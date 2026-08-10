@@ -23,10 +23,8 @@ public sealed class StoreWorkspaceOperationException(
 public sealed class StoreWorkspaceCoordinator : IExtractOps
 {
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan DefaultLongRequestTimeout =
-        ExtractWaitPolicy.HardTimeoutForEnvironment(
-            JulieExtractRunner.DefaultTimeout,
-            Environment.GetEnvironmentVariable);
+    private static TimeSpan DefaultLongRequestTimeout =>
+        DefaultLongRequestTimeoutFor(Environment.GetEnvironmentVariable);
 
     private readonly StoreFamilyBinding _binding;
     private readonly IJulieStoreClient _client;
@@ -274,8 +272,13 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         if (replayedImport && request is StoreImportRequest replayedRequest)
         {
             StoreRequestControls controls = Controls(ImportFingerprint(replayedRequest.Level), StoreOperation.Import);
-            result = _client.Submit(replayedRequest with { Request = controls });
-            RequireCommittedAndCompleteJournal(replayedRequest with { Request = controls }, result);
+            StoreImportRequest freshImport = replayedRequest with
+            {
+                Request = controls,
+                FromArtifact = null,
+            };
+            result = _client.Submit(freshImport);
+            RequireCommittedAndCompleteJournal(freshImport, result);
         }
         if (resolveAfter)
         {
@@ -476,6 +479,14 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         return operation is StoreOperation.Import or StoreOperation.Resolve
             ? DefaultLongRequestTimeout
             : DefaultRequestTimeout;
+    }
+
+    internal static TimeSpan DefaultLongRequestTimeoutFor(Func<string, string?> readEnvironmentVariable)
+    {
+        TimeSpan timeout = ExtractWaitPolicy.HardTimeoutForEnvironment(
+            JulieExtractRunner.DefaultTimeout,
+            readEnvironmentVariable);
+        return TimeSpan.FromSeconds(Math.Truncate(timeout.TotalSeconds));
     }
 
     private static StoreRequestControls RequestControls(StoreRequest request) => request switch

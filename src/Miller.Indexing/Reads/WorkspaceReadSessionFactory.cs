@@ -55,6 +55,14 @@ public static class WorkspaceReadSessionFactory
         bool enabled = storeEnabled ?? StoreEnabledFromEnvironment();
         if (!enabled)
         {
+            if (Directory.Exists(workspaceRoot) && StoreWorkspacePointer.Read(workspaceRoot) is not null)
+            {
+                throw new FamilyStoreReadException(
+                    FamilyStoreReadFailure.BindingNotReady,
+                    $"Store mode is disabled but workspace '{workspaceRoot}' still has an active store pointer; " +
+                    "export the active view before serving the legacy artifact.");
+            }
+
             using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(
                 legacyDatabasePath,
                 workspaceRoot,

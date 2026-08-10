@@ -1,7 +1,7 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: AMENDED v4.9 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
-The original freeze and its G3b decision remain historical evidence. The v4.1 through v4.9 amendments record
+**Status: AMENDED v4.10 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
+The original freeze and its G3b decision remain historical evidence. The v4.1 through v4.10 amendments record
 execution-contract corrections discovered after the first producer/Miller implementation review;
 the corrections are normative and must not be represented as completed until the named gates pass.
 Post-amendment changes require another versioned amendment and a recorded reason, not silent edits.
@@ -104,6 +104,20 @@ lookups. This refinement is normative for the v1.18.0 release candidate.
 | Amendment | Normative correction | State on 2026-08-10 |
 |---|---|---|
 | A31 — metadata-only identity probes | Leadership version checks and vector store-path lookups use the bounded family-store freshness probe. They validate the serving store and view but do not materialize the compatibility projection or hash all level stamps unless a real read session is opened. | Implemented and verified in freshness/read-session tests |
+
+## 0. v4.10 post-freeze amendment register
+
+The next adversarial pair found recovery, freshness, and producer-request seams in the v4.9 implementation.
+These refinements are normative for the v1.18.0 release candidate; the A7 durable-reader and A8
+cursor-incremental sidecar gates remain open.
+
+| Amendment | Normative correction | State on 2026-08-10 |
+|---|---|---|
+| A32 — rollback cleanup revalidation | Source reconciliation may remove a malformed workspace pointer only after reacquiring the writer lock and re-reading it. A pointer that became valid during reconciliation is preserved and forces bootstrap retry rather than binding the legacy artifact beside an active store pointer. | Implemented and verified in rollback tests |
+| A33 — rebuilt store identity publication | A freshness rebuild publishes the complete identity read from the rebuilt store session, including the new store-log sequence; a cheap probe may omit that identity only before a rebuild is needed. | Implemented and verified in freshness tests |
+| A34 — off-mode probe parity | Store-off freshness probes apply the same active-pointer refusal as full read sessions; no probe may report a legacy cursor while a store pointer remains. | Implemented and verified in read-session tests |
+| A35 — replayed import mode | After an interrupted import is replayed and committed, the follow-up import is a fresh store-view reconcile and never repeats `--from-artifact` against the populated view. | Implemented and verified in coordinator tests |
+| A36 — request-control normalization | The hard-cap-derived import/resolve request timeout is normalized to whole producer seconds, and malformed-pointer inspection does not acquire a writer lease for a read-only result. | Implemented and verified in coordinator/rollback tests |
 
 ---
 
@@ -921,6 +935,22 @@ implemented before the release candidate was reconsidered:
 | A29 | high | A family-store sidecar lease or writer failure could escape `ConvergeStore`, making a completed scan look failed and skipping the history/vector stamps. | ACCEPTED — folded: per-sidecar containment, timeout-aware lease containment, and post-failure history/vector publication |
 | A30 | medium | A durable orphaned import journal entry could replay an already-terminal idempotency key after source changes, hiding a needed reconcile; journal cleanup could also replace the original producer error. | ACCEPTED — folded: replayed-terminal import followed by a fresh reconcile request, plus cleanup-error preservation |
 | A31 | medium | Leadership and vector path lookups opened a full family-store read session for one metadata value or a derived path. | ACCEPTED — folded: metadata-only freshness probes preserve validation while skipping compatibility projection and level-stamp hashing |
+
+### v4.10 implementation recheck — 2026-08-10
+
+The next Claude/Grok pair found two confirmed freshness/recovery defects and several smaller request-boundary
+issues. The accepted A7/A8 design findings remain open gates rather than being folded into this release.
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| A32 | high | Bootstrap released its writer lock before deleting a pointer that had required source reconciliation. | ACCEPTED — folded: cleanup reacquires the writer lock, revalidates the pointer, preserves a valid replacement, and retries before legacy binding |
+| A33 | high | Store freshness rebuilt the index on sequence advances while retaining the prior full store identity. | ACCEPTED — folded: the rebuild callback publishes the identity from the rebuilt read session |
+| A34 | medium | Store-off freshness probes could read a legacy cursor while full opens refused an active store pointer. | ACCEPTED — folded: Probe and Open share the active-pointer refusal |
+| A35 | medium | Replayed imports reused `--from-artifact` for the fresh request after the replay had populated the view. | ACCEPTED — folded: the follow-up request is a fresh view reconcile with no artifact source |
+| A36 | low | Fractional hard-cap values failed producer request-argument construction, and malformed-pointer inspection needlessly contended on the writer lock. | ACCEPTED — folded: producer request seconds are normalized and malformed inspection is read-only |
+| A37 | high | A persistent unreadable store should bypass the fail-closed leadership gate and self-reimport. | DISMISSED — conflicts with the load-bearing A5/leadership invariant: an active pointer whose serving store cannot be read must remain not-ready and must never enter the permissive legacy-version path |
+| A38 | medium | A family-wide sidecar lease can leave sibling views stale while A8 full-view convergence is in progress. | DEFERRED — this is the explicitly disclosed A8 family lease/full-rewrite gate; no Ph5 cursor or availability design was pulled forward |
+| A39 | medium | Resolution-base cache validation could be bypassed by an out-of-contract same-size/same-mtime in-place mutation. | DISMISSED — bases are producer-published immutable files; changing the cache would reintroduce a full hash into every real read session and contradict the bounded A31 probe/read cost boundary |
 
 ## Cross-reference: gate price list → contract sections
 

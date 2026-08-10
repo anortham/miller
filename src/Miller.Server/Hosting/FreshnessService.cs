@@ -229,7 +229,9 @@ public sealed class FreshnessService : BackgroundService
                 workspaceRoot,
                 workspace.WorkspaceId,
                 storeEnabled);
-            return RepositoryIndexLoader.LoadSession(reader);
+            return new FreshnessRebuildResult(
+                RepositoryIndexLoader.LoadSession(reader),
+                reader.Snapshot.IndexIdentity);
         });
         if (swapped)
             _logger.LogInformation("Freshness: rebuilt + swapped index to revision {Revision}.", latest);

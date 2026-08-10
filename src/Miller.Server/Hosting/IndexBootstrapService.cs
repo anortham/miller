@@ -777,6 +777,12 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             if (loadResult.Rebuilt)
                 scanRevision = loadResult.RebuiltRevision;
 
+            using SingleWriterLock? rollbackCleanupLease = rollbackRequiresSourceRebuild
+                ? SingleWriterLock.TryAcquire(millerDir)
+                    ?? throw new StoreRollbackRetryException(new IOException(
+                        "Cannot reconcile the malformed store pointer because the workspace writer lock is held."))
+                : null;
+
             if (rollbackRequiresSourceRebuild)
             {
                 if (!didScan)
@@ -787,7 +793,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
                 try
                 {
-                    StoreWorkspacePointer.Delete(canonicalRoot);
+                    bool deleted = StoreRollbackExporter.DeleteMalformedPointerIfStillMalformed(
+                        canonicalRoot,
+                        canonicalDbPath,
+                        rollbackCleanupLease);
+                    if (!deleted && StoreWorkspacePointer.Exists(canonicalRoot))
+                    {
+                        throw new StoreRollbackRetryException(new IOException(
+                            "The store pointer became valid while legacy reconciliation was running; " +
+                            "Miller will retry before binding the legacy artifact."));
+                    }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {

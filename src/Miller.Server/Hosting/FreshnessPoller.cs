@@ -2,6 +2,10 @@ using Miller.Indexing;
 
 namespace Miller.Server.Hosting;
 
+public readonly record struct FreshnessRebuildResult(
+    MillerRepositoryIndex Index,
+    string? ArtifactId);
+
 /// <summary>
 /// The pure poll-then-swap decision behind <see cref="FreshnessService"/> (m3-design decision-2/-5): the
 /// testable seam with no SQLite, no timer, and no subprocess. Given the index holder, the latest persisted
@@ -28,6 +32,25 @@ public static class FreshnessPoller
     public static bool PollOnce(
         IndexHolder holder, long latestRevision, string? latestArtifactId, Func<MillerRepositoryIndex> rebuild)
     {
+        ArgumentNullException.ThrowIfNull(rebuild);
+        return PollOnce(
+            holder,
+            latestRevision,
+            latestArtifactId,
+            () => new FreshnessRebuildResult(rebuild(), ArtifactId: null));
+    }
+
+    /// <summary>
+    /// Variant of <see cref="PollOnce(IndexHolder,long,string?,Func{MillerRepositoryIndex})"/> that lets a rebuild
+    /// publish the full identity read from the rebuilt session. Store freshness identities include the store-log
+    /// sequence, so the cheap probe can decide to rebuild without carrying the complete identity on every poll.
+    /// </summary>
+    public static bool PollOnce(
+        IndexHolder holder,
+        long latestRevision,
+        string? latestArtifactId,
+        Func<FreshnessRebuildResult> rebuild)
+    {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(rebuild);
 
@@ -37,8 +60,11 @@ public static class FreshnessPoller
         if (!artifactReplaced && latestRevision <= holder.BuiltRevision)
             return false;
 
-        MillerRepositoryIndex next = rebuild();
-        holder.Swap(next, latestRevision, latestArtifactId ?? builtArtifactId);
+        FreshnessRebuildResult rebuilt = rebuild();
+        holder.Swap(
+            rebuilt.Index,
+            latestRevision,
+            latestArtifactId ?? rebuilt.ArtifactId ?? builtArtifactId);
         return true;
     }
 

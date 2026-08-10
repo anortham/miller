@@ -144,6 +144,14 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void EnvironmentHardCapIsNormalizedToProducerRequestSeconds()
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(900),
+            StoreWorkspaceCoordinator.DefaultLongRequestTimeoutFor(_ => "900.5"));
+    }
+
+    [Fact]
     public void StoreTimeoutOverrideOnlyAppliesToLongOperations()
     {
         Assert.Equal(
@@ -326,7 +334,8 @@ public sealed class StoreWorkspaceCoordinatorTests
         Directory.CreateDirectory(root);
         try
         {
-            string fingerprint = $"import|{Binding.FamilyId:D}|{Binding.ViewId}|L1|";
+            string fromArtifact = Path.Combine(root, ".miller", "symbols.db");
+            string fingerprint = $"import|{Binding.FamilyId:D}|{Binding.ViewId}|L1|{fromArtifact}";
             var journal = new StoreRequestJournal(root);
             Assert.Equal("orphan-request", journal.GetOrCreate(fingerprint, () => "orphan-request"));
 
@@ -346,7 +355,8 @@ public sealed class StoreWorkspaceCoordinatorTests
                 },
                 client,
                 () => IndexLevelPolicy.Progressive,
-                _ => snapshots.Dequeue());
+                _ => snapshots.Dequeue(),
+                fromArtifact: fromArtifact);
 
             coordinator.Scan(jobs: 1);
 
@@ -355,9 +365,11 @@ public sealed class StoreWorkspaceCoordinatorTests
                 .ToArray();
             Assert.Equal(2, imports.Length);
             Assert.Equal("orphan-request", Assert.IsType<StoreImportRequest>(imports[0]).Request.RequestId);
+            Assert.Equal(fromArtifact, Assert.IsType<StoreImportRequest>(imports[0]).FromArtifact);
             Assert.NotEqual(
                 Assert.IsType<StoreImportRequest>(imports[0]).Request.RequestId,
                 Assert.IsType<StoreImportRequest>(imports[1]).Request.RequestId);
+            Assert.Null(Assert.IsType<StoreImportRequest>(imports[1]).FromArtifact);
         }
         finally
         {

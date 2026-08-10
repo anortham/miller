@@ -31,6 +31,64 @@ public sealed class StoreRollbackExporterTests : IDisposable
     }
 
     [Fact]
+    public void MalformedPointerCleanupKeepsAValidReplacement()
+    {
+        Directory.CreateDirectory(_root);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(_root);
+        StoreWorkspacePointer.Write(
+            _root,
+            new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-4111-8111-111111111111"),
+                Path.Combine(_root, "store"),
+                "view-a",
+                canonicalRoot,
+                StoreBindingState.Ready));
+
+        bool deleted = StoreRollbackExporter.DeleteMalformedPointerIfStillMalformed(
+            _root,
+            Path.Combine(_root, ".miller", "symbols.db"));
+
+        Assert.False(deleted);
+        Assert.NotNull(StoreWorkspacePointer.Read(_root));
+    }
+
+    [Fact]
+    public void MalformedPointerReportsSourceRebuildWhileTheWriterLockIsHeld()
+    {
+        string miller = Path.Combine(_root, ".miller");
+        Directory.CreateDirectory(miller);
+        File.WriteAllText(Path.Combine(miller, "store.json"), "not-json");
+
+        using SingleWriterLock? held = SingleWriterLock.TryAcquire(miller);
+        Assert.NotNull(held);
+        StoreRollbackExportResult result = StoreRollbackExporter.ExportIfRequired(
+            _root,
+            Path.Combine(miller, "symbols.db"),
+            new UnexpectedStoreClient());
+
+        Assert.False(result.Exported);
+        Assert.True(result.RequiresSourceRebuild);
+    }
+
+    [Fact]
+    public void MalformedPointerCleanupKeepsCallerLeaseHeld()
+    {
+        string miller = Path.Combine(_root, ".miller");
+        Directory.CreateDirectory(miller);
+        File.WriteAllText(Path.Combine(miller, "store.json"), "not-json");
+
+        using SingleWriterLock? held = SingleWriterLock.TryAcquire(miller);
+        Assert.NotNull(held);
+        bool deleted = StoreRollbackExporter.DeleteMalformedPointerIfStillMalformed(
+            _root,
+            Path.Combine(miller, "symbols.db"),
+            held);
+
+        Assert.True(deleted);
+        Assert.Null(SingleWriterLock.TryAcquire(miller));
+    }
+
+    [Fact]
     public void ValidPointerOpenFailurePropagatesAndPreservesStoreBinding()
     {
         Directory.CreateDirectory(_root);

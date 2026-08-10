@@ -177,6 +177,22 @@ public sealed class FreshnessPollerTests
     }
 
     [Fact]
+    public void PollOnce_RevisionAdvance_UsesTheIdentityBuiltByTheRebuild()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        var holder = new IndexHolder(BuildIndex(fx), builtRevision: 1, builtArtifactId: "artifact-old");
+
+        bool swapped = FreshnessPoller.PollOnce(
+            holder,
+            latestRevision: 2,
+            latestArtifactId: null,
+            rebuild: () => new FreshnessRebuildResult(BuildIndex(fx), "store-current-identity"));
+
+        Assert.True(swapped);
+        Assert.Equal("store-current-identity", holder.BuiltArtifactId);
+    }
+
+    [Fact]
     public void PollOnce_NullHolder_Throws()
     {
         using var fx = JulieDbFixture.CreateDefault();
