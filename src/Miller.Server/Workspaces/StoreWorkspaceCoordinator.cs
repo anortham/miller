@@ -6,6 +6,7 @@ using Miller.Server.Hosting;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Miller.Server.Workspaces;
 
@@ -615,7 +616,9 @@ internal sealed class StoreRequestJournal
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            File.WriteAllText(temporary, JsonSerializer.Serialize(entry));
+            File.WriteAllText(
+                temporary,
+                JsonSerializer.Serialize(entry, StoreRequestJournalJsonContext.Default.StoreRequestJournalEntry));
             try
             {
                 File.Move(temporary, path, overwrite: false);
@@ -653,7 +656,9 @@ internal sealed class StoreRequestJournal
 
     private static StoreRequestJournalEntry Read(string path, string? expectedFingerprint)
     {
-        StoreRequestJournalEntry entry = JsonSerializer.Deserialize<StoreRequestJournalEntry>(File.ReadAllText(path))
+        StoreRequestJournalEntry entry = JsonSerializer.Deserialize(
+            File.ReadAllText(path),
+            StoreRequestJournalJsonContext.Default.StoreRequestJournalEntry)
             ?? throw new InvalidDataException($"Store request journal '{path}' is empty.");
         if (entry.SchemaVersion != SchemaVersion
             || (expectedFingerprint is not null
@@ -685,3 +690,6 @@ internal sealed class StoreRequestJournal
         }
     }
 }
+
+[JsonSerializable(typeof(StoreRequestJournalEntry))]
+internal sealed partial class StoreRequestJournalJsonContext : JsonSerializerContext;
