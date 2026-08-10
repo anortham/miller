@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
@@ -953,53 +954,83 @@ public static class DashboardData
         DashboardWorkspaceFacts? selectedFacts = selectedWorkspace is null
             ? null
             : WithRebindProvenance(DashboardIndexFactsCache.Read(selectedWorkspace), workspaces);
-        IReadOnlyList<DashboardWorkspaceFacts> workspaceFacts = selectedFacts is null
-            ? Array.Empty<DashboardWorkspaceFacts>()
-            : new[] { selectedFacts };
-        DashboardContextSavingsSummary contextSavings = ReadContextSavings(telemetryDbPath, selectedWorkspaceId);
-        DashboardWorkspaceHealthPanel? health = selectedWorkspace is null || selectedFacts is null
+        bool storeEnabled = WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
+        WorkspaceReadHandle? storeSession = selectedWorkspace is null || !storeEnabled
             ? null
-            : ReadWorkspaceHealthPanel(selectedWorkspace, selectedFacts);
-        DashboardPatternInventoryPanel? patternInventory = selectedWorkspace is null || selectedFacts is null
-            ? null
-            : ReadPatternInventoryPanel(selectedWorkspace, selectedFacts);
-        DashboardWorkspaceOnboardingPanel? onboarding = selectedWorkspace is null || selectedFacts is null
-            ? null
-            : ReadWorkspaceOnboardingPanel(selectedWorkspace, selectedFacts, telemetryDbPath);
-        DashboardLocalMetricsPanel? localMetrics = selectedWorkspace is null || selectedFacts is null
-            ? null
-            : ReadLocalMetricsPanel(selectedWorkspace);
-        DashboardWorkspaceTrendsPanel? trends = selectedWorkspace is null || selectedFacts is null
-            ? null
-            : DashboardIndexFactsReader.ReadTrends(selectedWorkspace);
-        return new DashboardSnapshot(
-            workspaces,
-            telemetry,
-            selectedWorkspaceId,
-            workspaceFacts,
-            selectedFacts,
-            contextSavings,
-            health,
-            patternInventory,
-            onboarding,
-            localMetrics,
-            trends);
+            : TryOpenStoreReadSession(selectedWorkspace);
+        try
+        {
+            IReadOnlyList<DashboardWorkspaceFacts> workspaceFacts = selectedFacts is null
+                ? Array.Empty<DashboardWorkspaceFacts>()
+                : new[] { selectedFacts };
+            DashboardContextSavingsSummary contextSavings = ReadContextSavings(telemetryDbPath, selectedWorkspaceId);
+            DashboardWorkspaceHealthPanel? health = selectedWorkspace is null || selectedFacts is null
+                ? null
+                : ReadWorkspaceHealthPanel(selectedWorkspace, selectedFacts, storeEnabled, storeSession);
+            DashboardPatternInventoryPanel? patternInventory = selectedWorkspace is null || selectedFacts is null
+                ? null
+                : ReadPatternInventoryPanel(selectedWorkspace, selectedFacts, storeEnabled, storeSession);
+            DashboardWorkspaceOnboardingPanel? onboarding = selectedWorkspace is null || selectedFacts is null
+                ? null
+                : ReadWorkspaceOnboardingPanel(selectedWorkspace, selectedFacts, telemetryDbPath);
+            DashboardLocalMetricsPanel? localMetrics = selectedWorkspace is null || selectedFacts is null
+                ? null
+                : ReadLocalMetricsPanel(selectedWorkspace, selectedFacts, storeEnabled, storeSession);
+            DashboardWorkspaceTrendsPanel? trends = selectedWorkspace is null || selectedFacts is null
+                ? null
+                : DashboardIndexFactsReader.ReadTrends(selectedWorkspace);
+            return new DashboardSnapshot(
+                workspaces,
+                telemetry,
+                selectedWorkspaceId,
+                workspaceFacts,
+                selectedFacts,
+                contextSavings,
+                health,
+                patternInventory,
+                onboarding,
+                localMetrics,
+                trends);
+        }
+        finally
+        {
+            storeSession?.Dispose();
+        }
     }
 
-    private static DashboardLocalMetricsPanel? ReadLocalMetricsPanel(DashboardWorkspaceRow workspace)
+    private static DashboardLocalMetricsPanel? ReadLocalMetricsPanel(
+        DashboardWorkspaceRow workspace,
+        DashboardWorkspaceFacts dashboardFacts,
+        bool storeEnabled,
+        IWorkspaceReadSession? storeSession)
     {
         try
         {
-            IReadOnlyList<ComplexityHotspot> hotspots = ComplexityRankingReader.Read(
-                workspace.IndexDbPath,
-                limit: 5,
-                minSeverity: ComplexitySeverity.Moderate,
-                includeTests: false);
-            IReadOnlyList<CloneGroup> cloneGroups = CloneGroupReader.Read(
-                workspace.IndexDbPath,
-                limit: 5,
-                minCount: 2,
-                symbolsPerGroup: 3);
+            if (storeEnabled && storeSession is null)
+                return UnavailableLocalMetrics(workspace, dashboardFacts.Message);
+
+            IReadOnlyList<ComplexityHotspot> hotspots = storeEnabled
+                ? ComplexityRankingReader.Read(
+                    storeSession!,
+                    limit: 5,
+                    minSeverity: ComplexitySeverity.Moderate,
+                    includeTests: false)
+                : ComplexityRankingReader.Read(
+                    workspace.IndexDbPath,
+                    limit: 5,
+                    minSeverity: ComplexitySeverity.Moderate,
+                    includeTests: false);
+            IReadOnlyList<CloneGroup> cloneGroups = storeEnabled
+                ? CloneGroupReader.Read(
+                    storeSession!,
+                    limit: 5,
+                    minCount: 2,
+                    symbolsPerGroup: 3)
+                : CloneGroupReader.Read(
+                    workspace.IndexDbPath,
+                    limit: 5,
+                    minCount: 2,
+                    symbolsPerGroup: 3);
 
             return new DashboardLocalMetricsPanel(
                 workspace.WorkspaceId,
@@ -1036,13 +1067,19 @@ public static class DashboardData
 
     private static DashboardPatternInventoryPanel? ReadPatternInventoryPanel(
         DashboardWorkspaceRow workspace,
-        DashboardWorkspaceFacts dashboardFacts)
+        DashboardWorkspaceFacts dashboardFacts,
+        bool storeEnabled,
+        IWorkspaceReadSession? storeSession)
     {
         try
         {
-            WorkspaceExtractionHealthFacts extraction = ReadExtractionHealthOrUnavailable(
-                workspace.IndexDbPath,
-                dashboardFacts.Message ?? dashboardFacts.FreshnessStatus);
+            WorkspaceExtractionHealthFacts extraction = storeEnabled
+                ? storeSession is null
+                    ? UnavailableExtraction(dashboardFacts.Message ?? dashboardFacts.FreshnessStatus)
+                    : WorkspaceHealthReader.Read(storeSession)
+                : ReadExtractionHealthOrUnavailable(
+                    workspace.IndexDbPath,
+                    dashboardFacts.Message ?? dashboardFacts.FreshnessStatus);
             if (!extraction.StructuralFacts.Available)
             {
                 return new DashboardPatternInventoryPanel(
@@ -1107,20 +1144,23 @@ public static class DashboardData
 
     private static DashboardWorkspaceHealthPanel? ReadWorkspaceHealthPanel(
         DashboardWorkspaceRow workspace,
-        DashboardWorkspaceFacts dashboardFacts)
+        DashboardWorkspaceFacts dashboardFacts,
+        bool storeEnabled,
+        IWorkspaceReadSession? storeSession)
     {
         try
         {
             WorkspaceFacts facts = BuildWorkspaceFacts(workspace, dashboardFacts);
-            // Non-schema read failures (missing/locked/corrupt db) degrade to unavailable SECTIONS so the
-            // panel still renders leader/sidecar facts; IncompatibleExtractException propagates out of the
-            // helper to this method's catch so the rebuild guidance lands in the panel's Error.
-            WorkspaceExtractionHealthFacts extraction = ReadExtractionHealthOrUnavailable(
-                workspace.IndexDbPath,
-                facts.WarningText ?? facts.FreshnessStatus);
+            WorkspaceExtractionHealthFacts extraction = storeEnabled
+                ? storeSession is null
+                    ? UnavailableExtraction(facts.WarningText ?? facts.FreshnessStatus)
+                    : WorkspaceHealthReader.Read(storeSession)
+                : ReadExtractionHealthOrUnavailable(
+                    workspace.IndexDbPath,
+                    facts.WarningText ?? facts.FreshnessStatus);
             LeaderHealthFacts leader = LeaderHealthFacts.Read(Path.GetDirectoryName(workspace.IndexDbPath) ?? workspace.CanonicalRoot) with
             {
-                ArtifactExtractorVersion = ExtractBinaryVersionReader.TryRead(workspace.IndexDbPath),
+                ArtifactExtractorVersion = dashboardFacts.ExtractorVersion,
             };
             WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
                 facts,
@@ -1341,13 +1381,47 @@ public static class DashboardData
             ex is FileNotFoundException or SqliteException or InvalidOperationException)
         {
             string message = string.IsNullOrWhiteSpace(error) ? ex.Message : error;
-            return new WorkspaceExtractionHealthFacts(
-                HealthFactSection<ParseDiagnosticGroup>.Unavailable(message),
-                HealthFactSection<CapabilityGapGroup>.Unavailable(message),
-                HealthFactSection<LanguageCapabilitySummary>.Unavailable(message),
-                HealthFactSection<StructuralFactGroup>.Unavailable(message),
-                HealthFactSection<ComplexityMetricGroup>.Unavailable(message),
-                HealthFactSection<FileStatusGroup>.Unavailable(message));
+            return UnavailableExtraction(message);
+        }
+    }
+
+    private static WorkspaceExtractionHealthFacts UnavailableExtraction(string? message)
+    {
+        string error = message ?? "workspace extraction health is unavailable";
+        return new(
+            HealthFactSection<ParseDiagnosticGroup>.Unavailable(error),
+            HealthFactSection<CapabilityGapGroup>.Unavailable(error),
+            HealthFactSection<LanguageCapabilitySummary>.Unavailable(error),
+            HealthFactSection<StructuralFactGroup>.Unavailable(error),
+            HealthFactSection<ComplexityMetricGroup>.Unavailable(error),
+            HealthFactSection<FileStatusGroup>.Unavailable(error));
+    }
+
+    private static DashboardLocalMetricsPanel UnavailableLocalMetrics(
+        DashboardWorkspaceRow workspace,
+        string? error) =>
+        new(
+            workspace.WorkspaceId,
+            "unavailable",
+            Array.Empty<DashboardMetricComplexityHotspot>(),
+            Array.Empty<DashboardMetricCloneGroup>(),
+            Error: error ?? "the family-store read session is unavailable");
+
+    private static WorkspaceReadHandle? TryOpenStoreReadSession(DashboardWorkspaceRow workspace)
+    {
+        try
+        {
+            return WorkspaceReadSessionFactory.Open(
+                workspace.IndexDbPath,
+                workspace.CanonicalRoot,
+                workspace.WorkspaceId,
+                storeEnabled: true);
+        }
+        catch (Exception ex) when (
+            ex is IOException or SqliteException or InvalidOperationException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException)
+        {
+            return null;
         }
     }
 

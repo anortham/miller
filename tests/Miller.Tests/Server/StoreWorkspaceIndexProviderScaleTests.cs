@@ -1,3 +1,4 @@
+using Miller.Dashboard;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
@@ -69,6 +70,17 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
 
             File.Delete(artifact);
             WorkspaceContext context = bootstrap.Workspace;
+            DashboardSnapshot dashboard = DashboardData.ReadSnapshot(
+                context.RegistryDbPath,
+                context.TelemetryDbPath,
+                context.WorkspaceId);
+            Assert.NotNull(dashboard.Health);
+            Assert.NotEqual("unavailable", dashboard.Health!.State);
+            Assert.NotNull(dashboard.PatternInventory);
+            Assert.NotEqual("unavailable", dashboard.PatternInventory!.State);
+            Assert.NotNull(dashboard.LocalMetrics);
+            Assert.NotEqual("unavailable", dashboard.LocalMetrics!.State);
+
             foreach (string[] args in new[]
             {
                 new[] { "search", "StoreCliCalculator" },

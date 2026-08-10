@@ -3,6 +3,9 @@ using Miller.Indexing.Reads;
 
 namespace Miller.Indexing.Store;
 
+public sealed class StoreArtifactVersionReadException(string message, Exception? innerException = null)
+    : IOException(message, innerException);
+
 /// <summary>Reads the producer version from the serving family store for leadership eligibility.</summary>
 public static class StoreArtifactVersionReader
 {
@@ -20,11 +23,34 @@ public static class StoreArtifactVersionReader
         return pointerPresent ? storeVersion : legacyVersionReader(legacyDatabasePath);
     }
 
+    public static string? ReadForLeadership(
+        string? legacyDatabasePath,
+        Func<string?, string?> legacyVersionReader)
+    {
+        ArgumentNullException.ThrowIfNull(legacyVersionReader);
+        (string? storeVersion, bool pointerPresent, Exception? failure) = ReadCore(legacyDatabasePath);
+        if (pointerPresent && failure is not null)
+        {
+            throw new StoreArtifactVersionReadException(
+                "The active family-store version is unreadable; refusing to claim leadership.",
+                failure);
+        }
+
+        return pointerPresent ? storeVersion : legacyVersionReader(legacyDatabasePath);
+    }
+
     public static string? TryRead(string? legacyDatabasePath, out bool pointerPresent)
     {
-        pointerPresent = false;
+        (string? version, bool foundPointer, _) = ReadCore(legacyDatabasePath);
+        pointerPresent = foundPointer;
+        return version;
+    }
+
+    private static (string? Version, bool PointerPresent, Exception? Failure) ReadCore(string? legacyDatabasePath)
+    {
+        bool pointerPresent = false;
         if (string.IsNullOrWhiteSpace(legacyDatabasePath))
-            return null;
+            return (null, false, null);
 
         try
         {
@@ -35,8 +61,11 @@ public static class StoreArtifactVersionReader
             pointerPresent = StoreWorkspacePointer.Exists(workspaceRoot);
             StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(workspaceRoot);
             if (pointer is null)
-                return null;
-            pointerPresent = true;
+            {
+                return pointerPresent
+                    ? (null, true, new IOException("The active family-store pointer disappeared while it was read."))
+                    : (null, false, null);
+            }
 
             var binding = new StoreFamilyBinding(
                 pointer.FamilyId,
@@ -45,13 +74,13 @@ public static class StoreArtifactVersionReader
                 pointer.WorkspaceRoot,
                 StoreBindingState.Ready);
             using FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding);
-            return session.Visibility.BinaryVersion;
+            return (session.Visibility.BinaryVersion, true, null);
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException
                 or NotSupportedException or FormatException or SqliteException)
         {
-            return null;
+            return (null, pointerPresent, ex);
         }
     }
 }

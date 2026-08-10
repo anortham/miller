@@ -82,12 +82,22 @@ public sealed class CrossWorkspaceRefreshService
             // refresh, dashboard): probe the bundled binary, read the artifact's recorded binary_version, and
             // let the shared eligibility matrix decide. Evaluated only after the lock is acquired, so the
             // lock-busy enqueue-to-leader path is never affected.
-            dbPath => LeadershipEligibility.Evaluate(
-                runner.QueryVersion(),
-                WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
-                    ? StoreArtifactVersionReader.TryReadOrFallback(dbPath, ExtractBinaryVersionReader.TryRead)
-                    : ExtractBinaryVersionReader.TryRead(dbPath),
-                Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1"),
+            dbPath =>
+            {
+                try
+                {
+                    return LeadershipEligibility.Evaluate(
+                        runner.QueryVersion(),
+                        WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
+                            ? StoreArtifactVersionReader.ReadForLeadership(dbPath, ExtractBinaryVersionReader.TryRead)
+                            : ExtractBinaryVersionReader.TryRead(dbPath),
+                        Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1");
+                }
+                catch (StoreArtifactVersionReadException ex)
+                {
+                    return new LeadershipVerdict(false, false, ex.Message);
+                }
+            },
             ReadArtifactId,
             governor,
             storeClient: new JulieStoreClient(runner.BinaryPath),

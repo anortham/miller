@@ -6,6 +6,7 @@ using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
+using Miller.Indexing.Store;
 using Miller.Server.Cli;
 using Miller.Server.Hosting;
 using Miller.Server.Logging;
@@ -499,7 +500,9 @@ public sealed class WorkspaceTool
         LeaderHealthFacts.Read(Path.GetDirectoryName(indexDbPath)!) with
         {
             OwnExtractorVersion = _indexer.OwnExtractorVersion,
-            ArtifactExtractorVersion = ExtractBinaryVersionReader.TryRead(indexDbPath),
+            ArtifactExtractorVersion = WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
+                ? StoreArtifactVersionReader.TryReadOrFallback(indexDbPath, ExtractBinaryVersionReader.TryRead)
+                : ExtractBinaryVersionReader.TryRead(indexDbPath),
             OwnVerdict = ownWorkspace ? _indexer.EligibilityVerdict : null,
         };
 

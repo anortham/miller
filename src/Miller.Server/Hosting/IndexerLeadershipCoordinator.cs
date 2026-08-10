@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server.Workspaces;
 
 namespace Miller.Server.Hosting;
@@ -121,10 +122,19 @@ internal sealed class IndexerLeadershipCoordinator
     /// <summary>Evaluate the D2 verdict and publish it for status/health rendering.</summary>
     public LeadershipVerdict EvaluateEligibility(string? extractDbPath)
     {
-        LeadershipVerdict verdict = LeadershipEligibility.Evaluate(
-            _ownExtractorVersion.Value,
-            _readArtifactExtractorVersion(extractDbPath),
-            _allowExtractorDowngrade);
+        LeadershipVerdict verdict;
+        try
+        {
+            verdict = LeadershipEligibility.Evaluate(
+                _ownExtractorVersion.Value,
+                _readArtifactExtractorVersion(extractDbPath),
+                _allowExtractorDowngrade);
+        }
+        catch (StoreArtifactVersionReadException ex)
+        {
+            verdict = new LeadershipVerdict(false, false, ex.Message);
+        }
+
         EligibilityVerdict = verdict;
         return verdict;
     }

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server.Hosting;
 using Miller.Server.Workspaces;
 using Xunit;
@@ -135,6 +136,19 @@ public sealed class IndexerLeadershipCoordinatorTests
             logRequestDrainStats: static (_, _, _) => { });
 
         Assert.Null(decision);
+    }
+
+    [Fact]
+    public void EvaluateEligibility_UnreadableStoreVersionRefusesLeadership()
+    {
+        var coordinator = NewCoordinator(
+            readArtifactExtractorVersion: _ => throw new StoreArtifactVersionReadException(
+                "The active family-store version is unreadable; refusing to claim leadership."));
+
+        LeadershipVerdict verdict = coordinator.EvaluateEligibility("/repo/.miller/symbols.db");
+
+        Assert.False(verdict.Eligible);
+        Assert.Contains("refusing to claim leadership", verdict.Reason, StringComparison.Ordinal);
     }
 
     private static IndexerLeadershipCoordinator NewCoordinator(

@@ -468,4 +468,20 @@ public sealed class FamilyStoreReadSessionTests
 
         Assert.Null(StoreArtifactVersionReader.TryReadOrFallback(legacyPath, _ => "legacy-2.0.0"));
     }
+
+    [Fact]
+    public void StoreArtifactVersionReaderRejectsUnreadableServingStoreForLeadership()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(
+            fixture.Binding.WorkspaceRoot,
+            fixture.Binding with { StoreRoot = Path.Combine(fixture.Binding.StoreRoot, "missing") });
+
+        string legacyPath = Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db");
+
+        StoreArtifactVersionReadException error = Assert.Throws<StoreArtifactVersionReadException>(() =>
+            StoreArtifactVersionReader.ReadForLeadership(legacyPath, _ => "legacy-2.0.0"));
+
+        Assert.Contains("refusing to claim leadership", error.Message, StringComparison.Ordinal);
+    }
 }

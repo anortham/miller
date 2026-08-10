@@ -3227,7 +3227,9 @@ public static class CliDispatch
     private static LeaderHealthFacts CliLeaderFacts(string indexDbPath) =>
         LeaderHealthFacts.Read(Path.GetDirectoryName(indexDbPath)!) with
         {
-            ArtifactExtractorVersion = ExtractBinaryVersionReader.TryRead(indexDbPath),
+            ArtifactExtractorVersion = WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
+                ? StoreArtifactVersionReader.TryReadOrFallback(indexDbPath, ExtractBinaryVersionReader.TryRead)
+                : ExtractBinaryVersionReader.TryRead(indexDbPath),
         };
 
     private static string RenderWorkspaceLeader(
