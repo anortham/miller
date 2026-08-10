@@ -1,5 +1,6 @@
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -363,7 +364,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
@@ -404,7 +405,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
@@ -461,7 +462,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
@@ -502,7 +503,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
         bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
         return new WorkspaceArtifactContext(
             readSession,
@@ -558,7 +559,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        using WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        using WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
         bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
         long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
         CachedContentSearch cached = familyStore
@@ -613,7 +614,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        using WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        using WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
         bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
         long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
         string sourcePath = familyStore
@@ -681,7 +682,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
@@ -1176,8 +1177,51 @@ public sealed class WorkspaceIndexProvider
     {
         string databasePath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
-        return _openReadSession(databasePath, root, _currentWorkspace.WorkspaceId);
+        return OpenReadSession(databasePath, root, _currentWorkspace.WorkspaceId);
     }
+
+    private WorkspaceReadHandle OpenReadSession(string databasePath, string root, string? workspaceId)
+    {
+        try
+        {
+            return _openReadSession(databasePath, root, workspaceId);
+        }
+        catch (StorePointerFormatException exception)
+        {
+            if (string.IsNullOrWhiteSpace(workspaceId))
+            {
+                throw MalformedStorePointer(
+                    "The workspace store pointer is malformed and cannot be reconciled because the workspace is not registered.",
+                    exception);
+            }
+
+            WorkspaceRefreshResult refresh = _refresh(workspaceId);
+            if (refresh.Status is not (WorkspaceRefreshStatus.Refreshed or WorkspaceRefreshStatus.Unchanged))
+            {
+                string detail = refresh.Error ?? refresh.WarningText ??
+                    $"reconciliation returned {refresh.StatusText}";
+                throw MalformedStorePointer(
+                    $"The workspace store pointer is malformed and reconciliation did not complete: {detail}",
+                    exception);
+            }
+
+            try
+            {
+                return _openReadSession(databasePath, root, workspaceId);
+            }
+            catch (StorePointerFormatException retryException)
+            {
+                throw MalformedStorePointer(
+                    "The workspace store pointer is still malformed after reconciliation.",
+                    retryException);
+            }
+        }
+    }
+
+    private static FamilyStoreReadException MalformedStorePointer(
+        string message,
+        StorePointerFormatException exception) =>
+        new(FamilyStoreReadFailure.CurrentMalformed, message, exception);
 
     private readonly record struct CacheKey(
         string WorkspaceId,

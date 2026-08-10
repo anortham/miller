@@ -112,6 +112,7 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.Equal(2, request.Scan.Jobs);
         Assert.Equal("/workspace/.miller/symbols.db", request.FromArtifact);
         Assert.Equal("request-import", report.Input?.Format);
+        Assert.Equal(expected == StoreLevel.Full, client.Requests.Any(request => request.Operation == StoreOperation.Resolve));
     }
 
     [Fact]

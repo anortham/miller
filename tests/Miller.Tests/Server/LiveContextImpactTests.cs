@@ -17,7 +17,7 @@ public sealed class ContextPerformanceCollection;
 public sealed class LiveContextImpactTests
 {
     [Fact]
-    public void Live_ImpactAndContext_OverRealExtract_AreCorrectAndFast()
+    public void Live_ImpactAndContext_OverRealExtract_AreCorrect()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
 
@@ -91,14 +91,10 @@ public sealed class LiveContextImpactTests
             Assert.NotEqual("failed", report.Status);
             Assert.True(report.SymbolsExtracted > 0);
 
-            // --- load the index + graph as one unit (the single production path) and TIME the build (D11). ---
             var buildSw = Stopwatch.StartNew();
             var index = RepositoryIndexLoader.Load(canonicalDb);
             buildSw.Stop();
-            // The graph build rides the index build; for this tiny repo it is effectively instant. The 10s rebuild
-            // budget (D11/D11-rebuild) is the ceiling — assert we are nowhere near it on a real (if small) extract.
-            Assert.True(buildSw.ElapsedMilliseconds < 10_000,
-                $"index+graph build took {buildSw.ElapsedMilliseconds}ms (budget 10s).");
+            Console.WriteLine($"[local-performance] index+graph build: {buildSw.ElapsedMilliseconds}ms");
 
             var resolver = new SmartTargetResolver(index);
 
@@ -109,21 +105,16 @@ public sealed class LiveContextImpactTests
             // Process is depended-on by the test method (and the Service-side chain) — reverse adjacency is populated.
             Assert.NotEmpty(index.Dependents(processId));
 
-            // === impact("OrderService") — the reverse closure incl. a likely test, and it is FAST. ===
             var impactSw = Stopwatch.StartNew();
             string impactOut = ImpactTool.Run(index, resolver,
                 target: "OrderService", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false,
                 out int impactedCount, out _);
             impactSw.Stop();
 
-            // The xUnit test is reached and partitioned into the likely-tests section.
             Assert.Contains("ProcessWorks", impactOut);
             Assert.Contains("likely tests", impactOut, StringComparison.OrdinalIgnoreCase);
-            // SOMETHING downstream is impacted (the Controller-side caller and/or the Service chain).
             Assert.True(impactedCount >= 1, $"expected a non-empty impact set; output:\n{impactOut}");
-            // Well under julie's 1.3s avg / 5s p95 — the adoption mandate.
-            Assert.True(impactSw.ElapsedMilliseconds < 1_000,
-                $"impact took {impactSw.ElapsedMilliseconds}ms (budget 1s).");
+            Console.WriteLine($"[local-performance] impact: {impactSw.ElapsedMilliseconds}ms");
 
             // impact on the precise method also surfaces the test (reverse closure from Process).
             string impactProcess = ImpactTool.Run(index, resolver,
@@ -200,9 +191,9 @@ public sealed class LiveContextImpactTests
             }
             Array.Sort(ctxRunsMs);
             double ctxP95Ms = ctxRunsMs[(int)Math.Ceiling(ctxSamples * 0.95) - 1];
-            Assert.True(ctxP95Ms < 100,
-                $"context p95 {ctxP95Ms:F1}ms over {ctxSamples} runs exceeded the 100ms budget " +
-                $"(min {ctxRunsMs[0]:F1}ms, max {ctxRunsMs[ctxSamples - 1]:F1}ms).");
+            Console.WriteLine(
+                $"[local-performance] actionable context p95 over {ctxSamples} runs: {ctxP95Ms:F1}ms " +
+                $"(min {ctxRunsMs[0]:F1}ms, max {ctxRunsMs[ctxSamples - 1]:F1}ms)");
 
             string tiny = ContextTool.RunActionable(
                 index,

@@ -256,7 +256,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             before,
             changedFiles: 0,
             deletedFiles: 0,
-            resolveAfter: level == StoreLevel.Full && request.FromArtifact is null);
+            resolveAfter: level == StoreLevel.Full);
     }
 
     private ExtractReport Submit(

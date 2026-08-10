@@ -3,6 +3,7 @@ using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
@@ -54,6 +55,46 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.True(context.IndexFresh);
         Assert.Empty(context.Index.FindByName("FreshType"));
         Assert.IsType<TargetResolution.NotFound>(context.Resolver.Resolve("FreshType"));
+    }
+
+    [Fact]
+    public void Resolve_CurrentWorkspace_ReconcilesMalformedStorePointerBeforeRetryingTheRead()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("current-malformed-pointer");
+        int openCount = 0;
+        int refreshCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspaceAt(root, current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId =>
+            {
+                refreshCount++;
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.Refreshed,
+                    workspaceId,
+                    root,
+                    current.DbPath,
+                    Revision: 1,
+                    Scanned: true);
+            },
+            openReadSession: (databasePath, workspaceRoot, workspaceId) =>
+            {
+                if (++openCount == 1)
+                    throw new StorePointerFormatException("malformed");
+                return new WorkspaceReadHandle(LegacyArtifactReadSession.Open(
+                    databasePath,
+                    workspaceRoot,
+                    workspaceId));
+            });
+
+        using WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
+
+        Assert.Equal(2, openCount);
+        Assert.Equal(1, refreshCount);
+        Assert.Equal(WorkspaceReadMode.LegacyArtifact, context.Snapshot.Mode);
     }
 
     [Fact]
