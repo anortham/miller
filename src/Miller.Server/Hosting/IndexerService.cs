@@ -424,6 +424,8 @@ public sealed class IndexerService : BackgroundService
         // Pass the CANONICAL db (verified-fact 4): the single-file update/delete ops require an
         // already-canonical --db (the runner no longer GetFullPath-mangles it).
         IExtractOps ops = _createOps(workspace, canonicalRoot, canonicalDbPath);
+        if (ops is StoreWorkspaceCoordinator storeCoordinator)
+            storeCoordinator.EnsureBindingPointer();
         _failurePolicy = PersistedScanFailurePolicy.For(canonicalDbPath, canonicalRoot);
         lock (_opsGate)
             _ops = ops; // publish for M6 write-through (TryReindexAsLeader)
@@ -517,6 +519,10 @@ public sealed class IndexerService : BackgroundService
                 await RelinquishForReplacedRootAsync(millerDir, canonicalRoot, stoppingToken).ConfigureAwait(false);
                 return true; // re-enter the claim loop; the re-bootstrap has rebound the workspace
             }
+
+            if (yieldDecision is null && handoffDecision is null &&
+                ops is StoreWorkspaceCoordinator leaderStoreCoordinator)
+                leaderStoreCoordinator.EnsureBindingPointer();
 
             if (yieldDecision is { } decision)
             {

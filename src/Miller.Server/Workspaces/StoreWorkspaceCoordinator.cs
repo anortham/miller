@@ -57,6 +57,30 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         _fromArtifact = fromArtifact;
     }
 
+    internal void EnsureBindingPointer()
+    {
+        StoreWorkspacePointerDocument? pointer;
+        try
+        {
+            pointer = StoreWorkspacePointer.Read(_binding.WorkspaceRoot);
+        }
+        catch (StorePointerFormatException)
+        {
+            pointer = null;
+        }
+
+        if (pointer is not null &&
+            pointer.FamilyId == _binding.FamilyId &&
+            string.Equals(pointer.ViewId, _binding.ViewId, StringComparison.Ordinal) &&
+            ArtifactRootIdentity.Matches(pointer.StoreRoot, _binding.StoreRoot) &&
+            ArtifactRootIdentity.Matches(pointer.WorkspaceRoot, _binding.WorkspaceRoot))
+        {
+            return;
+        }
+
+        StoreWorkspacePointer.Write(_binding.WorkspaceRoot, _binding);
+    }
+
     public static StoreWorkspaceCoordinator Create(
         WorkspaceContext workspace,
         string canonicalRoot,

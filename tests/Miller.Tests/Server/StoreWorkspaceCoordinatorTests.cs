@@ -210,6 +210,43 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void EnsureBindingPointerRepairsMalformedStoreMetadata()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-pointer-repair-" + Guid.NewGuid().ToString("N"));
+        string storeRoot = Path.Combine(root, "store");
+        Directory.CreateDirectory(Path.Combine(root, ".miller"));
+        Directory.CreateDirectory(storeRoot);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, ".miller", "store.json"), "not-json");
+            StoreFamilyBinding binding = Binding with
+            {
+                StoreRoot = storeRoot,
+                WorkspaceRoot = PathCanonicalizer.CanonicalizeRoot(root),
+            };
+            var coordinator = new StoreWorkspaceCoordinator(
+                binding,
+                new RecordingStoreClient(StoreOperation.Update),
+                () => IndexLevelPolicy.Progressive,
+                _ => new StoreWorkspaceState(1, "l1"),
+                () => "request-repair");
+
+            coordinator.EnsureBindingPointer();
+
+            StoreWorkspacePointerDocument repaired = Assert.IsType<StoreWorkspacePointerDocument>(
+                StoreWorkspacePointer.Read(root));
+            Assert.Equal(binding.FamilyId, repaired.FamilyId);
+            Assert.Equal(binding.ViewId, repaired.ViewId);
+            Assert.Equal(binding.StoreRoot, repaired.StoreRoot);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void TypedStoreFailureDoesNotMasqueradeAsACompletedExtractReport()
     {
         var client = new RecordingStoreClient(

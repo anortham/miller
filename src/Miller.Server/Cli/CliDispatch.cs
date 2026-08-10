@@ -3862,10 +3862,10 @@ public static class CliDispatch
             return false;
         }
 
+        string workspaceRoot = ctx.CanonicalRoot ?? ctx.WorkspaceRoot;
         StoreWorkspacePointerDocument? pointer;
         try
         {
-            string workspaceRoot = ctx.CanonicalRoot ?? ctx.WorkspaceRoot;
             pointer = Directory.Exists(workspaceRoot)
                 ? StoreWorkspacePointer.Read(workspaceRoot)
                 : null;
@@ -3909,10 +3909,10 @@ public static class CliDispatch
             if (rollback.RequiresSourceRebuild)
             {
                 err.WriteLine("The legacy artifact is unavailable until source reconciliation completes.");
-                return false;
+                return TryReconcileCliSource(ctx, err);
             }
 
-            return rollback.Exported && File.Exists(ctx.ExtractDbPath);
+            return StoreWorkspacePointer.Read(workspaceRoot) is null && File.Exists(ctx.ExtractDbPath);
         }
         catch (Exception ex) when (StoreRollbackExporter.IsOperationalFailure(ex))
         {

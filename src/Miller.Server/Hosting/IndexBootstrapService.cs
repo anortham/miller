@@ -877,14 +877,73 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             RegisterBootstrapWorkspace(
                 workspace,
                 stableWorkspaceId,
-                WorkspaceRegistryState.Ready,
+                WorkspaceRegistryState.Refreshing,
                 revision: null,
                 lineage);
 
-            StoreFamilyBinding binding = StoreWorkspaceCoordinator.ResolveBinding(
-                workspace,
-                canonicalRoot,
-                rootReplaced);
+            string millerDir = Path.GetDirectoryName(canonicalDbPath)
+                ?? throw new InvalidOperationException(
+                    $"Cannot determine the .miller directory for index DB path '{canonicalDbPath}'.");
+            StoreFamilyBinding? binding = null;
+            bool lockAcquired = false;
+            bool winnerArtifactUsable = false;
+            BootstrapScanLease<SingleWriterLock> storeLease = AcquireBootstrapScanLease(
+                tryAcquire: () =>
+                {
+                    SingleWriterLock? lease = SingleWriterLock.TryAcquire(millerDir);
+                    lockAcquired = lease is not null;
+                    return lease;
+                },
+                decide: () =>
+                {
+                    if (!lockAcquired)
+                    {
+                        return new BootstrapScanDecision(
+                            ShouldScan: !winnerArtifactUsable,
+                            ScanIntent.IncrementalReconcile,
+                            winnerArtifactUsable
+                                ? WorkspaceRegistryState.LoadedExisting
+                                : WorkspaceRegistryState.Ready);
+                    }
+
+                    binding = StoreWorkspaceCoordinator.ResolveBinding(
+                        workspace,
+                        canonicalRoot,
+                        rootReplaced);
+                    return new BootstrapScanDecision(
+                        binding.State == StoreBindingState.Planned || rootReplaced,
+                        rootReplaced ? ScanIntent.RootRebind : ScanIntent.IncrementalReconcile,
+                        binding.State == StoreBindingState.Planned || rootReplaced
+                            ? WorkspaceRegistryState.Ready
+                            : WorkspaceRegistryState.LoadedExisting);
+                },
+                winnerArtifactUsable: () =>
+                {
+                    if (rootReplaced)
+                        return false;
+                    winnerArtifactUsable = TryReadReadyStoreBinding(
+                        canonicalRoot,
+                        stableWorkspaceId,
+                        out binding);
+                    return winnerArtifactUsable;
+                },
+                wait: BootstrapScanLockWait(),
+                pollInterval: BootstrapScanLockPollInterval,
+                utcNow: () => DateTimeOffset.UtcNow,
+                sleep: Thread.Sleep);
+            using SingleWriterLock? bootstrapLease = storeLease.Lease;
+            if (storeLease.Outcome == BootstrapLeaseOutcome.TimedOut)
+            {
+                throw new InvalidOperationException(
+                    $"Timed out waiting for the Miller writer lock on {millerDir}, and no readable family-store " +
+                    $"view exists for {canonicalRoot}. {DescribeBootstrapLockHolder(millerDir)}");
+            }
+
+            if (binding is null)
+            {
+                throw new InvalidOperationException(
+                    "The family-store bootstrap did not resolve a binding after the writer-lock decision.");
+            }
             long? scanRevision = null;
             bool didScan = false;
             if (binding.State == StoreBindingState.Planned || rootReplaced)
@@ -974,6 +1033,36 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             if (ledger is not null && !usesExistingLedger)
                 ledger.Dispose();
             throw;
+        }
+    }
+
+    private static bool TryReadReadyStoreBinding(
+        string canonicalRoot,
+        string stableWorkspaceId,
+        out StoreFamilyBinding? binding)
+    {
+        binding = null;
+        try
+        {
+            StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(canonicalRoot);
+            if (pointer is null)
+                return false;
+
+            var candidate = new StoreFamilyBinding(
+                pointer.FamilyId,
+                pointer.StoreRoot,
+                pointer.ViewId,
+                pointer.WorkspaceRoot,
+                StoreBindingState.Ready);
+            using FamilyStoreReadSession session = FamilyStoreReadSession.Open(candidate, stableWorkspaceId);
+            binding = candidate;
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is FamilyStoreReadException or StorePointerFormatException or IOException
+                or UnauthorizedAccessException or ArgumentException or SqliteException)
+        {
+            return false;
         }
     }
 
