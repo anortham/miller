@@ -3872,17 +3872,8 @@ public static class CliDispatch
         }
         catch (StorePointerFormatException ex)
         {
-            try
-            {
-                StoreWorkspacePointer.Delete(ctx.CanonicalRoot ?? ctx.WorkspaceRoot);
-            }
-            catch (Exception deleteError) when (deleteError is IOException or UnauthorizedAccessException)
-            {
-                err.WriteLine($"The malformed store pointer could not be removed: {deleteError.Message}");
-            }
-
             err.WriteLine(
-                $"The store pointer is malformed ({ex.Message}); source reconciliation is required before a CLI read.");
+                $"The store pointer is malformed ({ex.Message}); source reconciliation is required before any CLI read.");
             return false;
         }
 

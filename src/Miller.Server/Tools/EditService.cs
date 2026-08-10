@@ -49,6 +49,7 @@ public sealed class EditService
     private const string FailureApplyFailed = "apply_failed";
     private const string FailurePartialApply = "partial_apply";
     private const string FailureReferenceLayerConverging = "reference_layer_converging";
+    private const string FailureResolutionConverging = "resolution_converging";
     private const int RenameDiffMaxBytes = 4 * 1024;
     private const int RenameSummaryMaxBytes = 1024;
     private const int MaxRenameEvidenceSitesPerTier = 8;
@@ -211,7 +212,7 @@ public sealed class EditService
                 ToolDiagnostic.ExpectedEmpty(result.FailureReason, DiagnosticMessage(result.Output)),
             FailureAmbiguousMatch =>
                 ToolDiagnostic.Ambiguity(result.FailureReason, DiagnosticMessage(result.Output)),
-            FailureInvalidRequest or FailureStaleTarget or FailureReferenceLayerConverging =>
+            FailureInvalidRequest or FailureStaleTarget or FailureReferenceLayerConverging or FailureResolutionConverging =>
                 ToolDiagnostic.Refusal(result.FailureReason, DiagnosticMessage(result.Output)),
             FailureApplyFailed or FailurePartialApply =>
                 ToolDiagnostic.Unavailable(result.FailureReason, DiagnosticMessage(result.Output)),
@@ -1105,7 +1106,7 @@ public sealed class EditService
                 "rename is refused while this family-store view's identifier resolution is not exact; retry " +
                 "after the resolve operation completes.",
                 json,
-                failureReason: FailureReferenceLayerConverging);
+                failureReason: FailureResolutionConverging);
         }
 
         var evidenceBounds = new ReferenceEvidenceBounds(int.MaxValue, int.MaxValue);

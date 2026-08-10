@@ -1,6 +1,8 @@
 using Microsoft.Data.Sqlite;
+using Miller.Core.Editing;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Server.Hosting;
 using Miller.Server.Resolution;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
@@ -94,6 +96,31 @@ public sealed class ResolutionLayerGuardTests : IDisposable
         Assert.Contains("diagnostic_code=resolution_converging", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ExactStateWithLaggingResolutionStampRefusesRename()
+    {
+        WorkspaceReadSnapshot lagging = _snapshot with
+        {
+            ResolutionState = "exact",
+            ResolutionExactAt = 0,
+        };
+        var service = new EditService(
+            _index,
+            new SmartTargetResolver(_index),
+            _databasePath,
+            _snapshot.WorkspaceRoot,
+            new EditApplier(static () => new NoopLease()),
+            new NoopWriteThrough(),
+            readSession: new ThrowingReadSession(lagging));
+
+        EditService.EditResult result = service.Execute(
+            new EditRequest("rename_symbol", "Alpha") { NewText = "RenamedAlpha", Format = "json" });
+
+        Assert.Equal("resolution_converging", result.FailureReason);
+        Assert.NotNull(result.Diagnostic);
+        Assert.Equal("resolution_converging", result.Diagnostic!.Code);
+    }
+
     private sealed class StoreReadProvider : IWorkspaceIndexProvider, IWorkspaceSymbolReadProvider
     {
         private readonly MillerRepositoryIndex _index;
@@ -149,6 +176,20 @@ public sealed class ResolutionLayerGuardTests : IDisposable
             throw new InvalidOperationException("The resolution guard must run before any store read.");
 
         public void Dispose()
+        {
+        }
+    }
+
+    private sealed class NoopLease : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class NoopWriteThrough : IEditWriteThrough
+    {
+        public void Converge(IReadOnlyList<string> changedFiles)
         {
         }
     }

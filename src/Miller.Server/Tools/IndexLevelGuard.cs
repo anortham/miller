@@ -39,7 +39,10 @@ internal static class IndexLevelGuard
 
     public static bool ResolutionLayerConverging(WorkspaceReadSnapshot snapshot) =>
         snapshot.Mode == WorkspaceReadMode.FamilyStore
-        && !string.Equals(snapshot.ResolutionState, "exact", StringComparison.OrdinalIgnoreCase);
+        && (!string.Equals(snapshot.ResolutionState, "exact", StringComparison.OrdinalIgnoreCase)
+            || snapshot.ResolutionExactAt != snapshot.ManifestGeneration
+            || snapshot.ResolutionBaseId is null
+            || snapshot.ResolutionDeltaGeneration is null);
 
     public static ToolDiagnostic ResolutionConverging() =>
         ToolDiagnostic.ExpectedEmpty(
