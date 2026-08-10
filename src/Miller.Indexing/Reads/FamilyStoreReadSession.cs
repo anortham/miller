@@ -104,7 +104,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
                 SetQueryOnly(connection);
                 var freshness = new WorkspaceFreshnessToken(
                     visibility.FamilyId,
-                    visibility.ManifestGeneration,
+                    visibility.StoreLogSequence,
                     visibility.ManifestHash,
                     visibility.StoreLogSequence,
                     ResolutionStamp(visibility),

@@ -63,6 +63,19 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void SnapshotRevisionUsesStoreLogSequenceWhenItDiffersFromManifestGeneration()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        AppendStoreLog(fixture, 5, viewId: null, versionId: null);
+
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding, "workspace-a");
+
+        Assert.Equal(5, session.Snapshot.Freshness.Revision);
+        Assert.Equal(5, session.Snapshot.Freshness.StoreLogSequence);
+        Assert.Equal(2, session.Snapshot.Freshness.ManifestGeneration);
+    }
+
+    [Fact]
     public void FreshnessProbeReadsStoreCursorWithoutOpeningAProjection()
     {
         using StoreFixture fixture = StoreFixture.Create();

@@ -84,6 +84,11 @@ public sealed class StoreFamilyResolver
             else if (CanPromoteUnknownLineage(family, facts))
             {
                 family = ResolveFamily(facts);
+                if (HasPublishedGeneration(family.StoreRoot))
+                {
+                    throw new StoreBindingMismatchException(
+                        "The family store has a published generation but is missing its CURRENT pointer.");
+                }
                 viewId = member.ViewId;
             }
             else if (IsPositiveFamilyReplacement(family, member, facts))

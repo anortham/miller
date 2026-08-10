@@ -292,6 +292,28 @@ public sealed class StoreFamilyResolverTests : IDisposable
     }
 
     [Fact]
+    public void PublishedGenerationWithoutCurrentRefusesWhenUnknownLineageIsPromoted()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
+        var ids = new Queue<Guid>(
+        [
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ]);
+        var resolver = Resolver(registry, ids);
+        WorkspaceRootFacts unknownFacts = Facts("ws-a", "root-a", "/repo/.git", null);
+        StoreFamilyBinding planned = resolver.ResolveOrCreate(unknownFacts);
+        WriteStoreCatalog(planned.StoreRoot, planned.FamilyId, planned.ViewId, unknownFacts.WorkspaceRoot);
+        File.Delete(Path.Combine(planned.StoreRoot, "CURRENT"));
+
+        StoreBindingMismatchException error = Assert.Throws<StoreBindingMismatchException>(() =>
+            resolver.ResolveOrCreate(Facts("ws-a", "root-a", "/repo/.git", Utc(1))));
+
+        Assert.Contains("CURRENT", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ServingGenerationSymlinkEscapeRefusesWithoutRegistryMutation()
     {
         if (OperatingSystem.IsWindows())
