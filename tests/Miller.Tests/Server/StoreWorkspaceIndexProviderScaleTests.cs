@@ -559,6 +559,117 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
         }
     }
 
+    [Fact]
+    public void ResolutionRebaseAdvancesTheStoreSequenceAndRotatesTheLiveBasePath()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "miller-store-rebase-scale-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(directory, "root");
+        string store = Path.Combine(directory, "store");
+        Directory.CreateDirectory(root);
+        string source = Path.Combine(root, "Calculator.cs");
+        File.WriteAllText(
+            source,
+            "namespace Example; public static class Calculator { public static int Add(int a, int b) => a + b; }");
+        try
+        {
+            ScaleTestSupport.RunJulie(
+                binary,
+                "store", "import", "--store", store,
+                "--family", "11111111-1111-4111-8111-111111111111",
+                "--root", root, "--view", "view-a", "--level", "full", "--jobs", "1", "--json");
+            ScaleTestSupport.RunJulie(
+                binary,
+                "store", "resolve", "--store", store, "--view", "view-a", "--json");
+
+            var binding = new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-4111-8111-111111111111"),
+                store,
+                "view-a",
+                PathCanonicalizer.CanonicalizeRoot(root),
+                StoreBindingState.Ready);
+            long firstSequence;
+            using (FamilyStoreReadSession first = FamilyStoreReadSession.Open(binding))
+            {
+                firstSequence = Assert.IsType<long>(first.Snapshot.Freshness.StoreLogSequence);
+                Assert.NotEmpty(ReadResolutionRows(first));
+            }
+
+            string storeDatabase = Path.Combine(store, "gen-001", "store.db");
+            string firstBase;
+            string firstBasePath;
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = storeDatabase,
+                Pooling = false,
+            }.ToString()))
+            {
+                connection.Open();
+                using SqliteCommand command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT view.resolution_base_id,base.relative_path
+                    FROM views AS view
+                    JOIN resolution_bases AS base ON base.base_id=view.resolution_base_id
+                    WHERE view.view_id='view-a';
+                    """;
+                using SqliteDataReader reader = command.ExecuteReader();
+                Assert.True(reader.Read());
+                firstBase = reader.GetString(0);
+                firstBasePath = Path.Combine(store, "gen-001", reader.GetString(1));
+            }
+
+            File.WriteAllText(
+                source,
+                "namespace Example; public static class Calculator { public static int Multiply(int a, int b) => a * b; }");
+            ScaleTestSupport.RunJulie(
+                binary,
+                "store", "update", "--store", store, "--root", root, "--view", "view-a",
+                "--file", "Calculator.cs", "--level", "full", "--jobs", "1", "--json");
+            ScaleTestSupport.RunJulie(
+                binary,
+                "store", "resolve", "--store", store, "--view", "view-a", "--json");
+            File.Delete(firstBasePath);
+
+            using FamilyStoreReadSession second = FamilyStoreReadSession.Open(binding);
+            long secondSequence = Assert.IsType<long>(second.Snapshot.Freshness.StoreLogSequence);
+            Assert.True(secondSequence > firstSequence);
+            Assert.NotEmpty(ReadResolutionRows(second));
+            using var verify = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = storeDatabase,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            verify.Open();
+            using SqliteCommand verifyCommand = verify.CreateCommand();
+            verifyCommand.CommandText =
+                """
+                SELECT view.resolution_base_id,
+                       delta.identifier_replacements + delta.pending_replacements
+                         + delta.pending_tombstones,
+                       delta.exact_gap_rows
+                FROM views AS view
+                JOIN resolution_deltas AS delta
+                  ON delta.view_id=view.view_id
+                 AND delta.delta_generation=view.resolution_delta_generation
+                WHERE view.view_id='view-a';
+                """;
+            using SqliteDataReader verifyReader = verifyCommand.ExecuteReader();
+            Assert.True(verifyReader.Read());
+            Assert.NotEqual(firstBase, verifyReader.GetString(0));
+            Assert.Equal(0, verifyReader.GetInt64(1));
+            Assert.Equal(0, verifyReader.GetInt64(2));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static IReadOnlyList<string> ReadResolutionRows(IWorkspaceReadSession session) =>
         session.Read(connection =>
         {

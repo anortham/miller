@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
+using System.Security.Cryptography;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -374,10 +375,254 @@ public sealed class FamilyStoreReadSessionTests
         Assert.Equal(FamilyStoreReadFailure.Corrupt, error.Failure);
     }
 
+    [Fact]
+    public void StoreSequenceAdvanceReopensTheRotatedResolutionBasePath()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        InstallResolutionBase(
+            fixture,
+            "base-before",
+            "manifest-prior",
+            baseVersionId: 1,
+            baseTargetSymbolId: "target-prior",
+            deltaTargetSymbolId: "target-before",
+            sequence: 3,
+            deltaGeneration: 1);
+
+        using (FamilyStoreReadSession before = FamilyStoreReadSession.Open(fixture.Binding))
+        {
+            Assert.Equal(3, before.Snapshot.Freshness.StoreLogSequence);
+            Assert.Equal("target-before", ReadResolutionTarget(before));
+        }
+
+        string oldBasePath = ResolutionBasePath(fixture, "base-before");
+        InstallResolutionBase(
+            fixture,
+            "base-after",
+            "manifest-current",
+            baseVersionId: 2,
+            baseTargetSymbolId: "target-after",
+            deltaTargetSymbolId: null,
+            sequence: 4,
+            deltaGeneration: 2);
+        (string ManifestHash, long ResolverOutputEpoch, long VersionId) beforeIdentity =
+            ReadResolutionBaseIdentity(fixture, "base-before");
+        (string ManifestHash, long ResolverOutputEpoch, long VersionId) afterIdentity =
+            ReadResolutionBaseIdentity(fixture, "base-after");
+        Assert.Equal(("manifest-prior", 6L, 1L), beforeIdentity);
+        Assert.Equal(("manifest-current", 6L, 2L), afterIdentity);
+        Assert.NotEqual(
+            (beforeIdentity.ManifestHash, beforeIdentity.ResolverOutputEpoch),
+            (afterIdentity.ManifestHash, afterIdentity.ResolverOutputEpoch));
+        File.Delete(oldBasePath);
+
+        using FamilyStoreReadSession after = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.Equal(4, after.Snapshot.Freshness.StoreLogSequence);
+        Assert.Equal("target-after", ReadResolutionTarget(after));
+    }
+
     private static long ReadStoreLogSequence(StoreFixture fixture)
     {
         using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
         return Assert.IsType<long>(session.Snapshot.Freshness.StoreLogSequence);
+    }
+
+    private static string ReadResolutionTarget(FamilyStoreReadSession session) =>
+        session.Read(connection =>
+        {
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "SELECT target_symbol_id FROM identifier_resolutions WHERE identifier_id='identifier';";
+            return Assert.IsType<string>(command.ExecuteScalar());
+        });
+
+    private static void InstallResolutionBase(
+        StoreFixture fixture,
+        string baseId,
+        string baseManifestHash,
+        long baseVersionId,
+        string baseTargetSymbolId,
+        string? deltaTargetSymbolId,
+        long sequence,
+        long deltaGeneration)
+    {
+        string basePath = ResolutionBasePath(fixture, baseId);
+        using (var baseConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = basePath,
+            Pooling = false,
+        }.ToString()))
+        {
+            baseConnection.Open();
+            using SqliteCommand command = baseConnection.CreateCommand();
+            command.CommandText =
+                """
+                CREATE TABLE base_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+                INSERT INTO base_meta VALUES
+                  ('completed','1'),
+                  ('manifest_hash',$manifest),
+                  ('resolver_output_epoch','6');
+                CREATE TABLE resolution_base_versions (version_id INTEGER PRIMARY KEY) STRICT;
+                INSERT INTO resolution_base_versions VALUES ($version);
+                CREATE TABLE identifier_resolutions (
+                  version_id INTEGER NOT NULL,
+                  identifier_id TEXT NOT NULL,
+                  target_version_id INTEGER,
+                  target_symbol_id TEXT,
+                  tier INTEGER,
+                  confidence REAL,
+                  method TEXT,
+                  outcome TEXT NOT NULL,
+                  candidates INTEGER,
+                  PRIMARY KEY(version_id,identifier_id)) STRICT;
+                CREATE TABLE pending_resolutions (
+                  version_id INTEGER NOT NULL,
+                  pending_relationship_id TEXT NOT NULL,
+                  target_version_id INTEGER NOT NULL,
+                  target_symbol_id TEXT NOT NULL,
+                  tier INTEGER NOT NULL,
+                  confidence REAL NOT NULL,
+                  method TEXT NOT NULL,
+                  PRIMARY KEY(version_id,pending_relationship_id)) STRICT;
+                INSERT INTO identifier_resolutions
+                  VALUES ($version,'identifier',$version,$baseTarget,1,1.0,'exact','resolved',1);
+                """;
+            command.Parameters.AddWithValue("$manifest", baseManifestHash);
+            command.Parameters.AddWithValue("$version", baseVersionId);
+            command.Parameters.AddWithValue("$baseTarget", baseTargetSymbolId);
+            command.ExecuteNonQuery();
+        }
+        long bytes = new FileInfo(basePath).Length;
+        string sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(basePath))).ToLowerInvariant();
+        string storePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = storePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand store = connection.CreateCommand();
+        store.CommandText =
+            """
+            CREATE TABLE IF NOT EXISTS resolution_bases (
+              base_id TEXT PRIMARY KEY,
+              manifest_hash TEXT NOT NULL,
+              resolver_output_epoch INTEGER NOT NULL,
+              state TEXT NOT NULL,
+              relative_path TEXT NOT NULL,
+              identifier_count INTEGER NOT NULL,
+              pending_count INTEGER NOT NULL,
+              file_bytes INTEGER,
+              file_sha256 TEXT,
+              request_id TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL) STRICT;
+            CREATE UNIQUE INDEX IF NOT EXISTS uidx_read_resolution_bases_identity
+              ON resolution_bases(manifest_hash,resolver_output_epoch);
+            CREATE TABLE IF NOT EXISTS resolution_base_versions (
+              base_id TEXT NOT NULL,
+              version_id INTEGER NOT NULL,
+              PRIMARY KEY(base_id,version_id),
+              FOREIGN KEY(base_id) REFERENCES resolution_bases(base_id) ON DELETE CASCADE,
+              FOREIGN KEY(version_id) REFERENCES file_versions(version_id) ON DELETE RESTRICT) STRICT;
+            CREATE TABLE IF NOT EXISTS resolution_deltas (
+              view_id TEXT NOT NULL,
+              delta_generation INTEGER NOT NULL,
+              base_id TEXT NOT NULL,
+              manifest_generation INTEGER NOT NULL,
+              manifest_hash TEXT NOT NULL,
+              resolver_output_epoch INTEGER NOT NULL,
+              identifier_replacements INTEGER NOT NULL,
+              pending_replacements INTEGER NOT NULL,
+              pending_tombstones INTEGER NOT NULL,
+              exact_gap_rows INTEGER NOT NULL,
+              exact_gap_files INTEGER NOT NULL,
+              exact_gap_json TEXT NOT NULL,
+              request_id TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(view_id,delta_generation)) STRICT;
+            CREATE TABLE IF NOT EXISTS resolution_identifier_deltas (
+              view_id TEXT NOT NULL,
+              delta_generation INTEGER NOT NULL,
+              version_id INTEGER NOT NULL,
+              identifier_id TEXT NOT NULL,
+              target_version_id INTEGER,
+              target_symbol_id TEXT,
+              tier INTEGER,
+              confidence REAL,
+              method TEXT,
+              outcome TEXT NOT NULL,
+              candidates INTEGER,
+              PRIMARY KEY(view_id,delta_generation,version_id,identifier_id)) STRICT;
+            CREATE TABLE IF NOT EXISTS resolution_pending_deltas (
+              view_id TEXT NOT NULL,
+              delta_generation INTEGER NOT NULL,
+              version_id INTEGER NOT NULL,
+              pending_relationship_id TEXT NOT NULL,
+              operation TEXT NOT NULL,
+              target_version_id INTEGER,
+              target_symbol_id TEXT,
+              tier INTEGER,
+              confidence REAL,
+              method TEXT,
+              PRIMARY KEY(view_id,delta_generation,version_id,pending_relationship_id)) STRICT;
+            INSERT INTO resolution_bases VALUES
+              ($base,$baseManifest,6,'ready',$relative,1,0,$bytes,$sha,$request,$now,$now);
+            INSERT INTO resolution_base_versions VALUES ($base,$baseVersion);
+            INSERT INTO resolution_deltas VALUES
+              ('view-a',$delta,$base,2,'manifest-current',6,$identifierReplacements,0,0,0,0,
+               '{"files":[],"rows":[]}',$request,$now);
+            INSERT INTO resolution_identifier_deltas
+              SELECT 'view-a',$delta,2,'identifier',2,$deltaTarget,1,1.0,'exact','resolved',1
+              WHERE $deltaTarget IS NOT NULL;
+            UPDATE views SET resolution_state='exact',resolution_base_id=$base,
+              resolution_delta_generation=$delta,resolution_exact_at=2,updated_at=$now
+              WHERE view_id='view-a';
+            INSERT INTO store_log VALUES
+              ($sequence,$request,'resolution_exact_rebased','view-a',2,NULL,NULL,0,
+               '{}',$now);
+            """;
+        store.Parameters.AddWithValue("$base", baseId);
+        store.Parameters.AddWithValue("$baseManifest", baseManifestHash);
+        store.Parameters.AddWithValue("$baseVersion", baseVersionId);
+        store.Parameters.AddWithValue("$relative", $"bases/{baseId}.db");
+        store.Parameters.AddWithValue("$bytes", bytes);
+        store.Parameters.AddWithValue("$sha", sha256);
+        store.Parameters.AddWithValue("$request", $"request-{baseId}");
+        store.Parameters.AddWithValue("$now", $"2026-08-09T00:00:0{sequence}Z");
+        store.Parameters.AddWithValue("$delta", deltaGeneration);
+        store.Parameters.AddWithValue("$identifierReplacements", deltaTargetSymbolId is null ? 0 : 1);
+        store.Parameters.AddWithValue("$deltaTarget", (object?)deltaTargetSymbolId ?? DBNull.Value);
+        store.Parameters.AddWithValue("$sequence", sequence);
+        store.ExecuteNonQuery();
+    }
+
+    private static string ResolutionBasePath(StoreFixture fixture, string baseId) =>
+        Path.Combine(fixture.Binding.StoreRoot, "gen-001", "bases", $"{baseId}.db");
+
+    private static (string ManifestHash, long ResolverOutputEpoch, long VersionId) ReadResolutionBaseIdentity(
+        StoreFixture fixture,
+        string baseId)
+    {
+        string storePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = storePath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT base.manifest_hash,base.resolver_output_epoch,root.version_id
+            FROM resolution_bases AS base
+            JOIN resolution_base_versions AS root ON root.base_id=base.base_id
+            WHERE base.base_id=$base;
+            """;
+        command.Parameters.AddWithValue("$base", baseId);
+        using SqliteDataReader reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        return (reader.GetString(0), reader.GetInt64(1), reader.GetInt64(2));
     }
 
     private static void AppendStoreLog(StoreFixture fixture, long sequence, string? viewId, long? versionId)
