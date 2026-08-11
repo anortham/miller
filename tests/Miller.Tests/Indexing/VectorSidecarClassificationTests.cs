@@ -81,6 +81,19 @@ public sealed class VectorSidecarClassificationTests
     }
 
     [Fact]
+    public void ModelNotPreparedPause_OverridesReadyAndPreservesTheReason()
+    {
+        var meta = Meta();
+        meta["converge_pause_state"] = "model-not-prepared";
+        meta["converge_pause_reason"] = "sidecar reported ready=false (model_not_prepared)";
+
+        VectorSidecarFacts facts = Classify(meta);
+
+        Assert.Equal("model-not-prepared", facts.State);
+        Assert.Equal("sidecar reported ready=false (model_not_prepared)", facts.Reason);
+    }
+
+    [Fact]
     public void DiskBlockedPause_OverridesBuilding()
     {
         var meta = Meta();

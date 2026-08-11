@@ -26,6 +26,7 @@ namespace Miller.Server.Tools;
 [McpServerToolType]
 public sealed partial class ContextTool
 {
+    private const int TermRescuePromotionReadLimit = 8;
     private readonly IWorkspaceIndexProvider _workspaceProvider;
     private readonly ISemanticTextArm? _semanticArm;
     private readonly VectorSidecar? _semanticSidecar;
@@ -59,6 +60,36 @@ public sealed partial class ContextTool
         _semanticSidecar = semanticSidecar;
     }
 
+    public string Context(
+        string query,
+        int token_budget = 2000,
+        int max_hops = 1,
+        string[]? entry_symbols = null,
+        string? failing_test = null,
+        string? stack_trace = null,
+        string format = "compact",
+        string reference_mode = "off",
+        int reference_depth = 1,
+        bool exclude_tests = false,
+        string? workspace_id = null,
+        bool? ensure_fresh = null,
+        string[]? edited_files = null) =>
+        ContextWithCancellation(
+            query,
+            token_budget,
+            max_hops,
+            entry_symbols,
+            failing_test,
+            stack_trace,
+            format,
+            reference_mode,
+            reference_depth,
+            exclude_tests,
+            workspace_id,
+            ensure_fresh,
+            edited_files,
+            CancellationToken.None);
+
     [McpServerTool(Name = "context")]
     [Description(
         "First call in an UNFAMILIAR code area: give a task plus optional entry symbols, edited files, failing " +
@@ -68,7 +99,7 @@ public sealed partial class ContextTool
         "NOT for: a symbol you can already name (inspect it) or text lookups (search). Example: " +
         "context query=\"how does workspace refresh converge the search sidecar\". Compact by default; " +
         "format=json to chain.")]
-    public string Context(
+    public string ContextWithCancellation(
         [Description("The task or question to anchor the bundle on.")] string query,
         [Description("Hard bound on complete output in estimated tokens. Default 2000; MCP maximum 2400.")]
         int token_budget = 2000,
@@ -89,12 +120,15 @@ public sealed partial class ContextTool
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
         bool? ensure_fresh = null,
         [Description("Workspace-relative files changed by the current task; their symbols rank as pivots. Optional.")]
-        string[]? edited_files = null)
+        string[]? edited_files = null,
+        [Description("Framework request cancellation token.")]
+        CancellationToken cancellationToken = default)
     {
         var telemetry = TelemetryContext.Current;
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (token_budget <= 0)
                 return string.Empty;
 
@@ -119,19 +153,22 @@ public sealed partial class ContextTool
             IReadOnlyList<ContextSourceSeed> sourceSeeds = [];
             if (!resolutionConverging)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 semanticSeeds = LoadSemanticSeeds(
                     context,
                     query,
                     parsedReferenceMode == ReferenceMode.Usage && exclude_tests);
+                cancellationToken.ThrowIfCancellationRequested();
                 sourceSeeds = LoadSourceRescueSeeds(
                     context.Index,
                     TryResolveTextContentIndex(workspace_id, ensureFresh),
                     query,
                     rescueExcludeTests);
+                cancellationToken.ThrowIfCancellationRequested();
                 switch (parsedReferenceMode)
                 {
                     case ReferenceMode.Off:
-                        output = RunActionable(
+                        output = RunActionableWithCancellation(
                             context.Index,
                             context.Index.Graph,
                             context.Resolver,
@@ -153,10 +190,11 @@ public sealed partial class ContextTool
                                 symbolId,
                                 new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
                             json,
-                            out selectedCount, out candidatesExamined);
+                            out selectedCount, out candidatesExamined,
+                            cancellationToken);
                         break;
                     case ReferenceMode.Usage:
-                        output = RunReferenceAwareActionable(
+                        output = RunReferenceAwareActionableWithCancellation(
                             context.Index,
                             context.Index.Graph,
                             context.Resolver,
@@ -186,7 +224,8 @@ public sealed partial class ContextTool
                                 context.ReadSession,
                                 symbols,
                                 excludeTests),
-                            out selectedCount, out candidatesExamined);
+                            out selectedCount, out candidatesExamined,
+                            cancellationToken);
                         break;
                     default:
                         throw new ArgumentOutOfRangeException(nameof(reference_mode));
@@ -253,6 +292,10 @@ public sealed partial class ContextTool
                     telemetry);
             }
             return BoundFinalOutput(output, effectiveTokenBudget, json);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -659,8 +702,48 @@ public sealed partial class ContextTool
         Func<string, OutgoingReferenceEvidenceSet>? readOutgoing,
         bool json,
         out int selectedCount,
-        out int candidatesExamined)
+        out int candidatesExamined) =>
+        RunActionableWithCancellation(
+            index,
+            graph,
+            resolver,
+            query,
+            tokenBudget,
+            maxHops,
+            entrySymbols,
+            editedFiles,
+            failingTest,
+            stackTrace,
+            semanticSeeds,
+            sourceSeeds,
+            readBody,
+            readOutgoing,
+            json,
+            out selectedCount,
+            out candidatesExamined,
+            CancellationToken.None);
+
+    internal static string RunActionableWithCancellation(
+        ISymbolLookupIndex index,
+        ISymbolGraphReachability graph,
+        SmartTargetResolver resolver,
+        string query,
+        int tokenBudget,
+        int maxHops,
+        IReadOnlyList<string>? entrySymbols,
+        IReadOnlyList<string>? editedFiles,
+        string? failingTest,
+        string? stackTrace,
+        IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
+        IReadOnlyList<ContextSourceSeed>? sourceSeeds,
+        Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
+        Func<string, OutgoingReferenceEvidenceSet>? readOutgoing,
+        bool json,
+        out int selectedCount,
+        out int candidatesExamined,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         IReadOnlyList<Candidate> candidates = BuildCandidates(
             index,
             graph,
@@ -675,8 +758,9 @@ public sealed partial class ContextTool
             sourceSeeds,
             readOutgoing,
             out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
-            out candidatesExamined);
-        candidates = AttachPivotBodies(candidates, tokenBudget, readBody);
+            out candidatesExamined,
+            cancellationToken);
+        candidates = AttachPivotBodies(candidates, tokenBudget, readBody, cancellationToken);
 
         if (candidates.Count == 0)
         {
@@ -687,6 +771,7 @@ public sealed partial class ContextTool
         var packCandidates = new List<PackCandidate<Candidate>>(candidates.Count);
         foreach (var c in candidates)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int cost = (int)TokenEstimator.Count(CompactCostLine(c));
             packCandidates.Add(new PackCandidate<Candidate>(
                 c,
@@ -694,6 +779,7 @@ public sealed partial class ContextTool
                 AllocationTier: c.IsPivot ? 0 : 2));
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         IReadOnlyList<Candidate> selected = ContextPacker.PackAllocated(packCandidates, tokenBudget);
         Func<IReadOnlyList<Candidate>, string> renderer = json
             ? selected => RenderJson(selected, anchorDiagnostics, query, boundOptionalFields: false)
@@ -701,7 +787,13 @@ public sealed partial class ContextTool
         Func<IReadOnlyList<Candidate>, string> boundedRenderer = json
             ? selected => RenderJson(selected, anchorDiagnostics, query, boundOptionalFields: true)
             : selected => RenderCompact(selected, anchorDiagnostics, query);
-        return RenderWithinBudget(selected, tokenBudget, renderer, boundedRenderer, out selectedCount);
+        return RenderWithinBudget(
+            selected,
+            tokenBudget,
+            renderer,
+            boundedRenderer,
+            out selectedCount,
+            cancellationToken);
     }
 
 
@@ -802,8 +894,56 @@ public sealed partial class ContextTool
         Func<IndexedSymbol, OutgoingReferenceEvidenceSet> readOutgoingEvidence,
         Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
         out int selectedCount,
-        out int candidatesExamined)
+        out int candidatesExamined) =>
+        RunReferenceAwareActionableWithCancellation(
+            index,
+            graph,
+            resolver,
+            query,
+            tokenBudget,
+            maxHops,
+            entrySymbols,
+            editedFiles,
+            failingTest,
+            stackTrace,
+            semanticSeeds,
+            sourceSeeds,
+            readBody,
+            referenceDepth,
+            excludeTests,
+            json,
+            readReferenceEvidence,
+            readOutgoingEvidence,
+            readContentChunks,
+            out selectedCount,
+            out candidatesExamined,
+            CancellationToken.None);
+
+    internal static string RunReferenceAwareActionableWithCancellation(
+        ISymbolLookupIndex index,
+        ISymbolGraphReachability graph,
+        SmartTargetResolver resolver,
+        string query,
+        int tokenBudget,
+        int maxHops,
+        IReadOnlyList<string>? entrySymbols,
+        IReadOnlyList<string>? editedFiles,
+        string? failingTest,
+        string? stackTrace,
+        IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
+        IReadOnlyList<ContextSourceSeed>? sourceSeeds,
+        Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
+        int referenceDepth,
+        bool excludeTests,
+        bool json,
+        Func<IndexedSymbol, ReferenceEvidenceSet> readReferenceEvidence,
+        Func<IndexedSymbol, OutgoingReferenceEvidenceSet> readOutgoingEvidence,
+        Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
+        out int selectedCount,
+        out int candidatesExamined,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(resolver);
@@ -836,12 +976,14 @@ public sealed partial class ContextTool
                         new OutgoingReferenceEvidenceCoverage(0, 0, 0, 0, 0, false, false));
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 return readOutgoingEvidence(symbol);
             },
             out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
-            out candidatesExamined);
+            out candidatesExamined,
+            cancellationToken);
 
-        candidates = AttachPivotBodies(candidates, tokenBudget, readBody);
+        candidates = AttachPivotBodies(candidates, tokenBudget, readBody, cancellationToken);
 
         if (candidates.Count == 0)
         {
@@ -855,14 +997,19 @@ public sealed partial class ContextTool
             excludeTests,
             readReferenceEvidence,
             readOutgoingEvidence,
-            readContentChunks);
+            readContentChunks,
+            cancellationToken);
         var packCandidates = new List<PackCandidate<ReferenceContextItem>>(items.Count);
         foreach (ReferenceContextItem item in items)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             packCandidates.Add(new PackCandidate<ReferenceContextItem>(
                 item,
                 (int)TokenEstimator.Count(ReferenceCostLine(item)),
                 AllocationTier: ReferenceAllocationTier(item)));
+        }
 
+        cancellationToken.ThrowIfCancellationRequested();
         IReadOnlyList<ReferenceContextItem> selected =
             ContextPacker.PackAllocated(packCandidates, tokenBudget);
         Func<IReadOnlyList<ReferenceContextItem>, string> renderer = json
@@ -871,7 +1018,13 @@ public sealed partial class ContextTool
         Func<IReadOnlyList<ReferenceContextItem>, string> boundedRenderer = json
             ? selected => RenderReferenceJson(selected, anchorDiagnostics, query, boundOptionalFields: true)
             : selected => RenderReferenceCompact(selected, anchorDiagnostics, query);
-        return RenderWithinBudget(selected, tokenBudget, renderer, boundedRenderer, out selectedCount);
+        return RenderWithinBudget(
+            selected,
+            tokenBudget,
+            renderer,
+            boundedRenderer,
+            out selectedCount,
+            cancellationToken);
     }
 
     private static string RenderWithinBudget<T>(
@@ -879,8 +1032,10 @@ public sealed partial class ContextTool
         int tokenBudget,
         Func<IReadOnlyList<T>, string> renderer,
         Func<IReadOnlyList<T>, string> boundedRenderer,
-        out int selectedCount)
+        out int selectedCount,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         IReadOnlyList<T> empty = Array.Empty<T>();
         string emptyOutput = renderer(empty);
         if (tokenBudget <= 0)
@@ -913,6 +1068,7 @@ public sealed partial class ContextTool
         string bestOutput = emptyOutput;
         while (lowestCandidateCount <= highestCandidateCount)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int candidateCount = lowestCandidateCount + ((highestCandidateCount - lowestCandidateCount) / 2);
             var prefix = new ArraySegment<T>(retained, 0, candidateCount);
             string output = boundedRenderer(prefix);
@@ -1128,8 +1284,10 @@ public sealed partial class ContextTool
         IReadOnlyList<ContextSourceSeed>? sourceSeeds,
         Func<string, OutgoingReferenceEvidenceSet>? readOutgoing,
         out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
-        out int candidatesExamined)
+        out int candidatesExamined,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (maxHops < 0) maxHops = 0;
         if (maxHops > 2) maxHops = 2;
         candidatesExamined = 0;
@@ -1151,6 +1309,7 @@ public sealed partial class ContextTool
             int? lineDistance = null,
             bool pinned = false)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int order = anchorOrder++;
             symbols[symbol.SymbolId] = symbol;
             signals.Add(new ContextPivotSignal(
@@ -1174,6 +1333,7 @@ public sealed partial class ContextTool
 
         if (!string.IsNullOrWhiteSpace(query))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             // Parent-query auto policy for both arms: one-word term rescue must not reintroduce
             // tests when the original natural-language query would hide them.
             bool excludeTests = SearchTool.ResolveExcludeTests(null, query, SearchToolMode.Symbol);
@@ -1183,6 +1343,7 @@ public sealed partial class ContextTool
                 SearchToolMode.Symbol,
                 SearchSeedLimit,
                 excludeTests);
+            cancellationToken.ThrowIfCancellationRequested();
             int retrievedCount = Math.Min(retrieved.Candidates.Count, SearchSeedLimit);
             for (int rank = 0; rank < retrievedCount; rank++)
             {
@@ -1201,12 +1362,14 @@ public sealed partial class ContextTool
 
             foreach (string term in queryTerms)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 SymbolCandidateSet termCandidates = SearchTool.CollectSymbolCandidates(
                     index,
                     term,
                     SearchToolMode.Symbol,
                     limit: 6,
                     excludeTests);
+                cancellationToken.ThrowIfCancellationRequested();
                 int termCandidateCount = Math.Min(termCandidates.Candidates.Count, 6);
                 for (int rank = 0; rank < termCandidateCount; rank++)
                 {
@@ -1235,7 +1398,8 @@ public sealed partial class ContextTool
                     symbols,
                     reasons,
                     (symbol, rank, score, strength, reason) =>
-                        AddSignal(symbol, rank, score, strength, reason));
+                        AddSignal(symbol, rank, score, strength, reason),
+                    cancellationToken);
             }
         }
 
@@ -1243,6 +1407,7 @@ public sealed partial class ContextTool
         {
             foreach (string entry in entrySymbols)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (string.IsNullOrWhiteSpace(entry))
                     continue;
                 switch (resolver.Resolve(entry))
@@ -1288,6 +1453,7 @@ public sealed partial class ContextTool
         {
             foreach (string editedFile in editedFiles)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (string.IsNullOrWhiteSpace(editedFile))
                     continue;
                 string? resolvedPath = index.ResolveIndexedFilePath(editedFile);
@@ -1313,6 +1479,7 @@ public sealed partial class ContextTool
         bool failingTestMatched = failingTestMatches.Count > 0;
         foreach (IndexedSymbol match in failingTestMatches)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             AddSignal(match, NoRetrievalRank, 0, 80, "failing_test");
         }
         if (failingTestTruncated)
@@ -1332,6 +1499,7 @@ public sealed partial class ContextTool
             ParseStackFrames(stackTrace, out bool stackFramesTruncated);
         foreach ((string file, int line) in stackFrames)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             string? resolvedPath = index.ResolveIndexedFilePath(file);
             IReadOnlyList<IndexedSymbol> matches = resolvedPath is null
                 ? index.FindByFilePathFragment(file, SearchSeedLimit)
@@ -1356,6 +1524,7 @@ public sealed partial class ContextTool
             FindNamedAnchorCandidates(index, stackTrace, out bool stackSymbolsTruncated);
         foreach (IndexedSymbol match in stackSymbolMatches)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             stackMatched = true;
             AddSignal(match, NoRetrievalRank, 0, 90, "stack_symbol");
         }
@@ -1385,6 +1554,7 @@ public sealed partial class ContextTool
         {
             foreach (ContextSourceSeed seed in sourceSeeds.Where(static seed => IsQueryPivot(seed.Symbol)))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 IndexedSymbol symbol = PreferDefinitionPivot(index, seed.Symbol);
                 AddSignal(
                     symbol,
@@ -1399,6 +1569,7 @@ public sealed partial class ContextTool
         {
             foreach (ContextSemanticSeed seed in semanticSeeds.Where(static seed => IsQueryPivot(seed.Symbol)))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 IndexedSymbol symbol = PreferDefinitionPivot(index, seed.Symbol);
                 AddSignal(
                     symbol,
@@ -1415,7 +1586,9 @@ public sealed partial class ContextTool
             return Array.Empty<Candidate>();
 
         string[] pivotIds = pivots.Select(static pivot => pivot.SymbolId).ToArray();
+        cancellationToken.ThrowIfCancellationRequested();
         IReadOnlyList<ReachedNode> reached = graph.Reach(pivotIds, maxHops, ReachCap, Direction.Both);
+        cancellationToken.ThrowIfCancellationRequested();
         var candidates = new List<Candidate>(pivotIds.Length + reached.Count);
         var symbolsById = SymbolLookupBatch.FindBySymbolIds(
             index,
@@ -1424,6 +1597,7 @@ public sealed partial class ContextTool
         var pivotSymbols = new List<IndexedSymbol>(pivotIds.Length);
         foreach (string pivotId in pivotIds)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (symbolsById.TryGetValue(pivotId, out IndexedSymbol? symbol))
             {
                 pivotSymbols.Add(symbol);
@@ -1443,6 +1617,7 @@ public sealed partial class ContextTool
             reached.Count + (pivotSymbols.Count * 2));
         foreach (ReachedNode node in reached)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (seenNeighbourIds.Add(node.Id) &&
                 symbolsById.TryGetValue(node.Id, out IndexedSymbol? symbol))
             {
@@ -1453,6 +1628,7 @@ public sealed partial class ContextTool
         {
             foreach (IndexedSymbol pivot in pivotSymbols)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 int added = 0;
                 foreach (IndexedSymbol symbol in index.FindByFilePath(pivot.FilePath)
                              .Where(static symbol => IsQueryPivot(symbol))
@@ -1460,6 +1636,7 @@ public sealed partial class ContextTool
                              .ThenBy(symbol => LineDistance(symbol, pivot.StartLine))
                              .ThenBy(static symbol => symbol.SymbolId, StringComparer.Ordinal))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (!seenNeighbourIds.Add(symbol.SymbolId))
                         continue;
                     scoredReached.Add((symbol, 1, scorer.Score(symbol), "file_neighbour"));
@@ -1473,7 +1650,10 @@ public sealed partial class ContextTool
                      .OrderBy(static candidate => candidate.Hop)
                      .ThenByDescending(static candidate => candidate.Score)
                      .ThenBy(static candidate => candidate.Symbol.SymbolId, StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             candidates.Add(new Candidate(entry.Symbol, entry.Hop, entry.Reason));
+        }
 
         candidatesExamined = candidates.Count;
         return candidates;
@@ -1491,9 +1671,12 @@ public sealed partial class ContextTool
         List<ContextPivotSignal> signals,
         Dictionary<string, IndexedSymbol> symbols,
         Dictionary<string, (int Strength, int Order, string Reason, int? Line)> reasons,
-        Action<IndexedSymbol, int, double, int, string> addSignal)
+        Action<IndexedSymbol, int, double, int, string> addSignal,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var hits = new Dictionary<string, TermRescueTestHit>(StringComparer.Ordinal);
+        var outgoingBySymbol = new Dictionary<string, OutgoingReferenceEvidenceSet>(StringComparer.Ordinal);
 
         void Consider(
             IndexedSymbol testSymbol,
@@ -1534,6 +1717,7 @@ public sealed partial class ContextTool
 
         foreach ((string symbolId, (int Strength, int Order, string Reason, int? Line) reason) in reasons)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!reason.Reason.StartsWith("query_term_", StringComparison.Ordinal) ||
                 reason.Reason.EndsWith("_subject", StringComparison.Ordinal) ||
                 !symbols.TryGetValue(symbolId, out IndexedSymbol? symbol))
@@ -1561,11 +1745,11 @@ public sealed partial class ContextTool
                 reason.Strength);
         }
 
-        // Parent NL auto-hide keeps tests out of term rescue; re-scan tests only for promotion.
         if (excludeTests)
         {
             foreach (string term in queryTerms)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 SymbolCandidateSet termCandidates = SearchTool.CollectSymbolCandidates(
                     index,
                     term,
@@ -1575,6 +1759,7 @@ public sealed partial class ContextTool
                 int termCandidateCount = Math.Min(termCandidates.Candidates.Count, 6);
                 for (int rank = 0; rank < termCandidateCount; rank++)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     SymbolCandidate candidate = termCandidates.Candidates[rank];
                     if (index.FindBySymbolId(candidate.SymbolId) is not { } symbol)
                         continue;
@@ -1591,23 +1776,33 @@ public sealed partial class ContextTool
             }
         }
 
-        foreach (TermRescueTestHit hit in hits.Values)
+        foreach (TermRescueTestHit hit in hits.Values
+                     .OrderByDescending(static hit => hit.Strength)
+                     .ThenBy(static hit => hit.RetrievalRank)
+                     .ThenBy(static hit => hit.Test.FilePath, StringComparer.Ordinal)
+                     .ThenBy(static hit => hit.Test.StartLine)
+                     .ThenBy(static hit => hit.Test.SymbolId, StringComparer.Ordinal)
+                     .Take(TermRescuePromotionReadLimit))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             OutgoingReferenceEvidenceSet outgoing;
             try
             {
-                outgoing = readOutgoing(hit.Test.SymbolId);
+                if (!outgoingBySymbol.TryGetValue(hit.Test.SymbolId, out outgoing!))
+                {
+                    outgoing = readOutgoing(hit.Test.SymbolId);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    outgoingBySymbol.Add(hit.Test.SymbolId, outgoing);
+                }
             }
             catch (Exception ex) when (
                 ex is InvalidOperationException or IOException or UnauthorizedAccessException
                     or ArgumentException or NotSupportedException
                     or Microsoft.Data.Sqlite.SqliteException)
             {
-                // Promotion is optional enrichment; a read failure must not abort context.
                 continue;
             }
 
-            // Truncated exact pages can hide a second subject — refuse to promote on incomplete evidence.
             if (outgoing.Coverage.ExactTruncated)
                 continue;
 
@@ -1615,6 +1810,7 @@ public sealed partial class ContextTool
             IndexedSymbol? soleSubject = null;
             foreach (OutgoingReferenceEvidence edge in outgoing.Exact)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (string.IsNullOrEmpty(edge.TargetSymbolId) || !edge.IsExact)
                     continue;
                 if (index.FindBySymbolId(edge.TargetSymbolId) is not { } target)
@@ -1854,8 +2050,10 @@ public sealed partial class ContextTool
     private static IReadOnlyList<Candidate> AttachPivotBodies(
         IReadOnlyList<Candidate> candidates,
         int tokenBudget,
-        Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody)
+        Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (readBody is null)
             return candidates;
 
@@ -1867,6 +2065,7 @@ public sealed partial class ContextTool
         var enriched = new Candidate[candidates.Count];
         for (int index = 0; index < candidates.Count; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Candidate candidate = candidates[index];
             if (!candidate.IsPivot)
             {
@@ -1875,6 +2074,7 @@ public sealed partial class ContextTool
             }
 
             ExtractReader.BodyReadResult body = readBody(candidate.Symbol);
+            cancellationToken.ThrowIfCancellationRequested();
             if (body.Text is { } text)
             {
                 bool truncated = text.Length > maxBodyChars;
@@ -1988,8 +2188,10 @@ public sealed partial class ContextTool
         bool excludeTests,
         Func<IndexedSymbol, ReferenceEvidenceSet> readReferenceEvidence,
         Func<IndexedSymbol, OutgoingReferenceEvidenceSet> readOutgoingEvidence,
-        Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks)
+        Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var items = new List<ReferenceContextItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var usableCandidates = candidates
@@ -2000,6 +2202,7 @@ public sealed partial class ContextTool
 
         foreach (Candidate candidate in usableCandidates)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             IndexedSymbol symbol = candidate.Symbol;
             AddItem(new ReferenceContextItem(
                 ItemType: "symbol",
@@ -2031,8 +2234,11 @@ public sealed partial class ContextTool
         }
 
         IReadOnlyList<IndexedSymbol> symbols = usableCandidates.Select(static candidate => candidate.Symbol).ToArray();
-        foreach (TextContentSearchHit hit in readContentChunks(symbols, excludeTests))
+        IReadOnlyList<TextContentSearchHit> contentChunks = readContentChunks(symbols, excludeTests);
+        cancellationToken.ThrowIfCancellationRequested();
+        foreach (TextContentSearchHit hit in contentChunks)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (excludeTests && IsTestPath.Check(hit.Path ?? hit.DisplayPath))
                 continue;
             AddItem(new ReferenceContextItem(
@@ -2057,10 +2263,13 @@ public sealed partial class ContextTool
         {
             foreach (Candidate candidate in usableCandidates)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 IndexedSymbol symbol = candidate.Symbol;
                 OutgoingReferenceEvidenceSet outgoing = readOutgoingEvidence(symbol);
+                cancellationToken.ThrowIfCancellationRequested();
                 foreach (OutgoingReferenceEvidence callee in outgoing.Exact)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (excludeTests && IsTestPath.Check(callee.FilePath))
                         continue;
                     AddItem(new ReferenceContextItem(
@@ -2080,6 +2289,7 @@ public sealed partial class ContextTool
 
                 foreach (OutgoingReferenceEvidence callee in outgoing.Fallback)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (excludeTests && IsTestPath.Check(callee.FilePath))
                         continue;
                     AddItem(new ReferenceContextItem(
@@ -2097,8 +2307,10 @@ public sealed partial class ContextTool
                 }
 
                 ReferenceEvidenceSet inbound = readReferenceEvidence(symbol);
+                cancellationToken.ThrowIfCancellationRequested();
                 foreach (ReferenceEvidence reference in inbound.Exact)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (excludeTests && IsTestPath.Check(reference.FilePath))
                         continue;
                     AddItem(new ReferenceContextItem(
@@ -2118,6 +2330,7 @@ public sealed partial class ContextTool
 
                 foreach (ReferenceEvidence reference in inbound.Fallback)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (excludeTests && IsTestPath.Check(reference.FilePath))
                         continue;
                     AddItem(new ReferenceContextItem(

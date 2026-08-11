@@ -215,6 +215,7 @@ public sealed class VectorConvergeService : BackgroundService
     internal const string ConvergePauseStateKey = "converge_pause_state";
     internal const string ConvergePauseReasonKey = "converge_pause_reason";
     internal const string CircuitOpenPauseValue = "circuit-open";
+    internal const string ModelNotPreparedPauseValue = "model-not-prepared";
     internal const string DiskBlockedPauseValue = "disk-blocked";
 
     /// <summary>A disk gate that always reports space: the default for drains that do not project onto a real
@@ -581,6 +582,13 @@ public sealed class VectorConvergeService : BackgroundService
 
     internal async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
         IVectorConvergePort port,
+        SemanticEmbeddingSessionBroker broker,
+        CancellationToken cancellationToken) =>
+        await DrainAsync(
+            port, EmbeddingClient.For(broker), null, null, AlwaysAvailable, cancellationToken).ConfigureAwait(false);
+
+    internal async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
+        IVectorConvergePort port,
         SemanticEmbeddingSession session,
         IVectorShadowRebuilder? rebuilder,
         CancellationToken cancellationToken) =>
@@ -622,6 +630,8 @@ public sealed class VectorConvergeService : BackgroundService
     {
         ArgumentNullException.ThrowIfNull(port);
         ArgumentNullException.ThrowIfNull(diskGate);
+
+        await embedding.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
 
         var state = new DrainState(rebuilder, diskGate, _signal.TakeFullRebuild());
         VectorCursorOutcome symbols = await DrainCursorAsync(
@@ -1206,11 +1216,16 @@ public sealed class VectorConvergeService : BackgroundService
     /// </summary>
     private static void ResolvePause(IVectorConvergePort port, EmbeddingClient embedding, DrainState state)
     {
-        (string desiredState, string desiredReason) = embedding.State is SemanticSessionState.CircuitOpen
-            ? (CircuitOpenPauseValue, Scrub(embedding.UnavailableReason))
-            : state.DiskBlocked
-                ? (DiskBlockedPauseValue, Scrub(state.DiskBlockedReason))
-                : (string.Empty, string.Empty);
+        (string desiredState, string desiredReason) = embedding.State switch
+        {
+            SemanticSessionState.CircuitOpen =>
+                (CircuitOpenPauseValue, Scrub(embedding.UnavailableReason)),
+            SemanticSessionState.ModelNotPrepared =>
+                (ModelNotPreparedPauseValue, Scrub(embedding.UnavailableReason)),
+            _ when state.DiskBlocked =>
+                (DiskBlockedPauseValue, Scrub(state.DiskBlockedReason)),
+            _ => (string.Empty, string.Empty),
+        };
 
         string current = port.Meta(ConvergePauseStateKey) ?? string.Empty;
         if (string.Equals(current, desiredState, StringComparison.Ordinal))
@@ -1249,6 +1264,7 @@ public sealed class VectorConvergeService : BackgroundService
 
     private sealed class EmbeddingClient(
         Func<IReadOnlyList<string>, CancellationToken, Task<SemanticEmbedOutcome>> embedBatch,
+        Func<CancellationToken, Task<SemanticEncoderHandshake?>> ensureReady,
         Func<SemanticSessionState> state,
         Func<string?> unavailableReason)
     {
@@ -1260,16 +1276,27 @@ public sealed class VectorConvergeService : BackgroundService
             IReadOnlyList<string> texts,
             CancellationToken cancellationToken) => embedBatch(texts, cancellationToken);
 
+        public Task<SemanticEncoderHandshake?> EnsureReadyAsync(CancellationToken cancellationToken) =>
+            ensureReady(cancellationToken);
+
         public static EmbeddingClient For(SemanticEmbeddingSession session)
         {
             ArgumentNullException.ThrowIfNull(session);
-            return new EmbeddingClient(session.EmbedBatchAsync, () => session.State, () => session.UnavailableReason);
+            return new EmbeddingClient(
+                session.EmbedBatchAsync,
+                session.EnsureStartedAsync,
+                () => session.State,
+                () => session.UnavailableReason);
         }
 
         public static EmbeddingClient For(SemanticEmbeddingSessionBroker broker)
         {
             ArgumentNullException.ThrowIfNull(broker);
-            return new EmbeddingClient(broker.EmbedBatchAsync, () => broker.State, () => broker.UnavailableReason);
+            return new EmbeddingClient(
+                broker.EmbedBatchAsync,
+                broker.EnsureReadyAsync,
+                () => broker.State,
+                () => broker.UnavailableReason);
         }
     }
 

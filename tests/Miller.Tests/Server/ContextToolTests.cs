@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.AI;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Graph;
 using Miller.Core.References;
@@ -1392,6 +1393,38 @@ public sealed class ContextToolTests
     }
 
     // ---- routed wrapper / ctor shape ----
+
+    [Fact]
+    public void ContextWithCancellation_AlreadyCancelled_PropagatesCancellation()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-cancel-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(EmptyIndex(), "current.db", "current-ws", root));
+        var tool = new ContextTool(provider);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => tool.ContextWithCancellation(
+            "OrderService",
+            cancellationToken: cancellation.Token));
+    }
+
+    [Fact]
+    public void ContextWithCancellation_SchemaOmitsFrameworkCancellationToken()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-schema-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(EmptyIndex(), "current.db", "current-ws", root));
+        var tool = new ContextTool(provider);
+        System.Reflection.MethodInfo method = typeof(ContextTool).GetMethod(
+            nameof(ContextTool.ContextWithCancellation))!;
+
+        AIFunction function = AIFunctionFactory.Create(method, tool);
+        JsonElement properties = function.JsonSchema.GetProperty("properties");
+
+        Assert.True(properties.TryGetProperty("query", out _));
+        Assert.False(properties.TryGetProperty("cancellationToken", out _));
+    }
 
     [Fact]
     public void Context_ExplicitWorkspaceId_DefaultsEnsureFreshTrue_AndRoutesToTargetIndex()
@@ -3028,6 +3061,109 @@ public sealed class ContextToolTests
         Assert.StartsWith("query_term_", reason);
         Assert.EndsWith("_subject", reason);
         Assert.Equal("partial", document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public void RunActionable_TermRescuePromotionReadsAtMostEightUniqueTestsDeterministically()
+    {
+        IndexedSymbol[] symbols = Enumerable.Range(0, 12)
+            .Select(index => new IndexedSymbol(
+                index,
+                $"0000000000000000000000000000d{index:x3}",
+                index < 6 ? $"AlphaBehavior{index}" : $"BetaBehavior{index}",
+                index < 6 ? $"method AlphaBehavior{index}" : $"method BetaBehavior{index}",
+                "method",
+                "csharp",
+                $"tests/Behavior{index}Tests.cs",
+                10,
+                40,
+                null,
+                true))
+            .ToArray();
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+
+        static string[] RunAndRecord(
+            MillerRepositoryIndex repositoryIndex,
+            SmartTargetResolver targetResolver)
+        {
+            var reads = new List<string>();
+            ContextTool.RunActionable(
+                repositoryIndex,
+                repositoryIndex.Graph,
+                targetResolver,
+                "alpha beta behavior",
+                tokenBudget: 4000,
+                maxHops: 0,
+                entrySymbols: null,
+                editedFiles: null,
+                failingTest: null,
+                stackTrace: null,
+                semanticSeeds: null,
+                sourceSeeds: null,
+                readBody: null,
+                readOutgoing: id =>
+                {
+                    reads.Add(id);
+                    return ExactOutgoingSet();
+                },
+                json: true,
+                out _,
+                out _);
+            return reads.ToArray();
+        }
+
+        string[] first = RunAndRecord(index, resolver);
+        string[] second = RunAndRecord(index, resolver);
+
+        Assert.Equal(first, second);
+        Assert.Equal(first.Length, first.Distinct(StringComparer.Ordinal).Count());
+        Assert.InRange(first.Length, 1, 8);
+    }
+
+    [Fact]
+    public void RunActionable_CancellationDuringCandidateEnrichment_StopsPipeline()
+    {
+        const string testId = "0000000000000000000000000000e001";
+        var test = new IndexedSymbol(
+            0,
+            testId,
+            "AlphaBehavior",
+            "method AlphaBehavior",
+            "method",
+            "csharp",
+            "tests/AlphaBehaviorTests.cs",
+            10,
+            40,
+            null,
+            true);
+        var index = MillerRepositoryIndex.Build([test]);
+        var resolver = new SmartTargetResolver(index);
+        using var cancellation = new CancellationTokenSource();
+
+        Assert.Throws<OperationCanceledException>(() => ContextTool.RunActionableWithCancellation(
+            index,
+            index.Graph,
+            resolver,
+            "alpha behavior",
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            readOutgoing: _ =>
+            {
+                cancellation.Cancel();
+                return ExactOutgoingSet();
+            },
+            json: true,
+            out _,
+            out _,
+            cancellationToken: cancellation.Token));
     }
 
     [Fact]

@@ -73,7 +73,10 @@ public sealed class SemanticQueryDiagnosticsTests
             case Scenario.ModelNotPrepared:
             {
                 var port = new RecordingPort { Matches = [Match(1, 0.1, "a", "src/A.cs")] };
-                var arm = new SemanticSearchArm(Root, enabled: true, port.Factory, static () => null);
+                await using var session = new SemanticEmbeddingSession(
+                    FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.ModelNotPrepared),
+                    FastOptions);
+                var arm = new SemanticSearchArm(Root, enabled: true, port.Factory, () => session);
                 result = await arm.QuerySymbolsAsync("workspace refresh", 5, cancellationToken: ct);
                 break;
             }

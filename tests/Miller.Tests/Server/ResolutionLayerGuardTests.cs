@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Editing;
 using Miller.Indexing;
@@ -62,18 +63,19 @@ public sealed class ResolutionLayerGuardTests : IDisposable
     [Fact]
     public void TraceRefusesAConvergingStoreResolutionLayer()
     {
-        string output = new TraceTool(new StoreReadProvider(_index, _lookupIndex, _snapshot)).Trace("Alpha");
+        string output = new TraceTool(new StoreReadProvider(_index, _lookupIndex, _snapshot))
+            .Trace("Alpha", format: "json");
 
-        Assert.Contains("diagnostic_code=resolution_converging", output, StringComparison.Ordinal);
+        AssertConvergingEnvelope(output, "trace");
     }
 
     [Fact]
     public void ContextUsageRefusesAConvergingStoreResolutionLayer()
     {
         string output = new ContextTool(new StoreReadProvider(_index, _lookupIndex, _snapshot))
-            .Context("Alpha", reference_mode: "usage");
+            .Context("Alpha", reference_mode: "usage", format: "json");
 
-        Assert.Contains("diagnostic_code=resolution_converging", output, StringComparison.Ordinal);
+        AssertConvergingEnvelope(output, "context");
     }
 
     [Theory]
@@ -82,18 +84,29 @@ public sealed class ResolutionLayerGuardTests : IDisposable
     public void InspectReferenceDepthRefusesAConvergingStoreResolutionLayer(string depth)
     {
         string output = new InspectTool(new StoreReadProvider(_index, _lookupIndex, _snapshot))
-            .Inspect("Alpha", depth: depth);
+            .Inspect("Alpha", depth: depth, format: "json");
 
-        Assert.Contains("diagnostic_code=resolution_converging", output, StringComparison.Ordinal);
+        AssertConvergingEnvelope(output, "inspect");
     }
 
     [Fact]
     public void ImpactRefusesAConvergingStoreResolutionLayer()
     {
         string output = new ImpactTool(new StoreReadProvider(_index, _lookupIndex, _snapshot))
-            .Impact(target: "Alpha");
+            .Impact(target: "Alpha", format: "json");
 
-        Assert.Contains("diagnostic_code=resolution_converging", output, StringComparison.Ordinal);
+        AssertConvergingEnvelope(output, "impact");
+    }
+
+    private static void AssertConvergingEnvelope(string output, string tool)
+    {
+        using var document = JsonDocument.Parse(output);
+
+        Assert.Equal(1, document.RootElement.GetProperty("schema_version").GetInt32());
+        Assert.Equal(tool, document.RootElement.GetProperty("tool").GetString());
+        Assert.Equal(
+            "resolution_converging",
+            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Miller.Indexing;
 using Miller.Indexing.Semantic;
 
 namespace Miller.Server.Cli;
@@ -30,6 +31,13 @@ internal delegate int SemanticPrepareProcessRunner(
     IReadOnlyList<string> arguments,
     TextWriter stdout,
     TextWriter stderr);
+
+internal enum SemanticPrepareActivationOutcome
+{
+    Activated,
+    NoLiveBroker,
+    StillNotReady,
+}
 
 /// <summary>
 /// The <c>miller semantic prepare [--model &lt;id&gt;] [--json]</c> verb: Miller's explicit, consented
@@ -60,6 +68,7 @@ internal sealed class SemanticPrepareCli
     private readonly Func<int> _currentPid;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string> _newNonce;
+    private readonly Func<SemanticPrepareActivationOutcome> _activate;
 
     internal SemanticPrepareCli(
         Func<string, bool> fileExists,
@@ -67,7 +76,8 @@ internal sealed class SemanticPrepareCli
         SemanticPrepareProcessRunner runProcess,
         Func<int> currentPid,
         Func<DateTimeOffset> utcNow,
-        Func<string> newNonce)
+        Func<string> newNonce,
+        Func<SemanticPrepareActivationOutcome> activate)
     {
         _fileExists = fileExists ?? throw new ArgumentNullException(nameof(fileExists));
         _preflight = preflight ?? throw new ArgumentNullException(nameof(preflight));
@@ -75,13 +85,15 @@ internal sealed class SemanticPrepareCli
         _currentPid = currentPid ?? throw new ArgumentNullException(nameof(currentPid));
         _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
         _newNonce = newNonce ?? throw new ArgumentNullException(nameof(newNonce));
+        _activate = activate ?? throw new ArgumentNullException(nameof(activate));
     }
 
     /// <summary>The production wiring: real filesystem probe, the shared <see cref="DiskPreflight"/>, real child
     /// process.</summary>
-    public static SemanticPrepareCli Production() =>
+    public static SemanticPrepareCli Production(string toolsRoot, string millerHome) =>
         new(File.Exists, SharedDiskPreflight.Instance, RunProcess, () => Environment.ProcessId,
-            () => DateTimeOffset.UtcNow, () => Guid.NewGuid().ToString("N"));
+            () => DateTimeOffset.UtcNow, () => Guid.NewGuid().ToString("N"),
+            () => ActivateExistingBroker(toolsRoot, millerHome));
 
     /// <summary>The absolute path of the progress marker for a workspace's <c>.miller</c> directory.</summary>
     internal static string MarkerPathFor(string millerDir) => Path.Combine(millerDir, MarkerFileName);
@@ -129,14 +141,81 @@ internal sealed class SemanticPrepareCli
             : request.Model!.Trim();
         string nonce = _newNonce();
         WriteMarker(markerPath, model, nonce);
+        int exitCode;
         try
         {
-            return _runProcess(executable, BuildArguments(model), stdout, stderr);
+            exitCode = _runProcess(executable, BuildArguments(model), stdout, stderr);
         }
         finally
         {
             DeleteMarker(markerPath, nonce);
         }
+
+        if (exitCode != 0)
+            return exitCode;
+
+        SemanticPrepareActivationOutcome activation;
+        try
+        {
+            activation = _activate();
+        }
+        catch (Exception)
+        {
+            activation = SemanticPrepareActivationOutcome.StillNotReady;
+        }
+        WriteActivation(request.Json, activation, stdout);
+        return 0;
+    }
+
+    private static SemanticPrepareActivationOutcome ActivateExistingBroker(string toolsRoot, string millerHome)
+    {
+        if (SemanticActivation.FromEnvironment() is SemanticMode.Off)
+            return SemanticPrepareActivationOutcome.NoLiveBroker;
+
+        var factory = new SharedSemanticBrokerConnectionFactory(
+            toolsRoot,
+            millerHome,
+            SemanticEncoderSelection.Active);
+        try
+        {
+            ExistingSemanticBrokerProbe probe = factory.ProbeExistingAsync(
+                    new SemanticSessionOptions().InitTimeout,
+                    CancellationToken.None)
+                .AsTask()
+                .GetAwaiter()
+                .GetResult();
+            return probe.Readiness switch
+            {
+                ExistingSemanticBrokerReadiness.Activated => SemanticPrepareActivationOutcome.Activated,
+                ExistingSemanticBrokerReadiness.StillNotReady => SemanticPrepareActivationOutcome.StillNotReady,
+                _ => SemanticPrepareActivationOutcome.NoLiveBroker,
+            };
+        }
+        finally
+        {
+            factory.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+    }
+
+    private static void WriteActivation(
+        bool json,
+        SemanticPrepareActivationOutcome outcome,
+        TextWriter stdout)
+    {
+        string value = outcome switch
+        {
+            SemanticPrepareActivationOutcome.Activated => "activated",
+            SemanticPrepareActivationOutcome.NoLiveBroker => "no_live_broker",
+            SemanticPrepareActivationOutcome.StillNotReady => "still_not_ready",
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome)),
+        };
+        if (json)
+        {
+            stdout.WriteLine($"{{\"activation\":\"{value}\"}}");
+            return;
+        }
+
+        stdout.WriteLine($"semantic activation: {value}");
     }
 
     private static IReadOnlyList<string> BuildArguments(string model) =>

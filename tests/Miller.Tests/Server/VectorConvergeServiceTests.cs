@@ -1528,6 +1528,54 @@ public sealed class VectorConvergeServiceTests
         Assert.DoesNotContain(port.Commits, c => c.Kind is VectorUnitKind.Symbol);
         Assert.Equal(0, outcomes.Single(o => o.Kind is VectorUnitKind.Symbol).CompletedRevision);
         Assert.False(string.IsNullOrEmpty(port.Meta(VectorConvergeService.SymbolErrorKey)));
+        Assert.Equal("model-not-prepared", port.Meta("converge_pause_state"));
+        Assert.Contains("model_not_prepared", port.Meta("converge_pause_reason"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Drain_NextWakeProbesAParkedSessionAndClearsTheModelNotPreparedPause()
+    {
+        var port = new FakePort();
+        port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.SequencedLauncher(
+                FakeSidecarFault.ModelNotPrepared,
+                FakeSidecarFault.None),
+            FastOptions);
+        VectorConvergeService service = NewService();
+
+        await service.DrainAsync(port, session, TestContext.Current.CancellationToken);
+        Assert.Equal("model-not-prepared", port.Meta("converge_pause_state"));
+
+        await service.DrainAsync(port, session, TestContext.Current.CancellationToken);
+
+        Assert.Equal(SemanticSessionState.Ready, session.State);
+        Assert.Contains(port.Commits, c => c.Kind is VectorUnitKind.Symbol);
+        Assert.True(string.IsNullOrEmpty(port.Meta("converge_pause_state")));
+        Assert.True(string.IsNullOrEmpty(port.Meta("converge_pause_reason")));
+    }
+
+    [Fact]
+    public async Task Drain_BrokerAdapterProbesAParkedSessionOnTheNextWake()
+    {
+        var port = new FakePort();
+        port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.SequencedLauncher(
+                FakeSidecarFault.ModelNotPrepared,
+                FakeSidecarFault.None),
+            FastOptions);
+        await using var broker = new SemanticEmbeddingSessionBroker(enabled: true, () => session);
+        VectorConvergeService service = NewService();
+
+        await service.DrainAsync(port, broker, TestContext.Current.CancellationToken);
+        Assert.Equal("model-not-prepared", port.Meta("converge_pause_state"));
+
+        await service.DrainAsync(port, broker, TestContext.Current.CancellationToken);
+
+        Assert.Equal(SemanticSessionState.Ready, broker.State);
+        Assert.Contains(port.Commits, c => c.Kind is VectorUnitKind.Symbol);
     }
 
     [Fact]
