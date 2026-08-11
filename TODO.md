@@ -18,6 +18,13 @@
   `ResolutionLayerGuardTests` and render a standalone diagnostic when the attached output is empty
   (found 2026-08-11 dogfood; evidence `.memories/2026-08-11/125539_bf6d.md`).
 
+## Closed
+
+- Missing family-store bootstrap after RootRebind no longer rejects a current tier-gated legacy resolution as
+  `resolution_input_incomplete`. The producer had required `complete` even when tier gating was the only reason a
+  current full pass reported `partial`; julie-extract now accepts it only when current and identifier-total. The
+  21-test producer adapter target and Miller public bootstrap regression prove exact rows and a readable store.
+
 ## Product Backlog
 
 - Cross-tool discoverability: keep improving high-traffic empty states so `search`, `trace`, `impact`, and `inspect` hand agents to `content`, `patterns`, source-region search, or complexity when those are the better next tool.

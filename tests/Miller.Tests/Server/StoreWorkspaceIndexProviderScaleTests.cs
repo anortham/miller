@@ -21,6 +21,76 @@ namespace Miller.Tests.Server;
 public sealed class StoreWorkspaceIndexProviderScaleTests
 {
     [Fact]
+    public async Task MissingFamilyStoreRootRebindsFromPartialLegacyResolution()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        string directory = Path.Combine(Path.GetTempPath(), "miller-store-partial-seed-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(directory, "root");
+        string home = Path.Combine(directory, "home");
+        string artifact = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(artifact)!);
+        File.WriteAllText(
+            Path.Combine(root, "PartialSeed.cs"),
+            "namespace Example; public static class PartialSeed { public static int Value => 42; }");
+
+        string? priorStoreMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
+        string? priorSearchSidecar = Environment.GetEnvironmentVariable(SymbolSearchSidecar.EnvVar);
+        string? priorSemantic = Environment.GetEnvironmentVariable("MILLER_SEMANTIC");
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
+        Environment.SetEnvironmentVariable(SymbolSearchSidecar.EnvVar, "off");
+        Environment.SetEnvironmentVariable("MILLER_SEMANTIC", "off");
+        try
+        {
+            ScaleTestSupport.RunJulie(
+                binary,
+                "scan", "--root", root, "--db", artifact, "--level", "full", "--jobs", "1", "--json");
+            using (var connection = new SqliteConnection($"Data Source={artifact};Pooling=False"))
+            {
+                connection.Open();
+                using SqliteCommand command = connection.CreateCommand();
+                command.CommandText = "UPDATE artifact_metadata SET value='partial' WHERE key='reference_resolution_status'";
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+
+            bool storeEnabled = false;
+            using var bootstrap = new IndexBootstrapService(
+                NullLogger<IndexBootstrapService>.Instance,
+                storeEnabled: () => storeEnabled);
+            bootstrap.TestHomeDirectoryOverride = home;
+            Assert.Equal(
+                BindOutcome.Started,
+                bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
+            int initialGeneration = bootstrap.Snapshot.RunGeneration;
+            await bootstrap.WaitForRunAsync(initialGeneration, TestContext.Current.CancellationToken);
+
+            Assert.True(bootstrap.IsBound, bootstrap.Snapshot.FailureMessage);
+            Assert.Null(StoreWorkspacePointer.Read(root));
+            storeEnabled = true;
+            int replacementGeneration = bootstrap.RebootstrapForReplacedRoot(
+                PathCanonicalizer.CanonicalizeRoot(root));
+            Assert.True(replacementGeneration > initialGeneration);
+            await bootstrap.WaitForRunAsync(replacementGeneration, TestContext.Current.CancellationToken);
+
+            Assert.True(bootstrap.IsBound, bootstrap.Snapshot.FailureMessage);
+            Assert.NotNull(StoreWorkspacePointer.Read(root));
+            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                artifact,
+                root,
+                bootstrap.Workspace.WorkspaceId);
+            Assert.Equal("exact", session.Snapshot.ResolutionState);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, priorStoreMode);
+            Environment.SetEnvironmentVariable(SymbolSearchSidecar.EnvVar, priorSearchSidecar);
+            Environment.SetEnvironmentVariable("MILLER_SEMANTIC", priorSemantic);
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task CliPrimaryReadsUseFamilyStoreWhenLegacyArtifactIsAbsent()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
