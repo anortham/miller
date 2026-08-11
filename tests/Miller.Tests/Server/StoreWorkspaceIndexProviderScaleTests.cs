@@ -11,6 +11,7 @@ using Miller.Server.Hosting;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
+using System.Text.Json;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -229,7 +230,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                     first.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
                 int generation = first.Snapshot.RunGeneration;
                 await first.WaitForRunAsync(generation, TestContext.Current.CancellationToken);
-                Assert.True(first.IsBound, first.Snapshot.FailureMessage);
+                Assert.True(first.IsBound, BootstrapFailureDetails(first.Snapshot));
                 Assert.Contains(
                     first.Index.Search("BootstrapCalculator", 10),
                     symbol => symbol.Document.Name == "BootstrapCalculator");
@@ -579,4 +580,12 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
 
     private static string Encode(string value) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value));
 
+    private static string BootstrapFailureDetails(BootstrapSnapshot snapshot)
+    {
+        string message = snapshot.FailureMessage ?? snapshot.LastFailureMessage ?? "<none>";
+        int separator = message.IndexOf(':', StringComparison.Ordinal);
+        string failureClass = separator > 0 ? message[..separator] : "unknown";
+        return $"failure_class={failureClass} failure_message={message} " +
+               $"snapshot_json={JsonSerializer.Serialize(snapshot)}";
+    }
 }

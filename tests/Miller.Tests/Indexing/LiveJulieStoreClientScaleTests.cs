@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing.Store;
+using System.Text.Json;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -42,7 +43,9 @@ public sealed class LiveJulieStoreClientScaleTests : IDisposable
             Request = Controls("import-retry", "import-key"),
         }, cancellationToken);
 
-        Assert.Equal(StoreRequestState.Committed, imported.State);
+        Assert.True(
+            imported.State == StoreRequestState.Committed,
+            StoreFailureDetails(imported));
         Assert.Equal(StoreLevel.L1, imported.RequestedLevel);
         Assert.True(imported.Completion.L1);
         Assert.False(imported.Completion.L2);
@@ -180,4 +183,9 @@ public sealed class LiveJulieStoreClientScaleTests : IDisposable
 
     private static StoreRequestControls Controls(string requestId, string idempotencyKey) =>
         new(requestId, idempotencyKey, TimeSpan.FromSeconds(30));
+
+    private static string StoreFailureDetails(StoreRequestResult result) =>
+        $"failure_class={result.Failure.Class.Code} " +
+        $"failure_message={result.Failure.Message ?? "<none>"} " +
+        $"report_json={JsonSerializer.Serialize(result)}";
 }

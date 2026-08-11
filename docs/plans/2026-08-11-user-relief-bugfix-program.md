@@ -255,12 +255,12 @@
 **Approach:** Add `fs4 = "1.1.0"` to the CLI crate and update the lockfile. Unit-test real temporary-directory probing and keep injected arithmetic boundary tests. Do not enable Miller's PR `windows-scale-smoke` while `scripts/julie-pins.json` still points at 2.31.4; that job restores the published pin and would remain red. Keep it scheduled/manual until a separately approved 2.31.5 publication and pin bump, while extractor CI proves the source fix now.
 
 **Acceptance criteria:**
-- [ ] No `df`, `powershell.exe`, `Get-Volume`, or command-line parsing remains in filesystem capacity acquisition.
-- [ ] Exact-fit, insufficient-space, nonexistent-store ancestor, and real-filesystem tests retain their current codes and arithmetic.
+- [x] No `df`, `powershell.exe`, `Get-Volume`, or command-line parsing remains in filesystem capacity acquisition.
+- [x] Exact-fit, insufficient-space, nonexistent-store ancestor, and real-filesystem tests retain their current codes and arithmetic.
 - [ ] Source-built Windows capacity/store probing passes with a plain local path; Miller Scale failures print producer class and message.
-- [ ] Extractor pull requests run the source-built Windows proof; Miller `windows-scale-smoke` remains schedule/manual while pinned to 2.31.4.
+- [x] Extractor pull requests run the source-built Windows proof; Miller `windows-scale-smoke` remains schedule/manual while pinned to 2.31.4.
 - [ ] Extractor formatter, clippy, default/contract tests, and `cargo deny check --all-features` pass; Miller worker scope passes.
-- [ ] Focused red/green and worker-scope verification pass; hand off per commit mode.
+- [x] Focused red/green and worker-scope verification pass; hand off per commit mode.
 
 ### Task 6: Prove the combined relief candidate and close only completed TODO items
 
