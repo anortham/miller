@@ -214,6 +214,67 @@ public static class StoreSidecarCatalog
     public static bool IsCurrent(string databasePath, StoreSidecarStamp expected) =>
         TryRead(databasePath) == expected;
 
+    internal static bool TryFastForwardEmptyDelta(
+        string databasePath,
+        StoreSidecarStamp expected,
+        IWorkspaceReadSession session,
+        Func<SqliteConnection, SqliteTransaction, long, bool> updateMetadata)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
+        ArgumentNullException.ThrowIfNull(expected);
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(updateMetadata);
+
+        StoreSidecarStamp? previous = TryRead(databasePath);
+        if (previous is null ||
+            previous.StoreLogSequence >= expected.StoreLogSequence ||
+            previous with
+            {
+                StoreLogSequence = expected.StoreLogSequence,
+                ResolutionStamp = expected.ResolutionStamp,
+            } != expected)
+        {
+            return false;
+        }
+
+        RevisionDeltaResult delta = RevisionDeltaReader.Read(
+            session,
+            previous.StoreLogSequence,
+            previous.FamilyId);
+        if (delta.Status != RevisionDeltaStatus.Complete ||
+            delta.ToRevision != expected.StoreLogSequence ||
+            delta.ChangedPaths.Count != 0 ||
+            delta.DeletedPaths is not { Count: 0 })
+        {
+            return false;
+        }
+
+        try
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.GetFullPath(databasePath),
+                Mode = SqliteOpenMode.ReadWrite,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            using SqliteTransaction transaction = connection.BeginTransaction();
+            if (Read(connection, transaction) != previous ||
+                !updateMetadata(connection, transaction, expected.StoreLogSequence))
+            {
+                return false;
+            }
+
+            Stamp(connection, transaction, expected);
+            transaction.Commit();
+            return true;
+        }
+        catch (SqliteException)
+        {
+            return false;
+        }
+    }
+
     private static void EnsureStampSchema(SqliteConnection connection, SqliteTransaction transaction)
     {
         using (var create = connection.CreateCommand())
@@ -240,6 +301,35 @@ public static class StoreSidecarCatalog
         AddColumn(connection, transaction, columns, "level_stamp_l1", "TEXT NOT NULL DEFAULT ''");
         AddColumn(connection, transaction, columns, "level_stamp_l2", "TEXT NOT NULL DEFAULT ''");
         AddColumn(connection, transaction, columns, "level_stamp_l3", "TEXT NOT NULL DEFAULT ''");
+    }
+
+    private static StoreSidecarStamp? Read(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT kind,family_id,view_id,manifest_hash,store_log_sequence,resolution_stamp,
+                   store_instance_id,generation_name,manifest_generation,index_level,
+                   level_stamp_l1,level_stamp_l2,level_stamp_l3
+            FROM store_sidecar_stamp WHERE singleton=1;
+            """;
+        using SqliteDataReader reader = command.ExecuteReader();
+        if (!reader.Read())
+            return null;
+        return new StoreSidecarStamp(
+            ParseKind(reader.GetString(0)),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetInt64(4),
+            reader.IsDBNull(5) ? null : reader.GetString(5),
+            reader.GetString(6),
+            reader.GetString(7),
+            reader.GetInt64(8),
+            reader.GetString(9),
+            reader.GetString(10),
+            reader.GetString(11),
+            reader.GetString(12));
     }
 
     private static void AddColumn(

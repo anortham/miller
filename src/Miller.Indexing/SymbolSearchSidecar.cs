@@ -314,6 +314,19 @@ public sealed class SymbolSearchSidecar
         string searchDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, session.Snapshot.ViewId);
         if (StoreSidecarCatalog.IsCurrent(searchDbPath, expected))
             return false;
+        if (StoreSidecarCatalog.TryFastForwardEmptyDelta(
+                searchDbPath,
+                expected,
+                session,
+                (connection, transaction, revision) =>
+                    SearchIndexWriter.TryFastForwardStoreMetadata(
+                        connection,
+                        transaction,
+                        revision,
+                        RegionOptions)))
+        {
+            return true;
+        }
 
         SearchIndexWriter.WriteStoreView(searchDbPath, session, RegionOptions);
         return true;

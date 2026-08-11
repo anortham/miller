@@ -152,6 +152,26 @@ public static class SearchIndexWriter
             stamp);
     }
 
+    internal static bool TryFastForwardStoreMetadata(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long revision,
+        RegionIndexOptions regionOptions)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            UPDATE meta
+            SET revision=$revision
+            WHERE schema_version=$schema_version
+              AND region_index_enabled=$region_index_enabled;
+            """;
+        command.Parameters.AddWithValue("$revision", revision);
+        command.Parameters.AddWithValue("$schema_version", SchemaVersion);
+        command.Parameters.AddWithValue("$region_index_enabled", regionOptions.Enabled ? 1 : 0);
+        return command.ExecuteNonQuery() == 1;
+    }
+
     private static void WriteAtomic(
         string searchDbPath,
         IReadOnlyList<IndexedSymbol> symbols,

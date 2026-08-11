@@ -211,6 +211,107 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void SearchSidecarFastForwardsAcrossReusedManifestImportChunks()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, initial));
+
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Search,
+            fixture.Binding.ViewId);
+        AddSentinel(databasePath);
+        AppendReusedManifestImport(fixture);
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, updated));
+
+        AssertFastForwarded(databasePath, StoreSidecarKind.Search, updated, "SELECT revision FROM meta;");
+    }
+
+    [Fact]
+    public void ContentSidecarFastForwardsAcrossReusedManifestImportChunks()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var sidecar = new ContentCorpusSidecar();
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, initial));
+
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Content,
+            fixture.Binding.ViewId);
+        AddSentinel(databasePath);
+        AppendReusedManifestImport(fixture);
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, updated));
+
+        AssertFastForwarded(
+            databasePath,
+            StoreSidecarKind.Content,
+            updated,
+            "SELECT workspace_revision FROM content_meta;");
+    }
+
+    [Fact]
+    public void StoreSidecarFastForwardRollsBackMetadataWhenTheStampUpdateFails()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, initial));
+
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Search,
+            fixture.Binding.ViewId);
+        RejectStampUpdates(databasePath);
+        AppendReusedManifestImport(fixture);
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, updated.Snapshot);
+        bool advanced = StoreSidecarCatalog.TryFastForwardEmptyDelta(
+            databasePath,
+            expected,
+            updated,
+            (connection, transaction, revision) =>
+                SearchIndexWriter.TryFastForwardStoreMetadata(
+                    connection,
+                    transaction,
+                    revision,
+                    RegionIndexOptions.Disabled));
+
+        Assert.False(advanced);
+        Assert.Equal(2, ReadInt64(databasePath, "SELECT revision FROM meta;"));
+        Assert.Equal(2, StoreSidecarCatalog.TryRead(databasePath)!.StoreLogSequence);
+    }
+
+    [Fact]
+    public void SearchSidecarRebuildsWhenTheStoreDeltaContainsChanges()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, session));
+
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Search,
+            fixture.Binding.ViewId);
+        StoreSidecarStamp current = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, session.Snapshot);
+        StoreSidecarCatalog.Stamp(databasePath, current with { StoreLogSequence = 1 });
+        AddSentinel(databasePath);
+
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, session));
+
+        Assert.False(TableExists(databasePath, "fast_forward_sentinel"));
+        Assert.Equal(current, StoreSidecarCatalog.TryRead(databasePath));
+    }
+
+    [Fact]
     public void EnabledWorkspaceFactoryUsesTheValidatedPointerInsteadOfTheLegacyArtifact()
     {
         using StoreFixture fixture = StoreFixture.Create();
@@ -296,6 +397,119 @@ public sealed class FamilyStoreReadSessionTests
         command.Parameters.AddWithValue("$view", (object?)viewId ?? DBNull.Value);
         command.Parameters.AddWithValue("$version", (object?)versionId ?? DBNull.Value);
         command.ExecuteNonQuery();
+    }
+
+    private static void AppendReusedManifestImport(StoreFixture fixture)
+    {
+        string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO store_log VALUES
+              (3,'request-reuse','store_import_l3_chunk','view-a',2,2,3,0,'{}','2026-08-09T00:00:03Z'),
+              (4,'request-reuse','store_import_completed','view-a',2,NULL,3,1,
+               '{"manifest":{"disposition":"reused"}}','2026-08-09T00:00:04Z'),
+              (5,'request-reuse','store_resolve_completed','view-a',2,NULL,3,1,
+               '{}','2026-08-09T00:00:05Z');
+            UPDATE views
+            SET resolution_state='exact',
+                resolution_base_id='base-1',
+                resolution_delta_generation=2,
+                resolution_exact_at=5,
+                updated_at='2026-08-09T00:00:05Z'
+            WHERE view_id='view-a';
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    private static void AddSentinel(string databasePath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "CREATE TABLE fast_forward_sentinel(value INTEGER NOT NULL); INSERT INTO fast_forward_sentinel VALUES (1);";
+        command.ExecuteNonQuery();
+    }
+
+    private static void RejectStampUpdates(string databasePath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TRIGGER reject_store_stamp
+            BEFORE UPDATE OF store_log_sequence ON store_sidecar_stamp
+            BEGIN
+                SELECT RAISE(ABORT, 'reject stamp update');
+            END;
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    private static long ReadInt64(string databasePath, string sql)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static bool TableExists(string databasePath, string table)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$name;";
+        command.Parameters.AddWithValue("$name", table);
+        return command.ExecuteScalar() is not null;
+    }
+
+    private static void AssertFastForwarded(
+        string databasePath,
+        StoreSidecarKind kind,
+        FamilyStoreReadSession session,
+        string revisionSql)
+    {
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(kind, session.Snapshot);
+        Assert.Equal(expected, StoreSidecarCatalog.TryRead(databasePath));
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = $"SELECT ({revisionSql.TrimEnd(';')}), (SELECT value FROM fast_forward_sentinel);";
+        using SqliteDataReader reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal(expected.StoreLogSequence, reader.GetInt64(0));
+        Assert.Equal(1, reader.GetInt64(1));
     }
 
     private static void DeleteManifest(StoreFixture fixture, long generation)
@@ -520,6 +734,20 @@ public sealed class FamilyStoreReadSessionTests
                   end_byte INTEGER NOT NULL,
                   confidence REAL,
                   metadata_json TEXT) STRICT;
+                CREATE TABLE parse_diagnostics (
+                  diagnostic_id TEXT PRIMARY KEY,
+                  version_id INTEGER NOT NULL,
+                  path TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  message TEXT,
+                  start_line INTEGER NOT NULL,
+                  start_column INTEGER NOT NULL,
+                  end_line INTEGER NOT NULL,
+                  end_column INTEGER NOT NULL,
+                  start_byte INTEGER NOT NULL,
+                  end_byte INTEGER NOT NULL,
+                  metadata_json TEXT) STRICT;
                 """;
             command.ExecuteNonQuery();
             command.CommandText =
@@ -542,7 +770,7 @@ public sealed class FamilyStoreReadSessionTests
                   (2,2,'same.cs','csharp','visible.pattern.v1','node','class',NULL,1,1,1,2,0,1,1.0,NULL);
                 INSERT INTO store_log VALUES
                   (1,'request-prior','manifest_flipped','view-a',1,NULL,NULL,0,'{}','2026-08-08T00:00:00Z'),
-                  (2,'request-a','store_import_completed','view-a',2,NULL,NULL,1,'{}','2026-08-09T00:00:01Z');
+                  (2,'request-a','manifest_flipped','view-a',2,NULL,NULL,1,'{}','2026-08-09T00:00:01Z');
                 """;
             command.Parameters.AddWithValue("$root", workspace);
             command.ExecuteNonQuery();

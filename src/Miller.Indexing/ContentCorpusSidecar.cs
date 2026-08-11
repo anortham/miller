@@ -46,6 +46,14 @@ public sealed class ContentCorpusSidecar
         string contentDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Content, session.Snapshot.ViewId);
         if (StoreSidecarCatalog.IsCurrent(contentDbPath, expected))
             return false;
+        if (StoreSidecarCatalog.TryFastForwardEmptyDelta(
+                contentDbPath,
+                expected,
+                session,
+                ContentCorpusWriter.TryFastForwardStoreMetadata))
+        {
+            return true;
+        }
 
         ContentCorpusWriter.WriteStoreView(contentDbPath, session);
         return true;

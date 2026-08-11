@@ -129,6 +129,35 @@ public static partial class ContentCorpusWriter
         return facts with { Path = fullPath };
     }
 
+    internal static bool TryFastForwardStoreMetadata(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long revision)
+    {
+        using (var sources = connection.CreateCommand())
+        {
+            sources.Transaction = transaction;
+            sources.CommandText = "UPDATE content_sources SET workspace_revision=$revision WHERE workspace_revision IS NOT NULL;";
+            sources.Parameters.AddWithValue("$revision", revision);
+            sources.ExecuteNonQuery();
+        }
+
+        using var metadata = connection.CreateCommand();
+        metadata.Transaction = transaction;
+        metadata.CommandText = """
+            UPDATE content_meta
+            SET workspace_revision=$revision,
+                updated_at_utc=$updated
+            WHERE schema_version=$schema_version
+              AND chunker_version=$chunker_version;
+            """;
+        metadata.Parameters.AddWithValue("$revision", revision);
+        metadata.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
+        metadata.Parameters.AddWithValue("$schema_version", ContentCorpusSchema.SchemaVersion);
+        metadata.Parameters.AddWithValue("$chunker_version", ContentCorpusSchema.ChunkerVersion);
+        return metadata.ExecuteNonQuery() == 1;
+    }
+
     private static int PreserveExternalSources(string tempPath, string existingPath)
     {
         if (!File.Exists(existingPath))
