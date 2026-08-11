@@ -90,6 +90,23 @@ public sealed class ToolDiagnosticTests : IDisposable
             document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData(" \r\n\t")]
+    public void Attach_EmptyJsonRendersStandaloneDiagnosticEnvelope(string payload)
+    {
+        var diagnostic = ToolDiagnostic.ExpectedEmpty("resolution_converging", "Resolution is converging.");
+
+        string output = ToolDiagnosticRenderer.Attach("trace", payload, diagnostic, json: true);
+        using var document = JsonDocument.Parse(output);
+
+        Assert.Equal(1, document.RootElement.GetProperty("schema_version").GetInt32());
+        Assert.Equal("trace", document.RootElement.GetProperty("tool").GetString());
+        Assert.Equal(
+            "resolution_converging",
+            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
     [Fact]
     public void Attach_JsonDoesNotExpandSafeUnicodeOrHtmlCharacters()
     {

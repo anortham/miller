@@ -111,10 +111,10 @@
 **Approach:** Check emptiness before `JsonNode.Parse`. Reuse `RenderJson` so standalone field names remain `schema_version`, `tool`, and `diagnostic`; do not invent a synthetic results payload. Preserve malformed/scalar rejection tests.
 
 **Acceptance criteria:**
-- [ ] Empty and whitespace JSON attachment returns a valid standalone diagnostic envelope.
-- [ ] JSON convergence paths for trace, inspect overview/full, impact, and context return `resolution_converging`, never `invalid_json_output`.
-- [ ] Nonempty object/array, malformed JSON, scalar JSON, compact output, and telemetry behavior remain unchanged.
-- [ ] Focused red/green and worker-scope verification pass; hand off per commit mode.
+- [x] Empty and whitespace JSON attachment returns a valid standalone diagnostic envelope.
+- [x] JSON convergence paths for trace, inspect overview/full, impact, and context return `resolution_converging`, never `invalid_json_output`.
+- [x] Nonempty object/array, malformed JSON, scalar JSON, compact output, and telemetry behavior remain unchanged.
+- [x] Focused red/green and worker-scope verification pass; hand off per commit mode.
 
 ### Task 2: Make family-store reference reads targeted and bound context enrichment
 
@@ -172,11 +172,11 @@
 **Approach:** Reuse the existing loader and current CPU-only policy after an unready startup has released the accelerator lease. Do not acquire a new lease or spawn a process from health. Tests use a fake loader sequence to prove absent→absent, absent→ready, concurrent serialized health, ready embed after transition, and no repeated load once ready.
 
 **Acceptance criteria:**
-- [ ] An unprepared broker remains alive and reports protocol-conformant `model_not_prepared` health.
-- [ ] After the model becomes available, one health request flips the same broker process to ready and embedding succeeds.
-- [ ] Ready brokers do not reload, and unready checks do not hold or reacquire the accelerator lease.
-- [ ] Protocol v1 envelopes and stdout purity remain unchanged.
-- [ ] Sidecar focused tests, formatter, clippy, and worker-scope verification pass; hand off per commit mode.
+- [x] An unprepared broker remains alive and reports protocol-conformant `model_not_prepared` health.
+- [x] After the model becomes available, one health request flips the same broker process to ready and embedding succeeds.
+- [x] Ready brokers do not reload, and unready checks do not hold or reacquire the accelerator lease.
+- [x] Protocol v1 envelopes and stdout purity remain unchanged.
+- [x] Sidecar focused tests, formatter, clippy, and worker-scope verification pass; hand off per commit mode.
 
 ### Task 4: Recover Miller semantic sessions after prepare and fix operator guidance
 

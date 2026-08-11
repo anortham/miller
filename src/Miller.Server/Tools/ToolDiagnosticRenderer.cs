@@ -147,6 +147,9 @@ public static class ToolDiagnosticRenderer
 
     private static string AttachJson(string tool, string output, ToolDiagnostic diagnostic)
     {
+        if (string.IsNullOrWhiteSpace(output))
+            return RenderJson(tool, diagnostic);
+
         JsonNode? parsed;
         try
         {
