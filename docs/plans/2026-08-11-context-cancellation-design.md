@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-11
 
-**Status:** Approved design; implementation pending.
+**Status:** Implemented and verified locally.
 
 ## Problem
 
@@ -10,7 +10,13 @@ A canceled reference-aware `context` request continued consuming one CPU core af
 
 ## Architecture Quality
 
-No Architecture Impact. This change preserves the existing context retrieval, ranking, rendering, and MCP result contracts. It adds cooperative cancellation to the existing synchronous pipeline.
+- **Affected modules:** `ContextTool` MCP binding and its internal retrieval/render pipeline.
+- **Caller-facing interface:** The published `context` name, JSON arguments, outputs, and direct `Context` wrapper are unchanged; only the framework-bound handler receives cancellation.
+- **Depth/locality check:** Cancellation stays inside `ContextTool` and does not alter shared search, graph, or reference-reader interfaces.
+- **Test surface:** Handler cancellation, generated JSON schema, and existing compact/JSON context behavior.
+- **Seams/adapters:** Internal cancellation-aware entry points preserve existing non-cancelable test and CLI callers.
+- **Rejected shortcuts:** Entry-only checks, fixed timeouts, and worker isolation.
+- **Architecture risk:** Low.
 
 ## Design
 
@@ -35,8 +41,8 @@ No Architecture Impact. This change preserves the existing context retrieval, ra
 
 ## Acceptance Criteria
 
-- [ ] Canceling a running `context` request stops its synchronous work promptly.
-- [ ] No background thread continues consuming a core after cancellation.
-- [ ] Uncanceled compact and JSON results remain unchanged.
-- [ ] The cancellation token is infrastructure-provided, not a published tool argument.
-- [ ] Focused context tests pass with no warnings or errors.
+- [x] Canceling a running `context` request stops its synchronous work promptly.
+- [x] No background thread continues consuming a core after cancellation.
+- [x] Uncanceled compact and JSON results remain unchanged.
+- [x] The cancellation token is infrastructure-provided, not a published tool argument.
+- [x] Focused context tests pass with no warnings or errors.
