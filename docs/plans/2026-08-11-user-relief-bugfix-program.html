@@ -169,8 +169,8 @@
     <p class="goal">Remove confirmed diagnostics, reference-latency, semantic-activation, and Windows bootstrap failures without publishing prematurely.</p>
   </div>
   <div class="hprog">
-    <div class="n">0<small> / 6 tasks</small></div>
-    <div class="meter" aria-label="0% complete"><i style="width:0%"></i></div>
+    <div class="n">4<small> / 6 tasks</small></div>
+    <div class="meter" aria-label="67% complete"><i style="width:67%"></i></div>
   </div>
 </header>
 <nav class="tabs" aria-label="Digest sections">
@@ -181,24 +181,24 @@
 <div class="pane on" id="timeline">
   <div class="spine">
     <div class="stage now">
-      <h2>Batch A — Independent fixes <span class="chip inprogress"><span class="ico">◐</span>0 / 5</span></h2>
+      <h2>Batch A — Independent fixes <span class="chip inprogress"><span class="ico">◐</span>4 / 5</span></h2>
       <p class="why">Five disjoint worker lanes fix the confirmed regressions with focused red/green proof.</p>
-      <div class="here">You are here — Task 1 ready</div>
-      <div class="trow"><span class="st queued">○ Queued</span><span class="what"><b>1</b>Standalone JSON diagnostics <span>— render empty convergence output as valid JSON.</span></span></div>
-      <div class="trow"><span class="st queued">○ Queued</span><span class="what"><b>2</b>Family-store reference latency <span>— targeted composite SQL plus bounded rescue reads.</span></span></div>
-      <div class="trow"><span class="st queued">○ Queued</span><span class="what"><b>3</b>Live broker model activation <span>— health reloads the retained loader without respawn.</span></span></div>
+      <div class="here">You are here — local verification complete; Windows CI pending</div>
+      <div class="trow"><span class="st done">✓ Complete</span><span class="what"><b>1</b>Standalone JSON diagnostics <span>— render empty convergence output as valid JSON.</span></span></div>
+      <div class="trow"><span class="st done">✓ Complete</span><span class="what"><b>2</b>Family-store reference latency <span>— targeted composite SQL plus bounded rescue reads.</span></span></div>
+      <div class="trow"><span class="st done">✓ Complete</span><span class="what"><b>3</b>Live broker model activation <span>— health reloads the retained loader without respawn.</span></span></div>
       <div class="flag"><b>⚠ Criterion revised — Task 4.</b><p>ModelNotPrepared must flow through pause metadata, semantic fallback, compact status, health guidance, and both embedding adapters.</p></div>
-      <div class="trow"><span class="st queued">○ Queued</span><span class="what"><b>4</b>Miller semantic recovery and UX <span>— parked state recovers with the cold-load timeout.</span></span></div>
+      <div class="trow"><span class="st done">✓ Complete</span><span class="what"><b>4</b>Miller semantic recovery and UX <span>— parked state recovers with the cold-load timeout.</span></span></div>
       <div class="flag"><b>⚠ Criterion revised — Task 5.</b><p>Extractor PRs prove current Windows source; Miller's PR job stays off until a fixed producer is published and pinned.</p></div>
-      <div class="trow"><span class="st queued">○ Queued</span><span class="what"><b>5</b>Native capacity probe <span>— replace shell probes with fs4 and source-built Windows coverage.</span></span></div>
+      <div class="trow"><span class="st inprogress">◐ External gate</span><span class="what"><b>5</b>Native capacity probe <span>— source fix is green; real Windows CI and cargo-deny remain.</span></span></div>
     </div>
-    <div class="stage">
-      <h2>Serial close — Cross-repository proof <span class="chip queued"><span class="ico">○</span>0 / 1</span></h2>
+    <div class="stage now">
+      <h2>Serial close — Cross-repository proof <span class="chip inprogress"><span class="ico">◐</span>Local proof complete</span></h2>
       <p class="why">Integration waits for all five fixes, then repeats original repros and records release-candidate evidence.</p>
-      <div class="trow"><span class="st queued">○ Queued</span><span class="what"><b>6</b>Integration and relief candidate <span>— restore from source, run gates, update TODO and findings.</span></span></div>
+      <div class="trow"><span class="st inprogress">◐ Approval-gated</span><span class="what"><b>6</b>Integration and relief candidate <span>— local gates and repros pass; Windows, pinning, and release remain.</span></span></div>
     </div>
   </div>
-  <div class="card remains"><b>Remaining:</b> six tasks. Publication, pin changes, and the Miller PR Windows gate remain approval-gated.</div>
+  <div class="card remains"><b>Remaining:</b> run real Windows CI and dependency policy, then separately approve publication, pin changes, and the Miller PR Windows gate.</div>
 </div>
 <div class="pane" id="decisions">
   <div class="card dec"><h3>Preserve caller contracts <span class="where">Tasks 1–5</span></h3><p><b>Landed:</b> fixes stay behind existing render, store-read, semantic-session, broker-engine, and capacity-provider seams.</p></div>

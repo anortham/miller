@@ -289,10 +289,10 @@
 
 **Acceptance criteria:**
 - [ ] All hard gates in the Verification Strategy pass with ledger entries tied to exact commits.
-- [ ] Original JSON convergence repro returns `resolution_converging` in valid JSON.
-- [ ] Original context/reference queries return identical evidence with report-only timings materially below baseline.
-- [ ] A model prepared after broker startup becomes ready and embeds without restarting Miller or the broker.
+- [x] Original JSON convergence repro returns `resolution_converging` in valid JSON.
+- [x] Original context/reference queries return identical evidence with report-only timings materially below baseline.
+- [x] A model prepared after broker startup becomes ready and embeds without restarting Miller or the broker.
 - [ ] Real source-built Windows capacity/store probing succeeds; after approved 2.31.5 publication and pinning, the Miller PR Windows Scale gate is enabled and green.
-- [ ] Only completed Active TODO entries are removed; excluded backlog remains unchanged.
-- [ ] All three repository worktrees are audited and no changes are stranded.
-- [ ] No push, tag, package publication, pin bump, or release occurs without explicit approval.
+- [x] Only completed Active TODO entries are removed; excluded backlog remains unchanged.
+- [x] All three repository worktrees are audited and no changes are stranded.
+- [x] No push, tag, package publication, pin bump, or release occurs without explicit approval.
