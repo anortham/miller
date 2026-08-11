@@ -26,6 +26,7 @@ namespace Miller.Server.Tools;
 [McpServerToolType]
 public sealed partial class ContextTool
 {
+    private const int TermRescuePromotionReadLimit = 8;
     private readonly IWorkspaceIndexProvider _workspaceProvider;
     private readonly ISemanticTextArm? _semanticArm;
     private readonly VectorSidecar? _semanticSidecar;
@@ -1494,6 +1495,7 @@ public sealed partial class ContextTool
         Action<IndexedSymbol, int, double, int, string> addSignal)
     {
         var hits = new Dictionary<string, TermRescueTestHit>(StringComparer.Ordinal);
+        var outgoingBySymbol = new Dictionary<string, OutgoingReferenceEvidenceSet>(StringComparer.Ordinal);
 
         void Consider(
             IndexedSymbol testSymbol,
@@ -1561,7 +1563,6 @@ public sealed partial class ContextTool
                 reason.Strength);
         }
 
-        // Parent NL auto-hide keeps tests out of term rescue; re-scan tests only for promotion.
         if (excludeTests)
         {
             foreach (string term in queryTerms)
@@ -1591,23 +1592,31 @@ public sealed partial class ContextTool
             }
         }
 
-        foreach (TermRescueTestHit hit in hits.Values)
+        foreach (TermRescueTestHit hit in hits.Values
+                     .OrderByDescending(static hit => hit.Strength)
+                     .ThenBy(static hit => hit.RetrievalRank)
+                     .ThenBy(static hit => hit.Test.FilePath, StringComparer.Ordinal)
+                     .ThenBy(static hit => hit.Test.StartLine)
+                     .ThenBy(static hit => hit.Test.SymbolId, StringComparer.Ordinal)
+                     .Take(TermRescuePromotionReadLimit))
         {
             OutgoingReferenceEvidenceSet outgoing;
             try
             {
-                outgoing = readOutgoing(hit.Test.SymbolId);
+                if (!outgoingBySymbol.TryGetValue(hit.Test.SymbolId, out outgoing!))
+                {
+                    outgoing = readOutgoing(hit.Test.SymbolId);
+                    outgoingBySymbol.Add(hit.Test.SymbolId, outgoing);
+                }
             }
             catch (Exception ex) when (
                 ex is InvalidOperationException or IOException or UnauthorizedAccessException
                     or ArgumentException or NotSupportedException
                     or Microsoft.Data.Sqlite.SqliteException)
             {
-                // Promotion is optional enrichment; a read failure must not abort context.
                 continue;
             }
 
-            // Truncated exact pages can hide a second subject — refuse to promote on incomplete evidence.
             if (outgoing.Coverage.ExactTruncated)
                 continue;
 

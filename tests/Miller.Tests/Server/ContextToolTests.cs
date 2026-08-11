@@ -3031,6 +3031,64 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void RunActionable_TermRescuePromotionReadsAtMostEightUniqueTestsDeterministically()
+    {
+        IndexedSymbol[] symbols = Enumerable.Range(0, 12)
+            .Select(index => new IndexedSymbol(
+                index,
+                $"0000000000000000000000000000d{index:x3}",
+                index < 6 ? $"AlphaBehavior{index}" : $"BetaBehavior{index}",
+                index < 6 ? $"method AlphaBehavior{index}" : $"method BetaBehavior{index}",
+                "method",
+                "csharp",
+                $"tests/Behavior{index}Tests.cs",
+                10,
+                40,
+                null,
+                true))
+            .ToArray();
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+
+        static string[] RunAndRecord(
+            MillerRepositoryIndex repositoryIndex,
+            SmartTargetResolver targetResolver)
+        {
+            var reads = new List<string>();
+            ContextTool.RunActionable(
+                repositoryIndex,
+                repositoryIndex.Graph,
+                targetResolver,
+                "alpha beta behavior",
+                tokenBudget: 4000,
+                maxHops: 0,
+                entrySymbols: null,
+                editedFiles: null,
+                failingTest: null,
+                stackTrace: null,
+                semanticSeeds: null,
+                sourceSeeds: null,
+                readBody: null,
+                readOutgoing: id =>
+                {
+                    reads.Add(id);
+                    return ExactOutgoingSet();
+                },
+                json: true,
+                out _,
+                out _);
+            return reads.ToArray();
+        }
+
+        string[] first = RunAndRecord(index, resolver);
+        string[] second = RunAndRecord(index, resolver);
+
+        Assert.Equal(first, second);
+        Assert.Equal(first.Length, first.Distinct(StringComparer.Ordinal).Count());
+        Assert.InRange(first.Length, 1, 8);
+    }
+
+    [Fact]
     public void RunActionable_TermRescueTestWithTwoExactSubjects_DoesNotPromote()
     {
         const string subjectAId = "0000000000000000000000000000c201";

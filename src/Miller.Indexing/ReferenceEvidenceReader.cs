@@ -12,7 +12,7 @@ public sealed record ReferenceEvidenceBundle(
     IReadOnlyDictionary<ReferenceKind, OutgoingReferenceEvidenceSet> OutgoingKinds);
 
 /// <summary>Reads bounded, normalized reference evidence keyed by resolved symbol IDs.</summary>
-public static class ReferenceEvidenceReader
+public static partial class ReferenceEvidenceReader
 {
     private static readonly string[] RequiredResolutionTables =
         ["reference_sites", "identifier_resolutions", "pending_resolutions", "pending_relationships"];
@@ -34,13 +34,21 @@ public static class ReferenceEvidenceReader
         if (kinds.Count == 0)
             throw new ArgumentException("At least one reference kind is required.", nameof(kinds));
 
-        return session.Read(connection => ReadForSymbol(
-            connection,
-            symbolId,
-            inboundQuery,
-            outgoingQuery,
-            kindBounds,
-            kinds));
+        return session.Read(connection => IsFamilyStoreResolutionProjection(connection)
+            ? ReadForSymbolFromFamilyStore(
+                connection,
+                symbolId,
+                inboundQuery,
+                outgoingQuery,
+                kindBounds,
+                kinds)
+            : ReadForSymbol(
+                connection,
+                symbolId,
+                inboundQuery,
+                outgoingQuery,
+                kindBounds,
+                kinds));
     }
 
     /// <summary>Read inbound, outgoing, and selected relationship kinds for one symbol from one snapshot.</summary>
@@ -150,7 +158,9 @@ public static class ReferenceEvidenceReader
         ArgumentNullException.ThrowIfNull(session);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetSymbolId);
         query.Validate();
-        return session.Read(connection => ReadInbound(connection, targetSymbolId, query));
+        return session.Read(connection => IsFamilyStoreResolutionProjection(connection)
+            ? ReadInboundFromFamilyStore(connection, targetSymbolId, query)
+            : ReadInbound(connection, targetSymbolId, query));
     }
 
     /// <summary>Read several independently bounded inbound relationship kinds from one artifact snapshot.</summary>
@@ -289,7 +299,9 @@ public static class ReferenceEvidenceReader
         ArgumentNullException.ThrowIfNull(session);
         ArgumentException.ThrowIfNullOrWhiteSpace(containingSymbolId);
         query.Validate();
-        return session.Read(connection => ReadOutgoing(connection, containingSymbolId, query));
+        return session.Read(connection => IsFamilyStoreResolutionProjection(connection)
+            ? ReadOutgoingFromFamilyStore(connection, containingSymbolId, query)
+            : ReadOutgoing(connection, containingSymbolId, query));
     }
 
     /// <summary>Read several independently bounded outgoing relationship kinds from one artifact snapshot.</summary>

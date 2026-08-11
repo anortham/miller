@@ -142,12 +142,12 @@
 **Approach:** Keep row parsing/deduplication shared across partial files. Query base rows with `(version_id, identifier_id)` or `(version_id, pending_relationship_id)` and apply the current delta replacement/tombstone rules before joining visible symbols/sites. Add a collision fixture where equal local IDs exist in different versions, and an `EXPLAIN QUERY PLAN` assertion that the base resolution tables are searched by composite index rather than scanned. Context tests inject the outgoing reader and assert at most eight calls while preserving sole-subject promotion, multi-subject refusal, truncation refusal, and test-intent behavior.
 
 **Acceptance criteria:**
-- [ ] Family-store inbound, outgoing, outgoing-kinds, exact, and fallback results match legacy fixture output byte-for-byte.
-- [ ] Equal local IDs in different versions never cross-resolve.
-- [ ] Query-plan tests show composite-index `SEARCH` operations and reject full scans of base identifier/pending resolution tables.
-- [ ] Term rescue performs no more than eight unique outgoing reads per context call and retains deterministic ranking.
-- [ ] Repeated dogfood context/inspect/trace timings show the expected order-of-magnitude reduction; timings remain report-only.
-- [ ] Focused red/green and worker-scope verification pass; hand off per commit mode.
+- [x] Family-store inbound, outgoing, outgoing-kinds, exact, and fallback results match legacy fixture output byte-for-byte.
+- [x] Equal local IDs in different versions never cross-resolve.
+- [x] Query-plan tests show composite-index `SEARCH` operations and reject full scans of base identifier/pending resolution tables.
+- [x] Term rescue performs no more than eight unique outgoing reads per context call and retains deterministic ranking.
+- [x] Repeated dogfood context/inspect/trace timings show the expected order-of-magnitude reduction; timings remain report-only.
+- [x] Focused red/green and worker-scope verification pass; hand off per commit mode.
 
 ### Task 3: Let a live sidecar broker activate a newly prepared model
 
