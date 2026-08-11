@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>User-Relief Bugfix Report</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f5f1; --card:#fff; --ink:#20211f; --muted:#656860; --border:#d8d7d1; --accent:#9a3412; --good:#166534; --wash:#ffedd5; }
+  @media (prefers-color-scheme:dark) { :root { --bg:#171816; --card:#22231f; --ink:#f1f1eb; --muted:#b6b8ae; --border:#3a3c35; --accent:#fdba74; --good:#86efac; --wash:#431407; } }
+  * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 system-ui,sans-serif; }
+  main { max-width:900px; margin:0 auto; padding:32px 22px 48px; } h1 { margin:0; font-size:24px; } h2 { font-size:15px; margin:0 0 9px; }
+  .lead { color:var(--muted); margin:4px 0 22px; } .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:15px; } .status { border-left:4px solid var(--accent); }
+  .tag { display:inline-block; padding:3px 9px; border-radius:999px; background:var(--wash); color:var(--accent); font-weight:700; font-size:12px; }
+  .n { font-size:24px; font-weight:700; } .ok { color:var(--good); } ul { margin:6px 0 0; padding-left:20px; } li { margin:5px 0; }
+  code { font-family:ui-monospace,monospace; font-size:12px; } .wide { margin-top:12px; } .muted { color:var(--muted); }
+</style>
+</head>
+<body><main>
+  <span class="tag">BLOCKED ON EXTERNAL GATES</span>
+  <h1>User-Relief Bugfix Program</h1>
+  <p class="lead">Local implementation and verification are complete; Windows CI, dependency policy, and push authorization remain.</p>
+  <section class="grid">
+    <div class="card status"><h2>Progress</h2><div class="n">4 / 6</div><p class="muted">Tasks 5–6 are locally complete but cannot close their external criteria.</p></div>
+    <div class="card"><h2>Miller</h2><div class="n ok">6,356 + 135</div><p class="muted">Fast and Scale passed; Release build clean.</p></div>
+    <div class="card"><h2>Context</h2><div class="n ok">~8.1–8.5s</div><p class="muted">Down from about 33 seconds.</p></div>
+    <div class="card"><h2>Semantic</h2><div class="n ok">384 dims</div><p class="muted">Same broker activated and embedded without restart.</p></div>
+  </section>
+  <section class="card wide"><h2>Shipped locally</h2><ul>
+    <li>Valid JSON convergence diagnostics.</li><li>Targeted family-store resolution SQL and bounded Context rescue.</li>
+    <li>Live sidecar activation plus Miller session recovery and operator guidance.</li><li>Native <code>fs4</code> capacity probing and Windows source CI definition.</li>
+  </ul></section>
+  <section class="card wide status"><h2>Remaining gates</h2><ul>
+    <li>Approve an extractor branch push and PR.</li><li>Run Windows capacity/store and remote dependency-policy CI.</li>
+    <li>After green CI, separately approve publication, pins, workflow enablement, and release preparation.</li>
+  </ul></section>
+  <section class="card wide"><h2>Clean local branches</h2><ul>
+    <li>Miller <code>46cd6384</code></li><li>julie-extractors <code>692ef4e</code></li><li>julie-semantic-sidecar <code>35c8f13</code></li>
+  </ul></section>
+</main></body></html>
