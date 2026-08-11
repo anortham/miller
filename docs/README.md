@@ -12,6 +12,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`findings/2026-08-09-index-store-ph3-acceptance.md`](findings/2026-08-09-index-store-ph3-acceptance.md) - v1.18 default-on family-store acceptance: view-scoped reads, orchestration, sidecars, migration, rollback export, provenance, and the disclosed A7/A8 follow-ups.
 - [`plans/2026-08-09-index-store-ph3-cleanup-plan.md`](plans/2026-08-09-index-store-ph3-cleanup-plan.md) - historical v4.3 execution-drift cleanup and the origin of the A7/A8 follow-up boundaries.
 - [`findings/2026-08-10-julie-extract-2.31.3-adoption.md`](findings/2026-08-10-julie-extract-2.31.3-adoption.md) - public 2.31.3 producer hardening pin, four-platform archive checksums, tag provenance, and restored-binary verification.
+- [`findings/2026-08-11-julie-extract-2.31.4-adoption.md`](findings/2026-08-11-julie-extract-2.31.4-adoption.md) - public 2.31.4 producer performance pin, four-platform archive checksums, tag provenance, and restored-binary verification.
 - [`findings/2026-08-09-julie-extract-2.31.2-adoption.md`](findings/2026-08-09-julie-extract-2.31.2-adoption.md) - historical 2.31.2 pin adoption evidence.
 - [`findings/2026-08-10-v1.18.0-cross-model-review.md`](findings/2026-08-10-v1.18.0-cross-model-review.md) - exact external-review history, fix dispositions, disclosed A7/A8 boundaries, and final local verification.
 - [`findings/2026-08-09-julie-extract-2.31.1-adoption.md`](findings/2026-08-09-julie-extract-2.31.1-adoption.md) - public 2.31.1 pin adoption, archive checksums, migration-identity fix, and restored-binary verification.
@@ -128,7 +129,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-09-patterns-tool-design.md`](plans/2026-06-09-patterns-tool-design.md) - design record for the `patterns` tool over extractor structural facts.
 - [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the `patterns` MCP/CLI surface.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
-- [`release-notes/v1.18.0.md`](release-notes/v1.18.0.md) - latest release notes.
+- [`release-notes/v1.18.1.md`](release-notes/v1.18.1.md) - latest release notes.
+- [`release-notes/v1.18.0.md`](release-notes/v1.18.0.md) - previous release notes.
 - [`findings/2026-08-10-v1.18.0-release-verification.md`](findings/2026-08-10-v1.18.0-release-verification.md) - live `v1.18.0` release verification.
 - [`release-notes/v1.17.0.md`](release-notes/v1.17.0.md) - previous release notes.
 - [`findings/2026-08-06-v1.17.0-release-verification.md`](findings/2026-08-06-v1.17.0-release-verification.md) - live `v1.17.0` release verification.
