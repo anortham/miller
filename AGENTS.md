@@ -70,17 +70,24 @@ The suite is split into two categories. **Keep them separate; this is load-beari
 grew to 30+ minutes because slow integration tests ran on every change — Miller's split exists to prevent
 that, and there are guards that will fail the build if the split erodes.
 
-- **Default = fast suite.** A bare `dotnet test` runs ONLY `Category!=Scale` (pure logic + contract
+- **Inner loop = focused tests.** While you develop, run only the test class or group that covers the
+  change: `dotnet test --filter "FullyQualifiedName~<TestClassName>"`. Do not run any suite after every
+  edit — suites run at the boundaries below.
+- **Fast suite at task boundaries.** A bare `dotnet test` runs ONLY `Category!=Scale` (pure logic + contract
   tests, no subprocess). This is enforced by `VSTestTestCaseFilter=Category!=Scale` in
   [`Miller.Tests.csproj`](tests/Miller.Tests/Miller.Tests.csproj) (the MSBuild default for `--filter`; a
-  command-line `--filter` overrides it). **Run this on every change.** Wall-clock duration is report-only;
+  command-line `--filter` overrides it). Run it once when a coherent task lands, not per edit.
+  Wall-clock duration is report-only;
   compare repeated runs on the same local machine when measuring performance. (A well-formed
   `.runsettings` `<TestCaseFilter>` works too; the csproj property is preferred because it needs no extra
   file and fails the build loudly on a typo instead of silently running everything.)
 - **Scale suite is opt-in.** `Category=Scale` tests spawn the real `julie-extract` or build large
-  fixtures. Run them with `scripts/test.sh scale` / `scripts/test.ps1 scale` (or `all`) before a
-  commit/PR, or when you touch the indexing/extract path. They **skip** (not fail) if
+  fixtures. Run them with `scripts/test.sh scale` / `scripts/test.ps1 scale` (or `all`) once at the
+  branch gate (before commit/PR), or when you touch the indexing/extract path. They **skip** (not fail) if
   `.tools/julie-extract` is missing.
+- **Never rerun a green suite on an unchanged tree.** A fast-forward merge, a branch switch, or a
+  metadata-only commit does not change the source tree. If a scope already passed on this exact tree,
+  cite that run instead of running it again.
 
 Use the wrapper, not raw `dotnet test`, unless you have a reason:
 
