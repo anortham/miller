@@ -185,13 +185,18 @@
 - Modify: `src/Miller.Indexing/Semantic/SemanticEmbeddingSessionBroker.cs:1-180`
 - Modify: `src/Miller.Indexing/Semantic/SharedSemanticBrokerConnectionFactory.cs:131-202`
 - Modify: `src/Miller.Indexing/Semantic/SemanticSearchArm.cs:284-383`
+- Modify: `src/Miller.Indexing/VectorSidecar.cs:515-602`
 - Modify: `src/Miller.Server/Hosting/VectorConvergeService.cs:565-640,1240-1280`
 - Modify: `src/Miller.Server/Cli/SemanticPrepareCli.cs:20-175`
 - Modify: `src/Miller.Server/Cli/CliDispatch.cs:300-350`
 - Modify: `src/Miller.Server/Tools/WorkspaceHealthFacts.cs:339-388`
 - Modify: `src/Miller.Server/Tools/WorkspaceRender.cs:542-551`
 - Modify: `tests/Miller.Tests/Indexing/SemanticEmbeddingSessionTests.cs`
+- Modify: `tests/Miller.Tests/Indexing/SemanticQueryDiagnosticsTests.cs`
 - Modify: `tests/Miller.Tests/Indexing/SharedSemanticBrokerConnectionFactoryTests.cs`
+- Modify: `tests/Miller.Tests/Indexing/VectorSidecarTests.cs`
+- Modify: `tests/Miller.Tests/Indexing/VectorSidecarClassificationTests.cs`
+- Modify: `tests/Miller.Tests/Indexing/VectorSidecarOpenTests.cs`
 - Modify: `tests/Miller.Tests/Server/VectorConvergeServiceTests.cs`
 - Modify: `tests/Miller.Tests/Server/SemanticPrepareCliTests.cs`
 - Modify: `tests/Miller.Tests/Server/WorkspaceVectorFactsRenderTests.cs`
@@ -202,7 +207,7 @@
 
 **Contract inputs:** A valid `model_not_prepared` health refusal is not a transport failure; successful prepare remains exit 0 even when no live broker exists; activation probing never starts a broker.
 
-**File ownership:** Miller: semantic session/broker/factory, semantic search fallback, vector convergence, semantic prepare/dispatch, workspace health/status rendering, and the listed tests.
+**File ownership:** Miller: semantic session/broker/factory, semantic search fallback, vector sidecar pause classification, vector convergence, semantic prepare/dispatch, workspace health/status rendering, and the listed tests.
 
 **Serialization required:** No.
 
@@ -213,14 +218,14 @@
 **Approach:** Split call admission so `EnsureStartedAsync` may probe a parked session while embed calls fail fast. Extend the nested `VectorConvergeService.EmbeddingClient` with `EnsureReadyAsync` through both `For(SemanticEmbeddingSession)` and `For(SemanticEmbeddingSessionBroker)` adapters; only converge invokes it automatically. Stamp `ModelNotPrepared` as a distinct non-ready convergence pause, map embed refusal to `SemanticFallbackKind.ModelNotPrepared`, and preserve the reason in `WorkspaceRender.VectorsLabel`. Use the existing cold-load `InitTimeout` for readiness probes, not the short request timeout. Inject the prepare activator for fast tests; production uses passive broker observation and cannot become an owner candidate. Keep transport errors on the existing fatal/backoff path.
 
 **Acceptance criteria:**
-- [ ] `model_not_prepared` produces `SemanticSessionState.ModelNotPrepared`, not `CircuitOpen`, and does not increment the fatal counter.
-- [ ] Query embeddings fail fast while parked; converge and explicit prepare probes can transition the same session to `Ready`.
-- [ ] Convergence records a model-not-prepared pause and semantic search returns `ModelNotPrepared`, never generic `EmbedError` or a false-ready state.
-- [ ] Successful prepare probes a live broker once, does not spawn one, preserves exit 0, and reports activation outcome in compact and JSON output.
-- [ ] Compact `workspace status` includes the model-not-prepared reason and `miller semantic prepare` hint; `workspace health` recommends the same action and no longer recommends merely keeping a leader alive.
-- [ ] Readiness probes use the cold-load initialization timeout through both session and broker embedding adapters.
-- [ ] Transport-failure circuit, reconnect, `MILLER_SEMANTIC=off`, and no-restart-loop tests remain green.
-- [ ] Focused red/green and worker-scope verification pass; hand off per commit mode.
+- [x] `model_not_prepared` produces `SemanticSessionState.ModelNotPrepared`, not `CircuitOpen`, and does not increment the fatal counter.
+- [x] Query embeddings fail fast while parked; converge and explicit prepare probes can transition the same session to `Ready`.
+- [x] Convergence records a model-not-prepared pause and semantic search returns `ModelNotPrepared`, never generic `EmbedError` or a false-ready state.
+- [x] Successful prepare probes a live broker once, does not spawn one, preserves exit 0, and reports activation outcome in compact and JSON output.
+- [x] Compact `workspace status` includes the model-not-prepared reason and `miller semantic prepare` hint; `workspace health` recommends the same action and no longer recommends merely keeping a leader alive.
+- [x] Readiness probes use the cold-load initialization timeout through both session and broker embedding adapters.
+- [x] Transport-failure circuit, reconnect, `MILLER_SEMANTIC=off`, and no-restart-loop tests remain green.
+- [x] Focused red/green and worker-scope verification pass; hand off per commit mode.
 
 ### Task 5: Replace shell capacity probes and prove the source fix on Windows
 

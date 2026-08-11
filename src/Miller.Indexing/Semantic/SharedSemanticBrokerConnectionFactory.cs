@@ -5,6 +5,17 @@ using System.Text;
 
 namespace Miller.Indexing.Semantic;
 
+public enum ExistingSemanticBrokerReadiness
+{
+    Activated,
+    NoLiveBroker,
+    StillNotReady,
+}
+
+public sealed record ExistingSemanticBrokerProbe(
+    ExistingSemanticBrokerReadiness Readiness,
+    SemanticBrokerSnapshot? Snapshot);
+
 public sealed record SemanticBrokerSnapshot(
     string State,
     string EndpointIdentity,
@@ -159,6 +170,14 @@ public sealed class SharedSemanticBrokerConnectionFactory :
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
+        ExistingSemanticBrokerProbe probe = await ProbeExistingAsync(timeout, cancellationToken).ConfigureAwait(false);
+        return probe.Readiness is ExistingSemanticBrokerReadiness.Activated ? probe.Snapshot : null;
+    }
+
+    public async ValueTask<ExistingSemanticBrokerProbe> ProbeExistingAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
         if (timeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(timeout));
         ThrowIfDisposed();
@@ -172,11 +191,11 @@ public sealed class SharedSemanticBrokerConnectionFactory :
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return null;
+            return new ExistingSemanticBrokerProbe(ExistingSemanticBrokerReadiness.NoLiveBroker, null);
         }
 
         if (connection is null)
-            return null;
+            return new ExistingSemanticBrokerProbe(ExistingSemanticBrokerReadiness.NoLiveBroker, null);
 
         await using var passiveFactory = new PassiveConnectionFactory(connection, this);
         _passiveConnectionAccepted?.Invoke();
@@ -193,11 +212,13 @@ public sealed class SharedSemanticBrokerConnectionFactory :
         {
             SemanticEncoderHandshake? handshake =
                 await session.EnsureStartedAsync(observation.Token).ConfigureAwait(false);
-            return handshake is null ? null : Snapshot;
+            return handshake is null
+                ? new ExistingSemanticBrokerProbe(ExistingSemanticBrokerReadiness.StillNotReady, null)
+                : new ExistingSemanticBrokerProbe(ExistingSemanticBrokerReadiness.Activated, Snapshot);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return null;
+            return new ExistingSemanticBrokerProbe(ExistingSemanticBrokerReadiness.StillNotReady, null);
         }
     }
 

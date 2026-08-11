@@ -168,14 +168,53 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
             CreateFactory(counter, loadDelayMs: 0, healthDelayMs: 5_000);
         var elapsed = Stopwatch.StartNew();
 
-        SemanticBrokerSnapshot? snapshot = await observer.ObserveExistingAsync(
+        ExistingSemanticBrokerProbe probe = await observer.ProbeExistingAsync(
             TimeSpan.FromMilliseconds(100),
             TestContext.Current.CancellationToken);
 
         elapsed.Stop();
-        Assert.Null(snapshot);
+        Assert.Equal(ExistingSemanticBrokerReadiness.StillNotReady, probe.Readiness);
+        Assert.Null(probe.Snapshot);
         Assert.InRange(elapsed.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(2));
         Assert.Equal(0, observer.Snapshot.SpawnAttempts);
+    }
+
+    [Fact]
+    public async Task PassiveProbe_WithNoLiveBroker_ReportsNoLiveBrokerWithoutSpawning()
+    {
+        string counter = Path.Combine(_root, "passive-absent-loads.txt");
+        await using SharedSemanticBrokerConnectionFactory observer =
+            CreateFactory(counter, loadDelayMs: 0);
+
+        ExistingSemanticBrokerProbe probe = await observer.ProbeExistingAsync(
+            TimeSpan.FromMilliseconds(100),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExistingSemanticBrokerReadiness.NoLiveBroker, probe.Readiness);
+        Assert.Null(probe.Snapshot);
+        Assert.Equal(0, observer.Snapshot.SpawnAttempts);
+        Assert.False(File.Exists(counter));
+    }
+
+    [Fact]
+    public async Task PassiveProbe_WithAReadyLiveBroker_ReportsActivatedWithoutSpawning()
+    {
+        string counter = Path.Combine(_root, "passive-ready-loads.txt");
+        await using SharedSemanticBrokerConnectionFactory owner =
+            CreateFactory(counter, loadDelayMs: 0);
+        await using ISemanticSidecarConnection ownerConnection =
+            await owner.ConnectAsync(TestContext.Current.CancellationToken);
+        await using SharedSemanticBrokerConnectionFactory observer =
+            CreateFactory(counter, loadDelayMs: 0);
+
+        ExistingSemanticBrokerProbe probe = await observer.ProbeExistingAsync(
+            TimeSpan.FromSeconds(2),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExistingSemanticBrokerReadiness.Activated, probe.Readiness);
+        Assert.NotNull(probe.Snapshot);
+        Assert.Equal(0, observer.Snapshot.SpawnAttempts);
+        Assert.Single(File.ReadAllLines(counter));
     }
 
     [Fact]

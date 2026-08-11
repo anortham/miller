@@ -112,6 +112,21 @@ public sealed class WorkspaceVectorFactsRenderTests
     }
 
     [Fact]
+    public void Compact_ModelNotPrepared_PreservesReasonAndShowsPrepareCommand()
+    {
+        var facts = new VectorSidecarFacts(
+            "model-not-prepared",
+            "/repo/.miller/vectors.db",
+            "sidecar reported ready=false (model_not_prepared)");
+
+        string line = CompactVectorsLine(facts);
+
+        Assert.Contains("model-not-prepared", line, StringComparison.Ordinal);
+        Assert.Contains("model_not_prepared", line, StringComparison.Ordinal);
+        Assert.Contains("miller semantic prepare", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Compact_DiskBlocked_IsBareVocabulary()
     {
         var facts = new VectorSidecarFacts("disk-blocked", "/repo/.miller/vectors.db", "preflight failed");
@@ -296,6 +311,32 @@ public sealed class WorkspaceVectorFactsRenderTests
         Assert.Contains("vector retrieval is unavailable", warning.Message, StringComparison.Ordinal);
         Assert.Contains(health.RecommendedActions, action => action.Contains("resident Miller leader", StringComparison.Ordinal));
         Assert.Equal(HealthState.Degraded, health.State);
+    }
+
+    [Fact]
+    public void Health_ModelNotPrepared_RecommendsPrepareInsteadOfAResidentLeader()
+    {
+        var vectors = new VectorSidecarFacts(
+            "model-not-prepared",
+            "/repo/.miller/vectors.db",
+            "sidecar reported ready=false (model_not_prepared)");
+
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            Facts(vectors),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(OkCount: 1, EmptyCount: 0, ErrorCount: 0),
+            EmptyExtractionHealth());
+
+        HealthWarning warning = Assert.Single(
+            health.Warnings,
+            item => item.Code == "vectors_model_not_prepared");
+        Assert.Contains("model_not_prepared", warning.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            health.RecommendedActions,
+            action => action.Contains("miller semantic prepare", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            health.RecommendedActions,
+            action => action.Contains("resident Miller leader", StringComparison.Ordinal));
     }
 
     [Fact]

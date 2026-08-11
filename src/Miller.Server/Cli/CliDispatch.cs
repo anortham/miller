@@ -356,7 +356,7 @@ public static class CliDispatch
 
         string millerDir = Path.GetDirectoryName(ctx.ExtractDbPath)
             ?? throw new InvalidOperationException("Cannot determine the workspace .miller directory.");
-        return SemanticPrepareCli.Production().Run(
+        return SemanticPrepareCli.Production(ctx.ToolsRoot, MillerHomeFor(ctx)).Run(
             new SemanticPrepareRequest(o.Value("model"), o.Has("json")),
             ctx.ToolsRoot,
             millerDir,

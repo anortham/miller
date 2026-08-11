@@ -377,6 +377,16 @@ public sealed record WorkspaceHealthFacts(
             return;
         }
 
+        if (string.Equals(vectors.State, "model-not-prepared", StringComparison.OrdinalIgnoreCase))
+        {
+            string modelMessage = string.IsNullOrWhiteSpace(vectors.Reason)
+                ? "vector retrieval is model-not-prepared"
+                : $"vector retrieval is model-not-prepared: {vectors.Reason}";
+            warnings.Add(new HealthWarning("vectors_model_not_prepared", "degraded", modelMessage));
+            recommended.Add("run `miller semantic prepare` to install the selected embedding model");
+            return;
+        }
+
         string normalizedState = vectors.State.Replace('-', '_');
         string message = string.IsNullOrWhiteSpace(vectors.Reason)
             ? $"vector retrieval is {vectors.State}"

@@ -15,6 +15,7 @@ public enum VectorOpenKind
     Unavailable,
     Incompatible,
     Building,
+    ModelNotPrepared,
     CircuitOpen,
     DiskBlocked,
     Downloading,
@@ -189,6 +190,7 @@ public sealed class VectorSidecar
     private const string BuildingState = "building";
     private const string UnavailableState = "unavailable";
     private const string IncompatibleState = "incompatible";
+    private const string ModelNotPreparedState = "model-not-prepared";
     private const string CircuitOpenState = "circuit-open";
     private const string DiskBlockedState = "disk-blocked";
     private const string DownloadingState = "downloading";
@@ -422,6 +424,7 @@ public sealed class VectorSidecar
     {
         BuildingState => VectorOpenKind.Building,
         IncompatibleState => VectorOpenKind.Incompatible,
+        ModelNotPreparedState => VectorOpenKind.ModelNotPrepared,
         CircuitOpenState => VectorOpenKind.CircuitOpen,
         DiskBlockedState => VectorOpenKind.DiskBlocked,
         DownloadingState => VectorOpenKind.Downloading,
@@ -596,6 +599,7 @@ public sealed class VectorSidecar
     private static string? PauseState(IReadOnlyDictionary<string, string> meta) =>
         meta.GetValueOrDefault("converge_pause_state") switch
         {
+            ModelNotPreparedState => ModelNotPreparedState,
             CircuitOpenState => CircuitOpenState,
             DiskBlockedState => DiskBlockedState,
             _ => null,

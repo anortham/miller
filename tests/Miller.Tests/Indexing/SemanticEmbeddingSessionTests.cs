@@ -367,7 +367,40 @@ public sealed class SemanticEmbeddingSessionTests
 
         Assert.False(outcome.Succeeded);
         Assert.Contains("model_not_prepared", outcome.FailureReason);
-        Assert.Equal(SemanticSessionState.CircuitOpen, session.State);
+        Assert.Equal(SemanticSessionState.ModelNotPrepared, session.State);
+        Assert.Equal(0, session.RestartCount);
+    }
+
+    [Fact]
+    public async Task ModelNotPrepared_EmbedsFailFastUntilAnExplicitReadinessProbeRecoversTheSession()
+    {
+        await using var factory = new RecordingConnectionFactory(
+            FakeSemanticSidecar.SequencedLauncher(
+                FakeSidecarFault.ModelNotPrepared,
+                FakeSidecarFault.None));
+        await using var session = new SemanticEmbeddingSession(factory, FastOptions);
+
+        SemanticEmbedOutcome first =
+            await session.EmbedBatchAsync(["alpha"], TestContext.Current.CancellationToken);
+        SemanticEmbedOutcome parked =
+            await session.EmbedBatchAsync(["beta"], TestContext.Current.CancellationToken);
+
+        Assert.False(first.Succeeded);
+        Assert.False(parked.Succeeded);
+        Assert.Equal(1, factory.ConnectCount);
+        Assert.Equal(SemanticSessionState.ModelNotPrepared, session.State);
+        Assert.Null(session.Handshake);
+        Assert.Equal(0, session.RestartCount);
+
+        SemanticEncoderHandshake? handshake =
+            await session.EnsureStartedAsync(TestContext.Current.CancellationToken);
+        SemanticEmbedOutcome recovered =
+            await session.EmbedBatchAsync(["gamma"], TestContext.Current.CancellationToken);
+
+        Assert.NotNull(handshake);
+        Assert.True(recovered.Succeeded, recovered.FailureReason);
+        Assert.Equal(2, factory.ConnectCount);
+        Assert.Equal(SemanticSessionState.Ready, session.State);
         Assert.Equal(0, session.RestartCount);
     }
 

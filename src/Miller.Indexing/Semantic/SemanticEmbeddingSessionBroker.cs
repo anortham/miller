@@ -74,6 +74,34 @@ public sealed class SemanticEmbeddingSessionBroker : IAsyncDisposable, IDisposab
 
     public bool Available => GetSession() is not null;
 
+    public async Task<SemanticEncoderHandshake?> EnsureReadyAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (GetSession() is not { } session)
+            return null;
+
+        while (true)
+        {
+            await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (Volatile.Read(ref _waitingQueries) == 0)
+                break;
+
+            _operationGate.Release();
+            await Task.Yield();
+        }
+
+        try
+        {
+            return IsDisposed()
+                ? null
+                : await session.EnsureStartedAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
     public async Task<SemanticEmbedOutcome> EmbedQueryAsync(
         string text,
         CancellationToken cancellationToken = default)

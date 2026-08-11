@@ -347,6 +347,7 @@ public sealed class SemanticSearchArm
                 SemanticSessionState sessionState = _broker?.State ?? session!.State;
                 SemanticFallbackKind fallback = sessionState switch
                 {
+                    SemanticSessionState.ModelNotPrepared => SemanticFallbackKind.ModelNotPrepared,
                     SemanticSessionState.CircuitOpen => SemanticFallbackKind.CircuitOpen,
                     _ when outcome.TimedOut => SemanticFallbackKind.EmbedTimeout,
                     _ => SemanticFallbackKind.EmbedError,
@@ -563,6 +564,7 @@ public sealed class SemanticSearchArm
         VectorOpenKind.Missing => SemanticFallbackKind.VectorsMissing,
         VectorOpenKind.Incompatible => SemanticFallbackKind.VectorsIncompatible,
         VectorOpenKind.Building => SemanticFallbackKind.VectorsBuilding,
+        VectorOpenKind.ModelNotPrepared => SemanticFallbackKind.ModelNotPrepared,
         VectorOpenKind.CircuitOpen => SemanticFallbackKind.CircuitOpen,
         VectorOpenKind.DiskBlocked => SemanticFallbackKind.DiskBlocked,
         VectorOpenKind.Downloading => SemanticFallbackKind.ModelNotPrepared,

@@ -152,6 +152,86 @@ public sealed class SemanticPrepareCliTests : IDisposable
     }
 
     [Fact]
+    public void Prepare_Success_CompactReportsActivatedAndKeepsExitZero()
+    {
+        int probes = 0;
+        var cli = Build(
+            binaryExists: true,
+            preflight: Ok(),
+            runner: (_, _, _, _) => 0,
+            activator: () =>
+            {
+                probes++;
+                return SemanticPrepareActivationOutcome.Activated;
+            });
+
+        var (code, outText, _) = Run(cli, new SemanticPrepareRequest(Model: null, Json: false));
+
+        Assert.Equal(0, code);
+        Assert.Equal(1, probes);
+        Assert.Contains("activation: activated", outText, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Activated", "activated")]
+    [InlineData("NoLiveBroker", "no_live_broker")]
+    [InlineData("StillNotReady", "still_not_ready")]
+    public void Prepare_Success_JsonReportsPassiveActivationOutcome(
+        string outcomeName,
+        string expected)
+    {
+        SemanticPrepareActivationOutcome outcome =
+            Enum.Parse<SemanticPrepareActivationOutcome>(outcomeName);
+        var cli = Build(
+            binaryExists: true,
+            preflight: Ok(),
+            runner: (_, _, _, _) => 0,
+            activator: () => outcome);
+
+        var (code, outText, _) = Run(cli, new SemanticPrepareRequest(Model: null, Json: true));
+
+        Assert.Equal(0, code);
+        string jsonLine = outText.Split('\n', StringSplitOptions.RemoveEmptyEntries).Last();
+        using JsonDocument json = JsonDocument.Parse(jsonLine);
+        Assert.Equal(expected, json.RootElement.GetProperty("activation").GetString());
+    }
+
+    [Fact]
+    public void Prepare_Failure_DoesNotProbeForActivation()
+    {
+        int probes = 0;
+        var cli = Build(
+            binaryExists: true,
+            preflight: Ok(),
+            runner: (_, _, _, _) => 9,
+            activator: () =>
+            {
+                probes++;
+                return SemanticPrepareActivationOutcome.Activated;
+            });
+
+        var (code, _, _) = Run(cli, new SemanticPrepareRequest(Model: null, Json: false));
+
+        Assert.Equal(9, code);
+        Assert.Equal(0, probes);
+    }
+
+    [Fact]
+    public void Prepare_Success_ActivationProbeFailureStillReturnsZeroAndReportsNotReady()
+    {
+        var cli = Build(
+            binaryExists: true,
+            preflight: Ok(),
+            runner: (_, _, _, _) => 0,
+            activator: () => throw new IOException("broker disappeared"));
+
+        var (code, outText, _) = Run(cli, new SemanticPrepareRequest(Model: null, Json: false));
+
+        Assert.Equal(0, code);
+        Assert.Contains("activation: still_not_ready", outText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Prepare_ForwardsOnlyModelToTheSidecar_NeverMillerJsonFlag()
     {
         string? executable = null;
@@ -303,8 +383,16 @@ public sealed class SemanticPrepareCliTests : IDisposable
         ISemanticPreparePreflight preflight,
         SemanticPrepareProcessRunner runner,
         int pid = FakePid,
-        string nonce = "test-nonce") =>
-        new(_ => binaryExists, preflight, runner, () => pid, () => FakeNow, () => nonce);
+        string nonce = "test-nonce",
+        Func<SemanticPrepareActivationOutcome>? activator = null) =>
+        new(
+            _ => binaryExists,
+            preflight,
+            runner,
+            () => pid,
+            () => FakeNow,
+            () => nonce,
+            activator ?? (() => SemanticPrepareActivationOutcome.NoLiveBroker));
 
     private (int Code, string Out, string Err) Run(SemanticPrepareCli cli, SemanticPrepareRequest request)
     {

@@ -15,6 +15,9 @@ public enum SemanticSessionState
     /// <summary>A connection is live and its handshake was accepted.</summary>
     Ready,
 
+    /// <summary>The broker is live, but the selected model has not been prepared yet.</summary>
+    ModelNotPrepared,
+
     /// <summary>The last call failed at the transport level; the next call reconnects after a backoff.</summary>
     Restarting,
 
@@ -277,7 +280,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (!TryEnterCall(out _))
+            if (!CanProbeReadiness())
                 return null;
 
             return await StartIfNeededAsync(cancellationToken).ConfigureAwait(false) ? Handshake : null;
@@ -370,7 +373,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
 
                 if (!await StartIfNeededAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    if (State == SemanticSessionState.CircuitOpen)
+                    if (State is SemanticSessionState.CircuitOpen or SemanticSessionState.ModelNotPrepared)
                         return SemanticEmbedOutcome.Fail(UnavailableReason!, lastTimedOut);
                     continue;
                 }
@@ -436,7 +439,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
             return false;
         }
 
-        if (State == SemanticSessionState.CircuitOpen)
+        if (State is SemanticSessionState.CircuitOpen or SemanticSessionState.ModelNotPrepared)
         {
             blockedReason = UnavailableReason;
             return false;
@@ -445,6 +448,9 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         blockedReason = null;
         return true;
     }
+
+    private bool CanProbeReadiness() =>
+        !_disposed && State is not SemanticSessionState.Stopped and not SemanticSessionState.CircuitOpen;
 
     private async Task RefreshRuntimeHealthAsync(CancellationToken cancellationToken)
     {
@@ -542,9 +548,14 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
             : MatchEncoder(health, _expectedEncoder, out refusal);
         if (handshake is null)
         {
-            // A not-ready or wrong-encoder sidecar is a stated refusal, not a transport fault worth reconnecting.
             await CloseConnectionAsync(abort: false).ConfigureAwait(false);
-            State = SemanticSessionState.CircuitOpen;
+            Handshake = null;
+            State = !health.Ready && string.Equals(
+                health.DegradedReason,
+                "model_not_prepared",
+                StringComparison.Ordinal)
+                ? SemanticSessionState.ModelNotPrepared
+                : SemanticSessionState.CircuitOpen;
             UnavailableReason = refusal;
             return false;
         }

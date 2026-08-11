@@ -544,6 +544,9 @@ public static class WorkspaceRender
         null or "disabled" => null,
         "ready" => VectorsReadyLabel(facts),
         "building" => $"building {facts.BuildProgressPercent ?? 0}% (not queryable)",
+        "model-not-prepared" => string.IsNullOrWhiteSpace(facts.Reason)
+            ? "model-not-prepared (run `miller semantic prepare`)"
+            : $"model-not-prepared ({facts.Reason}; run `miller semantic prepare`)",
         "unavailable" => string.IsNullOrWhiteSpace(facts.Reason)
             ? "unavailable"
             : $"unavailable ({facts.Reason})",
