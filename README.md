@@ -23,7 +23,7 @@ across files, SQL DDL/DML shapes, and owned grammar forks (Razor, T-SQL, C#) whe
 gaps. The full argument is
 [hand-written extractors, not query files](https://anortham.github.io/julie-extractors/extractors.html).
 
-> **Current release: [v1.18.2](https://github.com/anortham/miller/releases/tag/v1.18.2)** ·
+> **Current release: [v1.18.3](https://github.com/anortham/miller/releases/tag/v1.18.3)** ·
 > Website: [anortham.github.io/miller](https://anortham.github.io/miller/)
 
 ## Quickstart
@@ -59,8 +59,10 @@ roots on the first tool call and writes its index under that workspace's `.mille
 
 Every other install path is covered step by step in [docs/install.md](docs/install.md):
 
-- **Manual binary:** download an archive from the
-  [v1.17.0 release](https://github.com/anortham/miller/releases/tag/v1.17.0), verify its `.sha256`
+- **Manual binary:** download a platform archive directly — [macOS arm64](https://github.com/anortham/miller/releases/download/v1.18.3/miller-1.18.3-aarch64-apple-darwin.tar.gz),
+  [macOS x64](https://github.com/anortham/miller/releases/download/v1.18.3/miller-1.18.3-x86_64-apple-darwin.tar.gz),
+  [Linux x64](https://github.com/anortham/miller/releases/download/v1.18.3/miller-1.18.3-x86_64-unknown-linux-gnu.tar.gz),
+  or [Windows x64](https://github.com/anortham/miller/releases/download/v1.18.3/miller-1.18.3-x86_64-pc-windows-msvc.zip). Verify the matching `.sha256`
   sidecar, extract it, and point your MCP client at the binary. No .NET SDK or Node.js required.
 - **Any other MCP harness:** same binary, plus a routing block from `miller rules --harness <name>`.
 - **Source checkout (development):** needs the .NET 10 SDK, then
@@ -73,7 +75,7 @@ The minimal MCP config for clients you configure by hand:
   "mcpServers": {
     "miller": {
       "type": "stdio",
-      "command": "/absolute/path/to/miller-1.17.0-aarch64-apple-darwin/miller",
+      "command": "/absolute/path/to/miller-1.18.3-aarch64-apple-darwin/miller",
       "args": ["serve"]
     }
   }
