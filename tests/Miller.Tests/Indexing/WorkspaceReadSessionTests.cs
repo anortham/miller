@@ -1,5 +1,6 @@
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Core.Graph;
 using Miller.Server.Workspaces;
 using Xunit;
 
@@ -42,6 +43,20 @@ public sealed class WorkspaceReadSessionTests
         using WorkspaceReadHandle actual = fixture.DbPath;
 
         Assert.Equal(expected.Snapshot, actual.Snapshot);
+    }
+
+    [Fact]
+    public void LegacyHandleKeepsCompatibilityGraphReaders()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.CreateForInspect();
+        using var handle = new WorkspaceReadHandle(LegacyArtifactReadSession.Open(fixture.DbPath));
+        using var graph = new SqliteSymbolGraphIndex(handle);
+
+        _ = graph.Reach([JulieDbFixture.GetUserId], 1, 50, Direction.Both);
+
+        Assert.Null(handle.FamilyGraphResolutionReader);
+        Assert.Null(handle.FamilyGraphUnresolvedNameReader);
+        Assert.Equal(2, graph.QueryTelemetry.FrontierUnresolvedNames.Executions);
     }
 
     [Fact]

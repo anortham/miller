@@ -621,9 +621,11 @@ public sealed class FamilyStoreReadSessionTests
             deltaUnresolvedTargetId,
             reverseTargetId,
             reverseCallerId);
-        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
         session.CaptureGraphUnresolvedNameQueryPlan = true;
-        using var graph = new SqliteSymbolGraphIndex(session)
+        session.CaptureGraphResolutionQueryPlan = true;
+        using var handle = new WorkspaceReadHandle(session);
+        using var graph = new SqliteSymbolGraphIndex(handle)
         {
             CaptureFrontierQueryPlan = true,
         };
@@ -657,6 +659,12 @@ public sealed class FamilyStoreReadSessionTests
             session.LastGraphUnresolvedNameQueryPlan,
             detail => detail.Contains("MATERIALIZE", StringComparison.Ordinal)
                 || detail.Contains("SCAN r", StringComparison.Ordinal));
+        Assert.Contains(
+            session.LastGraphResolutionQueryPlan,
+            detail => detail.Contains("idx_read_resolution_identifiers_target", StringComparison.Ordinal));
+        Assert.Contains(
+            session.LastGraphResolutionQueryPlan,
+            detail => detail.Contains("idx_read_resolution_pending_target", StringComparison.Ordinal));
         Assert.Equal(
             [
                 (GraphStatementPhase.UnresolvedNameForward, 2),

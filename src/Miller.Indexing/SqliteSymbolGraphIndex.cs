@@ -20,6 +20,8 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
 
     private readonly string? _dbPath;
     private readonly IWorkspaceReadSession? _readSession;
+    private readonly IFamilyGraphResolutionReader? _familyGraphResolutionReader;
+    private readonly IFamilyGraphUnresolvedNameReader? _familyGraphUnresolvedNameReader;
     private readonly Dictionary<(string Id, Direction Direction), IReadOnlyList<string>> _neighbourCache = new();
     private readonly Dictionary<(string Id, Direction Direction), IReadOnlyList<GraphNeighbour>>
         _evidenceCache = new();
@@ -48,6 +50,12 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         ArgumentNullException.ThrowIfNull(readSession);
 
         _readSession = readSession;
+        _familyGraphResolutionReader = readSession is WorkspaceReadHandle handle
+            ? handle.FamilyGraphResolutionReader
+            : readSession as IFamilyGraphResolutionReader;
+        _familyGraphUnresolvedNameReader = readSession is WorkspaceReadHandle unresolvedNameHandle
+            ? unresolvedNameHandle.FamilyGraphUnresolvedNameReader
+            : readSession as IFamilyGraphUnresolvedNameReader;
     }
 
     public IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir) =>
@@ -323,7 +331,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 relationshipPlans,
                 GraphStatementPhase.RelationshipReverse);
         }
-        if (_readSession is IFamilyGraphUnresolvedNameReader unresolvedNameReader)
+        if (_familyGraphUnresolvedNameReader is { } unresolvedNameReader)
         {
             IReadOnlyList<FamilyGraphUnresolvedNameEdge> unresolvedNameEdges =
                 unresolvedNameReader.ReadUnresolvedNameEdges(missingIds, direction, StatementObserver);
@@ -371,7 +379,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
 
         long resolutionStarted = Stopwatch.GetTimestamp();
         int resolutionRows = 0;
-        if (_readSession is IFamilyGraphResolutionReader resolutionReader)
+        if (_familyGraphResolutionReader is { } resolutionReader)
         {
             IReadOnlyList<FamilyGraphResolutionEdge> resolutionEdges =
                 resolutionReader.ReadResolutionEdges(missingIds, direction, StatementObserver);

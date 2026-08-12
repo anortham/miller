@@ -21,6 +21,12 @@ public sealed class WorkspaceReadHandle : IWorkspaceReadSession
     public string? FamilyStoreRoot =>
         (_session as FamilyStoreReadSession)?.Visibility.StoreRoot;
 
+    internal IFamilyGraphResolutionReader? FamilyGraphResolutionReader =>
+        _session as IFamilyGraphResolutionReader;
+
+    internal IFamilyGraphUnresolvedNameReader? FamilyGraphUnresolvedNameReader =>
+        _session as IFamilyGraphUnresolvedNameReader;
+
     public TResult Read<TResult>(Func<SqliteConnection, TResult> query) => _session.Read(query);
 
     public void Dispose() => _session.Dispose();
