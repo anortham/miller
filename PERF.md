@@ -339,6 +339,14 @@ without first adding new phase, query-count, or resource evidence.
   response remained correct at 3,378 bytes / 10 results / 845 tokens. Exact PID/cid log evidence was retained,
   but the harness result exceeded the orchestration output budget after process exit, so its sampled CPU/I/O/PSS
   object was not recoverable; the candidate was not repeated and PID `2150085` was confirmed absent.
+- **Deferred-content-index acceptance:** Release was rebuilt from clean `fc634b50`; context improved to
+  2,107.919 ms but still missed the 2 s gate by 107.919 ms. The intended provider cost collapsed: Resolve fell
+  from 238 to 10 ms and IndexLoad from 230 to 2 ms, while ReadSessionOpen remained 6 ms and the single cache miss
+  was preserved. Source rescue fell from 580 to 405 ms, but still spent 194 ms narrow-scoring 1,832 rows, 65 ms
+  widening to 3,786 candidates, 70 ms analyzing 116 hydrated rows, and 35 ms hydrating 8,402 symbol spans. Symbol
+  Search was 550 ms, total lookup 1,594 calls / 838 ms, and graph 292 ms. The correct 3,378-byte, 10-result
+  response consumed 220 CPU ticks and 1,614,721,855 logical-read characters, peaking at 147,114 KB PSS / 193,184
+  KB RSS. Impact, trace, and idle were skipped because context remained over gate.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 

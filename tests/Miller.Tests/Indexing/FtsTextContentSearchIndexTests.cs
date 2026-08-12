@@ -87,14 +87,14 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
                 FtsTextSearchQueryFamily.CandidateFiltering,
                 FtsTextSearchQueryFamily.NarrowTokenScoring,
                 FtsTextSearchQueryFamily.FullHydration,
-                FtsTextSearchQueryFamily.SymbolSpanHydration,
                 FtsTextSearchQueryFamily.RawTextAnalysis,
-                FtsTextSearchQueryFamily.SymbolMapping,
-                FtsTextSearchQueryFamily.ResultConstruction,
                 FtsTextSearchQueryFamily.Scoring,
                 FtsTextSearchQueryFamily.WidenedCandidates,
                 FtsTextSearchQueryFamily.CandidateFiltering,
                 FtsTextSearchQueryFamily.NarrowTokenScoring,
+                FtsTextSearchQueryFamily.SymbolSpanHydration,
+                FtsTextSearchQueryFamily.SymbolMapping,
+                FtsTextSearchQueryFamily.ResultConstruction,
                 FtsTextSearchQueryFamily.FinalOrdering,
             ],
             observations
@@ -578,6 +578,91 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_DefersSymbolSpansUntilPhraseAndLimitSurvivorsAreKnown()
+    {
+        const int rejectedCount = 120;
+        const string query = "Rare_Marker";
+        var files = Enumerable.Range(0, rejectedCount)
+            .Select(static i => (
+                Path: $"src/Rejected{i:D3}.cs",
+                Language: "csharp",
+                IsTest: false,
+                Text: "Rare\nMarker"))
+            .Append((
+                Path: "src/Target.cs",
+                Language: "csharp",
+                IsTest: false,
+                Text: "header\nRare_Marker winner\ntail"))
+            .ToArray();
+        using var fx = BuildFixture(files);
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        ReplaceTargetSpansWithOverlappingTie();
+        var observations = new List<FtsTextSearchQueryObservation>();
+        var index = FtsTextContentSearchIndex.Open(
+            _contentDbPath,
+            expectedRevision: 7,
+            observations.Add);
+        ContentSearchHit expected = Assert.Single(ContentSearchIndex.Build(
+            files.Select(static (file, i) => new ContentDocument(i, file.Path, file.Text, file.Language)).ToArray())
+            .Search(query, limit: 1));
+
+        TextContentSearchHit actual = Assert.Single(index.Search(
+            query,
+            TextContentKind.WorkspaceSource,
+            limit: 1,
+            excludeTests: false));
+
+        Assert.Equal(expected.Path, actual.Path);
+        Assert.Equal(expected.Score, actual.Score);
+        Assert.Equal(expected.Line, actual.Line);
+        Assert.Equal(expected.Snippet, actual.Snippet);
+        Assert.Equal("a-narrow", actual.ContainingSymbolId);
+        Assert.Equal("NarrowA", actual.ContainingSymbolName);
+        Assert.Equal(rejectedCount + 1, observations
+            .Where(static observation => observation.Family == FtsTextSearchQueryFamily.RawTextAnalysis)
+            .Sum(static observation => observation.Rows));
+        Assert.Equal(3, observations
+            .Where(static observation => observation.Family == FtsTextSearchQueryFamily.SymbolSpanHydration)
+            .Sum(static observation => observation.Rows));
+    }
+
+    [Fact]
+    public void Search_MapsMultipleSurvivingChunksFromOneSourceWithOneSpanReadAndAllowsNoSpan()
+    {
+        string text = string.Join('\n', Enumerable.Range(1, 300).Select(static line =>
+            line is 20 or 200 ? "SharedMarker" : "filler"));
+        using var fx = BuildFixture(("src/Multi.cs", "csharp", false, text));
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        var observations = new List<FtsTextSearchQueryObservation>();
+        var index = FtsTextContentSearchIndex.Open(
+            _contentDbPath,
+            expectedRevision: 7,
+            observations.Add);
+
+        IReadOnlyList<TextContentSearchHit> hits = index.Search(
+            "SharedMarker",
+            TextContentKind.WorkspaceSource,
+            limit: 2,
+            excludeTests: false);
+
+        Assert.Equal(2, hits.Count);
+        Assert.All(hits, static hit => Assert.Equal("sym-multi", hit.ContainingSymbolId));
+        Assert.Equal(1, observations
+            .Where(static observation => observation.Family == FtsTextSearchQueryFamily.SymbolSpanHydration)
+            .Sum(static observation => observation.Rows));
+
+        DeleteAllSpansAndChunkSymbols();
+        index = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7);
+        TextContentSearchHit withoutSpan = Assert.Single(index.Search(
+            "SharedMarker",
+            TextContentKind.WorkspaceSource,
+            limit: 1,
+            excludeTests: false));
+        Assert.Null(withoutSpan.ContainingSymbolId);
+        Assert.Null(withoutSpan.ContainingSymbolName);
+    }
+
+    [Fact]
     public void Open_StaleRevision_FailsClosed()
     {
         WriteMinimalContentDb(revision: 6, schemaVersion: ContentCorpusSchema.SchemaVersion);
@@ -629,6 +714,51 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
             JulieDbFixture.PinnedContract,
             rows,
             fileContent: fileContent);
+    }
+
+    private void ReplaceTargetSpansWithOverlappingTie()
+    {
+        using var connection = OpenWritableContentDb();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            DELETE FROM content_symbol_spans
+            WHERE source_id = (SELECT source_id FROM content_sources WHERE path = 'src/Target.cs');
+            INSERT INTO content_symbol_spans(source_id, symbol_id, symbol_name, path, start_line, end_line)
+            SELECT source_id, 'z-wide', 'Wide', path, 1, 3
+            FROM content_sources WHERE path = 'src/Target.cs';
+            INSERT INTO content_symbol_spans(source_id, symbol_id, symbol_name, path, start_line, end_line)
+            SELECT source_id, 'b-narrow', 'NarrowB', path, 2, 2
+            FROM content_sources WHERE path = 'src/Target.cs';
+            INSERT INTO content_symbol_spans(source_id, symbol_id, symbol_name, path, start_line, end_line)
+            SELECT source_id, 'a-narrow', 'NarrowA', path, 2, 2
+            FROM content_sources WHERE path = 'src/Target.cs';
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    private void DeleteAllSpansAndChunkSymbols()
+    {
+        using var connection = OpenWritableContentDb();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            DELETE FROM content_symbol_spans;
+            UPDATE content_chunks
+            SET containing_symbol_id = NULL,
+                containing_symbol_name = NULL;
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    private SqliteConnection OpenWritableContentDb()
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _contentDbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        return connection;
     }
 
     private void WriteMinimalContentDb(long revision, int schemaVersion)

@@ -177,12 +177,12 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
             WidenedCandidateLimit,
             connection.DataSource);
         Observe(FtsTextSearchQueryFamily.StrictCandidates, candidates.Count, strictStarted);
-        var hits = new List<TextContentSearchHit>();
+        var pendingHits = new List<PendingTextHit>();
         var seenCandidateIds = new HashSet<string>(StringComparer.Ordinal);
         var coverageTermSet = plan.CoverageTerms.ToHashSet(StringComparer.Ordinal);
 
         AddHits(candidates);
-        if (hits.Count < limit)
+        if (pendingHits.Count < limit)
         {
             string widenedMatch = JoinFtsTerms(plan.CoverageTerms, " OR ");
             long widenedStarted = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -196,19 +196,46 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         }
 
         long orderingStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        hits.Sort(static (a, b) =>
+        pendingHits.Sort(static (a, b) =>
         {
-            int byScore = b.Score.CompareTo(a.Score);
+            int byScore = b.Hit.Score.CompareTo(a.Hit.Score);
             if (byScore != 0) return byScore;
-            int byPath = string.CompareOrdinal(a.DisplayPath, b.DisplayPath);
+            int byPath = string.CompareOrdinal(a.Hit.DisplayPath, b.Hit.DisplayPath);
             if (byPath != 0) return byPath;
-            int byLine = a.Line.CompareTo(b.Line);
-            return byLine != 0 ? byLine : string.CompareOrdinal(a.ChunkId, b.ChunkId);
+            int byLine = a.Hit.Line.CompareTo(b.Hit.Line);
+            return byLine != 0 ? byLine : string.CompareOrdinal(a.Hit.ChunkId, b.Hit.ChunkId);
         });
 
-        if (hits.Count > limit)
-            hits.RemoveRange(limit, hits.Count - limit);
-        Observe(FtsTextSearchQueryFamily.FinalOrdering, hits.Count, orderingStarted);
+        if (pendingHits.Count > limit)
+            pendingHits.RemoveRange(limit, pendingHits.Count - limit);
+        TimeSpan orderingElapsed = System.Diagnostics.Stopwatch.GetElapsedTime(orderingStarted);
+
+        long spansStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        IReadOnlyDictionary<string, IReadOnlyList<ContentSymbolSpan>> spansBySourceId = ReadSymbolSpans(
+            connection,
+            pendingHits.Select(static hit => hit.Hit.SourceId).Distinct(StringComparer.Ordinal).ToArray(),
+            connection.DataSource);
+        Observe(
+            FtsTextSearchQueryFamily.SymbolSpanHydration,
+            spansBySourceId.Sum(static entry => entry.Value.Count),
+            spansStarted);
+        var hits = new List<TextContentSearchHit>(pendingHits.Count);
+        long symbolStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        var mappedSymbols = new ContentSymbolSpan?[pendingHits.Count];
+        for (int i = 0; i < pendingHits.Count; i++)
+        {
+            PendingTextHit pending = pendingHits[i];
+            mappedSymbols[i] = BestContainingSymbol(
+                spansBySourceId,
+                pending.Hit.SourceId,
+                pending.Hit.Line);
+        }
+        Observe(FtsTextSearchQueryFamily.SymbolMapping, pendingHits.Count, symbolStarted);
+        long resultStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        for (int i = 0; i < pendingHits.Count; i++)
+            hits.Add(MaterializeHit(pendingHits[i], mappedSymbols[i]));
+        Observe(FtsTextSearchQueryFamily.ResultConstruction, hits.Count, resultStarted);
+        Observe(FtsTextSearchQueryFamily.FinalOrdering, hits.Count, orderingElapsed);
         return hits;
 
         void AddHits(IReadOnlyList<TextCandidate> candidates)
@@ -261,36 +288,23 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
                     batch.Select(static candidate => candidate.ChunkId).ToArray(),
                     connection.DataSource);
                 Observe(FtsTextSearchQueryFamily.FullHydration, chunksById.Count, hydrationStarted);
-                long spansStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-                IReadOnlyDictionary<string, IReadOnlyList<ContentSymbolSpan>> spansBySourceId =
-                    ReadSymbolSpans(
-                        connection,
-                        chunksById.Values.Select(static chunk => chunk.SourceId).Distinct(StringComparer.Ordinal).ToArray(),
-                        connection.DataSource);
-                Observe(
-                    FtsTextSearchQueryFamily.SymbolSpanHydration,
-                    spansBySourceId.Sum(static entry => entry.Value.Count),
-                    spansStarted);
                 long scoringStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-                int hitCountBefore = hits.Count;
+                int hitCountBefore = pendingHits.Count;
                 var subphases = new ScoringSubphases();
                 foreach (ScoredTextCandidate candidate in batch)
-                    AddHit(candidate, chunksById, spansBySourceId, ref subphases);
+                    AddHit(candidate, chunksById, ref subphases);
                 TimeSpan scoringElapsed = System.Diagnostics.Stopwatch.GetElapsedTime(scoringStarted);
                 Observe(
                     FtsTextSearchQueryFamily.RawTextAnalysis,
                     subphases.RawTextRows,
                     subphases.RawTextElapsed);
-                Observe(FtsTextSearchQueryFamily.SymbolMapping, subphases.SymbolRows, subphases.SymbolElapsed);
-                Observe(FtsTextSearchQueryFamily.ResultConstruction, subphases.ResultRows, subphases.ResultElapsed);
-                Observe(FtsTextSearchQueryFamily.Scoring, hits.Count - hitCountBefore, scoringElapsed);
+                Observe(FtsTextSearchQueryFamily.Scoring, pendingHits.Count - hitCountBefore, scoringElapsed);
             }
         }
 
         void AddHit(
             ScoredTextCandidate candidate,
             IReadOnlyDictionary<string, TextChunk> chunksById,
-            IReadOnlyDictionary<string, IReadOnlyList<ContentSymbolSpan>> spansBySourceId,
             ref ScoringSubphases subphases)
         {
             if (!chunksById.TryGetValue(candidate.ChunkId, out TextChunk? chunk))
@@ -307,12 +321,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
                 return;
 
             double score = analysis.HasTokenPhrase ? candidate.Score * TokenPhraseBoost : candidate.Score;
-
-            long symbolStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            ContentSymbolSpan? symbol = BestContainingSymbol(spansBySourceId, chunk.SourceId, bestLine.Line);
-            subphases.CompleteSymbol(symbolStarted);
-            long resultStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            hits.Add(new TextContentSearchHit(
+            pendingHits.Add(new PendingTextHit(new TextContentSearchHit(
                 chunk.SourceId,
                 chunk.ChunkId,
                 chunk.ContentKind,
@@ -328,11 +337,19 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
                 chunk.ByteEnd,
                 bestLine.Snippet,
                 chunk.SourceBytes,
-                symbol?.SymbolId ?? chunk.ContainingSymbolId,
-                symbol?.Name ?? chunk.ContainingSymbolName,
-                chunk.ContentHash));
-            subphases.CompleteResult(resultStarted);
+                chunk.ContainingSymbolId,
+                chunk.ContainingSymbolName,
+                chunk.ContentHash)));
         }
+
+        static TextContentSearchHit MaterializeHit(PendingTextHit pending, ContentSymbolSpan? symbol)
+            => symbol is null
+                ? pending.Hit
+                : pending.Hit with
+                {
+                    ContainingSymbolId = symbol.SymbolId,
+                    ContainingSymbolName = symbol.Name,
+                };
     }
 
     private void Observe(FtsTextSearchQueryFamily family, int rows, long startedAt)
@@ -805,31 +822,13 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
     {
         internal long RawTextElapsedTicks;
         internal int RawTextRows;
-        internal long SymbolElapsedTicks;
-        internal int SymbolRows;
-        internal long ResultElapsedTicks;
-        internal int ResultRows;
 
         internal readonly TimeSpan RawTextElapsed => TimeSpan.FromTicks(RawTextElapsedTicks);
-        internal readonly TimeSpan SymbolElapsed => TimeSpan.FromTicks(SymbolElapsedTicks);
-        internal readonly TimeSpan ResultElapsed => TimeSpan.FromTicks(ResultElapsedTicks);
 
         internal void CompleteRawText(long startedAt)
         {
             RawTextElapsedTicks += System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).Ticks;
             RawTextRows++;
-        }
-
-        internal void CompleteSymbol(long startedAt)
-        {
-            SymbolElapsedTicks += System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).Ticks;
-            SymbolRows++;
-        }
-
-        internal void CompleteResult(long startedAt)
-        {
-            ResultElapsedTicks += System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).Ticks;
-            ResultRows++;
         }
     }
 
@@ -845,6 +844,8 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         bool IsTest);
 
     private readonly record struct ScoredTextCandidate(string ChunkId, double Score);
+
+    private sealed record PendingTextHit(TextContentSearchHit Hit);
 
     private sealed record ContentSymbolSpan(string SymbolId, string Name, int StartLine, int EndLine);
 
