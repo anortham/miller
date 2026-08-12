@@ -323,25 +323,47 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 relationshipPlans,
                 GraphStatementPhase.RelationshipReverse);
         }
-        if (direction is Direction.Forward or Direction.Both)
+        if (_readSession is IFamilyGraphUnresolvedNameReader unresolvedNameReader)
         {
-            frontierRows += ExecuteObservedFrontierStatement(
-                missingIds,
-                UnresolvedNameForwardSql,
-                edgesById,
-                _queryTelemetry.FrontierUnresolvedNames,
-                unresolvedNamePlans,
-                GraphStatementPhase.UnresolvedNameForward);
+            IReadOnlyList<FamilyGraphUnresolvedNameEdge> unresolvedNameEdges =
+                unresolvedNameReader.ReadUnresolvedNameEdges(missingIds, direction, StatementObserver);
+            frontierRows += unresolvedNameEdges.Count;
+            foreach (FamilyGraphUnresolvedNameEdge edge in unresolvedNameEdges)
+            {
+                if (!edgesById.TryGetValue(edge.CurrentId, out Dictionary<string, GraphEdge>? currentEdges))
+                    continue;
+                string neighbour = string.Equals(edge.FromId, edge.CurrentId, StringComparison.Ordinal)
+                    ? edge.ToId
+                    : edge.FromId;
+                AddEdge(
+                    currentEdges,
+                    edge.CurrentId,
+                    neighbour,
+                    new GraphEdge(edge.FromId, edge.ToId, edge.Kind, edge.Confidence, edge.Source));
+            }
         }
-        if (direction is Direction.Reverse or Direction.Both)
+        else
         {
-            frontierRows += ExecuteObservedFrontierStatement(
-                missingIds,
-                UnresolvedNameReverseSql,
-                edgesById,
-                _queryTelemetry.FrontierUnresolvedNames,
-                unresolvedNamePlans,
-                GraphStatementPhase.UnresolvedNameReverse);
+            if (direction is Direction.Forward or Direction.Both)
+            {
+                frontierRows += ExecuteObservedFrontierStatement(
+                    missingIds,
+                    UnresolvedNameForwardSql,
+                    edgesById,
+                    _queryTelemetry.FrontierUnresolvedNames,
+                    unresolvedNamePlans,
+                    GraphStatementPhase.UnresolvedNameForward);
+            }
+            if (direction is Direction.Reverse or Direction.Both)
+            {
+                frontierRows += ExecuteObservedFrontierStatement(
+                    missingIds,
+                    UnresolvedNameReverseSql,
+                    edgesById,
+                    _queryTelemetry.FrontierUnresolvedNames,
+                    unresolvedNamePlans,
+                    GraphStatementPhase.UnresolvedNameReverse);
+            }
         }
         _queryTelemetry.FrontierBatch.Add(frontierRows, Stopwatch.GetElapsedTime(frontierStarted));
         if (CaptureFrontierQueryPlan)

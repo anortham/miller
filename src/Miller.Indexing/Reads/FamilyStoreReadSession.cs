@@ -34,7 +34,10 @@ public sealed class FamilyStoreReadException(
     public FamilyStoreReadFailure Failure { get; } = failure;
 }
 
-public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraphResolutionReader
+public sealed class FamilyStoreReadSession :
+    IWorkspaceReadSession,
+    IFamilyGraphResolutionReader,
+    IFamilyGraphUnresolvedNameReader
 {
     private const int StoreSchemaVersion = 2;
     private const int StoreFormatEpoch = 1;
@@ -51,6 +54,10 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraph
     internal bool CaptureGraphResolutionQueryPlan { get; set; }
 
     internal IReadOnlyList<string> LastGraphResolutionQueryPlan { get; private set; } = [];
+
+    internal bool CaptureGraphUnresolvedNameQueryPlan { get; set; }
+
+    internal IReadOnlyList<string> LastGraphUnresolvedNameQueryPlan { get; private set; } = [];
 
     private FamilyStoreReadSession(
         SqliteConnection connection,
@@ -256,6 +263,50 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraph
         }
     }
 
+    IReadOnlyList<FamilyGraphUnresolvedNameEdge> IFamilyGraphUnresolvedNameReader.ReadUnresolvedNameEdges(
+        IReadOnlyList<string> candidateIds,
+        Direction direction,
+        Action<GraphStatementObservation>? statementObserver)
+    {
+        if (candidateIds.Count == 0 || Visibility.ResolutionState != "exact")
+            return [];
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            IReadOnlyList<(string Id, long VersionId)> candidates = ReadGraphCandidates(candidateIds);
+            if (candidates.Count == 0)
+                return [];
+
+            var edges = new List<FamilyGraphUnresolvedNameEdge>();
+            var plans = new List<string>();
+            if (direction is Direction.Forward or Direction.Both)
+            {
+                ReadGraphUnresolvedNameArm(
+                    candidates,
+                    candidateIds,
+                    UnresolvedNameForwardSql,
+                    edges,
+                    plans,
+                    GraphStatementPhase.UnresolvedNameForward,
+                    statementObserver);
+            }
+            if (direction is Direction.Reverse or Direction.Both)
+            {
+                ReadGraphUnresolvedNameArm(
+                    candidates,
+                    candidateIds,
+                    UnresolvedNameReverseSql,
+                    edges,
+                    plans,
+                    GraphStatementPhase.UnresolvedNameReverse,
+                    statementObserver);
+            }
+            LastGraphUnresolvedNameQueryPlan = plans;
+            return edges;
+        }
+    }
+
     private IReadOnlyList<(string Id, long VersionId)> ReadGraphCandidates(IReadOnlyList<string> candidateIds)
     {
         string values = string.Join(", ", Enumerable.Range(0, candidateIds.Count).Select(index => $"($id{index})"));
@@ -320,6 +371,51 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraph
             candidateIds));
     }
 
+    private void ReadGraphUnresolvedNameArm(
+        IReadOnlyList<(string Id, long VersionId)> candidates,
+        IReadOnlyList<string> candidateIds,
+        string sql,
+        List<FamilyGraphUnresolvedNameEdge> edges,
+        List<string> plans,
+        GraphStatementPhase phase,
+        Action<GraphStatementObservation>? statementObserver)
+    {
+        string values = string.Join(
+            ", ",
+            Enumerable.Range(0, candidates.Count).Select(index => $"($id{index},$version{index})"));
+        using SqliteCommand command = _connection.CreateCommand();
+        command.CommandText = $"WITH candidates(id,version_id) AS (VALUES {values})\n" + sql;
+        for (int index = 0; index < candidates.Count; index++)
+        {
+            command.Parameters.AddWithValue($"$id{index}", candidates[index].Id);
+            command.Parameters.AddWithValue($"$version{index}", candidates[index].VersionId);
+        }
+        if (CaptureGraphUnresolvedNameQueryPlan)
+            plans.AddRange(ReadQueryPlan(command));
+
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        int rows = 0;
+        using (SqliteDataReader reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                rows++;
+                edges.Add(new FamilyGraphUnresolvedNameEdge(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.GetDouble(4),
+                    reader.GetString(5)));
+            }
+        }
+        statementObserver?.Invoke(GraphStatementObservation.Completed(
+            phase,
+            rows,
+            System.Diagnostics.Stopwatch.GetElapsedTime(started),
+            candidateIds));
+    }
+
     private static IReadOnlyList<string> ReadQueryPlan(SqliteCommand command)
     {
         using SqliteCommand explain = command.Connection!.CreateCommand();
@@ -348,6 +444,58 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraph
           WHERE d.view_id=(SELECT view_id FROM _miller_session)
             AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
             AND d.version_id=r.version_id AND d.identifier_id=r.identifier_id);
+        """;
+
+    private const string UnresolvedNameForwardSql = """
+        SELECT candidates.id,i.containing_symbol_id,target.symbol_id,i.kind,
+               i.confidence * 0.5,'identifier_name'
+        FROM candidates
+        JOIN main.identifiers AS i
+          ON i.version_id=candidates.version_id AND i.containing_symbol_id=candidates.id
+        LEFT JOIN main.resolution_identifier_deltas AS d
+          ON d.view_id=(SELECT view_id FROM _miller_session)
+         AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
+         AND d.version_id=i.version_id AND d.identifier_id=i.identifier_id
+        LEFT JOIN resolution_base.identifier_resolutions AS r
+          ON r.version_id=i.version_id AND r.identifier_id=i.identifier_id
+        JOIN main.symbols AS target ON target.name=i.name
+        JOIN _miller_visible_entries AS target_visible ON target_visible.version_id=target.version_id
+        WHERE ((d.identifier_id IS NOT NULL AND d.target_symbol_id IS NULL)
+            OR (d.identifier_id IS NULL AND r.target_symbol_id IS NULL))
+          AND i.containing_symbol_id<>target.symbol_id
+          AND NOT EXISTS (
+              SELECT 1
+              FROM main.symbols AS duplicate
+              JOIN _miller_visible_entries AS duplicate_visible
+                ON duplicate_visible.version_id=duplicate.version_id
+              WHERE duplicate.name=i.name AND duplicate.symbol_id<>target.symbol_id);
+        """;
+
+    private const string UnresolvedNameReverseSql = """
+        SELECT candidates.id,i.containing_symbol_id,target.symbol_id,i.kind,
+               i.confidence * 0.5,'identifier_name'
+        FROM candidates
+        JOIN main.symbols AS target
+          ON target.version_id=candidates.version_id AND target.symbol_id=candidates.id
+        JOIN main.identifiers AS i ON i.name=target.name
+        JOIN _miller_visible_entries AS source_visible ON source_visible.version_id=i.version_id
+        JOIN main.symbols AS source
+          ON source.version_id=i.version_id AND source.symbol_id=i.containing_symbol_id
+        LEFT JOIN main.resolution_identifier_deltas AS d
+          ON d.view_id=(SELECT view_id FROM _miller_session)
+         AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
+         AND d.version_id=i.version_id AND d.identifier_id=i.identifier_id
+        LEFT JOIN resolution_base.identifier_resolutions AS r
+          ON r.version_id=i.version_id AND r.identifier_id=i.identifier_id
+        WHERE ((d.identifier_id IS NOT NULL AND d.target_symbol_id IS NULL)
+            OR (d.identifier_id IS NULL AND r.target_symbol_id IS NULL))
+          AND i.containing_symbol_id<>target.symbol_id
+          AND NOT EXISTS (
+              SELECT 1
+              FROM main.symbols AS duplicate
+              JOIN _miller_visible_entries AS duplicate_visible
+                ON duplicate_visible.version_id=duplicate.version_id
+              WHERE duplicate.name=target.name AND duplicate.symbol_id<>target.symbol_id);
         """;
 
     private const string IdentifierDeltaForwardSql = """

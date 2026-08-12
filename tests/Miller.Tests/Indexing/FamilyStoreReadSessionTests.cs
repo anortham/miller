@@ -538,7 +538,7 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
-    public void CombinedFamilyFrontierUsesSeparateBoundedStatementsWithExactParity()
+    public void FamilyFrontierUsesBoundedStorageCapabilitiesWithExactParity()
     {
         const string targetId = "62000000000000000000000000000001";
         const string identifierCallerId = "62000000000000000000000000000002";
@@ -579,21 +579,93 @@ public sealed class FamilyStoreReadSessionTests
             [identifierCallerId, pendingCallerId, relationshipTargetId, relationshipCallerId, nameTargetId, nameCallerId],
             result.Select(static node => node.Id));
         Assert.Equal(2, telemetry.FrontierRelationships.Executions);
-        Assert.Equal(2, telemetry.FrontierUnresolvedNames.Executions);
+        Assert.Equal(0, telemetry.FrontierUnresolvedNames.Executions);
         Assert.Equal(1, telemetry.FrontierBatch.Executions);
         Assert.Equal(2, graph.LastFrontierQueryPlan.RelationshipStatements.Count);
-        Assert.Equal(2, graph.LastFrontierQueryPlan.UnresolvedNameStatements.Count);
+        Assert.Empty(graph.LastFrontierQueryPlan.UnresolvedNameStatements);
         Assert.All(
             graph.LastFrontierQueryPlan.RelationshipStatements,
             plan => Assert.DoesNotContain(
                 plan,
                 detail => detail.Contains("identifier_resolutions", StringComparison.Ordinal)));
-        Assert.All(
-            graph.LastFrontierQueryPlan.UnresolvedNameStatements,
-            plan => Assert.InRange(
-                plan.Count(detail => detail.Contains("MATERIALIZE identifier_resolutions", StringComparison.Ordinal)),
-                0,
-                1));
+    }
+
+    [Fact]
+    public void FamilyUnresolvedNameReadsPreserveOverlayAndHomonymParityWithoutCompatibilityView()
+    {
+        const string forwardSourceId = "64000000000000000000000000000001";
+        const string uniqueTargetId = "64000000000000000000000000000002";
+        const string deltaUnresolvedTargetId = "64000000000000000000000000000003";
+        const string reverseTargetId = "64000000000000000000000000000004";
+        const string reverseCallerId = "64000000000000000000000000000005";
+        using StoreFixture fixture = StoreFixture.Create();
+        InstallResolutionBase(
+            fixture,
+            "base-unresolved-name",
+            "manifest-current",
+            baseVersionId: 2,
+            baseTargetSymbolId: "64000000000000000000000000000010",
+            deltaTargetSymbolId: null,
+            sequence: 3,
+            deltaGeneration: 1,
+            includeGraphRows: false);
+        InstallGraphRows(
+            fixture,
+            "64000000000000000000000000000010",
+            "64000000000000000000000000000011",
+            "64000000000000000000000000000012");
+        InstallUnresolvedNameGraphRows(
+            fixture,
+            forwardSourceId,
+            uniqueTargetId,
+            deltaUnresolvedTargetId,
+            reverseTargetId,
+            reverseCallerId);
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        session.CaptureGraphUnresolvedNameQueryPlan = true;
+        using var graph = new SqliteSymbolGraphIndex(session)
+        {
+            CaptureFrontierQueryPlan = true,
+        };
+        var observations = new List<GraphStatementObservation>();
+        graph.StatementObserver = observations.Add;
+
+        IReadOnlyList<ReachedNode> result = graph.Reach(
+            [forwardSourceId, reverseTargetId],
+            1,
+            20,
+            Direction.Both);
+
+        Assert.Equal(
+            [
+                uniqueTargetId,
+                deltaUnresolvedTargetId,
+                reverseCallerId,
+                "64000000000000000000000000000006",
+                "64000000000000000000000000000007",
+            ],
+            result.Select(static node => node.Id));
+        Assert.Equal(0, graph.QueryTelemetry.FrontierUnresolvedNames.Executions);
+        Assert.Empty(graph.LastFrontierQueryPlan.UnresolvedNameStatements);
+        Assert.Contains(
+            session.LastGraphUnresolvedNameQueryPlan,
+            detail => detail.Contains("idx_read_identifiers_containing", StringComparison.Ordinal));
+        Assert.Contains(
+            session.LastGraphUnresolvedNameQueryPlan,
+            detail => detail.Contains("idx_read_identifiers_name_kind", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            session.LastGraphUnresolvedNameQueryPlan,
+            detail => detail.Contains("MATERIALIZE", StringComparison.Ordinal)
+                || detail.Contains("SCAN r", StringComparison.Ordinal));
+        Assert.Equal(
+            [
+                (GraphStatementPhase.UnresolvedNameForward, 2),
+                (GraphStatementPhase.UnresolvedNameReverse, 1),
+            ],
+            observations
+                .Where(static observation => observation.Phase is GraphStatementPhase.UnresolvedNameForward
+                    or GraphStatementPhase.UnresolvedNameReverse)
+                .Select(static observation => (observation.Phase, observation.Rows)));
     }
 
     [Fact]
@@ -966,6 +1038,94 @@ public sealed class FamilyStoreReadSessionTests
         command.Parameters.AddWithValue("$nameTarget", nameTargetId);
         command.Parameters.AddWithValue("$nameCaller", nameCallerId);
         command.ExecuteNonQuery();
+    }
+
+    private static void InstallUnresolvedNameGraphRows(
+        StoreFixture fixture,
+        string forwardSourceId,
+        string uniqueTargetId,
+        string deltaUnresolvedTargetId,
+        string reverseTargetId,
+        string reverseCallerId)
+    {
+        string storePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = storePath,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText =
+                """
+                CREATE INDEX idx_read_identifiers_containing ON identifiers(containing_symbol_id,version_id);
+                CREATE INDEX idx_read_identifiers_name_kind ON identifiers(name,kind,version_id);
+                INSERT INTO symbols VALUES
+                  (2,$forwardSource,'same.cs','csharp','ForwardSource','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+                  (2,$uniqueTarget,'same.cs','csharp','UniqueTarget','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+                  (2,$deltaUnresolvedTarget,'same.cs','csharp','DeltaUnresolvedTarget','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+                  (2,$reverseTarget,'same.cs','csharp','ReverseTarget','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+                  (2,$reverseCaller,'same.cs','csharp','ReverseCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+                  (2,'64000000000000000000000000000006','same.cs','csharp','BaseResolvedTarget','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+                  (2,'64000000000000000000000000000007','same.cs','csharp','DeltaResolvedTarget','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+                  (2,'64000000000000000000000000000008','same.cs','csharp','Homonym','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+                  (2,'64000000000000000000000000000009','same.cs','csharp','Homonym','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+                INSERT INTO identifiers
+                  (version_id,identifier_id,path,language,name,kind,containing_symbol_id,
+                   start_line,start_column,end_line,end_column,start_byte,end_byte,confidence)
+                  VALUES
+                  (2,'name-forward','same.cs','csharp','UniqueTarget','call',$forwardSource,1,1,1,2,0,1,1.0),
+                  (2,'name-reverse','same.cs','csharp','ReverseTarget','call',$reverseCaller,1,1,1,2,0,1,1.0),
+                  (2,'base-resolved','same.cs','csharp','BaseResolvedTarget','call',$forwardSource,1,1,1,2,0,1,1.0),
+                  (2,'delta-resolved','same.cs','csharp','DeltaResolvedTarget','call',$forwardSource,1,1,1,2,0,1,1.0),
+                  (2,'delta-unresolved','same.cs','csharp','DeltaUnresolvedTarget','call',$forwardSource,1,1,1,2,0,1,1.0),
+                  (2,'homonym','same.cs','csharp','Homonym','call',$forwardSource,1,1,1,2,0,1,1.0);
+                INSERT INTO resolution_identifier_deltas VALUES
+                  ('view-a',1,2,'delta-resolved',2,'64000000000000000000000000000007',1,1.0,'exact','resolved',1),
+                  ('view-a',1,2,'delta-unresolved',NULL,NULL,NULL,NULL,NULL,'unresolved',0);
+                """;
+            command.Parameters.AddWithValue("$forwardSource", forwardSourceId);
+            command.Parameters.AddWithValue("$uniqueTarget", uniqueTargetId);
+            command.Parameters.AddWithValue("$deltaUnresolvedTarget", deltaUnresolvedTargetId);
+            command.Parameters.AddWithValue("$reverseTarget", reverseTargetId);
+            command.Parameters.AddWithValue("$reverseCaller", reverseCallerId);
+            command.ExecuteNonQuery();
+        }
+
+        using var baseConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = ResolutionBasePath(fixture, "base-unresolved-name"),
+            Pooling = false,
+        }.ToString());
+        baseConnection.Open();
+        using SqliteCommand resolution = baseConnection.CreateCommand();
+        resolution.CommandText =
+            """
+            INSERT INTO identifier_resolutions VALUES
+              (2,'base-resolved',2,'64000000000000000000000000000006',1,1.0,'exact','resolved',1),
+              (2,'delta-resolved',NULL,NULL,NULL,NULL,NULL,'unresolved',0),
+              (2,'delta-unresolved',2,$deltaUnresolvedTarget,1,1.0,'exact','resolved',1);
+            """;
+        resolution.Parameters.AddWithValue("$deltaUnresolvedTarget", deltaUnresolvedTargetId);
+        resolution.ExecuteNonQuery();
+        baseConnection.Close();
+
+        string basePath = ResolutionBasePath(fixture, "base-unresolved-name");
+        long bytes = new FileInfo(basePath).Length;
+        string sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(basePath))).ToLowerInvariant();
+        using var storeConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = storePath,
+            Pooling = false,
+        }.ToString());
+        storeConnection.Open();
+        using SqliteCommand metadata = storeConnection.CreateCommand();
+        metadata.CommandText =
+            "UPDATE resolution_bases SET identifier_count=4,file_bytes=$bytes,file_sha256=$sha WHERE base_id='base-unresolved-name';";
+        metadata.Parameters.AddWithValue("$bytes", bytes);
+        metadata.Parameters.AddWithValue("$sha", sha256);
+        metadata.ExecuteNonQuery();
     }
 
     private static string ResolutionBasePath(StoreFixture fixture, string baseId) =>
