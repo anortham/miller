@@ -162,6 +162,46 @@ public sealed class MillerLoggingSetupTests : IDisposable
         Assert.Equal("miller-.jsonl", Path.GetFileName(paths.JsonLog));
     }
 
+    [Fact]
+    public void SharedFileSink_WithSizeRolling_RollsWithinTheDayInsteadOfGrowingWithoutBound()
+    {
+        string basePath = Path.Combine(_dir, "sized-.log");
+        var logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.File(
+                basePath,
+                rollingInterval: RollingInterval.Day,
+                shared: true,
+                retainedFileCountLimit: MillerLoggingSetup.RetainedFileCountLimit,
+                fileSizeLimitBytes: 2048,
+                rollOnFileSizeLimit: true,
+                outputTemplate: "{Message:l}{NewLine}")
+            .CreateLogger();
+        try
+        {
+            for (int i = 0; i < 200; i++)
+                logger.Information(new string('x', 200));
+        }
+        finally
+        {
+            logger.Dispose();
+        }
+
+        var rolls = Directory.EnumerateFiles(_dir, "sized-*.log").ToList();
+        Assert.True(rolls.Count > 1, $"size rolling produced {rolls.Count} file(s); expected more than one");
+        Assert.All(rolls, path => Assert.True(
+            new FileInfo(path).Length < 32 * 1024,
+            $"{Path.GetFileName(path)} grew past the size limit"));
+    }
+
+    [Fact]
+    public void FileSizeLimit_IsBoundedSoOneBusyDayCannotFillTheDisk()
+    {
+        Assert.True(MillerLoggingSetup.FileSizeLimitBytes > 0);
+        Assert.True(MillerLoggingSetup.FileSizeLimitBytes <= 128L * 1024 * 1024);
+        Assert.True(MillerLoggingSetup.RetainedFileCountLimit > 0);
+    }
+
     // --- helpers ---
 
     // The single dated roll Serilog wrote for an extension — resolved by the shared "miller-" prefix (the date is

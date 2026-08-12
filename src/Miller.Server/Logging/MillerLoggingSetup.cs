@@ -16,7 +16,8 @@ namespace Miller.Server.Logging;
 /// per-pid scheme created two files per process LAUNCH, which piled up fast). Which process wrote a line, and its
 /// leader/reader role, are LOG PROPERTIES (<c>pid</c> + the live <see cref="MillerRole"/> enricher), not part of
 /// the file name — so attribution survives without a file-per-process. Retention keeps
-/// <see cref="RetainedFileCountLimit"/> days.</item>
+/// <see cref="RetainedFileCountLimit"/> rolls per sink, and a day that exceeds
+/// <see cref="FileSizeLimitBytes"/> rolls within the day so one busy day cannot grow without bound.</item>
 /// <item><b>Level switch.</b> A <see cref="LoggingLevelSwitch"/> initialised from <c>MILLER_LOG_LEVEL</c> (via
 /// the pure <see cref="LogLevelParse"/>) controls the minimum level — an operator dials verbosity at startup with
 /// no recompile.</item>
@@ -32,8 +33,16 @@ namespace Miller.Server.Logging;
 /// </summary>
 public static class MillerLoggingSetup
 {
-    /// <summary>How many daily rolls to retain for each shared file.</summary>
+    /// <summary>How many rolls to retain for each shared file.</summary>
     public const int RetainedFileCountLimit = 14;
+
+    /// <summary>
+    /// Per-file size cap before a same-day roll. The daily roll alone bounds how many FILES accumulate, not how
+    /// large one day can get: a multi-process fleet under a busy writer shares one pair, so a single day is
+    /// unbounded without this. Size rolling turns that into the same retention promise the day count already
+    /// makes — at most <see cref="RetainedFileCountLimit"/> files per sink, each at most this large.
+    /// </summary>
+    public const long FileSizeLimitBytes = 32L * 1024 * 1024;
 
     // The common file-name prefix of every Miller log file. Serilog's daily roll appends YYYYMMDD where the
     // trailing '-' sits, so the on-disk name is miller-<YYYYMMDD>.log / .jsonl.
@@ -82,13 +91,17 @@ public static class MillerLoggingSetup
                 rollingInterval: RollingInterval.Day,
                 shared: true,
                 retainedFileCountLimit: RetainedFileCountLimit,
+                fileSizeLimitBytes: FileSizeLimitBytes,
+                rollOnFileSizeLimit: true,
                 outputTemplate: HumanOutputTemplate)
             .WriteTo.File(
                 new CompactJsonFormatter(),
                 paths.JsonLog,
                 rollingInterval: RollingInterval.Day,
                 shared: true,
-                retainedFileCountLimit: RetainedFileCountLimit);
+                retainedFileCountLimit: RetainedFileCountLimit,
+                fileSizeLimitBytes: FileSizeLimitBytes,
+                rollOnFileSizeLimit: true);
     }
 
     /// <summary>
