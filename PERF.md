@@ -122,16 +122,19 @@ without first adding new phase, query-count, or resource evidence.
   synthetic fixture from 35 locator calls to zero, but the one faithful replay remained 49.63 s wall / 24.740 s
   resolver with LocateIdentifier still 10,804 and RelationshipCoverage zero. That uncommitted slice is being
   removed; it does not fix the production bottleneck.
-- **Actual call path:** The faithful run has zero relationship-hydration work. `recheck_resolved_pending_items`
-  instead rechecks the 10,804 prior pending rows and calls `locate_identifier` when demoting each co-located
-  identifier. `load_resolved_pending_page` already hydrates those rows in bounded pages but omits the co-located
-  identifier result.
-- **Next fix:** Extend the resolved-pending page result with an exact, ambiguity-aware co-located identifier lookup
-  hydrated by the store session's existing bounded page query. The generic resolver consumes that result and keeps
-  the current locator fallback only for session adapters that cannot pre-hydrate it.
-- **Gate:** Exact demotion/digest parity for span, line fallback, ambiguity, no match, and non-store fallback;
-  LocateIdentifier falls from one call per store pending row to zero; the new hydration query count scales with
-  bounded pages; one real replay is run once and either meets budget or names the next measured bottleneck.
+- **Second disproven caller attribution:** Batching exact co-location hydration in `load_resolved_pending_page`
+  passed a real scoped 8-row RED/GREEN (8 locator calls to zero; three hydration statements at window three), but
+  the faithful replay again remained 49.77 s wall / 24.738 s resolver with LocateIdentifier still 10,804 and the
+  new family zero. That uncommitted slice was removed too; resolved-pending recheck is not the production caller.
+- **Current evidence:** The live snapshot already recorded 8,109 locator calls at 1.033 s, and PendingHydration
+  reads 89,930 rows while RelationshipHydration and both attempted families remain zero. `resolve_pending_items`
+  is the strongest remaining candidate, but two plausible caller attributions have now failed and inference is no
+  longer enough.
+- **Next diagnosis:** Test-only `SnapshottingSession` records the current `ResolutionPhase` and fixed per-phase
+  locator counts. One replay with this materially new evidence will name ResolvedPending, Pending, Relationships,
+  or Other before any third production edit.
+- **Gate:** The selected caller gets an interface-level exact RED; locator executions fall from per-row to bounded
+  pages with digest/row parity; one real replay is run once and either meets budget or names the next bottleneck.
 
 ### PERF-009 — Bridge trace still needs a bounded family-store representation
 
