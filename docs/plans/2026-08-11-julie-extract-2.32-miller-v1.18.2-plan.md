@@ -100,10 +100,10 @@
 **Approach:** Use explicit commits rather than stash. Before and after integration, record path, branch, commit, dirty state, and all related worktrees. Review the resulting tests through `FamilyStoreReadSession` and `StoreWorkspaceIndexProvider`, not private producer details.
 
 **Acceptance criteria:**
-- [ ] Current dirty files are preserved byte-for-byte unless this plan explicitly updates them.
-- [ ] Exact base rotation and partial-resolution recovery regressions exist on current `main`.
-- [ ] Both source worktrees and commit ancestry are reconciled and reported.
-- [ ] Focused test discovery/build succeeds and the change is committed locally.
+- [x] Current dirty files are preserved byte-for-byte unless this plan explicitly updates them.
+- [x] Exact base rotation and partial-resolution recovery regressions exist on current `main`.
+- [x] Both source worktrees and commit ancestry are reconciled and reported.
+- [x] Focused test discovery/build succeeds and the change is committed locally.
 
 ### Task 2: Pin and restore released julie-extract 2.32.0
 
