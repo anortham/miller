@@ -313,7 +313,8 @@ public sealed class CrossWorkspaceRefreshService
                     ArtifactId: TryReadArtifactId(row, useStore));
             }
         }
-        bool effectiveForce = force || sourceRebuildRequired;
+        bool storeRootRebindRequired = useStore && StoreArtifactVersionReader.RequiresRootRebind(row.IndexDbPath);
+        bool effectiveForce = force || sourceRebuildRequired || storeRootRebindRequired;
 
         // D2 gate, AFTER winning the lock (so a busy lock still enqueues to the live leader above, which
         // enforces its own gate): an outdated extractor must never rewrite an artifact built by a newer one.
@@ -339,7 +340,9 @@ public sealed class CrossWorkspaceRefreshService
         // Evaluated BEFORE machine-wide admission is taken: an attempt the backoff will not allow must not first
         // queue for (or hold) the one lease every other workspace's scan is waiting on.
         IScanFailurePolicy failurePolicy = _failurePolicyFor(row.IndexDbPath, row.CanonicalRoot);
-        ScanIntent intent = sourceRebuildRequired
+        ScanIntent intent = storeRootRebindRequired
+            ? ScanIntent.RootRebind
+            : sourceRebuildRequired
             ? ScanIntent.CorruptionHeal
             : effectiveForce ? ScanIntent.UserFullRebuild : ScanIntent.IncrementalReconcile;
         ScanAttemptDecision attempt = failurePolicy.Evaluate(intent, bypassBackoff);

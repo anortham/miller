@@ -28,9 +28,12 @@ public static class StoreArtifactVersionReader
         Func<string?, string?> legacyVersionReader)
     {
         ArgumentNullException.ThrowIfNull(legacyVersionReader);
-        (string? storeVersion, bool pointerPresent, Exception? failure) = ReadCore(legacyDatabasePath);
+        (string? storeVersion, bool pointerPresent, Exception? failure, bool missingStoreRoot) =
+            ReadCore(legacyDatabasePath);
         if (pointerPresent && failure is not null)
         {
+            if (missingStoreRoot)
+                return legacyVersionReader(legacyDatabasePath);
             throw new StoreArtifactVersionReadException(
                 "The active family-store version is unreadable; refusing to claim leadership.",
                 failure);
@@ -39,18 +42,25 @@ public static class StoreArtifactVersionReader
         return pointerPresent ? storeVersion : legacyVersionReader(legacyDatabasePath);
     }
 
+    public static bool RequiresRootRebind(string? legacyDatabasePath)
+    {
+        (_, bool pointerPresent, _, bool missingStoreRoot) = ReadCore(legacyDatabasePath);
+        return pointerPresent && missingStoreRoot;
+    }
+
     public static string? TryRead(string? legacyDatabasePath, out bool pointerPresent)
     {
-        (string? version, bool foundPointer, _) = ReadCore(legacyDatabasePath);
+        (string? version, bool foundPointer, _, _) = ReadCore(legacyDatabasePath);
         pointerPresent = foundPointer;
         return version;
     }
 
-    private static (string? Version, bool PointerPresent, Exception? Failure) ReadCore(string? legacyDatabasePath)
+    private static (string? Version, bool PointerPresent, Exception? Failure, bool MissingStoreRoot) ReadCore(
+        string? legacyDatabasePath)
     {
         bool pointerPresent = false;
         if (string.IsNullOrWhiteSpace(legacyDatabasePath))
-            return (null, false, null);
+            return (null, false, null, false);
 
         try
         {
@@ -62,15 +72,18 @@ public static class StoreArtifactVersionReader
             if (!StoreWorkspacePointer.Exists(workspaceRoot))
             {
                 pointerPresent = false;
-                return (null, false, null);
+                return (null, false, null, false);
             }
             StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(workspaceRoot);
             if (pointer is null)
             {
                 return pointerPresent
-                    ? (null, true, new IOException("The active family-store pointer disappeared while it was read."))
-                    : (null, false, null);
+                    ? (null, true, new IOException("The active family-store pointer disappeared while it was read."), false)
+                    : (null, false, null, false);
             }
+
+            if (!Directory.Exists(pointer.StoreRoot))
+                return (null, true, new DirectoryNotFoundException(pointer.StoreRoot), true);
 
             var binding = new StoreFamilyBinding(
                 pointer.FamilyId,
@@ -81,13 +94,13 @@ public static class StoreArtifactVersionReader
             WorkspaceFreshnessProbe probe = FamilyStoreReadSession.Probe(binding);
             return (probe.BinaryVersion ?? throw new FamilyStoreReadException(
                 FamilyStoreReadFailure.Corrupt,
-                "The family-store freshness probe omitted binary_version."), true, null);
+                "The family-store freshness probe omitted binary_version."), true, null, false);
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException
                 or NotSupportedException or FormatException or SqliteException)
         {
-            return (null, pointerPresent, ex);
+            return (null, pointerPresent, ex, false);
         }
     }
 }

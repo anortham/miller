@@ -203,7 +203,8 @@
 - [ ] Legacy compatibility mode exports the current view and never serves an older artifact.
 - [ ] Scoped/default and forced-full results are canonically equivalent; timings are recorded.
 - [ ] Windows release asset layout/version and upstream Windows gates are verified; any Miller-hosted Windows gate still requiring a push is named explicitly.
-- [ ] Dogfood fixes, if any, pass focused tests and are committed locally.
+- [x] The Miller dangling-pointer RootRebind dogfood fix passes its real-producer Scale regression and 84 affected
+  pure tests and is committed locally; producer blockers remain open.
 
 ### Task 5: Prepare and gate Miller v1.18.2
 

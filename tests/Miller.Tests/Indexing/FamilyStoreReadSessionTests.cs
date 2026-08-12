@@ -1057,7 +1057,7 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
-    public void StoreArtifactVersionReaderRejectsUnreadableServingStoreForLeadership()
+    public void StoreArtifactVersionReaderUsesLegacyVersionToRecoverAMissingStoreRoot()
     {
         using StoreFixture fixture = StoreFixture.Create();
         StoreWorkspacePointer.Write(
@@ -1066,10 +1066,10 @@ public sealed class FamilyStoreReadSessionTests
 
         string legacyPath = Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db");
 
-        StoreArtifactVersionReadException error = Assert.Throws<StoreArtifactVersionReadException>(() =>
+        Assert.Equal(
+            "legacy-2.0.0",
             StoreArtifactVersionReader.ReadForLeadership(legacyPath, _ => "legacy-2.0.0"));
-
-        Assert.Contains("refusing to claim leadership", error.Message, StringComparison.Ordinal);
+        Assert.True(StoreArtifactVersionReader.RequiresRootRebind(legacyPath));
     }
 
     [Fact]

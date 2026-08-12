@@ -34,6 +34,12 @@
 - `miller semantic prepare` leaves a live unready broker and Miller session latched until restart. The sidecar retains a loader but does not invoke it from `health`; Miller maps a valid `model_not_prepared` refusal to `CircuitOpen`.
 - `julie-extract` runs `powershell.exe -Command "(Get-Volume -FilePath $args[0]).SizeRemaining" <path>`. Windows PowerShell consumes the path as command text instead of binding `$args[0]`, causing `capacity_probe_failed` during family-store bootstrap.
 - Repeated `source=Roots` bindings are request-time recovery from `BootstrapPhase.Failed`, not a second retry timer. Fix the producer failure and its diagnostics; do not add another bootstrap retry policy in this program.
+- 2026-08-11 integration dogfood found two additional 2.32.0 producer blockers: scoped closure expanded one
+  changed file to more than 253k identifiers and remained CPU-bound past 17 minutes, and a 1.03 GB
+  `from_artifact` import lost its writer lease after 17.62 seconds and left a non-terminal claimed request.
+- The same dogfood found and fixed a Miller boundary defect: a valid dangling store pointer was rejected before
+  RootRebind. The recovery gate now distinguishes an absent store root from a malformed pointer or corrupt
+  existing store and retains downgrade protection using the preserved legacy version.
 - TODO scan added the semantic-activation bug to scope. Cross-tool discoverability, stateless MCP, accidental-root policy, explicit registration, complexity, dead-code, and Eros contract entries remain product/design backlog and are excluded.
 
 ## Architecture Quality
@@ -286,4 +292,3 @@
 - [ ] Only completed Active TODO entries are removed; excluded backlog remains unchanged.
 - [ ] All three repository worktrees are audited and no changes are stranded.
 - [ ] No push, tag, package publication, pin bump, or release occurs without explicit approval.
-

@@ -2,6 +2,14 @@
 
 ## Active
 
+- julie-extract 2.32.0 scoped resolution expanded one changed Miller test file (86 touched names) to more than
+  253k identifier resolutions and remained CPU-bound past 17 minutes, versus the prior 2m24 full-corpus baseline.
+  Fix the closure explosion and add a real-corpus one-file performance regression before Miller release prep.
+
+- julie-extract 2.32.0 `store import --from-artifact` can outlive its writer lease without heartbeating, then fail
+  `store-writer lease fencing check failed` after loading a 1.03 GB partial legacy artifact. The request remains
+  claimed by the exited process with no terminal result. Add lease-heartbeat and stale-claim recovery coverage.
+
 - Semantic activation after `miller semantic prepare` requires a session restart (found 2026-08-02 fresh-machine
   dogfood; evidence `.memories/2026-08-02/224155_d317.md`). Two latches: the broker stats the model cache only at
   spawn, and Miller's embedding session opens its circuit permanently on `model_not_prepared`. Fix:
@@ -19,6 +27,10 @@
   (found 2026-08-11 dogfood; evidence `.memories/2026-08-11/125539_bf6d.md`).
 
 ## Closed
+
+- A valid family-store pointer whose store root disappeared no longer blocks its own repair at the extractor
+  eligibility gate. Miller uses the preserved legacy binary version only for downgrade safety in that exact case
+  and routes the operation through `RootRebind`; malformed pointers and corrupt existing stores still refuse.
 
 - Missing family-store bootstrap after RootRebind no longer rejects a current tier-gated legacy resolution as
   `resolution_input_incomplete`. The producer had required `complete` even when tier gating was the only reason a

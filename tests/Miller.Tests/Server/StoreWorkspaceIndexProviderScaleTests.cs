@@ -78,6 +78,28 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 root,
                 bootstrap.Workspace.WorkspaceId);
             Assert.Equal("exact", session.Snapshot.ResolutionState);
+
+            StoreWorkspacePointerDocument pointer = Assert.IsType<StoreWorkspacePointerDocument>(
+                StoreWorkspacePointer.Read(root));
+            Directory.Delete(pointer.StoreRoot, recursive: true);
+            using var registry = WorkspaceRegistry.Open(bootstrap.Workspace.RegistryDbPath);
+            var refresh = new CrossWorkspaceRefreshService(
+                registry,
+                new JulieExtractRunner(binary),
+                SymbolSearchSidecar.Disabled,
+                ScanGovernor.Disabled(),
+                storeEnabled: static () => true);
+
+            WorkspaceRefreshResult recovered = refresh.Refresh(
+                bootstrap.Workspace.WorkspaceId!,
+                bypassBackoff: true);
+
+            Assert.Equal(WorkspaceRefreshStatus.Refreshed, recovered.Status);
+            using WorkspaceReadHandle recoveredSession = WorkspaceReadSessionFactory.Open(
+                artifact,
+                root,
+                bootstrap.Workspace.WorkspaceId);
+            Assert.Equal("exact", recoveredSession.Snapshot.ResolutionState);
         }
         finally
         {
