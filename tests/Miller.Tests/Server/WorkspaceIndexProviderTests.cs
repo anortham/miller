@@ -366,12 +366,14 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal(2, first.FtsSearchDelta.ConnectionOpen.CallCount);
         Assert.Equal(2, first.FtsSearchDelta.WordCandidates.CallCount);
         Assert.Equal(2, first.FtsSearchDelta.WordScoring.CallCount);
+        Assert.Equal(2, first.FtsSearchDelta.WordHydration.CallCount);
         Assert.Equal(2, first.FtsSearchDelta.TrigramCandidates.CallCount);
         Assert.Equal(2, first.FtsSearchDelta.TrigramScoring.CallCount);
         Assert.Equal(2, first.FtsSearchDelta.FinalOrdering.CallCount);
         Assert.Equal(1, second.FtsSearchDelta.ConnectionOpen.CallCount);
         Assert.Equal(1, second.FtsSearchDelta.WordCandidates.CallCount);
         Assert.Equal(1, second.FtsSearchDelta.WordScoring.CallCount);
+        Assert.Equal(1, second.FtsSearchDelta.WordHydration.CallCount);
         Assert.Equal(1, second.FtsSearchDelta.TrigramCandidates.CallCount);
         Assert.Equal(1, second.FtsSearchDelta.TrigramScoring.CallCount);
         Assert.Equal(1, second.FtsSearchDelta.FinalOrdering.CallCount);

@@ -280,6 +280,14 @@ without first adding new phase, query-count, or resource evidence.
   remained 13 / 877 ms, lookup 1,594 / 1,148 ms, graph 299 ms, and all later lookup phases issued zero FTS work.
   This proves broad word-candidate loading/scoring owns 709 ms of the 868 ms measured inside FTS, with the term
   trigram candidate queries another 152 ms. The 3,378-byte response remained correct at 10 results / 845 tokens.
+- **Unused-trigram bypass acceptance:** Release was rebuilt from clean `d0cf7c34`; context completed successfully
+  in 2,509.602 ms, still over the 2 s gate. FTS trigram work fell from 11 queries / 159 ms / 1,800 candidates to
+  one query / 5 ms / 200 candidates, but word work remained dominant: 11 candidate queries / 451 ms / 57,068
+  rows plus 11 scoring passes / 266 ms. Search was 13 calls / 729 ms and total lookup was 1,594 / 992 ms; graph
+  remained 289 ms. Outer semantic/source/query/term/anchor phases were 377/677/248/374/335 ms. The correct
+  3,378-byte, 10-result response consumed 1,627,915,275 logical-read characters and 430,080 physical-write bytes,
+  peaking at 140,729 KB PSS / 187,924 KB RSS. Impact, trace, and idle were skipped because context remained over
+  gate.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 

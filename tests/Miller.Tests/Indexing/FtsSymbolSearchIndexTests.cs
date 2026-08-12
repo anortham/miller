@@ -258,6 +258,38 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_HighFanoutWordArm_HydratesOnlyRankedResultsWithExactParity()
+    {
+        IndexedSymbol[] syms = Enumerable.Range(0, 1_200)
+            .Select(index => new IndexedSymbol(
+                index,
+                $"sym-{index:d4}",
+                $"SharedItem{index:d4}",
+                $"class SharedItem{index:d4}",
+                "class",
+                "csharp",
+                $"src/S{index:d4}.cs",
+                StartLine: 1,
+                EndLine: 2,
+                ParentId: null,
+                IsTest: false))
+            .ToArray();
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+        var observations = new List<FtsSearchQueryObservation>();
+        var fts = FtsSymbolSearchIndex.Open(_dbPath, observations.Add);
+        var memory = SymbolSearchProjection.Build(syms);
+
+        IReadOnlyList<SearchHit> expected = memory.Search("shared", limit: 7, mode: SearchMode.Or);
+        IReadOnlyList<SearchHit> actual = fts.Search("shared", limit: 7, mode: SearchMode.Or);
+
+        Assert.Equal(expected.Select(static hit => hit.Document.DocId), actual.Select(static hit => hit.Document.DocId));
+        Assert.Equal(expected.Select(static hit => hit.Score), actual.Select(static hit => hit.Score));
+        FtsSearchQueryObservation hydration = Assert.Single(observations, static observation =>
+            observation.Family == FtsSearchQueryFamily.WordHydration);
+        Assert.InRange(hydration.Rows, 0, 7);
+    }
+
+    [Fact]
     public void Search_WordArm_RankingParity_NonAsciiIdentifiers_WithInMemoryProjection()
     {
         // Accent-collision parity (the Phase-5 caveat): 'Café' and 'Cafe' are DISTINCT terms to the in-memory
@@ -514,6 +546,7 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
                 FtsSearchQueryFamily.ConnectionOpen,
                 FtsSearchQueryFamily.WordCandidates,
                 FtsSearchQueryFamily.WordScoring,
+                FtsSearchQueryFamily.WordHydration,
                 FtsSearchQueryFamily.TrigramCandidates,
                 FtsSearchQueryFamily.TrigramScoring,
                 FtsSearchQueryFamily.FinalOrdering,
@@ -636,6 +669,8 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
         IReadOnlyList<SearchHit> hits = index.Search("alpha", limit: 2, mode: SearchMode.Or);
 
         Assert.Equal(["AlphaTarget", "ZalphaZ"], hits.Select(static hit => hit.Document.Name));
+        Assert.Equal(1, Assert.Single(observations, static observation =>
+            observation.Family == FtsSearchQueryFamily.WordHydration).Rows);
         Assert.Equal(1, observations.Count(static observation =>
             observation.Family == FtsSearchQueryFamily.TrigramCandidates));
     }

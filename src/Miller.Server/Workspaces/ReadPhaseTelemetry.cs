@@ -47,6 +47,7 @@ internal sealed record FtsSearchQueryTelemetrySnapshot(
     SearchRequestFamilyTelemetry ConnectionOpen,
     SearchRequestFamilyTelemetry AndIntersectionProbe,
     SearchRequestFamilyTelemetry WordCandidates,
+    SearchRequestFamilyTelemetry WordHydration,
     SearchRequestFamilyTelemetry WordScoring,
     SearchRequestFamilyTelemetry TrigramCandidates,
     SearchRequestFamilyTelemetry TrigramScoring,
@@ -56,6 +57,7 @@ internal sealed record FtsSearchQueryTelemetrySnapshot(
         ConnectionOpen.CallCount +
         AndIntersectionProbe.CallCount +
         WordCandidates.CallCount +
+        WordHydration.CallCount +
         WordScoring.CallCount +
         TrigramCandidates.CallCount +
         TrigramScoring.CallCount +
@@ -272,6 +274,7 @@ internal sealed class ReadPhaseTelemetry
             FtsSearchFamilyDelta(current.ConnectionOpen, baseline.ConnectionOpen),
             FtsSearchFamilyDelta(current.AndIntersectionProbe, baseline.AndIntersectionProbe),
             FtsSearchFamilyDelta(current.WordCandidates, baseline.WordCandidates),
+            FtsSearchFamilyDelta(current.WordHydration, baseline.WordHydration),
             FtsSearchFamilyDelta(current.WordScoring, baseline.WordScoring),
             FtsSearchFamilyDelta(current.TrigramCandidates, baseline.TrigramCandidates),
             FtsSearchFamilyDelta(current.TrigramScoring, baseline.TrigramScoring),
@@ -283,6 +286,7 @@ internal sealed class ReadPhaseTelemetry
             FtsSearchFamily(current.ConnectionOpen),
             FtsSearchFamily(current.AndIntersectionProbe),
             FtsSearchFamily(current.WordCandidates),
+            FtsSearchFamily(current.WordHydration),
             FtsSearchFamily(current.WordScoring),
             FtsSearchFamily(current.TrigramCandidates),
             FtsSearchFamily(current.TrigramScoring),

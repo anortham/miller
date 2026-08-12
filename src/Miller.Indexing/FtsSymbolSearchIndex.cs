@@ -233,20 +233,15 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
 
             string orMatch = string.Join(" OR ", distinctTerms.Select(QuoteFts));
             long wordCandidatesStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            IReadOnlyList<DiskSymbol> candidates = WordCandidates(connection, orMatch);
+            IReadOnlyList<WordCandidate> candidates = WordCandidates(connection, orMatch);
             Observe(FtsSearchQueryFamily.WordCandidates, candidates.Count, wordCandidatesStarted);
 
             long wordScoringStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            var tokens = new List<string>(16);
             var df = new int[distinctTerms.Count];
             var scoredCandidates = new List<WordCandidateScore>(candidates.Count);
-            foreach (DiskSymbol candidate in candidates)
+            foreach (WordCandidate candidate in candidates)
             {
-                IndexedSymbol symbol = candidate.Symbol;
-
-                tokens.Clear();
-                string text = string.IsNullOrEmpty(symbol.Signature) ? symbol.Name : symbol.Name + " " + symbol.Signature;
-                CodeTokenizer.Tokenize(text, tokens);
+                string[] tokens = candidate.Body.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
                 var termFrequencies = new int[distinctTerms.Count];
                 int matched = 0;
@@ -260,39 +255,50 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
                 }
 
                 if (matched == 0) continue;
-                scoredCandidates.Add(new WordCandidateScore(symbol, candidate.DocLen, termFrequencies, matched));
+                scoredCandidates.Add(new WordCandidateScore(candidate, termFrequencies, matched));
             }
 
+            var rankedCandidates = new List<RankedWordCandidate>(scoredCandidates.Count);
             foreach (WordCandidateScore candidate in scoredCandidates)
             {
                 if (mode == SearchMode.And && candidate.Matched < requiredTerms) continue;   // AND: every distinct term must hit
 
-                IndexedSymbol symbol = candidate.Symbol;
                 double score = 0.0;
                 for (int i = 0; i < distinctTerms.Count; i++)
                 {
                     int tf = candidate.TermFrequencies[i];
                     if (tf == 0) continue;
-                    score += Bm25.TermScore(Bm25.Idf(n, df[i]), tf, candidate.DocLen, _avgdl);
+                    score += Bm25.TermScore(Bm25.Idf(n, df[i]), tf, candidate.Candidate.DocLen, _avgdl);
                 }
 
                 score = Bm25.ApplyExactNameAdjustments(
                     score,
-                    symbol.Name,
-                    symbol.Kind,
+                    candidate.Candidate.Name,
+                    candidate.Candidate.Kind,
                     normalizedQuery);
 
-                wordHits.Add(new SearchHit(symbol.ToSearchableDocument(), score));
-                wordMatched.Add(symbol.DocId);
+                rankedCandidates.Add(new RankedWordCandidate(candidate.Candidate.DocId, score));
+                wordMatched.Add(candidate.Candidate.DocId);
             }
 
             // Deterministic ordering: score DESC, then DocId ASC — identical to MillerSearchIndex.
-            wordHits.Sort(static (a, b) =>
+            rankedCandidates.Sort(static (a, b) =>
             {
                 int byScore = b.Score.CompareTo(a.Score);
-                return byScore != 0 ? byScore : a.Document.DocId.CompareTo(b.Document.DocId);
+                return byScore != 0 ? byScore : a.DocId.CompareTo(b.DocId);
             });
-            Observe(FtsSearchQueryFamily.WordScoring, wordHits.Count, wordScoringStarted);
+            Observe(FtsSearchQueryFamily.WordScoring, rankedCandidates.Count, wordScoringStarted);
+
+            int survivorCount = Math.Min(rankedCandidates.Count, limit);
+            long wordHydrationStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            IReadOnlyDictionary<int, IndexedSymbol> hydrated =
+                HydrateWordSymbols(connection, rankedCandidates, survivorCount);
+            for (int i = 0; i < survivorCount; i++)
+            {
+                RankedWordCandidate candidate = rankedCandidates[i];
+                wordHits.Add(new SearchHit(hydrated[candidate.DocId].ToSearchableDocument(), candidate.Score));
+            }
+            Observe(FtsSearchQueryFamily.WordHydration, hydrated.Count, wordHydrationStarted);
         }
 
         // ---- Trigram arm (OR only): additive interior-substring recall over the collapsed name, windowed
@@ -346,22 +352,65 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
     /// <summary>How many trigram-arm candidates to window in (interior-substring recall is purely additive).</summary>
     private const int TrigramWindow = 200;
 
-    private sealed record WordCandidateScore(
-        IndexedSymbol Symbol,
-        int DocLen,
-        int[] TermFrequencies,
-        int Matched);
+    private sealed record WordCandidateScore(WordCandidate Candidate, int[] TermFrequencies, int Matched);
 
-    private static IReadOnlyList<DiskSymbol> WordCandidates(SqliteConnection connection, string match)
+    private readonly record struct RankedWordCandidate(int DocId, double Score);
+
+    private readonly record struct WordCandidate(int DocId, string Name, string Kind, int DocLen, string Body);
+
+    private static IReadOnlyList<WordCandidate> WordCandidates(SqliteConnection connection, string match)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = SymbolSelect("""
+        cmd.CommandText = """
+            SELECT s.doc_id, s.name, s.kind, s.doc_len, symbols_fts.body
             FROM symbols_fts
             JOIN search_symbols s ON s.symbol_id = symbols_fts.symbol_id
             WHERE body MATCH $q
-            """);
+            """;
         cmd.Parameters.AddWithValue("$q", match);
-        return ReadDiskSymbols(cmd);
+        var results = new List<WordCandidate>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new WordCandidate(
+                reader.GetInt32(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
+                reader.GetString(4)));
+        }
+        return results;
+    }
+
+    private const int HydrationParameterChunkSize = 500;
+
+    private static IReadOnlyDictionary<int, IndexedSymbol> HydrateWordSymbols(
+        SqliteConnection connection,
+        IReadOnlyList<RankedWordCandidate> rankedCandidates,
+        int count)
+    {
+        var hydrated = new Dictionary<int, IndexedSymbol>(count);
+        for (int offset = 0; offset < count; offset += HydrationParameterChunkSize)
+        {
+            int chunkCount = Math.Min(HydrationParameterChunkSize, count - offset);
+            using var cmd = connection.CreateCommand();
+            var placeholders = new string[chunkCount];
+            for (int i = 0; i < chunkCount; i++)
+            {
+                string parameterName = "$doc" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                placeholders[i] = parameterName;
+                cmd.Parameters.AddWithValue(parameterName, rankedCandidates[offset + i].DocId);
+            }
+            cmd.CommandText = SymbolSelect(
+                $"FROM search_symbols s WHERE s.doc_id IN ({string.Join(',', placeholders)});");
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                IndexedSymbol symbol = ReadDiskSymbol(reader).Symbol;
+                hydrated.Add(symbol.DocId, symbol);
+            }
+        }
+        return hydrated;
     }
 
     private static bool HasAndIntersection(SqliteConnection connection, string match)
@@ -401,7 +450,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         return results;
     }
 
-    private static int CountOccurrences(List<string> tokens, string term)
+    private static int CountOccurrences(IReadOnlyList<string> tokens, string term)
     {
         int count = 0;
         foreach (string t in tokens)
@@ -700,6 +749,7 @@ internal enum FtsSearchQueryFamily
     ConnectionOpen,
     AndIntersectionProbe,
     WordCandidates,
+    WordHydration,
     WordScoring,
     TrigramCandidates,
     TrigramScoring,
@@ -720,6 +770,7 @@ internal sealed record FtsSearchQueryMeasurementSnapshot(
     FtsSearchQueryFamilyMeasurement ConnectionOpen,
     FtsSearchQueryFamilyMeasurement AndIntersectionProbe,
     FtsSearchQueryFamilyMeasurement WordCandidates,
+    FtsSearchQueryFamilyMeasurement WordHydration,
     FtsSearchQueryFamilyMeasurement WordScoring,
     FtsSearchQueryFamilyMeasurement TrigramCandidates,
     FtsSearchQueryFamilyMeasurement TrigramScoring,
@@ -733,7 +784,7 @@ internal sealed class FtsSearchQueryTelemetryCollector
     private readonly long[] _rows = new long[Enum.GetValues<FtsSearchQueryFamily>().Length];
 
     internal static FtsSearchQueryMeasurementSnapshot EmptySnapshot { get; } =
-        new(default, default, default, default, default, default, default);
+        new(default, default, default, default, default, default, default, default);
 
     internal static FtsSearchQueryTelemetryCollector? Current => CurrentCollector.Value;
 
@@ -757,6 +808,7 @@ internal sealed class FtsSearchQueryTelemetryCollector
             Family(FtsSearchQueryFamily.ConnectionOpen),
             Family(FtsSearchQueryFamily.AndIntersectionProbe),
             Family(FtsSearchQueryFamily.WordCandidates),
+            Family(FtsSearchQueryFamily.WordHydration),
             Family(FtsSearchQueryFamily.WordScoring),
             Family(FtsSearchQueryFamily.TrigramCandidates),
             Family(FtsSearchQueryFamily.TrigramScoring),
