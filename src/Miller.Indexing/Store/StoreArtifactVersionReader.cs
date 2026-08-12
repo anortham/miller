@@ -82,7 +82,7 @@ public static class StoreArtifactVersionReader
                     : (null, false, null, false);
             }
 
-            if (!Directory.Exists(pointer.StoreRoot))
+            if (StoreRootIsMissing(pointer.StoreRoot))
                 return (null, true, new DirectoryNotFoundException(pointer.StoreRoot), true);
 
             var binding = new StoreFamilyBinding(
@@ -101,6 +101,24 @@ public static class StoreArtifactVersionReader
                 or NotSupportedException or FormatException or SqliteException)
         {
             return (null, pointerPresent, ex, false);
+        }
+    }
+
+    private static bool StoreRootIsMissing(string storeRoot)
+    {
+        try
+        {
+            using IEnumerator<string> entries = Directory.EnumerateFileSystemEntries(storeRoot).GetEnumerator();
+            _ = entries.MoveNext();
+            return false;
+        }
+        catch (FileNotFoundException)
+        {
+            return true;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return true;
         }
     }
 }

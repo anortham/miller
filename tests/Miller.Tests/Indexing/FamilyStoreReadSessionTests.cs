@@ -1073,6 +1073,34 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void StoreArtifactVersionReaderRejectsAnExistingStoreRootBehindAnInaccessibleDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using StoreFixture fixture = StoreFixture.Create();
+        string inaccessibleParent = Path.Combine(fixture.Binding.StoreRoot, "inaccessible");
+        string existingStoreRoot = Path.Combine(inaccessibleParent, "store");
+        Directory.CreateDirectory(existingStoreRoot);
+        StoreWorkspacePointer.Write(
+            fixture.Binding.WorkspaceRoot,
+            fixture.Binding with { StoreRoot = existingStoreRoot });
+        string legacyPath = Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db");
+        UnixFileMode originalMode = File.GetUnixFileMode(inaccessibleParent);
+        File.SetUnixFileMode(inaccessibleParent, UnixFileMode.None);
+        try
+        {
+            Assert.Throws<StoreArtifactVersionReadException>(() =>
+                StoreArtifactVersionReader.ReadForLeadership(legacyPath, _ => "legacy-2.0.0"));
+            Assert.False(StoreArtifactVersionReader.RequiresRootRebind(legacyPath));
+        }
+        finally
+        {
+            File.SetUnixFileMode(inaccessibleParent, originalMode);
+        }
+    }
+
+    [Fact]
     public void StoreArtifactVersionReaderDoesNotFallBackWhenThePointerCannotBeRead()
     {
         if (OperatingSystem.IsWindows())
