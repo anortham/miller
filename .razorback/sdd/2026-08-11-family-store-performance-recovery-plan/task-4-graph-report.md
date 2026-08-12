@@ -132,3 +132,13 @@
 - GREEN: the same test passed 1/1 in 79 ms, proving total count 12, immutable sample length 8, exact first-eight input order, and completion-only behavior when the observer cancels after unresolved-name forward.
 - `SqliteSymbolGraphIndexTests` plus the provider wiring test passed 22/22 in 549 ms. Release build passed in 9.67 s with zero warnings/errors.
 - No context call was run; this instrumentation earns the lead's one replay to recover the real four ids.
+
+## Round 10: exact four-candidate family-resolution evidence
+
+- The lead replay recovered the exact ordered frontier: `a6a374fb8554e68e3a7a0b217670d32a`, `ac38a31eba3de6a7a7fcb778bf24e33a`, `9639df0e830f9b3520b25bb6b3aa837a`, `72d24b5950320bbbd03e1bf7dca3e52a`.
+- One temporary opt-in Scale harness opened the real pinned family session, persisted EXPLAIN for all eight production SQL constants, separately timed the private candidate hydration, then invoked the actual `IFamilyGraphResolutionReader.ReadResolutionEdges` operation once with `Direction.Both`. A five-second outer bound covered the real invocation and the harness was removed after evidence capture.
+- Candidate hydration returned the same four ids in input order with versions `1227`, `1021`, `1605`, and `1078` in 7.066 ms.
+- Actual completed arms, rows/query wall: identifier base forward 37/5.044 ms; identifier delta forward 0/9.718 ms; pending base forward 20/0.445 ms; pending delta forward 1/0.768 ms; identifier base reverse 102/1.029 ms; identifier delta reverse 2/20.869 ms; pending base reverse 18/0.236 ms; pending delta reverse 0/1.050 ms. The operation merged 180 edges; the xUnit test completed in 200 ms.
+- Forward base plans use `idx_export_resolution_identifiers_order(version_id=?)` and `idx_export_resolution_pending_order(version_id=?)`. Reverse base plans use the checked-in target-leading `idx_read_resolution_identifiers_target(target_version_id=? AND target_symbol_id=?)` and `idx_read_resolution_pending_target(target_version_id=? AND target_symbol_id=?)`. Delta plans use their view/generation primary indexes; no base resolution arm is scanned.
+- Every arm is far below the two-second behavior-fix gate. The exact four-candidate family resolution operation therefore does not reproduce the rebuilt process timeout, so no caller-facing RED or production query change was justified. The remaining discrepancy is outside this proven family-reader operation or depends on a process-only state not present in the same pinned-session invocation.
+- No context call was run and `PERF.md` was not touched.
