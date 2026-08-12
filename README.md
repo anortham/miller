@@ -95,8 +95,9 @@ miller semantic prepare
 
 That fetches the default encoder (`bge-small-en-v1.5-f32`, 384 dimensions, ~134 MB) into a cache shared
 with Julie — `%LOCALAPPDATA%\julie-semantic\` on Windows, `~/.cache/julie-semantic` elsewhere, or
-`JULIE_EMBEDDING_CACHE_DIR` when set. **Restart the MCP server afterwards:** `prepare` can only activate
-a broker that is already running, so a server started before the download stays lexical-only.
+`JULIE_EMBEDDING_CACHE_DIR` when set. `prepare` reports `activated` when it activates the running broker;
+no restart is needed in that case. If it reports `no_live_broker` or `still_not_ready`, restart the MCP
+server after preparation.
 
 Confirm it took with `miller workspace status` — semantics are live when you see `vectors: ready` and
 `semantic_broker: ready` with a resolved `backend` (`vulkan`, `metal`, or `cpu`). The larger

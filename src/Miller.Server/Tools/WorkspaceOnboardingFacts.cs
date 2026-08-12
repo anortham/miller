@@ -83,14 +83,14 @@ public sealed record WorkspaceOnboardingFacts(
             notes.Add("telemetry is unavailable; this onboarding falls back to generic Miller startup guidance");
         if (SemanticNeedsPreparing(statusFacts.Vectors))
             notes.Add("semantic retrieval is enabled but not serving; run `miller semantic prepare` once to install " +
-                      "the embedding model, then restart the server");
+                      "the embedding model. If prepare reports `activated`, no restart is needed; restart the " +
+                      "server only when it reports `no_live_broker` or `still_not_ready`");
 
-        // A positive allowlist, not "everything that is not ready": incompatible, circuit-open, and disk-blocked
-        // are degraded for reasons another model download cannot fix, and building/downloading are active work.
         static bool SemanticNeedsPreparing(VectorSidecarFacts? vectors) =>
             vectors is not null &&
             (string.Equals(vectors.State, "model-not-prepared", StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(vectors.State, "unavailable", StringComparison.OrdinalIgnoreCase));
+             (string.Equals(vectors.State, "unavailable", StringComparison.OrdinalIgnoreCase) &&
+              vectors.Reason?.Contains("no vector artifact exists", StringComparison.OrdinalIgnoreCase) == true));
 
         string[] privacy =
         [

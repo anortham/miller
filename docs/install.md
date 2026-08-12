@@ -139,10 +139,10 @@ miller semantic prepare
 | Encoder selection | `MILLER_SEMANTIC_MODEL=<id>` |
 | Disable entirely | `MILLER_SEMANTIC=off` (permanent zero-work; lexical output byte-identical) |
 
-**Restart the MCP server after preparing.** `prepare` only activates a broker that is already running, so
-a server that started before the download stays lexical-only and reports
-`semantic_broker: not_started`. Verify with `miller workspace status`: semantics are live when `vectors`
-reads `ready` and `semantic_broker` reads `ready` with a resolved `backend`.
+`prepare` reports `activated` when it activates the running broker, so no restart is needed in that case. If
+it reports `no_live_broker` or `still_not_ready`, restart the MCP server after preparation; a server that
+started before the download otherwise stays lexical-only. Verify with `miller workspace status`: semantics
+are live when `vectors` reads `ready` and `semantic_broker` reads `ready` with a resolved `backend`.
 
 If `workspace status` shows a vector artifact without a completeness stamp, check `workspace health`
 first — a missing model is reported as `vectors_model_not_prepared`, which `workspace refresh` cannot fix.

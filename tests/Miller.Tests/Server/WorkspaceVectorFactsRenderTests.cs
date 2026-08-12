@@ -333,6 +333,29 @@ public sealed class WorkspaceVectorFactsRenderTests
     }
 
     [Theory]
+    [InlineData("Vector artifact is corrupt: malformed metadata")]
+    [InlineData("Vector artifact cannot be read: permission denied")]
+    [InlineData("Vector artifact has no completeness stamp for the current view")]
+    [InlineData("Family-store vectors are unavailable: store log could not be read")]
+    public void Health_UnavailableNonMissingReason_DoesNotRecommendPrepare(string reason)
+    {
+        var vectors = new VectorSidecarFacts(
+            "unavailable",
+            "/repo/.miller/vectors.db",
+            reason);
+
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            Facts(vectors),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(OkCount: 1, EmptyCount: 0, ErrorCount: 0),
+            EmptyExtractionHealth());
+
+        Assert.DoesNotContain(
+            health.RecommendedActions,
+            action => action.Contains("miller semantic prepare", StringComparison.Ordinal));
+    }
+
+    [Theory]
     [InlineData("building")]
     [InlineData("downloading")]
     [InlineData("disk-blocked")]
@@ -381,6 +404,23 @@ public sealed class WorkspaceVectorFactsRenderTests
     }
 
     [Fact]
+    public void Onboarding_PrepareNote_ExplainsActivationOutcomes()
+    {
+        WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingFacts.Create(
+            Facts(new VectorSidecarFacts("model-not-prepared", "/repo/.miller/vectors.db", "ready=false")),
+            TelemetryOnboardingFacts.Unavailable("absent"),
+            []);
+
+        string note = Assert.Single(
+            onboarding.InstructionNotes,
+            item => item.Contains("miller semantic prepare", StringComparison.Ordinal));
+        Assert.Contains("activated", note, StringComparison.Ordinal);
+        Assert.Contains("no restart is needed", note, StringComparison.Ordinal);
+        Assert.Contains("no_live_broker", note, StringComparison.Ordinal);
+        Assert.Contains("still_not_ready", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Onboarding_SemanticEnabledButNotServing_NotesThePrepareStep()
     {
         var vectors = new VectorSidecarFacts(
@@ -394,6 +434,23 @@ public sealed class WorkspaceVectorFactsRenderTests
             []);
 
         Assert.Contains(
+            onboarding.InstructionNotes,
+            note => note.Contains("miller semantic prepare", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("Vector artifact is corrupt: malformed metadata")]
+    [InlineData("Vector artifact cannot be read: permission denied")]
+    [InlineData("Vector artifact has no completeness stamp for the current view")]
+    [InlineData("Family-store vectors are unavailable: store log could not be read")]
+    public void Onboarding_UnavailableNonMissingReason_DoesNotNoteThePrepareStep(string reason)
+    {
+        WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingFacts.Create(
+            Facts(new VectorSidecarFacts("unavailable", "/repo/.miller/vectors.db", reason)),
+            TelemetryOnboardingFacts.Unavailable("absent"),
+            []);
+
+        Assert.DoesNotContain(
             onboarding.InstructionNotes,
             note => note.Contains("miller semantic prepare", StringComparison.Ordinal));
     }

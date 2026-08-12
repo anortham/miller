@@ -314,7 +314,7 @@ public sealed class CliDispatchTests : IDisposable
     {
         var (code, outText, _) = Run(new[] { "version" }, Context(Path.Combine(_dir, "symbols.db")));
         Assert.Equal(0, code);
-        Assert.StartsWith("1.18.2", outText.Trim());
+        Assert.StartsWith("1.18.3", outText.Trim());
     }
 
     [Fact]
@@ -329,7 +329,7 @@ public sealed class CliDispatchTests : IDisposable
         using JsonDocument doc = JsonDocument.Parse(outText);
         JsonElement root = doc.RootElement;
 
-        Assert.StartsWith("1.18.2", root.GetProperty("miller").GetProperty("version").GetString());
+        Assert.StartsWith("1.18.3", root.GetProperty("miller").GetProperty("version").GetString());
 
         JsonElement julie = root.GetProperty("julie_extract");
         Assert.Equal("2.32.1", julie.GetProperty("pinned_version").GetString());
@@ -3119,7 +3119,7 @@ public sealed class CliDispatchTests : IDisposable
         // binary's version into the status header (the dogfooding "which build is live" signal).
         var (code, outText, _) = Run(new[] { "workspace", "status" }, Context(fx.DbPath));
         Assert.Equal(0, code);
-        Assert.Contains("miller 1.18.2", outText);
+        Assert.Contains("miller 1.18.3", outText);
         Assert.Contains("pid ", outText);
         Assert.Contains("symbols:", outText);
     }
