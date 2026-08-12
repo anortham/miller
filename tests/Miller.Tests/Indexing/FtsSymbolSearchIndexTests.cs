@@ -323,6 +323,77 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void CountTokenFrequencies_ScansSpaceDelimitedBodyOnceAndPreservesTermOrder()
+    {
+        string[] terms = ["beta", "alpha", "café", "missing"];
+        int[] termHashes = FtsSymbolSearchIndex.CreateOrdinalTermHashes(terms);
+        Span<int> frequencies = stackalloc int[terms.Length];
+
+        int scannedTokens = FtsSymbolSearchIndex.CountTokenFrequencies(
+            "  alpha beta alpha   café alphabet café  ",
+            terms,
+            termHashes,
+            frequencies);
+
+        Assert.Equal(6, scannedTokens);
+        Assert.Equal([1, 2, 2, 0], frequencies.ToArray());
+    }
+
+    [Fact]
+    public void CountTokenFrequencies_RepeatedMultiTermScoringDoesNotAllocate()
+    {
+        const string body = "shared item resolver context shared graph café shared";
+        string[] terms = ["context", "shared", "café", "missing", "graph"];
+        int[] termHashes = FtsSymbolSearchIndex.CreateOrdinalTermHashes(terms);
+        Span<int> frequencies = stackalloc int[terms.Length];
+        _ = FtsSymbolSearchIndex.CountTokenFrequencies(body, terms, termHashes, frequencies);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        int scannedTokens = 0;
+        for (int i = 0; i < 10_000; i++)
+        {
+            frequencies.Clear();
+            scannedTokens += FtsSymbolSearchIndex.CountTokenFrequencies(body, terms, termHashes, frequencies);
+        }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(80_000, scannedTokens);
+        Assert.Equal([1, 3, 1, 0, 1], frequencies.ToArray());
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void Search_HighFanoutMultiTermWordArm_PreservesExactRankingParity()
+    {
+        IndexedSymbol[] syms = Enumerable.Range(0, 1_200)
+            .Select(index => new IndexedSymbol(
+                index,
+                $"sym-{index:d4}",
+                $"SharedContextGraphResolverFactoryItem{index:d4}",
+                index % 3 == 0
+                    ? $"class SharedContextGraphResolverFactoryItem{index:d4} with Search Index Provider"
+                    : $"class SharedContextGraphResolverFactoryItem{index:d4}",
+                "class",
+                "csharp",
+                $"src/S{index:d4}.cs",
+                StartLine: 1,
+                EndLine: 2,
+                ParentId: null,
+                IsTest: false))
+            .ToArray();
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+        var fts = FtsSymbolSearchIndex.Open(_dbPath);
+        var memory = SymbolSearchProjection.Build(syms);
+        const string query = "shared context graph resolver factory search index provider item shared";
+
+        IReadOnlyList<SearchHit> expected = memory.Search(query, limit: 25, mode: SearchMode.Or);
+        IReadOnlyList<SearchHit> actual = fts.Search(query, limit: 25, mode: SearchMode.Or);
+
+        Assert.Equal(expected.Select(static hit => hit.Document.DocId), actual.Select(static hit => hit.Document.DocId));
+        Assert.Equal(expected.Select(static hit => hit.Score), actual.Select(static hit => hit.Score));
+    }
+
+    [Fact]
     public void Search_WordArm_RankingParity_NonAsciiIdentifiers_WithInMemoryProjection()
     {
         // Accent-collision parity (the Phase-5 caveat): 'Café' and 'Cafe' are DISTINCT terms to the in-memory

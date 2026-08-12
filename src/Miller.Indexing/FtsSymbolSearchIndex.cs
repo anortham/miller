@@ -1,3 +1,4 @@
+using System.Buffers;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
 using Miller.Core.Tokenization;
@@ -237,47 +238,19 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
             Observe(FtsSearchQueryFamily.WordCandidates, candidates.Count, wordCandidatesStarted);
 
             long wordScoringStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            var df = new int[distinctTerms.Count];
-            var scoredCandidates = new List<WordCandidateScore>(candidates.Count);
-            foreach (WordCandidate candidate in candidates)
-            {
-                var termFrequencies = new int[distinctTerms.Count];
-                int matched = 0;
-                for (int i = 0; i < distinctTerms.Count; i++)
-                {
-                    int tf = CountTokenOccurrences(candidate.Body, distinctTerms[i]);
-                    if (tf == 0) continue;
-                    termFrequencies[i] = tf;
-                    df[i]++;
-                    matched++;
-                }
-
-                if (matched == 0) continue;
-                scoredCandidates.Add(new WordCandidateScore(candidate, termFrequencies, matched));
-            }
-
-            var rankedCandidates = new List<RankedWordCandidate>(scoredCandidates.Count);
-            foreach (WordCandidateScore candidate in scoredCandidates)
-            {
-                if (mode == SearchMode.And && candidate.Matched < requiredTerms) continue;   // AND: every distinct term must hit
-
-                double score = 0.0;
-                for (int i = 0; i < distinctTerms.Count; i++)
-                {
-                    int tf = candidate.TermFrequencies[i];
-                    if (tf == 0) continue;
-                    score += Bm25.TermScore(Bm25.Idf(n, df[i]), tf, candidate.Candidate.DocLen, _avgdl);
-                }
-
-                score = Bm25.ApplyExactNameAdjustments(
-                    score,
-                    candidate.Candidate.Name,
-                    candidate.Candidate.Kind,
-                    normalizedQuery);
-
-                rankedCandidates.Add(new RankedWordCandidate(candidate.Candidate.DocId, score));
-                wordMatched.Add(candidate.Candidate.DocId);
-            }
+            string[] termArray = distinctTerms.ToArray();
+            int[] termHashes = CreateOrdinalTermHashes(termArray);
+            List<RankedWordCandidate> rankedCandidates = ScoreWordCandidates(
+                candidates,
+                termArray,
+                termHashes,
+                mode,
+                requiredTerms,
+                n,
+                _avgdl,
+                normalizedQuery);
+            foreach (RankedWordCandidate candidate in rankedCandidates)
+                wordMatched.Add(candidate.DocId);
 
             // Deterministic ordering: score DESC, then DocId ASC — identical to MillerSearchIndex.
             rankedCandidates.Sort(static (a, b) =>
@@ -350,11 +323,148 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
     /// <summary>How many trigram-arm candidates to window in (interior-substring recall is purely additive).</summary>
     private const int TrigramWindow = 200;
 
-    private sealed record WordCandidateScore(WordCandidate Candidate, int[] TermFrequencies, int Matched);
+    private const int MaximumPooledFrequencyCells = 1_000_000;
 
     private readonly record struct RankedWordCandidate(int DocId, double Score);
 
     private readonly record struct WordCandidate(int DocId, string Name, string Kind, int DocLen, string Body);
+
+    private static List<RankedWordCandidate> ScoreWordCandidates(
+        IReadOnlyList<WordCandidate> candidates,
+        string[] terms,
+        int[] termHashes,
+        SearchMode mode,
+        int requiredTerms,
+        int documentCount,
+        double averageDocumentLength,
+        string normalizedQuery)
+    {
+        var documentFrequencies = new int[terms.Length];
+        var ranked = new List<RankedWordCandidate>(candidates.Count);
+        int frequencyCellCount = candidates.Count <= MaximumPooledFrequencyCells / terms.Length
+            ? candidates.Count * terms.Length
+            : 0;
+
+        if (frequencyCellCount > 0)
+        {
+            int[] rentedFrequencies = ArrayPool<int>.Shared.Rent(frequencyCellCount);
+            try
+            {
+                Span<int> allFrequencies = rentedFrequencies.AsSpan(0, frequencyCellCount);
+                allFrequencies.Clear();
+                for (int candidateIndex = 0; candidateIndex < candidates.Count; candidateIndex++)
+                {
+                    Span<int> frequencies = allFrequencies.Slice(candidateIndex * terms.Length, terms.Length);
+                    CountTokenFrequencies(candidates[candidateIndex].Body, terms, termHashes, frequencies);
+                    AccumulateDocumentFrequencies(frequencies, documentFrequencies);
+                }
+
+                for (int candidateIndex = 0; candidateIndex < candidates.Count; candidateIndex++)
+                {
+                    ReadOnlySpan<int> frequencies = allFrequencies.Slice(candidateIndex * terms.Length, terms.Length);
+                    AddRankedWordCandidate(
+                        candidates[candidateIndex],
+                        frequencies,
+                        documentFrequencies,
+                        mode,
+                        requiredTerms,
+                        documentCount,
+                        averageDocumentLength,
+                        normalizedQuery,
+                        ranked);
+                }
+            }
+            finally
+            {
+                ArrayPool<int>.Shared.Return(rentedFrequencies);
+            }
+
+            return ranked;
+        }
+
+        int[] reusableFrequencies = ArrayPool<int>.Shared.Rent(terms.Length);
+        try
+        {
+            Span<int> frequencies = reusableFrequencies.AsSpan(0, terms.Length);
+            foreach (WordCandidate candidate in candidates)
+            {
+                frequencies.Clear();
+                CountTokenFrequencies(candidate.Body, terms, termHashes, frequencies);
+                AccumulateDocumentFrequencies(frequencies, documentFrequencies);
+            }
+
+            foreach (WordCandidate candidate in candidates)
+            {
+                frequencies.Clear();
+                CountTokenFrequencies(candidate.Body, terms, termHashes, frequencies);
+                AddRankedWordCandidate(
+                    candidate,
+                    frequencies,
+                    documentFrequencies,
+                    mode,
+                    requiredTerms,
+                    documentCount,
+                    averageDocumentLength,
+                    normalizedQuery,
+                    ranked);
+            }
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(reusableFrequencies);
+        }
+
+        return ranked;
+    }
+
+    private static void AccumulateDocumentFrequencies(
+        ReadOnlySpan<int> termFrequencies,
+        Span<int> documentFrequencies)
+    {
+        for (int i = 0; i < termFrequencies.Length; i++)
+        {
+            if (termFrequencies[i] > 0)
+                documentFrequencies[i]++;
+        }
+    }
+
+    private static void AddRankedWordCandidate(
+        WordCandidate candidate,
+        ReadOnlySpan<int> termFrequencies,
+        ReadOnlySpan<int> documentFrequencies,
+        SearchMode mode,
+        int requiredTerms,
+        int documentCount,
+        double averageDocumentLength,
+        string normalizedQuery,
+        List<RankedWordCandidate> ranked)
+    {
+        int matched = 0;
+        for (int i = 0; i < termFrequencies.Length; i++)
+        {
+            if (termFrequencies[i] > 0)
+                matched++;
+        }
+
+        if (matched == 0 || (mode == SearchMode.And && matched < requiredTerms))
+            return;
+
+        double score = 0.0;
+        for (int i = 0; i < termFrequencies.Length; i++)
+        {
+            int termFrequency = termFrequencies[i];
+            if (termFrequency == 0)
+                continue;
+            score += Bm25.TermScore(
+                Bm25.Idf(documentCount, documentFrequencies[i]),
+                termFrequency,
+                candidate.DocLen,
+                averageDocumentLength);
+        }
+
+        score = Bm25.ApplyExactNameAdjustments(score, candidate.Name, candidate.Kind, normalizedQuery);
+        ranked.Add(new RankedWordCandidate(candidate.DocId, score));
+    }
 
     private static IReadOnlyList<WordCandidate> WordCandidates(SqliteConnection connection, string match)
     {
@@ -470,6 +580,72 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
                 count++;
         }
         return count;
+    }
+
+    internal static int[] CreateOrdinalTermHashes(IReadOnlyList<string> terms)
+    {
+        var hashes = new int[terms.Count];
+        for (int i = 0; i < terms.Count; i++)
+            hashes[i] = OrdinalTokenHash(terms[i]);
+        return hashes;
+    }
+
+    internal static int CountTokenFrequencies(
+        string body,
+        ReadOnlySpan<string> terms,
+        ReadOnlySpan<int> termHashes,
+        Span<int> termFrequencies)
+    {
+        if (termHashes.Length != terms.Length)
+            throw new ArgumentException("Term hashes must correspond to every term.", nameof(termHashes));
+        if (termFrequencies.Length < terms.Length)
+            throw new ArgumentException("Term frequencies must have room for every term.", nameof(termFrequencies));
+
+        int scannedTokens = 0;
+        int position = 0;
+        ReadOnlySpan<char> bodySpan = body;
+        while (position < bodySpan.Length)
+        {
+            while (position < bodySpan.Length && bodySpan[position] == ' ')
+                position++;
+
+            int tokenStart = position;
+            while (position < bodySpan.Length && bodySpan[position] != ' ')
+                position++;
+
+            if (position == tokenStart)
+                continue;
+
+            scannedTokens++;
+            ReadOnlySpan<char> token = bodySpan[tokenStart..position];
+            int tokenHash = OrdinalTokenHash(token);
+            for (int termIndex = 0; termIndex < terms.Length; termIndex++)
+            {
+                string term = terms[termIndex];
+                if (termHashes[termIndex] != tokenHash || term.Length != token.Length)
+                    continue;
+                if (!token.SequenceEqual(term))
+                    continue;
+                termFrequencies[termIndex]++;
+                break;
+            }
+        }
+
+        return scannedTokens;
+    }
+
+    private static int OrdinalTokenHash(ReadOnlySpan<char> token)
+    {
+        unchecked
+        {
+            uint hash = 2166136261;
+            foreach (char value in token)
+            {
+                hash ^= value;
+                hash *= 16777619;
+            }
+            return (int)hash;
+        }
     }
 
     // FTS5 string literal: wrap in double quotes, doubling any embedded quote. CodeTokenizer tokens never
