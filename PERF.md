@@ -303,6 +303,14 @@ without first adding new phase, query-count, or resource evidence.
   anchor resolution 359 ms, and graph 302 ms. The 3,378-byte, 10-result response consumed 1,629,847,106
   logical-read characters and 430,080 physical-write bytes, peaking at 121,234 KB PSS / 168,440 KB RSS. Impact,
   trace, and idle were skipped because context remained over gate; the unchanged request was not repeated.
+- **Source-rescue diagnosis:** Release was rebuilt from clean `3e356d80`; the one diagnosis completed in
+  2,485.694 ms. The new content-FTS stages prove scoring dominates source rescue: five scoring passes consumed
+  561 ms to select five results, versus one widened-candidate query at 16 ms / 3,786 rows and five hydration
+  queries at 44 ms / 1,832 rows; connection, nine document-frequency queries, the empty strict query, and final
+  ordering totaled 1 ms. Content scoring therefore owns 561 ms of the 882 ms outer source-rescue phase. Symbol
+  FTS used 237 ms for 57,068 candidates, 242 ms scoring, and 4 ms bounded hydration; lookup was 1,594 / 760 ms
+  and graph 288 ms. The correct response consumed 1,629,863,538 logical-read characters, peaked at 122,059 KB
+  PSS / 169,104 KB RSS, and preserved 3,378 bytes / 10 results / 845 tokens.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 

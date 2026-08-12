@@ -42,7 +42,12 @@ internal sealed record FtsTextSearchQueryTelemetrySnapshot(
     SearchRequestFamilyTelemetry DocumentFrequency,
     SearchRequestFamilyTelemetry StrictCandidates,
     SearchRequestFamilyTelemetry WidenedCandidates,
+    SearchRequestFamilyTelemetry CandidateFiltering,
     SearchRequestFamilyTelemetry FullHydration,
+    SearchRequestFamilyTelemetry TokenScoringPhrase,
+    SearchRequestFamilyTelemetry SnippetSelection,
+    SearchRequestFamilyTelemetry SymbolMapping,
+    SearchRequestFamilyTelemetry ResultConstruction,
     SearchRequestFamilyTelemetry Scoring,
     SearchRequestFamilyTelemetry FinalOrdering)
 {
@@ -51,7 +56,12 @@ internal sealed record FtsTextSearchQueryTelemetrySnapshot(
         DocumentFrequency.CallCount +
         StrictCandidates.CallCount +
         WidenedCandidates.CallCount +
+        CandidateFiltering.CallCount +
         FullHydration.CallCount +
+        TokenScoringPhrase.CallCount +
+        SnippetSelection.CallCount +
+        SymbolMapping.CallCount +
+        ResultConstruction.CallCount +
         Scoring.CallCount +
         FinalOrdering.CallCount;
 }
@@ -250,7 +260,12 @@ internal sealed class ReadPhaseTelemetry
             FtsTextSearchFamilyDelta(current.DocumentFrequency, baseline.DocumentFrequency),
             FtsTextSearchFamilyDelta(current.StrictCandidates, baseline.StrictCandidates),
             FtsTextSearchFamilyDelta(current.WidenedCandidates, baseline.WidenedCandidates),
+            FtsTextSearchFamilyDelta(current.CandidateFiltering, baseline.CandidateFiltering),
             FtsTextSearchFamilyDelta(current.FullHydration, baseline.FullHydration),
+            FtsTextSearchFamilyDelta(current.TokenScoringPhrase, baseline.TokenScoringPhrase),
+            FtsTextSearchFamilyDelta(current.SnippetSelection, baseline.SnippetSelection),
+            FtsTextSearchFamilyDelta(current.SymbolMapping, baseline.SymbolMapping),
+            FtsTextSearchFamilyDelta(current.ResultConstruction, baseline.ResultConstruction),
             FtsTextSearchFamilyDelta(current.Scoring, baseline.Scoring),
             FtsTextSearchFamilyDelta(current.FinalOrdering, baseline.FinalOrdering));
 
@@ -261,7 +276,12 @@ internal sealed class ReadPhaseTelemetry
             FtsTextSearchFamily(current.DocumentFrequency),
             FtsTextSearchFamily(current.StrictCandidates),
             FtsTextSearchFamily(current.WidenedCandidates),
+            FtsTextSearchFamily(current.CandidateFiltering),
             FtsTextSearchFamily(current.FullHydration),
+            FtsTextSearchFamily(current.TokenScoringPhrase),
+            FtsTextSearchFamily(current.SnippetSelection),
+            FtsTextSearchFamily(current.SymbolMapping),
+            FtsTextSearchFamily(current.ResultConstruction),
             FtsTextSearchFamily(current.Scoring),
             FtsTextSearchFamily(current.FinalOrdering));
 

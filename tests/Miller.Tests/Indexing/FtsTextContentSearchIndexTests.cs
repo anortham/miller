@@ -77,18 +77,26 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
 
         _ = index.Search("KnownSourceError", TextContentKind.WorkspaceSource, limit: 10);
 
-        Assert.Equal(FtsTextSearchQueryFamily.ConnectionOpen, observations[0].Family);
-        Assert.Contains(observations, static observation =>
-            observation.Family == FtsTextSearchQueryFamily.DocumentFrequency);
-        Assert.Equal(1, observations.Count(static observation =>
-            observation.Family == FtsTextSearchQueryFamily.StrictCandidates));
-        Assert.Equal(1, observations.Count(static observation =>
-            observation.Family == FtsTextSearchQueryFamily.WidenedCandidates));
-        Assert.Equal(1, observations.Count(static observation =>
-            observation.Family == FtsTextSearchQueryFamily.FullHydration));
-        Assert.Equal(1, observations.Count(static observation =>
-            observation.Family == FtsTextSearchQueryFamily.Scoring));
-        Assert.Equal(FtsTextSearchQueryFamily.FinalOrdering, observations[^1].Family);
+        Assert.True(observations.Count(static observation =>
+            observation.Family == FtsTextSearchQueryFamily.DocumentFrequency) > 0);
+        Assert.Equal(
+            [
+                FtsTextSearchQueryFamily.ConnectionOpen,
+                FtsTextSearchQueryFamily.StrictCandidates,
+                FtsTextSearchQueryFamily.CandidateFiltering,
+                FtsTextSearchQueryFamily.FullHydration,
+                FtsTextSearchQueryFamily.TokenScoringPhrase,
+                FtsTextSearchQueryFamily.SnippetSelection,
+                FtsTextSearchQueryFamily.SymbolMapping,
+                FtsTextSearchQueryFamily.ResultConstruction,
+                FtsTextSearchQueryFamily.Scoring,
+                FtsTextSearchQueryFamily.WidenedCandidates,
+                FtsTextSearchQueryFamily.CandidateFiltering,
+                FtsTextSearchQueryFamily.FinalOrdering,
+            ],
+            observations
+                .Where(static observation => observation.Family != FtsTextSearchQueryFamily.DocumentFrequency)
+                .Select(static observation => observation.Family));
         Assert.All(observations, static observation => Assert.True(observation.Elapsed >= TimeSpan.Zero));
 
         observations.Clear();
@@ -98,15 +106,18 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
             observation =>
             {
                 observations.Add(observation);
-                if (observation.Family == FtsTextSearchQueryFamily.StrictCandidates)
-                    throw new OperationCanceledException("stop after completed strict candidate query");
+                if (observation.Family == FtsTextSearchQueryFamily.TokenScoringPhrase)
+                    throw new OperationCanceledException("stop after completed token scoring batch");
             });
 
         Assert.Throws<OperationCanceledException>(() =>
             index.Search("KnownSourceError", TextContentKind.WorkspaceSource, limit: 10));
-        Assert.Equal(FtsTextSearchQueryFamily.StrictCandidates, observations[^1].Family);
+        Assert.Equal(FtsTextSearchQueryFamily.TokenScoringPhrase, observations[^1].Family);
         Assert.DoesNotContain(observations, static observation =>
-            observation.Family is FtsTextSearchQueryFamily.FullHydration or FtsTextSearchQueryFamily.Scoring);
+            observation.Family is FtsTextSearchQueryFamily.SnippetSelection
+                or FtsTextSearchQueryFamily.SymbolMapping
+                or FtsTextSearchQueryFamily.ResultConstruction
+                or FtsTextSearchQueryFamily.Scoring);
     }
 
     [Fact]
