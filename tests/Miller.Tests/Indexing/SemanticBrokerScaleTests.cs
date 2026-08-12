@@ -119,7 +119,20 @@ public sealed class SemanticBrokerScaleTests : IDisposable
 
     private Process StartProbe(string project, string toolsRoot, string label, int durationSeconds)
     {
-        var start = new ProcessStartInfo("dotnet")
+        string configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
+        string executable = OperatingSystem.IsWindows()
+            ? "miller-semantic-broker-probe.exe"
+            : "miller-semantic-broker-probe";
+        string probeRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(project)!, "bin"));
+        string? candidate = new[] { configuration, "Release", "Debug" }
+            .Distinct(StringComparer.Ordinal)
+            .Select(value => Path.Combine(probeRoot, value, "net10.0", executable))
+            .FirstOrDefault(File.Exists);
+        Assert.True(
+            candidate is not null,
+            $"The semantic broker probe apphost was not built under {probeRoot}. Build the Release solution or test project before running Scale tests.");
+
+        var start = new ProcessStartInfo(candidate!)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -127,7 +140,6 @@ public sealed class SemanticBrokerScaleTests : IDisposable
         };
         foreach (string argument in new[]
         {
-            "run", "--project", project, "-c", "Release", "--no-build", "--",
             "--tools-root", toolsRoot,
             "--miller-home", _millerHome,
             "--label", label,
