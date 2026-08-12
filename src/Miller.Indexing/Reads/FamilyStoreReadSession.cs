@@ -224,31 +224,31 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraph
             if (direction is Direction.Forward or Direction.Both)
             {
                 ReadGraphResolutionArm(
-                    candidates, IdentifierBaseForwardSql, edges, plans,
+                    candidates, candidateIds, IdentifierBaseForwardSql, edges, plans,
                     GraphStatementPhase.IdentifierBaseForward, statementObserver);
                 ReadGraphResolutionArm(
-                    candidates, IdentifierDeltaForwardSql, edges, plans,
+                    candidates, candidateIds, IdentifierDeltaForwardSql, edges, plans,
                     GraphStatementPhase.IdentifierDeltaForward, statementObserver);
                 ReadGraphResolutionArm(
-                    candidates, PendingBaseForwardSql, edges, plans,
+                    candidates, candidateIds, PendingBaseForwardSql, edges, plans,
                     GraphStatementPhase.PendingBaseForward, statementObserver);
                 ReadGraphResolutionArm(
-                    candidates, PendingDeltaForwardSql, edges, plans,
+                    candidates, candidateIds, PendingDeltaForwardSql, edges, plans,
                     GraphStatementPhase.PendingDeltaForward, statementObserver);
             }
             if (direction is Direction.Reverse or Direction.Both)
             {
                 ReadGraphResolutionArm(
-                    candidates, IdentifierBaseReverseSql, edges, plans,
+                    candidates, candidateIds, IdentifierBaseReverseSql, edges, plans,
                     GraphStatementPhase.IdentifierBaseReverse, statementObserver);
                 ReadGraphResolutionArm(
-                    candidates, IdentifierDeltaReverseSql, edges, plans,
+                    candidates, candidateIds, IdentifierDeltaReverseSql, edges, plans,
                     GraphStatementPhase.IdentifierDeltaReverse, statementObserver);
                 ReadGraphResolutionArm(
-                    candidates, PendingBaseReverseSql, edges, plans,
+                    candidates, candidateIds, PendingBaseReverseSql, edges, plans,
                     GraphStatementPhase.PendingBaseReverse, statementObserver);
                 ReadGraphResolutionArm(
-                    candidates, PendingDeltaReverseSql, edges, plans,
+                    candidates, candidateIds, PendingDeltaReverseSql, edges, plans,
                     GraphStatementPhase.PendingDeltaReverse, statementObserver);
             }
             LastGraphResolutionQueryPlan = plans;
@@ -279,6 +279,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraph
 
     private void ReadGraphResolutionArm(
         IReadOnlyList<(string Id, long VersionId)> candidates,
+        IReadOnlyList<string> candidateIds,
         string sql,
         List<FamilyGraphResolutionEdge> edges,
         List<string> plans,
@@ -312,10 +313,11 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraph
                     reader.GetString(5)));
             }
         }
-        statementObserver?.Invoke(new GraphStatementObservation(
+        statementObserver?.Invoke(GraphStatementObservation.Completed(
             phase,
             rows,
-            System.Diagnostics.Stopwatch.GetElapsedTime(started)));
+            System.Diagnostics.Stopwatch.GetElapsedTime(started),
+            candidateIds));
     }
 
     private static IReadOnlyList<string> ReadQueryPlan(SqliteCommand command)

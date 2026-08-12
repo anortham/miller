@@ -108,6 +108,48 @@ public sealed class SqliteSymbolGraphIndexTests
     }
 
     [Fact]
+    public void Reach_StatementObserverCapsImmutableCandidateSampleInOrdinalInputOrder()
+    {
+        string[] ids = Enumerable.Range(0, 12)
+            .Select(index => $"405{index:00000000000000000000000000000}")
+            .ToArray();
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            ids.Select((id, index) => new JulieDbFixture.SymbolRow(
+                id,
+                $"Candidate{index}",
+                "method",
+                "csharp",
+                $"src/Candidate{index}.cs",
+                $"void Candidate{index}()",
+                1,
+                null)).ToArray());
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+        var observations = new List<GraphStatementObservation>();
+        sqlite.StatementObserver = observation =>
+        {
+            observations.Add(observation);
+            if (observation.Phase == GraphStatementPhase.UnresolvedNameForward)
+                throw new OperationCanceledException("stop after the completed forward name statement");
+        };
+
+        Assert.Throws<OperationCanceledException>(() =>
+            sqlite.Reach(ids, 1, 20, Direction.Forward));
+
+        Assert.Equal(
+            [GraphStatementPhase.RelationshipForward, GraphStatementPhase.UnresolvedNameForward],
+            observations.Select(static observation => observation.Phase));
+        Assert.All(observations, observation =>
+        {
+            Assert.Equal(12, observation.CandidateCount);
+            Assert.Equal(ids.Take(8), observation.CandidateSample);
+            Assert.Equal(8, observation.CandidateSample.Length);
+            Assert.True(observation.CandidateSample.IsDefaultOrEmpty is false);
+        });
+    }
+
+    [Fact]
     public void Reach_HighFrontierUsesBoundedSqlBatches()
     {
         const string rootId = "40200000000000000000000000000001";

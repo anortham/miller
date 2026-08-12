@@ -1449,10 +1449,13 @@ public sealed class WorkspaceIndexProvider
         };
         Serilog.Log.Information(
             "Graph statement phase {GraphStatementPhase} completed in {GraphStatementElapsedMs} ms with " +
-            "{GraphStatementRows} rows for cid {CorrelationId}",
+            "{GraphStatementRows} rows for {GraphStatementCandidateCount} candidates " +
+            "{GraphStatementCandidateSample} for cid {CorrelationId}",
             phase,
             Math.Max(0, (long)observation.Elapsed.TotalMilliseconds),
             observation.Rows,
+            observation.CandidateCount,
+            System.Text.Json.JsonSerializer.Serialize(observation.CandidateSample),
             TelemetryContext.Current?.CorrelationId ?? "unmeasured");
     }
 

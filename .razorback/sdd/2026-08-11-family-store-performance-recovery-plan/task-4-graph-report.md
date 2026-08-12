@@ -122,3 +122,13 @@
 - Plan uses `idx_export_resolution_identifiers_order(version_id=?)`, the identifier primary index `(version_id,identifier_id)`, target-symbol primary index `(version_id,symbol_id)`, and visible-version index. It contains no scan of the resolution base.
 - The isolated known-entry candidate is therefore bounded and does not reproduce the real timeout. Per the gate, no RED or production behavior fix was added. The missing evidence is the exact real four-pivot candidate/version shape entering family resolution; the explicit entry alone is insufficient.
 - The temporary diagnostic harness was removed. No context call was run and `PERF.md` was not touched.
+
+## Round 9: bounded candidate-shape observations
+
+- The remaining diagnostic gap was the exact multi-pivot input shape. `GraphStatementObservation` now carries exact `CandidateCount` plus an immutable `CandidateSample` capped at eight ids in original `missingIds` order.
+- Candidate shape is populated at every completed relationship/name/family-resolution/supplemental/completion observation. The family session receives the original caller ids separately from its version-resolved rows, so SQLite join order cannot reorder the sample.
+- The Server's existing correlated fixed event now adds `GraphStatementCandidateCount` and a JSON `GraphStatementCandidateSample`; phase labels remain a fixed enum-to-string mapping. No public contract, MCP/telemetry schema, or dynamic label was added.
+- RED: the exact >8-candidate test failed to compile because `CandidateCount` and `CandidateSample` did not exist (`CS1061`).
+- GREEN: the same test passed 1/1 in 79 ms, proving total count 12, immutable sample length 8, exact first-eight input order, and completion-only behavior when the observer cancels after unresolved-name forward.
+- `SqliteSymbolGraphIndexTests` plus the provider wiring test passed 22/22 in 549 ms. Release build passed in 9.67 s with zero warnings/errors.
+- No context call was run; this instrumentation earns the lead's one replay to recover the real four ids.

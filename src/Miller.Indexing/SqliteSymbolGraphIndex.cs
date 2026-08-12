@@ -1,6 +1,7 @@
 using Miller.Core.Contracts;
 using Miller.Core.Graph;
 using Miller.Indexing.Reads;
+using System.Collections.Immutable;
 using System.Diagnostics;
 
 namespace Miller.Indexing;
@@ -374,7 +375,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             if (direction is Direction.Reverse or Direction.Both)
                 resolutionRows += ExecuteFrontierStatement(missingIds, ResolutionReverseSql, edgesById, null, null);
         }
-        ObserveStatement(GraphStatementPhase.FamilyResolution, resolutionRows, resolutionStarted);
+        ObserveStatement(GraphStatementPhase.FamilyResolution, resolutionRows, resolutionStarted, missingIds);
 
         long supplementalStarted = Stopwatch.GetTimestamp();
         IReadOnlyList<GraphEdge> supplementalEdges = SupplementalEdges();
@@ -393,7 +394,11 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 AddEdge(reverse, edge.To, edge.From, edge);
             }
         }
-        ObserveStatement(GraphStatementPhase.Supplemental, supplementalEdges.Count, supplementalStarted);
+        ObserveStatement(
+            GraphStatementPhase.Supplemental,
+            supplementalEdges.Count,
+            supplementalStarted,
+            missingIds);
 
         IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>> loaded = edgesById.ToDictionary(
             static pair => pair.Key,
@@ -429,7 +434,8 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         ObserveStatement(
             GraphStatementPhase.Completion,
             result.Sum(static pair => pair.Value.Count),
-            frontierStarted);
+            frontierStarted,
+            missingIds);
         return result;
     }
 
@@ -443,12 +449,20 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     {
         long started = Stopwatch.GetTimestamp();
         int rows = ExecuteFrontierStatement(ids, sql, edgesById, telemetry, plans);
-        ObserveStatement(phase, rows, started);
+        ObserveStatement(phase, rows, started, ids);
         return rows;
     }
 
-    private void ObserveStatement(GraphStatementPhase phase, int rows, long started) =>
-        StatementObserver?.Invoke(new GraphStatementObservation(phase, rows, Stopwatch.GetElapsedTime(started)));
+    private void ObserveStatement(
+        GraphStatementPhase phase,
+        int rows,
+        long started,
+        IReadOnlyList<string> candidateIds) =>
+        StatementObserver?.Invoke(GraphStatementObservation.Completed(
+            phase,
+            rows,
+            Stopwatch.GetElapsedTime(started),
+            candidateIds));
 
     private int ExecuteFrontierStatement(
         IReadOnlyList<string> ids,
@@ -979,7 +993,24 @@ internal enum GraphStatementPhase
 internal sealed record GraphStatementObservation(
     GraphStatementPhase Phase,
     int Rows,
-    TimeSpan Elapsed);
+    TimeSpan Elapsed,
+    int CandidateCount,
+    ImmutableArray<string> CandidateSample)
+{
+    private const int CandidateSampleLimit = 8;
+
+    internal static GraphStatementObservation Completed(
+        GraphStatementPhase phase,
+        int rows,
+        TimeSpan elapsed,
+        IReadOnlyList<string> candidateIds) =>
+        new(
+            phase,
+            rows,
+            elapsed,
+            candidateIds.Count,
+            [.. candidateIds.Take(CandidateSampleLimit)]);
+}
 
 internal sealed record FrontierQueryPlan(
     IReadOnlyList<IReadOnlyList<string>> RelationshipStatements,
