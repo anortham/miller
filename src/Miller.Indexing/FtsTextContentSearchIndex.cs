@@ -268,10 +268,9 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
                     AddHit(candidate, chunksById, ref subphases);
                 TimeSpan scoringElapsed = System.Diagnostics.Stopwatch.GetElapsedTime(scoringStarted);
                 Observe(
-                    FtsTextSearchQueryFamily.PhraseVerification,
-                    subphases.PhraseRows,
-                    subphases.PhraseElapsed);
-                Observe(FtsTextSearchQueryFamily.SnippetSelection, subphases.SnippetRows, subphases.SnippetElapsed);
+                    FtsTextSearchQueryFamily.RawTextAnalysis,
+                    subphases.RawTextRows,
+                    subphases.RawTextElapsed);
                 Observe(FtsTextSearchQueryFamily.SymbolMapping, subphases.SymbolRows, subphases.SymbolElapsed);
                 Observe(FtsTextSearchQueryFamily.ResultConstruction, subphases.ResultRows, subphases.ResultElapsed);
                 Observe(FtsTextSearchQueryFamily.Scoring, hits.Count - hitCountBefore, scoringElapsed);
@@ -286,19 +285,17 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
             if (!chunksById.TryGetValue(candidate.ChunkId, out TextChunk? chunk))
                 return;
 
-            long phraseStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            bool hasTokenPhrase = ContainsTokenPhrase(chunk, plan.QueryTokens);
-            subphases.CompletePhrase(phraseStarted);
-            if (plan.RequiresTokenPhrase && !hasTokenPhrase)
+            long rawTextStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            RawTextAnalysis analysis = AnalyzeRawText(chunk, coverageTermSet, plan.QueryTokens);
+            subphases.CompleteRawText(rawTextStarted);
+            if (plan.RequiresTokenPhrase && !analysis.HasTokenPhrase)
                 return;
 
-            long snippetStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            BestLine bestLine = BestLineAndSnippet(chunk, coverageTermSet, plan.QueryTokens);
-            subphases.CompleteSnippet(snippetStarted);
+            BestLine bestLine = analysis.BestLine;
             if (bestLine.DistinctTermCount < plan.RequiredLineCoverage)
                 return;
 
-            double score = hasTokenPhrase ? candidate.Score * TokenPhraseBoost : candidate.Score;
+            double score = analysis.HasTokenPhrase ? candidate.Score * TokenPhraseBoost : candidate.Score;
 
             long symbolStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             ContentSymbolSpan? symbol = BestContainingSymbol(chunk.SourceId, bestLine.Line);
@@ -579,7 +576,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         return candidates;
     }
 
-    private static BestLine BestLineAndSnippet(
+    private static RawTextAnalysis AnalyzeRawText(
         TextChunk chunk,
         HashSet<string> queryTerms,
         IReadOnlyList<string> queryTokens)
@@ -589,6 +586,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         bool bestHasPhrase = false;
         int bestMatches = -1;
         int bestTokenHits = -1;
+        bool hasTokenPhrase = false;
         var tokens = new List<string>(32);
         var lineTerms = new HashSet<string>(StringComparer.Ordinal);
         for (int i = 0; i < lines.Length; i++)
@@ -607,6 +605,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
             }
 
             bool hasPhrase = queryTokens.Count > 1 && ContainsTokenPhrase(tokens, queryTokens);
+            hasTokenPhrase |= hasPhrase;
             if (hasPhrase && !bestHasPhrase ||
                 hasPhrase == bestHasPhrase &&
                 (lineTerms.Count > bestMatches || (lineTerms.Count == bestMatches && tokenHits > bestTokenHits)))
@@ -621,26 +620,9 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         int start = Math.Max(0, bestIndex - SnippetRadius);
         int end = Math.Min(lines.Length - 1, bestIndex + SnippetRadius);
         string snippet = string.Join('\n', lines[start..(end + 1)]);
-        return new BestLine(chunk.LineStart + bestIndex, snippet, bestMatches);
-    }
-
-    private static bool ContainsTokenPhrase(TextChunk chunk, IReadOnlyList<string> queryTokens)
-    {
-        if (queryTokens.Count < 2)
-            return false;
-
-        var tokens = new List<string>(32);
-        foreach (string line in SplitLines(chunk.RawText))
-        {
-            tokens.Clear();
-            CodeTokenizer.Tokenize(line, tokens);
-            if (tokens.Count < queryTokens.Count)
-                continue;
-            if (ContainsTokenPhrase(tokens, queryTokens))
-                return true;
-        }
-
-        return false;
+        return new RawTextAnalysis(
+            hasTokenPhrase,
+            new BestLine(chunk.LineStart + bestIndex, snippet, bestMatches));
     }
 
     private static bool ContainsTokenPhrase(IReadOnlyList<string> lineTokens, IReadOnlyList<string> queryTokens)
@@ -758,30 +740,21 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
 
     private struct ScoringSubphases
     {
-        internal long PhraseElapsedTicks;
-        internal int PhraseRows;
-        internal long SnippetElapsedTicks;
-        internal int SnippetRows;
+        internal long RawTextElapsedTicks;
+        internal int RawTextRows;
         internal long SymbolElapsedTicks;
         internal int SymbolRows;
         internal long ResultElapsedTicks;
         internal int ResultRows;
 
-        internal readonly TimeSpan PhraseElapsed => TimeSpan.FromTicks(PhraseElapsedTicks);
-        internal readonly TimeSpan SnippetElapsed => TimeSpan.FromTicks(SnippetElapsedTicks);
+        internal readonly TimeSpan RawTextElapsed => TimeSpan.FromTicks(RawTextElapsedTicks);
         internal readonly TimeSpan SymbolElapsed => TimeSpan.FromTicks(SymbolElapsedTicks);
         internal readonly TimeSpan ResultElapsed => TimeSpan.FromTicks(ResultElapsedTicks);
 
-        internal void CompletePhrase(long startedAt)
+        internal void CompleteRawText(long startedAt)
         {
-            PhraseElapsedTicks += System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).Ticks;
-            PhraseRows++;
-        }
-
-        internal void CompleteSnippet(long startedAt)
-        {
-            SnippetElapsedTicks += System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).Ticks;
-            SnippetRows++;
+            RawTextElapsedTicks += System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).Ticks;
+            RawTextRows++;
         }
 
         internal void CompleteSymbol(long startedAt)
@@ -798,6 +771,8 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
     }
 
     private sealed record BestLine(int Line, string Snippet, int DistinctTermCount);
+
+    private sealed record RawTextAnalysis(bool HasTokenPhrase, BestLine BestLine);
 
     private readonly record struct TextCandidate(string ChunkId, string TokenBody);
 
@@ -841,8 +816,7 @@ internal enum FtsTextSearchQueryFamily
     CandidateFiltering,
     NarrowTokenScoring,
     FullHydration,
-    PhraseVerification,
-    SnippetSelection,
+    RawTextAnalysis,
     SymbolMapping,
     ResultConstruction,
     Scoring,
@@ -867,8 +841,7 @@ internal sealed record FtsTextSearchQueryMeasurementSnapshot(
     FtsTextSearchQueryFamilyMeasurement CandidateFiltering,
     FtsTextSearchQueryFamilyMeasurement NarrowTokenScoring,
     FtsTextSearchQueryFamilyMeasurement FullHydration,
-    FtsTextSearchQueryFamilyMeasurement PhraseVerification,
-    FtsTextSearchQueryFamilyMeasurement SnippetSelection,
+    FtsTextSearchQueryFamilyMeasurement RawTextAnalysis,
     FtsTextSearchQueryFamilyMeasurement SymbolMapping,
     FtsTextSearchQueryFamilyMeasurement ResultConstruction,
     FtsTextSearchQueryFamilyMeasurement Scoring,
@@ -882,7 +855,7 @@ internal sealed class FtsTextSearchQueryTelemetryCollector
     private readonly long[] _rows = new long[Enum.GetValues<FtsTextSearchQueryFamily>().Length];
 
     internal static FtsTextSearchQueryMeasurementSnapshot EmptySnapshot { get; } =
-        new(default, default, default, default, default, default, default, default, default, default, default, default, default);
+        new(default, default, default, default, default, default, default, default, default, default, default, default);
 
     internal static FtsTextSearchQueryTelemetryCollector? Current => CurrentCollector.Value;
 
@@ -910,8 +883,7 @@ internal sealed class FtsTextSearchQueryTelemetryCollector
             Family(FtsTextSearchQueryFamily.CandidateFiltering),
             Family(FtsTextSearchQueryFamily.NarrowTokenScoring),
             Family(FtsTextSearchQueryFamily.FullHydration),
-            Family(FtsTextSearchQueryFamily.PhraseVerification),
-            Family(FtsTextSearchQueryFamily.SnippetSelection),
+            Family(FtsTextSearchQueryFamily.RawTextAnalysis),
             Family(FtsTextSearchQueryFamily.SymbolMapping),
             Family(FtsTextSearchQueryFamily.ResultConstruction),
             Family(FtsTextSearchQueryFamily.Scoring),

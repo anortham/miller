@@ -86,8 +86,7 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
                 FtsTextSearchQueryFamily.CandidateFiltering,
                 FtsTextSearchQueryFamily.NarrowTokenScoring,
                 FtsTextSearchQueryFamily.FullHydration,
-                FtsTextSearchQueryFamily.PhraseVerification,
-                FtsTextSearchQueryFamily.SnippetSelection,
+                FtsTextSearchQueryFamily.RawTextAnalysis,
                 FtsTextSearchQueryFamily.SymbolMapping,
                 FtsTextSearchQueryFamily.ResultConstruction,
                 FtsTextSearchQueryFamily.Scoring,
@@ -108,16 +107,15 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
             observation =>
             {
                 observations.Add(observation);
-                if (observation.Family == FtsTextSearchQueryFamily.PhraseVerification)
-                    throw new OperationCanceledException("stop after completed phrase verification batch");
+                if (observation.Family == FtsTextSearchQueryFamily.RawTextAnalysis)
+                    throw new OperationCanceledException("stop after completed raw text analysis batch");
             });
 
         Assert.Throws<OperationCanceledException>(() =>
             index.Search("KnownSourceError", TextContentKind.WorkspaceSource, limit: 10));
-        Assert.Equal(FtsTextSearchQueryFamily.PhraseVerification, observations[^1].Family);
+        Assert.Equal(FtsTextSearchQueryFamily.RawTextAnalysis, observations[^1].Family);
         Assert.DoesNotContain(observations, static observation =>
-            observation.Family is FtsTextSearchQueryFamily.SnippetSelection
-                or FtsTextSearchQueryFamily.SymbolMapping
+            observation.Family is FtsTextSearchQueryFamily.SymbolMapping
                 or FtsTextSearchQueryFamily.ResultConstruction
                 or FtsTextSearchQueryFamily.Scoring);
     }
@@ -466,7 +464,64 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
             .Where(static observation => observation.Family == FtsTextSearchQueryFamily.FullHydration)
             .Sum(static observation => observation.Rows));
         Assert.Equal(1, observations
-            .Where(static observation => observation.Family == FtsTextSearchQueryFamily.PhraseVerification)
+            .Where(static observation => observation.Family == FtsTextSearchQueryFamily.RawTextAnalysis)
+            .Sum(static observation => observation.Rows));
+    }
+
+    [Fact]
+    public void Search_PhraseCandidatesAnalyzeRawTextOnceWithExactParityAndLineSemantics()
+    {
+        const int matchingCount = 80;
+        const string query = "Δelta_Δelta";
+        var files = Enumerable.Range(0, matchingCount)
+            .Select(static i => (
+                Path: $"src/Match{i:D3}.cs",
+                Language: "csharp",
+                IsTest: false,
+                Text: "header\nΔelta filler\nΔelta_Δelta winner\ntail"))
+            .Append((
+                Path: "src/CrossLine.cs",
+                Language: "csharp",
+                IsTest: false,
+                Text: "Δelta\nΔelta"))
+            .ToArray();
+        using var fx = BuildFixture(files);
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        var observations = new List<FtsTextSearchQueryObservation>();
+        var index = FtsTextContentSearchIndex.Open(
+            _contentDbPath,
+            expectedRevision: 7,
+            observations.Add);
+        IReadOnlyList<ContentSearchHit> expected = ContentSearchIndex.Build(
+            files.Select(static (file, i) => new ContentDocument(i, file.Path, file.Text, file.Language)).ToArray())
+            .Search(query, limit: matchingCount + 1);
+
+        IReadOnlyList<TextContentSearchHit> actual = index.Search(
+            query,
+            TextContentKind.WorkspaceSource,
+            limit: matchingCount + 1,
+            excludeTests: false);
+
+        Assert.Equal(matchingCount, actual.Count);
+        Assert.Equal(expected.Select(static hit => hit.Path), actual.Select(static hit => hit.Path));
+        Assert.Equal(expected.Select(static hit => hit.Score), actual.Select(static hit => hit.Score));
+        Assert.Equal(expected.Select(static hit => hit.Line), actual.Select(static hit => hit.Line));
+        Assert.Equal(expected.Select(static hit => hit.Snippet), actual.Select(static hit => hit.Snippet));
+        Assert.All(actual, static hit =>
+        {
+            Assert.Equal(3, hit.Line);
+            Assert.Equal("header\nΔelta filler\nΔelta_Δelta winner\ntail", hit.Snippet);
+        });
+        Assert.Equal(
+            Enumerable.Range(0, matchingCount).Select(static i => $"src/Match{i:D3}.cs"),
+            actual.Select(static hit => hit.Path));
+        Assert.DoesNotContain(actual, static hit => hit.Path == "src/CrossLine.cs");
+        int hydratedRows = observations
+            .Where(static observation => observation.Family == FtsTextSearchQueryFamily.FullHydration)
+            .Sum(static observation => observation.Rows);
+        Assert.Equal(matchingCount + 1, hydratedRows);
+        Assert.Equal(hydratedRows, observations
+            .Where(static observation => observation.Family == FtsTextSearchQueryFamily.RawTextAnalysis)
             .Sum(static observation => observation.Rows));
     }
 

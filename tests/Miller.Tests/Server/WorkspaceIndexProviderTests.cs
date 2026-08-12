@@ -419,7 +419,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using (secondTelemetry.ActivateSearchTelemetry())
         {
             FtsTextSearchQueryTelemetryCollector.Current!.Record(new FtsTextSearchQueryObservation(
-                FtsTextSearchQueryFamily.SnippetSelection,
+                FtsTextSearchQueryFamily.RawTextAnalysis,
                 Rows: 12,
                 Elapsed: TimeSpan.FromMilliseconds(250)));
             second = secondTelemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
@@ -436,10 +436,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         Assert.Equal(1, first.FtsTextSearchDelta.ConnectionOpen.CallCount);
         Assert.Equal(1, first.FtsTextSearchDelta.FinalOrdering.CallCount);
-        Assert.Equal(0, first.FtsTextSearchDelta.SnippetSelection.CallCount);
-        Assert.Equal(1, second.FtsTextSearchDelta.SnippetSelection.CallCount);
-        Assert.Equal(250, second.FtsTextSearchDelta.SnippetSelection.ElapsedMilliseconds);
-        Assert.Equal(12, second.FtsTextSearchDelta.SnippetSelection.ReturnedRowCount);
+        Assert.Equal(0, first.FtsTextSearchDelta.RawTextAnalysis.CallCount);
+        Assert.Equal(1, second.FtsTextSearchDelta.RawTextAnalysis.CallCount);
+        Assert.Equal(250, second.FtsTextSearchDelta.RawTextAnalysis.ElapsedMilliseconds);
+        Assert.Equal(12, second.FtsTextSearchDelta.RawTextAnalysis.ReturnedRowCount);
         Assert.Equal(0, second.FtsTextSearchDelta.ConnectionOpen.CallCount);
         Assert.Equal(0, zero.FtsTextSearchDelta.TotalCallCount);
     }

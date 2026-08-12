@@ -318,6 +318,12 @@ without first adding new phase, query-count, or resource evidence.
   scoring cost is repeatedly tokenizing and scoring the 1,832 fully hydrated chunks, not snippet extraction or
   symbol lookup. The outer source-rescue phase was 888 ms; output remained correct at 3,378 bytes / 10 results /
   845 tokens, with 121,565 KB peak PSS / 168,852 KB RSS.
+- **Deferred-source-hydration acceptance:** Release was rebuilt from clean `fa27442e`; context improved to
+  2,385.347 ms but still missed the 2 s gate. Narrow scoring processed 1,832 candidate rows in 201 ms, then only
+  116 survivors were hydrated in 7 ms, phrase-verified in 83 ms, and snippet-scored in 82 ms. Source rescue fell
+  from 888 to 704 ms, while symbol Search was 542 ms, lookup 814 ms, and graph 308 ms. The correct 3,378-byte,
+  10-result response consumed 1,605,764,774 logical-read characters and peaked at 146,853 KB PSS / 194,088 KB
+  RSS. Impact, trace, and idle were skipped because context remained over gate.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 

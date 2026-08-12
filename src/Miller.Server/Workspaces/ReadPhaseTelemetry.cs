@@ -45,8 +45,7 @@ internal sealed record FtsTextSearchQueryTelemetrySnapshot(
     SearchRequestFamilyTelemetry CandidateFiltering,
     SearchRequestFamilyTelemetry NarrowTokenScoring,
     SearchRequestFamilyTelemetry FullHydration,
-    SearchRequestFamilyTelemetry PhraseVerification,
-    SearchRequestFamilyTelemetry SnippetSelection,
+    SearchRequestFamilyTelemetry RawTextAnalysis,
     SearchRequestFamilyTelemetry SymbolMapping,
     SearchRequestFamilyTelemetry ResultConstruction,
     SearchRequestFamilyTelemetry Scoring,
@@ -60,8 +59,7 @@ internal sealed record FtsTextSearchQueryTelemetrySnapshot(
         CandidateFiltering.CallCount +
         NarrowTokenScoring.CallCount +
         FullHydration.CallCount +
-        PhraseVerification.CallCount +
-        SnippetSelection.CallCount +
+        RawTextAnalysis.CallCount +
         SymbolMapping.CallCount +
         ResultConstruction.CallCount +
         Scoring.CallCount +
@@ -265,8 +263,7 @@ internal sealed class ReadPhaseTelemetry
             FtsTextSearchFamilyDelta(current.CandidateFiltering, baseline.CandidateFiltering),
             FtsTextSearchFamilyDelta(current.NarrowTokenScoring, baseline.NarrowTokenScoring),
             FtsTextSearchFamilyDelta(current.FullHydration, baseline.FullHydration),
-            FtsTextSearchFamilyDelta(current.PhraseVerification, baseline.PhraseVerification),
-            FtsTextSearchFamilyDelta(current.SnippetSelection, baseline.SnippetSelection),
+            FtsTextSearchFamilyDelta(current.RawTextAnalysis, baseline.RawTextAnalysis),
             FtsTextSearchFamilyDelta(current.SymbolMapping, baseline.SymbolMapping),
             FtsTextSearchFamilyDelta(current.ResultConstruction, baseline.ResultConstruction),
             FtsTextSearchFamilyDelta(current.Scoring, baseline.Scoring),
@@ -282,8 +279,7 @@ internal sealed class ReadPhaseTelemetry
             FtsTextSearchFamily(current.CandidateFiltering),
             FtsTextSearchFamily(current.NarrowTokenScoring),
             FtsTextSearchFamily(current.FullHydration),
-            FtsTextSearchFamily(current.PhraseVerification),
-            FtsTextSearchFamily(current.SnippetSelection),
+            FtsTextSearchFamily(current.RawTextAnalysis),
             FtsTextSearchFamily(current.SymbolMapping),
             FtsTextSearchFamily(current.ResultConstruction),
             FtsTextSearchFamily(current.Scoring),
