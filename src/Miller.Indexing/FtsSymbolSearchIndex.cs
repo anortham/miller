@@ -24,9 +24,15 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
     private readonly int _documentCount;
     private readonly Lazy<IReadOnlyList<string>> _paths;
     private readonly Lazy<IReadOnlySet<string>> _knownExtensions;
+    private readonly Action<FtsSearchQueryObservation>? _queryObserver;
 
     private FtsSymbolSearchIndex(
-        string connectionString, double avgdl, long revision, int documentCount, string? artifactId)
+        string connectionString,
+        double avgdl,
+        long revision,
+        int documentCount,
+        string? artifactId,
+        Action<FtsSearchQueryObservation>? queryObserver)
     {
         _connectionString = connectionString;
         _avgdl = avgdl;
@@ -37,6 +43,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         _knownExtensions = new Lazy<IReadOnlySet<string>>(
             () => BuildKnownExtensions(_paths.Value),
             LazyThreadSafetyMode.ExecutionAndPublication);
+        _queryObserver = queryObserver;
     }
 
     /// <summary>The julie-extract revision this artifact was built from (freshness key for Phase 3 routing).</summary>
@@ -58,7 +65,11 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
     /// the corpus stats. Throws if the file is missing or schema-incompatible; production routing surfaces that
     /// as a visible sidecar freshness/configuration error unless the sidecar is explicitly disabled.
     /// </summary>
-    public static FtsSymbolSearchIndex Open(string searchDbPath)
+    public static FtsSymbolSearchIndex Open(string searchDbPath) => Open(searchDbPath, queryObserver: null);
+
+    internal static FtsSymbolSearchIndex Open(
+        string searchDbPath,
+        Action<FtsSearchQueryObservation>? queryObserver)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(searchDbPath);
 
@@ -79,7 +90,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         (long revision, int documentCount, double avgdl, string? artifactId) = ReadMeta(connection, absPath);
         ValidateFtsTables(connection);
 
-        return new FtsSymbolSearchIndex(connectionString, avgdl, revision, documentCount, artifactId);
+        return new FtsSymbolSearchIndex(connectionString, avgdl, revision, documentCount, artifactId, queryObserver);
     }
 
     /// <summary>The meta artifact stamp, or null when the column predates artifact stamping. Read separately so
@@ -198,6 +209,19 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         using var connection = new SqliteConnection(_connectionString);
         connection.Open();
 
+        if (mode == SearchMode.And && distinctTerms.Count > 1)
+        {
+            string andMatch = string.Join(" AND ", distinctTerms.Select(QuoteFts));
+            long probeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            bool hasIntersection = HasAndIntersection(connection, andMatch);
+            _queryObserver?.Invoke(new FtsSearchQueryObservation(
+                FtsSearchQueryFamily.AndIntersectionProbe,
+                hasIntersection ? 1 : 0,
+                System.Diagnostics.Stopwatch.GetElapsedTime(probeStarted)));
+            if (!hasIntersection)
+                return Array.Empty<SearchHit>();
+        }
+
         // ---- Word arm: every doc matching ANY query term (uncapped — exactly the set the in-memory index
         // would score), re-scored with the shared BM25 math. AND-filtered in C# after accumulation.
         var wordHits = new List<SearchHit>();
@@ -209,7 +233,12 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
             int requiredTerms = distinctTerms.Count;
 
             string orMatch = string.Join(" OR ", distinctTerms.Select(QuoteFts));
+            long wordCandidatesStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             IReadOnlyList<DiskSymbol> candidates = WordCandidates(connection, orMatch);
+            _queryObserver?.Invoke(new FtsSearchQueryObservation(
+                FtsSearchQueryFamily.WordCandidates,
+                candidates.Count,
+                System.Diagnostics.Stopwatch.GetElapsedTime(wordCandidatesStarted)));
 
             var tokens = new List<string>(16);
             var df = new int[distinctTerms.Count];
@@ -313,6 +342,14 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
             """);
         cmd.Parameters.AddWithValue("$q", match);
         return ReadDiskSymbols(cmd);
+    }
+
+    private static bool HasAndIntersection(SqliteConnection connection, string match)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM symbols_fts WHERE body MATCH $q LIMIT 1;";
+        cmd.Parameters.AddWithValue("$q", match);
+        return cmd.ExecuteScalar() is not null;
     }
 
     private static IReadOnlyList<DiskSymbol> TrigramCandidates(SqliteConnection connection, string match, int limit)
@@ -637,3 +674,14 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
 
     private readonly record struct DiskSymbol(IndexedSymbol Symbol, int DocLen);
 }
+
+internal enum FtsSearchQueryFamily
+{
+    AndIntersectionProbe,
+    WordCandidates,
+}
+
+internal sealed record FtsSearchQueryObservation(
+    FtsSearchQueryFamily Family,
+    int Rows,
+    TimeSpan Elapsed);

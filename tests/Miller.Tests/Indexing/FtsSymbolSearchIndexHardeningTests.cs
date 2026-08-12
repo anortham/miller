@@ -103,6 +103,19 @@ public sealed class FtsSymbolSearchIndexHardeningTests : IDisposable
         Assert.Contains(hits, hit => hit.Document.Name == expectedName);
     }
 
+    [Theory]
+    [InlineData("AND beta")]
+    [InlineData("say \"hello\" twice")]
+    [InlineData("naïve café")]
+    public void Search_AndProbe_QueryWithFtsSyntaxOrNonAscii_DoesNotThrow(string query)
+    {
+        FtsSymbolSearchIndex index = OpenWith(NastyCorpus());
+
+        Exception? ex = Record.Exception(() => index.Search(query, limit: 10, mode: SearchMode.And));
+
+        Assert.Null(ex);
+    }
+
     private static IReadOnlyList<IndexedSymbol> NastyCorpus() =>
     [
         Sym(0, "AndOrNot", "src/a.cs"),

@@ -444,6 +444,60 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_AndMode_DisjointHighFanoutTermsStopsAfterEmptyIntersectionProbe()
+    {
+        IndexedSymbol[] syms = Enumerable.Range(0, 2_000)
+            .Select(index => new IndexedSymbol(
+                index,
+                $"sym-{index:d4}",
+                index < 1_000 ? $"AlphaItem{index:d4}" : $"BetaItem{index:d4}",
+                Signature: null,
+                "class",
+                "csharp",
+                $"src/S{index:d4}.cs",
+                StartLine: 1,
+                EndLine: 2,
+                ParentId: null,
+                IsTest: false))
+            .ToArray();
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+        var observations = new List<FtsSearchQueryObservation>();
+        var index = FtsSymbolSearchIndex.Open(_dbPath, observations.Add);
+
+        IReadOnlyList<SearchHit> hits = index.Search("alpha beta", limit: 10, mode: SearchMode.And);
+
+        Assert.Empty(hits);
+        Assert.Equal(1, observations.Count(static observation =>
+            observation.Family == FtsSearchQueryFamily.AndIntersectionProbe));
+        Assert.Equal(0, observations.Count(static observation =>
+            observation.Family == FtsSearchQueryFamily.WordCandidates));
+    }
+
+    [Fact]
+    public void Search_AndMode_IntersectingTermsPreserveRankingAndExecuteExistingWordCandidates()
+    {
+        var syms = Corpus(
+            ("a", "AlphaBeta", "class AlphaBeta", "class", "csharp", "src/A.cs"),
+            ("b", "AlphaBetaFactory", "class AlphaBetaFactory", "class", "csharp", "src/B.cs"),
+            ("c", "AlphaOnly", "class AlphaOnly", "class", "csharp", "src/C.cs"),
+            ("d", "BetaOnly", "class BetaOnly", "class", "csharp", "src/D.cs"));
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+        var observations = new List<FtsSearchQueryObservation>();
+        var fts = FtsSymbolSearchIndex.Open(_dbPath, observations.Add);
+        var memory = SymbolSearchProjection.Build(syms);
+
+        IReadOnlyList<SearchHit> expected = memory.Search("alpha beta", limit: 10, mode: SearchMode.And);
+        IReadOnlyList<SearchHit> actual = fts.Search("alpha beta", limit: 10, mode: SearchMode.And);
+
+        Assert.Equal(expected.Select(static hit => hit.Document.DocId), actual.Select(static hit => hit.Document.DocId));
+        Assert.Equal(expected.Select(static hit => hit.Score), actual.Select(static hit => hit.Score));
+        Assert.Equal(1, observations.Count(static observation =>
+            observation.Family == FtsSearchQueryFamily.AndIntersectionProbe));
+        Assert.Equal(1, observations.Count(static observation =>
+            observation.Family == FtsSearchQueryFamily.WordCandidates));
+    }
+
+    [Fact]
     public void Search_TrigramArm_FindsInteriorAndBoundaryCrossingSubstring()
     {
         var syms = Corpus(
@@ -583,7 +637,9 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
 
         using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = _dbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
         }.ToString()))
         {
             rw.Open();
@@ -604,7 +660,9 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
 
         using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = _dbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
         }.ToString()))
         {
             rw.Open();
@@ -625,7 +683,9 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
 
         using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = _dbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
         }.ToString()))
         {
             rw.Open();

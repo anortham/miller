@@ -250,6 +250,15 @@ without first adding new phase, query-count, or resource evidence.
   425 ms / 0 rows and OR 19 / 1,128 ms / 822 rows. Lookup telemetry was 1,602 calls / 1,818 ms, including Search
   21 / 1,554 ms; graph reach was 291 ms. The run consumed 2,455,137,618 logical-read characters and 401,408
   physical-write bytes, peaking at 156,415 KB PSS / 199,792 KB RSS.
+- **Search-reuse acceptance:** Release was rebuilt from `23f08106`; context completed successfully in 3,060.308 ms,
+  an improvement but still over the 2 s gate. Actual Search work fell from 21 calls to 13: first query 9 / 674 ms /
+  272 rows, mode variant 1 / 242 ms / 18 rows, window variant 3 / 373 ms / 260 rows, exact repeat 0, and cache hit
+  8 / 0 ms / 272 rows. On the boolean axis, actual work was AND 2 / 416 ms / 0 rows and OR 11 / 874 ms / 550
+  rows; dropped 0. All eight anchor repeats were cache hits, reducing anchor resolution to 344 ms, but query/term
+  actual searches still cost 393/554 ms and returned broad OR windows. Lookup telemetry fell to 1,594 calls /
+  1,567 ms, including Search 13 / 1,291 ms; graph reach remained 285 ms. The 3,378-byte, 10-result response consumed
+  2,066,491,374 logical-read characters and 438,272 physical-write bytes, peaking at 155,465 KB PSS / 198,784 KB
+  RSS. Impact, trace, and idle were skipped because context remained over gate.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 
