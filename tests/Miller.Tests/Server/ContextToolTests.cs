@@ -1526,6 +1526,7 @@ public sealed class ContextToolTests
             lookupPhases.Select(static observation => observation.Phase));
         Assert.All(lookupPhases, static observation => Assert.True(observation.Delta.TotalCallCount >= 0));
         Assert.True(lookupPhases[^1].Total.TotalCallCount > 0);
+        Assert.True(lookupPhases[^1].SearchTotal.TotalCallCount > 0);
     }
 
     [Fact]

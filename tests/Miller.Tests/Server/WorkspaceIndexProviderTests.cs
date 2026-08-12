@@ -211,6 +211,129 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void LookupPhaseTelemetryClassifiesSearchRequestsWithoutExposingQueries()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        var measured = new MeasuredSymbolLookupIndex(inner);
+        using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "search-shape.db"), "current-ws", _dir);
+        using TelemetryScope scope = ledger.Measure("context", op: null);
+        _ = measured.Search("before baseline", 10, SearchMode.Or);
+        var telemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using IDisposable searchTelemetry = telemetry.ActivateSearchTelemetry();
+
+        _ = measured.Search("TargetType", 10, SearchMode.Or);
+        _ = measured.Search("TargetType", 10, SearchMode.Or);
+        _ = measured.Search("TargetType", 20, SearchMode.Or);
+        _ = measured.Search("TargetType", 20, SearchMode.And);
+        _ = measured.Search("Qzxwplmn", 10, SearchMode.Or);
+        ContextLookupPhaseObservation first = telemetry.CompleteLookupPhase(ContextLookupPhase.QueryRetrieval);
+
+        _ = measured.Search("TargetType", 10, SearchMode.Or);
+        _ = measured.Search("Vbnmqwer", 10, SearchMode.And);
+        ContextLookupPhaseObservation second = telemetry.CompleteLookupPhase(ContextLookupPhase.TermRetrieval);
+
+        Assert.Equal(2, first.SearchDelta.FirstQuery.CallCount);
+        Assert.Equal(1, first.SearchDelta.ModeVariant.CallCount);
+        Assert.Equal(1, first.SearchDelta.WindowVariant.CallCount);
+        Assert.Equal(1, first.SearchDelta.ExactRepeat.CallCount);
+        Assert.Equal(1, first.SearchDelta.FirstQuery.ReturnedRowCount);
+        Assert.Equal(1, first.SearchDelta.ModeVariant.ReturnedRowCount);
+        Assert.Equal(1, first.SearchDelta.WindowVariant.ReturnedRowCount);
+        Assert.Equal(1, first.SearchDelta.ExactRepeat.ReturnedRowCount);
+        Assert.Equal(1, first.SearchDelta.And.CallCount);
+        Assert.Equal(4, first.SearchDelta.Or.CallCount);
+        Assert.Equal(1, first.SearchDelta.And.ReturnedRowCount);
+        Assert.Equal(3, first.SearchDelta.Or.ReturnedRowCount);
+        Assert.Equal(0, first.SearchDelta.DroppedCallCount);
+        Assert.Equal(1, second.SearchDelta.FirstQuery.CallCount);
+        Assert.Equal(0, second.SearchDelta.ModeVariant.CallCount);
+        Assert.Equal(0, second.SearchDelta.WindowVariant.CallCount);
+        Assert.Equal(1, second.SearchDelta.ExactRepeat.CallCount);
+        Assert.Equal(3, second.SearchTotal.FirstQuery.CallCount);
+        Assert.Equal(1, second.SearchTotal.ModeVariant.CallCount);
+        Assert.Equal(1, second.SearchTotal.WindowVariant.CallCount);
+        Assert.Equal(2, second.SearchTotal.ExactRepeat.CallCount);
+        Assert.Equal(7, second.SearchTotal.TotalCallCount);
+        Assert.All(
+            new[]
+            {
+                first.SearchDelta.FirstQuery,
+                first.SearchDelta.ModeVariant,
+                first.SearchDelta.WindowVariant,
+                first.SearchDelta.ExactRepeat,
+                first.SearchDelta.And,
+                first.SearchDelta.Or,
+            },
+            static family => Assert.True(family.ElapsedMilliseconds >= 0));
+    }
+
+    [Fact]
+    public void LookupPhaseTelemetryBoundsUnclassifiedSearchRequestState()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        var measured = new MeasuredSymbolLookupIndex(inner);
+        using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "search-overflow.db"), "current-ws", _dir);
+        using TelemetryScope scope = ledger.Measure("context", op: null);
+        var telemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using IDisposable searchTelemetry = telemetry.ActivateSearchTelemetry();
+
+        for (int index = 0; index < 80; index++)
+            _ = measured.Search($"MissingType{index}", 10, SearchMode.Or);
+
+        ContextLookupPhaseObservation observation =
+            telemetry.CompleteLookupPhase(ContextLookupPhase.QueryRetrieval);
+
+        Assert.Equal(64, observation.SearchDelta.FirstQuery.CallCount);
+        Assert.Equal(16, observation.SearchDelta.DroppedCallCount);
+        Assert.Equal(80, observation.SearchDelta.TotalCallCount);
+    }
+
+    [Fact]
+    public void LookupPhaseTelemetryDoesNotCrossCorrelateInterleavedContexts()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        var measured = new MeasuredSymbolLookupIndex(inner);
+        using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "search-interleaved.db"), "current-ws", _dir);
+        using TelemetryScope firstScope = ledger.Measure("context", op: null);
+        var firstTelemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using IDisposable firstSearchTelemetry = firstTelemetry.ActivateSearchTelemetry();
+        _ = measured.Search("TargetType", 10, SearchMode.Or);
+
+        ContextLookupPhaseObservation second;
+        using (TelemetryScope secondScope = ledger.Measure("context", op: null))
+        {
+            var secondTelemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+            using IDisposable secondSearchTelemetry = secondTelemetry.ActivateSearchTelemetry();
+            _ = measured.Search("Qzxwplmn", 20, SearchMode.And);
+            second = secondTelemetry.CompleteLookupPhase(ContextLookupPhase.QueryRetrieval);
+        }
+
+        _ = measured.Search("TargetType", 10, SearchMode.Or);
+        ContextLookupPhaseObservation first =
+            firstTelemetry.CompleteLookupPhase(ContextLookupPhase.QueryRetrieval);
+
+        Assert.Equal(2, first.SearchDelta.ExactRepeat.CallCount + first.SearchDelta.FirstQuery.CallCount);
+        Assert.Equal(2, first.SearchDelta.Or.CallCount);
+        Assert.Equal(0, first.SearchDelta.And.CallCount);
+        Assert.Equal(1, second.SearchDelta.FirstQuery.CallCount);
+        Assert.Equal(1, second.SearchDelta.And.CallCount);
+        Assert.Equal(0, second.SearchDelta.Or.CallCount);
+    }
+
+    [Fact]
+    public void MeasuredSearchPreservesNullForgivenInnerBehavior()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        var measured = new MeasuredSymbolLookupIndex(inner);
+
+        Assert.Empty(measured.Search(null!));
+    }
+
+    [Fact]
     public void RepeatedCurrentFamilyReadsKeepCachedIdentityAndReportOnlyTheirOwnLookupDelta()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");

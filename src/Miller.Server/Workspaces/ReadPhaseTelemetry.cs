@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using Miller.Core.Graph;
 using Miller.Core.Search;
 using Miller.Indexing;
@@ -36,6 +38,28 @@ internal enum ContextLookupPhase
 
 internal readonly record struct LookupMethodTelemetry(long CallCount, long ElapsedMilliseconds);
 
+internal readonly record struct SearchRequestFamilyTelemetry(
+    long CallCount,
+    long ElapsedMilliseconds,
+    long ReturnedRowCount);
+
+internal sealed record SearchRequestTelemetrySnapshot(
+    SearchRequestFamilyTelemetry FirstQuery,
+    SearchRequestFamilyTelemetry ModeVariant,
+    SearchRequestFamilyTelemetry WindowVariant,
+    SearchRequestFamilyTelemetry ExactRepeat,
+    SearchRequestFamilyTelemetry And,
+    SearchRequestFamilyTelemetry Or,
+    long DroppedCallCount)
+{
+    internal long TotalCallCount =>
+        FirstQuery.CallCount +
+        ModeVariant.CallCount +
+        WindowVariant.CallCount +
+        ExactRepeat.CallCount +
+        DroppedCallCount;
+}
+
 internal sealed record SymbolLookupTelemetrySnapshot(
     LookupMethodTelemetry DocumentCount,
     LookupMethodTelemetry KnownExtensions,
@@ -68,7 +92,28 @@ internal sealed record SymbolLookupTelemetrySnapshot(
 internal sealed record ContextLookupPhaseObservation(
     ContextLookupPhase Phase,
     SymbolLookupTelemetrySnapshot Delta,
-    SymbolLookupTelemetrySnapshot Total);
+    SymbolLookupTelemetrySnapshot Total,
+    SearchRequestTelemetrySnapshot SearchDelta,
+    SearchRequestTelemetrySnapshot SearchTotal);
+
+internal enum SearchRequestClassification
+{
+    FirstQuery,
+    ModeVariant,
+    WindowVariant,
+    ExactRepeat,
+}
+
+internal readonly record struct SearchQueryIdentity(string Digest);
+
+internal readonly record struct SearchQueryModeIdentity(SearchQueryIdentity Query, SearchMode Mode);
+
+internal readonly record struct SearchRequestIdentity(SearchQueryIdentity Query, SearchMode Mode, int Limit);
+
+internal readonly record struct SearchRequestObservation(
+    SearchRequestIdentity Identity,
+    long ElapsedTicks,
+    long ReturnedRowCount);
 
 internal sealed class ReadPhaseTelemetry
 {
@@ -76,6 +121,8 @@ internal sealed class ReadPhaseTelemetry
     private readonly ReadMeasurementSnapshot _lookupBaseline;
     private readonly ReadMeasurementSnapshot[] _lookupFamilyBaseline;
     private ReadMeasurementSnapshot[] _lookupPhaseBaseline;
+    private readonly SearchRequestTelemetryCollector _searchTelemetry = new();
+    private SearchRequestTelemetrySnapshot _searchPhaseBaseline = SearchRequestTelemetryCollector.EmptySnapshot;
     private readonly MeasuredSymbolGraphReachability? _graph;
     private readonly ReadMeasurementSnapshot _graphBaseline;
 
@@ -116,13 +163,19 @@ internal sealed class ReadPhaseTelemetry
     internal ContextLookupPhaseObservation CompleteLookupPhase(ContextLookupPhase phase)
     {
         ReadMeasurementSnapshot[] current = _lookup.SnapshotByFamily();
+        SearchRequestTelemetrySnapshot searchCurrent = _searchTelemetry.Snapshot();
         var observation = new ContextLookupPhaseObservation(
             phase,
             LookupTelemetry(current, _lookupPhaseBaseline),
-            LookupTelemetry(current, _lookupFamilyBaseline));
+            LookupTelemetry(current, _lookupFamilyBaseline),
+            SearchTelemetryDelta(searchCurrent, _searchPhaseBaseline),
+            searchCurrent);
         _lookupPhaseBaseline = current;
+        _searchPhaseBaseline = searchCurrent;
         return observation;
     }
+
+    internal IDisposable ActivateSearchTelemetry() => _searchTelemetry.Activate();
 
     private static ReadMeasurementSnapshot Delta(
         ReadMeasurementSnapshot current,
@@ -159,6 +212,176 @@ internal sealed class ReadPhaseTelemetry
             Family(SymbolLookupMethodFamily.IsIndexedFilePath),
             Family(SymbolLookupMethodFamily.ResolveIndexedFilePath));
     }
+
+    private static SearchRequestTelemetrySnapshot SearchTelemetryDelta(
+        SearchRequestTelemetrySnapshot current,
+        SearchRequestTelemetrySnapshot baseline) =>
+        new(
+            SearchFamilyDelta(current.FirstQuery, baseline.FirstQuery),
+            SearchFamilyDelta(current.ModeVariant, baseline.ModeVariant),
+            SearchFamilyDelta(current.WindowVariant, baseline.WindowVariant),
+            SearchFamilyDelta(current.ExactRepeat, baseline.ExactRepeat),
+            SearchFamilyDelta(current.And, baseline.And),
+            SearchFamilyDelta(current.Or, baseline.Or),
+            Math.Max(0, current.DroppedCallCount - baseline.DroppedCallCount));
+
+    private static SearchRequestFamilyTelemetry SearchFamilyDelta(
+        SearchRequestFamilyTelemetry current,
+        SearchRequestFamilyTelemetry baseline) =>
+        new(
+            Math.Max(0, current.CallCount - baseline.CallCount),
+            Math.Max(0, current.ElapsedMilliseconds - baseline.ElapsedMilliseconds),
+            Math.Max(0, current.ReturnedRowCount - baseline.ReturnedRowCount));
+}
+
+internal sealed class SearchRequestTelemetryAccumulator
+{
+    private readonly long[] _classificationCalls = new long[Enum.GetValues<SearchRequestClassification>().Length];
+    private readonly long[] _classificationElapsedTicks = new long[Enum.GetValues<SearchRequestClassification>().Length];
+    private readonly long[] _classificationRows = new long[Enum.GetValues<SearchRequestClassification>().Length];
+    private readonly long[] _modeCalls = new long[2];
+    private readonly long[] _modeElapsedTicks = new long[2];
+    private readonly long[] _modeRows = new long[2];
+    private long _droppedCalls;
+
+    internal void Add(SearchRequestClassification classification, SearchRequestObservation observation)
+    {
+        int index = (int)classification;
+        _classificationCalls[index]++;
+        _classificationElapsedTicks[index] += observation.ElapsedTicks;
+        _classificationRows[index] += observation.ReturnedRowCount;
+    }
+
+    internal void AddMode(SearchRequestObservation observation)
+    {
+        int index = observation.Identity.Mode == SearchMode.And ? 0 : 1;
+        _modeCalls[index]++;
+        _modeElapsedTicks[index] += observation.ElapsedTicks;
+        _modeRows[index] += observation.ReturnedRowCount;
+    }
+
+    internal void AddDropped(long callCount) => _droppedCalls += callCount;
+
+    internal SearchRequestTelemetrySnapshot Snapshot() =>
+        new(
+            Classification(SearchRequestClassification.FirstQuery),
+            Classification(SearchRequestClassification.ModeVariant),
+            Classification(SearchRequestClassification.WindowVariant),
+            Classification(SearchRequestClassification.ExactRepeat),
+            Mode(0),
+            Mode(1),
+            _droppedCalls);
+
+    private SearchRequestFamilyTelemetry Classification(SearchRequestClassification classification)
+    {
+        int index = (int)classification;
+        return new SearchRequestFamilyTelemetry(
+            _classificationCalls[index],
+            ElapsedMilliseconds(_classificationElapsedTicks[index]),
+            _classificationRows[index]);
+    }
+
+    private SearchRequestFamilyTelemetry Mode(int index) =>
+        new(
+            _modeCalls[index],
+            ElapsedMilliseconds(_modeElapsedTicks[index]),
+            _modeRows[index]);
+
+    private static long ElapsedMilliseconds(long ticks) =>
+        Math.Max(0, (long)Stopwatch.GetElapsedTime(0, ticks).TotalMilliseconds);
+}
+
+internal sealed class SearchRequestTelemetryCollector
+{
+    private const int IdentityCapacity = 64;
+    private static readonly AsyncLocal<SearchRequestTelemetryCollector?> CurrentCollector = new();
+
+    private readonly byte[] _identityKey = RandomNumberGenerator.GetBytes(32);
+    private readonly HashSet<SearchQueryIdentity> _seenQueries = [];
+    private readonly HashSet<SearchQueryModeIdentity> _seenQueryModes = [];
+    private readonly HashSet<SearchRequestIdentity> _seenRequests = [];
+    private readonly SearchRequestTelemetryAccumulator _total = new();
+
+    internal static SearchRequestTelemetrySnapshot EmptySnapshot { get; } =
+        new(default, default, default, default, default, default, 0);
+
+    internal static SearchRequestTelemetryCollector? Current => CurrentCollector.Value;
+
+    internal IDisposable Activate()
+    {
+        SearchRequestTelemetryCollector? previous = CurrentCollector.Value;
+        CurrentCollector.Value = this;
+        return new Activation(previous);
+    }
+
+    internal void Record(string? query, int limit, SearchMode mode, long elapsedTicks, long returnedRows)
+    {
+        byte[] digest = HMACSHA256.HashData(_identityKey, Encoding.UTF8.GetBytes(query ?? string.Empty));
+        var request = new SearchRequestIdentity(
+            new SearchQueryIdentity(Convert.ToHexString(digest)),
+            mode,
+            limit);
+        var observation = new SearchRequestObservation(request, elapsedTicks, returnedRows);
+        _total.AddMode(observation);
+
+        SearchRequestClassification? classification = Classify(request);
+        if (classification is null)
+        {
+            _total.AddDropped(1);
+            return;
+        }
+        _total.Add(classification.Value, observation);
+    }
+
+    internal SearchRequestTelemetrySnapshot Snapshot() => _total.Snapshot();
+
+    private SearchRequestClassification? Classify(SearchRequestIdentity request)
+    {
+        if (_seenRequests.Contains(request))
+            return SearchRequestClassification.ExactRepeat;
+
+        var queryMode = new SearchQueryModeIdentity(request.Query, request.Mode);
+        if (_seenQueryModes.Contains(queryMode))
+        {
+            if (_seenRequests.Count >= IdentityCapacity)
+                return null;
+            _seenRequests.Add(request);
+            return SearchRequestClassification.WindowVariant;
+        }
+
+        if (_seenQueries.Contains(request.Query))
+        {
+            if (_seenQueryModes.Count >= IdentityCapacity || _seenRequests.Count >= IdentityCapacity)
+                return null;
+            _seenQueryModes.Add(queryMode);
+            _seenRequests.Add(request);
+            return SearchRequestClassification.ModeVariant;
+        }
+
+        if (_seenQueries.Count >= IdentityCapacity ||
+            _seenQueryModes.Count >= IdentityCapacity ||
+            _seenRequests.Count >= IdentityCapacity)
+        {
+            return null;
+        }
+        _seenQueries.Add(request.Query);
+        _seenQueryModes.Add(queryMode);
+        _seenRequests.Add(request);
+        return SearchRequestClassification.FirstQuery;
+    }
+
+    private sealed class Activation(SearchRequestTelemetryCollector? previous) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            CurrentCollector.Value = previous;
+        }
+    }
 }
 
 internal sealed class MeasuredSymbolLookupIndex(ISymbolLookupIndex inner) : ISymbolLookupIndex
@@ -171,8 +394,25 @@ internal sealed class MeasuredSymbolLookupIndex(ISymbolLookupIndex inner) : ISym
     public IReadOnlySet<string> KnownExtensions =>
         Measure(SymbolLookupMethodFamily.KnownExtensions, () => inner.KnownExtensions);
 
-    public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or) =>
-        Measure(SymbolLookupMethodFamily.Search, () => inner.Search(query, limit, mode));
+    public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or)
+    {
+        long startedAt = Stopwatch.GetTimestamp();
+        long returnedRows = 0;
+        try
+        {
+            IReadOnlyList<SearchHit> result = inner.Search(query, limit, mode);
+            returnedRows = result.Count;
+            return result;
+        }
+        finally
+        {
+            long elapsedTicks = Stopwatch.GetTimestamp() - startedAt;
+            int family = (int)SymbolLookupMethodFamily.Search;
+            Interlocked.Increment(ref _callCounts[family]);
+            Interlocked.Add(ref _elapsedTicks[family], elapsedTicks);
+            SearchRequestTelemetryCollector.Current?.Record(query, limit, mode, elapsedTicks, returnedRows);
+        }
+    }
 
     public IndexedSymbol Resolve(int docId) => Measure(SymbolLookupMethodFamily.ResolveDoc, () => inner.Resolve(docId));
 

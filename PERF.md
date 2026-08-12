@@ -171,6 +171,75 @@ without first adding new phase, query-count, or resource evidence.
   early-return shape, and reports the complete non-empty bundle shape. The two focused order tests pass together;
   phase labels are fixed and every persisted log event carries the request correlation ID. The Release build passes
   with zero warnings and zero errors.
+- **Final clean-HEAD acceptance:** Release was rebuilt from `85c51f81` and the isolated server identified itself as
+  `1.18.1+85c51f813492`. The one permitted context call (PID `2019481`, cid
+  `019ff4f3-051a-70b5-afc1-6b015b52a3a1`) still timed out at 7,007.282 ms after `pivot_ranking`; no `graph_reach`
+  event or completed telemetry row was produced. It consumed 769 CPU ticks, 7,420,905,628 logical-read characters,
+  4,952,562,410 logical-write characters, 112,713,728 physical-write bytes, and peaked at 159,880 KB PSS / 202,076
+  KB RSS. Impact, trace, and steady-idle were skipped because context missed first.
+- **Split-query-family acceptance:** Release was rebuilt from graph commit `b71263c1`; the server identified itself
+  as `1.18.1+b71263c1c0f6`. The one permitted context call (PID `2028695`, cid
+  `019ff506-221a-7c19-9182-91eaafc79cc1`) still timed out at 7,007.190 ms after `pivot_ranking`, with no
+  `graph_reach` event or completed telemetry row. It consumed 758 CPU ticks, 7,165,003,276 logical-read characters,
+  4,894,812,906 logical-write characters, 120,950,784 physical-write bytes, and peaked at 157,155 KB PSS / 199,148
+  KB RSS. Impact, trace, and steady-idle were skipped because context missed first.
+- **Statement-phase diagnosis:** Release was rebuilt from `921ccdff`; the one default-on diagnostic (PID `2034501`,
+  cid `019ff50f-2b63-7023-8c54-52b83b6305fe`) timed out at 7,006.926 ms. Exact PID/cid rows completed
+  `relationship_forward` in 519 ms / 1 row, `relationship_reverse` in 512 ms / 1 row,
+  `unresolved_name_forward` in 1,432 ms / 0 rows, and `unresolved_name_reverse` in 1,973 ms / 65 rows; the last
+  phase completed during shutdown after cancellation was requested. No `family_resolution`, `supplemental`,
+  `completion`, or outer `graph_reach` event completed. The diagnostic consumed 6,405,642,896 logical-read
+  characters and 130,494,464 physical-write bytes, peaking at 161,060 KB PSS / 203,408 KB RSS.
+- **Family-arm diagnosis:** Release was rebuilt from `a9bf810b`; the one default-on diagnostic (PID `2037968`, cid
+  `019ff514-2b35-7882-836b-3a82179bc5f8`) timed out at 7,006.932 ms. Exact graph order was
+  `relationship_forward` 501 ms / 1 row, `relationship_reverse` 498 ms / 1 row, `unresolved_name_forward`
+  1,396 ms / 0 rows, and `unresolved_name_reverse` 1,929 ms / 65 rows. None of the eight new identifier/pending
+  base/delta forward/reverse family-resolution arms completed, so the deepest boundary remains
+  `unresolved_name_reverse`; the next stall is before the first family arm completion. No `family_resolution`,
+  `supplemental`, `completion`, or outer `graph_reach` completed. The run consumed 6,954,489,644 logical-read
+  characters and 139,198,464 physical-write bytes, peaking at 158,112 KB PSS / 200,136 KB RSS.
+- **Candidate-shape diagnosis:** Release was rebuilt from `83108ad3`; the one default-on diagnostic (PID `2042776`,
+  cid `019ff51c-73a2-7e98-8001-65705c2b120f`) timed out at 7,007.205 ms. The first completed graph event,
+  `relationship_forward` at 505 ms / 1 row, reported candidate count 4 and the exact capped sample
+  `[a6a374fb8554e68e3a7a0b217670d32a, ac38a31eba3de6a7a7fcb778bf24e33a,
+  9639df0e830f9b3520b25bb6b3aa837a, 72d24b5950320bbbd03e1bf7dca3e52a]`. Later phases retained the same shape:
+  `relationship_reverse` 499 ms / 1 row, `unresolved_name_forward` 1,400 ms / 0 rows, and
+  `unresolved_name_reverse` 1,927 ms / 65 rows. No family arm or outer `graph_reach` completed. The run consumed
+  7,037,425,780 logical-read characters and 140,709,888 physical-write bytes, peaking at 155,491 KB PSS / 197,708
+  KB RSS.
+- **Family-name-union bypass acceptance:** Release was rebuilt from `7d712f8b`; the one default-on acceptance (PID
+  `2054929`, cid `019ff533-f2b5-747e-b395-38f4c853b9ef`) still timed out at 7,001.628 ms. Outer phases completed
+  through pivot ranking: resolve 20 ms, semantic seeds 616 ms, source rescue 580 ms, query retrieval 424 ms, term
+  retrieval 533 ms, anchor resolution 680 ms, and pivot ranking 6 ms. Graph phases completed
+  `relationship_forward` 508 ms / 1 row, `relationship_reverse` 505 ms / 1 row, `unresolved_name_forward`
+  1,393 ms / 0 rows, and `unresolved_name_reverse` 1,917 ms / 65 rows, with the same four pivots. No family arm,
+  outer `graph_reach`, output, or telemetry row completed. The run consumed 6,814,735,084 logical-read characters
+  and 137,048,064 physical-write bytes, peaking at 154,042 KB PSS / 199,704 KB RSS. Impact and trace were skipped.
+- **Forwarded-capability acceptance:** Release was rebuilt from `d42f2626`; context finally completed successfully
+  instead of timing out, but at 4,332.033 ms it still missed the 2 s hard gate. Graph reach completed in 1,296 ms:
+  unresolved-name arms fell from seconds to 0/1 ms, all eight family arms completed in 0–20 ms each, family
+  resolution took 43 ms / 180 rows, supplemental 168 ms / 24 rows, and graph completion 1,257 ms / 155 rows.
+  Before graph reach, semantic/source/query/term/anchor work still totaled 2,839 ms. Completed telemetry reported
+  1,602 lookups / 1,929 ms and one graph call / 1,296 ms. The successful 3,378-byte, 10-result response consumed
+  3,863,767,755 logical-read characters and 23,568,384 physical-write bytes, peaking at 151,849 KB PSS / 198,456
+  KB RSS. Impact, trace, and idle were skipped because context remained over gate.
+- **Relationship-view bypass acceptance:** Release was rebuilt from `8e711985`; context completed successfully in
+  3,153.484 ms, improving another 1.18 s but still missing the 2 s hard gate. Graph reach fell from 1,296 ms to
+  290 ms: relationship arms fell to 1/0 ms, unresolved-name arms remained 0/1 ms, family arms stayed 0–20 ms, and
+  graph completion fell to 250 ms / 155 rows. The remaining dominant evidence is before graph reach: semantic,
+  source, query, term, and anchor phases consumed 2,672 ms, while completed telemetry reported 1,602 lookups /
+  1,750 ms and one graph call / 289 ms. The successful response consumed 2,455,032,764 logical-read characters,
+  only 380,928 physical-write bytes, and peaked at 153,819 KB PSS / 200,876 KB RSS. Impact, trace, and idle were
+  skipped because context remained over gate.
+- **Lookup-family diagnosis:** Release was rebuilt from `264d2e8a`; the one diagnosis completed successfully in
+  3,423.838 ms. Fixed lookup deltas prove search owns the largest remaining measured lookup cost: query retrieval
+  used Search 4 / 811 ms, ResolveDoc 68 / 13 ms, FindBySymbolId 61 / 9 ms; term retrieval used Search 9 / 331 ms,
+  ResolveDoc 482 / 64 ms, FindBySymbolId 235 / 31 ms; anchor resolution used Search 8 / 310 ms, ResolveDoc 272 /
+  36 ms, FindByName 1 / 22 ms, FindBySymbolId 300 / 39 ms, ResolveIndexedFilePath 1 / 14 ms. Graph reach and
+  candidate ordering had no lookup delta; hydration used FindBySymbolId 157 / 19 ms; file neighbours used
+  FindByFilePath 4 / 3 ms. Total Search was 21 calls / 1,452 ms of the telemetry total 1,602 calls / 1,708 ms.
+  Graph reach remained 286 ms. The run consumed 2,455,051,247 logical-read characters and 425,984 physical-write
+  bytes, peaking at 156,301 KB PSS / 203,452 KB RSS.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 

@@ -143,6 +143,7 @@ public sealed partial class ContextTool
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             int effectiveTokenBudget = Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens);
             using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            using IDisposable? searchTelemetry = context.ReadTelemetry?.ActivateSearchTelemetry();
             CompletePhase("resolve", telemetry, ref phaseStart);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             int bundleTokenBudget = Math.Max(
@@ -362,10 +363,13 @@ public sealed partial class ContextTool
             _lookupPhaseObserver?.Invoke(observation);
             Serilog.Log.Information(
                 "Context lookup phase {ContextLookupPhase} completed with delta {@ContextLookupDelta} " +
-                "and total {@ContextLookupTotal} for cid {CorrelationId}",
+                "and total {@ContextLookupTotal}, search delta {@ContextSearchDelta}, " +
+                "and search total {@ContextSearchTotal} for cid {CorrelationId}",
                 completedLookupPhase,
                 observation.Delta,
                 observation.Total,
+                observation.SearchDelta,
+                observation.SearchTotal,
                 telemetry?.CorrelationId ?? "unmeasured");
         }
         Serilog.Log.Information(
