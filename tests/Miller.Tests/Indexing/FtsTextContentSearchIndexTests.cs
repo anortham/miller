@@ -82,10 +82,12 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
         Assert.Equal(
             [
                 FtsTextSearchQueryFamily.ConnectionOpen,
+                FtsTextSearchQueryFamily.AverageDocumentLength,
                 FtsTextSearchQueryFamily.StrictCandidates,
                 FtsTextSearchQueryFamily.CandidateFiltering,
                 FtsTextSearchQueryFamily.NarrowTokenScoring,
                 FtsTextSearchQueryFamily.FullHydration,
+                FtsTextSearchQueryFamily.SymbolSpanHydration,
                 FtsTextSearchQueryFamily.RawTextAnalysis,
                 FtsTextSearchQueryFamily.SymbolMapping,
                 FtsTextSearchQueryFamily.ResultConstruction,
@@ -466,6 +468,56 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
         Assert.Equal(1, observations
             .Where(static observation => observation.Family == FtsTextSearchQueryFamily.RawTextAnalysis)
             .Sum(static observation => observation.Rows));
+    }
+
+    [Fact]
+    public void Open_HighFanoutCorpusReadsConstantMetadataAndSearchHydratesOnlyMatchingCandidates()
+    {
+        const int decoyCount = 600;
+        const string query = "rare rescue marker";
+        const string targetText = "Rare rescue marker identifies the only relevant source.";
+        var files = Enumerable.Range(0, decoyCount)
+            .Select(static i => (
+                Path: $"src/Decoy{i:D4}.cs",
+                Language: "csharp",
+                IsTest: false,
+                Text: $"Ordinary unrelated content number {i}."))
+            .Append((Path: "src/Target.cs", Language: "csharp", IsTest: false, Text: targetText))
+            .ToArray();
+        using var fx = BuildFixture(files);
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        ContentSearchHit expected = Assert.Single(ContentSearchIndex.Build(
+            files.Select(static (file, i) => new ContentDocument(i, file.Path, file.Text, file.Language)).ToArray())
+            .Search(query, limit: 1));
+        var telemetry = new FtsTextSearchQueryTelemetryCollector();
+        using IDisposable activation = telemetry.Activate();
+
+        var index = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7);
+        FtsTextSearchQueryMeasurementSnapshot opened = telemetry.Snapshot();
+
+        Assert.Equal(decoyCount + 1, index.DocumentCount);
+        Assert.Equal(1, opened.OpenMetadata.ReturnedRowCount);
+        Assert.Equal(0, opened.OpenChunkMetadata.ReturnedRowCount);
+        Assert.Equal(0, opened.OpenSymbolSpans.ReturnedRowCount);
+
+        TextContentSearchHit actual = Assert.Single(index.Search(
+            query,
+            TextContentKind.WorkspaceSource,
+            limit: 1,
+            excludeTests: false));
+        FtsTextSearchQueryMeasurementSnapshot searched = telemetry.Snapshot();
+
+        Assert.Equal(expected.Path, actual.Path);
+        Assert.Equal(expected.Score, actual.Score);
+        Assert.Equal(expected.Line, actual.Line);
+        Assert.Equal(expected.Snippet, actual.Snippet);
+        Assert.Equal("sym-target", actual.ContainingSymbolId);
+        Assert.Equal("Target", actual.ContainingSymbolName);
+        Assert.Equal(1, searched.AverageDocumentLength.CallCount);
+        Assert.Equal(1, searched.AverageDocumentLength.ReturnedRowCount);
+        Assert.Equal(1, searched.StrictCandidates.ReturnedRowCount);
+        Assert.Equal(1, searched.FullHydration.ReturnedRowCount);
+        Assert.Equal(1, searched.SymbolSpanHydration.ReturnedRowCount);
     }
 
     [Fact]

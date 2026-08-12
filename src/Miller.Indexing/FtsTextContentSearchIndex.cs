@@ -13,29 +13,24 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
     private const double TokenPhraseBoost = 2.5;
 
     private readonly string _connectionString;
-    private readonly IReadOnlyDictionary<string, TextChunkMetadata> _chunkMetadataById;
-    private readonly IReadOnlyDictionary<string, IReadOnlyList<ContentSymbolSpan>> _spansBySourceId;
     private readonly int _documentCount;
-    private readonly double _avgdl;
+    private readonly object _statisticsGate = new();
     private readonly Action<FtsTextSearchQueryObservation>? _queryObserver;
+    private double? _averageDocumentLength;
 
     private FtsTextContentSearchIndex(
         string connectionString,
-        IReadOnlyList<TextChunkMetadata> chunks,
-        IReadOnlyDictionary<string, IReadOnlyList<ContentSymbolSpan>> spansBySourceId,
+        int documentCount,
         long revision,
         Action<FtsTextSearchQueryObservation>? queryObserver)
     {
         _connectionString = connectionString;
-        _chunkMetadataById = chunks.ToDictionary(static chunk => chunk.ChunkId, StringComparer.Ordinal);
-        _spansBySourceId = spansBySourceId;
-        _documentCount = chunks.Count;
-        _avgdl = chunks.Count == 0 ? 0.0 : chunks.Average(static c => c.DocLen);
+        _documentCount = documentCount;
         Revision = revision;
         _queryObserver = queryObserver;
     }
 
-    public int DocumentCount => _chunkMetadataById.Count;
+    public int DocumentCount => _documentCount;
 
     public long Revision { get; }
 
@@ -63,7 +58,9 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         using var connection = new SqliteConnection(connectionString);
         connection.Open();
 
+        long metadataStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         ContentMeta meta = ReadMeta(connection, absPath);
+        ObserveOpen(FtsTextSearchQueryFamily.OpenMetadata, rows: 1, metadataStarted);
         if (meta.SchemaVersion != ContentCorpusSchema.SchemaVersion)
         {
             throw new InvalidOperationException(
@@ -89,8 +86,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         EnsureSchema(connection, absPath);
         return new FtsTextContentSearchIndex(
             connectionString,
-            ReadChunkMetadata(connection, absPath),
-            ReadSymbolSpans(connection, absPath),
+            meta.ChunkCount,
             meta.WorkspaceRevision.GetValueOrDefault(),
             queryObserver);
     }
@@ -113,7 +109,9 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         using var connection = new SqliteConnection(connectionString);
         connection.Open();
 
+        long metadataStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         ContentMeta meta = ReadMeta(connection, absPath);
+        ObserveOpen(FtsTextSearchQueryFamily.OpenMetadata, rows: 1, metadataStarted);
         if (meta.SchemaVersion != ContentCorpusSchema.SchemaVersion)
         {
             throw new InvalidOperationException(
@@ -124,8 +122,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         EnsureSchema(connection, absPath);
         return new FtsTextContentSearchIndex(
             connectionString,
-            ReadChunkMetadata(connection, absPath),
-            ReadSymbolSpans(connection, absPath),
+            meta.ChunkCount,
             meta.WorkspaceRevision.GetValueOrDefault(),
             queryObserver: null);
     }
@@ -143,7 +140,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         int limit = 10,
         bool excludeTests = false)
     {
-        if (contentKinds.Count == 0 || limit <= 0 || _chunkMetadataById.Count == 0)
+        if (contentKinds.Count == 0 || limit <= 0 || _documentCount == 0)
             return Array.Empty<TextContentSearchHit>();
 
         var allowedKinds = new HashSet<string>(StringComparer.Ordinal);
@@ -161,6 +158,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         long connectionStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         connection.Open();
         Observe(FtsTextSearchQueryFamily.ConnectionOpen, rows: 0, connectionStarted);
+        double averageDocumentLength = AverageDocumentLength(connection);
 
         var documentFrequency = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (string term in plan.DistinctTerms)
@@ -173,7 +171,11 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
 
         string strictMatch = JoinFtsTerms(plan.CoverageTerms, " AND ");
         long strictStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        IReadOnlyList<TextCandidate> candidates = ChunkCandidates(connection, strictMatch, WidenedCandidateLimit);
+        IReadOnlyList<TextCandidate> candidates = ChunkCandidates(
+            connection,
+            strictMatch,
+            WidenedCandidateLimit,
+            connection.DataSource);
         Observe(FtsTextSearchQueryFamily.StrictCandidates, candidates.Count, strictStarted);
         var hits = new List<TextContentSearchHit>();
         var seenCandidateIds = new HashSet<string>(StringComparer.Ordinal);
@@ -187,7 +189,8 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
             IReadOnlyList<TextCandidate> widenedCandidates = ChunkCandidates(
                 connection,
                 widenedMatch,
-                WidenedCandidateLimit);
+                WidenedCandidateLimit,
+                connection.DataSource);
             Observe(FtsTextSearchQueryFamily.WidenedCandidates, widenedCandidates.Count, widenedStarted);
             AddHits(widenedCandidates);
         }
@@ -216,10 +219,8 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
                 {
                     if (!seenCandidateIds.Add(candidate.ChunkId))
                         return false;
-                    if (!_chunkMetadataById.TryGetValue(candidate.ChunkId, out TextChunkMetadata? metadata))
-                        return false;
-                    return allowedKinds.Contains(metadata.ContentKind)
-                        && (!excludeTests || !metadata.IsTest);
+                    return allowedKinds.Contains(candidate.ContentKind)
+                        && (!excludeTests || !candidate.IsTest);
                 })
                 .ToArray();
             Observe(FtsTextSearchQueryFamily.CandidateFiltering, eligibleCandidates.Length, filteringStarted);
@@ -228,7 +229,6 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
             var scoredCandidates = new List<ScoredTextCandidate>(eligibleCandidates.Length);
             foreach (TextCandidate candidate in eligibleCandidates)
             {
-                TextChunkMetadata metadata = _chunkMetadataById[candidate.ChunkId];
                 double score = 0.0;
                 int matchedCoverage = 0;
                 foreach (string term in plan.DistinctTerms)
@@ -241,8 +241,8 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
                     score += Bm25.TermScore(
                         Bm25.Idf(_documentCount, documentFrequency[term]),
                         tf,
-                        metadata.DocLen,
-                        _avgdl);
+                        candidate.DocLen,
+                        averageDocumentLength);
                 }
 
                 if (matchedCoverage >= plan.RequiredCoverage && score > 0.0)
@@ -261,11 +261,21 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
                     batch.Select(static candidate => candidate.ChunkId).ToArray(),
                     connection.DataSource);
                 Observe(FtsTextSearchQueryFamily.FullHydration, chunksById.Count, hydrationStarted);
+                long spansStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                IReadOnlyDictionary<string, IReadOnlyList<ContentSymbolSpan>> spansBySourceId =
+                    ReadSymbolSpans(
+                        connection,
+                        chunksById.Values.Select(static chunk => chunk.SourceId).Distinct(StringComparer.Ordinal).ToArray(),
+                        connection.DataSource);
+                Observe(
+                    FtsTextSearchQueryFamily.SymbolSpanHydration,
+                    spansBySourceId.Sum(static entry => entry.Value.Count),
+                    spansStarted);
                 long scoringStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 int hitCountBefore = hits.Count;
                 var subphases = new ScoringSubphases();
                 foreach (ScoredTextCandidate candidate in batch)
-                    AddHit(candidate, chunksById, ref subphases);
+                    AddHit(candidate, chunksById, spansBySourceId, ref subphases);
                 TimeSpan scoringElapsed = System.Diagnostics.Stopwatch.GetElapsedTime(scoringStarted);
                 Observe(
                     FtsTextSearchQueryFamily.RawTextAnalysis,
@@ -280,6 +290,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         void AddHit(
             ScoredTextCandidate candidate,
             IReadOnlyDictionary<string, TextChunk> chunksById,
+            IReadOnlyDictionary<string, IReadOnlyList<ContentSymbolSpan>> spansBySourceId,
             ref ScoringSubphases subphases)
         {
             if (!chunksById.TryGetValue(candidate.ChunkId, out TextChunk? chunk))
@@ -298,7 +309,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
             double score = analysis.HasTokenPhrase ? candidate.Score * TokenPhraseBoost : candidate.Score;
 
             long symbolStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            ContentSymbolSpan? symbol = BestContainingSymbol(chunk.SourceId, bestLine.Line);
+            ContentSymbolSpan? symbol = BestContainingSymbol(spansBySourceId, chunk.SourceId, bestLine.Line);
             subphases.CompleteSymbol(symbolStarted);
             long resultStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             hits.Add(new TextContentSearchHit(
@@ -334,12 +345,21 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         _queryObserver?.Invoke(observation);
     }
 
+    private static void ObserveOpen(FtsTextSearchQueryFamily family, int rows, long startedAt)
+    {
+        var observation = new FtsTextSearchQueryObservation(
+            family,
+            rows,
+            System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
+        FtsTextSearchQueryTelemetryCollector.Current?.Record(observation);
+    }
+
     public IReadOnlyList<TextContentSearchHit> Materialize(
         IReadOnlyCollection<string> chunkIds,
         IReadOnlyCollection<string> contentKinds,
         bool excludeTests = false)
     {
-        if (chunkIds.Count == 0 || contentKinds.Count == 0 || _chunkMetadataById.Count == 0)
+        if (chunkIds.Count == 0 || contentKinds.Count == 0 || _documentCount == 0)
             return Array.Empty<TextContentSearchHit>();
 
         var allowedKinds = new HashSet<string>(contentKinds.Where(static kind => !string.IsNullOrWhiteSpace(kind)),
@@ -347,26 +367,28 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         if (allowedKinds.Count == 0)
             return Array.Empty<TextContentSearchHit>();
 
-        string[] eligibleIds = chunkIds
-            .Distinct(StringComparer.Ordinal)
-            .Where(chunkId =>
-                _chunkMetadataById.TryGetValue(chunkId, out TextChunkMetadata? metadata)
-                && allowedKinds.Contains(metadata.ContentKind)
-                && (!excludeTests || !metadata.IsTest))
-            .ToArray();
+        string[] requestedIds = chunkIds.Distinct(StringComparer.Ordinal).ToArray();
         using var connection = new SqliteConnection(_connectionString);
         connection.Open();
         IReadOnlyDictionary<string, TextChunk> chunksById = ReadChunksById(
             connection,
-            eligibleIds,
+            requestedIds,
+            connection.DataSource,
+            allowedKinds,
+            excludeTests);
+        TextChunk[] eligibleChunks = requestedIds
+            .Select(chunkId => chunksById.GetValueOrDefault(chunkId))
+            .Where(static chunk => chunk is not null)
+            .Select(static chunk => chunk!)
+            .ToArray();
+        IReadOnlyDictionary<string, IReadOnlyList<ContentSymbolSpan>> spansBySourceId = ReadSymbolSpans(
+            connection,
+            eligibleChunks.Select(static chunk => chunk.SourceId).Distinct(StringComparer.Ordinal).ToArray(),
             connection.DataSource);
-        var hits = new List<TextContentSearchHit>(eligibleIds.Length);
-        foreach (string chunkId in eligibleIds)
+        var hits = new List<TextContentSearchHit>(eligibleChunks.Length);
+        foreach (TextChunk chunk in eligibleChunks)
         {
-            if (!chunksById.TryGetValue(chunkId, out TextChunk? chunk))
-                continue;
-
-            ContentSymbolSpan? symbol = BestContainingSymbol(chunk.SourceId, chunk.LineStart);
+            ContentSymbolSpan? symbol = BestContainingSymbol(spansBySourceId, chunk.SourceId, chunk.LineStart);
             hits.Add(new TextContentSearchHit(
                 chunk.SourceId,
                 chunk.ChunkId,
@@ -396,16 +418,19 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         try
         {
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT schema_version, workspace_revision FROM content_meta LIMIT 2;";
+            command.CommandText = "SELECT schema_version, workspace_revision, chunk_count FROM content_meta LIMIT 2;";
             using var reader = command.ExecuteReader();
             if (!reader.Read())
                 throw MalformedMeta(absPath, "no meta row");
 
             int schemaVersion = checked((int)ReadInt64(reader, 0, absPath, "schema_version"));
             long? workspaceRevision = reader.IsDBNull(1) ? null : ReadInt64(reader, 1, absPath, "workspace_revision");
+            int chunkCount = checked((int)ReadInt64(reader, 2, absPath, "chunk_count"));
+            if (chunkCount < 0)
+                throw MalformedMeta(absPath, "chunk_count is negative");
             if (reader.Read())
                 throw MalformedMeta(absPath, "multiple meta rows");
-            return new ContentMeta(schemaVersion, workspaceRevision);
+            return new ContentMeta(schemaVersion, workspaceRevision, chunkCount);
         }
         catch (SqliteException ex)
         {
@@ -436,38 +461,12 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
             "source_id", "symbol_id", "symbol_name", "path", "start_line", "end_line");
     }
 
-    private static IReadOnlyList<TextChunkMetadata> ReadChunkMetadata(
-        SqliteConnection connection,
-        string absPath)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT chunk_id, content_kind, doc_len, is_test
-            FROM content_chunks
-            ORDER BY chunk_id;
-            """;
-        using var reader = command.ExecuteReader();
-        var chunks = new List<TextChunkMetadata>();
-        while (reader.Read())
-        {
-            int docLen = checked((int)ReadInt64(reader, 2, absPath, "doc_len"));
-            if (docLen < 0)
-                throw MalformedChunk(absPath, "doc_len is negative");
-
-            chunks.Add(new TextChunkMetadata(
-                RequiredString(reader, 0, absPath, "chunk_id"),
-                RequiredString(reader, 1, absPath, "content_kind"),
-                docLen,
-                ReadInt64(reader, 3, absPath, "is_test") != 0));
-        }
-
-        return chunks;
-    }
-
     private static IReadOnlyDictionary<string, TextChunk> ReadChunksById(
         SqliteConnection connection,
         IReadOnlyList<string> chunkIds,
-        string absPath)
+        string absPath,
+        IReadOnlySet<string>? allowedKinds = null,
+        bool excludeTests = false)
     {
         var chunks = new Dictionary<string, TextChunk>(StringComparer.Ordinal);
         foreach (string[] batch in chunkIds.Chunk(400))
@@ -479,13 +478,26 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
                 parameters[i] = "$chunk" + i.ToString(CultureInfo.InvariantCulture);
                 command.Parameters.AddWithValue(parameters[i], batch[i]);
             }
+            string kindPredicate = string.Empty;
+            if (allowedKinds is not null)
+            {
+                string[] kinds = allowedKinds.Order(StringComparer.Ordinal).ToArray();
+                var kindParameters = new string[kinds.Length];
+                for (int i = 0; i < kinds.Length; i++)
+                {
+                    kindParameters[i] = "$kind" + i.ToString(CultureInfo.InvariantCulture);
+                    command.Parameters.AddWithValue(kindParameters[i], kinds[i]);
+                }
+                kindPredicate = $" AND c.content_kind IN ({string.Join(", ", kindParameters)})";
+            }
+            string testPredicate = excludeTests ? " AND c.is_test = 0" : string.Empty;
             command.CommandText = $"""
                 SELECT c.chunk_id, c.source_id, c.content_kind, c.path, c.url, c.display_path, c.language,
                        c.line_start, c.line_end, c.byte_start, c.byte_end, c.raw_text, c.doc_len, c.is_test,
                        c.source_bytes, c.containing_symbol_id, c.containing_symbol_name, s.content_hash
                 FROM content_chunks c
                 JOIN content_sources s ON s.source_id = c.source_id
-                WHERE c.chunk_id IN ({string.Join(", ", parameters)})
+                WHERE c.chunk_id IN ({string.Join(", ", parameters)}){kindPredicate}{testPredicate}
                 ORDER BY c.chunk_id;
                 """;
             using SqliteDataReader reader = command.ExecuteReader();
@@ -522,30 +534,41 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
 
     private static IReadOnlyDictionary<string, IReadOnlyList<ContentSymbolSpan>> ReadSymbolSpans(
         SqliteConnection connection,
+        IReadOnlyList<string> sourceIds,
         string absPath)
     {
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT source_id, symbol_id, symbol_name, start_line, end_line
-            FROM content_symbol_spans
-            ORDER BY source_id, start_line, end_line, symbol_id;
-            """;
-        using var reader = command.ExecuteReader();
         var bySource = new Dictionary<string, List<ContentSymbolSpan>>(StringComparer.Ordinal);
-        while (reader.Read())
+        foreach (string[] batch in sourceIds.Chunk(RawTextBatchSize))
         {
-            string sourceId = RequiredString(reader, 0, absPath, "source_id");
-            if (!bySource.TryGetValue(sourceId, out List<ContentSymbolSpan>? spans))
+            using SqliteCommand command = connection.CreateCommand();
+            var parameters = new string[batch.Length];
+            for (int i = 0; i < batch.Length; i++)
             {
-                spans = new List<ContentSymbolSpan>();
-                bySource[sourceId] = spans;
+                parameters[i] = "$source" + i.ToString(CultureInfo.InvariantCulture);
+                command.Parameters.AddWithValue(parameters[i], batch[i]);
             }
+            command.CommandText = $"""
+                SELECT source_id, symbol_id, symbol_name, start_line, end_line
+                FROM content_symbol_spans
+                WHERE source_id IN ({string.Join(", ", parameters)})
+                ORDER BY source_id, start_line, end_line, symbol_id;
+                """;
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                string sourceId = RequiredString(reader, 0, absPath, "source_id");
+                if (!bySource.TryGetValue(sourceId, out List<ContentSymbolSpan>? spans))
+                {
+                    spans = [];
+                    bySource[sourceId] = spans;
+                }
 
-            spans.Add(new ContentSymbolSpan(
-                RequiredString(reader, 1, absPath, "symbol_id"),
-                RequiredString(reader, 2, absPath, "symbol_name"),
-                checked((int)ReadInt64(reader, 3, absPath, "start_line")),
-                checked((int)ReadInt64(reader, 4, absPath, "end_line"))));
+                spans.Add(new ContentSymbolSpan(
+                    RequiredString(reader, 1, absPath, "symbol_id"),
+                    RequiredString(reader, 2, absPath, "symbol_name"),
+                    checked((int)ReadInt64(reader, 3, absPath, "start_line")),
+                    checked((int)ReadInt64(reader, 4, absPath, "end_line"))));
+            }
         }
 
         return bySource.ToDictionary(
@@ -562,18 +585,55 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
-    private static IReadOnlyList<TextCandidate> ChunkCandidates(SqliteConnection connection, string match, int limit)
+    private static IReadOnlyList<TextCandidate> ChunkCandidates(
+        SqliteConnection connection,
+        string match,
+        int limit,
+        string absPath)
     {
         using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT chunk_id, body FROM content_fts WHERE body MATCH $q ORDER BY rank LIMIT $limit;";
+        command.CommandText = """
+            SELECT f.chunk_id, f.body, c.content_kind, c.doc_len, c.is_test
+            FROM content_fts f
+            JOIN content_chunks c ON c.chunk_id = f.chunk_id
+            WHERE f.body MATCH $q
+            ORDER BY f.rank
+            LIMIT $limit;
+            """;
         command.Parameters.AddWithValue("$q", match);
         command.Parameters.AddWithValue("$limit", limit);
         var candidates = new List<TextCandidate>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
-            candidates.Add(new TextCandidate(reader.GetString(0), reader.GetString(1)));
+        {
+            int docLen = checked((int)ReadInt64(reader, 3, absPath, "doc_len"));
+            if (docLen < 0)
+                throw MalformedChunk(absPath, "doc_len is negative");
+            candidates.Add(new TextCandidate(
+                RequiredString(reader, 0, absPath, "chunk_id"),
+                RequiredString(reader, 1, absPath, "body"),
+                RequiredString(reader, 2, absPath, "content_kind"),
+                docLen,
+                ReadInt64(reader, 4, absPath, "is_test") != 0));
+        }
         return candidates;
+    }
+
+    private double AverageDocumentLength(SqliteConnection connection)
+    {
+        lock (_statisticsGate)
+        {
+            if (_averageDocumentLength is { } lockedCached)
+                return lockedCached;
+
+            long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "SELECT COALESCE(AVG(doc_len), 0.0) FROM content_chunks;";
+            double average = Convert.ToDouble(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+            Observe(FtsTextSearchQueryFamily.AverageDocumentLength, rows: 1, startedAt);
+            _averageDocumentLength = average;
+            return average;
+        }
     }
 
     private static RawTextAnalysis AnalyzeRawText(
@@ -664,9 +724,12 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         return string.Join(separator, quoted);
     }
 
-    private ContentSymbolSpan? BestContainingSymbol(string sourceId, int line)
+    private static ContentSymbolSpan? BestContainingSymbol(
+        IReadOnlyDictionary<string, IReadOnlyList<ContentSymbolSpan>> spansBySourceId,
+        string sourceId,
+        int line)
     {
-        if (!_spansBySourceId.TryGetValue(sourceId, out IReadOnlyList<ContentSymbolSpan>? spans))
+        if (!spansBySourceId.TryGetValue(sourceId, out IReadOnlyList<ContentSymbolSpan>? spans))
             return null;
 
         ContentSymbolSpan? best = null;
@@ -736,7 +799,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
     private static InvalidOperationException MalformedChunk(string absPath, string detail) =>
         new($"content.db at '{absPath}' has malformed content_chunks data: {detail}. Rebuild the content corpus.");
 
-    private sealed record ContentMeta(int SchemaVersion, long? WorkspaceRevision);
+    private sealed record ContentMeta(int SchemaVersion, long? WorkspaceRevision, int ChunkCount);
 
     private struct ScoringSubphases
     {
@@ -774,17 +837,16 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
 
     private sealed record RawTextAnalysis(bool HasTokenPhrase, BestLine BestLine);
 
-    private readonly record struct TextCandidate(string ChunkId, string TokenBody);
+    private readonly record struct TextCandidate(
+        string ChunkId,
+        string TokenBody,
+        string ContentKind,
+        int DocLen,
+        bool IsTest);
 
     private readonly record struct ScoredTextCandidate(string ChunkId, double Score);
 
     private sealed record ContentSymbolSpan(string SymbolId, string Name, int StartLine, int EndLine);
-
-    private sealed record TextChunkMetadata(
-        string ChunkId,
-        string ContentKind,
-        int DocLen,
-        bool IsTest);
 
     private sealed record TextChunk(
         string ChunkId,
@@ -809,13 +871,18 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
 
 internal enum FtsTextSearchQueryFamily
 {
+    OpenMetadata,
+    OpenChunkMetadata,
+    OpenSymbolSpans,
     ConnectionOpen,
+    AverageDocumentLength,
     DocumentFrequency,
     StrictCandidates,
     WidenedCandidates,
     CandidateFiltering,
     NarrowTokenScoring,
     FullHydration,
+    SymbolSpanHydration,
     RawTextAnalysis,
     SymbolMapping,
     ResultConstruction,
@@ -834,13 +901,18 @@ internal readonly record struct FtsTextSearchQueryFamilyMeasurement(
     long ReturnedRowCount);
 
 internal sealed record FtsTextSearchQueryMeasurementSnapshot(
+    FtsTextSearchQueryFamilyMeasurement OpenMetadata,
+    FtsTextSearchQueryFamilyMeasurement OpenChunkMetadata,
+    FtsTextSearchQueryFamilyMeasurement OpenSymbolSpans,
     FtsTextSearchQueryFamilyMeasurement ConnectionOpen,
+    FtsTextSearchQueryFamilyMeasurement AverageDocumentLength,
     FtsTextSearchQueryFamilyMeasurement DocumentFrequency,
     FtsTextSearchQueryFamilyMeasurement StrictCandidates,
     FtsTextSearchQueryFamilyMeasurement WidenedCandidates,
     FtsTextSearchQueryFamilyMeasurement CandidateFiltering,
     FtsTextSearchQueryFamilyMeasurement NarrowTokenScoring,
     FtsTextSearchQueryFamilyMeasurement FullHydration,
+    FtsTextSearchQueryFamilyMeasurement SymbolSpanHydration,
     FtsTextSearchQueryFamilyMeasurement RawTextAnalysis,
     FtsTextSearchQueryFamilyMeasurement SymbolMapping,
     FtsTextSearchQueryFamilyMeasurement ResultConstruction,
@@ -855,7 +927,9 @@ internal sealed class FtsTextSearchQueryTelemetryCollector
     private readonly long[] _rows = new long[Enum.GetValues<FtsTextSearchQueryFamily>().Length];
 
     internal static FtsTextSearchQueryMeasurementSnapshot EmptySnapshot { get; } =
-        new(default, default, default, default, default, default, default, default, default, default, default, default);
+        new(
+            default, default, default, default, default, default, default, default,
+            default, default, default, default, default, default, default, default, default);
 
     internal static FtsTextSearchQueryTelemetryCollector? Current => CurrentCollector.Value;
 
@@ -876,13 +950,18 @@ internal sealed class FtsTextSearchQueryTelemetryCollector
 
     internal FtsTextSearchQueryMeasurementSnapshot Snapshot() =>
         new(
+            Family(FtsTextSearchQueryFamily.OpenMetadata),
+            Family(FtsTextSearchQueryFamily.OpenChunkMetadata),
+            Family(FtsTextSearchQueryFamily.OpenSymbolSpans),
             Family(FtsTextSearchQueryFamily.ConnectionOpen),
+            Family(FtsTextSearchQueryFamily.AverageDocumentLength),
             Family(FtsTextSearchQueryFamily.DocumentFrequency),
             Family(FtsTextSearchQueryFamily.StrictCandidates),
             Family(FtsTextSearchQueryFamily.WidenedCandidates),
             Family(FtsTextSearchQueryFamily.CandidateFiltering),
             Family(FtsTextSearchQueryFamily.NarrowTokenScoring),
             Family(FtsTextSearchQueryFamily.FullHydration),
+            Family(FtsTextSearchQueryFamily.SymbolSpanHydration),
             Family(FtsTextSearchQueryFamily.RawTextAnalysis),
             Family(FtsTextSearchQueryFamily.SymbolMapping),
             Family(FtsTextSearchQueryFamily.ResultConstruction),

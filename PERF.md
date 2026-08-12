@@ -330,6 +330,15 @@ without first adding new phase, query-count, or resource evidence.
   Search remained 547 ms, total lookup 825 ms, and graph 294 ms. The correct 3,378-byte, 10-result response used
   238 CPU ticks and 1,605,754,253 logical-read characters, peaking at 148,243 KB PSS / 195,332 KB RSS. Impact,
   trace, and idle were skipped because context remained over gate.
+- **Content-provider diagnosis:** Release was rebuilt from clean `a0613d60`; the one diagnosis completed correctly
+  in 2,253 ms server wall / 2,254 ms persisted telemetry, still missing the 2 s gate. Provider work occurred only
+  in SourceRescue: one resolve took 238 ms, comprising one 6 ms read-session open, one cache miss, and one 230 ms
+  index load; every later provider delta was zero. Source rescue was 580 ms, including content FTS widened
+  candidates 47 ms / 3,786 rows, narrow scoring 196 ms / 1,832 rows, hydration 8 ms / 116 rows, and fused raw-text
+  analysis 74 ms / 116 rows. Symbol Search was 555 ms, total lookup 1,594 calls / 830 ms, and graph 295 ms. The
+  response remained correct at 3,378 bytes / 10 results / 845 tokens. Exact PID/cid log evidence was retained,
+  but the harness result exceeded the orchestration output budget after process exit, so its sampled CPU/I/O/PSS
+  object was not recoverable; the candidate was not repeated and PID `2150085` was confirmed absent.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 

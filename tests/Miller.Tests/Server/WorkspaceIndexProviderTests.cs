@@ -410,8 +410,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         var firstTelemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
         using IDisposable firstActivation = firstTelemetry.ActivateSearchTelemetry();
         FtsTextSearchQueryTelemetryCollector.Current!.Record(new FtsTextSearchQueryObservation(
-            FtsTextSearchQueryFamily.ConnectionOpen,
-            Rows: 0,
+            FtsTextSearchQueryFamily.OpenMetadata,
+            Rows: 1,
             Elapsed: TimeSpan.FromMilliseconds(10)));
 
         ContextLookupPhaseObservation second;
@@ -419,7 +419,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using (secondTelemetry.ActivateSearchTelemetry())
         {
             FtsTextSearchQueryTelemetryCollector.Current!.Record(new FtsTextSearchQueryObservation(
-                FtsTextSearchQueryFamily.RawTextAnalysis,
+                FtsTextSearchQueryFamily.SymbolSpanHydration,
                 Rows: 12,
                 Elapsed: TimeSpan.FromMilliseconds(250)));
             second = secondTelemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
@@ -434,13 +434,15 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         ContextLookupPhaseObservation zero =
             firstTelemetry.CompleteLookupPhase(ContextLookupPhase.QueryRetrieval);
 
-        Assert.Equal(1, first.FtsTextSearchDelta.ConnectionOpen.CallCount);
+        Assert.Equal(1, first.FtsTextSearchDelta.OpenMetadata.CallCount);
+        Assert.Equal(10, first.FtsTextSearchDelta.OpenMetadata.ElapsedMilliseconds);
+        Assert.Equal(1, first.FtsTextSearchDelta.OpenMetadata.ReturnedRowCount);
         Assert.Equal(1, first.FtsTextSearchDelta.FinalOrdering.CallCount);
-        Assert.Equal(0, first.FtsTextSearchDelta.RawTextAnalysis.CallCount);
-        Assert.Equal(1, second.FtsTextSearchDelta.RawTextAnalysis.CallCount);
-        Assert.Equal(250, second.FtsTextSearchDelta.RawTextAnalysis.ElapsedMilliseconds);
-        Assert.Equal(12, second.FtsTextSearchDelta.RawTextAnalysis.ReturnedRowCount);
-        Assert.Equal(0, second.FtsTextSearchDelta.ConnectionOpen.CallCount);
+        Assert.Equal(0, first.FtsTextSearchDelta.SymbolSpanHydration.CallCount);
+        Assert.Equal(1, second.FtsTextSearchDelta.SymbolSpanHydration.CallCount);
+        Assert.Equal(250, second.FtsTextSearchDelta.SymbolSpanHydration.ElapsedMilliseconds);
+        Assert.Equal(12, second.FtsTextSearchDelta.SymbolSpanHydration.ReturnedRowCount);
+        Assert.Equal(0, second.FtsTextSearchDelta.OpenMetadata.CallCount);
         Assert.Equal(0, zero.FtsTextSearchDelta.TotalCallCount);
     }
 

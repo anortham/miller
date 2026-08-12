@@ -38,13 +38,18 @@ internal enum ContextLookupPhase
 }
 
 internal sealed record FtsTextSearchQueryTelemetrySnapshot(
+    SearchRequestFamilyTelemetry OpenMetadata,
+    SearchRequestFamilyTelemetry OpenChunkMetadata,
+    SearchRequestFamilyTelemetry OpenSymbolSpans,
     SearchRequestFamilyTelemetry ConnectionOpen,
+    SearchRequestFamilyTelemetry AverageDocumentLength,
     SearchRequestFamilyTelemetry DocumentFrequency,
     SearchRequestFamilyTelemetry StrictCandidates,
     SearchRequestFamilyTelemetry WidenedCandidates,
     SearchRequestFamilyTelemetry CandidateFiltering,
     SearchRequestFamilyTelemetry NarrowTokenScoring,
     SearchRequestFamilyTelemetry FullHydration,
+    SearchRequestFamilyTelemetry SymbolSpanHydration,
     SearchRequestFamilyTelemetry RawTextAnalysis,
     SearchRequestFamilyTelemetry SymbolMapping,
     SearchRequestFamilyTelemetry ResultConstruction,
@@ -52,13 +57,18 @@ internal sealed record FtsTextSearchQueryTelemetrySnapshot(
     SearchRequestFamilyTelemetry FinalOrdering)
 {
     internal long TotalCallCount =>
+        OpenMetadata.CallCount +
+        OpenChunkMetadata.CallCount +
+        OpenSymbolSpans.CallCount +
         ConnectionOpen.CallCount +
+        AverageDocumentLength.CallCount +
         DocumentFrequency.CallCount +
         StrictCandidates.CallCount +
         WidenedCandidates.CallCount +
         CandidateFiltering.CallCount +
         NarrowTokenScoring.CallCount +
         FullHydration.CallCount +
+        SymbolSpanHydration.CallCount +
         RawTextAnalysis.CallCount +
         SymbolMapping.CallCount +
         ResultConstruction.CallCount +
@@ -307,13 +317,18 @@ internal sealed class ReadPhaseTelemetry
         FtsTextSearchQueryMeasurementSnapshot current,
         FtsTextSearchQueryMeasurementSnapshot baseline) =>
         new(
+            FtsTextSearchFamilyDelta(current.OpenMetadata, baseline.OpenMetadata),
+            FtsTextSearchFamilyDelta(current.OpenChunkMetadata, baseline.OpenChunkMetadata),
+            FtsTextSearchFamilyDelta(current.OpenSymbolSpans, baseline.OpenSymbolSpans),
             FtsTextSearchFamilyDelta(current.ConnectionOpen, baseline.ConnectionOpen),
+            FtsTextSearchFamilyDelta(current.AverageDocumentLength, baseline.AverageDocumentLength),
             FtsTextSearchFamilyDelta(current.DocumentFrequency, baseline.DocumentFrequency),
             FtsTextSearchFamilyDelta(current.StrictCandidates, baseline.StrictCandidates),
             FtsTextSearchFamilyDelta(current.WidenedCandidates, baseline.WidenedCandidates),
             FtsTextSearchFamilyDelta(current.CandidateFiltering, baseline.CandidateFiltering),
             FtsTextSearchFamilyDelta(current.NarrowTokenScoring, baseline.NarrowTokenScoring),
             FtsTextSearchFamilyDelta(current.FullHydration, baseline.FullHydration),
+            FtsTextSearchFamilyDelta(current.SymbolSpanHydration, baseline.SymbolSpanHydration),
             FtsTextSearchFamilyDelta(current.RawTextAnalysis, baseline.RawTextAnalysis),
             FtsTextSearchFamilyDelta(current.SymbolMapping, baseline.SymbolMapping),
             FtsTextSearchFamilyDelta(current.ResultConstruction, baseline.ResultConstruction),
@@ -323,13 +338,18 @@ internal sealed class ReadPhaseTelemetry
     private static FtsTextSearchQueryTelemetrySnapshot FtsTextSearchTelemetry(
         FtsTextSearchQueryMeasurementSnapshot current) =>
         new(
+            FtsTextSearchFamily(current.OpenMetadata),
+            FtsTextSearchFamily(current.OpenChunkMetadata),
+            FtsTextSearchFamily(current.OpenSymbolSpans),
             FtsTextSearchFamily(current.ConnectionOpen),
+            FtsTextSearchFamily(current.AverageDocumentLength),
             FtsTextSearchFamily(current.DocumentFrequency),
             FtsTextSearchFamily(current.StrictCandidates),
             FtsTextSearchFamily(current.WidenedCandidates),
             FtsTextSearchFamily(current.CandidateFiltering),
             FtsTextSearchFamily(current.NarrowTokenScoring),
             FtsTextSearchFamily(current.FullHydration),
+            FtsTextSearchFamily(current.SymbolSpanHydration),
             FtsTextSearchFamily(current.RawTextAnalysis),
             FtsTextSearchFamily(current.SymbolMapping),
             FtsTextSearchFamily(current.ResultConstruction),
