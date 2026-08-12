@@ -70,3 +70,13 @@
 - The persisted plan is `/tmp/miller-name-reverse-85c51f81.txt`. It materializes the `identifier_resolutions` compatibility union, scans the resolution base, and builds `AUTOMATIC COVERING INDEX (identifier_id=?)` for the left join. That plan shape is inefficient, but the isolated caller completed in 142 ms and returned zero rows, so it does not explain the seven-second wall miss for this exact payload.
 - No production telemetry, seam, or query change was added because the required hypothesis was rejected. The opt-in real-store diagnostic source was removed after collecting evidence.
 - Next isolated arm: unresolved-name forward. It is the next unmeasured fallback arm after rejecting unresolved-name reverse; this is a diagnostic selection, not a root-cause claim. Do not rerun the combined context query until that arm is isolated or main-frontier phase telemetry changes.
+
+## Round 4: remaining post-fix frontier arms exhausted
+
+- One reusable opt-in Scale harness compiled cleanly, then each remaining fixed SQL arm ran exactly once against the same pinned real family view and `WorkspaceIndexProvider` id. Each invocation persisted `EXPLAIN` before execution and had its own five-second outer timeout.
+- Unresolved-name forward: `/tmp/miller-name-forward-85c51f81.txt`; 0 rows; 1,397.130 ms query wall. Its plan materialized the identifier-resolution union, scanned the resolution base, and built `AUTOMATIC COVERING INDEX (identifier_id=?)` before using `idx_read_identifiers_containing` and symbol-name indexes.
+- Relationship forward: `/tmp/miller-relationship-forward-85c51f81.txt`; 0 rows; 0.110 ms query wall. Its plan used `idx_read_relationships_from(from_symbol_id=?)`.
+- Relationship reverse: `/tmp/miller-relationship-reverse-85c51f81.txt`; 0 rows; 0.111 ms query wall. Its plan used `idx_read_relationships_to(to_symbol_id=?)`.
+- Together with round 3 unresolved-name reverse (0 rows, 142 ms test duration), every relationship/name arm remaining after the family resolution capability is individually below the required two-second stop threshold. No caller-facing RED or production fix was added because no isolated arm satisfied the gate.
+- The selected remaining family is the composed frontier query itself: SQLite's planning/materialization interaction across the fixed `UNION ALL` arms, rather than an individually slow relationship/name arm. This is an evidence-bounded diagnosis, not yet a root cause. The combined query and process context were not rerun.
+- The diagnostic harness was removed. Next work must add fixed internal per-arm/composition telemetry or construct a production-fixture RED for the combined query shape without another process context replay.
