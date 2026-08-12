@@ -393,6 +393,13 @@ public sealed record WorkspaceHealthFacts(
             : $"vector retrieval is {vectors.State}: {vectors.Reason}";
         warnings.Add(new HealthWarning($"vectors_{normalizedState}", "degraded", message));
         recommended.Add("keep a resident Miller leader running so vectors can converge or rebuild");
+
+        // Only an absent artifact is plausibly a never-prepared model. building/downloading are active work, and
+        // incompatible/circuit-open/disk-blocked have their own remedies that another download cannot deliver.
+        if (string.Equals(vectors.State, "unavailable", StringComparison.OrdinalIgnoreCase))
+            recommended.Add(
+                "if vectors have never converged here, install the embedding model with `miller semantic prepare` " +
+                "— a refresh alone cannot download it");
     }
 
     private static HealthState StateFrom(WorkspaceFacts statusFacts, IReadOnlyList<HealthWarning> warnings)

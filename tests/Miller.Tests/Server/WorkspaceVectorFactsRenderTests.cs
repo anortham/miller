@@ -314,6 +314,104 @@ public sealed class WorkspaceVectorFactsRenderTests
     }
 
     [Fact]
+    public void Health_VectorsUnavailable_AlsoRecommendsCheckingThePreparedModel()
+    {
+        var vectors = new VectorSidecarFacts(
+            "unavailable",
+            "/repo/.miller/vectors.db",
+            "no vector artifact exists");
+
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            Facts(vectors),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(OkCount: 1, EmptyCount: 0, ErrorCount: 0),
+            EmptyExtractionHealth());
+
+        Assert.Contains(
+            health.RecommendedActions,
+            action => action.Contains("miller semantic prepare", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("building")]
+    [InlineData("downloading")]
+    [InlineData("disk-blocked")]
+    [InlineData("incompatible")]
+    public void Health_StatesPrepareCannotFix_DoNotRecommendDownloadingTheModel(string state)
+    {
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            Facts(new VectorSidecarFacts(state, "/repo/.miller/vectors.db", "reason")),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(OkCount: 1, EmptyCount: 0, ErrorCount: 0),
+            EmptyExtractionHealth());
+
+        Assert.DoesNotContain(
+            health.RecommendedActions,
+            action => action.Contains("miller semantic prepare", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("building")]
+    [InlineData("downloading")]
+    [InlineData("disk-blocked")]
+    [InlineData("incompatible")]
+    public void Onboarding_StatesPrepareCannotFix_DoNotNoteTheModelDownload(string state)
+    {
+        WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingFacts.Create(
+            Facts(new VectorSidecarFacts(state, "/repo/.miller/vectors.db", "reason")),
+            TelemetryOnboardingFacts.Unavailable("absent"),
+            []);
+
+        Assert.DoesNotContain(
+            onboarding.InstructionNotes,
+            note => note.Contains("miller semantic prepare", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Onboarding_ModelNotPrepared_NotesThePrepareStep()
+    {
+        WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingFacts.Create(
+            Facts(new VectorSidecarFacts("model-not-prepared", "/repo/.miller/vectors.db", "ready=false")),
+            TelemetryOnboardingFacts.Unavailable("absent"),
+            []);
+
+        Assert.Contains(
+            onboarding.InstructionNotes,
+            note => note.Contains("miller semantic prepare", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Onboarding_SemanticEnabledButNotServing_NotesThePrepareStep()
+    {
+        var vectors = new VectorSidecarFacts(
+            "unavailable",
+            "/repo/.miller/vectors.db",
+            "no vector artifact exists");
+
+        WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingFacts.Create(
+            Facts(vectors),
+            TelemetryOnboardingFacts.Unavailable("absent"),
+            []);
+
+        Assert.Contains(
+            onboarding.InstructionNotes,
+            note => note.Contains("miller semantic prepare", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Onboarding_SemanticReady_DoesNotNagAboutPreparing()
+    {
+        WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingFacts.Create(
+            Facts(new VectorSidecarFacts("ready", "/repo/.miller/vectors.db", null)),
+            TelemetryOnboardingFacts.Unavailable("absent"),
+            []);
+
+        Assert.DoesNotContain(
+            onboarding.InstructionNotes,
+            note => note.Contains("miller semantic prepare", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Health_ModelNotPrepared_RecommendsPrepareInsteadOfAResidentLeader()
     {
         var vectors = new VectorSidecarFacts(

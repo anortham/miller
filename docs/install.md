@@ -14,6 +14,10 @@ install it separately, and no .NET SDK is needed to run the main `miller` binary
 Native AOT). The packaged dashboard helper is self-contained but non-AOT because ASP.NET Razor Components
 do not currently support Native AOT.
 
+Archives also bundle the `julie-semantic-sidecar` runtime but **never the model weights**. Semantic
+retrieval is on by default, so every install needs the one-time
+[embedding-model download](#enable-semantic-retrieval) before the semantic arm does any work.
+
 ## Plugin install
 
 The plugin launcher downloads the Miller release archive that matches your platform, verifies its
@@ -112,6 +116,36 @@ for each, and smoke-runs both `julie-extract --version` and `miller version` bef
 Maintainers should use the two-step validation/promote flow in
 [`release-process.md`](release-process.md) so publishing reuses already validated artifacts instead of
 rebuilding the platform matrix.
+
+## Enable semantic retrieval
+
+Release archives ship the embedding sidecar and its llama/ggml runtime, but packages
+[never bundle model weights](https://github.com/anortham/julie-semantic-sidecar) and **no Miller code
+path downloads them** — the only path is the `semantic prepare` verb. Because semantic retrieval is
+default-on, an install that skips this step serves lexical-only forever while `workspace health` reports
+`degraded`. Run once per machine:
+
+```bash
+miller semantic prepare
+```
+
+| Fact | Value |
+|---|---|
+| Default encoder | `bge-small-en-v1.5-f32`, 384 dimensions, ~134 MB |
+| Optional encoder | `qwen3-0.6b-f16`, 512 dimensions, ~1.2 GB, ~8x build time |
+| Cache (Windows) | `%LOCALAPPDATA%\julie-semantic\` |
+| Cache (macOS/Linux) | `~/.cache/julie-semantic` (or `$XDG_CACHE_HOME/julie-semantic`) |
+| Cache override | `JULIE_EMBEDDING_CACHE_DIR` |
+| Encoder selection | `MILLER_SEMANTIC_MODEL=<id>` |
+| Disable entirely | `MILLER_SEMANTIC=off` (permanent zero-work; lexical output byte-identical) |
+
+**Restart the MCP server after preparing.** `prepare` only activates a broker that is already running, so
+a server that started before the download stays lexical-only and reports
+`semantic_broker: not_started`. Verify with `miller workspace status`: semantics are live when `vectors`
+reads `ready` and `semantic_broker` reads `ready` with a resolved `backend`.
+
+If `workspace status` shows a vector artifact without a completeness stamp, check `workspace health`
+first — a missing model is reported as `vectors_model_not_prepared`, which `workspace refresh` cannot fix.
 
 ## MCP configuration
 
