@@ -537,6 +537,65 @@ public sealed class FamilyStoreReadSessionTests
         Assert.Equal(identifierCallerId, reached.Id);
     }
 
+    [Fact]
+    public void CombinedFamilyFrontierUsesSeparateBoundedStatementsWithExactParity()
+    {
+        const string targetId = "62000000000000000000000000000001";
+        const string identifierCallerId = "62000000000000000000000000000002";
+        const string pendingCallerId = "62000000000000000000000000000003";
+        const string relationshipTargetId = "62000000000000000000000000000004";
+        const string relationshipCallerId = "62000000000000000000000000000005";
+        const string nameTargetId = "62000000000000000000000000000006";
+        const string nameCallerId = "62000000000000000000000000000007";
+        using StoreFixture fixture = StoreFixture.Create();
+        InstallResolutionBase(
+            fixture,
+            "base-combined-frontier",
+            "manifest-current",
+            baseVersionId: 2,
+            baseTargetSymbolId: targetId,
+            deltaTargetSymbolId: null,
+            sequence: 3,
+            deltaGeneration: 1,
+            includeGraphRows: true);
+        InstallGraphRows(fixture, targetId, identifierCallerId, pendingCallerId);
+        InstallCombinedFrontierRows(
+            fixture,
+            targetId,
+            relationshipTargetId,
+            relationshipCallerId,
+            nameTargetId,
+            nameCallerId);
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        using var graph = new SqliteSymbolGraphIndex(session)
+        {
+            CaptureFrontierQueryPlan = true,
+        };
+
+        IReadOnlyList<ReachedNode> result = graph.Reach([targetId], 1, 20, Direction.Both);
+        GraphQueryTelemetrySnapshot telemetry = graph.QueryTelemetry;
+
+        Assert.Equal(
+            [identifierCallerId, pendingCallerId, relationshipTargetId, relationshipCallerId, nameTargetId, nameCallerId],
+            result.Select(static node => node.Id));
+        Assert.Equal(2, telemetry.FrontierRelationships.Executions);
+        Assert.Equal(2, telemetry.FrontierUnresolvedNames.Executions);
+        Assert.Equal(1, telemetry.FrontierBatch.Executions);
+        Assert.Equal(2, graph.LastFrontierQueryPlan.RelationshipStatements.Count);
+        Assert.Equal(2, graph.LastFrontierQueryPlan.UnresolvedNameStatements.Count);
+        Assert.All(
+            graph.LastFrontierQueryPlan.RelationshipStatements,
+            plan => Assert.DoesNotContain(
+                plan,
+                detail => detail.Contains("identifier_resolutions", StringComparison.Ordinal)));
+        Assert.All(
+            graph.LastFrontierQueryPlan.UnresolvedNameStatements,
+            plan => Assert.InRange(
+                plan.Count(detail => detail.Contains("MATERIALIZE identifier_resolutions", StringComparison.Ordinal)),
+                0,
+                1));
+    }
+
     private static long ReadStoreLogSequence(StoreFixture fixture)
     {
         using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
@@ -809,6 +868,49 @@ public sealed class FamilyStoreReadSessionTests
               ('view-a',1,2,'pending','tombstone',NULL,NULL,NULL,NULL,NULL);
             """;
         command.Parameters.AddWithValue("$target", deltaTargetId);
+        command.ExecuteNonQuery();
+    }
+
+    private static void InstallCombinedFrontierRows(
+        StoreFixture fixture,
+        string targetId,
+        string relationshipTargetId,
+        string relationshipCallerId,
+        string nameTargetId,
+        string nameCallerId)
+    {
+        string storePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = storePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO symbols VALUES
+              (2,$relationshipTarget,'same.cs','csharp','RelationshipTarget','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+              (2,$relationshipCaller,'same.cs','csharp','RelationshipCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+              (2,$nameTarget,'same.cs','csharp','UniqueNameTarget','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+              (2,$nameCaller,'same.cs','csharp','NameCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+            INSERT INTO relationships
+              (version_id,relationship_id,from_symbol_id,to_symbol_id,path,kind,confidence)
+              VALUES
+              (2,'relationship-forward',$target,$relationshipTarget,'same.cs','calls',1.0),
+              (2,'relationship-reverse',$relationshipCaller,$target,'same.cs','calls',1.0);
+            INSERT INTO identifiers
+              (version_id,identifier_id,path,language,name,kind,containing_symbol_id,
+               start_line,start_column,end_line,end_column,start_byte,end_byte,confidence)
+              VALUES
+              (2,'name-forward','same.cs','csharp','UniqueNameTarget','call',$target,1,1,1,2,0,1,1.0),
+              (2,'name-reverse','same.cs','csharp','Target','call',$nameCaller,1,1,1,2,0,1,1.0);
+            """;
+        command.Parameters.AddWithValue("$target", targetId);
+        command.Parameters.AddWithValue("$relationshipTarget", relationshipTargetId);
+        command.Parameters.AddWithValue("$relationshipCaller", relationshipCallerId);
+        command.Parameters.AddWithValue("$nameTarget", nameTargetId);
+        command.Parameters.AddWithValue("$nameCaller", nameCallerId);
         command.ExecuteNonQuery();
     }
 

@@ -31,6 +31,8 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     private readonly GraphQueryTelemetry _queryTelemetry = new();
 
     internal GraphQueryTelemetrySnapshot QueryTelemetry => _queryTelemetry.Snapshot();
+    internal bool CaptureFrontierQueryPlan { get; set; }
+    internal FrontierQueryPlan LastFrontierQueryPlan { get; private set; } = FrontierQueryPlan.Empty;
 
     public SqliteSymbolGraphIndex(string dbPath)
     {
@@ -295,145 +297,47 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             static _ => new Dictionary<string, GraphEdge>(StringComparer.Ordinal),
             StringComparer.Ordinal);
 
-        string values = string.Join(
-            ", ",
-            Enumerable.Range(0, missingIds.Length).Select(index => $"($id{index})"));
-        string resolutionArms = _readSession is IFamilyGraphResolutionReader
-            ? string.Empty
-            : """
-                UNION ALL
-                SELECT candidates.id, p.from_symbol_id, pr.target_symbol_id, p.kind,
-                       MIN(p.confidence, pr.confidence), 'pending_resolution'
-                FROM candidates
-                JOIN pending_relationships p ON p.from_symbol_id = candidates.id
-                JOIN pending_resolutions pr
-                  ON pr.pending_relationship_id = p.pending_relationship_id
-                JOIN symbols target_symbol ON target_symbol.symbol_id = pr.target_symbol_id
-                WHERE $forward = 1
-                UNION ALL
-                SELECT candidates.id, p.from_symbol_id, pr.target_symbol_id, p.kind,
-                       MIN(p.confidence, pr.confidence), 'pending_resolution'
-                FROM candidates
-                JOIN pending_resolutions pr ON pr.target_symbol_id = candidates.id
-                JOIN pending_relationships p
-                  ON p.pending_relationship_id = pr.pending_relationship_id
-                JOIN symbols source_symbol ON source_symbol.symbol_id = p.from_symbol_id
-                WHERE $reverse = 1
-                UNION ALL
-                SELECT candidates.id,
-                       i.containing_symbol_id,
-                       ir.target_symbol_id,
-                       i.kind,
-                       COALESCE(ir.confidence, i.confidence),
-                       'identifier_target'
-                FROM candidates
-                JOIN identifiers i ON i.containing_symbol_id = candidates.id
-                JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-                JOIN symbols target_symbol
-                  ON target_symbol.symbol_id = ir.target_symbol_id
-                WHERE $forward = 1
-                UNION ALL
-                SELECT candidates.id, i.containing_symbol_id, ir.target_symbol_id,
-                       i.kind, COALESCE(ir.confidence, i.confidence), 'identifier_target'
-                FROM candidates
-                JOIN identifier_resolutions ir ON ir.target_symbol_id = candidates.id
-                JOIN identifiers i ON i.identifier_id = ir.identifier_id
-                JOIN symbols source_symbol ON source_symbol.symbol_id = i.containing_symbol_id
-                WHERE $reverse = 1
-                """;
-        using (var command = Connection.CreateCommand())
+        long frontierStarted = Stopwatch.GetTimestamp();
+        int frontierRows = 0;
+        var relationshipPlans = new List<IReadOnlyList<string>>();
+        var unresolvedNamePlans = new List<IReadOnlyList<string>>();
+        if (direction is Direction.Forward or Direction.Both)
         {
-            command.CommandText = $"""
-                WITH candidates(id) AS (VALUES {values}),
-                selected_edges(current_id, from_id, to_id, kind, confidence, source) AS (
-                    SELECT candidates.id, r.from_symbol_id, r.to_symbol_id,
-                           r.kind, r.confidence, 'relationship'
-                    FROM candidates
-                    JOIN relationships r ON r.from_symbol_id = candidates.id
-                    JOIN symbols target_symbol ON target_symbol.symbol_id = r.to_symbol_id
-                    WHERE $forward = 1
-                    UNION ALL
-                    SELECT candidates.id, r.from_symbol_id, r.to_symbol_id,
-                           r.kind, r.confidence, 'relationship'
-                    FROM candidates
-                    JOIN relationships r ON r.to_symbol_id = candidates.id
-                    JOIN symbols source_symbol ON source_symbol.symbol_id = r.from_symbol_id
-                    WHERE $reverse = 1
-                    {resolutionArms}
-                    UNION ALL
-                    SELECT candidates.id, i.containing_symbol_id, target_symbol.symbol_id,
-                           i.kind, i.confidence * 0.5, 'identifier_name'
-                    FROM candidates
-                    JOIN identifiers i ON i.containing_symbol_id = candidates.id
-                    LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-                    JOIN symbols target_symbol ON target_symbol.name = i.name
-                    WHERE $forward = 1
-                      AND ir.target_symbol_id IS NULL
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM symbols duplicate
-                          WHERE duplicate.name = i.name
-                            AND duplicate.symbol_id <> target_symbol.symbol_id
-                      )
-                    UNION ALL
-                    SELECT candidates.id, i.containing_symbol_id, target_symbol.symbol_id,
-                           i.kind, i.confidence * 0.5, 'identifier_name'
-                    FROM candidates
-                    JOIN symbols target_symbol ON target_symbol.symbol_id = candidates.id
-                    JOIN identifiers i ON i.name = target_symbol.name
-                    LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-                    JOIN symbols source_symbol ON source_symbol.symbol_id = i.containing_symbol_id
-                    WHERE $reverse = 1
-                      AND ir.target_symbol_id IS NULL
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM symbols duplicate
-                          WHERE duplicate.name = target_symbol.name
-                            AND duplicate.symbol_id <> target_symbol.symbol_id
-                      )
-                )
-                SELECT current_id, from_id, to_id, kind, confidence, source
-                FROM selected_edges
-                WHERE from_id <> to_id;
-                """;
-            for (int index = 0; index < missingIds.Length; index++)
-                command.Parameters.AddWithValue($"$id{index}", missingIds[index]);
-            command.Parameters.AddWithValue(
-                "$forward",
-                direction is Direction.Forward or Direction.Both ? 1 : 0);
-            command.Parameters.AddWithValue(
-                "$reverse",
-                direction is Direction.Reverse or Direction.Both ? 1 : 0);
-
-            long started = Stopwatch.GetTimestamp();
-            using var reader = command.ExecuteReader();
-            int currentOrdinal = reader.GetOrdinal("current_id");
-            int fromOrdinal = reader.GetOrdinal("from_id");
-            int toOrdinal = reader.GetOrdinal("to_id");
-            int kindOrdinal = reader.GetOrdinal("kind");
-            int confidenceOrdinal = reader.GetOrdinal("confidence");
-            int sourceOrdinal = reader.GetOrdinal("source");
-            int rows = 0;
-            while (reader.Read())
-            {
-                rows++;
-                string current = reader.GetString(currentOrdinal);
-                string from = reader.GetString(fromOrdinal);
-                string to = reader.GetString(toOrdinal);
-                string neighbour = string.Equals(from, current, StringComparison.Ordinal) ? to : from;
-                AddEdge(
-                    edgesById[current],
-                    current,
-                    neighbour,
-                    new GraphEdge(
-                        from,
-                        to,
-                        reader.GetString(kindOrdinal),
-                        reader.GetDouble(confidenceOrdinal),
-                        reader.GetString(sourceOrdinal)));
-            }
-            _queryTelemetry.FrontierBatch.Add(rows, Stopwatch.GetElapsedTime(started));
+            frontierRows += ExecuteFrontierStatement(
+                missingIds,
+                RelationshipForwardSql,
+                edgesById,
+                _queryTelemetry.FrontierRelationships,
+                relationshipPlans);
+            frontierRows += ExecuteFrontierStatement(
+                missingIds,
+                UnresolvedNameForwardSql,
+                edgesById,
+                _queryTelemetry.FrontierUnresolvedNames,
+                unresolvedNamePlans);
+            if (_readSession is not IFamilyGraphResolutionReader)
+                frontierRows += ExecuteFrontierStatement(missingIds, ResolutionForwardSql, edgesById, null, null);
         }
+        if (direction is Direction.Reverse or Direction.Both)
+        {
+            frontierRows += ExecuteFrontierStatement(
+                missingIds,
+                RelationshipReverseSql,
+                edgesById,
+                _queryTelemetry.FrontierRelationships,
+                relationshipPlans);
+            frontierRows += ExecuteFrontierStatement(
+                missingIds,
+                UnresolvedNameReverseSql,
+                edgesById,
+                _queryTelemetry.FrontierUnresolvedNames,
+                unresolvedNamePlans);
+            if (_readSession is not IFamilyGraphResolutionReader)
+                frontierRows += ExecuteFrontierStatement(missingIds, ResolutionReverseSql, edgesById, null, null);
+        }
+        _queryTelemetry.FrontierBatch.Add(frontierRows, Stopwatch.GetElapsedTime(frontierStarted));
+        if (CaptureFrontierQueryPlan)
+            LastFrontierQueryPlan = new FrontierQueryPlan(relationshipPlans, unresolvedNamePlans);
 
         if (_readSession is IFamilyGraphResolutionReader resolutionReader)
         {
@@ -500,6 +404,150 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         }
         return loaded;
     }
+
+    private int ExecuteFrontierStatement(
+        IReadOnlyList<string> ids,
+        string sql,
+        Dictionary<string, Dictionary<string, GraphEdge>> edgesById,
+        GraphQueryFamilyAccumulator? telemetry,
+        List<IReadOnlyList<string>>? plans)
+    {
+        string values = string.Join(", ", Enumerable.Range(0, ids.Count).Select(index => $"($id{index})"));
+        using Microsoft.Data.Sqlite.SqliteCommand command = Connection.CreateCommand();
+        command.CommandText = $"WITH candidates(id) AS (VALUES {values})\n" + sql;
+        for (int index = 0; index < ids.Count; index++)
+            command.Parameters.AddWithValue($"$id{index}", ids[index]);
+        if (CaptureFrontierQueryPlan && plans is not null)
+            plans.Add(ReadQueryPlan(command));
+
+        long started = Stopwatch.GetTimestamp();
+        using Microsoft.Data.Sqlite.SqliteDataReader reader = command.ExecuteReader();
+        int currentOrdinal = reader.GetOrdinal("current_id");
+        int fromOrdinal = reader.GetOrdinal("from_id");
+        int toOrdinal = reader.GetOrdinal("to_id");
+        int kindOrdinal = reader.GetOrdinal("kind");
+        int confidenceOrdinal = reader.GetOrdinal("confidence");
+        int sourceOrdinal = reader.GetOrdinal("source");
+        int rows = 0;
+        while (reader.Read())
+        {
+            rows++;
+            string current = reader.GetString(currentOrdinal);
+            string from = reader.GetString(fromOrdinal);
+            string to = reader.GetString(toOrdinal);
+            string neighbour = string.Equals(from, current, StringComparison.Ordinal) ? to : from;
+            AddEdge(
+                edgesById[current],
+                current,
+                neighbour,
+                new GraphEdge(
+                    from,
+                    to,
+                    reader.GetString(kindOrdinal),
+                    reader.GetDouble(confidenceOrdinal),
+                    reader.GetString(sourceOrdinal)));
+        }
+        telemetry?.Add(rows, Stopwatch.GetElapsedTime(started));
+        return rows;
+    }
+
+    private static IReadOnlyList<string> ReadQueryPlan(Microsoft.Data.Sqlite.SqliteCommand command)
+    {
+        using Microsoft.Data.Sqlite.SqliteCommand explain = command.Connection!.CreateCommand();
+        explain.CommandText = "EXPLAIN QUERY PLAN " + command.CommandText;
+        foreach (Microsoft.Data.Sqlite.SqliteParameter parameter in command.Parameters)
+            explain.Parameters.AddWithValue(parameter.ParameterName, parameter.Value);
+        using Microsoft.Data.Sqlite.SqliteDataReader reader = explain.ExecuteReader();
+        var plan = new List<string>();
+        while (reader.Read())
+            plan.Add(reader.GetString(3));
+        return plan;
+    }
+
+    private const string RelationshipForwardSql = """
+        SELECT candidates.id AS current_id,r.from_symbol_id AS from_id,r.to_symbol_id AS to_id,
+               r.kind,r.confidence,'relationship' AS source
+        FROM candidates
+        JOIN relationships r ON r.from_symbol_id=candidates.id
+        JOIN symbols target_symbol ON target_symbol.symbol_id=r.to_symbol_id
+        WHERE r.from_symbol_id<>r.to_symbol_id;
+        """;
+
+    private const string RelationshipReverseSql = """
+        SELECT candidates.id AS current_id,r.from_symbol_id AS from_id,r.to_symbol_id AS to_id,
+               r.kind,r.confidence,'relationship' AS source
+        FROM candidates
+        JOIN relationships r ON r.to_symbol_id=candidates.id
+        JOIN symbols source_symbol ON source_symbol.symbol_id=r.from_symbol_id
+        WHERE r.from_symbol_id<>r.to_symbol_id;
+        """;
+
+    private const string UnresolvedNameForwardSql = """
+        SELECT candidates.id AS current_id,i.containing_symbol_id AS from_id,
+               target_symbol.symbol_id AS to_id,i.kind,i.confidence * 0.5 AS confidence,
+               'identifier_name' AS source
+        FROM candidates
+        JOIN identifiers i ON i.containing_symbol_id=candidates.id
+        LEFT JOIN identifier_resolutions ir ON ir.identifier_id=i.identifier_id
+        JOIN symbols target_symbol ON target_symbol.name=i.name
+        WHERE ir.target_symbol_id IS NULL
+          AND i.containing_symbol_id<>target_symbol.symbol_id
+          AND NOT EXISTS (
+              SELECT 1 FROM symbols duplicate
+              WHERE duplicate.name=i.name AND duplicate.symbol_id<>target_symbol.symbol_id);
+        """;
+
+    private const string UnresolvedNameReverseSql = """
+        SELECT candidates.id AS current_id,i.containing_symbol_id AS from_id,
+               target_symbol.symbol_id AS to_id,i.kind,i.confidence * 0.5 AS confidence,
+               'identifier_name' AS source
+        FROM candidates
+        JOIN symbols target_symbol ON target_symbol.symbol_id=candidates.id
+        JOIN identifiers i ON i.name=target_symbol.name
+        LEFT JOIN identifier_resolutions ir ON ir.identifier_id=i.identifier_id
+        JOIN symbols source_symbol ON source_symbol.symbol_id=i.containing_symbol_id
+        WHERE ir.target_symbol_id IS NULL
+          AND i.containing_symbol_id<>target_symbol.symbol_id
+          AND NOT EXISTS (
+              SELECT 1 FROM symbols duplicate
+              WHERE duplicate.name=target_symbol.name AND duplicate.symbol_id<>target_symbol.symbol_id);
+        """;
+
+    private const string ResolutionForwardSql = """
+        SELECT candidates.id AS current_id,p.from_symbol_id AS from_id,pr.target_symbol_id AS to_id,
+               p.kind,MIN(p.confidence,pr.confidence) AS confidence,'pending_resolution' AS source
+        FROM candidates
+        JOIN pending_relationships p ON p.from_symbol_id=candidates.id
+        JOIN pending_resolutions pr ON pr.pending_relationship_id=p.pending_relationship_id
+        JOIN symbols target_symbol ON target_symbol.symbol_id=pr.target_symbol_id
+        WHERE p.from_symbol_id<>pr.target_symbol_id
+        UNION ALL
+        SELECT candidates.id,i.containing_symbol_id,ir.target_symbol_id,i.kind,
+               COALESCE(ir.confidence,i.confidence),'identifier_target'
+        FROM candidates
+        JOIN identifiers i ON i.containing_symbol_id=candidates.id
+        JOIN identifier_resolutions ir ON ir.identifier_id=i.identifier_id
+        JOIN symbols target_symbol ON target_symbol.symbol_id=ir.target_symbol_id
+        WHERE i.containing_symbol_id<>ir.target_symbol_id;
+        """;
+
+    private const string ResolutionReverseSql = """
+        SELECT candidates.id AS current_id,p.from_symbol_id AS from_id,pr.target_symbol_id AS to_id,
+               p.kind,MIN(p.confidence,pr.confidence) AS confidence,'pending_resolution' AS source
+        FROM candidates
+        JOIN pending_resolutions pr ON pr.target_symbol_id=candidates.id
+        JOIN pending_relationships p ON p.pending_relationship_id=pr.pending_relationship_id
+        JOIN symbols source_symbol ON source_symbol.symbol_id=p.from_symbol_id
+        WHERE p.from_symbol_id<>pr.target_symbol_id
+        UNION ALL
+        SELECT candidates.id,i.containing_symbol_id,ir.target_symbol_id,i.kind,
+               COALESCE(ir.confidence,i.confidence),'identifier_target'
+        FROM candidates
+        JOIN identifier_resolutions ir ON ir.target_symbol_id=candidates.id
+        JOIN identifiers i ON i.identifier_id=ir.identifier_id
+        JOIN symbols source_symbol ON source_symbol.symbol_id=i.containing_symbol_id
+        WHERE i.containing_symbol_id<>ir.target_symbol_id;
+        """;
 
     private static void AddEdge(
         Dictionary<string, GraphEdge> edges,
@@ -864,6 +912,13 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
 
 internal sealed record GraphQueryFamilyTelemetry(int Executions, long Rows, TimeSpan Elapsed);
 
+internal sealed record FrontierQueryPlan(
+    IReadOnlyList<IReadOnlyList<string>> RelationshipStatements,
+    IReadOnlyList<IReadOnlyList<string>> UnresolvedNameStatements)
+{
+    internal static FrontierQueryPlan Empty { get; } = new([], []);
+}
+
 internal sealed record GraphQueryTelemetrySnapshot(
     GraphQueryFamilyTelemetry SymbolExists,
     GraphQueryFamilyTelemetry SymbolName,
@@ -875,6 +930,8 @@ internal sealed record GraphQueryTelemetrySnapshot(
     GraphQueryFamilyTelemetry IdentifiersReverse,
     GraphQueryFamilyTelemetry UnresolvedIdentifiersReverse,
     GraphQueryFamilyTelemetry ResolveName,
+    GraphQueryFamilyTelemetry FrontierRelationships,
+    GraphQueryFamilyTelemetry FrontierUnresolvedNames,
     GraphQueryFamilyTelemetry FrontierBatch,
     GraphQueryFamilyTelemetry SupplementalEdges)
 {
@@ -882,13 +939,15 @@ internal sealed record GraphQueryTelemetrySnapshot(
         SymbolExists.Executions + SymbolName.Executions + RelationshipsForward.Executions +
         PendingForward.Executions + IdentifiersForward.Executions + RelationshipsReverse.Executions +
         PendingReverse.Executions + IdentifiersReverse.Executions + UnresolvedIdentifiersReverse.Executions +
-        ResolveName.Executions + FrontierBatch.Executions + SupplementalEdges.Executions;
+        ResolveName.Executions + FrontierRelationships.Executions + FrontierUnresolvedNames.Executions +
+        FrontierBatch.Executions + SupplementalEdges.Executions;
 
     public TimeSpan TotalElapsed =>
         SymbolExists.Elapsed + SymbolName.Elapsed + RelationshipsForward.Elapsed + PendingForward.Elapsed +
         IdentifiersForward.Elapsed + RelationshipsReverse.Elapsed + PendingReverse.Elapsed +
         IdentifiersReverse.Elapsed + UnresolvedIdentifiersReverse.Elapsed + ResolveName.Elapsed +
-        FrontierBatch.Elapsed + SupplementalEdges.Elapsed;
+        FrontierRelationships.Elapsed + FrontierUnresolvedNames.Elapsed + FrontierBatch.Elapsed +
+        SupplementalEdges.Elapsed;
 }
 
 internal sealed class GraphQueryTelemetry
@@ -903,6 +962,8 @@ internal sealed class GraphQueryTelemetry
     internal GraphQueryFamilyAccumulator IdentifiersReverse { get; } = new();
     internal GraphQueryFamilyAccumulator UnresolvedIdentifiersReverse { get; } = new();
     internal GraphQueryFamilyAccumulator ResolveName { get; } = new();
+    internal GraphQueryFamilyAccumulator FrontierRelationships { get; } = new();
+    internal GraphQueryFamilyAccumulator FrontierUnresolvedNames { get; } = new();
     internal GraphQueryFamilyAccumulator FrontierBatch { get; } = new();
     internal GraphQueryFamilyAccumulator SupplementalEdges { get; } = new();
 
@@ -917,6 +978,8 @@ internal sealed class GraphQueryTelemetry
         IdentifiersReverse.Snapshot(),
         UnresolvedIdentifiersReverse.Snapshot(),
         ResolveName.Snapshot(),
+        FrontierRelationships.Snapshot(),
+        FrontierUnresolvedNames.Snapshot(),
         FrontierBatch.Snapshot(),
         SupplementalEdges.Snapshot());
 }
