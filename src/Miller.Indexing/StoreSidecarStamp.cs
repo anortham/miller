@@ -27,6 +27,9 @@ public sealed record StoreSidecarStamp(
     string LevelStampL2,
     string LevelStampL3)
 {
+    public string ScopeToken =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(ScopeMaterial(this))));
+
     public static StoreSidecarStamp FromSnapshot(StoreSidecarKind kind, WorkspaceReadSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -60,6 +63,40 @@ public sealed record StoreSidecarStamp(
             snapshot.Freshness.LevelStampL1,
             snapshot.Freshness.LevelStampL2,
             snapshot.Freshness.LevelStampL3);
+    }
+
+    private static string ScopeMaterial(StoreSidecarStamp stamp)
+    {
+        var material = new System.Text.StringBuilder();
+        AppendScopeField(material, ((int)stamp.Kind).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        AppendScopeField(material, stamp.FamilyId);
+        AppendScopeField(material, stamp.ViewId);
+        AppendScopeField(material, stamp.ManifestHash);
+        AppendScopeField(
+            material,
+            stamp.StoreLogSequence.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        AppendScopeField(material, stamp.ResolutionStamp);
+        AppendScopeField(material, stamp.StoreInstanceId);
+        AppendScopeField(material, stamp.GenerationName);
+        AppendScopeField(
+            material,
+            stamp.ManifestGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        AppendScopeField(material, stamp.IndexLevel);
+        AppendScopeField(material, stamp.LevelStampL1);
+        AppendScopeField(material, stamp.LevelStampL2);
+        AppendScopeField(material, stamp.LevelStampL3);
+        return material.ToString();
+    }
+
+    private static void AppendScopeField(System.Text.StringBuilder material, string? value)
+    {
+        if (value is null)
+        {
+            material.Append("-1:");
+            return;
+        }
+
+        material.Append(value.Length).Append(':').Append(value);
     }
 }
 

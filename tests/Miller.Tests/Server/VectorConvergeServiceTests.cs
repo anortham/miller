@@ -1427,6 +1427,48 @@ public sealed class VectorConvergeServiceTests
     }
 
     [Fact]
+    public async Task Drain_SameStateFamilyStorePauseWithChangedScope_RewritesAllPauseMetadata()
+    {
+        var port = new FakePort { StoreSidecarScope = "current-scope" };
+        port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        port.Metadata["converge_pause_state"] = "circuit-open";
+        port.Metadata["converge_pause_reason"] = "old reason";
+        port.Metadata["converge_pause_scope"] = "stale-scope";
+
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.CrashMidBatch), FastOptions);
+        VectorConvergeService service = NewService();
+
+        await service.DrainAsync(port, session, TestContext.Current.CancellationToken);
+        await service.DrainAsync(port, session, TestContext.Current.CancellationToken);
+
+        Assert.Equal("circuit-open", port.Meta("converge_pause_state"));
+        Assert.NotEqual("old reason", port.Meta("converge_pause_reason"));
+        Assert.Equal("current-scope", port.Meta("converge_pause_scope"));
+        Assert.Contains("converge_pause_state", port.MetaWrites);
+        Assert.Contains("converge_pause_reason", port.MetaWrites);
+        Assert.Contains("converge_pause_scope", port.MetaWrites);
+    }
+
+    [Fact]
+    public async Task Drain_HealthyWake_ClearsFamilyStorePauseStateReasonAndScope()
+    {
+        var port = new FakePort { StoreSidecarScope = "current-scope" };
+        port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        port.Metadata["converge_pause_state"] = "circuit-open";
+        port.Metadata["converge_pause_reason"] = "stale reason";
+        port.Metadata["converge_pause_scope"] = "stale-scope";
+
+        await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+        await NewService().DrainAsync(port, session, TestContext.Current.CancellationToken);
+
+        Assert.True(string.IsNullOrEmpty(port.Meta("converge_pause_state")));
+        Assert.True(string.IsNullOrEmpty(port.Meta("converge_pause_reason")));
+        Assert.True(string.IsNullOrEmpty(port.Meta("converge_pause_scope")));
+        Assert.Contains("converge_pause_scope", port.MetaWrites);
+    }
+
+    [Fact]
     public async Task Drain_ShadowBuildRefusedForDisk_StampsDiskBlockedWithFreeAndRequiredAndHoldsTheCursorWithNoDebris()
     {
         var live = new FakePort();
@@ -1915,6 +1957,8 @@ public sealed class VectorConvergeServiceTests
 
     private sealed class FakePort : IVectorConvergePort
     {
+        public string? StoreSidecarScope { get; set; }
+
         public Dictionary<string, string> Metadata { get; } = new(StringComparer.Ordinal)
         {
             ["artifact_id"] = Artifact,

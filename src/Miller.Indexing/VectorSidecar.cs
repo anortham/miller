@@ -193,6 +193,7 @@ public sealed class VectorSidecar
     private const string ModelNotPreparedState = "model-not-prepared";
     private const string CircuitOpenState = "circuit-open";
     private const string DiskBlockedState = "disk-blocked";
+    private const string ConvergePauseScopeKey = "converge_pause_scope";
     private const string DownloadingState = "downloading";
     private const string ActiveRole = "active";
     private const string RetainedRole = "retained";
@@ -293,10 +294,10 @@ public sealed class VectorSidecar
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Vector, snapshot);
         if (!StoreSidecarCatalog.IsCurrent(path, expected))
         {
-            // A recorded convergence pause explains WHY the stamp never landed, and the remedy differs: the
+            // A matching convergence pause explains why the stamp never landed, and the remedy differs: the
             // generic message below sends the user to `workspace refresh`, which can never install a model the
             // sidecar reported missing.
-            if (RecordedPause(path) is { } paused)
+            if (RecordedPause(path, expected) is { } paused)
                 return paused;
 
             return Unavailable(
@@ -606,13 +607,21 @@ public sealed class VectorSidecar
     /// The convergence pause recorded on an artifact that has not earned its completeness stamp, or
     /// <c>null</c> when the artifact is absent, unreadable, or records no pause.
     /// </summary>
-    private VectorSidecarFacts? RecordedPause(string path)
+    private VectorSidecarFacts? RecordedPause(string path, StoreSidecarStamp expected)
     {
         if (!_probe.FileExists(path))
             return null;
 
         if (!_opener.TryReadMeta(path, out IReadOnlyDictionary<string, string> meta, out _))
             return null;
+
+        if (!string.Equals(
+                meta.GetValueOrDefault(ConvergePauseScopeKey),
+                expected.ScopeToken,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
 
         return PauseState(meta) is { } pause
             ? new VectorSidecarFacts(pause, path, meta.GetValueOrDefault("converge_pause_reason"))

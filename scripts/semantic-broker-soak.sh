@@ -135,7 +135,13 @@ start_probe() {
 wait_ready() {
   local file="$1"
   local deadline=$((SECONDS + timeout_seconds))
-  until grep -q '"event":"ready"' "$file" 2>/dev/null; do
+  while true; do
+    if grep -q '"event":"failed"' "$file" 2>/dev/null; then
+      return 1
+    fi
+    if grep -q '"event":"ready"' "$file" 2>/dev/null; then
+      return 0
+    fi
     ((SECONDS < deadline)) || return 1
     sleep 0.1
   done
@@ -278,8 +284,8 @@ start_probe model-old 5 "$default_model"
 old_pid=$STARTED_PID
 start_probe model-new 5 "$fallback_model"
 new_pid=$STARTED_PID
-wait_ready "$output_dir/model-old.jsonl" || true
-wait_ready "$output_dir/model-new.jsonl" || true
+wait_ready "$output_dir/model-old.jsonl"
+wait_ready "$output_dir/model-new.jsonl"
 old_endpoint="$(jq -r 'select(.event=="ready") | .endpointIdentity' "$output_dir/model-old.jsonl" | tail -1)"
 new_endpoint="$(jq -r 'select(.event=="ready") | .endpointIdentity' "$output_dir/model-new.jsonl" | tail -1)"
 accelerated_brokers="$(jq -s '[.[] | select(.event=="ready" and .accelerated==true)] | length' \

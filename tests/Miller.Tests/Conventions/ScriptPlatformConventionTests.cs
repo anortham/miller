@@ -89,4 +89,31 @@ public sealed class ScriptPlatformConventionTests
         int powershellTest = powershell.IndexOf("& dotnet test $Solution -c $Config --no-build --no-restore", StringComparison.Ordinal);
         Assert.True(powershellBuild >= 0 && powershellBuild < powershellTimer && powershellTimer < powershellTest);
     }
+
+    [Fact]
+    public void SemanticBrokerSoakReadiness_RejectsFailedEventsAndFatalShellModelWaits()
+    {
+        string scriptsDir = Path.Combine(ScaleTestSupport.RepoRoot(), "scripts");
+        string shell = File.ReadAllText(Path.Combine(scriptsDir, "semantic-broker-soak.sh"));
+        string powershell = File.ReadAllText(Path.Combine(scriptsDir, "semantic-broker-soak.ps1"));
+
+        string shellReady = shell[
+            shell.IndexOf("wait_ready() {", StringComparison.Ordinal)..
+            shell.IndexOf("wait_process() {", StringComparison.Ordinal)];
+        int shellFailed = shellReady.IndexOf("\"event\":\"failed\"", StringComparison.Ordinal);
+        int shellReadyEvent = shellReady.IndexOf("\"event\":\"ready\"", StringComparison.Ordinal);
+        Assert.True(shellFailed >= 0 && shellFailed < shellReadyEvent);
+
+        int modelWaitStart = shell.IndexOf(
+            "wait_ready \"$output_dir/model-old.jsonl\"", StringComparison.Ordinal);
+        int modelWaitEnd = shell.IndexOf("old_endpoint=", modelWaitStart, StringComparison.Ordinal);
+        Assert.DoesNotContain("|| true", shell[modelWaitStart..modelWaitEnd], StringComparison.Ordinal);
+
+        string powershellReady = powershell[
+            powershell.IndexOf("function Wait-Ready", StringComparison.Ordinal)..
+            powershell.IndexOf("function Wait-Probe", StringComparison.Ordinal)];
+        int powershellFailed = powershellReady.IndexOf("\"event\":\"failed\"", StringComparison.Ordinal);
+        int powershellReadyEvent = powershellReady.IndexOf("\"event\":\"ready\"", StringComparison.Ordinal);
+        Assert.True(powershellFailed >= 0 && powershellFailed < powershellReadyEvent);
+    }
 }

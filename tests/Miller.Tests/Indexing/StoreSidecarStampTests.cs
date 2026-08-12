@@ -50,6 +50,35 @@ public sealed class StoreSidecarStampTests : IDisposable
     }
 
     [Fact]
+    public void ScopeTokenChangesWhenAnyStampFieldChanges()
+    {
+        StoreSidecarStamp stamp = StoreSidecarStamp.FromSnapshot(
+            StoreSidecarKind.Vector,
+            Snapshot("manifest-a", sequence: 17));
+        string token = ScopeToken(stamp);
+
+        Assert.Equal(token, ScopeToken(stamp));
+        StoreSidecarStamp[] variants =
+        [
+            stamp with { Kind = StoreSidecarKind.Content },
+            stamp with { FamilyId = "family-b" },
+            stamp with { ViewId = "view-b" },
+            stamp with { ManifestHash = "manifest-b" },
+            stamp with { StoreLogSequence = 18 },
+            stamp with { ResolutionStamp = null },
+            stamp with { StoreInstanceId = "family-a:gen-002" },
+            stamp with { GenerationName = "gen-002" },
+            stamp with { ManifestGeneration = 4 },
+            stamp with { IndexLevel = "L1" },
+            stamp with { LevelStampL1 = "l1-b" },
+            stamp with { LevelStampL2 = "l2-b" },
+            stamp with { LevelStampL3 = "l3-b" },
+        ];
+
+        Assert.All(variants, variant => Assert.NotEqual(token, ScopeToken(variant)));
+    }
+
+    [Fact]
     public void StampUpgradesAnOlderCompletenessSchemaBeforePublishingTheNewToken()
     {
         Directory.CreateDirectory(_root);
@@ -211,4 +240,6 @@ public sealed class StoreSidecarStampTests : IDisposable
             WorkspaceReadMode.FamilyStore,
             GenerationName: "gen-001",
             ManifestGeneration: 3);
+
+    private static string ScopeToken(StoreSidecarStamp stamp) => stamp.ScopeToken;
 }

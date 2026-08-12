@@ -255,9 +255,53 @@ public sealed class VectorSidecarClassificationTests : IDisposable
     {
         WorkspaceReadSnapshot snapshot = StoreSnapshot();
         string path = VectorSidecar.PathForStore(_storeRoot, snapshot.ViewId);
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Vector, snapshot);
         var meta = Meta();
         meta["converge_pause_state"] = "model-not-prepared";
         meta["converge_pause_reason"] = "sidecar reported ready=false (model_not_prepared)";
+        meta["converge_pause_scope"] = ScopeToken(expected);
+        var opener = new FakeOpener();
+        opener.Metas[path] = meta;
+        var sidecar = new VectorSidecar(SemanticMode.On, new FakeProbe([], [path]), opener, CompatibleReader);
+
+        VectorSidecarFacts facts = sidecar.InspectStore(_storeRoot, snapshot);
+
+        Assert.Equal("model-not-prepared", facts.State);
+        Assert.Equal("sidecar reported ready=false (model_not_prepared)", facts.Reason);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("stale-scope")]
+    public void InspectStore_IgnoresPauseWithoutMatchingFamilyStoreScope(string? scope)
+    {
+        WorkspaceReadSnapshot snapshot = StoreSnapshot();
+        string path = VectorSidecar.PathForStore(_storeRoot, snapshot.ViewId);
+        var meta = Meta();
+        meta["converge_pause_state"] = "model-not-prepared";
+        meta["converge_pause_reason"] = "sidecar reported ready=false (model_not_prepared)";
+        if (scope is not null)
+            meta["converge_pause_scope"] = scope;
+        var opener = new FakeOpener();
+        opener.Metas[path] = meta;
+        var sidecar = new VectorSidecar(SemanticMode.On, new FakeProbe([], [path]), opener, CompatibleReader);
+
+        VectorSidecarFacts facts = sidecar.InspectStore(_storeRoot, snapshot);
+
+        Assert.Equal("unavailable", facts.State);
+        Assert.Contains("no completeness stamp", facts.Reason ?? string.Empty);
+    }
+
+    [Fact]
+    public void InspectStore_MatchingFamilyStorePauseScopeRemainsPauseFirst()
+    {
+        WorkspaceReadSnapshot snapshot = StoreSnapshot();
+        string path = VectorSidecar.PathForStore(_storeRoot, snapshot.ViewId);
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Vector, snapshot);
+        var meta = Meta();
+        meta["converge_pause_state"] = "model-not-prepared";
+        meta["converge_pause_reason"] = "sidecar reported ready=false (model_not_prepared)";
+        meta["converge_pause_scope"] = ScopeToken(expected);
         var opener = new FakeOpener();
         opener.Metas[path] = meta;
         var sidecar = new VectorSidecar(SemanticMode.On, new FakeProbe([], [path]), opener, CompatibleReader);
@@ -355,6 +399,8 @@ public sealed class VectorSidecarClassificationTests : IDisposable
             ["chunk_completed_revision"] = chunkCompleted.ToString(),
             ["chunk_target_revision"] = "7",
         };
+
+    private static string ScopeToken(StoreSidecarStamp stamp) => stamp.ScopeToken;
 
     private sealed class FakeProbe(
         IReadOnlyList<string> retained,

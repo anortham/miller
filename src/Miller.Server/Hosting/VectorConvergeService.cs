@@ -99,6 +99,8 @@ internal interface IVectorConvergePort : IDisposable
 
     string? Meta(string key);
 
+    string? StoreSidecarScope { get; }
+
     void SetMeta(string key, string value);
 
     /// <summary>The changed-path snapshot taken under the writer gate, before any inference.</summary>
@@ -214,6 +216,7 @@ public sealed class VectorConvergeService : BackgroundService
     internal const string ChunkSourceArtifactKey = "chunk_source_artifact_id";
     internal const string ConvergePauseStateKey = "converge_pause_state";
     internal const string ConvergePauseReasonKey = "converge_pause_reason";
+    internal const string ConvergePauseScopeKey = "converge_pause_scope";
     internal const string CircuitOpenPauseValue = "circuit-open";
     internal const string ModelNotPreparedPauseValue = "model-not-prepared";
     internal const string DiskBlockedPauseValue = "disk-blocked";
@@ -990,6 +993,8 @@ public sealed class VectorConvergeService : BackgroundService
         shadow.SetMeta(SymbolErrorAtKey, string.Empty);
         shadow.SetMeta(ConvergePauseStateKey, string.Empty);
         shadow.SetMeta(ConvergePauseReasonKey, string.Empty);
+        if (shadow.StoreSidecarScope is not null)
+            shadow.SetMeta(ConvergePauseScopeKey, string.Empty);
 
         IReadOnlyList<VectorCorpusUnit> candidates = shadow.Units(VectorUnitKind.Symbol, null);
         IReadOnlyList<VectorUnitState> stored = shadow.Stored(VectorUnitKind.Symbol, null);
@@ -1211,8 +1216,9 @@ public sealed class VectorConvergeService : BackgroundService
     /// — reports the pause instead of a stale <c>ready</c>. Precedence is explicit: an open circuit outranks a
     /// disk block (it is the more fundamental stop), so a wake that is both stamps <c>circuit-open</c>. The
     /// transition is detected against the artifact's own meta rather than an in-process flag, and only the
-    /// stamp⟶ and ⟶clear edges write, keeping the hot drain loop off <c>vectors_meta</c>. A cleared pause is an
-    /// empty value, which the consumer's <c>VectorSidecar.PauseState</c> treats as absent.
+/// stamp⟶, scope-change, and ⟶clear edges write, keeping the hot drain loop off <c>vectors_meta</c>. A cleared
+/// pause empties state, reason, and family-store scope, which the consumer's <c>VectorSidecar.PauseState</c>
+/// treats as absent.
     /// </summary>
     private static void ResolvePause(IVectorConvergePort port, EmbeddingClient embedding, DrainState state)
     {
@@ -1228,11 +1234,35 @@ public sealed class VectorConvergeService : BackgroundService
         };
 
         string current = port.Meta(ConvergePauseStateKey) ?? string.Empty;
-        if (string.Equals(current, desiredState, StringComparison.Ordinal))
+        string currentReason = port.Meta(ConvergePauseReasonKey) ?? string.Empty;
+        string currentScope = port.Meta(ConvergePauseScopeKey) ?? string.Empty;
+        string? desiredScope = port.StoreSidecarScope;
+        if (string.IsNullOrEmpty(desiredState))
+        {
+            if (string.IsNullOrEmpty(current) &&
+                string.IsNullOrEmpty(currentReason) &&
+                string.IsNullOrEmpty(currentScope))
+            {
+                return;
+            }
+
+            port.SetMeta(ConvergePauseStateKey, string.Empty);
+            port.SetMeta(ConvergePauseReasonKey, string.Empty);
+            if (desiredScope is not null || !string.IsNullOrEmpty(currentScope))
+                port.SetMeta(ConvergePauseScopeKey, string.Empty);
             return;
+        }
+
+        if (string.Equals(current, desiredState, StringComparison.Ordinal) &&
+            (desiredScope is null || string.Equals(currentScope, desiredScope, StringComparison.Ordinal)))
+        {
+            return;
+        }
 
         port.SetMeta(ConvergePauseStateKey, desiredState);
         port.SetMeta(ConvergePauseReasonKey, desiredReason);
+        if (desiredScope is not null)
+            port.SetMeta(ConvergePauseScopeKey, desiredScope);
     }
 
     /// <summary>Persisted last-errors are bounded and carry no path: anything absolute is replaced by its file
@@ -1461,6 +1491,8 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
     private readonly StoreSidecarStamp? _storeStamp;
     private readonly string? _storeVectorPath;
     private readonly string? _storeRoot;
+
+    public string? StoreSidecarScope => _storeStamp?.ScopeToken;
 
     private SqliteVectorConvergePort(VectorStore vectors, string symbolsDbPath, string contentDbPath)
     {

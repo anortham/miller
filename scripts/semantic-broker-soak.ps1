@@ -183,6 +183,10 @@ function Wait-Ready([string]$Label) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
         if ((Test-Path $path) -and
+            (Select-String -Quiet -SimpleMatch '"event":"failed"' $path)) {
+            throw "Probe $Label reported failed readiness."
+        }
+        if ((Test-Path $path) -and
             (Select-String -Quiet -SimpleMatch '"event":"ready"' $path)) {
             Assert-NoForeignBroker "when probe $Label became ready"
             return
