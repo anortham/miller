@@ -66,6 +66,34 @@ internal sealed record FtsTextSearchQueryTelemetrySnapshot(
         FinalOrdering.CallCount;
 }
 
+internal enum TextContentIndexResolveFamily
+{
+    Resolve,
+    ReadSessionOpen,
+    CacheHit,
+    CacheMiss,
+    IndexLoad,
+}
+
+internal readonly record struct TextContentIndexResolveObservation(
+    TextContentIndexResolveFamily Family,
+    TimeSpan Elapsed);
+
+internal sealed record TextContentIndexResolveTelemetrySnapshot(
+    SearchRequestFamilyTelemetry Resolve,
+    SearchRequestFamilyTelemetry ReadSessionOpen,
+    SearchRequestFamilyTelemetry CacheHit,
+    SearchRequestFamilyTelemetry CacheMiss,
+    SearchRequestFamilyTelemetry IndexLoad)
+{
+    internal long TotalCallCount =>
+        Resolve.CallCount +
+        ReadSessionOpen.CallCount +
+        CacheHit.CallCount +
+        CacheMiss.CallCount +
+        IndexLoad.CallCount;
+}
+
 internal readonly record struct LookupMethodTelemetry(long CallCount, long ElapsedMilliseconds);
 
 internal readonly record struct SearchRequestFamilyTelemetry(
@@ -151,7 +179,9 @@ internal sealed record ContextLookupPhaseObservation(
     FtsSearchQueryTelemetrySnapshot FtsSearchDelta,
     FtsSearchQueryTelemetrySnapshot FtsSearchTotal,
     FtsTextSearchQueryTelemetrySnapshot FtsTextSearchDelta,
-    FtsTextSearchQueryTelemetrySnapshot FtsTextSearchTotal);
+    FtsTextSearchQueryTelemetrySnapshot FtsTextSearchTotal,
+    TextContentIndexResolveTelemetrySnapshot TextContentIndexResolveDelta,
+    TextContentIndexResolveTelemetrySnapshot TextContentIndexResolveTotal);
 
 internal enum SearchRequestClassification
 {
@@ -186,6 +216,9 @@ internal sealed class ReadPhaseTelemetry
     private readonly FtsTextSearchQueryTelemetryCollector _ftsTextSearchTelemetry = new();
     private FtsTextSearchQueryMeasurementSnapshot _ftsTextSearchPhaseBaseline =
         FtsTextSearchQueryTelemetryCollector.EmptySnapshot;
+    private readonly TextContentIndexResolveTelemetryCollector _textContentIndexResolveTelemetry = new();
+    private TextContentIndexResolveTelemetrySnapshot _textContentIndexResolvePhaseBaseline =
+        TextContentIndexResolveTelemetryCollector.EmptySnapshot;
     private readonly MeasuredSymbolGraphReachability? _graph;
     private readonly ReadMeasurementSnapshot _graphBaseline;
 
@@ -229,6 +262,8 @@ internal sealed class ReadPhaseTelemetry
         SearchRequestTelemetrySnapshot searchCurrent = _searchTelemetry.Snapshot();
         FtsSearchQueryMeasurementSnapshot ftsSearchCurrent = _ftsSearchTelemetry.Snapshot();
         FtsTextSearchQueryMeasurementSnapshot ftsTextSearchCurrent = _ftsTextSearchTelemetry.Snapshot();
+        TextContentIndexResolveTelemetrySnapshot textContentIndexResolveCurrent =
+            _textContentIndexResolveTelemetry.Snapshot();
         var observation = new ContextLookupPhaseObservation(
             phase,
             LookupTelemetry(current, _lookupPhaseBaseline),
@@ -238,11 +273,16 @@ internal sealed class ReadPhaseTelemetry
             FtsSearchTelemetryDelta(ftsSearchCurrent, _ftsSearchPhaseBaseline),
             FtsSearchTelemetry(ftsSearchCurrent),
             FtsTextSearchTelemetryDelta(ftsTextSearchCurrent, _ftsTextSearchPhaseBaseline),
-            FtsTextSearchTelemetry(ftsTextSearchCurrent));
+            FtsTextSearchTelemetry(ftsTextSearchCurrent),
+            TextContentIndexResolveTelemetryDelta(
+                textContentIndexResolveCurrent,
+                _textContentIndexResolvePhaseBaseline),
+            textContentIndexResolveCurrent);
         _lookupPhaseBaseline = current;
         _searchPhaseBaseline = searchCurrent;
         _ftsSearchPhaseBaseline = ftsSearchCurrent;
         _ftsTextSearchPhaseBaseline = ftsTextSearchCurrent;
+        _textContentIndexResolvePhaseBaseline = textContentIndexResolveCurrent;
         return observation;
     }
 
@@ -250,7 +290,18 @@ internal sealed class ReadPhaseTelemetry
         new CompositeActivation(
             _searchTelemetry.Activate(),
             _ftsSearchTelemetry.Activate(),
-            _ftsTextSearchTelemetry.Activate());
+            _ftsTextSearchTelemetry.Activate(),
+            _textContentIndexResolveTelemetry.Activate());
+
+    private static TextContentIndexResolveTelemetrySnapshot TextContentIndexResolveTelemetryDelta(
+        TextContentIndexResolveTelemetrySnapshot current,
+        TextContentIndexResolveTelemetrySnapshot baseline) =>
+        new(
+            SearchFamilyDelta(current.Resolve, baseline.Resolve),
+            SearchFamilyDelta(current.ReadSessionOpen, baseline.ReadSessionOpen),
+            SearchFamilyDelta(current.CacheHit, baseline.CacheHit),
+            SearchFamilyDelta(current.CacheMiss, baseline.CacheMiss),
+            SearchFamilyDelta(current.IndexLoad, baseline.IndexLoad));
 
     private static FtsTextSearchQueryTelemetrySnapshot FtsTextSearchTelemetryDelta(
         FtsTextSearchQueryMeasurementSnapshot current,
@@ -397,7 +448,11 @@ internal sealed class ReadPhaseTelemetry
             Math.Max(0, (long)TimeSpan.FromTicks(measurement.ElapsedTicks).TotalMilliseconds),
             measurement.ReturnedRowCount);
 
-    private sealed class CompositeActivation(IDisposable first, IDisposable second, IDisposable third) : IDisposable
+    private sealed class CompositeActivation(
+        IDisposable first,
+        IDisposable second,
+        IDisposable third,
+        IDisposable fourth) : IDisposable
     {
         private bool _disposed;
 
@@ -406,9 +461,66 @@ internal sealed class ReadPhaseTelemetry
             if (_disposed)
                 return;
             _disposed = true;
+            fourth.Dispose();
             third.Dispose();
             second.Dispose();
             first.Dispose();
+        }
+    }
+}
+
+internal sealed class TextContentIndexResolveTelemetryCollector
+{
+    private static readonly AsyncLocal<TextContentIndexResolveTelemetryCollector?> CurrentCollector = new();
+    private readonly long[] _calls = new long[Enum.GetValues<TextContentIndexResolveFamily>().Length];
+    private readonly long[] _elapsedTicks = new long[Enum.GetValues<TextContentIndexResolveFamily>().Length];
+
+    internal static TextContentIndexResolveTelemetrySnapshot EmptySnapshot { get; } =
+        new(default, default, default, default, default);
+
+    internal static TextContentIndexResolveTelemetryCollector? Current => CurrentCollector.Value;
+
+    internal IDisposable Activate()
+    {
+        TextContentIndexResolveTelemetryCollector? previous = CurrentCollector.Value;
+        CurrentCollector.Value = this;
+        return new Activation(previous);
+    }
+
+    internal void Record(TextContentIndexResolveObservation observation)
+    {
+        int index = (int)observation.Family;
+        Interlocked.Increment(ref _calls[index]);
+        Interlocked.Add(ref _elapsedTicks[index], observation.Elapsed.Ticks);
+    }
+
+    internal TextContentIndexResolveTelemetrySnapshot Snapshot() =>
+        new(
+            Family(TextContentIndexResolveFamily.Resolve),
+            Family(TextContentIndexResolveFamily.ReadSessionOpen),
+            Family(TextContentIndexResolveFamily.CacheHit),
+            Family(TextContentIndexResolveFamily.CacheMiss),
+            Family(TextContentIndexResolveFamily.IndexLoad));
+
+    private SearchRequestFamilyTelemetry Family(TextContentIndexResolveFamily family)
+    {
+        int index = (int)family;
+        return new SearchRequestFamilyTelemetry(
+            Interlocked.Read(ref _calls[index]),
+            Math.Max(0, (long)TimeSpan.FromTicks(Interlocked.Read(ref _elapsedTicks[index])).TotalMilliseconds),
+            0);
+    }
+
+    private sealed class Activation(TextContentIndexResolveTelemetryCollector? previous) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            CurrentCollector.Value = previous;
         }
     }
 }

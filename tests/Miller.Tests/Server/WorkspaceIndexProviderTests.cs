@@ -445,6 +445,46 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void LookupPhaseTelemetryCorrelatesContentIndexResolveStagesAcrossInterleavedContexts()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        var measured = new MeasuredSymbolLookupIndex(SymbolSearchProjectionLoader.Load(fixture.DbPath));
+        var firstTelemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using IDisposable firstActivation = firstTelemetry.ActivateSearchTelemetry();
+        TextContentIndexResolveTelemetryCollector.Current!.Record(new TextContentIndexResolveObservation(
+            TextContentIndexResolveFamily.ReadSessionOpen,
+            TimeSpan.FromMilliseconds(10)));
+
+        ContextLookupPhaseObservation second;
+        var secondTelemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using (secondTelemetry.ActivateSearchTelemetry())
+        {
+            TextContentIndexResolveTelemetryCollector.Current!.Record(new TextContentIndexResolveObservation(
+                TextContentIndexResolveFamily.CacheMiss,
+                TimeSpan.FromMilliseconds(20)));
+            second = secondTelemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
+        }
+
+        TextContentIndexResolveTelemetryCollector.Current!.Record(new TextContentIndexResolveObservation(
+            TextContentIndexResolveFamily.CacheHit,
+            TimeSpan.FromMilliseconds(30)));
+        ContextLookupPhaseObservation first =
+            firstTelemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
+        ContextLookupPhaseObservation zero =
+            firstTelemetry.CompleteLookupPhase(ContextLookupPhase.QueryRetrieval);
+
+        Assert.Equal(1, first.TextContentIndexResolveDelta.ReadSessionOpen.CallCount);
+        Assert.Equal(10, first.TextContentIndexResolveDelta.ReadSessionOpen.ElapsedMilliseconds);
+        Assert.Equal(1, first.TextContentIndexResolveDelta.CacheHit.CallCount);
+        Assert.Equal(30, first.TextContentIndexResolveDelta.CacheHit.ElapsedMilliseconds);
+        Assert.Equal(0, first.TextContentIndexResolveDelta.CacheMiss.CallCount);
+        Assert.Equal(1, second.TextContentIndexResolveDelta.CacheMiss.CallCount);
+        Assert.Equal(20, second.TextContentIndexResolveDelta.CacheMiss.ElapsedMilliseconds);
+        Assert.Equal(0, second.TextContentIndexResolveDelta.CacheHit.CallCount);
+        Assert.Equal(0, zero.TextContentIndexResolveDelta.TotalCallCount);
+    }
+
+    [Fact]
     public void MeasuredSearchPreservesNullForgivenInnerBehavior()
     {
         using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
@@ -1676,9 +1716,14 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 textLoadCount++;
                 return FtsTextContentSearchIndex.Open(ContentCorpusSidecar.ContentDbPathFor(dbPath), revision);
             });
+        var measured = new MeasuredSymbolLookupIndex(SymbolSearchProjectionLoader.Load(fx.DbPath));
+        var telemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using IDisposable activation = telemetry.ActivateSearchTelemetry();
 
         WorkspaceTextContentSearchContext byNull = provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false);
         WorkspaceTextContentSearchContext byId = provider.ResolveTextContentSearch("current-ws", ensureFresh: false);
+        ContextLookupPhaseObservation observation =
+            telemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
 
         Assert.Equal(7, byNull.Revision);
         Assert.Equal("current", byNull.FreshnessStatus);
@@ -1687,6 +1732,150 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Same(byNull.Index, byId.Index);
         Assert.Equal(1, textLoadCount);
         Assert.Single(byNull.Index.Search("KnownSourceError", TextContentKind.WorkspaceSource, 10));
+        Assert.Equal(2, observation.TextContentIndexResolveDelta.Resolve.CallCount);
+        Assert.Equal(2, observation.TextContentIndexResolveDelta.ReadSessionOpen.CallCount);
+        Assert.Equal(1, observation.TextContentIndexResolveDelta.CacheHit.CallCount);
+        Assert.Equal(1, observation.TextContentIndexResolveDelta.CacheMiss.CallCount);
+        Assert.Equal(1, observation.TextContentIndexResolveDelta.IndexLoad.CallCount);
+    }
+
+    [Fact]
+    public void ResolveTextContentSearch_CurrentFamilyStoreCachesBySnapshotAndReportsFixedResolveStages()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSource("current-ws", revision: 1, "KnownSourceError");
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(target.DbPath),
+            target.DbPath,
+            target.WorkspaceRoot,
+            workspaceId: "current-ws",
+            revision: 1);
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("current-store-content-cache");
+        WorkspaceReadSnapshot snapshot = StoreSnapshot(root, "manifest-a");
+        int loadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 12),
+            CurrentWorkspaceAt(root, current.DbPath, "current-ws"),
+            registry,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(snapshot)),
+            openStoreTextContentSearch: _ =>
+            {
+                loadCount++;
+                return FtsTextContentSearchIndex.Open(
+                    ContentCorpusSidecar.ContentDbPathFor(target.DbPath),
+                    1);
+            });
+        var measured = new MeasuredSymbolLookupIndex(SymbolSearchProjectionLoader.Load(current.DbPath));
+        var telemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using IDisposable activation = telemetry.ActivateSearchTelemetry();
+
+        WorkspaceTextContentSearchContext first =
+            provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false);
+        WorkspaceTextContentSearchContext cached =
+            provider.ResolveTextContentSearch("current-ws", ensureFresh: false);
+        snapshot = StoreSnapshot(root, "manifest-b");
+        WorkspaceTextContentSearchContext changed =
+            provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false);
+        ContextLookupPhaseObservation observation =
+            telemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
+
+        Assert.Same(first.Index, cached.Index);
+        Assert.NotSame(first.Index, changed.Index);
+        Assert.Equal(2, loadCount);
+        Assert.Equal(3, observation.TextContentIndexResolveDelta.Resolve.CallCount);
+        Assert.Equal(3, observation.TextContentIndexResolveDelta.ReadSessionOpen.CallCount);
+        Assert.Equal(1, observation.TextContentIndexResolveDelta.CacheHit.CallCount);
+        Assert.Equal(2, observation.TextContentIndexResolveDelta.CacheMiss.CallCount);
+        Assert.Equal(2, observation.TextContentIndexResolveDelta.IndexLoad.CallCount);
+    }
+
+    [Fact]
+    public async Task ResolveTextContentSearch_ConcurrentFamilyStoreResolvesLoadOneReader()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSource("current-ws", revision: 1, "KnownSourceError");
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(target.DbPath),
+            target.DbPath,
+            target.WorkspaceRoot,
+            workspaceId: "current-ws",
+            revision: 1);
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("current-store-content-concurrent");
+        WorkspaceReadSnapshot snapshot = StoreSnapshot(root, "manifest-a");
+        using var loadEntered = new ManualResetEventSlim();
+        using var releaseLoad = new ManualResetEventSlim();
+        int loadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 12),
+            CurrentWorkspaceAt(root, current.DbPath, "current-ws"),
+            registry,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(snapshot)),
+            openStoreTextContentSearch: _ =>
+            {
+                Interlocked.Increment(ref loadCount);
+                loadEntered.Set();
+                Assert.True(releaseLoad.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+                return FtsTextContentSearchIndex.Open(
+                    ContentCorpusSidecar.ContentDbPathFor(target.DbPath),
+                    1);
+            });
+        var measured = new MeasuredSymbolLookupIndex(SymbolSearchProjectionLoader.Load(current.DbPath));
+        var telemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using IDisposable activation = telemetry.ActivateSearchTelemetry();
+        TextContentIndexResolveTelemetryCollector collector =
+            TextContentIndexResolveTelemetryCollector.Current!;
+
+        Task<WorkspaceTextContentSearchContext> first = RunBlockingResolve(
+            () => provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false));
+        Assert.True(loadEntered.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        Task<WorkspaceTextContentSearchContext> second = RunBlockingResolve(
+            () => provider.ResolveTextContentSearch("current-ws", ensureFresh: false));
+        Assert.True(SpinWait.SpinUntil(
+            () => collector.Snapshot().CacheHit.CallCount == 1,
+            TimeSpan.FromSeconds(5)));
+        releaseLoad.Set();
+
+        WorkspaceTextContentSearchContext[] contexts = await Task.WhenAll(first, second);
+        ContextLookupPhaseObservation observation =
+            telemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
+
+        Assert.Same(contexts[0].Index, contexts[1].Index);
+        Assert.Equal(1, loadCount);
+        Assert.Equal(2, observation.TextContentIndexResolveDelta.Resolve.CallCount);
+        Assert.Equal(2, observation.TextContentIndexResolveDelta.ReadSessionOpen.CallCount);
+        Assert.Equal(1, observation.TextContentIndexResolveDelta.CacheHit.CallCount);
+        Assert.Equal(1, observation.TextContentIndexResolveDelta.CacheMiss.CallCount);
+        Assert.Equal(1, observation.TextContentIndexResolveDelta.IndexLoad.CallCount);
+    }
+
+    [Fact]
+    public void ResolveTextContentSearch_FailedLoadReportsOnlyCompletedStagesAndDoesNotPoisonCache()
+    {
+        using var fx = DbWithSource("current-ws", revision: 7, "KnownSourceError");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(fx.DbPath), builtRevision: 7),
+            CurrentWorkspaceAt(fx.WorkspaceRoot, fx.DbPath, "current-ws"),
+            registry,
+            loadTextContentSearch: (_, _) => throw new OperationCanceledException("stop during load"));
+        var measured = new MeasuredSymbolLookupIndex(SymbolSearchProjectionLoader.Load(fx.DbPath));
+        var telemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using IDisposable activation = telemetry.ActivateSearchTelemetry();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false));
+        Assert.Throws<OperationCanceledException>(() =>
+            provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false));
+        ContextLookupPhaseObservation observation =
+            telemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
+
+        Assert.Equal(0, observation.TextContentIndexResolveDelta.Resolve.CallCount);
+        Assert.Equal(2, observation.TextContentIndexResolveDelta.ReadSessionOpen.CallCount);
+        Assert.Equal(0, observation.TextContentIndexResolveDelta.CacheHit.CallCount);
+        Assert.Equal(2, observation.TextContentIndexResolveDelta.CacheMiss.CallCount);
+        Assert.Equal(0, observation.TextContentIndexResolveDelta.IndexLoad.CallCount);
     }
 
     [Fact]
@@ -2370,7 +2559,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Func<IWorkspaceReadSession, SymbolSearchProjection>? loadSessionSymbolSearch = null,
         Func<WorkspaceReadHandle, ISymbolLookupIndex>? openStoreSymbolSearch = null,
         Func<IWorkspaceReadSession, BridgeGraph>? loadSessionBridgeGraph = null,
-        Action<GraphStatementObservation>? graphStatementObserver = null) =>
+        Action<GraphStatementObservation>? graphStatementObserver = null,
+        Func<WorkspaceReadHandle, ITextContentSearchIndex>? openStoreTextContentSearch = null) =>
         new(
             holder,
             workspace,
@@ -2390,7 +2580,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadSessionSymbolSearch,
             openStoreSymbolSearch,
             loadSessionBridgeGraph,
-            graphStatementObserver);
+            graphStatementObserver,
+            openStoreTextContentSearch);
 
     private static WorkspaceReadSnapshot StoreSnapshot(
         string root,

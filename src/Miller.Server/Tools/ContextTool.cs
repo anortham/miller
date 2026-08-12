@@ -370,7 +370,9 @@ public sealed partial class ContextTool
                 "and total {@ContextLookupTotal}, search delta {@ContextSearchDelta}, " +
                 "search total {@ContextSearchTotal}, FTS search delta {@ContextFtsSearchDelta}, " +
                 "FTS search total {@ContextFtsSearchTotal}, content FTS search delta {@ContextFtsTextSearchDelta}, " +
-                "and content FTS search total {@ContextFtsTextSearchTotal} for cid {CorrelationId}",
+                "content FTS search total {@ContextFtsTextSearchTotal}, content index resolve delta " +
+                "{@ContextTextContentIndexResolveDelta}, and content index resolve total " +
+                "{@ContextTextContentIndexResolveTotal} for cid {CorrelationId}",
                 completedLookupPhase,
                 observation.Delta,
                 observation.Total,
@@ -380,6 +382,8 @@ public sealed partial class ContextTool
                 observation.FtsSearchTotal,
                 observation.FtsTextSearchDelta,
                 observation.FtsTextSearchTotal,
+                observation.TextContentIndexResolveDelta,
+                observation.TextContentIndexResolveTotal,
                 telemetry?.CorrelationId ?? "unmeasured");
         }
         Serilog.Log.Information(

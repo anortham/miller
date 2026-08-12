@@ -25,6 +25,7 @@ public sealed class WorkspaceIndexProvider
     private readonly Func<string, string, string?, WorkspaceReadHandle> _openReadSession;
     private readonly Func<IWorkspaceReadSession, SymbolSearchProjection> _loadSessionSymbolSearch;
     private readonly Func<WorkspaceReadHandle, ISymbolLookupIndex> _openStoreSymbolSearch;
+    private readonly Func<WorkspaceReadHandle, ITextContentSearchIndex> _openStoreTextContentSearch;
     private readonly Func<IWorkspaceReadSession, BridgeGraph> _loadSessionBridgeGraph;
     private readonly Action<GraphStatementObservation> _graphStatementObserver;
     private readonly SymbolSearchSidecar _sidecar;
@@ -80,7 +81,8 @@ public sealed class WorkspaceIndexProvider
         Func<IWorkspaceReadSession, SymbolSearchProjection>? loadSessionSymbolSearch = null,
         Func<WorkspaceReadHandle, ISymbolLookupIndex>? openStoreSymbolSearch = null,
         Func<IWorkspaceReadSession, BridgeGraph>? loadSessionBridgeGraph = null,
-        Action<GraphStatementObservation>? graphStatementObserver = null)
+        Action<GraphStatementObservation>? graphStatementObserver = null,
+        Func<WorkspaceReadHandle, ITextContentSearchIndex>? openStoreTextContentSearch = null)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(currentWorkspace);
@@ -114,6 +116,11 @@ public sealed class WorkspaceIndexProvider
                 ?? throw new InvalidOperationException("The family-store read session has no store root.");
             return _sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot);
         });
+        _openStoreTextContentSearch = openStoreTextContentSearch ?? (readSession =>
+            ContentCorpusSidecar.OpenStoreGenerationChecked(
+                readSession.FamilyStoreRoot
+                    ?? throw new InvalidOperationException("The family-store read session has no store root."),
+                readSession.Snapshot));
         _loadSessionBridgeGraph = loadSessionBridgeGraph ?? (session => SessionBridgeGraphLoader.Load(session));
         _graphStatementObserver = graphStatementObserver ?? ObserveGraphStatement;
     }
@@ -192,14 +199,20 @@ public sealed class WorkspaceIndexProvider
 
     public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh)
     {
+        long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        WorkspaceTextContentSearchContext context;
         if (workspaceId is null)
-            return ResolveCurrentTextContentSearch();
+            context = ResolveCurrentTextContentSearch();
+        else
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+            context = SelectorTargetsCurrent(workspaceId)
+                ? ResolveCurrentTextContentSearch()
+                : ResolveRegisteredTextContentSearch(workspaceId, ensureFresh);
+        }
 
-        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (SelectorTargetsCurrent(workspaceId))
-            return ResolveCurrentTextContentSearch();
-
-        return ResolveRegisteredTextContentSearch(workspaceId, ensureFresh);
+        ObserveTextContentIndexResolve(TextContentIndexResolveFamily.Resolve, startedAt);
+        return context;
     }
 
     /// <summary>
@@ -705,16 +718,21 @@ public sealed class WorkspaceIndexProvider
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
+        long sessionStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         using WorkspaceReadHandle readSession = OpenCurrentReadSession();
+        ObserveTextContentIndexResolve(TextContentIndexResolveFamily.ReadSessionOpen, sessionStartedAt);
         bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
         long revision = ContextRevision(readSession.Snapshot, holderRevision);
         string sourcePath = familyStore
-            ? StoreSidecarCatalog.PathFor(readSession.FamilyStoreRoot!, StoreSidecarKind.Content, readSession.Snapshot.ViewId)
+            ? StoreSidecarCatalog.PathFor(
+                readSession.FamilyStoreRoot ?? readSession.Snapshot.WorkspaceRoot,
+                StoreSidecarKind.Content,
+                readSession.Snapshot.ViewId)
             : dbPath;
         CachedTextContentSearch cached = familyStore
             ? GetOrLoadTextContentSearch(
                 KeyFor(workspaceKey, readSession.Snapshot),
-                () => ContentCorpusSidecar.OpenStoreGenerationChecked(readSession.FamilyStoreRoot!, readSession.Snapshot))
+                () => _openStoreTextContentSearch(readSession))
             : GetOrLoadTextContentSearch(KeyFor(workspaceKey, dbPath, revision), dbPath);
         return new WorkspaceTextContentSearchContext(
             cached.Index,
@@ -734,16 +752,21 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
+        long sessionStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         using WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        ObserveTextContentIndexResolve(TextContentIndexResolveFamily.ReadSessionOpen, sessionStartedAt);
         bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
         long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
         string sourcePath = familyStore
-            ? StoreSidecarCatalog.PathFor(readSession.FamilyStoreRoot!, StoreSidecarKind.Content, readSession.Snapshot.ViewId)
+            ? StoreSidecarCatalog.PathFor(
+                readSession.FamilyStoreRoot ?? readSession.Snapshot.WorkspaceRoot,
+                StoreSidecarKind.Content,
+                readSession.Snapshot.ViewId)
             : row.IndexDbPath;
         CachedTextContentSearch cached = familyStore
             ? GetOrLoadTextContentSearch(
                 KeyFor(row.WorkspaceId, readSession.Snapshot),
-                () => ContentCorpusSidecar.OpenStoreGenerationChecked(readSession.FamilyStoreRoot!, readSession.Snapshot))
+                () => _openStoreTextContentSearch(readSession))
             : GetOrLoadTextContentSearch(KeyFor(row.WorkspaceId, row.IndexDbPath, revision), row.IndexDbPath);
         return new WorkspaceTextContentSearchContext(
             cached.Index,
@@ -1154,17 +1177,29 @@ public sealed class WorkspaceIndexProvider
         Func<ITextContentSearchIndex> load)
     {
         Lazy<CachedTextContentSearch> lazy;
+        bool cacheHit;
+        long cacheStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         lock (_cacheGate)
         {
-            if (!_textContentSearchCache.TryGetValue(key, out lazy!))
+            cacheHit = _textContentSearchCache.TryGetValue(key, out lazy!);
+            if (!cacheHit)
             {
                 lazy = new Lazy<CachedTextContentSearch>(
-                    () => new CachedTextContentSearch(load()),
+                    () =>
+                    {
+                        long loadStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+                        ITextContentSearchIndex index = load();
+                        ObserveTextContentIndexResolve(TextContentIndexResolveFamily.IndexLoad, loadStartedAt);
+                        return new CachedTextContentSearch(index);
+                    },
                     LazyThreadSafetyMode.ExecutionAndPublication);
                 _textContentSearchCache[key] = lazy;
                 EvictOtherEntriesForWorkspaceUnderLock(_textContentSearchCache, key);
             }
         }
+        ObserveTextContentIndexResolve(
+            cacheHit ? TextContentIndexResolveFamily.CacheHit : TextContentIndexResolveFamily.CacheMiss,
+            cacheStartedAt);
 
         try
         {
@@ -1182,6 +1217,13 @@ public sealed class WorkspaceIndexProvider
             }
             throw;
         }
+    }
+
+    private static void ObserveTextContentIndexResolve(TextContentIndexResolveFamily family, long startedAt)
+    {
+        TimeSpan elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
+        TextContentIndexResolveTelemetryCollector.Current?.Record(
+            new TextContentIndexResolveObservation(family, elapsed));
     }
 
     private void EnsureRegionSearchEnabled()

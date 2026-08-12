@@ -324,6 +324,12 @@ without first adding new phase, query-count, or resource evidence.
   from 888 to 704 ms, while symbol Search was 542 ms, lookup 814 ms, and graph 308 ms. The correct 3,378-byte,
   10-result response consumed 1,605,764,774 logical-read characters and peaked at 146,853 KB PSS / 194,088 KB
   RSS. Impact, trace, and idle were skipped because context remained over gate.
+- **Fused-source-analysis acceptance:** Release was rebuilt from clean `7556ef25`; context improved to
+  2,288.059 ms but still missed the 2 s gate. Fused raw-text analysis consumed 76 ms / 116 rows versus the prior
+  separate 83 ms phrase verification plus 82 ms snippet selection; source rescue fell from 704 to 609 ms. Symbol
+  Search remained 547 ms, total lookup 825 ms, and graph 294 ms. The correct 3,378-byte, 10-result response used
+  238 CPU ticks and 1,605,754,253 logical-read characters, peaking at 148,243 KB PSS / 195,332 KB RSS. Impact,
+  trace, and idle were skipped because context remained over gate.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 
