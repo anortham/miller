@@ -48,6 +48,7 @@ internal sealed record SearchRequestTelemetrySnapshot(
     SearchRequestFamilyTelemetry ModeVariant,
     SearchRequestFamilyTelemetry WindowVariant,
     SearchRequestFamilyTelemetry ExactRepeat,
+    SearchRequestFamilyTelemetry CacheHit,
     SearchRequestFamilyTelemetry And,
     SearchRequestFamilyTelemetry Or,
     long DroppedCallCount)
@@ -57,6 +58,7 @@ internal sealed record SearchRequestTelemetrySnapshot(
         ModeVariant.CallCount +
         WindowVariant.CallCount +
         ExactRepeat.CallCount +
+        CacheHit.CallCount +
         DroppedCallCount;
 }
 
@@ -221,6 +223,7 @@ internal sealed class ReadPhaseTelemetry
             SearchFamilyDelta(current.ModeVariant, baseline.ModeVariant),
             SearchFamilyDelta(current.WindowVariant, baseline.WindowVariant),
             SearchFamilyDelta(current.ExactRepeat, baseline.ExactRepeat),
+            SearchFamilyDelta(current.CacheHit, baseline.CacheHit),
             SearchFamilyDelta(current.And, baseline.And),
             SearchFamilyDelta(current.Or, baseline.Or),
             Math.Max(0, current.DroppedCallCount - baseline.DroppedCallCount));
@@ -242,6 +245,8 @@ internal sealed class SearchRequestTelemetryAccumulator
     private readonly long[] _modeCalls = new long[2];
     private readonly long[] _modeElapsedTicks = new long[2];
     private readonly long[] _modeRows = new long[2];
+    private long _cacheHitCalls;
+    private long _cacheHitRows;
     private long _droppedCalls;
 
     internal void Add(SearchRequestClassification classification, SearchRequestObservation observation)
@@ -262,12 +267,19 @@ internal sealed class SearchRequestTelemetryAccumulator
 
     internal void AddDropped(long callCount) => _droppedCalls += callCount;
 
+    internal void AddCacheHit(long returnedRows)
+    {
+        _cacheHitCalls++;
+        _cacheHitRows += returnedRows;
+    }
+
     internal SearchRequestTelemetrySnapshot Snapshot() =>
         new(
             Classification(SearchRequestClassification.FirstQuery),
             Classification(SearchRequestClassification.ModeVariant),
             Classification(SearchRequestClassification.WindowVariant),
             Classification(SearchRequestClassification.ExactRepeat),
+            new SearchRequestFamilyTelemetry(_cacheHitCalls, 0, _cacheHitRows),
             Mode(0),
             Mode(1),
             _droppedCalls);
@@ -303,7 +315,7 @@ internal sealed class SearchRequestTelemetryCollector
     private readonly SearchRequestTelemetryAccumulator _total = new();
 
     internal static SearchRequestTelemetrySnapshot EmptySnapshot { get; } =
-        new(default, default, default, default, default, default, 0);
+        new(default, default, default, default, default, default, default, 0);
 
     internal static SearchRequestTelemetryCollector? Current => CurrentCollector.Value;
 
@@ -334,6 +346,8 @@ internal sealed class SearchRequestTelemetryCollector
     }
 
     internal SearchRequestTelemetrySnapshot Snapshot() => _total.Snapshot();
+
+    internal void RecordCacheHit(long returnedRows) => _total.AddCacheHit(returnedRows);
 
     private SearchRequestClassification? Classify(SearchRequestIdentity request)
     {

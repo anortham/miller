@@ -240,6 +240,16 @@ without first adding new phase, query-count, or resource evidence.
   FindByFilePath 4 / 3 ms. Total Search was 21 calls / 1,452 ms of the telemetry total 1,602 calls / 1,708 ms.
   Graph reach remained 286 ms. The run consumed 2,455,051,247 logical-read characters and 425,984 physical-write
   bytes, peaking at 156,301 KB PSS / 203,452 KB RSS.
+- **Search-shape diagnosis:** Release was rebuilt from `4de81d3f`; the one diagnosis completed successfully in
+  3,569.835 ms. Query retrieval issued first 1 / 254 ms / 0 rows, mode variant 1 / 270 ms / 18 rows, and window
+  variant 2 / 357 ms / 50 rows; its orthogonal boolean split was AND 2 / 425 ms / 0 rows versus OR 2 / 456 ms /
+  68 rows. Term retrieval issued first 8 / 341 ms / 272 rows and window variant 1 / 6 ms / 210 rows, all OR 9 /
+  347 ms / 482 rows. Anchor resolution issued exact repeat 8 / 325 ms / 272 rows, all OR 8 / 325 ms / 272 rows.
+  The other four phases issued no searches; no calls were dropped. Final totals were first 9 / 595 ms / 272 rows,
+  mode 1 / 270 ms / 18 rows, window 3 / 363 ms / 260 rows, exact repeat 8 / 325 ms / 272 rows, with AND 2 /
+  425 ms / 0 rows and OR 19 / 1,128 ms / 822 rows. Lookup telemetry was 1,602 calls / 1,818 ms, including Search
+  21 / 1,554 ms; graph reach was 291 ms. The run consumed 2,455,137,618 logical-read characters and 401,408
+  physical-write bytes, peaking at 156,415 KB PSS / 199,792 KB RSS.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 

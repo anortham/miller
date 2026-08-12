@@ -144,6 +144,8 @@ public sealed partial class ContextTool
             int effectiveTokenBudget = Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens);
             using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             using IDisposable? searchTelemetry = context.ReadTelemetry?.ActivateSearchTelemetry();
+            ISymbolLookupIndex contextIndex = new ContextSearchCacheLookupIndex(context.Index);
+            var contextResolver = new SmartTargetResolver(contextIndex);
             CompletePhase("resolve", telemetry, ref phaseStart);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             int bundleTokenBudget = Math.Max(
@@ -166,12 +168,13 @@ public sealed partial class ContextTool
                 cancellationToken.ThrowIfCancellationRequested();
                 semanticSeeds = LoadSemanticSeeds(
                     context,
+                    contextIndex,
                     query,
                     parsedReferenceMode == ReferenceMode.Usage && exclude_tests);
                 CompletePhase("semantic_seeds", telemetry, ref phaseStart);
                 cancellationToken.ThrowIfCancellationRequested();
                 sourceSeeds = LoadSourceRescueSeeds(
-                    context.Index,
+                    contextIndex,
                     TryResolveTextContentIndex(workspace_id, ensureFresh),
                     query,
                     rescueExcludeTests);
@@ -181,9 +184,9 @@ public sealed partial class ContextTool
                 {
                     case ReferenceMode.Off:
                         output = RunActionableWithCancellation(
-                            context.Index,
+                            contextIndex,
                             context.Graph,
-                            context.Resolver,
+                            contextResolver,
                             query,
                             bundleTokenBudget,
                             max_hops,
@@ -212,9 +215,9 @@ public sealed partial class ContextTool
                         break;
                     case ReferenceMode.Usage:
                         output = RunReferenceAwareActionableWithCancellation(
-                            context.Index,
+                            contextIndex,
                             context.Graph,
-                            context.Resolver,
+                            contextResolver,
                             query,
                             bundleTokenBudget,
                             max_hops,
@@ -498,6 +501,7 @@ public sealed partial class ContextTool
 
     private IReadOnlyList<ContextSemanticSeed> LoadSemanticSeeds(
         WorkspaceReadContext context,
+        ISymbolLookupIndex index,
         string query,
         bool excludeTests)
     {
@@ -509,7 +513,7 @@ public sealed partial class ContextTool
         }
 
         SymbolCandidateSet lexical = SearchTool.CollectSymbolCandidates(
-            context.Index,
+            index,
             query,
             SearchToolMode.Symbol,
             limit: 2,
@@ -540,7 +544,7 @@ public sealed partial class ContextTool
             if (hit.SymbolId is not { } symbolId ||
                 !admission.AllowsExpansion && !lexicalIds.Contains(symbolId) ||
                 !seen.Add(symbolId) ||
-                context.Index.FindBySymbolId(symbolId) is not { } symbol ||
+                index.FindBySymbolId(symbolId) is not { } symbol ||
                 excludeTests && (symbol.IsTest || IsTestPath.Check(symbol.FilePath)))
             {
                 continue;

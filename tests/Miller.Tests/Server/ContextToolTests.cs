@@ -1530,6 +1530,48 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void ContextCachesRepeatedTermRescueSearchesBeforeAnchorCompletion()
+    {
+        var (index, _) = BuildFixture();
+        var measured = new MeasuredSymbolLookupIndex(index);
+        var readTelemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        WorkspaceReadContext context = ReadToolRoutingTestSupport.ContextFor(
+            index,
+            "current.db",
+            "current-ws",
+            "/repo") with
+        {
+            Index = measured,
+            Resolver = new SmartTargetResolver(measured),
+            ReadTelemetry = readTelemetry,
+        };
+        var provider = new RecordingWorkspaceIndexProvider(context);
+        var lookupPhases = new List<ContextLookupPhaseObservation>();
+        var tool = new ContextTool(
+            provider,
+            semanticArm: null,
+            semanticSidecar: null,
+            lookupPhaseObserver: lookupPhases.Add);
+
+        _ = tool.Context(
+            "how family store read context resolves symbols and graph",
+            token_budget: 1200,
+            max_hops: 1,
+            entry_symbols: ["WorkspaceIndexProvider"]);
+
+        Assert.Equal(
+            [
+                ContextLookupPhase.QueryRetrieval,
+                ContextLookupPhase.TermRetrieval,
+                ContextLookupPhase.AnchorResolution,
+            ],
+            lookupPhases.Select(static observation => observation.Phase));
+        Assert.True(
+            lookupPhases[^1].SearchTotal.CacheHit.CallCount > 0,
+            JsonSerializer.Serialize(lookupPhases[^1].SearchTotal));
+    }
+
+    [Fact]
     public void ContextLookupTelemetryRetainsOnlyCompletedSnapshotsBeforeCancellation()
     {
         var (index, _) = BuildFixture();

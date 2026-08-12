@@ -334,6 +334,104 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void ContextSearchCacheReusesExactRequestsAndMissesEveryKeyVariant()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        var measured = new MeasuredSymbolLookupIndex(inner);
+        var cache = new ContextSearchCacheLookupIndex(measured);
+
+        IReadOnlyList<SearchHit> first = cache.Search("TargetType", 10, SearchMode.Or);
+        IReadOnlyList<SearchHit> repeated = cache.Search("TargetType", 10, SearchMode.Or);
+        IReadOnlyList<SearchHit> differentLimit = cache.Search("TargetType", 20, SearchMode.Or);
+        IReadOnlyList<SearchHit> differentMode = cache.Search("TargetType", 10, SearchMode.And);
+        IReadOnlyList<SearchHit> differentQuery = cache.Search("Qzxwplmn", 10, SearchMode.Or);
+
+        Assert.Same(first, repeated);
+        Assert.Equal(first, repeated);
+        Assert.Equal(["TargetType"], repeated.Select(static hit => hit.Document.Name));
+        Assert.Single(differentLimit);
+        Assert.Single(differentMode);
+        Assert.Empty(differentQuery);
+        Assert.Equal(
+            4,
+            measured.SnapshotByFamily()[(int)SymbolLookupMethodFamily.Search].CallCount);
+    }
+
+    [Fact]
+    public void ContextSearchCacheStopsCachingNewRequestsAtItsFixedCapacity()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        var measured = new MeasuredSymbolLookupIndex(inner);
+        var cache = new ContextSearchCacheLookupIndex(measured);
+
+        for (int index = 0; index < 65; index++)
+            _ = cache.Search($"Qzxwplmn{index}", 10, SearchMode.Or);
+        _ = cache.Search("Qzxwplmn64", 10, SearchMode.Or);
+        _ = cache.Search("Qzxwplmn0", 10, SearchMode.Or);
+
+        Assert.Equal(
+            66,
+            measured.SnapshotByFamily()[(int)SymbolLookupMethodFamily.Search].CallCount);
+    }
+
+    [Fact]
+    public void ContextSearchCacheDoesNotRetainOneResultBeyondItsRowBudget()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        SearchHit hit = Assert.Single(inner.Search("TargetType"));
+        var backend = new FixedSearchResultLookupIndex(inner, Enumerable.Repeat(hit, 10_001).ToArray());
+        var cache = new ContextSearchCacheLookupIndex(backend);
+
+        _ = cache.Search("TargetType", 10_001, SearchMode.Or);
+        _ = cache.Search("TargetType", 10_001, SearchMode.Or);
+
+        Assert.Equal(2, backend.SearchCallCount);
+    }
+
+    [Fact]
+    public void ContextSearchCacheDoesNotRetainNewResultAfterCumulativeRowBudgetIsExhausted()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        SearchHit hit = Assert.Single(inner.Search("TargetType"));
+        var backend = new FixedSearchResultLookupIndex(inner, Enumerable.Repeat(hit, 6_000).ToArray());
+        var cache = new ContextSearchCacheLookupIndex(backend);
+
+        _ = cache.Search("First", 6_000, SearchMode.Or);
+        _ = cache.Search("Second", 6_000, SearchMode.Or);
+        _ = cache.Search("Second", 6_000, SearchMode.Or);
+        _ = cache.Search("First", 6_000, SearchMode.Or);
+
+        Assert.Equal(3, backend.SearchCallCount);
+    }
+
+    [Fact]
+    public void ContextSearchCacheReportsAvoidedWorkWithoutInventingBackendElapsedTime()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        var measured = new MeasuredSymbolLookupIndex(inner);
+        var telemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using IDisposable searchTelemetry = telemetry.ActivateSearchTelemetry();
+        var cache = new ContextSearchCacheLookupIndex(measured);
+
+        _ = cache.Search("TargetType", 10, SearchMode.Or);
+        IReadOnlyList<SearchHit> repeated = cache.Search("TargetType", 10, SearchMode.Or);
+        ContextLookupPhaseObservation observation =
+            telemetry.CompleteLookupPhase(ContextLookupPhase.AnchorResolution);
+
+        Assert.Equal(1, observation.Delta.Search.CallCount);
+        Assert.Equal(1, observation.SearchDelta.FirstQuery.CallCount);
+        Assert.Equal(1, observation.SearchDelta.CacheHit.CallCount);
+        Assert.Equal(0, observation.SearchDelta.CacheHit.ElapsedMilliseconds);
+        Assert.Equal(repeated.Count, observation.SearchDelta.CacheHit.ReturnedRowCount);
+        Assert.Equal(1, observation.SearchDelta.Or.CallCount);
+    }
+
+    [Fact]
     public void RepeatedCurrentFamilyReadsKeepCachedIdentityAndReportOnlyTheirOwnLookupDelta()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
@@ -2460,4 +2558,41 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             {
                 new JulieDbFixture.FileSpec(docPath) { Language = "markdown", DiskText = docText },
             });
+
+    private sealed class FixedSearchResultLookupIndex(
+        ISymbolLookupIndex inner,
+        IReadOnlyList<SearchHit> searchResult) : ISymbolLookupIndex
+    {
+        public int SearchCallCount { get; private set; }
+
+        public int DocumentCount => inner.DocumentCount;
+
+        public IReadOnlySet<string> KnownExtensions => inner.KnownExtensions;
+
+        public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or)
+        {
+            SearchCallCount++;
+            return searchResult;
+        }
+
+        public IndexedSymbol Resolve(int docId) => inner.Resolve(docId);
+
+        public IReadOnlyList<IndexedSymbol> FindByName(string name) => inner.FindByName(name);
+
+        public IndexedSymbol? FindBySymbolId(string symbolId) => inner.FindBySymbolId(symbolId);
+
+        public IReadOnlyList<IndexedSymbol> FindChildren(string parentId) => inner.FindChildren(parentId);
+
+        public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath) => inner.FindByFilePath(filePath);
+
+        public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit) =>
+            inner.FindByFilePathFragment(query, limit);
+
+        public IReadOnlyList<string> FindFilePathsByFragment(string query, int limit) =>
+            inner.FindFilePathsByFragment(query, limit);
+
+        public bool IsIndexedFilePath(string path) => inner.IsIndexedFilePath(path);
+
+        public string? ResolveIndexedFilePath(string target) => inner.ResolveIndexedFilePath(target);
+    }
 }
