@@ -50,8 +50,11 @@ public static class CloneGroupReader
         JulieSchemaGate.Verify(connection);
 
         using SqliteCommand command = connection.CreateCommand();
+        // MATERIALIZED is load-bearing, not a hint we can drop. Left to its own judgement SQLite inlines a
+        // small-LIMIT CTE and re-runs this whole-table GROUP BY once per join probe: limit 50/20/10 measured 5-6s
+        // on a 226k-symbol store while limit 5 — what the dashboard workspace panel asks for — never finished.
         command.CommandText = """
-            WITH clone_hashes AS (
+            WITH clone_hashes AS MATERIALIZED (
                 SELECT body_hash, COUNT(*) AS clone_count
                 FROM symbols
                 WHERE body_hash IS NOT NULL AND body_hash != ''
