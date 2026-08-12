@@ -1,9 +1,9 @@
 ---
 id: prove-the-value-then-show-it-2026-07-28-strategy
 title: Prove the value, then show it — 2026-07-28 strategy
-status: active
+status: completed
 created: 2026-07-29T00:13:39.439Z
-updated: 2026-08-12T12:36:15.367Z
+updated: 2026-08-12T13:52:05.214Z
 tags:
   - strategy
   - performance
@@ -12,31 +12,20 @@ tags:
   - overnight
 ---
 
-## Direction
+## Outcome
 
-Miller replaces the retired Julie agent-tool core. The family-store interactive read recovery is now accepted locally; release preparation continues across Miller and julie-extractors.
+Miller's family-store performance recovery was proved with exact dogfood and published as stable `v1.18.2`; the coordinated producer improvements were published as stable `julie-extract v2.32.1`.
 
-## Verified Miller state
+## Verified release
 
-- Final candidate `e46e72e2`: warm inspect 254.855 ms, context 1,938.450 ms, impact 1,260.196 ms, trace 145.721 ms.
-- Context peak 151,516 KB PSS; post-read 3 s idle peak 161,214 KB PSS. Outputs remained exact.
-- Fast branch gate: 6,439 passed, 4 skipped. Scale gate: 138 passed, 5 skipped. Zero failures and zero build warnings/errors.
-- PERF-001/002/003/011 and the consumer-side portions of PERF-004/005 are accepted.
+- Miller source/tag `c49dc3712ad81ed359236e433c7eaf63d0f04197`.
+- Four-target package-only workflow `31602463908` passed; exact-artifact promotion `31603272634` passed.
+- Public archives and checksum sidecars verified from fresh downloads.
+- Bundled Linux package reports Miller `1.18.2+c49dc3712ad8`, `julie-extract 2.32.1`, and semantic sidecar `0.1.0`.
+- Final candidate measurements: inspect 254.855 ms, context 1,938.450 ms, impact 1,260.196 ms, trace 145.721 ms; exact output preserved.
+- Fast gate 6,439/4 skipped; scale gate 138/5 skipped; no failures.
 
-## Julie state to integrate
+## Follow-ups outside this completed release
 
-- `main` includes writer heartbeat, scope crossover, clean replay evidence, and patch-equivalent artifact retry `70cd205f`.
-- `perf/store-resolution-query-amplification` adds diagnostic history and the accepted cached exact-writer fix `ab3aa957`; faithful resolution improved 49.98 s → 43.10 s with exact output.
-- Prepare the local v2.32.1 candidate only after integrating that branch; no publication claim.
-
-## Remaining work
-
-- Commit the Miller gate/docs evidence and reconcile worktrees.
-- Integrate Julie performance history into `release/2.32.1`, update release prep metadata/notes, and run its declared local gates.
-- Prepare Miller v1.18.2 metadata/notes and local package/security/plugin/site gates after Julie candidate state is settled.
-- PERF-010 registry/open isolation remains separate: no supported registry override exists, and shared registry mutation/HOME repurposing is prohibited.
-- PERF-009 bridge-mode process dogfood remains unmeasured but ordinary trace is accepted.
-
-## Approval boundary
-
-Do not push, tag, publish, deploy, advertise marketplace versions, or create releases without explicit user approval.
+- PERF-010 registry/open isolation still needs a supported registry override; shared registry mutation and HOME repurposing remain prohibited.
+- PERF-009 bridge-mode process dogfood remains unmeasured, while ordinary trace acceptance passed.
