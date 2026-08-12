@@ -21,33 +21,47 @@ internal sealed class ProcessGitDiffReader : IGitDiffReader
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
+    // Miller runs as an MCP stdio server with a read permanently pending on its own stdin pipe. A child that
+    // INHERITS that handle blocks in Git-for-Windows startup handle probing and never runs at all (0s CPU until
+    // the timeout kills it), so stdin is redirected and closed immediately. The CLI never showed it: a console
+    // stdin probes fine. Do not drop the redirect.
+    internal static ProcessStartInfo CreateStartInfo(GitDiffRequest request)
+    {
+        var start = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = request.WorkspaceRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            RedirectStandardInput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        start.ArgumentList.Add("--no-pager");
+        start.ArgumentList.Add("diff");
+        start.ArgumentList.Add("--no-ext-diff");
+        if (request.Staged)
+            start.ArgumentList.Add("--cached");
+        if (!string.IsNullOrWhiteSpace(request.BaseRef))
+            start.ArgumentList.Add(request.BaseRef);
+        start.ArgumentList.Add("--");
+
+        return start;
+    }
+
     public GitDiffResult Read(GitDiffRequest request)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.WorkspaceRoot);
 
         try
         {
-            var start = new ProcessStartInfo("git")
-            {
-                WorkingDirectory = request.WorkspaceRoot,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-
-            start.ArgumentList.Add("--no-pager");
-            start.ArgumentList.Add("diff");
-            start.ArgumentList.Add("--no-ext-diff");
-            if (request.Staged)
-                start.ArgumentList.Add("--cached");
-            if (!string.IsNullOrWhiteSpace(request.BaseRef))
-                start.ArgumentList.Add(request.BaseRef);
-            start.ArgumentList.Add("--");
+            ProcessStartInfo start = CreateStartInfo(request);
 
             using Process? process = Process.Start(start);
             if (process is null)
                 return GitDiffResult.Fail("git process did not start.");
+
+            process.StandardInput.Close();
 
             Task<string> stdout = process.StandardOutput.ReadToEndAsync();
             Task<string> stderr = process.StandardError.ReadToEndAsync();
