@@ -104,8 +104,17 @@ without first adding new phase, query-count, or resource evidence.
 - **Timeout evidence fix:** Test-only diagnostics now serialize all fourteen families and atomically persist live
   snapshots at exponentially growing execution thresholds, so a future resolver timeout retains counters without
   adding a public CLI/report contract or per-query filesystem work.
-- **Next diagnosis:** Reuse an already-ready predecessor base or prepare one outside the 60 s scoped measurement,
-  then run the single bounded scoped replay. Do not repeat the failed fixture preparation unchanged.
+- **Faithful replay:** A reflink clone of the prior clean 1,538-file fixture reused its ready 392,526-identifier
+  predecessor base. The one scoped diagnostic completed in 49.81 s process wall; `run_resolution_session` was
+  24.848 s and finalization/other process work was about 24.96 s.
+- **Query evidence:** LocateIdentifier executed 10,804 times (72.12% of 14,980 query executions), exactly the
+  pending count. IdentifierHydration read 381,722 rows, PrimeWindow 313,107, and PendingHydration 89,930 rows.
+  LocateIdentifier runs inside `materialized_relationship_covers`' per-relationship loop. Both locator indexes
+  exist; the span query still reports a temporary ORDER BY B-tree, but an index-only tweak cannot remove 10,804
+  calls.
+- **Next fix:** Batch or materialize the relationship-to-identifier coverage join so coverage does not call
+  LocateIdentifier once per pending identifier/relationship. Separately instrument and reduce the roughly 25 s
+  exact finalization phase after the query-count fix; it is already as large as resolution itself.
 - **Fix:** Optimize only the measured query family after the bounded replay names it. A candidate-page cache remains
   an option, not an approved implementation, until the counter distribution proves it is the bottleneck.
 - **Gate:** Exact output/digest parity; candidate executions scale with distinct page keys rather than identifiers;
