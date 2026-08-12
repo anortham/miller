@@ -173,21 +173,23 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
 
         string strictMatch = JoinFtsTerms(plan.CoverageTerms, " AND ");
         long strictStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        IReadOnlyList<string> candidateIds = ChunkCandidates(connection, strictMatch, WidenedCandidateLimit);
-        Observe(FtsTextSearchQueryFamily.StrictCandidates, candidateIds.Count, strictStarted);
+        IReadOnlyList<TextCandidate> candidates = ChunkCandidates(connection, strictMatch, WidenedCandidateLimit);
+        Observe(FtsTextSearchQueryFamily.StrictCandidates, candidates.Count, strictStarted);
         var hits = new List<TextContentSearchHit>();
-        var tokens = new List<string>(64);
         var seenCandidateIds = new HashSet<string>(StringComparer.Ordinal);
         var coverageTermSet = plan.CoverageTerms.ToHashSet(StringComparer.Ordinal);
 
-        AddHits(candidateIds);
+        AddHits(candidates);
         if (hits.Count < limit)
         {
             string widenedMatch = JoinFtsTerms(plan.CoverageTerms, " OR ");
             long widenedStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            IReadOnlyList<string> widenedIds = ChunkCandidates(connection, widenedMatch, WidenedCandidateLimit);
-            Observe(FtsTextSearchQueryFamily.WidenedCandidates, widenedIds.Count, widenedStarted);
-            AddHits(widenedIds);
+            IReadOnlyList<TextCandidate> widenedCandidates = ChunkCandidates(
+                connection,
+                widenedMatch,
+                WidenedCandidateLimit);
+            Observe(FtsTextSearchQueryFamily.WidenedCandidates, widenedCandidates.Count, widenedStarted);
+            AddHits(widenedCandidates);
         }
 
         long orderingStarted = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -206,36 +208,69 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         Observe(FtsTextSearchQueryFamily.FinalOrdering, hits.Count, orderingStarted);
         return hits;
 
-        void AddHits(IReadOnlyList<string> ids)
+        void AddHits(IReadOnlyList<TextCandidate> candidates)
         {
             long filteringStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            string[] eligibleIds = ids
-                .Where(chunkId =>
+            TextCandidate[] eligibleCandidates = candidates
+                .Where(candidate =>
                 {
-                    if (!seenCandidateIds.Add(chunkId))
+                    if (!seenCandidateIds.Add(candidate.ChunkId))
                         return false;
-                    if (!_chunkMetadataById.TryGetValue(chunkId, out TextChunkMetadata? metadata))
+                    if (!_chunkMetadataById.TryGetValue(candidate.ChunkId, out TextChunkMetadata? metadata))
                         return false;
                     return allowedKinds.Contains(metadata.ContentKind)
                         && (!excludeTests || !metadata.IsTest);
                 })
                 .ToArray();
-            Observe(FtsTextSearchQueryFamily.CandidateFiltering, eligibleIds.Length, filteringStarted);
-            foreach (string[] batch in eligibleIds.Chunk(RawTextBatchSize))
+            Observe(FtsTextSearchQueryFamily.CandidateFiltering, eligibleCandidates.Length, filteringStarted);
+
+            long narrowScoringStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            var scoredCandidates = new List<ScoredTextCandidate>(eligibleCandidates.Length);
+            foreach (TextCandidate candidate in eligibleCandidates)
+            {
+                TextChunkMetadata metadata = _chunkMetadataById[candidate.ChunkId];
+                double score = 0.0;
+                int matchedCoverage = 0;
+                foreach (string term in plan.DistinctTerms)
+                {
+                    int tf = FtsSymbolSearchIndex.CountTokenOccurrences(candidate.TokenBody, term);
+                    if (tf == 0)
+                        continue;
+                    if (coverageTermSet.Contains(term))
+                        matchedCoverage++;
+                    score += Bm25.TermScore(
+                        Bm25.Idf(_documentCount, documentFrequency[term]),
+                        tf,
+                        metadata.DocLen,
+                        _avgdl);
+                }
+
+                if (matchedCoverage >= plan.RequiredCoverage && score > 0.0)
+                    scoredCandidates.Add(new ScoredTextCandidate(candidate.ChunkId, score));
+            }
+            Observe(
+                FtsTextSearchQueryFamily.NarrowTokenScoring,
+                eligibleCandidates.Length,
+                narrowScoringStarted);
+
+            foreach (ScoredTextCandidate[] batch in scoredCandidates.Chunk(RawTextBatchSize))
             {
                 long hydrationStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 IReadOnlyDictionary<string, TextChunk> chunksById = ReadChunksById(
                     connection,
-                    batch,
+                    batch.Select(static candidate => candidate.ChunkId).ToArray(),
                     connection.DataSource);
                 Observe(FtsTextSearchQueryFamily.FullHydration, chunksById.Count, hydrationStarted);
                 long scoringStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 int hitCountBefore = hits.Count;
                 var subphases = new ScoringSubphases();
-                foreach (string chunkId in batch)
-                    AddHit(chunkId, chunksById, ref subphases);
+                foreach (ScoredTextCandidate candidate in batch)
+                    AddHit(candidate, chunksById, ref subphases);
                 TimeSpan scoringElapsed = System.Diagnostics.Stopwatch.GetElapsedTime(scoringStarted);
-                Observe(FtsTextSearchQueryFamily.TokenScoringPhrase, subphases.TokenRows, subphases.TokenElapsed);
+                Observe(
+                    FtsTextSearchQueryFamily.PhraseVerification,
+                    subphases.PhraseRows,
+                    subphases.PhraseElapsed);
                 Observe(FtsTextSearchQueryFamily.SnippetSelection, subphases.SnippetRows, subphases.SnippetElapsed);
                 Observe(FtsTextSearchQueryFamily.SymbolMapping, subphases.SymbolRows, subphases.SymbolElapsed);
                 Observe(FtsTextSearchQueryFamily.ResultConstruction, subphases.ResultRows, subphases.ResultElapsed);
@@ -244,40 +279,16 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         }
 
         void AddHit(
-            string chunkId,
+            ScoredTextCandidate candidate,
             IReadOnlyDictionary<string, TextChunk> chunksById,
             ref ScoringSubphases subphases)
         {
-            if (!chunksById.TryGetValue(chunkId, out TextChunk? chunk))
+            if (!chunksById.TryGetValue(candidate.ChunkId, out TextChunk? chunk))
                 return;
 
-            long tokenStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            tokens.Clear();
-            CodeTokenizer.Tokenize(chunk.RawText, tokens);
-            double score = 0.0;
-            int matchedCoverage = 0;
-            foreach (string term in plan.DistinctTerms)
-            {
-                int tf = CountOccurrences(tokens, term);
-                if (tf == 0)
-                    continue;
-                if (coverageTermSet.Contains(term))
-                    matchedCoverage++;
-                score += Bm25.TermScore(
-                    Bm25.Idf(_documentCount, documentFrequency[term]),
-                    tf,
-                    chunk.DocLen,
-                    _avgdl);
-            }
-
-            if (matchedCoverage < plan.RequiredCoverage || score <= 0.0)
-            {
-                subphases.CompleteToken(tokenStarted);
-                return;
-            }
-
+            long phraseStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             bool hasTokenPhrase = ContainsTokenPhrase(chunk, plan.QueryTokens);
-            subphases.CompleteToken(tokenStarted);
+            subphases.CompletePhrase(phraseStarted);
             if (plan.RequiresTokenPhrase && !hasTokenPhrase)
                 return;
 
@@ -287,8 +298,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
             if (bestLine.DistinctTermCount < plan.RequiredLineCoverage)
                 return;
 
-            if (hasTokenPhrase)
-                score *= TokenPhraseBoost;
+            double score = hasTokenPhrase ? candidate.Score * TokenPhraseBoost : candidate.Score;
 
             long symbolStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             ContentSymbolSpan? symbol = BestContainingSymbol(chunk.SourceId, bestLine.Line);
@@ -555,18 +565,18 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
-    private static IReadOnlyList<string> ChunkCandidates(SqliteConnection connection, string match, int limit)
+    private static IReadOnlyList<TextCandidate> ChunkCandidates(SqliteConnection connection, string match, int limit)
     {
         using var command = connection.CreateCommand();
         command.CommandText =
-            "SELECT chunk_id FROM content_fts WHERE body MATCH $q ORDER BY rank LIMIT $limit;";
+            "SELECT chunk_id, body FROM content_fts WHERE body MATCH $q ORDER BY rank LIMIT $limit;";
         command.Parameters.AddWithValue("$q", match);
         command.Parameters.AddWithValue("$limit", limit);
-        var ids = new List<string>();
+        var candidates = new List<TextCandidate>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
-            ids.Add(reader.GetString(0));
-        return ids;
+            candidates.Add(new TextCandidate(reader.GetString(0), reader.GetString(1)));
+        return candidates;
     }
 
     private static BestLine BestLineAndSnippet(
@@ -695,15 +705,6 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         return best;
     }
 
-    private static int CountOccurrences(List<string> tokens, string term)
-    {
-        int count = 0;
-        foreach (string token in tokens)
-            if (string.Equals(token, term, StringComparison.Ordinal))
-                count++;
-        return count;
-    }
-
     private static string QuoteFts(string term) => "\"" + term.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
     private static void EnsureTable(SqliteConnection connection, string absPath, string tableName)
@@ -757,8 +758,8 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
 
     private struct ScoringSubphases
     {
-        internal long TokenElapsedTicks;
-        internal int TokenRows;
+        internal long PhraseElapsedTicks;
+        internal int PhraseRows;
         internal long SnippetElapsedTicks;
         internal int SnippetRows;
         internal long SymbolElapsedTicks;
@@ -766,15 +767,15 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         internal long ResultElapsedTicks;
         internal int ResultRows;
 
-        internal readonly TimeSpan TokenElapsed => TimeSpan.FromTicks(TokenElapsedTicks);
+        internal readonly TimeSpan PhraseElapsed => TimeSpan.FromTicks(PhraseElapsedTicks);
         internal readonly TimeSpan SnippetElapsed => TimeSpan.FromTicks(SnippetElapsedTicks);
         internal readonly TimeSpan SymbolElapsed => TimeSpan.FromTicks(SymbolElapsedTicks);
         internal readonly TimeSpan ResultElapsed => TimeSpan.FromTicks(ResultElapsedTicks);
 
-        internal void CompleteToken(long startedAt)
+        internal void CompletePhrase(long startedAt)
         {
-            TokenElapsedTicks += System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).Ticks;
-            TokenRows++;
+            PhraseElapsedTicks += System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).Ticks;
+            PhraseRows++;
         }
 
         internal void CompleteSnippet(long startedAt)
@@ -797,6 +798,10 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
     }
 
     private sealed record BestLine(int Line, string Snippet, int DistinctTermCount);
+
+    private readonly record struct TextCandidate(string ChunkId, string TokenBody);
+
+    private readonly record struct ScoredTextCandidate(string ChunkId, double Score);
 
     private sealed record ContentSymbolSpan(string SymbolId, string Name, int StartLine, int EndLine);
 
@@ -834,8 +839,9 @@ internal enum FtsTextSearchQueryFamily
     StrictCandidates,
     WidenedCandidates,
     CandidateFiltering,
+    NarrowTokenScoring,
     FullHydration,
-    TokenScoringPhrase,
+    PhraseVerification,
     SnippetSelection,
     SymbolMapping,
     ResultConstruction,
@@ -859,8 +865,9 @@ internal sealed record FtsTextSearchQueryMeasurementSnapshot(
     FtsTextSearchQueryFamilyMeasurement StrictCandidates,
     FtsTextSearchQueryFamilyMeasurement WidenedCandidates,
     FtsTextSearchQueryFamilyMeasurement CandidateFiltering,
+    FtsTextSearchQueryFamilyMeasurement NarrowTokenScoring,
     FtsTextSearchQueryFamilyMeasurement FullHydration,
-    FtsTextSearchQueryFamilyMeasurement TokenScoringPhrase,
+    FtsTextSearchQueryFamilyMeasurement PhraseVerification,
     FtsTextSearchQueryFamilyMeasurement SnippetSelection,
     FtsTextSearchQueryFamilyMeasurement SymbolMapping,
     FtsTextSearchQueryFamilyMeasurement ResultConstruction,
@@ -875,7 +882,7 @@ internal sealed class FtsTextSearchQueryTelemetryCollector
     private readonly long[] _rows = new long[Enum.GetValues<FtsTextSearchQueryFamily>().Length];
 
     internal static FtsTextSearchQueryMeasurementSnapshot EmptySnapshot { get; } =
-        new(default, default, default, default, default, default, default, default, default, default, default, default);
+        new(default, default, default, default, default, default, default, default, default, default, default, default, default);
 
     internal static FtsTextSearchQueryTelemetryCollector? Current => CurrentCollector.Value;
 
@@ -901,8 +908,9 @@ internal sealed class FtsTextSearchQueryTelemetryCollector
             Family(FtsTextSearchQueryFamily.StrictCandidates),
             Family(FtsTextSearchQueryFamily.WidenedCandidates),
             Family(FtsTextSearchQueryFamily.CandidateFiltering),
+            Family(FtsTextSearchQueryFamily.NarrowTokenScoring),
             Family(FtsTextSearchQueryFamily.FullHydration),
-            Family(FtsTextSearchQueryFamily.TokenScoringPhrase),
+            Family(FtsTextSearchQueryFamily.PhraseVerification),
             Family(FtsTextSearchQueryFamily.SnippetSelection),
             Family(FtsTextSearchQueryFamily.SymbolMapping),
             Family(FtsTextSearchQueryFamily.ResultConstruction),

@@ -84,14 +84,16 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
                 FtsTextSearchQueryFamily.ConnectionOpen,
                 FtsTextSearchQueryFamily.StrictCandidates,
                 FtsTextSearchQueryFamily.CandidateFiltering,
+                FtsTextSearchQueryFamily.NarrowTokenScoring,
                 FtsTextSearchQueryFamily.FullHydration,
-                FtsTextSearchQueryFamily.TokenScoringPhrase,
+                FtsTextSearchQueryFamily.PhraseVerification,
                 FtsTextSearchQueryFamily.SnippetSelection,
                 FtsTextSearchQueryFamily.SymbolMapping,
                 FtsTextSearchQueryFamily.ResultConstruction,
                 FtsTextSearchQueryFamily.Scoring,
                 FtsTextSearchQueryFamily.WidenedCandidates,
                 FtsTextSearchQueryFamily.CandidateFiltering,
+                FtsTextSearchQueryFamily.NarrowTokenScoring,
                 FtsTextSearchQueryFamily.FinalOrdering,
             ],
             observations
@@ -106,13 +108,13 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
             observation =>
             {
                 observations.Add(observation);
-                if (observation.Family == FtsTextSearchQueryFamily.TokenScoringPhrase)
-                    throw new OperationCanceledException("stop after completed token scoring batch");
+                if (observation.Family == FtsTextSearchQueryFamily.PhraseVerification)
+                    throw new OperationCanceledException("stop after completed phrase verification batch");
             });
 
         Assert.Throws<OperationCanceledException>(() =>
             index.Search("KnownSourceError", TextContentKind.WorkspaceSource, limit: 10));
-        Assert.Equal(FtsTextSearchQueryFamily.TokenScoringPhrase, observations[^1].Family);
+        Assert.Equal(FtsTextSearchQueryFamily.PhraseVerification, observations[^1].Family);
         Assert.DoesNotContain(observations, static observation =>
             observation.Family is FtsTextSearchQueryFamily.SnippetSelection
                 or FtsTextSearchQueryFamily.SymbolMapping
@@ -331,7 +333,7 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
     public void Search_CodeLikeQueryStillRequiresExactTokenPhrase()
     {
         using var weak = BuildFixture(
-            ("src/Weak.cs", "csharp", false, "Spawn timeout secs can be configured elsewhere."));
+            ("src/Weak.cs", "csharp", false, "JULIE EMBEDDING HOST\nSPAWN TIMEOUT SECS"));
         ContentCorpusWriter.Write(_contentDbPath, weak.DbPath, weak.WorkspaceRoot, "workspace-1", revision: 7);
         var weakIndex = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7);
 
@@ -419,6 +421,53 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
             limit: 10,
             excludeTests: true));
         Assert.Equal("src/Prod.cs", sourceHit.Path);
+    }
+
+    [Fact]
+    public void Search_HighFanoutWidenedFallbackHydratesOnlyScoreQualifiedCandidatesWithExactParity()
+    {
+        const int decoyCount = 600;
+        const string query = "gateway health checks doctor command latency";
+        const string targetText = "Gateway health checks doctor.";
+        var files = Enumerable.Range(0, decoyCount)
+            .Select(static i => (
+                Path: $"src/Decoy{i:D4}.cs",
+                Language: "csharp",
+                IsTest: false,
+                Text: "Gateway filler."))
+            .Append((Path: "src/Target.cs", Language: "csharp", IsTest: false, Text: targetText))
+            .ToArray();
+        using var fx = BuildFixture(files);
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        var observations = new List<FtsTextSearchQueryObservation>();
+        var index = FtsTextContentSearchIndex.Open(
+            _contentDbPath,
+            expectedRevision: 7,
+            observations.Add);
+        ContentSearchHit expected = Assert.Single(ContentSearchIndex.Build(
+            files.Select(static (file, i) => new ContentDocument(i, file.Path, file.Text, file.Language)).ToArray())
+            .Search(query, limit: 1));
+
+        TextContentSearchHit actual = Assert.Single(index.Search(
+            query,
+            TextContentKind.WorkspaceSource,
+            limit: 1,
+            excludeTests: false));
+
+        Assert.Equal("src/Target.cs", actual.Path);
+        Assert.Equal(expected.Score, actual.Score);
+        Assert.Equal(expected.Line, actual.Line);
+        Assert.Equal(expected.Snippet, actual.Snippet);
+        Assert.Equal("sym-target", actual.ContainingSymbolId);
+        Assert.Equal(decoyCount + 1, observations
+            .Where(static observation => observation.Family == FtsTextSearchQueryFamily.NarrowTokenScoring)
+            .Sum(static observation => observation.Rows));
+        Assert.Equal(1, observations
+            .Where(static observation => observation.Family == FtsTextSearchQueryFamily.FullHydration)
+            .Sum(static observation => observation.Rows));
+        Assert.Equal(1, observations
+            .Where(static observation => observation.Family == FtsTextSearchQueryFamily.PhraseVerification)
+            .Sum(static observation => observation.Rows));
     }
 
     [Fact]

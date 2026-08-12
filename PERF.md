@@ -311,6 +311,13 @@ without first adding new phase, query-count, or resource evidence.
   FTS used 237 ms for 57,068 candidates, 242 ms scoring, and 4 ms bounded hydration; lookup was 1,594 / 760 ms
   and graph 288 ms. The correct response consumed 1,629,863,538 logical-read characters, peaked at 122,059 KB
   PSS / 169,104 KB RSS, and preserved 3,378 bytes / 10 results / 845 tokens.
+- **Source-scoring subphase diagnosis:** Release was rebuilt from clean `1f7fa498`; the one diagnosis completed in
+  2,517.657 ms. Token scoring and phrase detection consumed 518 ms across five batches / 1,832 hydrated rows;
+  snippet selection added 60 ms but ran for only 116 survivors. Candidate filtering was 1 ms, symbol mapping and
+  result construction rounded to 0 ms, and aggregate scoring was 580 ms. This proves nearly all source-rescue
+  scoring cost is repeatedly tokenizing and scoring the 1,832 fully hydrated chunks, not snippet extraction or
+  symbol lookup. The outer source-rescue phase was 888 ms; output remained correct at 3,378 bytes / 10 results /
+  845 tokens, with 121,565 KB peak PSS / 168,852 KB RSS.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 

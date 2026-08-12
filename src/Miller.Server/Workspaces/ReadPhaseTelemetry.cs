@@ -43,8 +43,9 @@ internal sealed record FtsTextSearchQueryTelemetrySnapshot(
     SearchRequestFamilyTelemetry StrictCandidates,
     SearchRequestFamilyTelemetry WidenedCandidates,
     SearchRequestFamilyTelemetry CandidateFiltering,
+    SearchRequestFamilyTelemetry NarrowTokenScoring,
     SearchRequestFamilyTelemetry FullHydration,
-    SearchRequestFamilyTelemetry TokenScoringPhrase,
+    SearchRequestFamilyTelemetry PhraseVerification,
     SearchRequestFamilyTelemetry SnippetSelection,
     SearchRequestFamilyTelemetry SymbolMapping,
     SearchRequestFamilyTelemetry ResultConstruction,
@@ -57,8 +58,9 @@ internal sealed record FtsTextSearchQueryTelemetrySnapshot(
         StrictCandidates.CallCount +
         WidenedCandidates.CallCount +
         CandidateFiltering.CallCount +
+        NarrowTokenScoring.CallCount +
         FullHydration.CallCount +
-        TokenScoringPhrase.CallCount +
+        PhraseVerification.CallCount +
         SnippetSelection.CallCount +
         SymbolMapping.CallCount +
         ResultConstruction.CallCount +
@@ -261,8 +263,9 @@ internal sealed class ReadPhaseTelemetry
             FtsTextSearchFamilyDelta(current.StrictCandidates, baseline.StrictCandidates),
             FtsTextSearchFamilyDelta(current.WidenedCandidates, baseline.WidenedCandidates),
             FtsTextSearchFamilyDelta(current.CandidateFiltering, baseline.CandidateFiltering),
+            FtsTextSearchFamilyDelta(current.NarrowTokenScoring, baseline.NarrowTokenScoring),
             FtsTextSearchFamilyDelta(current.FullHydration, baseline.FullHydration),
-            FtsTextSearchFamilyDelta(current.TokenScoringPhrase, baseline.TokenScoringPhrase),
+            FtsTextSearchFamilyDelta(current.PhraseVerification, baseline.PhraseVerification),
             FtsTextSearchFamilyDelta(current.SnippetSelection, baseline.SnippetSelection),
             FtsTextSearchFamilyDelta(current.SymbolMapping, baseline.SymbolMapping),
             FtsTextSearchFamilyDelta(current.ResultConstruction, baseline.ResultConstruction),
@@ -277,8 +280,9 @@ internal sealed class ReadPhaseTelemetry
             FtsTextSearchFamily(current.StrictCandidates),
             FtsTextSearchFamily(current.WidenedCandidates),
             FtsTextSearchFamily(current.CandidateFiltering),
+            FtsTextSearchFamily(current.NarrowTokenScoring),
             FtsTextSearchFamily(current.FullHydration),
-            FtsTextSearchFamily(current.TokenScoringPhrase),
+            FtsTextSearchFamily(current.PhraseVerification),
             FtsTextSearchFamily(current.SnippetSelection),
             FtsTextSearchFamily(current.SymbolMapping),
             FtsTextSearchFamily(current.ResultConstruction),
