@@ -293,6 +293,12 @@ public sealed class VectorSidecar
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Vector, snapshot);
         if (!StoreSidecarCatalog.IsCurrent(path, expected))
         {
+            // A recorded convergence pause explains WHY the stamp never landed, and the remedy differs: the
+            // generic message below sends the user to `workspace refresh`, which can never install a model the
+            // sidecar reported missing.
+            if (RecordedPause(path) is { } paused)
+                return paused;
+
             return Unavailable(
                 path,
                 $"Vector artifact at '{path}' has no completeness stamp for family '{expected.FamilyId}', " +
@@ -594,6 +600,23 @@ public sealed class VectorSidecar
         }
 
         return generation;
+    }
+
+    /// <summary>
+    /// The convergence pause recorded on an artifact that has not earned its completeness stamp, or
+    /// <c>null</c> when the artifact is absent, unreadable, or records no pause.
+    /// </summary>
+    private VectorSidecarFacts? RecordedPause(string path)
+    {
+        if (!_probe.FileExists(path))
+            return null;
+
+        if (!_opener.TryReadMeta(path, out IReadOnlyDictionary<string, string> meta, out _))
+            return null;
+
+        return PauseState(meta) is { } pause
+            ? new VectorSidecarFacts(pause, path, meta.GetValueOrDefault("converge_pause_reason"))
+            : null;
     }
 
     private static string? PauseState(IReadOnlyDictionary<string, string> meta) =>

@@ -1,13 +1,30 @@
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
 using Miller.Server.Cli;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
 
-public sealed class VectorSidecarClassificationTests
+public sealed class VectorSidecarClassificationTests : IDisposable
 {
     private const string Root = "/ws";
+
+    private readonly string _storeRoot =
+        Path.Combine(Path.GetTempPath(), "miller-vector-classify-" + Guid.NewGuid());
+
+    public VectorSidecarClassificationTests() => Directory.CreateDirectory(_storeRoot);
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(_storeRoot, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+    }
 
     private static readonly SemanticGenerationIdentity Pinned =
         MillerSemanticContract.PinnedIdentity(MillerSemanticContract.DefaultEncoder);
@@ -232,6 +249,64 @@ public sealed class VectorSidecarClassificationTests
     {
         Assert.Equal(SemanticPrepareCli.MarkerFileName, SemanticPrepareMarker.FileName);
     }
+
+    [Fact]
+    public void InspectStore_UnstampedArtifactRecordingAModelNotPreparedPause_ReportsThePauseNotTheStampRefusal()
+    {
+        WorkspaceReadSnapshot snapshot = StoreSnapshot();
+        string path = VectorSidecar.PathForStore(_storeRoot, snapshot.ViewId);
+        var meta = Meta();
+        meta["converge_pause_state"] = "model-not-prepared";
+        meta["converge_pause_reason"] = "sidecar reported ready=false (model_not_prepared)";
+        var opener = new FakeOpener();
+        opener.Metas[path] = meta;
+        var sidecar = new VectorSidecar(SemanticMode.On, new FakeProbe([], [path]), opener, CompatibleReader);
+
+        VectorSidecarFacts facts = sidecar.InspectStore(_storeRoot, snapshot);
+
+        Assert.Equal("model-not-prepared", facts.State);
+        Assert.Equal("sidecar reported ready=false (model_not_prepared)", facts.Reason);
+    }
+
+    [Fact]
+    public void InspectStore_UnstampedArtifactWithNoRecordedPause_StillRefusesWithTheStampReason()
+    {
+        WorkspaceReadSnapshot snapshot = StoreSnapshot();
+        string path = VectorSidecar.PathForStore(_storeRoot, snapshot.ViewId);
+        var opener = new FakeOpener();
+        opener.Metas[path] = Meta();
+        var sidecar = new VectorSidecar(SemanticMode.On, new FakeProbe([], [path]), opener, CompatibleReader);
+
+        VectorSidecarFacts facts = sidecar.InspectStore(_storeRoot, snapshot);
+
+        Assert.Equal("unavailable", facts.State);
+        Assert.Contains("stamp", facts.Reason!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private WorkspaceReadSnapshot StoreSnapshot() =>
+        new(
+            _storeRoot,
+            "workspace-a",
+            "family-a",
+            "view-a",
+            new WorkspaceFreshnessToken(
+                "family-a",
+                3,
+                "manifest-a",
+                17,
+                "resolution-a",
+                StoreInstanceId: "family-a:gen-001",
+                ViewId: "view-a",
+                GenerationName: "gen-001",
+                ManifestGeneration: 3,
+                IndexLevel: IndexLevels.FullMetadataValue,
+                LevelStampL1: "l1-a",
+                LevelStampL2: "l2-a",
+                LevelStampL3: "l3-a"),
+            IndexLevels.FullMetadataValue,
+            WorkspaceReadMode.FamilyStore,
+            GenerationName: "gen-001",
+            ManifestGeneration: 3);
 
     private static VectorSidecarFacts ClassifyMissingActive(string marker, bool markerPidAlive)
     {

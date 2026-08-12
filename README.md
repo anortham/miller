@@ -13,7 +13,9 @@ budget made it worse, not better. Method, caveats, and raw evidence are in
 [method page](https://anortham.github.io/miller/method.html).
 
 Miller is deterministic, local-first, and runs without a daemon. Semantic retrieval is on by default,
-fully local, and off-switchable; lexical-only results stay byte-identical either way. The extraction
+fully local, and off-switchable; lexical-only results stay byte-identical either way. It does need a
+one-time embedding-model download — run [`miller semantic prepare`](#enable-semantic-retrieval) once, or
+Miller keeps serving lexical-only. The extraction
 layer ([`julie-extractors`](https://github.com/anortham/julie-extractors)) is hand-written across all
 [38 supported languages](#supported-languages), so it reaches structure shell search cannot: framework route facts across ~25
 framework families, dependency-injection registrations as real graph edges, partial classes linked
@@ -28,7 +30,8 @@ gaps. The full argument is
 
 The fastest path is the agent plugin. Its launcher downloads the Miller release archive for your
 platform, verifies the checksum, and starts `miller serve` as an MCP server. The archive bundles the
-pinned `julie-extract` binary, so there is nothing else to install.
+pinned `julie-extract` binary and the embedding sidecar, so the only extra step is the one-time
+[embedding-model download](#enable-semantic-retrieval) that turns semantic retrieval on.
 
 > Plugin installs need [Node.js](https://nodejs.org/) on `PATH` (the launcher is a Node script). Without
 > it the plugin fails with the opaque MCP error `-32000` and writes no Miller log. Install Node.js LTS
@@ -79,6 +82,28 @@ The minimal MCP config for clients you configure by hand:
 
 On Windows, use the full path to `miller.exe` as `command`. If your client lacks MCP roots support, set
 `"env": { "MILLER_WORKSPACE_ROOT": "/absolute/path/to/project" }` on the server entry.
+
+### Enable semantic retrieval
+
+Release archives bundle the embedding sidecar but **never the model weights**, and no Miller code path
+downloads them for you. Semantic retrieval is on by default, so until the model is installed Miller
+serves lexical-only and `workspace health` reports `degraded`. Install it once per machine:
+
+```bash
+miller semantic prepare
+```
+
+That fetches the default encoder (`bge-small-en-v1.5-f32`, 384 dimensions, ~134 MB) into a cache shared
+with Julie — `%LOCALAPPDATA%\julie-semantic\` on Windows, `~/.cache/julie-semantic` elsewhere, or
+`JULIE_EMBEDDING_CACHE_DIR` when set. **Restart the MCP server afterwards:** `prepare` can only activate
+a broker that is already running, so a server started before the download stays lexical-only.
+
+Confirm it took with `miller workspace status` — semantics are live when you see `vectors: ready` and
+`semantic_broker: ready` with a resolved `backend` (`vulkan`, `metal`, or `cpu`). The larger
+`qwen3-0.6b-f16` encoder is available via `miller semantic prepare --model qwen3-0.6b-f16` plus
+`MILLER_SEMANTIC_MODEL=qwen3-0.6b-f16`, at ~1.2 GB and roughly 8x the build time. To skip semantics
+entirely, set `MILLER_SEMANTIC=off` — a permanent zero-work guarantee that leaves lexical output
+byte-identical.
 
 ## Getting agents to use Miller
 

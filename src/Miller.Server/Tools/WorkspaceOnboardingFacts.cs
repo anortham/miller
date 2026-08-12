@@ -81,6 +81,16 @@ public sealed record WorkspaceOnboardingFacts(
             notes.Add("telemetry is sparse; treat this onboarding as a starting point, not a stable workflow profile");
         if (!telemetry.Available)
             notes.Add("telemetry is unavailable; this onboarding falls back to generic Miller startup guidance");
+        if (SemanticNeedsPreparing(statusFacts.Vectors))
+            notes.Add("semantic retrieval is enabled but not serving; run `miller semantic prepare` once to install " +
+                      "the embedding model, then restart the server");
+
+        // A positive allowlist, not "everything that is not ready": incompatible, circuit-open, and disk-blocked
+        // are degraded for reasons another model download cannot fix, and building/downloading are active work.
+        static bool SemanticNeedsPreparing(VectorSidecarFacts? vectors) =>
+            vectors is not null &&
+            (string.Equals(vectors.State, "model-not-prepared", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(vectors.State, "unavailable", StringComparison.OrdinalIgnoreCase));
 
         string[] privacy =
         [
