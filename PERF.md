@@ -138,8 +138,41 @@ without first adding new phase, query-count, or resource evidence.
   PendingHydration 89,930. Separately, exact finalization consumes about 23.7–25.0 s—roughly half total wall.
 - **Next diagnosis:** Instrument `finish_exact` at fixed boundaries (prior-overlay materialization, totality check,
   base row streaming, target validation/integrity, sync/publication) and optimize its largest measured phase.
+- **Finalization phase evidence:** One fixed-boundary replay completed in 49.98 s wall with 24.897 s in the resolver
+  and 24.947 s in `finish_exact`. Exclusive finalization time was: prior overlay approximately zero;
+  identifier totality 5.802 s; writer initialization 1 ms; source versions 23 ms; identifier-row streaming
+  **14.304 s (57.3%)**; pending rows 268 ms; writer finish/integrity/publication 4.537 s; scratch cleanup 12 ms.
+  Digest `b8833220...`, 392,526 identifiers, 10,804 pending rows, and integrity remained exact. The next RED targets
+  only identifier-row streaming; artifact-writer deep telemetry is not justified yet.
+- **Measured identifier writer fix:** `ResolutionBaseWriter` now keeps one cached identifier INSERT statement behind
+  its unchanged streaming API. The exact 100,000-row RED took 3.415 s against a 2.5 s ceiling; GREEN took 1.715 s.
+  One post-fix faithful replay reduced identifier-row streaming from 14.304 s to 7.547 s (-47.2%), `finish_exact`
+  from 24.947 s to 18.161 s, and end-to-end wall from 49.98 s to 43.10 s (-13.8%). Resolver time stayed comparable
+  at 24.710 s. Digest, 392,526 identifiers, 10,804 pending rows, publication identity, crash boundaries, and
+  integrity remained exact. Remaining finalization costs are totality 5.791 s and writer finish 4.524 s.
 - **Gate:** One fixed finalization phase is proven load-bearing by a bounded replay, then an exact RED/GREEN reduces
   its work without changing digest, rows, crash safety, or publication identity.
+
+### PERF-011 — Family-store context graph reach still exceeds the interactive budget
+
+- **Status:** Open; rebuilt acceptance still times out after the graph source change.
+- **Exact request:** `context` query `how family store read context resolves symbols and graph`, entry symbol
+  `WorkspaceIndexProvider`, token budget 1,200, max hops 1, default semantics, persistent initialized candidate.
+- **Acceptance miss:** Candidate PID `1998081`, cid `019ff4c2-4421-7657-b826-5cfc556505c7`, produced no response in
+  7,002.755 ms. It stopped after pivot ranking and before the fixed `graph_reach` completion event. Impact and trace
+  were not run because context failed the 2 s gate.
+- **Resource evidence:** 764 CPU ticks, 7,806,745,038 logical-read characters, 1,909,115 read syscalls,
+  5,096,174,958 logical-write characters, 1,244,311 write syscalls, 114,556,928 physical-write bytes, 156,774 KB
+  peak PSS, 149,436 KB peak private memory, and 199,108 KB peak RSS.
+- **Phase evidence:** resolve 21 ms; semantic seeds 592 ms; source rescue 579 ms; full-query retrieval 322 ms;
+  per-term retrieval 443 ms; anchor resolution 672 ms; pivot ranking 7 ms. No completed context telemetry row exists
+  after cancellation, so `read_graph_count`/`read_graph_ms` were not persisted.
+- **Instrumentation verification:** The fixed phase observer reports only completed real boundaries, preserves the
+  early-return shape, and reports the complete non-empty bundle shape. The two focused order tests pass together;
+  phase labels are fixed and every persisted log event carries the request correlation ID. The Release build passes
+  with zero warnings and zero errors.
+- **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
+  the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 
 ### PERF-009 — Bridge trace still needs a bounded family-store representation
 

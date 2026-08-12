@@ -1410,6 +1410,83 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void ContextWithCancellation_ReportsOnlyCompletedEarlyReturnPerformancePhasesInOrder()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-phases-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(EmptyIndex(), "current.db", "current-ws", root));
+        var phases = new List<string>();
+        var tool = new ContextTool(
+            provider,
+            semanticArm: null,
+            semanticSidecar: null,
+            phaseObserver: phases.Add);
+
+        _ = tool.Context("OrderService", token_budget: 100, max_hops: 0);
+
+        Assert.Equal(
+            [
+                "resolve",
+                "semantic_seeds",
+                "source_rescue",
+                "query_retrieval",
+                "term_retrieval",
+                "anchor_resolution",
+                "pivot_ranking",
+                "candidate_build",
+                "pivot_bodies",
+                "bundle",
+                "final_render",
+            ],
+            phases);
+    }
+
+    [Fact]
+    public void RunActionableWithCancellation_ReportsCompletedNonEmptyBundlePhasesInOrder()
+    {
+        var (index, resolver) = BuildFixture();
+        var phases = new List<string>();
+
+        _ = ContextTool.RunActionableWithCancellation(
+            index,
+            index.Graph,
+            resolver,
+            query: "zzz no lexical match zzz",
+            tokenBudget: 1200,
+            maxHops: 1,
+            entrySymbols: ["OrderRepo"],
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            readOutgoing: null,
+            json: false,
+            out _,
+            out _,
+            CancellationToken.None,
+            phases.Add);
+
+        Assert.Equal(
+            [
+                "query_retrieval",
+                "term_retrieval",
+                "anchor_resolution",
+                "pivot_ranking",
+                "graph_reach",
+                "symbol_hydration",
+                "file_neighbours",
+                "candidate_ordering",
+                "candidate_build",
+                "pivot_bodies",
+                "candidate_pack",
+                "bounded_render",
+            ],
+            phases);
+    }
+
+    [Fact]
     public void ContextWithCancellation_SchemaOmitsFrameworkCancellationToken()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-context-schema-" + Guid.NewGuid().ToString("N"));

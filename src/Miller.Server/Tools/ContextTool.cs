@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -30,6 +31,7 @@ public sealed partial class ContextTool
     private readonly IWorkspaceIndexProvider _workspaceProvider;
     private readonly ISemanticTextArm? _semanticArm;
     private readonly VectorSidecar? _semanticSidecar;
+    private readonly Action<string>? _phaseObserver;
 
     /// <summary>Construct a lexical-only context tool over the freshness-aware workspace provider.</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
@@ -52,12 +54,14 @@ public sealed partial class ContextTool
     internal ContextTool(
         IWorkspaceIndexProvider workspaceProvider,
         ISemanticTextArm? semanticArm,
-        VectorSidecar? semanticSidecar)
+        VectorSidecar? semanticSidecar,
+        Action<string>? phaseObserver = null)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
         _workspaceProvider = workspaceProvider;
         _semanticArm = semanticArm;
         _semanticSidecar = semanticSidecar;
+        _phaseObserver = phaseObserver;
     }
 
     public string Context(
@@ -125,6 +129,7 @@ public sealed partial class ContextTool
         CancellationToken cancellationToken = default)
     {
         var telemetry = TelemetryContext.Current;
+        long phaseStart = Stopwatch.GetTimestamp();
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
@@ -135,6 +140,7 @@ public sealed partial class ContextTool
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             int effectiveTokenBudget = Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens);
             using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            CompletePhase("resolve", telemetry, ref phaseStart);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             int bundleTokenBudget = Math.Max(
                 0,
@@ -158,12 +164,14 @@ public sealed partial class ContextTool
                     context,
                     query,
                     parsedReferenceMode == ReferenceMode.Usage && exclude_tests);
+                CompletePhase("semantic_seeds", telemetry, ref phaseStart);
                 cancellationToken.ThrowIfCancellationRequested();
                 sourceSeeds = LoadSourceRescueSeeds(
                     context.Index,
                     TryResolveTextContentIndex(workspace_id, ensureFresh),
                     query,
                     rescueExcludeTests);
+                CompletePhase("source_rescue", telemetry, ref phaseStart);
                 cancellationToken.ThrowIfCancellationRequested();
                 switch (parsedReferenceMode)
                 {
@@ -191,7 +199,8 @@ public sealed partial class ContextTool
                                 new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
                             json,
                             out selectedCount, out candidatesExamined,
-                            cancellationToken);
+                            cancellationToken,
+                            phase => CompletePhase(phase, telemetry, ref phaseStart));
                         break;
                     case ReferenceMode.Usage:
                         output = RunReferenceAwareActionableWithCancellation(
@@ -230,6 +239,7 @@ public sealed partial class ContextTool
                     default:
                         throw new ArgumentOutOfRangeException(nameof(reference_mode));
                 }
+                CompletePhase("bundle", telemetry, ref phaseStart);
             }
             else
             {
@@ -291,7 +301,9 @@ public sealed partial class ContextTool
                     json,
                     telemetry);
             }
-            return BoundFinalOutput(output, effectiveTokenBudget, json);
+            string finalOutput = BoundFinalOutput(output, effectiveTokenBudget, json);
+            CompletePhase("final_render", telemetry, ref phaseStart);
+            return finalOutput;
         }
         catch (OperationCanceledException)
         {
@@ -312,6 +324,20 @@ public sealed partial class ContextTool
                 Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens),
                 json);
         }
+    }
+
+    private void CompletePhase(string phase, TelemetryScope? telemetry, ref long phaseStart)
+    {
+        long elapsedMs = Math.Max(0, (long)Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
+        phaseStart = Stopwatch.GetTimestamp();
+        telemetry?.SetMetadata("context_phase", phase);
+        telemetry?.SetMetadata("context_phase_elapsed_ms", elapsedMs);
+        _phaseObserver?.Invoke(phase);
+        Serilog.Log.Information(
+            "Context phase {ContextPhase} completed in {ContextPhaseElapsedMs} ms for cid {CorrelationId}",
+            phase,
+            elapsedMs,
+            telemetry?.CorrelationId ?? "unmeasured");
     }
 
     private static IReadOnlyList<TextContentSearchHit> ReadContentChunks(
@@ -741,7 +767,8 @@ public sealed partial class ContextTool
         bool json,
         out int selectedCount,
         out int candidatesExamined,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<string>? phaseObserver = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         IReadOnlyList<Candidate> candidates = BuildCandidates(
@@ -759,8 +786,11 @@ public sealed partial class ContextTool
             readOutgoing,
             out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
             out candidatesExamined,
-            cancellationToken);
+            cancellationToken,
+            phaseObserver);
+        phaseObserver?.Invoke("candidate_build");
         candidates = AttachPivotBodies(candidates, tokenBudget, readBody, cancellationToken);
+        phaseObserver?.Invoke("pivot_bodies");
 
         if (candidates.Count == 0)
         {
@@ -781,19 +811,22 @@ public sealed partial class ContextTool
 
         cancellationToken.ThrowIfCancellationRequested();
         IReadOnlyList<Candidate> selected = ContextPacker.PackAllocated(packCandidates, tokenBudget);
+        phaseObserver?.Invoke("candidate_pack");
         Func<IReadOnlyList<Candidate>, string> renderer = json
             ? selected => RenderJson(selected, anchorDiagnostics, query, boundOptionalFields: false)
             : selected => RenderCompact(selected, anchorDiagnostics, query);
         Func<IReadOnlyList<Candidate>, string> boundedRenderer = json
             ? selected => RenderJson(selected, anchorDiagnostics, query, boundOptionalFields: true)
             : selected => RenderCompact(selected, anchorDiagnostics, query);
-        return RenderWithinBudget(
+        string output = RenderWithinBudget(
             selected,
             tokenBudget,
             renderer,
             boundedRenderer,
             out selectedCount,
             cancellationToken);
+        phaseObserver?.Invoke("bounded_render");
+        return output;
     }
 
 
@@ -1285,7 +1318,8 @@ public sealed partial class ContextTool
         Func<string, OutgoingReferenceEvidenceSet>? readOutgoing,
         out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
         out int candidatesExamined,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string>? phaseObserver = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (maxHops < 0) maxHops = 0;
@@ -1359,6 +1393,7 @@ public sealed partial class ContextTool
                         $"query_rank_{rank + 1}");
                 }
             }
+            phaseObserver?.Invoke("query_retrieval");
 
             foreach (string term in queryTerms)
             {
@@ -1386,6 +1421,7 @@ public sealed partial class ContextTool
                     }
                 }
             }
+            phaseObserver?.Invoke("term_retrieval");
 
             if (readOutgoing is not null && !HasTestOrDefIntent(query))
             {
@@ -1579,20 +1615,24 @@ public sealed partial class ContextTool
                     $"semantic_rank_{seed.Rank}");
             }
         }
+        phaseObserver?.Invoke("anchor_resolution");
 
         anchorDiagnostics = diagnostics;
         IReadOnlyList<ContextPivot> pivots = ContextPivotRanker.Rank(signals, limit: 4);
+        phaseObserver?.Invoke("pivot_ranking");
         if (pivots.Count == 0)
             return Array.Empty<Candidate>();
 
         string[] pivotIds = pivots.Select(static pivot => pivot.SymbolId).ToArray();
         cancellationToken.ThrowIfCancellationRequested();
         IReadOnlyList<ReachedNode> reached = graph.Reach(pivotIds, maxHops, ReachCap, Direction.Both);
+        phaseObserver?.Invoke("graph_reach");
         cancellationToken.ThrowIfCancellationRequested();
         var candidates = new List<Candidate>(pivotIds.Length + reached.Count);
         var symbolsById = SymbolLookupBatch.FindBySymbolIds(
             index,
             pivotIds.Concat(reached.Select(static node => node.Id)));
+        phaseObserver?.Invoke("symbol_hydration");
 
         var pivotSymbols = new List<IndexedSymbol>(pivotIds.Length);
         foreach (string pivotId in pivotIds)
@@ -1646,6 +1686,7 @@ public sealed partial class ContextTool
                 }
             }
         }
+        phaseObserver?.Invoke("file_neighbours");
         foreach (var entry in scoredReached
                      .OrderBy(static candidate => candidate.Hop)
                      .ThenByDescending(static candidate => candidate.Score)
@@ -1654,6 +1695,7 @@ public sealed partial class ContextTool
             cancellationToken.ThrowIfCancellationRequested();
             candidates.Add(new Candidate(entry.Symbol, entry.Hop, entry.Reason));
         }
+        phaseObserver?.Invoke("candidate_ordering");
 
         candidatesExamined = candidates.Count;
         return candidates;
