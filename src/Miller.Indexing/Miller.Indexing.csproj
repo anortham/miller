@@ -21,6 +21,7 @@
        drives them directly. -->
   <ItemGroup>
     <InternalsVisibleTo Include="Miller.Tests" />
+    <InternalsVisibleTo Include="miller" />
   </ItemGroup>
 
   <ItemGroup>

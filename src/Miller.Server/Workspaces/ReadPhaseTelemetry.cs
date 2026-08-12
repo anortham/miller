@@ -107,32 +107,42 @@ internal sealed class MeasuredSymbolLookupIndex(ISymbolLookupIndex inner) : ISym
     }
 }
 
-internal sealed class MeasuredSymbolGraphReachability(ISymbolGraphReachability inner) : ISymbolGraphReachability
+internal sealed class MeasuredSymbolGraphReachability : ISymbolGraphReachability
 {
+    private readonly ISymbolGraphReachability _inner;
     private long _elapsedTicks;
     private long _callCount;
+
+    internal MeasuredSymbolGraphReachability(
+        ISymbolGraphReachability inner,
+        Action<GraphStatementObservation>? statementObserver = null)
+    {
+        _inner = inner;
+        if (inner is SqliteSymbolGraphIndex sqlite)
+            sqlite.StatementObserver = statementObserver;
+    }
 
     public GraphReachResult ReachWithEvidence(
         IEnumerable<string> starts,
         int maxDepth,
         int limit,
-        Direction dir) => Measure(() => inner.ReachWithEvidence(starts, maxDepth, limit, dir));
+        Direction dir) => Measure(() => _inner.ReachWithEvidence(starts, maxDepth, limit, dir));
 
     public IReadOnlyList<ReachedNode> Reach(
         IEnumerable<string> starts,
         int maxDepth,
         int limit,
-        Direction dir) => Measure(() => inner.Reach(starts, maxDepth, limit, dir));
+        Direction dir) => Measure(() => _inner.Reach(starts, maxDepth, limit, dir));
 
     public IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth) =>
-        Measure(() => inner.ShortestPath(from, to, maxDepth));
+        Measure(() => _inner.ShortestPath(from, to, maxDepth));
 
     public GraphPath? ShortestPathWithEvidence(
         string from,
         string to,
         int maxDepth,
         Func<GraphNeighbour, bool> edgeFilter) =>
-        Measure(() => inner.ShortestPathWithEvidence(from, to, maxDepth, edgeFilter));
+        Measure(() => _inner.ShortestPathWithEvidence(from, to, maxDepth, edgeFilter));
 
     public ReadMeasurementSnapshot Snapshot() =>
         new(Interlocked.Read(ref _callCount), Interlocked.Read(ref _elapsedTicks));

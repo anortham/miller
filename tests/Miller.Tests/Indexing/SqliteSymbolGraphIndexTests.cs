@@ -68,6 +68,46 @@ public sealed class SqliteSymbolGraphIndexTests
     }
 
     [Fact]
+    public void Reach_StatementObserverReportsOnlyCompletedFixedPhasesBeforeCancellation()
+    {
+        const string sourceId = "40400000000000000000000000000001";
+        const string targetId = "40400000000000000000000000000002";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(sourceId, "Source", "method", "csharp", "src/Source.cs", "void Source()", 1, null),
+                new(targetId, "Target", "method", "csharp", "src/Target.cs", "void Target()", 1, null),
+            ],
+            relationships: [new("source-target", sourceId, targetId, "calls")]);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+        var observations = new List<GraphStatementObservation>();
+        sqlite.StatementObserver = observation =>
+        {
+            observations.Add(observation);
+            if (observation.Phase == GraphStatementPhase.UnresolvedNameForward)
+                throw new OperationCanceledException("stop after the completed forward name statement");
+        };
+
+        Assert.Throws<OperationCanceledException>(() =>
+            sqlite.Reach([sourceId], 1, 10, Direction.Both));
+
+        Assert.Equal(
+            [
+                GraphStatementPhase.RelationshipForward,
+                GraphStatementPhase.RelationshipReverse,
+                GraphStatementPhase.UnresolvedNameForward,
+            ],
+            observations.Select(static observation => observation.Phase));
+        Assert.All(observations, static observation => Assert.True(observation.Elapsed >= TimeSpan.Zero));
+        Assert.DoesNotContain(
+            observations,
+            static observation => observation.Phase is GraphStatementPhase.FamilyResolution
+                or GraphStatementPhase.Supplemental
+                or GraphStatementPhase.Completion);
+    }
+
+    [Fact]
     public void Reach_HighFrontierUsesBoundedSqlBatches()
     {
         const string rootId = "40200000000000000000000000000001";

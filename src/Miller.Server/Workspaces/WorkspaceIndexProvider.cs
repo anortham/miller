@@ -26,6 +26,7 @@ public sealed class WorkspaceIndexProvider
     private readonly Func<IWorkspaceReadSession, SymbolSearchProjection> _loadSessionSymbolSearch;
     private readonly Func<WorkspaceReadHandle, ISymbolLookupIndex> _openStoreSymbolSearch;
     private readonly Func<IWorkspaceReadSession, BridgeGraph> _loadSessionBridgeGraph;
+    private readonly Action<GraphStatementObservation> _graphStatementObserver;
     private readonly SymbolSearchSidecar _sidecar;
     private readonly object _cacheGate = new();
     private readonly Dictionary<CacheKey, Lazy<CachedIndex>> _cache = new();
@@ -78,7 +79,8 @@ public sealed class WorkspaceIndexProvider
         Func<IWorkspaceReadSession, MillerRepositoryIndex>? loadSessionIndex = null,
         Func<IWorkspaceReadSession, SymbolSearchProjection>? loadSessionSymbolSearch = null,
         Func<WorkspaceReadHandle, ISymbolLookupIndex>? openStoreSymbolSearch = null,
-        Func<IWorkspaceReadSession, BridgeGraph>? loadSessionBridgeGraph = null)
+        Func<IWorkspaceReadSession, BridgeGraph>? loadSessionBridgeGraph = null,
+        Action<GraphStatementObservation>? graphStatementObserver = null)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(currentWorkspace);
@@ -113,6 +115,7 @@ public sealed class WorkspaceIndexProvider
             return _sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot);
         });
         _loadSessionBridgeGraph = loadSessionBridgeGraph ?? (session => SessionBridgeGraphLoader.Load(session));
+        _graphStatementObserver = graphStatementObserver ?? ObserveGraphStatement;
     }
 
     public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
@@ -225,7 +228,9 @@ public sealed class WorkspaceIndexProvider
             ISymbolGraphReachability innerGraph = familyStore
                 ? new SqliteSymbolGraphIndex(readSession)
                 : holderIndex!.Graph;
-            var measuredGraph = familyStore ? new MeasuredSymbolGraphReachability(innerGraph) : null;
+            var measuredGraph = familyStore
+                ? new MeasuredSymbolGraphReachability(innerGraph, _graphStatementObserver)
+                : null;
             ISymbolGraphReachability graph = measuredGraph ?? innerGraph;
             var bridgeGraph = new Lazy<BridgeGraph>(
                 familyStore
@@ -435,7 +440,9 @@ public sealed class WorkspaceIndexProvider
             ISymbolGraphReachability innerGraph = familyStore
                 ? new SqliteSymbolGraphIndex(readSession)
                 : cached!.Index.Graph;
-            var measuredGraph = familyStore ? new MeasuredSymbolGraphReachability(innerGraph) : null;
+            var measuredGraph = familyStore
+                ? new MeasuredSymbolGraphReachability(innerGraph, _graphStatementObserver)
+                : null;
             ISymbolGraphReachability graph = measuredGraph ?? innerGraph;
             var bridgeGraph = new Lazy<BridgeGraph>(
                 familyStore
@@ -1418,6 +1425,28 @@ public sealed class WorkspaceIndexProvider
 
     private static MeasuredSymbolLookupIndex MeasureFamilyLookup(ISymbolLookupIndex index) =>
         index as MeasuredSymbolLookupIndex ?? new MeasuredSymbolLookupIndex(index);
+
+    private static void ObserveGraphStatement(GraphStatementObservation observation)
+    {
+        string phase = observation.Phase switch
+        {
+            GraphStatementPhase.RelationshipForward => "relationship_forward",
+            GraphStatementPhase.RelationshipReverse => "relationship_reverse",
+            GraphStatementPhase.UnresolvedNameForward => "unresolved_name_forward",
+            GraphStatementPhase.UnresolvedNameReverse => "unresolved_name_reverse",
+            GraphStatementPhase.FamilyResolution => "family_resolution",
+            GraphStatementPhase.Supplemental => "supplemental",
+            GraphStatementPhase.Completion => "completion",
+            _ => throw new InvalidOperationException("Unknown graph statement phase."),
+        };
+        Serilog.Log.Information(
+            "Graph statement phase {GraphStatementPhase} completed in {GraphStatementElapsedMs} ms with " +
+            "{GraphStatementRows} rows for cid {CorrelationId}",
+            phase,
+            Math.Max(0, (long)observation.Elapsed.TotalMilliseconds),
+            observation.Rows,
+            TelemetryContext.Current?.CorrelationId ?? "unmeasured");
+    }
 
     private sealed record RegisteredWorkspaceState(WorkspaceRegistryRow Row, WorkspaceRefreshResult? RefreshResult);
 

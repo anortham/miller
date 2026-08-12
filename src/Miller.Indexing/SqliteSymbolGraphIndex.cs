@@ -33,6 +33,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     internal GraphQueryTelemetrySnapshot QueryTelemetry => _queryTelemetry.Snapshot();
     internal bool CaptureFrontierQueryPlan { get; set; }
     internal FrontierQueryPlan LastFrontierQueryPlan { get; private set; } = FrontierQueryPlan.Empty;
+    internal Action<GraphStatementObservation>? StatementObserver { get; set; }
 
     public SqliteSymbolGraphIndex(string dbPath)
     {
@@ -303,45 +304,56 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         var unresolvedNamePlans = new List<IReadOnlyList<string>>();
         if (direction is Direction.Forward or Direction.Both)
         {
-            frontierRows += ExecuteFrontierStatement(
+            frontierRows += ExecuteObservedFrontierStatement(
                 missingIds,
                 RelationshipForwardSql,
                 edgesById,
                 _queryTelemetry.FrontierRelationships,
-                relationshipPlans);
-            frontierRows += ExecuteFrontierStatement(
-                missingIds,
-                UnresolvedNameForwardSql,
-                edgesById,
-                _queryTelemetry.FrontierUnresolvedNames,
-                unresolvedNamePlans);
-            if (_readSession is not IFamilyGraphResolutionReader)
-                frontierRows += ExecuteFrontierStatement(missingIds, ResolutionForwardSql, edgesById, null, null);
+                relationshipPlans,
+                GraphStatementPhase.RelationshipForward);
         }
         if (direction is Direction.Reverse or Direction.Both)
         {
-            frontierRows += ExecuteFrontierStatement(
+            frontierRows += ExecuteObservedFrontierStatement(
                 missingIds,
                 RelationshipReverseSql,
                 edgesById,
                 _queryTelemetry.FrontierRelationships,
-                relationshipPlans);
-            frontierRows += ExecuteFrontierStatement(
+                relationshipPlans,
+                GraphStatementPhase.RelationshipReverse);
+        }
+        if (direction is Direction.Forward or Direction.Both)
+        {
+            frontierRows += ExecuteObservedFrontierStatement(
+                missingIds,
+                UnresolvedNameForwardSql,
+                edgesById,
+                _queryTelemetry.FrontierUnresolvedNames,
+                unresolvedNamePlans,
+                GraphStatementPhase.UnresolvedNameForward);
+        }
+        if (direction is Direction.Reverse or Direction.Both)
+        {
+            frontierRows += ExecuteObservedFrontierStatement(
                 missingIds,
                 UnresolvedNameReverseSql,
                 edgesById,
                 _queryTelemetry.FrontierUnresolvedNames,
-                unresolvedNamePlans);
-            if (_readSession is not IFamilyGraphResolutionReader)
-                frontierRows += ExecuteFrontierStatement(missingIds, ResolutionReverseSql, edgesById, null, null);
+                unresolvedNamePlans,
+                GraphStatementPhase.UnresolvedNameReverse);
         }
         _queryTelemetry.FrontierBatch.Add(frontierRows, Stopwatch.GetElapsedTime(frontierStarted));
         if (CaptureFrontierQueryPlan)
             LastFrontierQueryPlan = new FrontierQueryPlan(relationshipPlans, unresolvedNamePlans);
 
+        long resolutionStarted = Stopwatch.GetTimestamp();
+        int resolutionRows = 0;
         if (_readSession is IFamilyGraphResolutionReader resolutionReader)
         {
-            foreach (FamilyGraphResolutionEdge edge in resolutionReader.ReadResolutionEdges(missingIds, direction))
+            IReadOnlyList<FamilyGraphResolutionEdge> resolutionEdges =
+                resolutionReader.ReadResolutionEdges(missingIds, direction);
+            resolutionRows = resolutionEdges.Count;
+            foreach (FamilyGraphResolutionEdge edge in resolutionEdges)
             {
                 if (!edgesById.TryGetValue(edge.CurrentId, out Dictionary<string, GraphEdge>? currentEdges))
                     continue;
@@ -355,8 +367,18 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                     new GraphEdge(edge.FromId, edge.ToId, edge.Kind, edge.Confidence, edge.Source));
             }
         }
+        else
+        {
+            if (direction is Direction.Forward or Direction.Both)
+                resolutionRows += ExecuteFrontierStatement(missingIds, ResolutionForwardSql, edgesById, null, null);
+            if (direction is Direction.Reverse or Direction.Both)
+                resolutionRows += ExecuteFrontierStatement(missingIds, ResolutionReverseSql, edgesById, null, null);
+        }
+        ObserveStatement(GraphStatementPhase.FamilyResolution, resolutionRows, resolutionStarted);
 
-        foreach (GraphEdge edge in SupplementalEdges())
+        long supplementalStarted = Stopwatch.GetTimestamp();
+        IReadOnlyList<GraphEdge> supplementalEdges = SupplementalEdges();
+        foreach (GraphEdge edge in supplementalEdges)
         {
             if (direction is Direction.Forward or Direction.Both &&
                 edgesById.TryGetValue(edge.From, out Dictionary<string, GraphEdge>? forward) &&
@@ -371,6 +393,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 AddEdge(reverse, edge.To, edge.From, edge);
             }
         }
+        ObserveStatement(GraphStatementPhase.Supplemental, supplementalEdges.Count, supplementalStarted);
 
         IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>> loaded = edgesById.ToDictionary(
             static pair => pair.Key,
@@ -388,6 +411,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 })
                 .ToArray(),
             StringComparer.Ordinal);
+        IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>> result = loaded;
         if (direction != Direction.Both && cacheResults)
         {
             foreach ((string id, IReadOnlyList<GraphNeighbour> neighbours) in loaded)
@@ -395,15 +419,36 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 if (_evidenceCache.Count < MaximumEvidenceCacheEntries)
                     _evidenceCache[(id, direction)] = neighbours;
             }
-            return ids.ToDictionary(
+            result = ids.ToDictionary(
                 static id => id,
                 id => _evidenceCache.TryGetValue((id, direction), out var cached)
                     ? cached
                     : loaded[id],
                 StringComparer.Ordinal);
         }
-        return loaded;
+        ObserveStatement(
+            GraphStatementPhase.Completion,
+            result.Sum(static pair => pair.Value.Count),
+            frontierStarted);
+        return result;
     }
+
+    private int ExecuteObservedFrontierStatement(
+        IReadOnlyList<string> ids,
+        string sql,
+        Dictionary<string, Dictionary<string, GraphEdge>> edgesById,
+        GraphQueryFamilyAccumulator telemetry,
+        List<IReadOnlyList<string>> plans,
+        GraphStatementPhase phase)
+    {
+        long started = Stopwatch.GetTimestamp();
+        int rows = ExecuteFrontierStatement(ids, sql, edgesById, telemetry, plans);
+        ObserveStatement(phase, rows, started);
+        return rows;
+    }
+
+    private void ObserveStatement(GraphStatementPhase phase, int rows, long started) =>
+        StatementObserver?.Invoke(new GraphStatementObservation(phase, rows, Stopwatch.GetElapsedTime(started)));
 
     private int ExecuteFrontierStatement(
         IReadOnlyList<string> ids,
@@ -911,6 +956,22 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
 }
 
 internal sealed record GraphQueryFamilyTelemetry(int Executions, long Rows, TimeSpan Elapsed);
+
+internal enum GraphStatementPhase
+{
+    RelationshipForward,
+    RelationshipReverse,
+    UnresolvedNameForward,
+    UnresolvedNameReverse,
+    FamilyResolution,
+    Supplemental,
+    Completion,
+}
+
+internal sealed record GraphStatementObservation(
+    GraphStatementPhase Phase,
+    int Rows,
+    TimeSpan Elapsed);
 
 internal sealed record FrontierQueryPlan(
     IReadOnlyList<IReadOnlyList<string>> RelationshipStatements,

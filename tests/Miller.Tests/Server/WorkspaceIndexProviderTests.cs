@@ -108,19 +108,21 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             builtRevision: 12,
             documentCount: 1,
             knownExtensionsCount: 1);
+        var graphStatements = new List<GraphStatementObservation>();
         var provider = NewProvider(
             holder,
             CurrentWorkspaceAt(root, current.DbPath, "current-ws"),
             registry,
             openReadSession: (_, _, _) => new WorkspaceReadHandle(
                 new FixtureReadSession(StoreSnapshot(root, "manifest-a"), target.DbPath)),
-            loadSessionSymbolSearch: session => SymbolSearchProjectionLoader.LoadSession(session));
+            loadSessionSymbolSearch: session => SymbolSearchProjectionLoader.LoadSession(session),
+            graphStatementObserver: graphStatements.Add);
         using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "telemetry.db"), "current-ws", root);
         using TelemetryScope scope = ledger.Measure("context", op: null);
 
         using WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
-        Assert.Single(context.Index.FindByName("TargetType"));
-        Assert.Empty(context.Graph.Reach(["missing"], 1, 10, Direction.Forward));
+        IndexedSymbol targetSymbol = Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.Empty(context.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
         ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
 
         using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
@@ -131,6 +133,15 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.True(rootElement.GetProperty("read_graph_count").GetInt64() > 0);
         Assert.True(rootElement.GetProperty("read_graph_ms").GetInt64() >= 0);
         Assert.Equal(1, rootElement.GetProperty("read_provider_cache_entries").GetInt32());
+        Assert.Equal(
+            [
+                GraphStatementPhase.RelationshipForward,
+                GraphStatementPhase.UnresolvedNameForward,
+                GraphStatementPhase.FamilyResolution,
+                GraphStatementPhase.Supplemental,
+                GraphStatementPhase.Completion,
+            ],
+            graphStatements.Select(static observation => observation.Phase));
     }
 
     [Fact]
@@ -1950,7 +1961,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Func<IWorkspaceReadSession, MillerRepositoryIndex>? loadSessionIndex = null,
         Func<IWorkspaceReadSession, SymbolSearchProjection>? loadSessionSymbolSearch = null,
         Func<WorkspaceReadHandle, ISymbolLookupIndex>? openStoreSymbolSearch = null,
-        Func<IWorkspaceReadSession, BridgeGraph>? loadSessionBridgeGraph = null) =>
+        Func<IWorkspaceReadSession, BridgeGraph>? loadSessionBridgeGraph = null,
+        Action<GraphStatementObservation>? graphStatementObserver = null) =>
         new(
             holder,
             workspace,
@@ -1969,7 +1981,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadSessionIndex,
             loadSessionSymbolSearch,
             openStoreSymbolSearch,
-            loadSessionBridgeGraph);
+            loadSessionBridgeGraph,
+            graphStatementObserver);
 
     private static WorkspaceReadSnapshot StoreSnapshot(
         string root,

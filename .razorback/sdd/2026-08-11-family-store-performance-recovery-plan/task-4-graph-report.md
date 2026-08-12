@@ -92,3 +92,14 @@
 - Exact GREEN: 1/1 in 109 ms, hand-derived six-neighbour `Direction.Both` output, two relationship executions, two unresolved-name executions, one logical frontier batch, two plan entries per family, and no resolution materialization in relationship plans.
 - Assigned class ceiling: `FamilyStoreReadSessionTests` plus `SqliteSymbolGraphIndexTests` passed 50/50 in 551 ms, Release, zero build warnings/errors.
 - The opt-in real combined-query harness was removed. No context acceptance was rerun; lead owns the rebuilt product gate.
+
+## Round 6: cancellation-safe graph statement instrumentation
+
+- Rebuilt `b71263c1` still timed out at 7,007 ms after `pivot_ranking`, with 7.165 GB logical reads. Query behavior was intentionally left unchanged and context was not rerun.
+- Architecture evidence: `WorkspaceIndexProvider` already constructs every family `SqliteSymbolGraphIndex` inside `MeasuredSymbolGraphReachability`; `TelemetryContext.Current` supplies request correlation at execution time. This supports an internal observer without widening `ISymbolGraphReachability`, `IWorkspaceReadSession`, MCP/CLI, or ContextTool signatures.
+- Miller.Indexing now exposes only an assembly-internal fixed enum/record callback. The `miller` server assembly is a friend solely so its existing measured wrapper can attach the callback; Miller.Indexing has no Serilog dependency.
+- Fixed completion phases are `relationship_forward`, `relationship_reverse`, `unresolved_name_forward`, `unresolved_name_reverse`, `family_resolution`, `supplemental`, and `completion`. Each event is emitted only after its statement/family completes and carries fixed phase, rows, elapsed milliseconds, and ambient correlation id. A cancellation or process timeout therefore leaves the last completed boundary durable instead of losing the whole graph interval.
+- Observer RED: the two-test scope failed to compile because `GraphStatementObservation`, the graph observer property, and provider constructor callback did not exist. The first GREEN compile also exposed the actual Server assembly name (`miller`, not project name `Miller.Server`); the friend declaration was corrected to the real assembly boundary.
+- Exact GREEN: 2/2 in 112 ms. The graph cancellation test observes only relationship forward/reverse and unresolved-name forward before the observer throws, with no later family/supplemental/completion events. The provider construction test observes the full forward sequence through the measured family graph.
+- `SqliteSymbolGraphIndexTests` passed 20/20 in 575 ms. `dotnet build Miller.slnx -c Release --no-restore` passed in 9.40 s with zero warnings/errors. ContextTool was not modified, so its phase suite was not rerun.
+- No candidate process/context acceptance was run; lead owns the one correlated replay.
