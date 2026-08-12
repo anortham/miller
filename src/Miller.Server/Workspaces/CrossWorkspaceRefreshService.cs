@@ -86,14 +86,24 @@ public sealed class CrossWorkspaceRefreshService
             // lock-busy enqueue-to-leader path is never affected.
             dbPath =>
             {
+                bool allowDowngrade =
+                    Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1";
+                string? ownVersion = runner.QueryVersion();
                 try
                 {
                     return LeadershipEligibility.Evaluate(
-                        runner.QueryVersion(),
+                        ownVersion,
                         WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
                             ? StoreArtifactVersionReader.ReadForLeadership(dbPath, ExtractBinaryVersionReader.TryRead)
                             : ExtractBinaryVersionReader.TryRead(dbPath),
-                        Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1");
+                        allowDowngrade);
+                }
+                catch (StoreArtifactVersionReadException) when (allowDowngrade)
+                {
+                    return LeadershipEligibility.Evaluate(
+                        ownVersion,
+                        artifactBinaryVersion: null,
+                        allowDowngrade: true);
                 }
                 catch (StoreArtifactVersionReadException ex)
                 {

@@ -21,6 +21,81 @@ namespace Miller.Tests.Server;
 public sealed class StoreWorkspaceIndexProviderScaleTests
 {
     [Fact]
+    public void ExplicitDowngradeOverrideRecoversAnUnreadableUnpublishedStore()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        string directory = Path.Combine(Path.GetTempPath(), "miller-store-override-recovery-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(directory, "root");
+        string home = Path.Combine(directory, "home");
+        string artifact = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(home);
+        Directory.CreateDirectory(Path.GetDirectoryName(artifact)!);
+        File.WriteAllText(
+            Path.Combine(root, "OverrideRecovery.cs"),
+            "namespace Example; public static class OverrideRecovery { public static int Value => 42; }");
+        ScaleTestSupport.RunJulie(
+            binary,
+            "scan", "--root", root, "--db", artifact, "--level", "full", "--jobs", "1", "--json");
+
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
+        string workspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+        string registryPath = Path.Combine(home, "workspaces.db");
+        using var registry = WorkspaceRegistry.Open(registryPath);
+        registry.UpsertSeen(workspaceId, "override-recovery", canonicalRoot, artifact);
+        StoreFamilyBinding binding = new StoreFamilyResolver(
+            registry,
+            Path.Combine(home, "stores")).ResolveOrCreate(new WorkspaceRootFacts(
+                workspaceId,
+                canonicalRoot,
+                CanonicalGitCommonDir: null,
+                GitCommonDirCreatedAtUtc: null,
+                WorkspaceRootIdentity.Capture(canonicalRoot)));
+        Directory.CreateDirectory(binding.StoreRoot);
+        Assert.Throws<StoreArtifactVersionReadException>(() =>
+            StoreArtifactVersionReader.ReadForLeadership(artifact, ExtractBinaryVersionReader.TryRead));
+
+        string? priorStoreMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
+        string? priorOverride = Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE");
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
+        Environment.SetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE", null);
+        try
+        {
+            var refresh = new CrossWorkspaceRefreshService(
+                registry,
+                new JulieExtractRunner(binary),
+                SymbolSearchSidecar.Disabled,
+                ScanGovernor.Disabled(),
+                storeEnabled: static () => true);
+
+            WorkspaceRefreshResult refused = refresh.Refresh(workspaceId, bypassBackoff: true);
+
+            Assert.Equal(WorkspaceRefreshStatus.IneligibleExtractor, refused.Status);
+            Assert.Throws<StoreArtifactVersionReadException>(() =>
+                StoreArtifactVersionReader.ReadForLeadership(artifact, ExtractBinaryVersionReader.TryRead));
+
+            Environment.SetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE", "1");
+            WorkspaceRefreshResult recovered = refresh.Refresh(workspaceId, bypassBackoff: true);
+
+            Assert.Equal(WorkspaceRefreshStatus.Refreshed, recovered.Status);
+            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                artifact,
+                canonicalRoot,
+                workspaceId,
+                storeEnabled: true);
+            Assert.Equal("exact", session.Snapshot.ResolutionState);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, priorStoreMode);
+            Environment.SetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE", priorOverride);
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task MissingFamilyStoreRootRebindsFromPartialLegacyResolution()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
