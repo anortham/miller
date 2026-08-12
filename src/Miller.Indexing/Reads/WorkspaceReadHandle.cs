@@ -27,6 +27,9 @@ public sealed class WorkspaceReadHandle : IWorkspaceReadSession
     internal IFamilyGraphUnresolvedNameReader? FamilyGraphUnresolvedNameReader =>
         _session as IFamilyGraphUnresolvedNameReader;
 
+    internal IFamilyGraphRelationshipReader? FamilyGraphRelationshipReader =>
+        _session as IFamilyGraphRelationshipReader;
+
     public TResult Read<TResult>(Func<SqliteConnection, TResult> query) => _session.Read(query);
 
     public void Dispose() => _session.Dispose();

@@ -22,6 +22,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     private readonly IWorkspaceReadSession? _readSession;
     private readonly IFamilyGraphResolutionReader? _familyGraphResolutionReader;
     private readonly IFamilyGraphUnresolvedNameReader? _familyGraphUnresolvedNameReader;
+    private readonly IFamilyGraphRelationshipReader? _familyGraphRelationshipReader;
     private readonly Dictionary<(string Id, Direction Direction), IReadOnlyList<string>> _neighbourCache = new();
     private readonly Dictionary<(string Id, Direction Direction), IReadOnlyList<GraphNeighbour>>
         _evidenceCache = new();
@@ -56,6 +57,9 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         _familyGraphUnresolvedNameReader = readSession is WorkspaceReadHandle unresolvedNameHandle
             ? unresolvedNameHandle.FamilyGraphUnresolvedNameReader
             : readSession as IFamilyGraphUnresolvedNameReader;
+        _familyGraphRelationshipReader = readSession is WorkspaceReadHandle relationshipHandle
+            ? relationshipHandle.FamilyGraphRelationshipReader
+            : readSession as IFamilyGraphRelationshipReader;
     }
 
     public IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir) =>
@@ -311,25 +315,47 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         int frontierRows = 0;
         var relationshipPlans = new List<IReadOnlyList<string>>();
         var unresolvedNamePlans = new List<IReadOnlyList<string>>();
-        if (direction is Direction.Forward or Direction.Both)
+        if (_familyGraphRelationshipReader is { } relationshipReader)
         {
-            frontierRows += ExecuteObservedFrontierStatement(
-                missingIds,
-                RelationshipForwardSql,
-                edgesById,
-                _queryTelemetry.FrontierRelationships,
-                relationshipPlans,
-                GraphStatementPhase.RelationshipForward);
+            IReadOnlyList<FamilyGraphRelationshipEdge> relationshipEdges =
+                relationshipReader.ReadRelationshipEdges(missingIds, direction, StatementObserver);
+            frontierRows += relationshipEdges.Count;
+            foreach (FamilyGraphRelationshipEdge edge in relationshipEdges)
+            {
+                if (!edgesById.TryGetValue(edge.CurrentId, out Dictionary<string, GraphEdge>? currentEdges))
+                    continue;
+                string neighbour = string.Equals(edge.FromId, edge.CurrentId, StringComparison.Ordinal)
+                    ? edge.ToId
+                    : edge.FromId;
+                AddEdge(
+                    currentEdges,
+                    edge.CurrentId,
+                    neighbour,
+                    new GraphEdge(edge.FromId, edge.ToId, edge.Kind, edge.Confidence, edge.Source));
+            }
         }
-        if (direction is Direction.Reverse or Direction.Both)
+        else
         {
-            frontierRows += ExecuteObservedFrontierStatement(
-                missingIds,
-                RelationshipReverseSql,
-                edgesById,
-                _queryTelemetry.FrontierRelationships,
-                relationshipPlans,
-                GraphStatementPhase.RelationshipReverse);
+            if (direction is Direction.Forward or Direction.Both)
+            {
+                frontierRows += ExecuteObservedFrontierStatement(
+                    missingIds,
+                    RelationshipForwardSql,
+                    edgesById,
+                    _queryTelemetry.FrontierRelationships,
+                    relationshipPlans,
+                    GraphStatementPhase.RelationshipForward);
+            }
+            if (direction is Direction.Reverse or Direction.Both)
+            {
+                frontierRows += ExecuteObservedFrontierStatement(
+                    missingIds,
+                    RelationshipReverseSql,
+                    edgesById,
+                    _queryTelemetry.FrontierRelationships,
+                    relationshipPlans,
+                    GraphStatementPhase.RelationshipReverse);
+            }
         }
         if (_familyGraphUnresolvedNameReader is { } unresolvedNameReader)
         {

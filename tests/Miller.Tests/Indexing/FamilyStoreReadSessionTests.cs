@@ -566,11 +566,15 @@ public sealed class FamilyStoreReadSessionTests
             relationshipCallerId,
             nameTargetId,
             nameCallerId);
-        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
-        using var graph = new SqliteSymbolGraphIndex(session)
+        FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        session.CaptureGraphRelationshipQueryPlan = true;
+        using var handle = new WorkspaceReadHandle(session);
+        using var graph = new SqliteSymbolGraphIndex(handle)
         {
             CaptureFrontierQueryPlan = true,
         };
+        var observations = new List<GraphStatementObservation>();
+        graph.StatementObserver = observations.Add;
 
         IReadOnlyList<ReachedNode> result = graph.Reach([targetId], 1, 20, Direction.Both);
         GraphQueryTelemetrySnapshot telemetry = graph.QueryTelemetry;
@@ -578,16 +582,30 @@ public sealed class FamilyStoreReadSessionTests
         Assert.Equal(
             [identifierCallerId, pendingCallerId, relationshipTargetId, relationshipCallerId, nameTargetId, nameCallerId],
             result.Select(static node => node.Id));
-        Assert.Equal(2, telemetry.FrontierRelationships.Executions);
+        Assert.Equal(0, telemetry.FrontierRelationships.Executions);
         Assert.Equal(0, telemetry.FrontierUnresolvedNames.Executions);
         Assert.Equal(1, telemetry.FrontierBatch.Executions);
-        Assert.Equal(2, graph.LastFrontierQueryPlan.RelationshipStatements.Count);
+        Assert.Empty(graph.LastFrontierQueryPlan.RelationshipStatements);
         Assert.Empty(graph.LastFrontierQueryPlan.UnresolvedNameStatements);
-        Assert.All(
-            graph.LastFrontierQueryPlan.RelationshipStatements,
-            plan => Assert.DoesNotContain(
-                plan,
-                detail => detail.Contains("identifier_resolutions", StringComparison.Ordinal)));
+        Assert.Contains(
+            session.LastGraphRelationshipQueryPlan,
+            detail => detail.Contains("idx_read_relationships_from", StringComparison.Ordinal));
+        Assert.Contains(
+            session.LastGraphRelationshipQueryPlan,
+            detail => detail.Contains("idx_read_relationships_to", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            session.LastGraphRelationshipQueryPlan,
+            detail => detail.Contains("MATERIALIZE", StringComparison.Ordinal)
+                || detail.Contains("SCAN r", StringComparison.Ordinal));
+        Assert.Equal(
+            [
+                (GraphStatementPhase.RelationshipForward, 1),
+                (GraphStatementPhase.RelationshipReverse, 1),
+            ],
+            observations
+                .Where(static observation => observation.Phase is GraphStatementPhase.RelationshipForward
+                    or GraphStatementPhase.RelationshipReverse)
+                .Select(static observation => (observation.Phase, observation.Rows)));
     }
 
     [Fact]
@@ -961,6 +979,8 @@ public sealed class FamilyStoreReadSessionTests
               to_symbol_id TEXT NOT NULL,path TEXT NOT NULL,kind TEXT NOT NULL,start_line INTEGER,start_column INTEGER,
               end_line INTEGER,end_column INTEGER,start_byte INTEGER,end_byte INTEGER,confidence REAL,metadata_json TEXT,
               PRIMARY KEY(version_id,relationship_id)) STRICT;
+            CREATE INDEX idx_read_relationships_from ON relationships(from_symbol_id,version_id);
+            CREATE INDEX idx_read_relationships_to ON relationships(to_symbol_id,version_id);
             CREATE TABLE pending_relationships (
               version_id INTEGER NOT NULL,pending_relationship_id TEXT NOT NULL,reference_site_id TEXT,
               from_symbol_id TEXT NOT NULL,caller_scope_symbol_id TEXT,path TEXT NOT NULL,kind TEXT NOT NULL,
@@ -1027,12 +1047,17 @@ public sealed class FamilyStoreReadSessionTests
               (2,$relationshipTarget,'same.cs','csharp','RelationshipTarget','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
               (2,$relationshipCaller,'same.cs','csharp','RelationshipCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
               (2,$nameTarget,'same.cs','csharp','UniqueNameTarget','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
-              (2,$nameCaller,'same.cs','csharp','NameCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+              (2,$nameCaller,'same.cs','csharp','NameCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+              (1,$target,'same.cs','csharp','PriorTarget','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+              (1,'62000000000000000000000000000008','same.cs','csharp','PriorRelationshipTarget','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+              (1,'62000000000000000000000000000009','same.cs','csharp','PriorRelationshipCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
             INSERT INTO relationships
               (version_id,relationship_id,from_symbol_id,to_symbol_id,path,kind,confidence)
               VALUES
               (2,'relationship-forward',$target,$relationshipTarget,'same.cs','calls',1.0),
-              (2,'relationship-reverse',$relationshipCaller,$target,'same.cs','calls',1.0);
+              (2,'relationship-reverse',$relationshipCaller,$target,'same.cs','calls',1.0),
+              (1,'prior-relationship-forward',$target,'62000000000000000000000000000008','same.cs','calls',1.0),
+              (1,'prior-relationship-reverse','62000000000000000000000000000009',$target,'same.cs','calls',1.0);
             INSERT INTO identifiers
               (version_id,identifier_id,path,language,name,kind,containing_symbol_id,
                start_line,start_column,end_line,end_column,start_byte,end_byte,confidence)

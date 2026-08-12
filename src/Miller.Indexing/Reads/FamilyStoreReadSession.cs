@@ -37,7 +37,8 @@ public sealed class FamilyStoreReadException(
 public sealed class FamilyStoreReadSession :
     IWorkspaceReadSession,
     IFamilyGraphResolutionReader,
-    IFamilyGraphUnresolvedNameReader
+    IFamilyGraphUnresolvedNameReader,
+    IFamilyGraphRelationshipReader
 {
     private const int StoreSchemaVersion = 2;
     private const int StoreFormatEpoch = 1;
@@ -58,6 +59,10 @@ public sealed class FamilyStoreReadSession :
     internal bool CaptureGraphUnresolvedNameQueryPlan { get; set; }
 
     internal IReadOnlyList<string> LastGraphUnresolvedNameQueryPlan { get; private set; } = [];
+
+    internal bool CaptureGraphRelationshipQueryPlan { get; set; }
+
+    internal IReadOnlyList<string> LastGraphRelationshipQueryPlan { get; private set; } = [];
 
     private FamilyStoreReadSession(
         SqliteConnection connection,
@@ -307,6 +312,50 @@ public sealed class FamilyStoreReadSession :
         }
     }
 
+    IReadOnlyList<FamilyGraphRelationshipEdge> IFamilyGraphRelationshipReader.ReadRelationshipEdges(
+        IReadOnlyList<string> candidateIds,
+        Direction direction,
+        Action<GraphStatementObservation>? statementObserver)
+    {
+        if (candidateIds.Count == 0)
+            return [];
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            IReadOnlyList<(string Id, long VersionId)> candidates = ReadGraphCandidates(candidateIds);
+            if (candidates.Count == 0)
+                return [];
+
+            var edges = new List<FamilyGraphRelationshipEdge>();
+            var plans = new List<string>();
+            if (direction is Direction.Forward or Direction.Both)
+            {
+                ReadGraphRelationshipArm(
+                    candidates,
+                    candidateIds,
+                    RelationshipForwardSql,
+                    edges,
+                    plans,
+                    GraphStatementPhase.RelationshipForward,
+                    statementObserver);
+            }
+            if (direction is Direction.Reverse or Direction.Both)
+            {
+                ReadGraphRelationshipArm(
+                    candidates,
+                    candidateIds,
+                    RelationshipReverseSql,
+                    edges,
+                    plans,
+                    GraphStatementPhase.RelationshipReverse,
+                    statementObserver);
+            }
+            LastGraphRelationshipQueryPlan = plans;
+            return edges;
+        }
+    }
+
     private IReadOnlyList<(string Id, long VersionId)> ReadGraphCandidates(IReadOnlyList<string> candidateIds)
     {
         string values = string.Join(", ", Enumerable.Range(0, candidateIds.Count).Select(index => $"($id{index})"));
@@ -416,6 +465,51 @@ public sealed class FamilyStoreReadSession :
             candidateIds));
     }
 
+    private void ReadGraphRelationshipArm(
+        IReadOnlyList<(string Id, long VersionId)> candidates,
+        IReadOnlyList<string> candidateIds,
+        string sql,
+        List<FamilyGraphRelationshipEdge> edges,
+        List<string> plans,
+        GraphStatementPhase phase,
+        Action<GraphStatementObservation>? statementObserver)
+    {
+        string values = string.Join(
+            ", ",
+            Enumerable.Range(0, candidates.Count).Select(index => $"($id{index},$version{index})"));
+        using SqliteCommand command = _connection.CreateCommand();
+        command.CommandText = $"WITH candidates(id,version_id) AS (VALUES {values})\n" + sql;
+        for (int index = 0; index < candidates.Count; index++)
+        {
+            command.Parameters.AddWithValue($"$id{index}", candidates[index].Id);
+            command.Parameters.AddWithValue($"$version{index}", candidates[index].VersionId);
+        }
+        if (CaptureGraphRelationshipQueryPlan)
+            plans.AddRange(ReadQueryPlan(command));
+
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        int rows = 0;
+        using (SqliteDataReader reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                rows++;
+                edges.Add(new FamilyGraphRelationshipEdge(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.GetDouble(4),
+                    reader.GetString(5)));
+            }
+        }
+        statementObserver?.Invoke(GraphStatementObservation.Completed(
+            phase,
+            rows,
+            System.Diagnostics.Stopwatch.GetElapsedTime(started),
+            candidateIds));
+    }
+
     private static IReadOnlyList<string> ReadQueryPlan(SqliteCommand command)
     {
         using SqliteCommand explain = command.Connection!.CreateCommand();
@@ -444,6 +538,26 @@ public sealed class FamilyStoreReadSession :
           WHERE d.view_id=(SELECT view_id FROM _miller_session)
             AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
             AND d.version_id=r.version_id AND d.identifier_id=r.identifier_id);
+        """;
+
+    private const string RelationshipForwardSql = """
+        SELECT candidates.id,r.from_symbol_id,r.to_symbol_id,r.kind,r.confidence,'relationship'
+        FROM candidates
+        JOIN main.relationships AS r
+          ON r.from_symbol_id=candidates.id AND r.version_id=candidates.version_id
+        JOIN main.symbols AS target ON target.symbol_id=r.to_symbol_id
+        JOIN _miller_visible_entries AS target_visible ON target_visible.version_id=target.version_id
+        WHERE r.from_symbol_id<>r.to_symbol_id;
+        """;
+
+    private const string RelationshipReverseSql = """
+        SELECT candidates.id,r.from_symbol_id,r.to_symbol_id,r.kind,r.confidence,'relationship'
+        FROM candidates
+        JOIN main.relationships AS r ON r.to_symbol_id=candidates.id
+        JOIN _miller_visible_entries AS source_visible ON source_visible.version_id=r.version_id
+        JOIN main.symbols AS source
+          ON source.version_id=r.version_id AND source.symbol_id=r.from_symbol_id
+        WHERE r.from_symbol_id<>r.to_symbol_id;
         """;
 
     private const string UnresolvedNameForwardSql = """
