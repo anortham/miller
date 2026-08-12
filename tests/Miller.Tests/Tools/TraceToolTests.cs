@@ -3,9 +3,11 @@ using Miller.Core.Graph;
 using Miller.Core.References;
 using Miller.Core.Resolver;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 using Miller.Tests;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
@@ -21,6 +23,18 @@ namespace Miller.Tests.Tools;
 /// </summary>
 public sealed class TraceToolTests
 {
+    private sealed class StubReadSession(WorkspaceReadSnapshot snapshot) : IWorkspaceReadSession
+    {
+        public WorkspaceReadSnapshot Snapshot { get; } = snapshot;
+
+        public TResult Read<TResult>(Func<SqliteConnection, TResult> query) =>
+            throw new InvalidOperationException("session read was not expected");
+
+        public void Dispose()
+        {
+        }
+    }
+
     // ---------- fixture builders ----------
 
     // A symbol-graph index over the given symbols + dependency edges (no bridge). DocIds are the 0-based ordinals
@@ -3452,6 +3466,86 @@ public sealed class TraceToolTests
             out int emitted, out _);
 
         Assert.Equal(2, emitted);
+    }
+
+    [Fact]
+    public void Trace_FamilyStoreBridgeMatchesLegacyOutputAndLoadsBridgeOnce()
+    {
+        var dtoEntity = MakeScored(
+            BridgeKind.MapsTo,
+            SymbolRef("dto", "UserDto", "src/UserDto.cs"),
+            SymbolRef("ent", "ApplicationUser", "src/ApplicationUser.cs"),
+            ConfidenceBand.High,
+            0.95);
+        var entityTable = MakeScored(
+            BridgeKind.StoredIn,
+            SymbolRef("ent", "ApplicationUser", "src/ApplicationUser.cs"),
+            NonSymbolRef("ApplicationUsers"),
+            ConfidenceBand.High,
+            0.9);
+        string tableNodeId = BridgeGraph.SynthesizeId(BridgeNodeKind.DbTable, "ApplicationUsers");
+        var legacyIndex = BuildBridgeIndex(
+            [("dto", "UserDto", "src/UserDto.cs", 10), ("ent", "ApplicationUser", "src/ApplicationUser.cs", 20)],
+            [dtoEntity, entityTable],
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+            {
+                [tableNodeId] = new BridgeNode(tableNodeId, BridgeNodeKind.DbTable, "ApplicationUsers", null, 0),
+            });
+        var legacyTool = new TraceTool(new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(legacyIndex, "legacy.db", "current-ws", "/repo")));
+        string expected = legacyTool.Trace("UserDto", mode: "bridge");
+        int bridgeLoadCount = 0;
+        var lookup = SymbolSearchProjection.Build(legacyIndex.FindByFilePath("src/UserDto.cs"));
+        var snapshot = new WorkspaceReadSnapshot(
+            "/repo",
+            "current-ws",
+            "family-a",
+            "view-a",
+            new WorkspaceFreshnessToken(
+                "family-a",
+                1,
+                "manifest-a",
+                1,
+                "resolution-a",
+                StoreInstanceId: "family-a:gen-001",
+                ViewId: "view-a",
+                GenerationName: "gen-001",
+                ManifestGeneration: 1,
+                IndexLevel: IndexLevels.FullMetadataValue,
+                LevelStampL1: "l1-a",
+                LevelStampL2: "l2-a",
+                LevelStampL3: "l3-a"),
+            IndexLevels.FullMetadataValue,
+            WorkspaceReadMode.FamilyStore,
+            GenerationName: "gen-001",
+            ManifestGeneration: 1,
+            ResolutionState: "exact",
+            ResolutionBaseId: "base-a",
+            ResolutionDeltaGeneration: 1,
+            ResolutionExactAt: 1);
+        var familyContext = new WorkspaceReadContext(
+            lookup,
+            legacyIndex.Graph,
+            new Lazy<BridgeGraph>(() =>
+            {
+                bridgeLoadCount++;
+                return legacyIndex.BridgeGraph;
+            }),
+            new SmartTargetResolver(lookup),
+            new WorkspaceReadHandle(new StubReadSession(snapshot)),
+            "current-ws",
+            "/repo",
+            Revision: 1,
+            IndexFresh: null,
+            FreshnessStatus: "current",
+            WarningText: null);
+        var familyTool = new TraceTool(new RecordingWorkspaceIndexProvider(familyContext));
+
+        familyTool.Trace("UserDto", mode: "path", to: "UserDto");
+        Assert.Equal(0, bridgeLoadCount);
+        Assert.Equal(expected, familyTool.Trace("UserDto", mode: "bridge"));
+        Assert.Equal(expected, familyTool.Trace("UserDto", mode: "bridge"));
+        Assert.Equal(1, bridgeLoadCount);
     }
 
     // ---------- dispatch / guards ----------

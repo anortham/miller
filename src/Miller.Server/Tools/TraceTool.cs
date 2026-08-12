@@ -165,25 +165,18 @@ public sealed class TraceTool
                         out emitted,
                         out nodesVisited);
                 }
-                else if (normalizedMode == ModeBridge && context.Index is MillerRepositoryIndex repositoryIndex)
+                else if (normalizedMode == ModeBridge)
                 {
-                    output = Run(
-                        repositoryIndex,
+                    output = RunBridge(
+                        context.Index,
+                        context.BridgeGraph.Value,
                         context.Resolver,
                         target,
                         scope,
-                        mode,
-                        to,
                         depth,
                         limit,
                         full,
                         json,
-                        reference_kind,
-                        include_definition,
-                        (symbol, query) => ReferenceEvidenceReader.Read(context.ReadSession, symbol.SymbolId, query),
-                        context.WorkspaceId ?? "current",
-                        null,
-                        continuation,
                         out emitted,
                         out nodesVisited);
                 }
@@ -552,7 +545,7 @@ public sealed class TraceTool
             ModeRefs => RunRefs(index, resolver, target, scope, depth, limit, json,
                 referenceKind, includeDefinition, readReferenceEvidence, workspaceId, snapshot, continuation,
                 out emitted, out nodesVisited),
-            ModeBridge => RunBridge(index, resolver, target, scope, depth, limit, fullFormat, json, out emitted, out nodesVisited),
+            ModeBridge => RunBridge(index, index.BridgeGraph, resolver, target, scope, depth, limit, fullFormat, json, out emitted, out nodesVisited),
             _ => throw InvalidMode(mode),
         };
     }
@@ -1202,41 +1195,41 @@ public sealed class TraceTool
     // ---------- mode: bridge (cross-language scored chain) ----------
 
     private static string RunBridge(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope,
+        ISymbolLookupIndex index, BridgeGraph bridgeGraph, SmartTargetResolver resolver, string target, string? scope,
         int depth, int limit, bool fullFormat, bool json, out int emitted, out int nodesVisited)
     {
         emitted = 0;
         nodesVisited = 0;
 
-        if (!ResolveBridgeStart(index, resolver, target, scope, out string startId, out string? routeFilter, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
+        if (!ResolveBridgeStart(index, bridgeGraph, resolver, target, scope, out string startId, out string? routeFilter, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
         {
             if (target.Contains('/', StringComparison.Ordinal) &&
-                TryBuildRouteDiagnostic(index.BridgeGraph, target, out var routeDiagnostic))
+                TryBuildRouteDiagnostic(bridgeGraph, target, out var routeDiagnostic))
             {
-                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
+                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target, bridgeGraph.CapabilityReport);
                 return json
-                    ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId: null,
+                    ? RenderBridgeJson(bridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId: null,
                         edges: [], routeDiagnostic.Message, routeDiagnostic.Code, routeNextActions)
                     : AppendNextActions(routeDiagnostic.Message, routeNextActions);
             }
 
             if (nextActions.Count == 0)
-                nextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
+                nextActions = BridgeFallbackNextActions(target, bridgeGraph.CapabilityReport);
             return json
-                ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId: null,
+                ? RenderBridgeJson(bridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId: null,
                     edges: [], note!, DiagnosticCode(note!), nextActions)
                 : AppendNextActions(note!, nextActions);
         }
 
         // A symbol with no incident bridge edges is not on any cross-language thread — whether it is absent from the
         // bridge node lookup entirely or present but edge-less, the honest answer is the same. Incident subsumes both.
-        if (index.BridgeGraph.Incident(startId).Count == 0)
+        if (bridgeGraph.Incident(startId).Count == 0)
         {
-            if (routeFilter is not null && TryBuildRouteDiagnostic(index.BridgeGraph, routeFilter, out var routeDiagnostic))
+            if (routeFilter is not null && TryBuildRouteDiagnostic(bridgeGraph, routeFilter, out var routeDiagnostic))
             {
-                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
+                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target, bridgeGraph.CapabilityReport);
                 return json
-                    ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
+                    ? RenderBridgeJson(bridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
                         edges: [], routeDiagnostic.Message, routeDiagnostic.Code, routeNextActions)
                     : AppendNextActions(routeDiagnostic.Message, routeNextActions);
             }
@@ -1244,37 +1237,37 @@ public sealed class TraceTool
             var message = new StringBuilder();
             message.Append($"'{target}' is not on a cross-language bridge. trace bridge follows DTO/entity/table/route links; ")
               .Append("this symbol has none.");
-            IReadOnlyList<TraceNextAction> bridgeNextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
+            IReadOnlyList<TraceNextAction> bridgeNextActions = BridgeFallbackNextActions(target, bridgeGraph.CapabilityReport);
             AppendNextActions(message, bridgeNextActions);
-            AppendBridgeCapabilityStatus(message, index.BridgeGraph.CapabilityReport);
+            AppendBridgeCapabilityStatus(message, bridgeGraph.CapabilityReport);
             return json
-                ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
+                ? RenderBridgeJson(bridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
                     edges: [], $"'{target}' is not on a cross-language bridge. trace bridge follows DTO/entity/table/route links; this symbol has none.",
                     "not_on_bridge", bridgeNextActions)
                 : message.ToString();
         }
 
-        IReadOnlyList<ScoredEdge> edges = index.BridgeGraph.Walk(startId, depth);
+        IReadOnlyList<ScoredEdge> edges = bridgeGraph.Walk(startId, depth);
         if (routeFilter is not null)
-            edges = FilterRouteTargetEdges(index.BridgeGraph, startId, edges, routeFilter);
+            edges = FilterRouteTargetEdges(bridgeGraph, startId, edges, routeFilter);
         nodesVisited = edges.Count;
 
         // The start has direct incident edges (checked above), so an empty Walk means depth could not reach them.
         if (edges.Count == 0)
         {
-            if (routeFilter is not null && TryBuildRouteDiagnostic(index.BridgeGraph, routeFilter, out var routeDiagnostic))
+            if (routeFilter is not null && TryBuildRouteDiagnostic(bridgeGraph, routeFilter, out var routeDiagnostic))
             {
-                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
+                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target, bridgeGraph.CapabilityReport);
                 return json
-                    ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
+                    ? RenderBridgeJson(bridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
                         edges: [], routeDiagnostic.Message, routeDiagnostic.Code, routeNextActions)
                     : AppendNextActions(routeDiagnostic.Message, routeNextActions);
             }
 
             string message = $"No bridge links from '{target}' within {depth} hop(s).";
-            IReadOnlyList<TraceNextAction> bridgeNextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
+            IReadOnlyList<TraceNextAction> bridgeNextActions = BridgeFallbackNextActions(target, bridgeGraph.CapabilityReport);
             return json
-                ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
+                ? RenderBridgeJson(bridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
                     edges: [], message, "no_bridge_links", bridgeNextActions)
                 : AppendNextActions(message, bridgeNextActions);
         }
@@ -1283,13 +1276,13 @@ public sealed class TraceTool
         {
             int shownCount = Math.Min(edges.Count, limit);
             emitted = shownCount;
-            return RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
+            return RenderBridgeJson(bridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
                 edges.Take(shownCount).ToArray(),
                 note: shownCount < edges.Count ? "bridge trace truncated by limit." : null,
                 diagnosticCode: shownCount < edges.Count ? "limit_truncated" : null);
         }
 
-        var startNode = index.BridgeGraph.Node(startId);
+        var startNode = bridgeGraph.Node(startId);
         var sb = new StringBuilder();
         sb.Append("# trace bridge ").Append(startNode is not null ? startNode.Display : target)
           .Append(" (").Append(Math.Min(edges.Count, limit)).Append(" link(s))\n");
@@ -1299,7 +1292,7 @@ public sealed class TraceTool
         {
             if (shown >= limit)
                 break;
-            sb.Append(BridgeLine(index.BridgeGraph, edge)).Append('\n');
+            sb.Append(BridgeLine(bridgeGraph, edge)).Append('\n');
             if (fullFormat)
                 AppendSignals(sb, edge);
             shown++;
@@ -1690,7 +1683,7 @@ public sealed class TraceTool
             : string.Join(", ", routes.Take(5).Select(route => route.Display)) + (routes.Count > 5 ? $", +{routes.Count - 5} more" : string.Empty);
 
     private static bool ResolveBridgeStart(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope,
+        ISymbolLookupIndex index, BridgeGraph bridgeGraph, SmartTargetResolver resolver, string target, string? scope,
         out string startId, out string? routeFilter, out string? note, out IReadOnlyList<TraceNextAction> nextActions)
     {
         startId = string.Empty;
@@ -1704,12 +1697,12 @@ public sealed class TraceTool
             return false;
         }
 
-        if (TryResolveBridgeRouteTarget(index.BridgeGraph, target, out startId, out routeFilter, out note))
+        if (TryResolveBridgeRouteTarget(bridgeGraph, target, out startId, out routeFilter, out note))
             return true;
         if (note is not null)
             return false;
 
-        if (TryResolveSyntheticBridgeNode(index.BridgeGraph, target, out startId, out routeFilter))
+        if (TryResolveSyntheticBridgeNode(bridgeGraph, target, out startId, out routeFilter))
             return true;
 
         switch (resolver.Resolve(target, scope))
@@ -1719,10 +1712,10 @@ public sealed class TraceTool
                 return true;
 
             case TargetResolution.File file:
-                return ResolveBridgeFileStart(index, target, file.Path, out startId, out note);
+                return ResolveBridgeFileStart(index, bridgeGraph, target, file.Path, out startId, out note);
 
             case TargetResolution.Candidates cands:
-                if (TryResolveSingleBridgeCandidate(index, cands.Matches, out startId))
+                if (TryResolveSingleBridgeCandidate(bridgeGraph, cands.Matches, out startId))
                     return true;
                 nextActions = AmbiguousTargetNextActions(target, cands.Matches);
                 note = RenderCandidatesNote(target, cands.Matches);
@@ -1739,13 +1732,13 @@ public sealed class TraceTool
     }
 
     private static bool TryResolveSingleBridgeCandidate(
-        MillerRepositoryIndex index,
+        BridgeGraph bridgeGraph,
         IReadOnlyList<IndexedSymbol> candidates,
         out string startId)
     {
         startId = string.Empty;
         var bridgeCandidates = candidates
-            .Where(s => index.BridgeGraph.Incident(s.SymbolId).Count > 0)
+            .Where(s => bridgeGraph.Incident(s.SymbolId).Count > 0)
             .ToList();
         if (bridgeCandidates.Count != 1)
             return false;
@@ -1885,7 +1878,7 @@ public sealed class TraceTool
     }
 
     private static bool ResolveBridgeFileStart(
-        MillerRepositoryIndex index, string target, string filePath,
+        ISymbolLookupIndex index, BridgeGraph bridgeGraph, string target, string filePath,
         out string startId, out string? note)
     {
         startId = string.Empty;
@@ -1899,7 +1892,7 @@ public sealed class TraceTool
         }
 
         var bridgeSymbols = symbols
-            .Where(s => index.BridgeGraph.Incident(s.SymbolId).Count > 0)
+            .Where(s => bridgeGraph.Incident(s.SymbolId).Count > 0)
             .OrderBy(s => s.StartLine)
             .ThenBy(s => s.Name, StringComparer.Ordinal)
             .ToList();

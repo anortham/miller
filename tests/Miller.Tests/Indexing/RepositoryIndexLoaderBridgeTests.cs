@@ -2,8 +2,10 @@ using Microsoft.Data.Sqlite;
 using Miller.Core.Graph;
 using Miller.Core.Resolver; // BridgeKind, ConfidenceBand, ScoredEdge (the Walk result element type)
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Resolution;
 using Miller.Server.Tools;
+using System.Text.Json;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -731,6 +733,21 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         {
             TryDelete(root);
         }
+    }
+
+    [Fact]
+    public void SessionBridgeGraphLoader_MatchesRepositoryBridgeGraph()
+    {
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(_dbPath, _dir);
+        BridgeGraph expected = RepositoryIndexLoader.Load(_dbPath).BridgeGraph;
+
+        BridgeGraph actual = SessionBridgeGraphLoader.Load(session);
+
+        Assert.Equal(JsonSerializer.Serialize(expected.Nodes), JsonSerializer.Serialize(actual.Nodes));
+        Assert.Equal(JsonSerializer.Serialize(expected.Edges), JsonSerializer.Serialize(actual.Edges));
+        Assert.Equal(
+            JsonSerializer.Serialize(expected.CapabilityReport),
+            JsonSerializer.Serialize(actual.CapabilityReport));
     }
 
     [Fact]

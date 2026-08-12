@@ -107,7 +107,7 @@ public static class RepositoryIndexLoader
     /// needed for Leg 1 <c>[controller]</c> expansion); the namespace is left null (not read into
     /// <see cref="IndexedSymbol"/>) — the resolver tolerates that.
     /// </summary>
-    private static IReadOnlyList<CoreSymbolDetail> ProjectToSymbolDetails(IReadOnlyList<IndexedSymbol> symbols)
+    internal static IReadOnlyList<CoreSymbolDetail> ProjectToSymbolDetails(IReadOnlyList<IndexedSymbol> symbols)
     {
         // id -> simple name, for the ParentId -> ParentClassName lookup.
         var nameById = new Dictionary<string, string>(symbols.Count, StringComparer.Ordinal);

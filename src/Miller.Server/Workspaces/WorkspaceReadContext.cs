@@ -19,6 +19,7 @@ namespace Miller.Server.Workspaces;
 public sealed record WorkspaceReadContext(
     ISymbolLookupIndex Index,
     ISymbolGraphReachability Graph,
+    Lazy<BridgeGraph> BridgeGraph,
     SmartTargetResolver Resolver,
     WorkspaceReadHandle ReadSession,
     string? WorkspaceId,
@@ -45,6 +46,9 @@ public sealed record WorkspaceReadContext(
         : this(
             Index,
             Index.Graph,
+            new Lazy<BridgeGraph>(
+                () => Index.BridgeGraph,
+                LazyThreadSafetyMode.ExecutionAndPublication),
             Resolver,
             ReadSession,
             WorkspaceId,

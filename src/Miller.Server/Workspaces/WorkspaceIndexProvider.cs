@@ -25,6 +25,7 @@ public sealed class WorkspaceIndexProvider
     private readonly Func<string, string, string?, WorkspaceReadHandle> _openReadSession;
     private readonly Func<IWorkspaceReadSession, SymbolSearchProjection> _loadSessionSymbolSearch;
     private readonly Func<WorkspaceReadHandle, ISymbolLookupIndex> _openStoreSymbolSearch;
+    private readonly Func<IWorkspaceReadSession, BridgeGraph> _loadSessionBridgeGraph;
     private readonly SymbolSearchSidecar _sidecar;
     private readonly object _cacheGate = new();
     private readonly Dictionary<CacheKey, Lazy<CachedIndex>> _cache = new();
@@ -76,7 +77,8 @@ public sealed class WorkspaceIndexProvider
         Func<string, string, string?, WorkspaceReadHandle>? openReadSession = null,
         Func<IWorkspaceReadSession, MillerRepositoryIndex>? loadSessionIndex = null,
         Func<IWorkspaceReadSession, SymbolSearchProjection>? loadSessionSymbolSearch = null,
-        Func<WorkspaceReadHandle, ISymbolLookupIndex>? openStoreSymbolSearch = null)
+        Func<WorkspaceReadHandle, ISymbolLookupIndex>? openStoreSymbolSearch = null,
+        Func<IWorkspaceReadSession, BridgeGraph>? loadSessionBridgeGraph = null)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(currentWorkspace);
@@ -110,6 +112,7 @@ public sealed class WorkspaceIndexProvider
                 ?? throw new InvalidOperationException("The family-store read session has no store root.");
             return _sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot);
         });
+        _loadSessionBridgeGraph = loadSessionBridgeGraph ?? (session => SessionBridgeGraphLoader.Load(session));
     }
 
     public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
@@ -218,10 +221,16 @@ public sealed class WorkspaceIndexProvider
             ISymbolGraphReachability graph = familyStore
                 ? new SqliteSymbolGraphIndex(readSession)
                 : holderIndex.Graph;
+            var bridgeGraph = new Lazy<BridgeGraph>(
+                familyStore
+                    ? () => _loadSessionBridgeGraph(readSession)
+                    : () => holderIndex.BridgeGraph,
+                LazyThreadSafetyMode.ExecutionAndPublication);
             var resolver = new SmartTargetResolver(index);
             return new WorkspaceReadContext(
                 index,
                 graph,
+                bridgeGraph,
                 resolver,
                 readSession,
                 _currentWorkspace.WorkspaceId,
@@ -386,12 +395,18 @@ public sealed class WorkspaceIndexProvider
             ISymbolGraphReachability graph = familyStore
                 ? new SqliteSymbolGraphIndex(readSession)
                 : cached!.Index.Graph;
+            var bridgeGraph = new Lazy<BridgeGraph>(
+                familyStore
+                    ? () => _loadSessionBridgeGraph(readSession)
+                    : () => cached!.Index.BridgeGraph,
+                LazyThreadSafetyMode.ExecutionAndPublication);
             SmartTargetResolver resolver = familyStore
                 ? new SmartTargetResolver(index)
                 : cached!.Resolver;
             return new WorkspaceReadContext(
                 index,
                 graph,
+                bridgeGraph,
                 resolver,
                 readSession,
                 row.WorkspaceId,

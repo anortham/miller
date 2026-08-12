@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
+using Miller.Core.Graph;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
@@ -203,6 +204,37 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         Assert.Single(context.Index.FindByName("TargetType"));
         Assert.IsType<TargetResolution.Symbol>(context.Resolver.Resolve("TargetType"));
+    }
+
+    [Fact]
+    public void Resolve_RegisteredFamilyStoreDefersBridgeLoadAndCachesItWithinContext()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-store-lazy-bridge");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        WorkspaceReadSnapshot snapshot = StoreSnapshot(root, "manifest-a");
+        int bridgeLoadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(snapshot, target.DbPath)),
+            loadSessionBridgeGraph: _ =>
+            {
+                bridgeLoadCount++;
+                return BridgeGraph.Build([], new Dictionary<string, BridgeNode>(StringComparer.Ordinal));
+            });
+
+        using WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: false);
+
+        Assert.Equal(0, bridgeLoadCount);
+        Assert.Same(context.BridgeGraph.Value, context.BridgeGraph.Value);
+        Assert.Equal(1, bridgeLoadCount);
     }
 
     [Fact]
@@ -1716,7 +1748,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Func<string, string, string?, WorkspaceReadHandle>? openReadSession = null,
         Func<IWorkspaceReadSession, MillerRepositoryIndex>? loadSessionIndex = null,
         Func<IWorkspaceReadSession, SymbolSearchProjection>? loadSessionSymbolSearch = null,
-        Func<WorkspaceReadHandle, ISymbolLookupIndex>? openStoreSymbolSearch = null) =>
+        Func<WorkspaceReadHandle, ISymbolLookupIndex>? openStoreSymbolSearch = null,
+        Func<IWorkspaceReadSession, BridgeGraph>? loadSessionBridgeGraph = null) =>
         new(
             holder,
             workspace,
@@ -1734,7 +1767,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             openReadSession,
             loadSessionIndex,
             loadSessionSymbolSearch,
-            openStoreSymbolSearch);
+            openStoreSymbolSearch,
+            loadSessionBridgeGraph);
 
     private static WorkspaceReadSnapshot StoreSnapshot(
         string root,
