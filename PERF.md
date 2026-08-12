@@ -126,13 +126,12 @@ without first adding new phase, query-count, or resource evidence.
   passed a real scoped 8-row RED/GREEN (8 locator calls to zero; three hydration statements at window three), but
   the faithful replay again remained 49.77 s wall / 24.738 s resolver with LocateIdentifier still 10,804 and the
   new family zero. That uncommitted slice was removed too; resolved-pending recheck is not the production caller.
-- **Current evidence:** The live snapshot already recorded 8,109 locator calls at 1.033 s, and PendingHydration
-  reads 89,930 rows while RelationshipHydration and both attempted families remain zero. `resolve_pending_items`
-  is the strongest remaining candidate, but two plausible caller attributions have now failed and inference is no
-  longer enough.
-- **Next diagnosis:** Test-only `SnapshottingSession` records the current `ResolutionPhase` and fixed per-phase
-  locator counts. One replay with this materially new evidence will name ResolvedPending, Pending, Relationships,
-  or Other before any third production edit.
+- **Exact caller evidence:** Test-only caller telemetry committed at Julie `5089c3a2` records fixed per-phase
+  locator counts. Its one faithful replay reported Pending=10,804 and ResolvedPending=Relationships=Other/Unset=0.
+  The earliest retained snapshot already had Pending=8,109 at 1.047 s with every other bucket zero.
+- **Measured fix:** Add a session-level Pending wrapper carrying complete/optional co-located identifier hydration.
+  Store mode computes exact uniqueness in the existing bounded Pending page; legacy/test adapters mark incomplete
+  and keep the existing fallback. No schema, cache, or workspace-sized projection is added.
 - **Gate:** The selected caller gets an interface-level exact RED; locator executions fall from per-row to bounded
   pages with digest/row parity; one real replay is run once and either meets budget or names the next bottleneck.
 
