@@ -298,7 +298,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         // ---- Trigram arm (OR only): additive interior-substring recall over the collapsed name, windowed
         // and floored BELOW every word hit so it never perturbs word-arm ranking parity. Excluded under AND.
         List<SearchHit>? trigramOnly = null;
-        if (wantTrigram)
+        if (wantTrigram && wordHits.Count < limit)
         {
             long trigramCandidatesStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             IReadOnlyList<DiskSymbol> trigramCandidates =

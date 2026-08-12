@@ -61,6 +61,28 @@ public sealed class FtsSymbolSearchIndexHardeningTests : IDisposable
         Assert.Contains(hits, hit => hit.Document.Name == "awidgetb");
     }
 
+    [Fact]
+    public void Search_WordHitsFillLimit_SkipsHighFanoutTrigramArmWithExactRankingParity()
+    {
+        var rows = new List<IndexedSymbol>(750);
+        for (int i = 0; i < 500; i++)
+            rows.Add(Sym(i, $"AlphaTarget{i:d4}", $"src/w{i:d4}.cs"));
+        for (int i = 0; i < 250; i++)
+            rows.Add(Sym(i + 500, $"ZalphaZ{i:d4}", $"src/z{i:d4}.cs"));
+        SearchIndexWriter.Write(_dbPath, rows, revision: 1);
+        var observations = new List<FtsSearchQueryObservation>();
+        var fts = FtsSymbolSearchIndex.Open(_dbPath, observations.Add);
+        var memory = SymbolSearchProjection.Build(rows);
+
+        IReadOnlyList<SearchHit> expected = memory.Search("alpha", limit: 10, mode: SearchMode.Or);
+        IReadOnlyList<SearchHit> actual = fts.Search("alpha", limit: 10, mode: SearchMode.Or);
+
+        Assert.Equal(expected.Select(static hit => hit.Document.DocId), actual.Select(static hit => hit.Document.DocId));
+        Assert.Equal(expected.Select(static hit => hit.Score), actual.Select(static hit => hit.Score));
+        Assert.Equal(0, observations.Count(static observation =>
+            observation.Family == FtsSearchQueryFamily.TrigramCandidates));
+    }
+
     [Theory]
     [InlineData("(foo)")]
     [InlineData("AND")]

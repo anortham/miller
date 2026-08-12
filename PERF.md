@@ -270,6 +270,16 @@ without first adding new phase, query-count, or resource evidence.
   graph reach was 305 ms. The 3,378-byte, 10-result response consumed 1,861,922,088 logical-read characters and
   393,216 physical-write bytes, peaking at 140,406 KB PSS / 183,856 KB RSS. Impact, trace, and idle were skipped
   because context remained over gate.
+- **FTS-stage diagnosis:** Release was rebuilt from clean `6913b8cc`; the one diagnosis completed successfully in
+  2,680.376 ms. Query retrieval opened four FTS connections and spent 225 ms returning 33,930 word candidates,
+  209 ms scoring them, and 7 ms on two empty trigram windows; the two empty AND probes themselves cost 1 ms.
+  Term retrieval opened nine connections and spent 201 ms returning 23,138 word candidates, 73 ms scoring them,
+  and 152 ms returning 1,800 trigram candidates. Final FTS totals were connection 13 / 0 ms, AND probe 2 / 1 ms /
+  0 rows, word candidates 11 / 426 ms / 57,068 rows, word scoring 11 / 283 ms / 57,068 rows, trigram candidates
+  11 / 159 ms / 1,800 rows, trigram scoring 11 / 0 ms / 810 rows, and ordering 11 / 0 ms / 550 rows. Search
+  remained 13 / 877 ms, lookup 1,594 / 1,148 ms, graph 299 ms, and all later lookup phases issued zero FTS work.
+  This proves broad word-candidate loading/scoring owns 709 ms of the 868 ms measured inside FTS, with the term
+  trigram candidate queries another 152 ms. The 3,378-byte response remained correct at 10 results / 845 tokens.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 

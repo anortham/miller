@@ -607,6 +607,40 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_WordHitsExactlyEqualLimit_SkipsTrigramArm()
+    {
+        var syms = Corpus(
+            ("a", "AlphaTarget", null, "class", "csharp", "src/A.cs"),
+            ("b", "ZalphaZ", null, "class", "csharp", "src/B.cs"));
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+        var observations = new List<FtsSearchQueryObservation>();
+        var index = FtsSymbolSearchIndex.Open(_dbPath, observations.Add);
+
+        IReadOnlyList<SearchHit> hits = index.Search("alpha", limit: 1, mode: SearchMode.Or);
+
+        Assert.Equal(["AlphaTarget"], hits.Select(static hit => hit.Document.Name));
+        Assert.Equal(0, observations.Count(static observation =>
+            observation.Family == FtsSearchQueryFamily.TrigramCandidates));
+    }
+
+    [Fact]
+    public void Search_WordHitsBelowLimit_StillRunsTrigramArmAndFindsInteriorSubstring()
+    {
+        var syms = Corpus(
+            ("a", "AlphaTarget", null, "class", "csharp", "src/A.cs"),
+            ("b", "ZalphaZ", null, "class", "csharp", "src/B.cs"));
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+        var observations = new List<FtsSearchQueryObservation>();
+        var index = FtsSymbolSearchIndex.Open(_dbPath, observations.Add);
+
+        IReadOnlyList<SearchHit> hits = index.Search("alpha", limit: 2, mode: SearchMode.Or);
+
+        Assert.Equal(["AlphaTarget", "ZalphaZ"], hits.Select(static hit => hit.Document.Name));
+        Assert.Equal(1, observations.Count(static observation =>
+            observation.Family == FtsSearchQueryFamily.TrigramCandidates));
+    }
+
+    [Fact]
     public void Search_TrigramWindow_OrdersCandidatesByStoredDocId_NotFtsRowid()
     {
         var syms = Corpus(Enumerable.Range(0, 205)
