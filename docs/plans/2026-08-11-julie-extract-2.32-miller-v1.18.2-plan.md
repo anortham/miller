@@ -243,5 +243,5 @@
 - [x] `scripts/test.sh all` passes on the exact implementation tree; only version/docs metadata changed afterward.
 - [x] Release build has zero warnings and zero errors on the exact implementation tree.
 - [x] Plugin/site/security/local package smokes pass; the approval-dependent four-target workflow gate is documented.
-- [ ] Current path, branch, commit, dirty state, and all related worktrees are reconciled and reported.
+- [x] Current path, branch, commit, dirty state, and all related worktrees are reconciled and reported.
 - [x] No push, tag, publication, release, or live marketplace change occurs without explicit user approval.
