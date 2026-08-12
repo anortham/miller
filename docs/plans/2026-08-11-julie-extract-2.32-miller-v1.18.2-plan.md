@@ -19,6 +19,7 @@
 - Preserve the current local `main` history and all related dirty documents; do not stash or overwrite them.
 - Keep fast and Scale suites separate during development; run `scripts/test.sh all` once at the branch gate because the extractor/index path changes.
 - Do not push, tag, publish, deploy, release, or update live marketplace state without explicit user approval after the final clean-state report.
+- Each task owns its acceptance-checkbox update and Goldfish checkpoint alongside its declared files so execution state is committed with the slice.
 
 ## Architecture Quality
 
@@ -134,11 +135,11 @@
 **Approach:** Treat the public store contract as unchanged and additive telemetry as optional. Follow the prior 2.31.4 adoption shape, but record the new scoped-resolution default, `JULIE_STORE_RESOLUTION_DELTA=off` escape hatch, rebase thresholds, partial-store recovery, and Windows pointer/durability fixes.
 
 **Acceptance criteria:**
-- [ ] All pin/version tests fail on the old expectation and pass at 2.32.0.
-- [ ] Restored host binary digest matches the published asset and `--version` reports 2.32.0.
-- [ ] Schema/epoch compatibility is measured rather than assumed.
-- [ ] Adoption evidence and docs map are current.
-- [ ] Focused verification passes and the change is committed locally.
+- [x] All pin/version tests fail on the old expectation and pass at 2.32.0.
+- [x] Restored host binary digest matches the published asset and `--version` reports 2.32.0.
+- [x] Schema/epoch compatibility is measured rather than assumed.
+- [x] Adoption evidence and docs map are current.
+- [x] Focused verification passes and the change is committed locally.
 
 ### Task 3: Prove focused consumer compatibility and recovery
 
