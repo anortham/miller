@@ -178,7 +178,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         WorkspaceRegistry registry,
         string workspaceId,
         string canonicalRoot,
-        bool rootReplacementObserved = false)
+        bool rootReplacementObserved = false,
+        bool recoverUnpublishedView = false)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
@@ -193,7 +194,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             rootReplacementObserved,
             git,
             WorkspaceRootIdentity.CaptureDirectoryCreationTime(git?.CommonDir),
-            millerHome);
+            millerHome,
+            recoverUnpublishedView);
     }
 
     private static StoreFamilyBinding ResolveBinding(
@@ -203,7 +205,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         bool rootReplacementObserved,
         GitWorktreeLayout? git,
         DateTimeOffset? commonDirCreatedAt,
-        string millerHome)
+        string millerHome,
+        bool recoverUnpublishedView = false)
     {
         var resolver = new StoreFamilyResolver(registry, Path.Combine(millerHome, "stores"));
         StoreFamilyBinding binding = resolver.ResolveOrCreate(new WorkspaceRootFacts(
@@ -212,7 +215,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             git?.CommonDir,
             commonDirCreatedAt,
             WorkspaceRootIdentity.Capture(canonicalRoot),
-            rootReplacementObserved));
+            rootReplacementObserved),
+            recoverUnpublishedView: recoverUnpublishedView);
         return binding;
     }
 
@@ -582,13 +586,26 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     {
         if (!File.Exists(Path.Combine(binding.StoreRoot, "CURRENT")))
             return null;
-        using var session = FamilyStoreReadSession.Open(
-            binding with { State = StoreBindingState.Ready },
-            workspaceId);
-        long sequence = session.Snapshot.Freshness.StoreLogSequence ?? throw new FamilyStoreReadException(
-            FamilyStoreReadFailure.Corrupt,
-            "The family-store snapshot has no store_log sequence.");
-        return new StoreWorkspaceState(sequence, session.Snapshot.IndexLevel);
+        FamilyStoreReadSession session;
+        try
+        {
+            session = FamilyStoreReadSession.Open(
+                binding with { State = StoreBindingState.Ready },
+                workspaceId);
+        }
+        catch (FamilyStoreReadException ex) when (
+            binding.State == StoreBindingState.Planned &&
+            ex.Failure == FamilyStoreReadFailure.ViewNotFound)
+        {
+            return null;
+        }
+        using (session)
+        {
+            long sequence = session.Snapshot.Freshness.StoreLogSequence ?? throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.Corrupt,
+                "The family-store snapshot has no store_log sequence.");
+            return new StoreWorkspaceState(sequence, session.Snapshot.IndexLevel);
+        }
     }
 
 }

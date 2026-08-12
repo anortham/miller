@@ -42,10 +42,13 @@ public static class StoreArtifactVersionReader
         return pointerPresent ? storeVersion : legacyVersionReader(legacyDatabasePath);
     }
 
-    public static bool RequiresRootRebind(string? legacyDatabasePath)
+    public static bool RequiresRootRebind(
+        string? legacyDatabasePath,
+        bool unreadableStoreRecoveryAllowed = false)
     {
-        (_, bool pointerPresent, _, bool missingStoreRoot) = ReadCore(legacyDatabasePath);
-        return pointerPresent && missingStoreRoot;
+        (_, bool pointerPresent, Exception? failure, bool missingStoreRoot) = ReadCore(legacyDatabasePath);
+        return pointerPresent
+            && (missingStoreRoot || (unreadableStoreRecoveryAllowed && failure is not null));
     }
 
     public static string? TryRead(string? legacyDatabasePath, out bool pointerPresent)

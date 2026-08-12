@@ -323,7 +323,11 @@ public sealed class CrossWorkspaceRefreshService
                     ArtifactId: TryReadArtifactId(row, useStore));
             }
         }
-        bool storeRootRebindRequired = useStore && StoreArtifactVersionReader.RequiresRootRebind(row.IndexDbPath);
+        bool unreadableStoreRecoveryAllowed =
+            Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1";
+        bool storeRootRebindRequired = useStore && StoreArtifactVersionReader.RequiresRootRebind(
+            row.IndexDbPath,
+            unreadableStoreRecoveryAllowed);
         bool effectiveForce = force || sourceRebuildRequired || storeRootRebindRequired;
 
         // D2 gate, AFTER winning the lock (so a busy lock still enqueues to the live leader above, which
@@ -678,7 +682,10 @@ public sealed class CrossWorkspaceRefreshService
         StoreFamilyBinding binding = StoreWorkspaceCoordinator.ResolveBinding(
             _registry,
             row.WorkspaceId,
-            row.CanonicalRoot);
+            row.CanonicalRoot,
+            recoverUnpublishedView:
+                attempt.EffectiveIntent == ScanIntent.RootRebind &&
+                Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1");
         StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.Create(
             binding,
             row.WorkspaceId,

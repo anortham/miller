@@ -52,7 +52,8 @@ public sealed class StoreFamilyResolver
 
     public StoreFamilyBinding ResolveOrCreate(
         WorkspaceRootFacts facts,
-        StoreMode mode = StoreMode.Enabled)
+        StoreMode mode = StoreMode.Enabled,
+        bool recoverUnpublishedView = false)
     {
         ArgumentNullException.ThrowIfNull(facts);
         if (mode == StoreMode.Disabled)
@@ -77,7 +78,7 @@ public sealed class StoreFamilyResolver
             if (catalog is not null)
             {
                 if (!IsPositiveFamilyReplacement(family, member, facts))
-                    return ReconcileCatalog(facts, family, member, catalog);
+                    return ReconcileCatalog(facts, family, member, catalog, recoverUnpublishedView);
                 family = ResolveFamily(facts);
                 viewId = MintViewId();
             }
@@ -178,15 +179,35 @@ public sealed class StoreFamilyResolver
         WorkspaceRootFacts facts,
         StoreFamilyRegistryRow family,
         StoreMemberRegistryRow member,
-        StoreCatalog catalog)
+        StoreCatalog catalog,
+        bool recoverUnpublishedView)
     {
         StoreCatalogView? expected = catalog.Views.FirstOrDefault(view =>
             string.Equals(view.ViewId, member.ViewId, StringComparison.Ordinal));
         if (expected is not null && !ArtifactRootIdentity.Matches(expected.Root, facts.WorkspaceRoot))
             throw new StoreBindingMismatchException("The store view root does not match the workspace root.");
-        StoreCatalogView selected = expected ?? catalog.Views.SingleOrDefault(view =>
-            ArtifactRootIdentity.Matches(view.Root, facts.WorkspaceRoot)) ??
-            throw new StoreBindingMismatchException("The store has no view for the workspace root.");
+        StoreCatalogView? selected = expected ?? catalog.Views.SingleOrDefault(view =>
+            ArtifactRootIdentity.Matches(view.Root, facts.WorkspaceRoot));
+        if (selected is null)
+        {
+            if (!recoverUnpublishedView)
+                throw new StoreBindingMismatchException("The store has no view for the workspace root.");
+
+            StoreMemberRegistryRow planned = _registry.UpsertStoreMember(
+                facts.WorkspaceId,
+                family.FamilyId,
+                member.ViewId,
+                facts.WorkspaceRoot,
+                facts.RootIdentity);
+            var plannedBinding = new StoreFamilyBinding(
+                family.FamilyId,
+                family.StoreRoot,
+                planned.ViewId,
+                facts.WorkspaceRoot,
+                StoreBindingState.Planned);
+            StoreWorkspacePointer.Write(facts.WorkspaceRoot, plannedBinding);
+            return plannedBinding;
+        }
 
         if (catalog.FamilyId != family.FamilyId)
             family = _registry.ReplaceStoreFamilyIdentity(family.FamilyId, catalog.FamilyId, family.StoreRoot);

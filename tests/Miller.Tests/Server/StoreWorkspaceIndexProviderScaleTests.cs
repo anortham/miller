@@ -51,9 +51,25 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 CanonicalGitCommonDir: null,
                 GitCommonDirCreatedAtUtc: null,
                 WorkspaceRootIdentity.Capture(canonicalRoot)));
-        Directory.CreateDirectory(binding.StoreRoot);
-        Assert.Throws<StoreArtifactVersionReadException>(() =>
+        string otherRoot = Path.Combine(directory, "other-root");
+        Directory.CreateDirectory(otherRoot);
+        File.WriteAllText(
+            Path.Combine(otherRoot, "Published.cs"),
+            "namespace Example; public static class Published { public static int Value => 7; }");
+        ScaleTestSupport.RunJulie(
+            binary,
+            "store", "import", "--store", binding.StoreRoot,
+            "--family", binding.FamilyId.ToString("D"),
+            "--root", otherRoot, "--view", "published-view",
+            "--level", "full", "--jobs", "1", "--json");
+        Assert.True(File.Exists(Path.Combine(binding.StoreRoot, "coord.db")));
+        Assert.Contains(
+            Directory.EnumerateFiles(binding.StoreRoot, "store.db", SearchOption.AllDirectories),
+            File.Exists);
+        Assert.False(StoreArtifactVersionReader.RequiresRootRebind(artifact));
+        StoreArtifactVersionReadException unreadable = Assert.Throws<StoreArtifactVersionReadException>(() =>
             StoreArtifactVersionReader.ReadForLeadership(artifact, ExtractBinaryVersionReader.TryRead));
+        Assert.Contains("no view", unreadable.InnerException?.Message, StringComparison.OrdinalIgnoreCase);
 
         string? priorStoreMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
         string? priorOverride = Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE");
@@ -77,7 +93,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
             Environment.SetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE", "1");
             WorkspaceRefreshResult recovered = refresh.Refresh(workspaceId, bypassBackoff: true);
 
-            Assert.Equal(WorkspaceRefreshStatus.Refreshed, recovered.Status);
+            Assert.True(WorkspaceRefreshStatus.Refreshed == recovered.Status, recovered.Error);
             using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
                 artifact,
                 canonicalRoot,
