@@ -289,6 +289,39 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
         Assert.InRange(hydration.Rows, 0, 7);
     }
 
+    [Theory]
+    [InlineData("alpha beta alpha", "alpha", 2)]
+    [InlineData("  alpha   beta alpha  ", "alpha", 2)]
+    [InlineData("alphabet alpha", "alpha", 1)]
+    [InlineData("", "alpha", 0)]
+    [InlineData("alpha", "", 0)]
+    [InlineData("café cafe café", "café", 2)]
+    [InlineData("café cafe café", "cafe", 1)]
+    public void CountTokenOccurrences_UsesExactSpaceDelimitedBoundaries(
+        string body,
+        string term,
+        int expected)
+    {
+        Assert.Equal(expected, FtsSymbolSearchIndex.CountTokenOccurrences(body, term));
+    }
+
+    [Fact]
+    public void CountTokenOccurrences_RepeatedHighFanoutScoringDoesNotAllocate()
+    {
+        const string body = "shared item shared signature class shared";
+        const string term = "shared";
+        _ = FtsSymbolSearchIndex.CountTokenOccurrences(body, term);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        int total = 0;
+        for (int i = 0; i < 10_000; i++)
+            total += FtsSymbolSearchIndex.CountTokenOccurrences(body, term);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(30_000, total);
+        Assert.Equal(0, allocated);
+    }
+
     [Fact]
     public void Search_WordArm_RankingParity_NonAsciiIdentifiers_WithInMemoryProjection()
     {

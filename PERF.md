@@ -288,6 +288,14 @@ without first adding new phase, query-count, or resource evidence.
   3,378-byte, 10-result response consumed 1,627,915,275 logical-read characters and 430,080 physical-write bytes,
   peaking at 140,729 KB PSS / 187,924 KB RSS. Impact, trace, and idle were skipped because context remained over
   gate.
+- **Deferred-word-hydration acceptance:** Release was rebuilt from clean `e97bf3de`; context completed successfully
+  in 2,104.074 ms, only 104 ms over the 2 s gate. Word-candidate work fell from 451 to 228 ms and word scoring
+  from 266 to 147 ms while the new bounded hydration stage loaded only 402 final rows in 5 ms; total Search fell
+  from 729 to 394 ms and lookup from 992 to 654 ms. The remaining largest outer phases are source rescue 626 ms,
+  anchor resolution 337 ms, graph 282 ms, semantic seeds 275 ms, and term retrieval 253 ms. The correct
+  3,378-byte, 10-result response consumed 1,629,859,578 logical-read characters and 434,176 physical-write bytes,
+  peaking at 123,574 KB PSS / 170,600 KB RSS. Impact, trace, and idle were skipped because context remained over
+  gate.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 

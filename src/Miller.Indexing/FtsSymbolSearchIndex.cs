@@ -241,13 +241,11 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
             var scoredCandidates = new List<WordCandidateScore>(candidates.Count);
             foreach (WordCandidate candidate in candidates)
             {
-                string[] tokens = candidate.Body.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
                 var termFrequencies = new int[distinctTerms.Count];
                 int matched = 0;
                 for (int i = 0; i < distinctTerms.Count; i++)
                 {
-                    int tf = CountOccurrences(tokens, distinctTerms[i]);
+                    int tf = CountTokenOccurrences(candidate.Body, distinctTerms[i]);
                     if (tf == 0) continue;
                     termFrequencies[i] = tf;
                     df[i]++;
@@ -450,12 +448,27 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         return results;
     }
 
-    private static int CountOccurrences(IReadOnlyList<string> tokens, string term)
+    internal static int CountTokenOccurrences(string body, string term)
     {
+        if (body.Length == 0 || term.Length == 0)
+            return 0;
+
         int count = 0;
-        foreach (string t in tokens)
-            if (string.Equals(t, term, StringComparison.Ordinal))
+        int position = 0;
+        ReadOnlySpan<char> bodySpan = body;
+        ReadOnlySpan<char> termSpan = term;
+        while (position < bodySpan.Length)
+        {
+            while (position < bodySpan.Length && bodySpan[position] == ' ')
+                position++;
+
+            int tokenStart = position;
+            while (position < bodySpan.Length && bodySpan[position] != ' ')
+                position++;
+
+            if (position > tokenStart && bodySpan[tokenStart..position].SequenceEqual(termSpan))
                 count++;
+        }
         return count;
     }
 
