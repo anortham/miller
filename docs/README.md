@@ -133,6 +133,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the `patterns` MCP/CLI surface.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
 - [`release-notes/v1.18.3.md`](release-notes/v1.18.3.md) - latest published release notes.
+- [`findings/2026-08-12-v1.18.3-release-candidate.md`](findings/2026-08-12-v1.18.3-release-candidate.md) - local `v1.18.3` candidate evidence; local gates passed and the package-only workflow remains pending.
 - [`findings/2026-08-12-v1.18.2-release-verification.md`](findings/2026-08-12-v1.18.2-release-verification.md) - live `v1.18.2` release verification.
 - [`findings/2026-08-12-v1.18.2-release-candidate.md`](findings/2026-08-12-v1.18.2-release-candidate.md) - local performance and pre-publication gate evidence.
 - [`release-notes/v1.18.2.md`](release-notes/v1.18.2.md) - previous release notes.
