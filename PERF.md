@@ -129,11 +129,17 @@ without first adding new phase, query-count, or resource evidence.
 - **Exact caller evidence:** Test-only caller telemetry committed at Julie `5089c3a2` records fixed per-phase
   locator counts. Its one faithful replay reported Pending=10,804 and ResolvedPending=Relationships=Other/Unset=0.
   The earliest retained snapshot already had Pending=8,109 at 1.047 s with every other bucket zero.
-- **Measured fix:** Add a session-level Pending wrapper carrying complete/optional co-located identifier hydration.
-  Store mode computes exact uniqueness in the existing bounded Pending page; legacy/test adapters mark incomplete
-  and keep the existing fallback. No schema, cache, or workspace-sized projection is added.
-- **Gate:** The selected caller gets an interface-level exact RED; locator executions fall from per-row to bounded
-  pages with digest/row parity; one real replay is run once and either meets budget or names the next bottleneck.
+- **No-win implementation rejected:** The exact measured Pending slice reduced LocateIdentifier from 10,804 to
+  zero and total candidate statements from 14,980 to 4,176, with digest/rows unchanged. Its single replay was
+  nevertheless 50.46 s wall / 25.418 s resolver versus 49.88 s / 24.813 s baseline—0.58–0.61 s slower. The
+  enriched page join used both locator indexes but added temporary GROUP BY/ORDER BY B-trees. The uncommitted
+  production slice is being removed; statement count was not wall-clock load-bearing on this host.
+- **Remaining measured work:** PrimeWindow still reads 313,107 rows, IdentifierHydration 381,722, and
+  PendingHydration 89,930. Separately, exact finalization consumes about 23.7–25.0 s—roughly half total wall.
+- **Next diagnosis:** Instrument `finish_exact` at fixed boundaries (prior-overlay materialization, totality check,
+  base row streaming, target validation/integrity, sync/publication) and optimize its largest measured phase.
+- **Gate:** One fixed finalization phase is proven load-bearing by a bounded replay, then an exact RED/GREEN reduces
+  its work without changing digest, rows, crash safety, or publication identity.
 
 ### PERF-009 — Bridge trace still needs a bounded family-store representation
 
