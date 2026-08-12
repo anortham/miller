@@ -10,6 +10,7 @@ using Miller.Indexing.Semantic;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 using Miller.Tests;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -1484,6 +1485,94 @@ public sealed class ContextToolTests
                 "bounded_render",
             ],
             phases);
+    }
+
+    [Fact]
+    public void ContextEmitsOneFixedLookupDeltaAtEachCompletedLookupPhase()
+    {
+        var (index, _) = BuildFixture();
+        var measured = new MeasuredSymbolLookupIndex(index);
+        var readTelemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        WorkspaceReadContext context = ReadToolRoutingTestSupport.ContextFor(
+            index,
+            "current.db",
+            "current-ws",
+            "/repo") with
+        {
+            Index = measured,
+            Resolver = new SmartTargetResolver(measured),
+            ReadTelemetry = readTelemetry,
+        };
+        var provider = new RecordingWorkspaceIndexProvider(context);
+        var lookupPhases = new List<ContextLookupPhaseObservation>();
+        var tool = new ContextTool(
+            provider,
+            semanticArm: null,
+            semanticSidecar: null,
+            lookupPhaseObserver: lookupPhases.Add);
+
+        _ = tool.Context("OrderService", token_budget: 1200, max_hops: 1);
+
+        Assert.Equal(
+            [
+                ContextLookupPhase.QueryRetrieval,
+                ContextLookupPhase.TermRetrieval,
+                ContextLookupPhase.AnchorResolution,
+                ContextLookupPhase.GraphReach,
+                ContextLookupPhase.SymbolHydration,
+                ContextLookupPhase.FileNeighbours,
+                ContextLookupPhase.CandidateOrdering,
+            ],
+            lookupPhases.Select(static observation => observation.Phase));
+        Assert.All(lookupPhases, static observation => Assert.True(observation.Delta.TotalCallCount >= 0));
+        Assert.True(lookupPhases[^1].Total.TotalCallCount > 0);
+    }
+
+    [Fact]
+    public void ContextLookupTelemetryRetainsOnlyCompletedSnapshotsBeforeCancellation()
+    {
+        var (index, _) = BuildFixture();
+        var measured = new MeasuredSymbolLookupIndex(index);
+        var readTelemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        WorkspaceReadContext context = ReadToolRoutingTestSupport.ContextFor(
+            index,
+            "current.db",
+            "current-ws",
+            "/repo") with
+        {
+            Index = measured,
+            Resolver = new SmartTargetResolver(measured),
+            ReadTelemetry = readTelemetry,
+        };
+        var provider = new RecordingWorkspaceIndexProvider(context);
+        var lookupPhases = new List<ContextLookupPhaseObservation>();
+        var tool = new ContextTool(
+            provider,
+            semanticArm: null,
+            semanticSidecar: null,
+            lookupPhaseObserver: observation =>
+            {
+                lookupPhases.Add(observation);
+                if (observation.Phase == ContextLookupPhase.AnchorResolution)
+                    throw new OperationCanceledException("stop after completed anchor lookup snapshot");
+            });
+
+        Assert.Throws<OperationCanceledException>(() =>
+            tool.Context("OrderService", token_budget: 1200, max_hops: 1));
+
+        Assert.Equal(
+            [
+                ContextLookupPhase.QueryRetrieval,
+                ContextLookupPhase.TermRetrieval,
+                ContextLookupPhase.AnchorResolution,
+            ],
+            lookupPhases.Select(static observation => observation.Phase));
+        Assert.DoesNotContain(
+            lookupPhases,
+            static observation => observation.Phase is ContextLookupPhase.GraphReach
+                or ContextLookupPhase.SymbolHydration
+                or ContextLookupPhase.FileNeighbours
+                or ContextLookupPhase.CandidateOrdering);
     }
 
     [Fact]

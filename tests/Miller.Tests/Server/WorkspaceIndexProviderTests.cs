@@ -145,6 +145,72 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void LookupPhaseTelemetryUsesFixedFamiliesAndIndependentBaselines()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        var measured = new MeasuredSymbolLookupIndex(inner);
+        _ = measured.FindByName("TargetType");
+        var telemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        IndexedSymbol symbol = Assert.Single(measured.FindByName("TargetType"));
+
+        _ = measured.DocumentCount;
+        _ = measured.KnownExtensions;
+        _ = measured.Search("TargetType");
+        _ = measured.Resolve(symbol.DocId);
+        _ = measured.FindBySymbolId(symbol.SymbolId);
+        _ = measured.FindChildren(symbol.SymbolId);
+        _ = measured.FindByFilePath(symbol.FilePath);
+        _ = measured.FindByFilePathFragment(symbol.FilePath, 10);
+        _ = measured.FindFilePathsByFragment(symbol.FilePath, 10);
+        _ = measured.IsIndexedFilePath(symbol.FilePath);
+        _ = measured.ResolveIndexedFilePath(symbol.FilePath);
+
+        ContextLookupPhaseObservation first = telemetry.CompleteLookupPhase(ContextLookupPhase.QueryRetrieval);
+        _ = measured.FindBySymbolId(symbol.SymbolId);
+        _ = measured.FindBySymbolId(symbol.SymbolId);
+        ContextLookupPhaseObservation second = telemetry.CompleteLookupPhase(ContextLookupPhase.TermRetrieval);
+
+        Assert.Equal(12, first.Delta.TotalCallCount);
+        Assert.Equal(12, first.Total.TotalCallCount);
+        Assert.Equal(1, first.Delta.DocumentCount.CallCount);
+        Assert.Equal(1, first.Delta.KnownExtensions.CallCount);
+        Assert.Equal(1, first.Delta.Search.CallCount);
+        Assert.Equal(1, first.Delta.ResolveDoc.CallCount);
+        Assert.Equal(1, first.Delta.FindByName.CallCount);
+        Assert.Equal(1, first.Delta.FindBySymbolId.CallCount);
+        Assert.Equal(1, first.Delta.FindChildren.CallCount);
+        Assert.Equal(1, first.Delta.FindByFilePath.CallCount);
+        Assert.Equal(1, first.Delta.FindByFilePathFragment.CallCount);
+        Assert.Equal(1, first.Delta.FindFilePathsByFragment.CallCount);
+        Assert.Equal(1, first.Delta.IsIndexedFilePath.CallCount);
+        Assert.Equal(1, first.Delta.ResolveIndexedFilePath.CallCount);
+        Assert.Equal(2, second.Delta.TotalCallCount);
+        Assert.Equal(2, second.Delta.FindBySymbolId.CallCount);
+        Assert.Equal(0, second.Delta.FindByName.CallCount);
+        Assert.Equal(14, second.Total.TotalCallCount);
+        Assert.Equal(3, second.Total.FindBySymbolId.CallCount);
+        Assert.Equal(1, second.Total.FindByName.CallCount);
+        Assert.All(
+            new[]
+            {
+                first.Delta.DocumentCount,
+                first.Delta.KnownExtensions,
+                first.Delta.Search,
+                first.Delta.ResolveDoc,
+                first.Delta.FindByName,
+                first.Delta.FindBySymbolId,
+                first.Delta.FindChildren,
+                first.Delta.FindByFilePath,
+                first.Delta.FindByFilePathFragment,
+                first.Delta.FindFilePathsByFragment,
+                first.Delta.IsIndexedFilePath,
+                first.Delta.ResolveIndexedFilePath,
+            },
+            static family => Assert.True(family.ElapsedMilliseconds >= 0));
+    }
+
+    [Fact]
     public void RepeatedCurrentFamilyReadsKeepCachedIdentityAndReportOnlyTheirOwnLookupDelta()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");

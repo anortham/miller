@@ -7,10 +7,75 @@ namespace Miller.Server.Workspaces;
 
 internal readonly record struct ReadMeasurementSnapshot(long CallCount, long ElapsedTicks);
 
+internal enum SymbolLookupMethodFamily
+{
+    DocumentCount,
+    KnownExtensions,
+    Search,
+    ResolveDoc,
+    FindByName,
+    FindBySymbolId,
+    FindChildren,
+    FindByFilePath,
+    FindByFilePathFragment,
+    FindFilePathsByFragment,
+    IsIndexedFilePath,
+    ResolveIndexedFilePath,
+}
+
+internal enum ContextLookupPhase
+{
+    QueryRetrieval,
+    TermRetrieval,
+    AnchorResolution,
+    GraphReach,
+    SymbolHydration,
+    FileNeighbours,
+    CandidateOrdering,
+}
+
+internal readonly record struct LookupMethodTelemetry(long CallCount, long ElapsedMilliseconds);
+
+internal sealed record SymbolLookupTelemetrySnapshot(
+    LookupMethodTelemetry DocumentCount,
+    LookupMethodTelemetry KnownExtensions,
+    LookupMethodTelemetry Search,
+    LookupMethodTelemetry ResolveDoc,
+    LookupMethodTelemetry FindByName,
+    LookupMethodTelemetry FindBySymbolId,
+    LookupMethodTelemetry FindChildren,
+    LookupMethodTelemetry FindByFilePath,
+    LookupMethodTelemetry FindByFilePathFragment,
+    LookupMethodTelemetry FindFilePathsByFragment,
+    LookupMethodTelemetry IsIndexedFilePath,
+    LookupMethodTelemetry ResolveIndexedFilePath)
+{
+    internal long TotalCallCount =>
+        DocumentCount.CallCount +
+        KnownExtensions.CallCount +
+        Search.CallCount +
+        ResolveDoc.CallCount +
+        FindByName.CallCount +
+        FindBySymbolId.CallCount +
+        FindChildren.CallCount +
+        FindByFilePath.CallCount +
+        FindByFilePathFragment.CallCount +
+        FindFilePathsByFragment.CallCount +
+        IsIndexedFilePath.CallCount +
+        ResolveIndexedFilePath.CallCount;
+}
+
+internal sealed record ContextLookupPhaseObservation(
+    ContextLookupPhase Phase,
+    SymbolLookupTelemetrySnapshot Delta,
+    SymbolLookupTelemetrySnapshot Total);
+
 internal sealed class ReadPhaseTelemetry
 {
     private readonly MeasuredSymbolLookupIndex _lookup;
     private readonly ReadMeasurementSnapshot _lookupBaseline;
+    private readonly ReadMeasurementSnapshot[] _lookupFamilyBaseline;
+    private ReadMeasurementSnapshot[] _lookupPhaseBaseline;
     private readonly MeasuredSymbolGraphReachability? _graph;
     private readonly ReadMeasurementSnapshot _graphBaseline;
 
@@ -21,6 +86,8 @@ internal sealed class ReadPhaseTelemetry
     {
         _lookup = lookup;
         _lookupBaseline = lookup.Snapshot();
+        _lookupFamilyBaseline = lookup.SnapshotByFamily();
+        _lookupPhaseBaseline = _lookupFamilyBaseline;
         _graph = graph;
         _graphBaseline = graph?.Snapshot() ?? default;
         ProviderCacheEntries = providerCacheEntries;
@@ -46,6 +113,17 @@ internal sealed class ReadPhaseTelemetry
             0,
             (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
 
+    internal ContextLookupPhaseObservation CompleteLookupPhase(ContextLookupPhase phase)
+    {
+        ReadMeasurementSnapshot[] current = _lookup.SnapshotByFamily();
+        var observation = new ContextLookupPhaseObservation(
+            phase,
+            LookupTelemetry(current, _lookupPhaseBaseline),
+            LookupTelemetry(current, _lookupFamilyBaseline));
+        _lookupPhaseBaseline = current;
+        return observation;
+    }
+
     private static ReadMeasurementSnapshot Delta(
         ReadMeasurementSnapshot current,
         ReadMeasurementSnapshot baseline) =>
@@ -55,45 +133,96 @@ internal sealed class ReadPhaseTelemetry
 
     private static long ElapsedMilliseconds(long ticks) =>
         Math.Max(0, (long)Stopwatch.GetElapsedTime(0, ticks).TotalMilliseconds);
+
+    private static SymbolLookupTelemetrySnapshot LookupTelemetry(
+        IReadOnlyList<ReadMeasurementSnapshot> current,
+        IReadOnlyList<ReadMeasurementSnapshot> baseline)
+    {
+        LookupMethodTelemetry Family(SymbolLookupMethodFamily family)
+        {
+            int index = (int)family;
+            ReadMeasurementSnapshot delta = Delta(current[index], baseline[index]);
+            return new LookupMethodTelemetry(delta.CallCount, ElapsedMilliseconds(delta.ElapsedTicks));
+        }
+
+        return new SymbolLookupTelemetrySnapshot(
+            Family(SymbolLookupMethodFamily.DocumentCount),
+            Family(SymbolLookupMethodFamily.KnownExtensions),
+            Family(SymbolLookupMethodFamily.Search),
+            Family(SymbolLookupMethodFamily.ResolveDoc),
+            Family(SymbolLookupMethodFamily.FindByName),
+            Family(SymbolLookupMethodFamily.FindBySymbolId),
+            Family(SymbolLookupMethodFamily.FindChildren),
+            Family(SymbolLookupMethodFamily.FindByFilePath),
+            Family(SymbolLookupMethodFamily.FindByFilePathFragment),
+            Family(SymbolLookupMethodFamily.FindFilePathsByFragment),
+            Family(SymbolLookupMethodFamily.IsIndexedFilePath),
+            Family(SymbolLookupMethodFamily.ResolveIndexedFilePath));
+    }
 }
 
 internal sealed class MeasuredSymbolLookupIndex(ISymbolLookupIndex inner) : ISymbolLookupIndex
 {
-    private long _elapsedTicks;
-    private long _callCount;
+    private readonly long[] _elapsedTicks = new long[Enum.GetValues<SymbolLookupMethodFamily>().Length];
+    private readonly long[] _callCounts = new long[Enum.GetValues<SymbolLookupMethodFamily>().Length];
 
-    public int DocumentCount => Measure(() => inner.DocumentCount);
+    public int DocumentCount => Measure(SymbolLookupMethodFamily.DocumentCount, () => inner.DocumentCount);
 
-    public IReadOnlySet<string> KnownExtensions => Measure(() => inner.KnownExtensions);
+    public IReadOnlySet<string> KnownExtensions =>
+        Measure(SymbolLookupMethodFamily.KnownExtensions, () => inner.KnownExtensions);
 
     public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or) =>
-        Measure(() => inner.Search(query, limit, mode));
+        Measure(SymbolLookupMethodFamily.Search, () => inner.Search(query, limit, mode));
 
-    public IndexedSymbol Resolve(int docId) => Measure(() => inner.Resolve(docId));
+    public IndexedSymbol Resolve(int docId) => Measure(SymbolLookupMethodFamily.ResolveDoc, () => inner.Resolve(docId));
 
-    public IReadOnlyList<IndexedSymbol> FindByName(string name) => Measure(() => inner.FindByName(name));
+    public IReadOnlyList<IndexedSymbol> FindByName(string name) =>
+        Measure(SymbolLookupMethodFamily.FindByName, () => inner.FindByName(name));
 
-    public IndexedSymbol? FindBySymbolId(string symbolId) => Measure(() => inner.FindBySymbolId(symbolId));
+    public IndexedSymbol? FindBySymbolId(string symbolId) =>
+        Measure(SymbolLookupMethodFamily.FindBySymbolId, () => inner.FindBySymbolId(symbolId));
 
-    public IReadOnlyList<IndexedSymbol> FindChildren(string parentId) => Measure(() => inner.FindChildren(parentId));
+    public IReadOnlyList<IndexedSymbol> FindChildren(string parentId) =>
+        Measure(SymbolLookupMethodFamily.FindChildren, () => inner.FindChildren(parentId));
 
-    public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath) => Measure(() => inner.FindByFilePath(filePath));
+    public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath) =>
+        Measure(SymbolLookupMethodFamily.FindByFilePath, () => inner.FindByFilePath(filePath));
 
     public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit) =>
-        Measure(() => inner.FindByFilePathFragment(query, limit));
+        Measure(SymbolLookupMethodFamily.FindByFilePathFragment, () => inner.FindByFilePathFragment(query, limit));
 
     public IReadOnlyList<string> FindFilePathsByFragment(string query, int limit) =>
-        Measure(() => inner.FindFilePathsByFragment(query, limit));
+        Measure(SymbolLookupMethodFamily.FindFilePathsByFragment, () => inner.FindFilePathsByFragment(query, limit));
 
-    public bool IsIndexedFilePath(string path) => Measure(() => inner.IsIndexedFilePath(path));
+    public bool IsIndexedFilePath(string path) =>
+        Measure(SymbolLookupMethodFamily.IsIndexedFilePath, () => inner.IsIndexedFilePath(path));
 
-    public string? ResolveIndexedFilePath(string target) => Measure(() => inner.ResolveIndexedFilePath(target));
+    public string? ResolveIndexedFilePath(string target) =>
+        Measure(SymbolLookupMethodFamily.ResolveIndexedFilePath, () => inner.ResolveIndexedFilePath(target));
 
-    public ReadMeasurementSnapshot Snapshot() =>
-        new(Interlocked.Read(ref _callCount), Interlocked.Read(ref _elapsedTicks));
-
-    private T Measure<T>(Func<T> action)
+    public ReadMeasurementSnapshot Snapshot()
     {
+        ReadMeasurementSnapshot[] families = SnapshotByFamily();
+        return new(
+            families.Sum(static family => family.CallCount),
+            families.Sum(static family => family.ElapsedTicks));
+    }
+
+    internal ReadMeasurementSnapshot[] SnapshotByFamily()
+    {
+        var snapshot = new ReadMeasurementSnapshot[_callCounts.Length];
+        for (int index = 0; index < snapshot.Length; index++)
+        {
+            snapshot[index] = new ReadMeasurementSnapshot(
+                Interlocked.Read(ref _callCounts[index]),
+                Interlocked.Read(ref _elapsedTicks[index]));
+        }
+        return snapshot;
+    }
+
+    private T Measure<T>(SymbolLookupMethodFamily family, Func<T> action)
+    {
+        int index = (int)family;
         long startedAt = Stopwatch.GetTimestamp();
         try
         {
@@ -101,8 +230,8 @@ internal sealed class MeasuredSymbolLookupIndex(ISymbolLookupIndex inner) : ISym
         }
         finally
         {
-            Interlocked.Increment(ref _callCount);
-            Interlocked.Add(ref _elapsedTicks, Stopwatch.GetTimestamp() - startedAt);
+            Interlocked.Increment(ref _callCounts[index]);
+            Interlocked.Add(ref _elapsedTicks[index], Stopwatch.GetTimestamp() - startedAt);
         }
     }
 }

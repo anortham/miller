@@ -32,6 +32,7 @@ public sealed partial class ContextTool
     private readonly ISemanticTextArm? _semanticArm;
     private readonly VectorSidecar? _semanticSidecar;
     private readonly Action<string>? _phaseObserver;
+    private readonly Action<ContextLookupPhaseObservation>? _lookupPhaseObserver;
 
     /// <summary>Construct a lexical-only context tool over the freshness-aware workspace provider.</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
@@ -55,13 +56,15 @@ public sealed partial class ContextTool
         IWorkspaceIndexProvider workspaceProvider,
         ISemanticTextArm? semanticArm,
         VectorSidecar? semanticSidecar,
-        Action<string>? phaseObserver = null)
+        Action<string>? phaseObserver = null,
+        Action<ContextLookupPhaseObservation>? lookupPhaseObserver = null)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
         _workspaceProvider = workspaceProvider;
         _semanticArm = semanticArm;
         _semanticSidecar = semanticSidecar;
         _phaseObserver = phaseObserver;
+        _lookupPhaseObserver = lookupPhaseObserver;
     }
 
     public string Context(
@@ -200,7 +203,11 @@ public sealed partial class ContextTool
                             json,
                             out selectedCount, out candidatesExamined,
                             cancellationToken,
-                            phase => CompletePhase(phase, telemetry, ref phaseStart));
+                            phase => CompletePhase(
+                                phase,
+                                telemetry,
+                                ref phaseStart,
+                                context.ReadTelemetry));
                         break;
                     case ReferenceMode.Usage:
                         output = RunReferenceAwareActionableWithCancellation(
@@ -326,13 +333,41 @@ public sealed partial class ContextTool
         }
     }
 
-    private void CompletePhase(string phase, TelemetryScope? telemetry, ref long phaseStart)
+    private void CompletePhase(
+        string phase,
+        TelemetryScope? telemetry,
+        ref long phaseStart,
+        ReadPhaseTelemetry? readTelemetry = null)
     {
         long elapsedMs = Math.Max(0, (long)Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
         phaseStart = Stopwatch.GetTimestamp();
         telemetry?.SetMetadata("context_phase", phase);
         telemetry?.SetMetadata("context_phase_elapsed_ms", elapsedMs);
         _phaseObserver?.Invoke(phase);
+        ContextLookupPhase? lookupPhase = phase switch
+        {
+            "query_retrieval" => ContextLookupPhase.QueryRetrieval,
+            "term_retrieval" => ContextLookupPhase.TermRetrieval,
+            "anchor_resolution" => ContextLookupPhase.AnchorResolution,
+            "graph_reach" => ContextLookupPhase.GraphReach,
+            "symbol_hydration" => ContextLookupPhase.SymbolHydration,
+            "file_neighbours" => ContextLookupPhase.FileNeighbours,
+            "candidate_ordering" => ContextLookupPhase.CandidateOrdering,
+            _ => null,
+        };
+        if (lookupPhase is { } completedLookupPhase && readTelemetry is not null)
+        {
+            ContextLookupPhaseObservation observation =
+                readTelemetry.CompleteLookupPhase(completedLookupPhase);
+            _lookupPhaseObserver?.Invoke(observation);
+            Serilog.Log.Information(
+                "Context lookup phase {ContextLookupPhase} completed with delta {@ContextLookupDelta} " +
+                "and total {@ContextLookupTotal} for cid {CorrelationId}",
+                completedLookupPhase,
+                observation.Delta,
+                observation.Total,
+                telemetry?.CorrelationId ?? "unmeasured");
+        }
         Serilog.Log.Information(
             "Context phase {ContextPhase} completed in {ContextPhaseElapsedMs} ms for cid {CorrelationId}",
             phase,
