@@ -62,3 +62,11 @@
 - Exact round-2 tests passed 2/2 in 119 ms.
 - Assigned class ceiling passed 49/49 in 569 ms (`FamilyStoreReadSessionTests` plus `SqliteSymbolGraphIndexTests`, Release, no build on the already compiled tree).
 - `git diff --check` passed. No rebuilt-host/context dogfood was run; lead owns product acceptance.
+
+## Round 3: rebuilt acceptance miss and isolated reverse-name evidence
+
+- Rebuilt acceptance on `85c51f81` still timed out at 7,007.282 ms in `graph_reach`, with 7.42 GB logical reads, 4.95 GB logical writes, and 112.7 MB physical writes. The indexed family resolution capability remains valid but is not sufficient by itself.
+- The one permitted isolated real family-session unresolved-name reverse arm used the same pinned family view and explicit `WorkspaceIndexProvider` symbol id (`a6a374fb8554e68e3a7a0b217670d32a`). A five-second outer bound protected only execution after a separate clean compile.
+- The persisted plan is `/tmp/miller-name-reverse-85c51f81.txt`. It materializes the `identifier_resolutions` compatibility union, scans the resolution base, and builds `AUTOMATIC COVERING INDEX (identifier_id=?)` for the left join. That plan shape is inefficient, but the isolated caller completed in 142 ms and returned zero rows, so it does not explain the seven-second wall miss for this exact payload.
+- No production telemetry, seam, or query change was added because the required hypothesis was rejected. The opt-in real-store diagnostic source was removed after collecting evidence.
+- Next isolated arm: unresolved-name forward. It is the next unmeasured fallback arm after rejecting unresolved-name reverse; this is a diagnostic selection, not a root-cause claim. Do not rerun the combined context query until that arm is isolated or main-frontier phase telemetry changes.
