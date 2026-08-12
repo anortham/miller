@@ -103,3 +103,13 @@
 - Exact GREEN: 2/2 in 112 ms. The graph cancellation test observes only relationship forward/reverse and unresolved-name forward before the observer throws, with no later family/supplemental/completion events. The provider construction test observes the full forward sequence through the measured family graph.
 - `SqliteSymbolGraphIndexTests` passed 20/20 in 575 ms. `dotnet build Miller.slnx -c Release --no-restore` passed in 9.40 s with zero warnings/errors. ContextTool was not modified, so its phase suite was not rerun.
 - No candidate process/context acceptance was run; lead owns the one correlated replay.
+
+## Round 7: family resolution arm instrumentation
+
+- Rebuilt `921ccdff` timed out at 7,006.9 ms. Correlated completed phases were relationship forward 519 ms/1 row, relationship reverse 512 ms/1 row, unresolved-name forward 1,432 ms/0 rows, and unresolved-name reverse 1,973 ms/65 rows during shutdown; no `family_resolution` completion followed. This selects the internal family resolution operation without yet selecting one of its arms.
+- Query behavior remains unchanged. The internal `IFamilyGraphResolutionReader.ReadResolutionEdges` callback now receives the existing graph statement observer; no Server/Serilog dependency enters the read session and no public interface changes.
+- Eight fixed completion phases are emitted after each actual reader closes: `identifier_base_forward`, `identifier_delta_forward`, `pending_base_forward`, `pending_delta_forward`, `identifier_base_reverse`, `identifier_delta_reverse`, `pending_base_reverse`, and `pending_delta_reverse`. Each carries rows and elapsed time through the already correlated provider boundary.
+- RED: the exact family graph test failed to compile because all eight fixed phase enum values were absent (`CS0117`).
+- GREEN: `FamilyResolutionObserverReportsOnlyCompletedArmsBeforeCancellation` passed 1/1 in 90 ms. It stops after completed `pending_base_forward` and observes only the four prior main frontier phases plus identifier base/delta forward and pending base forward; no pending delta, reverse, outer resolution, supplemental, or completion event is emitted.
+- `FamilyStoreReadSessionTests` plus `SqliteSymbolGraphIndexTests` passed 52/52 in 554 ms. Release build passed in 9.33 s with zero warnings/errors.
+- No candidate process/context call was run; lead owns the one replay that will select the first incomplete family resolution arm.

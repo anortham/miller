@@ -6,7 +6,8 @@ internal interface IFamilyGraphResolutionReader
 {
     IReadOnlyList<FamilyGraphResolutionEdge> ReadResolutionEdges(
         IReadOnlyList<string> candidateIds,
-        Direction direction);
+        Direction direction,
+        Action<GraphStatementObservation>? statementObserver);
 }
 
 internal sealed record FamilyGraphResolutionEdge(

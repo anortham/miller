@@ -596,6 +596,60 @@ public sealed class FamilyStoreReadSessionTests
                 1));
     }
 
+    [Fact]
+    public void FamilyResolutionObserverReportsOnlyCompletedArmsBeforeCancellation()
+    {
+        const string targetId = "63000000000000000000000000000001";
+        const string identifierCallerId = "63000000000000000000000000000002";
+        const string pendingCallerId = "63000000000000000000000000000003";
+        using StoreFixture fixture = StoreFixture.Create();
+        InstallResolutionBase(
+            fixture,
+            "base-resolution-observer",
+            "manifest-current",
+            baseVersionId: 2,
+            baseTargetSymbolId: targetId,
+            deltaTargetSymbolId: null,
+            sequence: 3,
+            deltaGeneration: 1,
+            includeGraphRows: true);
+        InstallGraphRows(fixture, targetId, identifierCallerId, pendingCallerId);
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        using var graph = new SqliteSymbolGraphIndex(session);
+        var observations = new List<GraphStatementObservation>();
+        graph.StatementObserver = observation =>
+        {
+            observations.Add(observation);
+            if (observation.Phase == GraphStatementPhase.PendingBaseForward)
+                throw new OperationCanceledException("stop after the completed pending base forward arm");
+        };
+
+        Assert.Throws<OperationCanceledException>(() =>
+            graph.Reach([targetId], 1, 20, Direction.Both));
+
+        Assert.Equal(
+            [
+                GraphStatementPhase.RelationshipForward,
+                GraphStatementPhase.RelationshipReverse,
+                GraphStatementPhase.UnresolvedNameForward,
+                GraphStatementPhase.UnresolvedNameReverse,
+                GraphStatementPhase.IdentifierBaseForward,
+                GraphStatementPhase.IdentifierDeltaForward,
+                GraphStatementPhase.PendingBaseForward,
+            ],
+            observations.Select(static observation => observation.Phase));
+        Assert.DoesNotContain(
+            observations,
+            static observation => observation.Phase is GraphStatementPhase.PendingDeltaForward
+                or GraphStatementPhase.IdentifierBaseReverse
+                or GraphStatementPhase.IdentifierDeltaReverse
+                or GraphStatementPhase.PendingBaseReverse
+                or GraphStatementPhase.PendingDeltaReverse
+                or GraphStatementPhase.FamilyResolution
+                or GraphStatementPhase.Supplemental
+                or GraphStatementPhase.Completion);
+    }
+
     private static long ReadStoreLogSequence(StoreFixture fixture)
     {
         using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);

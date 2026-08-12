@@ -351,7 +351,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         if (_readSession is IFamilyGraphResolutionReader resolutionReader)
         {
             IReadOnlyList<FamilyGraphResolutionEdge> resolutionEdges =
-                resolutionReader.ReadResolutionEdges(missingIds, direction);
+                resolutionReader.ReadResolutionEdges(missingIds, direction, StatementObserver);
             resolutionRows = resolutionEdges.Count;
             foreach (FamilyGraphResolutionEdge edge in resolutionEdges)
             {
@@ -963,6 +963,14 @@ internal enum GraphStatementPhase
     RelationshipReverse,
     UnresolvedNameForward,
     UnresolvedNameReverse,
+    IdentifierBaseForward,
+    IdentifierDeltaForward,
+    PendingBaseForward,
+    PendingDeltaForward,
+    IdentifierBaseReverse,
+    IdentifierDeltaReverse,
+    PendingBaseReverse,
+    PendingDeltaReverse,
     FamilyResolution,
     Supplemental,
     Completion,

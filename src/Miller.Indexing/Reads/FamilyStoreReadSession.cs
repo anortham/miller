@@ -206,7 +206,8 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraph
 
     IReadOnlyList<FamilyGraphResolutionEdge> IFamilyGraphResolutionReader.ReadResolutionEdges(
         IReadOnlyList<string> candidateIds,
-        Direction direction)
+        Direction direction,
+        Action<GraphStatementObservation>? statementObserver)
     {
         if (candidateIds.Count == 0 || Visibility.ResolutionState != "exact")
             return [];
@@ -222,17 +223,33 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraph
             var plans = new List<string>();
             if (direction is Direction.Forward or Direction.Both)
             {
-                ReadGraphResolutionArm(candidates, IdentifierBaseForwardSql, edges, plans);
-                ReadGraphResolutionArm(candidates, IdentifierDeltaForwardSql, edges, plans);
-                ReadGraphResolutionArm(candidates, PendingBaseForwardSql, edges, plans);
-                ReadGraphResolutionArm(candidates, PendingDeltaForwardSql, edges, plans);
+                ReadGraphResolutionArm(
+                    candidates, IdentifierBaseForwardSql, edges, plans,
+                    GraphStatementPhase.IdentifierBaseForward, statementObserver);
+                ReadGraphResolutionArm(
+                    candidates, IdentifierDeltaForwardSql, edges, plans,
+                    GraphStatementPhase.IdentifierDeltaForward, statementObserver);
+                ReadGraphResolutionArm(
+                    candidates, PendingBaseForwardSql, edges, plans,
+                    GraphStatementPhase.PendingBaseForward, statementObserver);
+                ReadGraphResolutionArm(
+                    candidates, PendingDeltaForwardSql, edges, plans,
+                    GraphStatementPhase.PendingDeltaForward, statementObserver);
             }
             if (direction is Direction.Reverse or Direction.Both)
             {
-                ReadGraphResolutionArm(candidates, IdentifierBaseReverseSql, edges, plans);
-                ReadGraphResolutionArm(candidates, IdentifierDeltaReverseSql, edges, plans);
-                ReadGraphResolutionArm(candidates, PendingBaseReverseSql, edges, plans);
-                ReadGraphResolutionArm(candidates, PendingDeltaReverseSql, edges, plans);
+                ReadGraphResolutionArm(
+                    candidates, IdentifierBaseReverseSql, edges, plans,
+                    GraphStatementPhase.IdentifierBaseReverse, statementObserver);
+                ReadGraphResolutionArm(
+                    candidates, IdentifierDeltaReverseSql, edges, plans,
+                    GraphStatementPhase.IdentifierDeltaReverse, statementObserver);
+                ReadGraphResolutionArm(
+                    candidates, PendingBaseReverseSql, edges, plans,
+                    GraphStatementPhase.PendingBaseReverse, statementObserver);
+                ReadGraphResolutionArm(
+                    candidates, PendingDeltaReverseSql, edges, plans,
+                    GraphStatementPhase.PendingDeltaReverse, statementObserver);
             }
             LastGraphResolutionQueryPlan = plans;
             return edges;
@@ -264,7 +281,9 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraph
         IReadOnlyList<(string Id, long VersionId)> candidates,
         string sql,
         List<FamilyGraphResolutionEdge> edges,
-        List<string> plans)
+        List<string> plans,
+        GraphStatementPhase phase,
+        Action<GraphStatementObservation>? statementObserver)
     {
         string values = string.Join(", ", Enumerable.Range(0, candidates.Count).Select(index => $"($id{index},$version{index})"));
         using SqliteCommand command = _connection.CreateCommand();
@@ -277,17 +296,26 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraph
         if (CaptureGraphResolutionQueryPlan)
             plans.AddRange(ReadQueryPlan(command));
 
-        using SqliteDataReader reader = command.ExecuteReader();
-        while (reader.Read())
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        int rows = 0;
+        using (SqliteDataReader reader = command.ExecuteReader())
         {
-            edges.Add(new FamilyGraphResolutionEdge(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.GetString(2),
-                reader.GetString(3),
-                reader.GetDouble(4),
-                reader.GetString(5)));
+            while (reader.Read())
+            {
+                rows++;
+                edges.Add(new FamilyGraphResolutionEdge(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.GetDouble(4),
+                    reader.GetString(5)));
+            }
         }
+        statementObserver?.Invoke(new GraphStatementObservation(
+            phase,
+            rows,
+            System.Diagnostics.Stopwatch.GetElapsedTime(started)));
     }
 
     private static IReadOnlyList<string> ReadQueryPlan(SqliteCommand command)
