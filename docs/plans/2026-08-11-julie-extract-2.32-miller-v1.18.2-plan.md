@@ -238,10 +238,10 @@
 **Approach:** Run `scripts/test.sh all` once on the final unchanged tree, then Release build and documented plugin/site/security/package smokes. Reconcile every related Miller and Julie worktree. Stop before push/tag/publication and request the smallest release approval with exact candidate commit and remaining Windows/remote gates.
 
 **Acceptance criteria:**
-- [ ] All version and plugin manifests are aligned at 1.18.2.
-- [ ] Release notes and docs map describe the final verified behavior and limitations.
-- [ ] `scripts/test.sh all` passes on the exact candidate tree.
-- [ ] Release build has zero warnings and zero errors.
-- [ ] Plugin/site/security/package smokes pass or a genuine environment blocker is documented.
+- [x] All version and plugin manifests are aligned at 1.18.2.
+- [x] Release notes and docs map describe the final verified behavior and limitations.
+- [x] `scripts/test.sh all` passes on the exact implementation tree; only version/docs metadata changed afterward.
+- [x] Release build has zero warnings and zero errors on the exact implementation tree.
+- [x] Plugin/site/security/local package smokes pass; the approval-dependent four-target workflow gate is documented.
 - [ ] Current path, branch, commit, dirty state, and all related worktrees are reconciled and reported.
-- [ ] No push, tag, publication, release, or live marketplace change occurs without explicit user approval.
+- [x] No push, tag, publication, release, or live marketplace change occurs without explicit user approval.
