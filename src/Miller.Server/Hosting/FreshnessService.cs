@@ -228,6 +228,7 @@ public sealed class FreshnessService : BackgroundService
             "Freshness poll: observed revision {Observed} (artifact {Artifact}) vs built revision {Built}.",
             latest, artifactId, built);
 
+        FreshnessSwapReason reason;
         bool swapped = storeEnabled
             ? FreshnessPoller.PollOnceLazy(holder, latest, artifactId, () =>
             {
@@ -246,7 +247,7 @@ public sealed class FreshnessService : BackgroundService
                         indexIdentity),
                     facts,
                     indexIdentity);
-            })
+            }, out reason)
             : FreshnessPoller.PollOnce(holder, latest, artifactId, () =>
             {
                 using WorkspaceReadHandle reader = _openReadSession(
@@ -257,9 +258,20 @@ public sealed class FreshnessService : BackgroundService
                 return new FreshnessRebuildResult(
                     RepositoryIndexLoader.LoadSession(reader),
                     reader.Snapshot.IndexIdentity);
-            });
-        if (swapped)
-            _logger.LogInformation("Freshness: rebuilt + swapped index to revision {Revision}.", latest);
+            }, out reason);
+
+        // A revision advance is the routine converge step: every process polls twice a second, so a healthy
+        // writer made this the single highest-volume line in the log (41% of one day's file at 110 lines/minute
+        // across two processes) while saying nothing an operator can act on. It belongs at Debug, alongside the
+        // observed-vs-built line above that explains it. A REPLACED artifact stays at Information — a full rebuild
+        // was promoted underneath this reader, which is rare and is the signal the revision counter cannot carry.
+        // Neither line claims a rebuild: the store path swaps a deferred factory (IndexHolder.SwapLazy) and
+        // materializes on the next read, so only the legacy path rebuilt anything here.
+        if (reason == FreshnessSwapReason.ArtifactReplaced)
+            _logger.LogInformation(
+                "Freshness: artifact replaced; swapped index view to revision {Revision}.", latest);
+        else if (swapped)
+            _logger.LogDebug("Freshness: swapped index view to revision {Revision}.", latest);
         return new PollResult(swapped, latest);
     }
 

@@ -12,6 +12,18 @@ public readonly record struct LazyFreshnessRebuildResult(
     string? ArtifactId);
 
 /// <summary>
+/// Why a poll swapped. Callers log the two cases at different levels: a revision advance is the routine
+/// converge step a healthy writer produces every few hundred milliseconds, while a replaced artifact means a
+/// full rebuild was promoted underneath this reader — rare, and the one case worth seeing at Information.
+/// </summary>
+public enum FreshnessSwapReason
+{
+    None,
+    RevisionAdvanced,
+    ArtifactReplaced,
+}
+
+/// <summary>
 /// The pure poll-then-swap decision behind <see cref="FreshnessService"/> (m3-design decision-2/-5): the
 /// testable seam with no SQLite, no timer, and no subprocess. Given the index holder, the latest persisted
 /// revision and artifact identity (read by the service from <c>extraction_revisions</c> /
@@ -54,7 +66,19 @@ public static class FreshnessPoller
         IndexHolder holder,
         long latestRevision,
         string? latestArtifactId,
-        Func<FreshnessRebuildResult> rebuild)
+        Func<FreshnessRebuildResult> rebuild) =>
+        PollOnce(holder, latestRevision, latestArtifactId, rebuild, out _);
+
+    /// <summary>
+    /// As <see cref="PollOnce(IndexHolder,long,string?,Func{FreshnessRebuildResult})"/>, also reporting WHY the
+    /// swap happened so a caller can log the routine revision advance separately from a promoted rebuild.
+    /// </summary>
+    public static bool PollOnce(
+        IndexHolder holder,
+        long latestRevision,
+        string? latestArtifactId,
+        Func<FreshnessRebuildResult> rebuild,
+        out FreshnessSwapReason reason)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(rebuild);
@@ -63,8 +87,12 @@ public static class FreshnessPoller
         bool artifactReplaced = latestArtifactId is not null && builtArtifactId is not null
             && !string.Equals(latestArtifactId, builtArtifactId, StringComparison.Ordinal);
         if (!artifactReplaced && latestRevision <= holder.BuiltRevision)
+        {
+            reason = FreshnessSwapReason.None;
             return false;
+        }
 
+        reason = artifactReplaced ? FreshnessSwapReason.ArtifactReplaced : FreshnessSwapReason.RevisionAdvanced;
         FreshnessRebuildResult rebuilt = rebuild();
         holder.Swap(
             rebuilt.Index,
@@ -84,7 +112,19 @@ public static class FreshnessPoller
         IndexHolder holder,
         long latestRevision,
         string? latestArtifactId,
-        Func<LazyFreshnessRebuildResult> rebuild)
+        Func<LazyFreshnessRebuildResult> rebuild) =>
+        PollOnceLazy(holder, latestRevision, latestArtifactId, rebuild, out _);
+
+    /// <summary>
+    /// As <see cref="PollOnceLazy(IndexHolder,long,string?,Func{LazyFreshnessRebuildResult})"/>, also reporting
+    /// WHY the swap happened so a caller can log the routine revision advance separately from a promoted rebuild.
+    /// </summary>
+    public static bool PollOnceLazy(
+        IndexHolder holder,
+        long latestRevision,
+        string? latestArtifactId,
+        Func<LazyFreshnessRebuildResult> rebuild,
+        out FreshnessSwapReason reason)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(rebuild);
@@ -93,8 +133,12 @@ public static class FreshnessPoller
         bool artifactReplaced = latestArtifactId is not null && builtArtifactId is not null
             && !string.Equals(latestArtifactId, builtArtifactId, StringComparison.Ordinal);
         if (!artifactReplaced && latestRevision <= holder.BuiltRevision)
+        {
+            reason = FreshnessSwapReason.None;
             return false;
+        }
 
+        reason = artifactReplaced ? FreshnessSwapReason.ArtifactReplaced : FreshnessSwapReason.RevisionAdvanced;
         LazyFreshnessRebuildResult rebuilt = rebuild();
         holder.SwapLazy(
             rebuilt.IndexFactory,
