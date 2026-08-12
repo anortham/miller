@@ -209,6 +209,7 @@ public sealed class WorkspaceIndexProvider
     /// </summary>
     private WorkspaceReadContext ResolveCurrent()
     {
+        long resolveStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         WorkspaceReadHandle readSession = OpenCurrentReadSession();
         try
         {
@@ -221,16 +222,21 @@ public sealed class WorkspaceIndexProvider
             ISymbolLookupIndex index = familyStore
                 ? ResolveFamilyStoreLookup(_currentWorkspace.WorkspaceId, readSession)
                 : holderIndex!;
-            ISymbolGraphReachability graph = familyStore
+            ISymbolGraphReachability innerGraph = familyStore
                 ? new SqliteSymbolGraphIndex(readSession)
                 : holderIndex!.Graph;
+            var measuredGraph = familyStore ? new MeasuredSymbolGraphReachability(innerGraph) : null;
+            ISymbolGraphReachability graph = measuredGraph ?? innerGraph;
             var bridgeGraph = new Lazy<BridgeGraph>(
                 familyStore
                     ? () => _loadSessionBridgeGraph(readSession)
                     : () => holderIndex!.BridgeGraph,
                 LazyThreadSafetyMode.ExecutionAndPublication);
             var resolver = new SmartTargetResolver(index);
-            return new WorkspaceReadContext(
+            ReadPhaseTelemetry? readTelemetry = familyStore
+                ? ReadTelemetry((MeasuredSymbolLookupIndex)index, measuredGraph)
+                : null;
+            var context = new WorkspaceReadContext(
                 index,
                 graph,
                 bridgeGraph,
@@ -243,7 +249,12 @@ public sealed class WorkspaceIndexProvider
                 "current",
                 WarningText: null,
                 DisplayId: CurrentDisplayId(),
-                IndexLevel: readSession.Snapshot.IndexLevel);
+                IndexLevel: readSession.Snapshot.IndexLevel)
+            {
+                ReadTelemetry = readTelemetry,
+            };
+            readTelemetry?.CompleteResolve(resolveStartedAt);
+            return context;
         }
         catch
         {
@@ -323,6 +334,7 @@ public sealed class WorkspaceIndexProvider
     /// </summary>
     private WorkspaceSymbolReadContext ResolveCurrentSymbolRead()
     {
+        long resolveStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         WorkspaceReadHandle readSession = OpenCurrentReadSession();
         try
         {
@@ -334,7 +346,10 @@ public sealed class WorkspaceIndexProvider
             ISymbolLookupIndex index = familyStore
                 ? ResolveFamilyStoreLookup(_currentWorkspace.WorkspaceId, readSession)
                 : legacySnapshot!.Value.Index;
-            return new WorkspaceSymbolReadContext(
+            ReadPhaseTelemetry? readTelemetry = familyStore
+                ? ReadTelemetry((MeasuredSymbolLookupIndex)index, graph: null)
+                : null;
+            var context = new WorkspaceSymbolReadContext(
                 index,
                 readSession,
                 _currentWorkspace.WorkspaceId,
@@ -344,7 +359,12 @@ public sealed class WorkspaceIndexProvider
                 "current",
                 WarningText: null,
                 DisplayId: CurrentDisplayId(),
-                IndexLevel: readSession.Snapshot.IndexLevel);
+                IndexLevel: readSession.Snapshot.IndexLevel)
+            {
+                ReadTelemetry = readTelemetry,
+            };
+            readTelemetry?.CompleteResolve(resolveStartedAt);
+            return context;
         }
         catch
         {
@@ -372,12 +392,14 @@ public sealed class WorkspaceIndexProvider
                 return GetOrAddSymbolSearchCache(
                     storeKey,
                     () => new CachedSymbolSearch(
-                        _sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot),
+                        MeasureFamilyLookup(_sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot)),
                         IsSidecar: true)).Index;
             }
             return GetOrAddSymbolSearchCache(
                 storeKey,
-                () => new CachedSymbolSearch(_loadSessionSymbolSearch(readSession), IsSidecar: false)).Index;
+                () => new CachedSymbolSearch(
+                    MeasureFamilyLookup(_loadSessionSymbolSearch(readSession)),
+                    IsSidecar: false)).Index;
         }
 
         MillerRepositoryIndex legacyIndex = holderIndex
@@ -394,6 +416,7 @@ public sealed class WorkspaceIndexProvider
 
     private WorkspaceReadContext ResolveRegistered(string workspaceId, bool ensureFresh)
     {
+        long resolveStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
@@ -409,9 +432,11 @@ public sealed class WorkspaceIndexProvider
             ISymbolLookupIndex index = familyStore
                 ? ResolveFamilyStoreLookup(row.WorkspaceId, readSession)
                 : cached!.Index;
-            ISymbolGraphReachability graph = familyStore
+            ISymbolGraphReachability innerGraph = familyStore
                 ? new SqliteSymbolGraphIndex(readSession)
                 : cached!.Index.Graph;
+            var measuredGraph = familyStore ? new MeasuredSymbolGraphReachability(innerGraph) : null;
+            ISymbolGraphReachability graph = measuredGraph ?? innerGraph;
             var bridgeGraph = new Lazy<BridgeGraph>(
                 familyStore
                     ? () => _loadSessionBridgeGraph(readSession)
@@ -420,7 +445,10 @@ public sealed class WorkspaceIndexProvider
             SmartTargetResolver resolver = familyStore
                 ? new SmartTargetResolver(index)
                 : cached!.Resolver;
-            return new WorkspaceReadContext(
+            ReadPhaseTelemetry? readTelemetry = familyStore
+                ? ReadTelemetry((MeasuredSymbolLookupIndex)index, measuredGraph)
+                : null;
+            var context = new WorkspaceReadContext(
                 index,
                 graph,
                 bridgeGraph,
@@ -435,7 +463,12 @@ public sealed class WorkspaceIndexProvider
                 WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
                 WorkspaceFreshnessView.WarningTextFor(refreshResult),
                 row.DisplayId,
-                IndexLevel: readSession.Snapshot.IndexLevel);
+                IndexLevel: readSession.Snapshot.IndexLevel)
+            {
+                ReadTelemetry = readTelemetry,
+            };
+            readTelemetry?.CompleteResolve(resolveStartedAt);
+            return context;
         }
         catch
         {
@@ -454,13 +487,13 @@ public sealed class WorkspaceIndexProvider
             return GetOrAddSymbolSearchCache(
                 key,
                 () => new CachedSymbolSearch(
-                    _openStoreSymbolSearch(readSession),
+                    MeasureFamilyLookup(_openStoreSymbolSearch(readSession)),
                     IsSidecar: true)).Index;
         }
 
         return GetOrAddSymbolReadCache(
             key,
-            () => new CachedSymbolRead(_loadSessionSymbolSearch(readSession))).Index;
+            () => new CachedSymbolRead(MeasureFamilyLookup(_loadSessionSymbolSearch(readSession)))).Index;
     }
 
     private WorkspaceSymbolSearchContext ResolveRegisteredSymbolSearch(string workspaceId, bool ensureFresh)
@@ -485,14 +518,16 @@ public sealed class WorkspaceIndexProvider
                 cached = GetOrAddSymbolSearchCache(
                     key,
                     () => new CachedSymbolSearch(
-                        _sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot),
+                        MeasureFamilyLookup(_sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot)),
                         IsSidecar: true));
             }
             else if (familyStore)
             {
                 cached = GetOrAddSymbolSearchCache(
                     key,
-                    () => new CachedSymbolSearch(_loadSessionSymbolSearch(readSession), IsSidecar: false));
+                    () => new CachedSymbolSearch(
+                        MeasureFamilyLookup(_loadSessionSymbolSearch(readSession)),
+                        IsSidecar: false));
             }
             else
             {
@@ -522,6 +557,7 @@ public sealed class WorkspaceIndexProvider
 
     private WorkspaceSymbolReadContext ResolveRegisteredSymbolRead(string workspaceId, bool ensureFresh)
     {
+        long resolveStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
@@ -536,7 +572,10 @@ public sealed class WorkspaceIndexProvider
                 : GetOrAddSymbolReadCache(
                     KeyFor(row.WorkspaceId, row.IndexDbPath, revision),
                     () => new CachedSymbolRead(_loadSymbolSearch(row.IndexDbPath))).Index;
-            return new WorkspaceSymbolReadContext(
+            ReadPhaseTelemetry? readTelemetry = familyStore
+                ? ReadTelemetry((MeasuredSymbolLookupIndex)index, graph: null)
+                : null;
+            var context = new WorkspaceSymbolReadContext(
                 index,
                 readSession,
                 row.WorkspaceId,
@@ -549,7 +588,12 @@ public sealed class WorkspaceIndexProvider
                 WorkspaceFreshnessView.WarningTextFor(refreshResult),
                 row.DisplayId,
                 IsCurrent: false,
-                IndexLevel: readSession.Snapshot.IndexLevel);
+                IndexLevel: readSession.Snapshot.IndexLevel)
+            {
+                ReadTelemetry = readTelemetry,
+            };
+            readTelemetry?.CompleteResolve(resolveStartedAt);
+            return context;
         }
         catch
         {
@@ -1350,6 +1394,31 @@ public sealed class WorkspaceIndexProvider
                 ?? throw new InvalidOperationException("The family-store snapshot has no store_log sequence.")
             : legacyRevision;
 
+    internal WorkspaceIndexProviderCacheSnapshot CacheSnapshot()
+    {
+        lock (_cacheGate)
+        {
+            return new WorkspaceIndexProviderCacheSnapshot(
+                _cache.Count,
+                _symbolSearchCache.Count,
+                _symbolReadCache.Count,
+                _contentSearchCache.Count,
+                _textContentSearchCache.Count,
+                _regionSearchCache.Count);
+        }
+    }
+
+    private ReadPhaseTelemetry ReadTelemetry(
+        MeasuredSymbolLookupIndex lookup,
+        MeasuredSymbolGraphReachability? graph)
+    {
+        WorkspaceIndexProviderCacheSnapshot cache = CacheSnapshot();
+        return new ReadPhaseTelemetry(lookup, graph, cache.TotalEntries);
+    }
+
+    private static MeasuredSymbolLookupIndex MeasureFamilyLookup(ISymbolLookupIndex index) =>
+        index as MeasuredSymbolLookupIndex ?? new MeasuredSymbolLookupIndex(index);
+
     private sealed record RegisteredWorkspaceState(WorkspaceRegistryRow Row, WorkspaceRefreshResult? RefreshResult);
 
     private sealed record CachedIndex(MillerRepositoryIndex Index, SmartTargetResolver Resolver);
@@ -1363,4 +1432,21 @@ public sealed class WorkspaceIndexProvider
     private sealed record CachedTextContentSearch(ITextContentSearchIndex Index);
 
     private sealed record CachedRegionSearch(IRegionSearchIndex Index);
+}
+
+internal readonly record struct WorkspaceIndexProviderCacheSnapshot(
+    int RepositoryEntries,
+    int SymbolSearchEntries,
+    int SymbolReadEntries,
+    int ContentSearchEntries,
+    int TextContentSearchEntries,
+    int RegionSearchEntries)
+{
+    public int TotalEntries =>
+        RepositoryEntries +
+        SymbolSearchEntries +
+        SymbolReadEntries +
+        ContentSearchEntries +
+        TextContentSearchEntries +
+        RegionSearchEntries;
 }

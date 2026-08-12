@@ -25,6 +25,8 @@ public sealed record WorkspaceSymbolReadContext(
 {
     public WorkspaceReadSnapshot Snapshot => ReadSession.Snapshot;
 
+    internal ReadPhaseTelemetry? ReadTelemetry { get; init; }
+
     public void Dispose()
     {
         if (Snapshot.Mode == WorkspaceReadMode.FamilyStore)

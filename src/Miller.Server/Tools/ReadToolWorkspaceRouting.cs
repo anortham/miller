@@ -125,6 +125,7 @@ internal static class ReadToolWorkspaceRouting
     public static void ApplyTelemetry(TelemetryScope? telemetry, WorkspaceReadContext context)
     {
         ApplyTelemetry(telemetry, context.WorkspaceId, context.WorkspaceRoot, context.IndexFresh);
+        ApplyReadTelemetry(telemetry, context.ReadTelemetry);
     }
 
     public static void ApplyTelemetry(TelemetryScope? telemetry, WorkspaceArtifactContext context)
@@ -140,6 +141,7 @@ internal static class ReadToolWorkspaceRouting
     public static void ApplyTelemetry(TelemetryScope? telemetry, WorkspaceSymbolReadContext context)
     {
         ApplyTelemetry(telemetry, context.WorkspaceId, context.WorkspaceRoot, context.IndexFresh);
+        ApplyReadTelemetry(telemetry, context.ReadTelemetry);
     }
 
     public static void ApplyTelemetry(TelemetryScope? telemetry, WorkspaceContentSearchContext context)
@@ -167,6 +169,19 @@ internal static class ReadToolWorkspaceRouting
             telemetry.SetWorkspace(workspaceId, workspaceRoot);
 
         telemetry.IndexFresh = indexFresh;
+    }
+
+    private static void ApplyReadTelemetry(TelemetryScope? telemetry, ReadPhaseTelemetry? readTelemetry)
+    {
+        if (telemetry is null || readTelemetry is null)
+            return;
+
+        telemetry.SetMetadata("read_resolve_ms", readTelemetry.ResolveElapsedMilliseconds);
+        telemetry.SetMetadata("read_lookup_count", readTelemetry.LookupCallCount);
+        telemetry.SetMetadata("read_lookup_ms", readTelemetry.LookupElapsedMilliseconds);
+        telemetry.SetMetadata("read_graph_count", readTelemetry.GraphCallCount);
+        telemetry.SetMetadata("read_graph_ms", readTelemetry.GraphElapsedMilliseconds);
+        telemetry.SetMetadata("read_provider_cache_entries", readTelemetry.ProviderCacheEntries);
     }
 
     private static bool ShouldShowFreshness(bool? indexFresh, string freshnessStatus)

@@ -64,6 +64,8 @@ public sealed record WorkspaceReadContext(
 
     public WorkspaceReadSnapshot Snapshot => ReadSession.Snapshot;
 
+    internal ReadPhaseTelemetry? ReadTelemetry { get; init; }
+
     public void Dispose()
     {
         if (Snapshot.Mode == WorkspaceReadMode.FamilyStore)

@@ -8,6 +8,7 @@ using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
+using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -93,6 +94,145 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Single(inspect.Index.FindByName("TargetType"));
         Assert.Equal(WorkspaceReadMode.FamilyStore, artifact.Snapshot.Mode);
         Assert.Equal(0, holderLoads);
+    }
+
+    [Fact]
+    public void Resolve_CurrentFamilyStoreEmitsFixedReadPhaseTelemetry()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("current-store-telemetry");
+        var holder = new IndexHolder(
+            () => throw new InvalidOperationException("holder repository was not expected"),
+            builtRevision: 12,
+            documentCount: 1,
+            knownExtensionsCount: 1);
+        var provider = NewProvider(
+            holder,
+            CurrentWorkspaceAt(root, current.DbPath, "current-ws"),
+            registry,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(StoreSnapshot(root, "manifest-a"), target.DbPath)),
+            loadSessionSymbolSearch: session => SymbolSearchProjectionLoader.LoadSession(session));
+        using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "telemetry.db"), "current-ws", root);
+        using TelemetryScope scope = ledger.Measure("context", op: null);
+
+        using WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
+        Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.Empty(context.Graph.Reach(["missing"], 1, 10, Direction.Forward));
+        ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
+
+        using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
+        JsonElement rootElement = metadata.RootElement;
+        Assert.True(rootElement.GetProperty("read_resolve_ms").GetInt64() >= 0);
+        Assert.True(rootElement.GetProperty("read_lookup_count").GetInt64() > 0);
+        Assert.True(rootElement.GetProperty("read_lookup_ms").GetInt64() >= 0);
+        Assert.True(rootElement.GetProperty("read_graph_count").GetInt64() > 0);
+        Assert.True(rootElement.GetProperty("read_graph_ms").GetInt64() >= 0);
+        Assert.Equal(1, rootElement.GetProperty("read_provider_cache_entries").GetInt32());
+    }
+
+    [Fact]
+    public void RepeatedCurrentFamilyReadsKeepCachedIdentityAndReportOnlyTheirOwnLookupDelta()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("current-store-telemetry-delta");
+        var provider = NewProvider(
+            new IndexHolder(
+                () => throw new InvalidOperationException("holder repository was not expected"),
+                builtRevision: 12,
+                documentCount: 1,
+                knownExtensionsCount: 1),
+            CurrentWorkspaceAt(root, current.DbPath, "current-ws"),
+            registry,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(StoreSnapshot(root, "manifest-a"), target.DbPath)),
+            loadSessionSymbolSearch: session => SymbolSearchProjectionLoader.LoadSession(session));
+        using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "telemetry-delta.db"), "current-ws", root);
+        ISymbolLookupIndex firstIndex;
+
+        using (TelemetryScope firstScope = ledger.Measure("context", op: null))
+        using (WorkspaceReadContext first = provider.Resolve(workspaceId: null, ensureFresh: false))
+        {
+            firstIndex = first.Index;
+            Assert.Single(first.Index.FindByName("TargetType"));
+            ReadToolWorkspaceRouting.ApplyTelemetry(firstScope, first);
+            using JsonDocument metadata = JsonDocument.Parse(firstScope.MetadataJson);
+            Assert.Equal(1, metadata.RootElement.GetProperty("read_lookup_count").GetInt64());
+        }
+
+        using (TelemetryScope secondScope = ledger.Measure("context", op: null))
+        using (WorkspaceReadContext second = provider.Resolve(workspaceId: null, ensureFresh: false))
+        {
+            Assert.Same(firstIndex, second.Index);
+            Assert.Single(second.Index.FindByName("TargetType"));
+            ReadToolWorkspaceRouting.ApplyTelemetry(secondScope, second);
+            using JsonDocument metadata = JsonDocument.Parse(secondScope.MetadataJson);
+            Assert.Equal(1, metadata.RootElement.GetProperty("read_lookup_count").GetInt64());
+        }
+    }
+
+    [Fact]
+    public void RepeatedCurrentFamilyReadRoutesKeepOneBoundedLookupAndNoRepositoryOrGraphGeneration()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("current-store-repeated-reads");
+        int holderLoads = 0;
+        int lookupLoads = 0;
+        var holder = new IndexHolder(
+            () =>
+            {
+                holderLoads++;
+                throw new InvalidOperationException("holder repository was not expected");
+            },
+            builtRevision: 12,
+            documentCount: 1,
+            knownExtensionsCount: 1);
+        var provider = NewProvider(
+            holder,
+            CurrentWorkspaceAt(root, current.DbPath, "current-ws"),
+            registry,
+            sidecar: new SymbolSearchSidecar(enabled: true),
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(StoreSnapshot(root, "manifest-a"), target.DbPath)),
+            loadSessionSymbolSearch: _ =>
+                throw new InvalidOperationException("projection fallback was not expected"),
+            openStoreSymbolSearch: _ =>
+            {
+                lookupLoads++;
+                return SymbolSearchProjectionLoader.Load(target.DbPath);
+            });
+        ISymbolGraphReachability? priorGraph = null;
+
+        for (int iteration = 0; iteration < 32; iteration++)
+        {
+            for (int graphRoute = 0; graphRoute < 3; graphRoute++)
+            {
+                using WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
+                Assert.IsType<MeasuredSymbolGraphReachability>(context.Graph);
+                Assert.False(context.BridgeGraph.IsValueCreated);
+                if (priorGraph is not null)
+                    Assert.NotSame(priorGraph, context.Graph);
+                priorGraph = context.Graph;
+            }
+
+            using WorkspaceSymbolReadContext inspect =
+                provider.ResolveSymbolRead(workspaceId: null, ensureFresh: false);
+            Assert.Single(inspect.Index.FindByName("TargetType"));
+        }
+
+        WorkspaceIndexProviderCacheSnapshot cache = provider.CacheSnapshot();
+        Assert.Equal(0, holderLoads);
+        Assert.Equal(1, lookupLoads);
+        Assert.Equal(0, cache.RepositoryEntries);
+        Assert.Equal(1, cache.SymbolSearchEntries);
+        Assert.Equal(0, cache.SymbolReadEntries);
+        Assert.Equal(1, cache.TotalEntries);
     }
 
     [Fact]
