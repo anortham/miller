@@ -70,9 +70,23 @@ Implemented on `dabcddd7`, `1fa03ac9`, and `4f7ff626`:
 - Focused verification is green: 361/361 for the disk-backed read slice and 246/246 for lazy bootstrap/freshness.
   Real rebuilt-host latency and PSS remain release gates.
 
+Bounded read telemetry is implemented on `75e86c0a`:
+
+- Family read records carry real provider resolve elapsed time, lookup calls/time, graph calls/time, and bounded
+  provider-cache entries.
+- The generation-cached lookup decorator preserves the existing index identity; each context subtracts a captured
+  baseline so a second call reports only its own work. The graph decorator remains context-local.
+- No synthetic render timing was added because routing has no honest post-render boundary. Rendering will be
+  measured at the process/tool wall in dogfood unless a real internal seam proves necessary.
+- Exact cache/delta/no-growth tests passed 4/4 and the affected ceiling passed 456/456.
+
 ## Telemetry
 
-Existing tool telemetry gains internal phase timings for workspace resolve, symbol seed/lookup, graph traversal, source enrichment, semantic fusion, and render. Producer results gain bounded counters for candidate queries, candidate rows, cache hits/misses, phase rows, and materialization chunks. Telemetry must not add an MCP tool or materially change compact tool output.
+Existing tool telemetry gains measured provider resolve, symbol lookup, graph traversal, and bounded cache facts at
+the family-read boundary. Producer diagnostics gain bounded counters for candidate queries, candidate rows, phase
+rows, and materialization chunks. Add a phase only at a real timing boundary; do not emit a backend name as a fake
+phase or infer render time from work that ends before rendering. Telemetry must not add an MCP tool or materially
+change compact tool output.
 
 ## Windows/constrained validation
 

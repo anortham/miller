@@ -55,6 +55,7 @@
 | Task 1: Disk-backed family-store read context | None - serial | `src/Miller.Indexing/SqliteSymbolGraphIndex.cs`; `src/Miller.Server/Workspaces/WorkspaceReadContext.cs`; `src/Miller.Server/Workspaces/WorkspaceIndexProvider.cs`; `src/Miller.Server/Tools/ContextTool.cs`; `src/Miller.Server/Tools/ImpactTool.cs`; `src/Miller.Server/Tools/TraceTool.cs`; `tests/Miller.Tests/Indexing/SqliteSymbolGraphIndexTests.cs`; `tests/Miller.Tests/Server/WorkspaceIndexProviderTests.cs`; directly required context/impact/trace tests | Yes | Task 2 measures and instruments the exact path established by Task 1.
 | Task 2: Lazy family-store bootstrap and freshness | None - serial | `src/Miller.Indexing/IndexHolder.cs`; `src/Miller.Server/Hosting/FreshnessService.cs`; `src/Miller.Server/Hosting/FreshnessPoller.cs`; `src/Miller.Server/Hosting/IndexBootstrapService.cs`; `src/Miller.Server/Workspaces/WorkspaceIndexProvider.cs`; `src/Miller.Server/Tools/WorkspaceTool.cs`; directly required tests | Yes | Consumes Task 1's lean provider contract; removes the background hydration observed after Task 1 began.
 | Task 3: Bounded read telemetry and resource regression | None - serial | telemetry helper/source selected from existing telemetry abstractions; focused telemetry tests; one family-store resource regression test; this plan and design docs | Yes | Consumes Tasks 1 and 2's final interactive and background read paths.
+| Task 4: Rebuilt-host dogfood and cancellation isolation | None - serial | process-level harness/evidence and production source/tests only if a measured budget miss selects them | Yes | Requires Tasks 1-3 committed so the live measurements exercise the candidate read path.
 
 ### Task 1: Disk-backed family-store read context
 
@@ -134,7 +135,7 @@
 
 **Interfaces:**
 - Consumes: Tasks 1 and 2's disk-backed `WorkspaceReadContext`, lazy family-store holder, and existing `TelemetryScope.SetMetadata` contract.
-- Produces: phase metadata for workspace resolution, seed lookup, graph traversal, and rendering; deterministic evidence that repeated family-store reads keep loaded-symbol and cache counts bounded.
+- Produces: real elapsed/count metadata for provider resolution, symbol lookup, graph traversal, and provider-cache entries; deterministic evidence that repeated family-store reads keep loaded-symbol and cache counts bounded.
 
 **Contract inputs:** Telemetry is added to existing tool records only; no new MCP surface or new unbounded label cardinality.
 
@@ -145,9 +146,37 @@
 **Dependency reason:** Requires Tasks 1 and 2's final paths so measurement covers interactive and background work.
 
 **Acceptance criteria:**
-- [ ] Existing telemetry records expose bounded phase timings for resolve, seed lookup, graph traversal, and render.
-- [ ] A deterministic test proves repeated family-store read calls do not accumulate a workspace-sized symbol or graph cache.
-- [ ] One bounded real dogfood run records warm wall time and retained PSS without repeating a failing long operation.
-- [ ] The design records measured before/after values and any remaining budget violation.
-- [ ] Assigned worker tests pass with zero warnings/errors.
-- [ ] Commit only owned files using `serial-worker-commit`.
+- [x] Existing telemetry records expose real provider resolve, lookup, and graph timings/counts plus bounded provider-cache entries.
+- [x] A deterministic test proves repeated family-store read calls preserve cached index identity, report per-call deltas, and do not accumulate a workspace-sized graph cache.
+- [x] The design records the implemented telemetry boundary and rejects a synthetic render phase.
+- [x] Assigned worker tests pass with zero warnings/errors: exact 4/4 and affected ceiling 456/456.
+- [x] Commit only owned files using `serial-worker-commit` (`75e86c0a`).
+
+### Task 4: Rebuilt-host dogfood and cancellation isolation
+
+**Files:**
+- Create or modify only if required by a measured miss: the smallest process-level performance harness/test
+- Modify only after a focused RED: exact production source selected by telemetry
+- Modify: `PERF.md`
+- Modify: this plan and design evidence
+
+**Interfaces:**
+- Consumes: Tasks 1-3's disk-backed provider, lazy holder, and bounded telemetry.
+- Produces: one rebuilt-host latency/PSS/idle-I/O sample and one bounded worktree-open cancellation sample.
+
+**Contract inputs:** Do not use the old MCP hosts as candidate evidence. Do not register/open the performance
+worktree through the old host again. Every subprocess has a 60-second hard bound; a miss selects one phase and one
+focused RED before any repeat. Record PID, commit, wall, CPU, RSS/PSS, logical reads, and telemetry metadata.
+
+**File ownership:** process-level harness/evidence and only the production/test files selected by a measured miss
+
+**Serialization required:** Yes.
+
+**Dependency reason:** Candidate resource evidence is meaningful only after all read-path fixes and telemetry land.
+
+**Acceptance criteria:**
+- [ ] Fresh candidate host performs no eager repository hydration at bootstrap or idle revision advance.
+- [ ] Warm inspect meets 500 ms and context/impact/trace meet 2 seconds on the development machine.
+- [ ] Idle retained PSS is at most 350 MB and an ordinary read peaks at most 600 MB.
+- [ ] One bounded registration/open identifies its registry/refresh/extractor/sidecar phases; cancellation terminates the supervised extractor and returns the host to bounded idle.
+- [ ] Any missed budget becomes one telemetry-selected RED/fix; no unchanged long operation is repeated.

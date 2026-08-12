@@ -22,7 +22,8 @@ without first adding new phase, query-count, or resource evidence.
 
 ### PERF-001 — Family-store graph reads hydrate the full repository in every MCP host
 
-- **Status:** Code fix complete on `dabcddd7` plus bridge-parity follow-up `1fa03ac9`; real budget gate pending.
+- **Status:** Code fix complete on `dabcddd7` plus bridge-parity follow-up `1fa03ac9`; bounded read telemetry
+  complete on `75e86c0a`; real budget gate pending.
 - **Observed:** Warm Miller `context` took 6.9 s. `trace` took 5.9–6.0 s and `impact` took 6.2 s.
 - **Memory:** Four Miller hosts retained about 5.4 GB PSS total; individual hosts retained about 1.0–2.0 GB.
 - **Root cause:** `WorkspaceIndexProvider.ResolveCurrent` and `ResolveRegistered` call
@@ -34,6 +35,9 @@ without first adding new phase, query-count, or resource evidence.
   context/impact/trace; affected parity tests pass; one bounded dogfood call meets wall and PSS budgets.
 - **Focused evidence:** 361/361 affected tests passed in 0.96 s test time (6.21 s command wall). Family bridge
   loading is deferred, runs once per read context only when bridge mode is requested, and matches legacy output.
+- **Telemetry:** Family reads now report real provider resolve time, lookup count/time, graph count/time, and bounded
+  provider-cache entries. The generation-cached lookup wrapper preserves object identity and each read reports only
+  its own counter deltas. Exact telemetry/cache tests passed 4/4 and the affected ceiling passed 456/456.
 
 ### PERF-002 — Family-store freshness rebuilds the full repository in every host on every revision
 
@@ -83,12 +87,15 @@ without first adding new phase, query-count, or resource evidence.
   generation-checked on-disk `FtsSymbolSearchIndex`. The projection is cached only until the next generation.
 - **Fix:** Route symbol-read lookup through the same FTS sidecar path as symbol search. Preserve the bounded
   projection only for the explicit sidecar-off escape hatch.
+- **Telemetry:** Commit `75e86c0a` measures the real disk-backed lookup calls and elapsed time on each family read,
+  so the rebuilt-host dogfood gate can distinguish provider setup from lookup work without materializing the holder.
 - **Gate:** Default-on sidecar test proves the session projection loader is not called and exact inspect parity is
   unchanged; bounded dogfood meets the 500 ms warm budget.
 
-### PERF-004 — Julie scoped resolution amplifies SQLite reads; exact query family not yet isolated
+### PERF-004 — Julie resolved-pending rechecks issue one identifier locator query per row
 
-- **Status:** Fixed-cardinality telemetry committed as Julie `bdf2076c`; one faithful replay is next.
+- **Status:** Root cause isolated after a faithful replay disproved the first caller attribution; corrected batched
+  hydration fix in progress.
 - **Observed:** A scoped resolve processed 199,123 rows for 47 names in 520,055 ms. Its process recorded about
   98.1 GB logical reads and 24.1 million read syscalls with only about 26 MB RSS.
 - **Disproven hypothesis:** A repeated-name/high-fanout fixture did not amplify top-level candidate reads even when
@@ -109,21 +116,26 @@ without first adding new phase, query-count, or resource evidence.
   24.848 s and finalization/other process work was about 24.96 s.
 - **Query evidence:** LocateIdentifier executed 10,804 times (72.12% of 14,980 query executions), exactly the
   pending count. IdentifierHydration read 381,722 rows, PrimeWindow 313,107, and PendingHydration 89,930 rows.
-  LocateIdentifier runs inside `materialized_relationship_covers`' per-relationship loop. Both locator indexes
-  exist; the span query still reports a temporary ORDER BY B-tree, but an index-only tweak cannot remove 10,804
-  calls.
-- **Next fix:** Batch or materialize the relationship-to-identifier coverage join so coverage does not call
-  LocateIdentifier once per pending identifier/relationship. Separately instrument and reduce the roughly 25 s
-  exact finalization phase after the query-count fix; it is already as large as resolution itself.
-- **Fix:** Optimize only the measured query family after the bounded replay names it. A candidate-page cache remains
-  an option, not an approved implementation, until the counter distribution proves it is the bottleneck.
-- **Gate:** Exact output/digest parity; candidate executions scale with distinct page keys rather than identifiers;
-  cache stays within its constant cap; one real replay completes within 60 s or stops once with counters naming the
-  next bottleneck.
+  Both locator indexes exist; the span query still reports a temporary ORDER BY B-tree, but an index-only tweak
+  cannot remove 10,804 calls.
+- **Disproven caller attribution:** A batched `materialized_relationship_covers` implementation reduced an exact
+  synthetic fixture from 35 locator calls to zero, but the one faithful replay remained 49.63 s wall / 24.740 s
+  resolver with LocateIdentifier still 10,804 and RelationshipCoverage zero. That uncommitted slice is being
+  removed; it does not fix the production bottleneck.
+- **Actual call path:** The faithful run has zero relationship-hydration work. `recheck_resolved_pending_items`
+  instead rechecks the 10,804 prior pending rows and calls `locate_identifier` when demoting each co-located
+  identifier. `load_resolved_pending_page` already hydrates those rows in bounded pages but omits the co-located
+  identifier result.
+- **Next fix:** Extend the resolved-pending page result with an exact, ambiguity-aware co-located identifier lookup
+  hydrated by the store session's existing bounded page query. The generic resolver consumes that result and keeps
+  the current locator fallback only for session adapters that cannot pre-hydrate it.
+- **Gate:** Exact demotion/digest parity for span, line fallback, ambiguity, no match, and non-store fallback;
+  LocateIdentifier falls from one call per store pending row to zero; the new hydration query count scales with
+  bounded pages; one real replay is run once and either meets budget or names the next measured bottleneck.
 
 ### PERF-009 — Bridge trace still needs a bounded family-store representation
 
-- **Status:** Fix round in progress under PERF-001.
+- **Status:** Bounded lazy bridge representation complete on `1fa03ac9`; real bridge budget gate pending.
 - **Finding:** The first lean-context implementation returned `bridge_requires_full_index` for family-store bridge
   mode. That avoids hydration but changes an existing public result and violates output parity.
 - **Immediate fix:** Preserve parity with a lazy bridge-only loader from the pinned session; ordinary lookup/refs/path
