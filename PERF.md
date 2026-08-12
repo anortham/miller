@@ -22,8 +22,8 @@ without first adding new phase, query-count, or resource evidence.
 
 ### PERF-001 — Family-store graph reads hydrate the full repository in every MCP host
 
-- **Status:** Code fix complete on `dabcddd7` plus bridge-parity follow-up `1fa03ac9`; bounded read telemetry
-  complete on `75e86c0a`; real budget gate pending.
+- **Status:** Accepted on `e46e72e2`. The disk-backed read path, bridge-parity follow-up, bounded telemetry, and
+  rebuilt-host wall/PSS gates are complete.
 - **Observed:** Warm Miller `context` took 6.9 s. `trace` took 5.9–6.0 s and `impact` took 6.2 s.
 - **Memory:** Four Miller hosts retained about 5.4 GB PSS total; individual hosts retained about 1.0–2.0 GB.
 - **Root cause:** `WorkspaceIndexProvider.ResolveCurrent` and `ResolveRegistered` call
@@ -38,10 +38,12 @@ without first adding new phase, query-count, or resource evidence.
 - **Telemetry:** Family reads now report real provider resolve time, lookup count/time, graph count/time, and bounded
   provider-cache entries. The generation-cached lookup wrapper preserves object identity and each read reports only
   its own counter deltas. Exact telemetry/cache tests passed 4/4 and the affected ceiling passed 456/456.
+- **Acceptance:** Final warm context/impact/trace completed in 1,938.450/1,260.196/145.721 ms. Context peaked at
+  151,516 KB PSS and 194,784 KB RSS; the same host's 3 s idle sample peaked at 161,214 KB PSS / 204,824 KB RSS.
 
 ### PERF-002 — Family-store freshness rebuilds the full repository in every host on every revision
 
-- **Status:** Code fix complete in `4f7ff626`; real idle PSS/CPU gate pending with rebuilt host.
+- **Status:** Accepted on `e46e72e2`; focused no-load coverage and rebuilt-host idle memory evidence are complete.
 - **Observed:** A reader with no active tool call reached 101.5 GB logical reads, 24.8 million read syscalls,
   about 1.0 GB RSS, and sustained 40–60% CPU. A newly restarted host reached 114% CPU and about 948 MB RSS.
 - **Log evidence:** `FreshnessService` reported `rebuilt + swapped index` for revisions 8867 and 8868 in several
@@ -60,6 +62,8 @@ without first adding new phase, query-count, or resource evidence.
   FreshnessService poll seam, provider/status no-load paths, legacy atomicity, and generation-race rejection.
 - **Gate:** Store bootstrap and a revision advance invoke no repository loader; holder metadata advances; a
   deliberately invoked legacy/edit path still loads once; idle post-refresh host stays below the PSS budget.
+- **Acceptance:** Focused coverage proves bootstrap and revision advance do not evaluate the repository loader.
+  Final candidate idle retained 161,214 KB PSS / 204,824 KB RSS, below the 350 MB budget.
 
 ### PERF-010 — Registering a Miller worktree can block on its own index lifecycle
 
@@ -80,7 +84,7 @@ without first adding new phase, query-count, or resource evidence.
 
 ### PERF-003 — Family-store inspect reloads a workspace-sized symbol projection
 
-- **Status:** Code fix complete in `dabcddd7`; real 500 ms warm budget gate pending.
+- **Status:** Accepted on `e46e72e2`; the final-HEAD warm inspect completed in 254.855 ms.
 - **Observed:** Exact `inspect` calls took roughly 1.7–2.0 s each after a new generation; the current soft budget is
   500 ms.
 - **Root cause:** `ResolveCurrentSymbolRead` uses `SymbolSearchProjectionLoader.LoadSession` instead of the existing
@@ -91,11 +95,13 @@ without first adding new phase, query-count, or resource evidence.
   so the rebuilt-host dogfood gate can distinguish provider setup from lookup work without materializing the holder.
 - **Gate:** Default-on sidecar test proves the session projection loader is not called and exact inspect parity is
   unchanged; bounded dogfood meets the 500 ms warm budget.
+- **Acceptance:** The exact `WorkspaceIndexProvider` overview returned one correct result in 254.855 ms with
+  61,120 KB peak PSS / 102,580 KB RSS and no graph work.
 
 ### PERF-004 — Julie resolved-pending rechecks issue one identifier locator query per row
 
-- **Status:** Root cause isolated after a faithful replay disproved the first caller attribution; corrected batched
-  hydration fix in progress.
+- **Status:** Accepted through the measured finalization fix on Julie `ab3aa957`; the locator batching attempt was
+  rejected because it removed statements without improving wall time.
 - **Observed:** A scoped resolve processed 199,123 rows for 47 names in 520,055 ms. Its process recorded about
   98.1 GB logical reads and 24.1 million read syscalls with only about 26 MB RSS.
 - **Disproven hypothesis:** A repeated-name/high-fanout fixture did not amplify top-level candidate reads even when
@@ -150,12 +156,12 @@ without first adding new phase, query-count, or resource evidence.
   from 24.947 s to 18.161 s, and end-to-end wall from 49.98 s to 43.10 s (-13.8%). Resolver time stayed comparable
   at 24.710 s. Digest, 392,526 identifiers, 10,804 pending rows, publication identity, crash boundaries, and
   integrity remained exact. Remaining finalization costs are totality 5.791 s and writer finish 4.524 s.
-- **Gate:** One fixed finalization phase is proven load-bearing by a bounded replay, then an exact RED/GREEN reduces
-  its work without changing digest, rows, crash safety, or publication identity.
+- **Gate:** Closed. The exact writer RED/GREEN and faithful replay reduced end-to-end resolution to 43.10 s while
+  preserving digest, rows, crash safety, publication identity, and integrity.
 
 ### PERF-011 — Family-store context graph reach still exceeds the interactive budget
 
-- **Status:** Open; rebuilt acceptance still times out after the graph source change.
+- **Status:** Accepted on `e46e72e2`; context, impact, trace, inspect, and memory gates pass on rebuilt candidates.
 - **Exact request:** `context` query `how family store read context resolves symbols and graph`, entry symbol
   `WorkspaceIndexProvider`, token budget 1,200, max hops 1, default semantics, persistent initialized candidate.
 - **Acceptance miss:** Candidate PID `1998081`, cid `019ff4c2-4421-7657-b826-5cfc556505c7`, produced no response in
@@ -347,8 +353,21 @@ without first adding new phase, query-count, or resource evidence.
   Search was 550 ms, total lookup 1,594 calls / 838 ms, and graph 292 ms. The correct 3,378-byte, 10-result
   response consumed 220 CPU ticks and 1,614,721,855 logical-read characters, peaking at 147,114 KB PSS / 193,184
   KB RSS. Impact, trace, and idle were skipped because context remained over gate.
-- **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
-  the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
+- **Single-pass FTS final acceptance:** Release was rebuilt from clean `e46e72e2`; context passed the 2 s hard
+  gate at 1,938.450 ms, then the same initialized host passed impact at 1,260.196 ms and trace at 145.721 ms.
+  Single-pass word scoring reduced symbol FTS scoring from 242 to 116 ms and total Search from 550 to 375 ms;
+  context lookup fell from 838 to 658 ms. Context output remained exact at 3,378 bytes / 10 results / 845 tokens.
+  Context consumed 194 CPU ticks and 1,611,105,366 logical-read characters with 151,516 KB peak PSS / 194,784 KB
+  RSS. The post-read 3 s idle sample added 68 CPU ticks, 777,199 logical-read characters, zero physical reads,
+  and peaked at 161,214 KB PSS / 204,824 KB RSS. All required read lanes passed without a repeat.
+- **Final-HEAD warm inspect acceptance:** The already-built `e46e72e2` Release candidate returned the exact
+  `WorkspaceIndexProvider` overview successfully in 254.855 ms, passing the 500 ms gate. Persisted telemetry was
+  235 ms with one result / 3,165 bytes / 792 estimated tokens, 28 lookups / 69 ms, zero graph work, and 21 ms
+  provider resolution. The isolated process used 26 CPU ticks, 338,295,847 logical-read characters, zero physical
+  reads, and peaked at 61,120 KB PSS / 102,580 KB RSS. The one-run lane exited cleanly without touching registry
+  state or any existing host.
+- **Gate:** Closed. The final one-run sequence passed context at 1,938.450 ms, impact at 1,260.196 ms, trace at
+  145.721 ms, warm inspect at 254.855 ms, and the 350/600 MB retained/peak PSS budgets.
 
 ### PERF-009 — Bridge trace still needs a bounded family-store representation
 
@@ -365,12 +384,12 @@ without first adding new phase, query-count, or resource evidence.
 
 ### PERF-005 — Scope selection still permits large full-like resolution work
 
-- **Status:** Scope crossover fix complete on Julie commits `f39d7263` and `fb31da08`; performance budget still open.
+- **Status:** Accepted with the scope crossover fix plus Julie writer optimization `ab3aa957`.
 - **Before:** One changed file expanded to 516,065 scoped rows versus 533,152 visible full rows and spent about
   20 minutes in resolution. Another incident selected 531,492 rows and spent about 20.7 minutes.
 - **After:** The real host selected full with `resolution_scope_crossover` and completed scope + resolution + diff
   in about 165.5 s, roughly 7.5× faster but still above the 60 s development budget.
-- **Gate:** PERF-004 must bring the same real corpus below budget without semantic or row differences.
+- **Gate:** Closed by the faithful 43.10 s replay with unchanged digest, rows, publication identity, and integrity.
 
 ## Fixed, awaiting integrated release gate
 

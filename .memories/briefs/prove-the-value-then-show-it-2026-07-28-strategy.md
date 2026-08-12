@@ -3,7 +3,7 @@ id: prove-the-value-then-show-it-2026-07-28-strategy
 title: Prove the value, then show it — 2026-07-28 strategy
 status: active
 created: 2026-07-29T00:13:39.439Z
-updated: 2026-08-12T05:25:07.948Z
+updated: 2026-08-12T12:36:15.367Z
 tags:
   - strategy
   - performance
@@ -14,42 +14,29 @@ tags:
 
 ## Direction
 
-Miller replaces the retired Julie agent-tool core, but release work is paused until routine reads and producer convergence meet performance budgets. The user approved an overnight autonomous recovery run across both repositories. Continue through measurement, TDD fixes, integration, and bounded dogfood; stop only at an approval boundary or genuine blocker.
+Miller replaces the retired Julie agent-tool core. The family-store interactive read recovery is now accepted locally; release preparation continues across Miller and julie-extractors.
 
-## Mandate
+## Verified Miller state
 
-- `PERF.md` is the canonical incident ledger. Record bottlenecks, disproven hypotheses, fix commits, and gates.
-- Measure once, fix the largest proven bottleneck, replay once, then move on. Never repeat unchanged work over 60 seconds.
-- Warm Miller inspect <=500 ms; context/impact/trace <=2 s. Windows-oriented <=2 s / <=5 s.
-- Idle PSS <=350 MB; ordinary read peak <=600 MB.
-- One-file Julie resolution <=5 s; full Miller-corpus resolution <=60 s.
-- No-op/retry work near-zero; CPU/concurrency viable on a corporate Windows laptop.
+- Final candidate `e46e72e2`: warm inspect 254.855 ms, context 1,938.450 ms, impact 1,260.196 ms, trace 145.721 ms.
+- Context peak 151,516 KB PSS; post-read 3 s idle peak 161,214 KB PSS. Outputs remained exact.
+- Fast branch gate: 6,439 passed, 4 skipped. Scale gate: 138 passed, 5 skipped. Zero failures and zero build warnings/errors.
+- PERF-001/002/003/011 and the consumer-side portions of PERF-004/005 are accepted.
 
-## Proven state
+## Julie state to integrate
 
-- Miller disk-backed family reads: `dabcddd7`; lazy bridge: `1fa03ac9`; lazy generation-pinned holder/bootstrap/freshness: `4f7ff626`; bounded real read telemetry: `75e86c0a` with 456/456 affected tests green.
-- Rebuilt-host Miller latency/PSS/idle-I/O and registration cancellation dogfood remain.
-- Julie import reuse: `70cd205f`; writer heartbeat: `0500ab1e`; scope crossover: `f39d7263`/`fb31da08`.
-- Julie query/caller telemetry: `bdf2076c`, `27a3e420`, `5089c3a2`.
-- Faithful Julie wall remains about 50 seconds: roughly 25 seconds resolver plus 24 seconds finalization.
-- Two caller guesses were disproven and removed. Exact caller telemetry then proved Pending owns all 10,804 locator calls.
-- The exact Pending batching implementation removed all 10,804 locator statements and reduced candidate statements 14,980 -> 4,176, but replay regressed from 49.88 to 50.46 seconds and resolver 24.813 -> 25.418 seconds. It was removed and rejection documented at `b8abd489`.
-- Next target: instrument `finish_exact` fixed phases—prior-overlay materialization, totality, row streaming, target/integrity validation, sync/publication—then optimize only the largest measured phase. After that, row-heavy PrimeWindow (313,107 rows) and IdentifierHydration (381,722 rows) remain candidates.
+- `main` includes writer heartbeat, scope crossover, clean replay evidence, and patch-equivalent artifact retry `70cd205f`.
+- `perf/store-resolution-query-amplification` adds diagnostic history and the accepted cached exact-writer fix `ab3aa957`; faithful resolution improved 49.98 s → 43.10 s with exact output.
+- Prepare the local v2.32.1 candidate only after integrating that branch; no publication claim.
 
-## Worktrees
+## Remaining work
 
-- Miller: `/home/murphy/source/miller/.worktrees/family-store-read-performance`, `perf/family-store-read-performance`.
-- Julie: `/home/murphy/source/julie-extractors/.worktrees/fix-store-resolution-query-amplification`, `perf/store-resolution-query-amplification`.
-- Serialize .NET/Rust compiles. Do not register/open the Miller performance worktree through old hosts again.
+- Commit the Miller gate/docs evidence and reconcile worktrees.
+- Integrate Julie performance history into `release/2.32.1`, update release prep metadata/notes, and run its declared local gates.
+- Prepare Miller v1.18.2 metadata/notes and local package/security/plugin/site gates after Julie candidate state is settled.
+- PERF-010 registry/open isolation remains separate: no supported registry override exists, and shared registry mutation/HOME repurposing is prohibited.
+- PERF-009 bridge-mode process dogfood remains unmeasured but ordinary trace is accepted.
 
-## Release constraints
+## Approval boundary
 
-- Stable Miller v1.18.1 and julie-extract v2.32.0 remain published. Releases paused pending PERF-001 through PERF-005.
-- No new MCP tools without approval.
-- No push, tag, publish, marketplace advertisement, deploy, or release without explicit approval.
-
-## References
-
-- Miller `PERF.md`
-- Miller family-store performance design/plan
-- Julie store-resolution query-amplification design/plan
+Do not push, tag, publish, deploy, advertise marketplace versions, or create releases without explicit user approval.

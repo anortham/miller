@@ -175,8 +175,12 @@ focused RED before any repeat. Record PID, commit, wall, CPU, RSS/PSS, logical r
 **Dependency reason:** Candidate resource evidence is meaningful only after all read-path fixes and telemetry land.
 
 **Acceptance criteria:**
-- [ ] Fresh candidate host performs no eager repository hydration at bootstrap or idle revision advance.
-- [ ] Warm inspect meets 500 ms and context/impact/trace meet 2 seconds on the development machine.
-- [ ] Idle retained PSS is at most 350 MB and an ordinary read peaks at most 600 MB.
+- [x] Fresh candidate host performs no eager repository hydration at bootstrap or idle revision advance.
+- [x] Warm inspect meets 500 ms and context/impact/trace meet 2 seconds on the development machine.
+- [x] Idle retained PSS is at most 350 MB and an ordinary read peaks at most 600 MB.
 - [ ] One bounded registration/open identifies its registry/refresh/extractor/sidecar phases; cancellation terminates the supervised extractor and returns the host to bounded idle.
-- [ ] Any missed budget becomes one telemetry-selected RED/fix; no unchanged long operation is repeated.
+- [x] Any missed budget becomes one telemetry-selected RED/fix; no unchanged long operation is repeated.
+
+The registration/open item remains unexecuted because Miller exposes no registry-path override and the safe harness
+must not repurpose `HOME`/`USERPROFILE` or mutate the user's shared registry. Exact-child cancellation was exercised
+throughout the bounded candidate diagnostics; adding a supported registry-isolation seam is separate PERF-010 work.

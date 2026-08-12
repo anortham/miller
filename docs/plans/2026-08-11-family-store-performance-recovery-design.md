@@ -2,7 +2,8 @@
 
 ## Status
 
-Approved on 2026-08-11. Performance blocks both the Julie 2.32.1 and Miller 1.18.2 candidates.
+Implemented and accepted on 2026-08-12 for the Miller interactive read path. Julie producer integration and the
+separate registry-isolation gate remain release-preparation work.
 
 ## Problem
 
