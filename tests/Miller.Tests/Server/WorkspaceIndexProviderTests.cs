@@ -403,6 +403,48 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void LookupPhaseTelemetryCorrelatesContentFtsStagesAcrossInterleavedContextsAndPreservesUnits()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        var measured = new MeasuredSymbolLookupIndex(SymbolSearchProjectionLoader.Load(fixture.DbPath));
+        var firstTelemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using IDisposable firstActivation = firstTelemetry.ActivateSearchTelemetry();
+        FtsTextSearchQueryTelemetryCollector.Current!.Record(new FtsTextSearchQueryObservation(
+            FtsTextSearchQueryFamily.ConnectionOpen,
+            Rows: 0,
+            Elapsed: TimeSpan.FromMilliseconds(10)));
+
+        ContextLookupPhaseObservation second;
+        var secondTelemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using (secondTelemetry.ActivateSearchTelemetry())
+        {
+            FtsTextSearchQueryTelemetryCollector.Current!.Record(new FtsTextSearchQueryObservation(
+                FtsTextSearchQueryFamily.StrictCandidates,
+                Rows: 12,
+                Elapsed: TimeSpan.FromMilliseconds(250)));
+            second = secondTelemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
+        }
+
+        FtsTextSearchQueryTelemetryCollector.Current!.Record(new FtsTextSearchQueryObservation(
+            FtsTextSearchQueryFamily.FinalOrdering,
+            Rows: 3,
+            Elapsed: TimeSpan.FromMilliseconds(40)));
+        ContextLookupPhaseObservation first =
+            firstTelemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
+        ContextLookupPhaseObservation zero =
+            firstTelemetry.CompleteLookupPhase(ContextLookupPhase.QueryRetrieval);
+
+        Assert.Equal(1, first.FtsTextSearchDelta.ConnectionOpen.CallCount);
+        Assert.Equal(1, first.FtsTextSearchDelta.FinalOrdering.CallCount);
+        Assert.Equal(0, first.FtsTextSearchDelta.StrictCandidates.CallCount);
+        Assert.Equal(1, second.FtsTextSearchDelta.StrictCandidates.CallCount);
+        Assert.Equal(250, second.FtsTextSearchDelta.StrictCandidates.ElapsedMilliseconds);
+        Assert.Equal(12, second.FtsTextSearchDelta.StrictCandidates.ReturnedRowCount);
+        Assert.Equal(0, second.FtsTextSearchDelta.ConnectionOpen.CallCount);
+        Assert.Equal(0, zero.FtsTextSearchDelta.TotalCallCount);
+    }
+
+    [Fact]
     public void MeasuredSearchPreservesNullForgivenInnerBehavior()
     {
         using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");

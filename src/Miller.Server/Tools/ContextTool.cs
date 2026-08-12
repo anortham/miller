@@ -178,7 +178,7 @@ public sealed partial class ContextTool
                     TryResolveTextContentIndex(workspace_id, ensureFresh),
                     query,
                     rescueExcludeTests);
-                CompletePhase("source_rescue", telemetry, ref phaseStart);
+                CompletePhase("source_rescue", telemetry, ref phaseStart, context.ReadTelemetry);
                 cancellationToken.ThrowIfCancellationRequested();
                 switch (parsedReferenceMode)
                 {
@@ -350,6 +350,7 @@ public sealed partial class ContextTool
         _phaseObserver?.Invoke(phase);
         ContextLookupPhase? lookupPhase = phase switch
         {
+            "source_rescue" => ContextLookupPhase.SourceRescue,
             "query_retrieval" => ContextLookupPhase.QueryRetrieval,
             "term_retrieval" => ContextLookupPhase.TermRetrieval,
             "anchor_resolution" => ContextLookupPhase.AnchorResolution,
@@ -368,7 +369,8 @@ public sealed partial class ContextTool
                 "Context lookup phase {ContextLookupPhase} completed with delta {@ContextLookupDelta} " +
                 "and total {@ContextLookupTotal}, search delta {@ContextSearchDelta}, " +
                 "search total {@ContextSearchTotal}, FTS search delta {@ContextFtsSearchDelta}, " +
-                "and FTS search total {@ContextFtsSearchTotal} for cid {CorrelationId}",
+                "FTS search total {@ContextFtsSearchTotal}, content FTS search delta {@ContextFtsTextSearchDelta}, " +
+                "and content FTS search total {@ContextFtsTextSearchTotal} for cid {CorrelationId}",
                 completedLookupPhase,
                 observation.Delta,
                 observation.Total,
@@ -376,6 +378,8 @@ public sealed partial class ContextTool
                 observation.SearchTotal,
                 observation.FtsSearchDelta,
                 observation.FtsSearchTotal,
+                observation.FtsTextSearchDelta,
+                observation.FtsTextSearchTotal,
                 telemetry?.CorrelationId ?? "unmeasured");
         }
         Serilog.Log.Information(

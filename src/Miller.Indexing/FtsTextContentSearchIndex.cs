@@ -17,12 +17,14 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
     private readonly IReadOnlyDictionary<string, IReadOnlyList<ContentSymbolSpan>> _spansBySourceId;
     private readonly int _documentCount;
     private readonly double _avgdl;
+    private readonly Action<FtsTextSearchQueryObservation>? _queryObserver;
 
     private FtsTextContentSearchIndex(
         string connectionString,
         IReadOnlyList<TextChunkMetadata> chunks,
         IReadOnlyDictionary<string, IReadOnlyList<ContentSymbolSpan>> spansBySourceId,
-        long revision)
+        long revision,
+        Action<FtsTextSearchQueryObservation>? queryObserver)
     {
         _connectionString = connectionString;
         _chunkMetadataById = chunks.ToDictionary(static chunk => chunk.ChunkId, StringComparer.Ordinal);
@@ -30,13 +32,20 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         _documentCount = chunks.Count;
         _avgdl = chunks.Count == 0 ? 0.0 : chunks.Average(static c => c.DocLen);
         Revision = revision;
+        _queryObserver = queryObserver;
     }
 
     public int DocumentCount => _chunkMetadataById.Count;
 
     public long Revision { get; }
 
-    public static FtsTextContentSearchIndex Open(string contentDbPath, long expectedRevision)
+    public static FtsTextContentSearchIndex Open(string contentDbPath, long expectedRevision) =>
+        Open(contentDbPath, expectedRevision, queryObserver: null);
+
+    internal static FtsTextContentSearchIndex Open(
+        string contentDbPath,
+        long expectedRevision,
+        Action<FtsTextSearchQueryObservation>? queryObserver)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
 
@@ -82,7 +91,8 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
             connectionString,
             ReadChunkMetadata(connection, absPath),
             ReadSymbolSpans(connection, absPath),
-            meta.WorkspaceRevision.GetValueOrDefault());
+            meta.WorkspaceRevision.GetValueOrDefault(),
+            queryObserver);
     }
 
     public static FtsTextContentSearchIndex OpenUnversioned(string contentDbPath)
@@ -116,7 +126,8 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
             connectionString,
             ReadChunkMetadata(connection, absPath),
             ReadSymbolSpans(connection, absPath),
-            meta.WorkspaceRevision.GetValueOrDefault());
+            meta.WorkspaceRevision.GetValueOrDefault(),
+            queryObserver: null);
     }
 
     public IReadOnlyList<TextContentSearchHit> Search(
@@ -147,14 +158,23 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
             return Array.Empty<TextContentSearchHit>();
 
         using var connection = new SqliteConnection(_connectionString);
+        long connectionStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         connection.Open();
+        Observe(FtsTextSearchQueryFamily.ConnectionOpen, rows: 0, connectionStarted);
 
         var documentFrequency = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (string term in plan.DistinctTerms)
-            documentFrequency[term] = CountChunksMatching(connection, QuoteFts(term));
+        {
+            long frequencyStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            int frequency = CountChunksMatching(connection, QuoteFts(term));
+            documentFrequency[term] = frequency;
+            Observe(FtsTextSearchQueryFamily.DocumentFrequency, frequency, frequencyStarted);
+        }
 
         string strictMatch = JoinFtsTerms(plan.CoverageTerms, " AND ");
+        long strictStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         IReadOnlyList<string> candidateIds = ChunkCandidates(connection, strictMatch, WidenedCandidateLimit);
+        Observe(FtsTextSearchQueryFamily.StrictCandidates, candidateIds.Count, strictStarted);
         var hits = new List<TextContentSearchHit>();
         var tokens = new List<string>(64);
         var seenCandidateIds = new HashSet<string>(StringComparer.Ordinal);
@@ -164,9 +184,13 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         if (hits.Count < limit)
         {
             string widenedMatch = JoinFtsTerms(plan.CoverageTerms, " OR ");
-            AddHits(ChunkCandidates(connection, widenedMatch, WidenedCandidateLimit));
+            long widenedStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            IReadOnlyList<string> widenedIds = ChunkCandidates(connection, widenedMatch, WidenedCandidateLimit);
+            Observe(FtsTextSearchQueryFamily.WidenedCandidates, widenedIds.Count, widenedStarted);
+            AddHits(widenedIds);
         }
 
+        long orderingStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         hits.Sort(static (a, b) =>
         {
             int byScore = b.Score.CompareTo(a.Score);
@@ -179,6 +203,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
 
         if (hits.Count > limit)
             hits.RemoveRange(limit, hits.Count - limit);
+        Observe(FtsTextSearchQueryFamily.FinalOrdering, hits.Count, orderingStarted);
         return hits;
 
         void AddHits(IReadOnlyList<string> ids)
@@ -196,12 +221,17 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
                 .ToArray();
             foreach (string[] batch in eligibleIds.Chunk(RawTextBatchSize))
             {
+                long hydrationStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 IReadOnlyDictionary<string, TextChunk> chunksById = ReadChunksById(
                     connection,
                     batch,
                     connection.DataSource);
+                Observe(FtsTextSearchQueryFamily.FullHydration, chunksById.Count, hydrationStarted);
+                long scoringStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                int hitCountBefore = hits.Count;
                 foreach (string chunkId in batch)
                     AddHit(chunkId, chunksById);
+                Observe(FtsTextSearchQueryFamily.Scoring, hits.Count - hitCountBefore, scoringStarted);
             }
         }
 
@@ -263,6 +293,16 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
                 symbol?.Name ?? chunk.ContainingSymbolName,
                 chunk.ContentHash));
         }
+    }
+
+    private void Observe(FtsTextSearchQueryFamily family, int rows, long startedAt)
+    {
+        var observation = new FtsTextSearchQueryObservation(
+            family,
+            rows,
+            System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
+        FtsTextSearchQueryTelemetryCollector.Current?.Record(observation);
+        _queryObserver?.Invoke(observation);
     }
 
     public IReadOnlyList<TextContentSearchHit> Materialize(
@@ -722,4 +762,94 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
         string? ContainingSymbolId,
         string? ContainingSymbolName,
         string ContentHash);
+}
+
+internal enum FtsTextSearchQueryFamily
+{
+    ConnectionOpen,
+    DocumentFrequency,
+    StrictCandidates,
+    WidenedCandidates,
+    FullHydration,
+    Scoring,
+    FinalOrdering,
+}
+
+internal readonly record struct FtsTextSearchQueryObservation(
+    FtsTextSearchQueryFamily Family,
+    int Rows,
+    TimeSpan Elapsed);
+
+internal readonly record struct FtsTextSearchQueryFamilyMeasurement(
+    long CallCount,
+    long ElapsedTicks,
+    long ReturnedRowCount);
+
+internal sealed record FtsTextSearchQueryMeasurementSnapshot(
+    FtsTextSearchQueryFamilyMeasurement ConnectionOpen,
+    FtsTextSearchQueryFamilyMeasurement DocumentFrequency,
+    FtsTextSearchQueryFamilyMeasurement StrictCandidates,
+    FtsTextSearchQueryFamilyMeasurement WidenedCandidates,
+    FtsTextSearchQueryFamilyMeasurement FullHydration,
+    FtsTextSearchQueryFamilyMeasurement Scoring,
+    FtsTextSearchQueryFamilyMeasurement FinalOrdering);
+
+internal sealed class FtsTextSearchQueryTelemetryCollector
+{
+    private static readonly AsyncLocal<FtsTextSearchQueryTelemetryCollector?> CurrentCollector = new();
+    private readonly long[] _calls = new long[Enum.GetValues<FtsTextSearchQueryFamily>().Length];
+    private readonly long[] _elapsedTicks = new long[Enum.GetValues<FtsTextSearchQueryFamily>().Length];
+    private readonly long[] _rows = new long[Enum.GetValues<FtsTextSearchQueryFamily>().Length];
+
+    internal static FtsTextSearchQueryMeasurementSnapshot EmptySnapshot { get; } =
+        new(default, default, default, default, default, default, default);
+
+    internal static FtsTextSearchQueryTelemetryCollector? Current => CurrentCollector.Value;
+
+    internal IDisposable Activate()
+    {
+        FtsTextSearchQueryTelemetryCollector? previous = CurrentCollector.Value;
+        CurrentCollector.Value = this;
+        return new Activation(previous);
+    }
+
+    internal void Record(FtsTextSearchQueryObservation observation)
+    {
+        int index = (int)observation.Family;
+        Interlocked.Increment(ref _calls[index]);
+        Interlocked.Add(ref _elapsedTicks[index], observation.Elapsed.Ticks);
+        Interlocked.Add(ref _rows[index], observation.Rows);
+    }
+
+    internal FtsTextSearchQueryMeasurementSnapshot Snapshot() =>
+        new(
+            Family(FtsTextSearchQueryFamily.ConnectionOpen),
+            Family(FtsTextSearchQueryFamily.DocumentFrequency),
+            Family(FtsTextSearchQueryFamily.StrictCandidates),
+            Family(FtsTextSearchQueryFamily.WidenedCandidates),
+            Family(FtsTextSearchQueryFamily.FullHydration),
+            Family(FtsTextSearchQueryFamily.Scoring),
+            Family(FtsTextSearchQueryFamily.FinalOrdering));
+
+    private FtsTextSearchQueryFamilyMeasurement Family(FtsTextSearchQueryFamily family)
+    {
+        int index = (int)family;
+        return new FtsTextSearchQueryFamilyMeasurement(
+            Interlocked.Read(ref _calls[index]),
+            Interlocked.Read(ref _elapsedTicks[index]),
+            Interlocked.Read(ref _rows[index]));
+    }
+
+    private sealed class Activation(FtsTextSearchQueryTelemetryCollector? previous) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            CurrentCollector.Value = previous;
+        }
+    }
 }

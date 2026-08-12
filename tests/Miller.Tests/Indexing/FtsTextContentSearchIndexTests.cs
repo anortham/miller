@@ -61,6 +61,55 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_ObservesCompletedFixedStagesAndStopsAfterObserverCancellation()
+    {
+        using var fx = BuildFixture(
+            ("src/Api.cs", "csharp", false, "KnownSourceError KnownSourceError"));
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        var observations = new List<FtsTextSearchQueryObservation>();
+        var index = FtsTextContentSearchIndex.Open(
+            _contentDbPath,
+            expectedRevision: 7,
+            observations.Add);
+
+        Assert.Empty(index.Search(string.Empty, TextContentKind.WorkspaceSource, limit: 10));
+        Assert.Empty(observations);
+
+        _ = index.Search("KnownSourceError", TextContentKind.WorkspaceSource, limit: 10);
+
+        Assert.Equal(FtsTextSearchQueryFamily.ConnectionOpen, observations[0].Family);
+        Assert.Contains(observations, static observation =>
+            observation.Family == FtsTextSearchQueryFamily.DocumentFrequency);
+        Assert.Equal(1, observations.Count(static observation =>
+            observation.Family == FtsTextSearchQueryFamily.StrictCandidates));
+        Assert.Equal(1, observations.Count(static observation =>
+            observation.Family == FtsTextSearchQueryFamily.WidenedCandidates));
+        Assert.Equal(1, observations.Count(static observation =>
+            observation.Family == FtsTextSearchQueryFamily.FullHydration));
+        Assert.Equal(1, observations.Count(static observation =>
+            observation.Family == FtsTextSearchQueryFamily.Scoring));
+        Assert.Equal(FtsTextSearchQueryFamily.FinalOrdering, observations[^1].Family);
+        Assert.All(observations, static observation => Assert.True(observation.Elapsed >= TimeSpan.Zero));
+
+        observations.Clear();
+        index = FtsTextContentSearchIndex.Open(
+            _contentDbPath,
+            expectedRevision: 7,
+            observation =>
+            {
+                observations.Add(observation);
+                if (observation.Family == FtsTextSearchQueryFamily.StrictCandidates)
+                    throw new OperationCanceledException("stop after completed strict candidate query");
+            });
+
+        Assert.Throws<OperationCanceledException>(() =>
+            index.Search("KnownSourceError", TextContentKind.WorkspaceSource, limit: 10));
+        Assert.Equal(FtsTextSearchQueryFamily.StrictCandidates, observations[^1].Family);
+        Assert.DoesNotContain(observations, static observation =>
+            observation.Family is FtsTextSearchQueryFamily.FullHydration or FtsTextSearchQueryFamily.Scoring);
+    }
+
+    [Fact]
     public void Search_ContentKinds_ReturnsDocsAndConfigButNotSource()
     {
         using var fx = JulieDbFixture.Create(

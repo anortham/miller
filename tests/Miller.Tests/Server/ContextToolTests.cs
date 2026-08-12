@@ -1515,6 +1515,7 @@ public sealed class ContextToolTests
 
         Assert.Equal(
             [
+                ContextLookupPhase.SourceRescue,
                 ContextLookupPhase.QueryRetrieval,
                 ContextLookupPhase.TermRetrieval,
                 ContextLookupPhase.AnchorResolution,
@@ -1528,6 +1529,7 @@ public sealed class ContextToolTests
         Assert.True(lookupPhases[^1].Total.TotalCallCount > 0);
         Assert.True(lookupPhases[^1].SearchTotal.TotalCallCount > 0);
         Assert.Equal(0, lookupPhases[^1].FtsSearchTotal.TotalCallCount);
+        Assert.Equal(0, lookupPhases[^1].FtsTextSearchTotal.TotalCallCount);
     }
 
     [Fact]

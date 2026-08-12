@@ -296,6 +296,13 @@ without first adding new phase, query-count, or resource evidence.
   3,378-byte, 10-result response consumed 1,629,859,578 logical-read characters and 434,176 physical-write bytes,
   peaking at 123,574 KB PSS / 170,600 KB RSS. Impact, trace, and idle were skipped because context remained over
   gate.
+- **Allocation-free-scoring final acceptance:** Release was rebuilt from clean `02deba5e`; the one final context
+  completed correctly but regressed to 2,515.301 ms, missing the 2 s hard gate. FTS word candidate/scoring was
+  262/227 ms for the same 57,068 rows, bounded hydration remained 5 ms / 402 rows, total Search was 508 ms,
+  lookup 778 ms, and graph 302 ms. The largest outer phases were source rescue 857 ms, semantic seeds 386 ms,
+  anchor resolution 359 ms, and graph 302 ms. The 3,378-byte, 10-result response consumed 1,629,847,106
+  logical-read characters and 430,080 physical-write bytes, peaking at 121,234 KB PSS / 168,440 KB RSS. Impact,
+  trace, and idle were skipped because context remained over gate; the unchanged request was not repeated.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 
