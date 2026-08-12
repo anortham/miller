@@ -3,6 +3,7 @@ using System;
 using System.Threading;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server;
 using Miller.Server.Hosting;
 using Miller.Tests.Indexing;
@@ -169,5 +170,124 @@ public sealed class FreshnessServicePollNowTests : IDisposable
         Assert.False(result.Swapped);
         Assert.Equal(3, result.Revision); // the held built revision — nothing to converge on
         Assert.Same(beforeIndex, holder.Current); // no churn — the held index was not rebuilt/swapped
+    }
+
+    [Fact]
+    public void PollNow_FamilyStoreRevisionAdvancePublishesMetadataWithoutLoadingRepository()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            JulieDbFixture.DefaultRows,
+            workspaceId: Ws,
+            revisions: new[] { new JulieDbFixture.RevisionRow(5) });
+        int repositoryLoads = 0;
+        var holder = new IndexHolder(
+            () =>
+            {
+                repositoryLoads++;
+                return MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+            },
+            builtRevision: 1,
+            documentCount: JulieDbFixture.DefaultRows.Count,
+            knownExtensionsCount: 1,
+            builtArtifactId: "store:old");
+        string tempHome = CreateTempHome();
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = tempHome;
+        var workspace = WorkspaceContext.Create(fx.WorkspaceRoot, AppContext.BaseDirectory, tempHome) with
+        {
+            ExtractDbPath = fx.DbPath,
+            WorkspaceId = Ws,
+        };
+        bootstrap.SeedForTest(workspace, holder);
+        WorkspaceReadSnapshot snapshot = FamilySnapshot(fx.WorkspaceRoot, storeLogSequence: 5);
+        var service = new FreshnessService(
+            bootstrap,
+            NullLogger<FreshnessService>.Instance,
+            storeEnabled: static () => true,
+            probe: (_, _, _, _) => new WorkspaceFreshnessProbe(5, "family:gen-002", "view-a"),
+            openReadSession: (_, _, _, _) => new WorkspaceReadHandle(new FixtureSession(snapshot, fx.DbPath)));
+
+        PollResult result = service.PollNow();
+
+        IndexHolderMetadata metadata = holder.MetadataSnapshot();
+        Assert.True(result.Swapped);
+        Assert.Equal(5, metadata.Revision);
+        Assert.Equal(JulieDbFixture.DefaultRows.Count, metadata.DocumentCount);
+        Assert.Equal(0, repositoryLoads);
+    }
+
+    [Fact]
+    public void PollNow_FamilyStoreLazyLoadRejectsANewerGenerationThanItsMetadata()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            JulieDbFixture.DefaultRows,
+            workspaceId: Ws,
+            revisions: new[] { new JulieDbFixture.RevisionRow(5) });
+        var holder = new IndexHolder(
+            MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath)),
+            builtRevision: 1,
+            builtArtifactId: "store:old");
+        string tempHome = CreateTempHome();
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = tempHome;
+        var workspace = WorkspaceContext.Create(fx.WorkspaceRoot, AppContext.BaseDirectory, tempHome) with
+        {
+            ExtractDbPath = fx.DbPath,
+            WorkspaceId = Ws,
+        };
+        bootstrap.SeedForTest(workspace, holder);
+        WorkspaceReadSnapshot snapshot = FamilySnapshot(fx.WorkspaceRoot, storeLogSequence: 5);
+        var service = new FreshnessService(
+            bootstrap,
+            NullLogger<FreshnessService>.Instance,
+            storeEnabled: static () => true,
+            probe: (_, _, _, _) => new WorkspaceFreshnessProbe(5, "family:gen-002", "view-a"),
+            openReadSession: (_, _, _, _) => new WorkspaceReadHandle(new FixtureSession(snapshot, fx.DbPath)));
+
+        Assert.True(service.PollNow().Swapped);
+        snapshot = FamilySnapshot(fx.WorkspaceRoot, storeLogSequence: 6);
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => holder.Current);
+        Assert.Contains("generation changed", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static WorkspaceReadSnapshot FamilySnapshot(string root, long storeLogSequence) =>
+        new(
+            root,
+            Ws,
+            "family-a",
+            "view-a",
+            new WorkspaceFreshnessToken(
+                "family-a",
+                storeLogSequence,
+                "manifest-a",
+                storeLogSequence,
+                StoreInstanceId: "family:gen-002",
+                ViewId: "view-a",
+                GenerationName: "gen-002",
+                ManifestGeneration: 2,
+                IndexLevel: IndexLevels.FullMetadataValue),
+            IndexLevels.FullMetadataValue,
+            WorkspaceReadMode.FamilyStore,
+            GenerationName: "gen-002",
+            ManifestGeneration: 2);
+
+    private sealed class FixtureSession(WorkspaceReadSnapshot snapshot, string dbPath) : IWorkspaceReadSession
+    {
+        public WorkspaceReadSnapshot Snapshot { get; } = snapshot;
+
+        public TResult Read<TResult>(Func<SqliteConnection, TResult> query)
+        {
+            using SqliteConnection connection = SqliteReadOnlyAccess.Open(dbPath);
+            return query(connection);
+        }
+
+        public void Dispose()
+        {
+        }
     }
 }

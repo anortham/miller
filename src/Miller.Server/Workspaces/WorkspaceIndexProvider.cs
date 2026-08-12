@@ -209,22 +209,25 @@ public sealed class WorkspaceIndexProvider
     /// </summary>
     private WorkspaceReadContext ResolveCurrent()
     {
-        (MillerRepositoryIndex holderIndex, long holderRevision) = _holder.Snapshot();
         WorkspaceReadHandle readSession = OpenCurrentReadSession();
         try
         {
-            long revision = ContextRevision(readSession.Snapshot, holderRevision);
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+            IndexHolderMetadata? holderMetadata = familyStore ? _holder.MetadataSnapshot() : null;
+            (MillerRepositoryIndex Index, long Revision)? legacySnapshot = familyStore ? null : _holder.Snapshot();
+            long holderRevision = holderMetadata?.Revision ?? legacySnapshot!.Value.Revision;
+            long revision = ContextRevision(readSession.Snapshot, holderRevision);
+            MillerRepositoryIndex? holderIndex = legacySnapshot?.Index;
             ISymbolLookupIndex index = familyStore
                 ? ResolveFamilyStoreLookup(_currentWorkspace.WorkspaceId, readSession)
-                : holderIndex;
+                : holderIndex!;
             ISymbolGraphReachability graph = familyStore
                 ? new SqliteSymbolGraphIndex(readSession)
-                : holderIndex.Graph;
+                : holderIndex!.Graph;
             var bridgeGraph = new Lazy<BridgeGraph>(
                 familyStore
                     ? () => _loadSessionBridgeGraph(readSession)
-                    : () => holderIndex.BridgeGraph,
+                    : () => holderIndex!.BridgeGraph,
                 LazyThreadSafetyMode.ExecutionAndPublication);
             var resolver = new SmartTargetResolver(index);
             return new WorkspaceReadContext(
@@ -236,7 +239,7 @@ public sealed class WorkspaceIndexProvider
                 _currentWorkspace.WorkspaceId,
                 _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
                 revision,
-                readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore ? null : _currentIndexFresh(holderRevision),
+                familyStore ? null : _currentIndexFresh(holderRevision),
                 "current",
                 WarningText: null,
                 DisplayId: CurrentDisplayId(),
@@ -251,10 +254,12 @@ public sealed class WorkspaceIndexProvider
 
     private WorkspaceArtifactContext ResolveCurrentArtifact()
     {
-        (_, long holderRevision) = _holder.Snapshot();
         WorkspaceReadHandle readSession = OpenCurrentReadSession();
         try
         {
+            long holderRevision = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore
+                ? _holder.MetadataSnapshot().Revision
+                : _holder.Snapshot().Revision;
             long revision = ContextRevision(readSession.Snapshot, holderRevision);
             return new WorkspaceArtifactContext(
                 readSession,
@@ -281,19 +286,25 @@ public sealed class WorkspaceIndexProvider
     /// </summary>
     private WorkspaceSymbolSearchContext ResolveCurrentSymbolSearch()
     {
-        (MillerRepositoryIndex index, long holderRevision) = _holder.Snapshot();
         WorkspaceReadHandle readSession = OpenCurrentReadSession();
         try
         {
+            bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+            IndexHolderMetadata? holderMetadata = familyStore ? _holder.MetadataSnapshot() : null;
+            (MillerRepositoryIndex Index, long Revision)? legacySnapshot = familyStore ? null : _holder.Snapshot();
+            long holderRevision = holderMetadata?.Revision ?? legacySnapshot!.Value.Revision;
             long revision = ContextRevision(readSession.Snapshot, holderRevision);
-            ISymbolLookupIndex searchIndex = ResolveCurrentSymbolSearchIndex(index, holderRevision, readSession);
+            ISymbolLookupIndex searchIndex = ResolveCurrentSymbolSearchIndex(
+                legacySnapshot?.Index,
+                holderRevision,
+                readSession);
             return new WorkspaceSymbolSearchContext(
                 searchIndex,
                 readSession,
                 _currentWorkspace.WorkspaceId,
                 _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
                 revision,
-                readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore ? null : _currentIndexFresh(holderRevision),
+                familyStore ? null : _currentIndexFresh(holderRevision),
                 "current",
                 WarningText: null,
                 DisplayId: CurrentDisplayId(),
@@ -312,21 +323,24 @@ public sealed class WorkspaceIndexProvider
     /// </summary>
     private WorkspaceSymbolReadContext ResolveCurrentSymbolRead()
     {
-        (MillerRepositoryIndex holderIndex, long holderRevision) = _holder.Snapshot();
         WorkspaceReadHandle readSession = OpenCurrentReadSession();
         try
         {
+            bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+            IndexHolderMetadata? holderMetadata = familyStore ? _holder.MetadataSnapshot() : null;
+            (MillerRepositoryIndex Index, long Revision)? legacySnapshot = familyStore ? null : _holder.Snapshot();
+            long holderRevision = holderMetadata?.Revision ?? legacySnapshot!.Value.Revision;
             long revision = ContextRevision(readSession.Snapshot, holderRevision);
-            ISymbolLookupIndex index = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore
+            ISymbolLookupIndex index = familyStore
                 ? ResolveFamilyStoreLookup(_currentWorkspace.WorkspaceId, readSession)
-                : holderIndex;
+                : legacySnapshot!.Value.Index;
             return new WorkspaceSymbolReadContext(
                 index,
                 readSession,
                 _currentWorkspace.WorkspaceId,
                 _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
                 revision,
-                readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore ? null : _currentIndexFresh(holderRevision),
+                familyStore ? null : _currentIndexFresh(holderRevision),
                 "current",
                 WarningText: null,
                 DisplayId: CurrentDisplayId(),
@@ -344,7 +358,7 @@ public sealed class WorkspaceIndexProvider
     // instead of hidden behind a memory fallback. The chosen backend is cached keyed on (workspace, dbPath,
     // revision) so a freshness Swap (revision bump) rebuilds it and the sidecar is not re-opened per query.
     private ISymbolLookupIndex ResolveCurrentSymbolSearchIndex(
-        MillerRepositoryIndex holderIndex,
+        MillerRepositoryIndex? holderIndex,
         long revision,
         WorkspaceReadHandle readSession)
     {
@@ -366,13 +380,16 @@ public sealed class WorkspaceIndexProvider
                 () => new CachedSymbolSearch(_loadSessionSymbolSearch(readSession), IsSidecar: false)).Index;
         }
 
+        MillerRepositoryIndex legacyIndex = holderIndex
+            ?? throw new InvalidOperationException("The legacy read route has no repository index.");
+
         if (!_sidecar.Enabled)
-            return holderIndex;
+            return legacyIndex;
 
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
         var key = KeyFor(workspaceKey, dbPath, revision);
-        return GetOrLoadSymbolSearch(key, dbPath, () => holderIndex).Index;
+        return GetOrLoadSymbolSearch(key, dbPath, () => legacyIndex).Index;
     }
 
     private WorkspaceReadContext ResolveRegistered(string workspaceId, bool ensureFresh)
@@ -581,7 +598,7 @@ public sealed class WorkspaceIndexProvider
         // No content index lives in the holder (the bootstrap seeds only the full repository index), so the
         // current workspace builds its content projection lazily on first content query and caches it keyed on
         // the holder's built revision — a freshness Swap (reindex) bumps the revision and rebuilds.
-        (_, long holderRevision) = _holder.Snapshot();
+        long holderRevision = _holder.MetadataSnapshot().Revision;
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
@@ -633,7 +650,7 @@ public sealed class WorkspaceIndexProvider
 
     private WorkspaceTextContentSearchContext ResolveCurrentTextContentSearch()
     {
-        (_, long holderRevision) = _holder.Snapshot();
+        long holderRevision = _holder.MetadataSnapshot().Revision;
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
@@ -692,7 +709,7 @@ public sealed class WorkspaceIndexProvider
 
     private WorkspaceRegionSearchContext ResolveCurrentRegionSearch()
     {
-        (_, long holderRevision) = _holder.Snapshot();
+        long holderRevision = _holder.MetadataSnapshot().Revision;
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;

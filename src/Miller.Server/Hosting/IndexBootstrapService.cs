@@ -1035,8 +1035,10 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     canonicalRoot);
             }
 
-            using FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding, stableWorkspaceId);
-            MillerRepositoryIndex index = RepositoryIndexLoader.LoadSession(session);
+            StoreFamilyBinding servingBinding = binding;
+            using FamilyStoreReadSession session = FamilyStoreReadSession.Open(servingBinding, stableWorkspaceId);
+            WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.ReadSession(session);
+            string indexIdentity = session.Snapshot.IndexIdentity;
             long builtRevision = session.Snapshot.Freshness.StoreLogSequence ?? throw new InvalidOperationException(
                 "The family-store bootstrap snapshot has no store_log sequence.");
             scanRevision ??= builtRevision;
@@ -1060,7 +1062,23 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 pruned = 0;
             }
 
-                var holder = new IndexHolder(index, builtRevision, session.Snapshot.IndexIdentity);
+            var holder = new IndexHolder(
+                () =>
+                {
+                    using FamilyStoreReadSession lazySession =
+                        FamilyStoreReadSession.Open(servingBinding, stableWorkspaceId);
+                    if (!string.Equals(lazySession.Snapshot.IndexIdentity, indexIdentity, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "The family-store generation changed before its lazy repository was loaded; " +
+                            "retry after freshness converges.");
+                    }
+                    return RepositoryIndexLoader.LoadSession(lazySession);
+                },
+                builtRevision,
+                checked((int)indexFacts.DocumentCount),
+                indexFacts.KnownExtensionsCount,
+                indexIdentity);
             var resolver = new SmartTargetResolver(holder);
             TimeSpan elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
             return new BootstrapRunResult(
@@ -1072,7 +1090,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 builtRevision,
                 pruned,
                 (long)elapsed.TotalMilliseconds,
-                index.DocumentCount,
+                checked((int)indexFacts.DocumentCount),
                 usesExistingLedger,
                 lineage);
         }

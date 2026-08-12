@@ -854,7 +854,7 @@ public sealed class WorkspaceTool
         if (TryAssembleCurrentStoreFacts() is { } storeFacts)
             return storeFacts;
 
-        var (index, builtRevision) = _holder.Snapshot();
+        IndexHolderMetadata holderMetadata = _holder.MetadataSnapshot();
         (string diskStatus, string? diskWarning) = CurrentIndexDiskStatus();
         bool indexAvailable = diskStatus == "current";
         return new WorkspaceFacts(
@@ -862,9 +862,9 @@ public sealed class WorkspaceTool
             WorkspaceId: _workspace.WorkspaceId,
             DbPath: _workspace.ExtractDbPath,
             IsLeader: _indexer.IsLeader,
-            DocumentCount: index.DocumentCount,
-            KnownExtensionsCount: index.KnownExtensions.Count,
-            BuiltRevision: builtRevision,
+            DocumentCount: holderMetadata.DocumentCount,
+            KnownExtensionsCount: holderMetadata.KnownExtensionsCount,
+            BuiltRevision: holderMetadata.Revision,
             LatestObservedRevision: _freshness.LatestObservedRevision,
             IndexFresh: indexAvailable ? _freshProbe.Compute() : false,
             QueueEmpty: _indexer.QueueEmpty,
@@ -874,8 +874,8 @@ public sealed class WorkspaceTool
             DisplayId: CurrentDisplayId(),
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
-            SearchSidecar: _sidecar.Inspect(_workspace.ExtractDbPath, builtRevision),
-            ContentCorpus: _contentSidecar.Inspect(_workspace.ExtractDbPath, builtRevision),
+            SearchSidecar: _sidecar.Inspect(_workspace.ExtractDbPath, holderMetadata.Revision),
+            ContentCorpus: _contentSidecar.Inspect(_workspace.ExtractDbPath, holderMetadata.Revision),
             Vectors: WorkspaceFactsAssembler.WithPendingFiles(
                 _vectors.Inspect(_workspace.WorkspaceRoot),
                 _workspace.ExtractDbPath),
@@ -908,14 +908,14 @@ public sealed class WorkspaceTool
             CurrentSemanticBrokerFacts(),
             _governor,
             storeEnabled: true);
-        var (index, builtRevision) = _holder.Snapshot();
+        IndexHolderMetadata holderMetadata = _holder.MetadataSnapshot();
         bool isStoreFacts = facts.Store is not null;
         return facts with
         {
             IsLeader = _indexer.IsLeader,
-            DocumentCount = index.DocumentCount,
-            KnownExtensionsCount = index.KnownExtensions.Count,
-            BuiltRevision = isStoreFacts ? facts.BuiltRevision : builtRevision,
+            DocumentCount = holderMetadata.DocumentCount,
+            KnownExtensionsCount = holderMetadata.KnownExtensionsCount,
+            BuiltRevision = isStoreFacts ? facts.BuiltRevision : holderMetadata.Revision,
             LatestObservedRevision = isStoreFacts ? facts.LatestObservedRevision : _freshness.LatestObservedRevision,
             QueueEmpty = _indexer.QueueEmpty,
         };

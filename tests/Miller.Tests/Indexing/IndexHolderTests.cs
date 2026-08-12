@@ -147,4 +147,68 @@ public sealed class IndexHolderTests
         var holder = new IndexHolder(IndexWith("A"), 1);
         Assert.Throws<ArgumentNullException>(() => holder.Swap(null!, 2));
     }
+
+    [Fact]
+    public void LazyGeneration_DoesNotLoadUntilCurrentAndLoadsOnlyOnce()
+    {
+        int loads = 0;
+        var holder = new IndexHolder(
+            () =>
+            {
+                loads++;
+                return IndexWith("Alpha");
+            },
+            builtRevision: 3,
+            builtArtifactId: "artifact-a",
+            documentCount: 42,
+            knownExtensionsCount: 7);
+
+        IndexHolderMetadata metadata = holder.MetadataSnapshot();
+
+        Assert.Equal(0, loads);
+        Assert.Equal(3, metadata.Revision);
+        Assert.Equal("artifact-a", metadata.ArtifactId);
+        Assert.Equal(42, metadata.DocumentCount);
+        Assert.Equal(7, metadata.KnownExtensionsCount);
+        Assert.Same(holder.Current, holder.Current);
+        Assert.Equal(1, loads);
+    }
+
+    [Fact]
+    public void SwapLazy_ReplacesMetadataWithoutLoadingEitherGeneration()
+    {
+        int oldLoads = 0;
+        int newLoads = 0;
+        var holder = new IndexHolder(
+            () =>
+            {
+                oldLoads++;
+                return IndexWith("Old");
+            },
+            builtRevision: 1,
+            documentCount: 10,
+            knownExtensionsCount: 1);
+
+        holder.SwapLazy(
+            () =>
+            {
+                newLoads++;
+                return IndexWith("New");
+            },
+            revision: 2,
+            artifactId: "artifact-b",
+            documentCount: 20,
+            knownExtensionsCount: 2);
+
+        IndexHolderMetadata metadata = holder.MetadataSnapshot();
+        Assert.Equal(0, oldLoads);
+        Assert.Equal(0, newLoads);
+        Assert.Equal(2, metadata.Revision);
+        Assert.Equal("artifact-b", metadata.ArtifactId);
+        Assert.Equal(20, metadata.DocumentCount);
+        Assert.Equal(2, metadata.KnownExtensionsCount);
+        Assert.NotEmpty(holder.Current.FindByName("New"));
+        Assert.Equal(0, oldLoads);
+        Assert.Equal(1, newLoads);
+    }
 }

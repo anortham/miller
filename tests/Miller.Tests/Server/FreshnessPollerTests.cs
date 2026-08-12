@@ -208,4 +208,33 @@ public sealed class FreshnessPollerTests
         Assert.Throws<ArgumentNullException>(() =>
             FreshnessPoller.PollOnce(holder, latestRevision: 2, rebuild: null!));
     }
+
+    [Fact]
+    public void PollOnceLazy_RevisionAdvancePublishesMetadataWithoutLoadingTheIndex()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        var holder = new IndexHolder(BuildIndex(fx), builtRevision: 1, builtArtifactId: "artifact-old");
+        int loads = 0;
+
+        bool swapped = FreshnessPoller.PollOnceLazy(
+            holder,
+            latestRevision: 2,
+            latestArtifactId: "artifact-new",
+            rebuild: () => new LazyFreshnessRebuildResult(
+                () =>
+                {
+                    loads++;
+                    return BuildIndex(fx);
+                },
+                new WorkspaceIndexFacts(DocumentCount: 42, KnownExtensionsCount: 7),
+                "artifact-new"));
+
+        IndexHolderMetadata metadata = holder.MetadataSnapshot();
+        Assert.True(swapped);
+        Assert.Equal(0, loads);
+        Assert.Equal(2, metadata.Revision);
+        Assert.Equal("artifact-new", metadata.ArtifactId);
+        Assert.Equal(42, metadata.DocumentCount);
+        Assert.Equal(7, metadata.KnownExtensionsCount);
+    }
 }

@@ -59,6 +59,67 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_CurrentFamilyStoreDoesNotMaterializeTheHolderRepository()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("current-store-lazy-holder");
+        int holderLoads = 0;
+        var holder = new IndexHolder(
+            () =>
+            {
+                holderLoads++;
+                throw new InvalidOperationException("holder repository was not expected");
+            },
+            builtRevision: 12,
+            documentCount: 1,
+            knownExtensionsCount: 1);
+        var provider = NewProvider(
+            holder,
+            CurrentWorkspaceAt(root, current.DbPath, "current-ws"),
+            registry,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(StoreSnapshot(root, "manifest-a"), target.DbPath)),
+            loadSessionSymbolSearch: session => SymbolSearchProjectionLoader.LoadSession(session));
+
+        using WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
+        using WorkspaceSymbolSearchContext search = provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false);
+        using WorkspaceSymbolReadContext inspect = provider.ResolveSymbolRead(workspaceId: null, ensureFresh: false);
+        using WorkspaceArtifactContext artifact = provider.ResolveArtifact(workspaceId: null, ensureFresh: false);
+
+        Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.Single(search.Index.FindByName("TargetType"));
+        Assert.Single(inspect.Index.FindByName("TargetType"));
+        Assert.Equal(WorkspaceReadMode.FamilyStore, artifact.Snapshot.Mode);
+        Assert.Equal(0, holderLoads);
+    }
+
+    [Fact]
+    public void Resolve_CurrentLegacySwapDuringSessionOpenUsesOneAtomicHolderGeneration()
+    {
+        using var before = DbWithSymbol("current-ws", revision: 1, "BeforeType");
+        using var after = DbWithSymbol("current-ws", revision: 2, "AfterType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        var holder = new IndexHolder(RepositoryIndexLoader.Load(before.DbPath), builtRevision: 1);
+        var provider = NewProvider(
+            holder,
+            CurrentWorkspace(before.DbPath, "current-ws"),
+            registry,
+            openReadSession: (databasePath, root, workspaceId) =>
+            {
+                holder.Swap(RepositoryIndexLoader.Load(after.DbPath), revision: 2);
+                return new WorkspaceReadHandle(LegacyArtifactReadSession.Open(databasePath, root, workspaceId));
+            });
+
+        using WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
+
+        Assert.Equal(2, context.Revision);
+        Assert.Single(context.Index.FindByName("AfterType"));
+        Assert.Empty(context.Index.FindByName("BeforeType"));
+    }
+
+    [Fact]
     public void Resolve_CurrentWorkspace_ReconcilesMalformedStorePointerBeforeRetryingTheRead()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");

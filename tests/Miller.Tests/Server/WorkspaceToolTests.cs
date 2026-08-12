@@ -81,7 +81,8 @@ public sealed class WorkspaceToolTests : IDisposable
         IDashboardLauncher? dashboardLauncher = null,
         VectorSidecar? vectors = null,
         SemanticEmbeddingSessionBroker? semanticBroker = null,
-        ScanGovernor? scanGovernor = null)
+        ScanGovernor? scanGovernor = null,
+        IndexHolder? holderOverride = null)
     {
         // The served workspace root is the fixture dir's parent of .miller; point ExtractDbPath at the fixture DB.
         string root = Path.GetDirectoryName(fx.DbPath)!;
@@ -95,7 +96,8 @@ public sealed class WorkspaceToolTests : IDisposable
             WorkspaceId = workspaceId,
         };
 
-        var holder = new IndexHolder(MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath)), builtRevision);
+        var holder = holderOverride
+            ?? new IndexHolder(MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath)), builtRevision);
 
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
         bootstrap.TestHomeDirectoryOverride = home;
@@ -409,6 +411,32 @@ public sealed class WorkspaceToolTests : IDisposable
         // The seeded telemetry row shows in the embedded breakdown.
         Assert.Contains("search", output);
         Assert.DoesNotContain("rebinding:", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Status_CurrentStoreFactsDoNotMaterializeTheHolderRepository()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        int loads = 0;
+        var holder = new IndexHolder(
+            () =>
+            {
+                loads++;
+                throw new InvalidOperationException("status materialized the holder repository");
+            },
+            builtRevision: 4,
+            documentCount: JulieDbFixture.DefaultRows.Count,
+            knownExtensionsCount: 1);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            holderOverride: holder);
+
+        string output = harness.Tool.Workspace(operation: "status");
+
+        Assert.Contains("symbols:", output, StringComparison.Ordinal);
+        Assert.Equal(0, loads);
     }
 
     [Fact]

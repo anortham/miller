@@ -1,34 +1,18 @@
 namespace Miller.Indexing;
 
 /// <summary>
-/// The single seam the read tools (search/inspect/resolver) depend on so the in-memory index can be replaced
-/// behind live readers (decision-5). It holds a <see cref="MillerRepositoryIndex"/> — a frozen, immutable index
-/// — paired with the julie <c>extraction_revisions</c> revision it was built from and the artifact's
-/// <c>artifact_metadata.artifact_id</c> identity. The freshness service rebuilds a new index from a fresh read
-/// and publishes it with <see cref="Swap"/>; tools read <see cref="Current"/> per call.
-///
-/// <para><b>Why lock-free is correct here.</b> The index is immutable once built, so publishing a new one is a
-/// single reference swap — there is no torn intermediate state, and an in-flight read that captured the old
-/// reference keeps a fully consistent old snapshot. This structurally satisfies the symbol-ID-churn rule: the
-/// whole resolved index is replaced atomically, so no stale link keyed on a churned id can survive a swap.</para>
-///
-/// <para>The index, its revision, and its artifact identity are stored together in one immutable snapshot
-/// behind a single <c>volatile</c> reference, so the triple never tears: a reader can never observe a new index
-/// with the old revision (or vice versa). Safe for any number of concurrent readers with a single publisher.</para>
-///
-/// <para><b>Why the artifact id matters.</b> A full (force) rebuild promotes a FRESH file over
-/// <c>symbols.db</c> (see <see cref="FullRebuildPromotion"/>), restarting julie's revision counter — the
-/// rebuilt artifact's latest revision can land at or below the held one, so a revision-only comparison would
-/// keep serving the pre-rebuild index forever. The artifact id changes with every fresh artifact and breaks
-/// that tie (the 2026-06-11 Eros fleet finding's cross-process file-stamp fix, applied to the in-process
-/// holder). Null means "unknown" (a synthetic/static extract); unknown never forces a swap.</para>
+/// Atomically publishes repository generations with eager metadata. A generation may defer repository
+/// materialization until <see cref="Current"/> is explicitly requested.
 /// </summary>
 public sealed class IndexHolder
 {
-    /// <summary>An immutable (index, revision, artifact id) triple — the unit that is published atomically.</summary>
-    private sealed record IndexState(MillerRepositoryIndex Index, long Revision, string? ArtifactId);
+    private sealed record IndexState(
+        Lazy<MillerRepositoryIndex> Index,
+        long Revision,
+        string? ArtifactId,
+        int DocumentCount,
+        int KnownExtensionsCount);
 
-    // The single volatile reference. A swap replaces it wholesale; a read takes it once for a consistent triple.
     private volatile IndexState _snapshot;
 
     /// <summary>
@@ -39,11 +23,27 @@ public sealed class IndexHolder
     public IndexHolder(MillerRepositoryIndex index, long builtRevision, string? builtArtifactId = null)
     {
         ArgumentNullException.ThrowIfNull(index);
-        _snapshot = new IndexState(index, builtRevision, builtArtifactId);
+        _snapshot = CreateEagerState(index, builtRevision, builtArtifactId);
+    }
+
+    /// <summary>Seed a generation whose metadata is available before its repository is materialized.</summary>
+    public IndexHolder(
+        Func<MillerRepositoryIndex> indexFactory,
+        long builtRevision,
+        int documentCount,
+        int knownExtensionsCount,
+        string? builtArtifactId = null)
+    {
+        _snapshot = CreateLazyState(
+            indexFactory,
+            builtRevision,
+            builtArtifactId,
+            documentCount,
+            knownExtensionsCount);
     }
 
     /// <summary>The current frozen index. Read per tool call; never null.</summary>
-    public MillerRepositoryIndex Current => _snapshot.Index;
+    public MillerRepositoryIndex Current => _snapshot.Index.Value;
 
     /// <summary>The revision the <see cref="Current"/> index was built from (its <c>extraction_revisions</c> cursor).</summary>
     public long BuiltRevision => _snapshot.Revision;
@@ -61,7 +61,18 @@ public sealed class IndexHolder
     public (MillerRepositoryIndex Index, long Revision) Snapshot()
     {
         var snapshot = _snapshot;
-        return (snapshot.Index, snapshot.Revision);
+        return (snapshot.Index.Value, snapshot.Revision);
+    }
+
+    /// <summary>Read generation metadata without materializing the repository.</summary>
+    public IndexHolderMetadata MetadataSnapshot()
+    {
+        var snapshot = _snapshot;
+        return new IndexHolderMetadata(
+            snapshot.Revision,
+            snapshot.ArtifactId,
+            snapshot.DocumentCount,
+            snapshot.KnownExtensionsCount);
     }
 
     /// <summary>
@@ -73,6 +84,57 @@ public sealed class IndexHolder
     public void Swap(MillerRepositoryIndex next, long revision, string? artifactId = null)
     {
         ArgumentNullException.ThrowIfNull(next);
-        _snapshot = new IndexState(next, revision, artifactId);
+        _snapshot = CreateEagerState(next, revision, artifactId);
+    }
+
+    /// <summary>Atomically publish a generation without evaluating its repository factory.</summary>
+    public void SwapLazy(
+        Func<MillerRepositoryIndex> indexFactory,
+        long revision,
+        int documentCount,
+        int knownExtensionsCount,
+        string? artifactId = null)
+    {
+        _snapshot = CreateLazyState(
+            indexFactory,
+            revision,
+            artifactId,
+            documentCount,
+            knownExtensionsCount);
+    }
+
+    private static IndexState CreateEagerState(
+        MillerRepositoryIndex index,
+        long revision,
+        string? artifactId) =>
+        new(
+            new Lazy<MillerRepositoryIndex>(() => index, LazyThreadSafetyMode.ExecutionAndPublication),
+            revision,
+            artifactId,
+            index.DocumentCount,
+            index.KnownExtensions.Count);
+
+    private static IndexState CreateLazyState(
+        Func<MillerRepositoryIndex> indexFactory,
+        long revision,
+        string? artifactId,
+        int documentCount,
+        int knownExtensionsCount)
+    {
+        ArgumentNullException.ThrowIfNull(indexFactory);
+        ArgumentOutOfRangeException.ThrowIfNegative(documentCount);
+        ArgumentOutOfRangeException.ThrowIfNegative(knownExtensionsCount);
+        return new IndexState(
+            new Lazy<MillerRepositoryIndex>(indexFactory, LazyThreadSafetyMode.ExecutionAndPublication),
+            revision,
+            artifactId,
+            documentCount,
+            knownExtensionsCount);
     }
 }
+
+public readonly record struct IndexHolderMetadata(
+    long Revision,
+    string? ArtifactId,
+    int DocumentCount,
+    int KnownExtensionsCount);

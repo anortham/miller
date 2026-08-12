@@ -39,6 +39,8 @@ public sealed class FreshnessService : BackgroundService
     private readonly IndexBootstrapService _bootstrap;
     private readonly ILogger<FreshnessService> _logger;
     private readonly Func<bool> _storeEnabled;
+    private readonly Func<string, string, string?, bool?, WorkspaceFreshnessProbe> _probe;
+    private readonly Func<string, string, string?, bool?, WorkspaceReadHandle> _openReadSession;
 
     private string? _workspaceId;
 
@@ -56,13 +58,17 @@ public sealed class FreshnessService : BackgroundService
     public FreshnessService(
         IndexBootstrapService bootstrap,
         ILogger<FreshnessService> logger,
-        Func<bool>? storeEnabled = null)
+        Func<bool>? storeEnabled = null,
+        Func<string, string, string?, bool?, WorkspaceFreshnessProbe>? probe = null,
+        Func<string, string, string?, bool?, WorkspaceReadHandle>? openReadSession = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
         _bootstrap = bootstrap;
         _logger = logger;
         _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
+        _probe = probe ?? WorkspaceReadSessionFactory.Probe;
+        _openReadSession = openReadSession ?? WorkspaceReadSessionFactory.Open;
     }
 
     // The live holder, read LAZILY off the bootstrap. The host constructs this hosted service before
@@ -194,7 +200,7 @@ public sealed class FreshnessService : BackgroundService
         WorkspaceContext workspace = _bootstrap.Workspace;
         string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
         bool storeEnabled = _storeEnabled();
-        WorkspaceFreshnessProbe probe = WorkspaceReadSessionFactory.Probe(
+        WorkspaceFreshnessProbe probe = _probe(
             dbPath,
             workspaceRoot,
             workspace.WorkspaceId,
@@ -206,7 +212,7 @@ public sealed class FreshnessService : BackgroundService
             : null;
         if (!storeEnabled || !string.Equals(storeIdentity, _lastObservedStoreIdentity, StringComparison.Ordinal))
         {
-            using WorkspaceReadHandle reader = WorkspaceReadSessionFactory.Open(
+            using WorkspaceReadHandle reader = _openReadSession(
                 dbPath,
                 workspaceRoot,
                 workspace.WorkspaceId,
@@ -222,20 +228,58 @@ public sealed class FreshnessService : BackgroundService
             "Freshness poll: observed revision {Observed} (artifact {Artifact}) vs built revision {Built}.",
             latest, artifactId, built);
 
-        bool swapped = FreshnessPoller.PollOnce(holder, latest, artifactId, () =>
-        {
-            using WorkspaceReadHandle reader = WorkspaceReadSessionFactory.Open(
-                dbPath,
-                workspaceRoot,
-                workspace.WorkspaceId,
-                storeEnabled);
-            return new FreshnessRebuildResult(
-                RepositoryIndexLoader.LoadSession(reader),
-                reader.Snapshot.IndexIdentity);
-        });
+        bool swapped = storeEnabled
+            ? FreshnessPoller.PollOnceLazy(holder, latest, artifactId, () =>
+            {
+                using WorkspaceReadHandle reader = _openReadSession(
+                    dbPath,
+                    workspaceRoot,
+                    workspace.WorkspaceId,
+                    true);
+                WorkspaceIndexFacts facts = WorkspaceIndexFactsReader.ReadSession(reader);
+                string indexIdentity = reader.Snapshot.IndexIdentity;
+                return new LazyFreshnessRebuildResult(
+                    () => LoadPinnedStoreIndex(
+                        dbPath,
+                        workspaceRoot,
+                        workspace.WorkspaceId,
+                        indexIdentity),
+                    facts,
+                    indexIdentity);
+            })
+            : FreshnessPoller.PollOnce(holder, latest, artifactId, () =>
+            {
+                using WorkspaceReadHandle reader = _openReadSession(
+                    dbPath,
+                    workspaceRoot,
+                    workspace.WorkspaceId,
+                    false);
+                return new FreshnessRebuildResult(
+                    RepositoryIndexLoader.LoadSession(reader),
+                    reader.Snapshot.IndexIdentity);
+            });
         if (swapped)
             _logger.LogInformation("Freshness: rebuilt + swapped index to revision {Revision}.", latest);
         return new PollResult(swapped, latest);
+    }
+
+    private MillerRepositoryIndex LoadPinnedStoreIndex(
+        string dbPath,
+        string workspaceRoot,
+        string? workspaceId,
+        string expectedIdentity)
+    {
+        using WorkspaceReadHandle reader = _openReadSession(
+            dbPath,
+            workspaceRoot,
+            workspaceId,
+            true);
+        if (!string.Equals(reader.Snapshot.IndexIdentity, expectedIdentity, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The family-store generation changed before its lazy repository was loaded; retry after freshness converges.");
+        }
+        return RepositoryIndexLoader.LoadSession(reader);
     }
 }
 

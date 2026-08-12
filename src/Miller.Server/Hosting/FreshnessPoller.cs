@@ -6,6 +6,11 @@ public readonly record struct FreshnessRebuildResult(
     MillerRepositoryIndex Index,
     string? ArtifactId);
 
+public readonly record struct LazyFreshnessRebuildResult(
+    Func<MillerRepositoryIndex> IndexFactory,
+    WorkspaceIndexFacts Facts,
+    string? ArtifactId);
+
 /// <summary>
 /// The pure poll-then-swap decision behind <see cref="FreshnessService"/> (m3-design decision-2/-5): the
 /// testable seam with no SQLite, no timer, and no subprocess. Given the index holder, the latest persisted
@@ -73,4 +78,30 @@ public static class FreshnessPoller
     /// <exception cref="ArgumentNullException"><paramref name="holder"/> or <paramref name="rebuild"/> is null.</exception>
     public static bool PollOnce(IndexHolder holder, long latestRevision, Func<MillerRepositoryIndex> rebuild) =>
         PollOnce(holder, latestRevision, latestArtifactId: null, rebuild);
+
+    /// <summary>Publish a changed generation's metadata while deferring repository materialization.</summary>
+    public static bool PollOnceLazy(
+        IndexHolder holder,
+        long latestRevision,
+        string? latestArtifactId,
+        Func<LazyFreshnessRebuildResult> rebuild)
+    {
+        ArgumentNullException.ThrowIfNull(holder);
+        ArgumentNullException.ThrowIfNull(rebuild);
+
+        string? builtArtifactId = holder.BuiltArtifactId;
+        bool artifactReplaced = latestArtifactId is not null && builtArtifactId is not null
+            && !string.Equals(latestArtifactId, builtArtifactId, StringComparison.Ordinal);
+        if (!artifactReplaced && latestRevision <= holder.BuiltRevision)
+            return false;
+
+        LazyFreshnessRebuildResult rebuilt = rebuild();
+        holder.SwapLazy(
+            rebuilt.IndexFactory,
+            latestRevision,
+            checked((int)rebuilt.Facts.DocumentCount),
+            rebuilt.Facts.KnownExtensionsCount,
+            latestArtifactId ?? rebuilt.ArtifactId ?? builtArtifactId);
+        return true;
+    }
 }
