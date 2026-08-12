@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Miller.Server.Cli;
@@ -11,6 +12,9 @@ internal static class ServerJson
 
     public static string Note(string message) => $"{{\"note\":{String(message)}}}";
 
+    public static string Strings(ImmutableArray<string> values) =>
+        JsonSerializer.Serialize(values, ServerJsonContext.Default.ImmutableArrayString);
+
     public static string Serialize(DashboardLaunchJson value) =>
         JsonSerializer.Serialize(value, ServerJsonContext.Default.DashboardLaunchJson);
 
@@ -22,6 +26,7 @@ internal sealed record DashboardLaunchJson(string Status, string Url, int? Pid, 
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(string))]
+[JsonSerializable(typeof(ImmutableArray<string>))]
 [JsonSerializable(typeof(DashboardLaunchJson))]
 internal sealed partial class ServerJsonContext : JsonSerializerContext;
 

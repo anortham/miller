@@ -33,6 +33,14 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void ServerJson_ImmutableStrings_UsesJsonEscaping()
+    {
+        string json = ServerJson.Strings(["alpha", "quote\"", "line\n"]);
+
+        Assert.Equal("[\"alpha\",\"quote\\u0022\",\"line\\n\"]", json);
+    }
+
+    [Fact]
     public void Resolve_CurrentWorkspace_ReturnsAResolverFixedToTheCapturedSnapshot()
     {
         using var before = DbWithSymbol("current-ws", revision: 1, "ExistingType");

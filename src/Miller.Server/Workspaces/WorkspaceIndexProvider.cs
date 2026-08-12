@@ -1497,7 +1497,7 @@ public sealed class WorkspaceIndexProvider
             Math.Max(0, (long)observation.Elapsed.TotalMilliseconds),
             observation.Rows,
             observation.CandidateCount,
-            System.Text.Json.JsonSerializer.Serialize(observation.CandidateSample),
+            ServerJson.Strings(observation.CandidateSample),
             TelemetryContext.Current?.CorrelationId ?? "unmeasured");
     }
 
