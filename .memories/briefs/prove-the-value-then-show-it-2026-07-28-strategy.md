@@ -3,7 +3,7 @@ id: prove-the-value-then-show-it-2026-07-28-strategy
 title: Prove the value, then show it — 2026-07-28 strategy
 status: active
 created: 2026-07-29T00:13:39.439Z
-updated: 2026-08-10T23:50:36.939Z
+updated: 2026-08-12T00:55:07.355Z
 tags:
   - strategy
   - adoption
@@ -19,25 +19,26 @@ Miller replaces the retired Julie agent-tool core and is positioned on its measu
 
 - The approved storage design is released: one producer-owned versioned store per repository family, with a coherent view per checkout and deduplication across worktrees and time.
 - Do not redesign the store, view, coordinator, migration, rollback, or sidecar boundaries. `julie-extractors` owns extraction and all writes to producer store state; Miller owns reads and derived sidecars.
-- User decision 2026-08-10: family-store mode is the default, not opt-in. Unset/blank `MILLER_INDEX_STORE` enables it; explicit `0|false|off|disabled` selects the existing legacy compatibility path, including export-before-serving and no stale fallback.
-- Per-view Miller sidecars remain the shipped design. Family-shared vectors and cursor-incremental search/content sidecars are follow-up work, not an invitation to redesign the released v1.18 path.
+- Family-store mode is default-on. Unset/blank `MILLER_INDEX_STORE` enables it; explicit `0|false|off|disabled` selects the legacy compatibility path, including export-before-serving and no stale fallback.
+- Per-view Miller sidecars remain the shipped design. Family-shared vectors and cursor-incremental search/content sidecars are follow-up work, not an invitation to redesign the released path.
 
 ## Release status
 
-- Stable Miller v1.18.0 was published 2026-08-10 from commit `13bd8a588ba2efe8ff3115420dcc65ac34cdcc53` after local, Linux/Windows CI, Scale, four-platform package, checksum, archive-content, and live-download gates passed.
-- `julie-extract` 2.31.3 is the shipped producer pin. Its stable four-platform release was published from commit `4e07f5e9`; it hardens concurrent multi-worktree writer fencing and maintenance recovery.
-- A7 durable reader pins and lock-order proof, plus A8 cursor-incremental sidecar convergence, remain the explicit next storage phases.
-- User cleared the prior separate-session ownership constraint on `/home/murphy/source/julie-extractors` on 2026-08-10; producer changes are available for coordinated follow-up when needed.
+- Stable Miller v1.18.1 is live as of 2026-08-11. The next Miller candidate is v1.18.2.
+- `julie-extract` v2.32.0 is live with four platform assets as of 2026-08-11 local time. It makes scoped exact family-store resolution default, adds safe full fallback/rebase behavior, recovers partial-resolution stores, and carries Windows pointer-close/durability fixes.
+- Miller `main` is a local continuation tree ahead of `origin/main`, containing the merged user-relief and context-cancellation work. A clean consumer branch adds exact base-rotation and partial-resolution RootRebind regressions.
+- Current goal: adopt v2.32.0, reconcile those consumer tests, dogfood store recovery/sidecars/performance/platform contracts, and prepare—but do not publish—the v1.18.2 release candidate.
 
 ## Standing constraints
 
 - No new MCP tools without explicit approval.
 - Local semantic retrieval remains default-on/off-switchable and separate from fleet semantics.
 - Preserve unrelated user changes in the main Miller checkout.
+- Do not push, tag, publish, or release without explicit user approval.
 
 ## References
 
-- `docs/findings/2026-08-10-v1.18.0-release-verification.md`
+- `docs/plans/2026-08-11-user-relief-bugfix-program.md`
+- `docs/findings/2026-08-11-user-relief-bugfix-verification.md`
 - `docs/plans/2026-08-10-v1.18-default-store-release-plan.md`
-- `docs/findings/2026-08-09-index-store-ph3-acceptance.md`
 - `docs/findings/2026-08-10-julie-extract-2.31.3-adoption.md`

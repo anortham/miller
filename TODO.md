@@ -2,10 +2,21 @@
 
 ## Active
 
-- Windows family-store bootstrap relief is implemented in julie-extract source with native `fs4` capacity
-  probing, but remains pending until the source-built Windows Capacity Store Probe job passes on a real Windows
-  runner. After that gate, publish julie-extract 2.31.5 with approval, pin it in Miller, and enable Miller's
-  Windows Scale pull-request gate; do not enable the gate while Miller still restores known-broken 2.31.4.
+- Semantic activation after `miller semantic prepare` requires a session restart (found 2026-08-02 fresh-machine
+  dogfood; evidence `.memories/2026-08-02/224155_d317.md`). Two latches: the broker stats the model cache only at
+  spawn, and Miller's embedding session opens its circuit permanently on `model_not_prepared`. Fix:
+  1. julie-extractors: broker re-stats the cache on `health` while unready, loads and flips ready.
+  2. Miller: park (don't latch) on `model_not_prepared`; re-probe health on the converge tick. Never respawn the
+     sidecar — the no-restart-loop invariant stays.
+  3. `semantic prepare`: after download, send one health probe to a live broker and print the outcome; surface the
+     reason + prepare hint in compact `workspace status`; fix the misleading health recommended-action.
+  Miller side ships first and is safe with old sidecars; the broker fix rides the next sidecar pin bump.
+
+- JSON diagnostics during family-store resolution convergence: `inspect`, `trace`, and `impact` with
+  `format=json` pass an empty result into `ToolDiagnosticRenderer.AttachJson` and return
+  `invalid_json_output`; compact correctly returns `resolution_converging`. Add JSON variants to
+  `ResolutionLayerGuardTests` and render a standalone diagnostic when the attached output is empty
+  (found 2026-08-11 dogfood; evidence `.memories/2026-08-11/125539_bf6d.md`).
 
 ## Product Backlog
 
