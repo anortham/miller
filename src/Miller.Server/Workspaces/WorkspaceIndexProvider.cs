@@ -1,3 +1,4 @@
+using Miller.Core.Graph;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
@@ -22,8 +23,8 @@ public sealed class WorkspaceIndexProvider
     private readonly Func<string, long, IRegionSearchIndex> _loadRegionSearch;
     private readonly Func<long, bool?> _currentIndexFresh;
     private readonly Func<string, string, string?, WorkspaceReadHandle> _openReadSession;
-    private readonly Func<IWorkspaceReadSession, MillerRepositoryIndex> _loadSessionIndex;
     private readonly Func<IWorkspaceReadSession, SymbolSearchProjection> _loadSessionSymbolSearch;
+    private readonly Func<WorkspaceReadHandle, ISymbolLookupIndex> _openStoreSymbolSearch;
     private readonly SymbolSearchSidecar _sidecar;
     private readonly object _cacheGate = new();
     private readonly Dictionary<CacheKey, Lazy<CachedIndex>> _cache = new();
@@ -74,7 +75,8 @@ public sealed class WorkspaceIndexProvider
         SymbolSearchSidecar sidecar,
         Func<string, string, string?, WorkspaceReadHandle>? openReadSession = null,
         Func<IWorkspaceReadSession, MillerRepositoryIndex>? loadSessionIndex = null,
-        Func<IWorkspaceReadSession, SymbolSearchProjection>? loadSessionSymbolSearch = null)
+        Func<IWorkspaceReadSession, SymbolSearchProjection>? loadSessionSymbolSearch = null,
+        Func<WorkspaceReadHandle, ISymbolLookupIndex>? openStoreSymbolSearch = null)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(currentWorkspace);
@@ -100,8 +102,14 @@ public sealed class WorkspaceIndexProvider
         _sidecar = sidecar;
         _openReadSession = openReadSession ?? ((databasePath, root, workspaceId) =>
             new WorkspaceReadHandle(LegacyArtifactReadSession.Open(databasePath, root, workspaceId)));
-        _loadSessionIndex = loadSessionIndex ?? (session => RepositoryIndexLoader.LoadSession(session));
+        _ = loadSessionIndex;
         _loadSessionSymbolSearch = loadSessionSymbolSearch ?? SymbolSearchProjectionLoader.LoadSession;
+        _openStoreSymbolSearch = openStoreSymbolSearch ?? (readSession =>
+        {
+            string storeRoot = readSession.FamilyStoreRoot
+                ?? throw new InvalidOperationException("The family-store read session has no store root.");
+            return _sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot);
+        });
     }
 
     public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
@@ -203,15 +211,17 @@ public sealed class WorkspaceIndexProvider
         try
         {
             long revision = ContextRevision(readSession.Snapshot, holderRevision);
-            CachedIndex? cached = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore
-                ? GetOrLoad(
-                    KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot),
-                    () => _loadSessionIndex(readSession))
-                : null;
-            MillerRepositoryIndex index = cached?.Index ?? holderIndex;
-            SmartTargetResolver resolver = cached?.Resolver ?? new SmartTargetResolver(index);
+            bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+            ISymbolLookupIndex index = familyStore
+                ? ResolveFamilyStoreLookup(_currentWorkspace.WorkspaceId, readSession)
+                : holderIndex;
+            ISymbolGraphReachability graph = familyStore
+                ? new SqliteSymbolGraphIndex(readSession)
+                : holderIndex.Graph;
+            var resolver = new SmartTargetResolver(index);
             return new WorkspaceReadContext(
                 index,
+                graph,
                 resolver,
                 readSession,
                 _currentWorkspace.WorkspaceId,
@@ -299,9 +309,7 @@ public sealed class WorkspaceIndexProvider
         {
             long revision = ContextRevision(readSession.Snapshot, holderRevision);
             ISymbolLookupIndex index = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore
-                ? GetOrAddSymbolReadCache(
-                    KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot),
-                    () => new CachedSymbolRead(_loadSessionSymbolSearch(readSession))).Index
+                ? ResolveFamilyStoreLookup(_currentWorkspace.WorkspaceId, readSession)
                 : holderIndex;
             return new WorkspaceSymbolReadContext(
                 index,
@@ -369,17 +377,22 @@ public sealed class WorkspaceIndexProvider
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
             long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
-            CacheKey key = familyStore
-                ? KeyFor(row.WorkspaceId, readSession.Snapshot)
-                : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
-            CachedIndex cached = GetOrLoad(
-                key,
-                () => familyStore
-                    ? _loadSessionIndex(readSession)
-                    : _loadIndex(row.IndexDbPath));
+            CachedIndex? cached = familyStore
+                ? null
+                : GetOrLoad(KeyFor(row.WorkspaceId, row.IndexDbPath, revision), () => _loadIndex(row.IndexDbPath));
+            ISymbolLookupIndex index = familyStore
+                ? ResolveFamilyStoreLookup(row.WorkspaceId, readSession)
+                : cached!.Index;
+            ISymbolGraphReachability graph = familyStore
+                ? new SqliteSymbolGraphIndex(readSession)
+                : cached!.Index.Graph;
+            SmartTargetResolver resolver = familyStore
+                ? new SmartTargetResolver(index)
+                : cached!.Resolver;
             return new WorkspaceReadContext(
-                cached.Index,
-                cached.Resolver,
+                index,
+                graph,
+                resolver,
                 readSession,
                 row.WorkspaceId,
                 row.CanonicalRoot,
@@ -397,6 +410,25 @@ public sealed class WorkspaceIndexProvider
             readSession.Dispose();
             throw;
         }
+    }
+
+    private ISymbolLookupIndex ResolveFamilyStoreLookup(
+        string? workspaceId,
+        WorkspaceReadHandle readSession)
+    {
+        CacheKey key = KeyFor(workspaceId, readSession.Snapshot);
+        if (_sidecar.Enabled)
+        {
+            return GetOrAddSymbolSearchCache(
+                key,
+                () => new CachedSymbolSearch(
+                    _openStoreSymbolSearch(readSession),
+                    IsSidecar: true)).Index;
+        }
+
+        return GetOrAddSymbolReadCache(
+            key,
+            () => new CachedSymbolRead(_loadSessionSymbolSearch(readSession))).Index;
     }
 
     private WorkspaceSymbolSearchContext ResolveRegisteredSymbolSearch(string workspaceId, bool ensureFresh)
@@ -467,16 +499,13 @@ public sealed class WorkspaceIndexProvider
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
             long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
-            CacheKey key = familyStore
-                ? KeyFor(row.WorkspaceId, readSession.Snapshot)
-                : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
-            CachedSymbolRead cached = GetOrAddSymbolReadCache(
-                key,
-                () => new CachedSymbolRead(familyStore
-                    ? _loadSessionSymbolSearch(readSession)
-                    : _loadSymbolSearch(row.IndexDbPath)));
+            ISymbolLookupIndex index = familyStore
+                ? ResolveFamilyStoreLookup(row.WorkspaceId, readSession)
+                : GetOrAddSymbolReadCache(
+                    KeyFor(row.WorkspaceId, row.IndexDbPath, revision),
+                    () => new CachedSymbolRead(_loadSymbolSearch(row.IndexDbPath))).Index;
             return new WorkspaceSymbolReadContext(
-                cached.Index,
+                index,
                 readSession,
                 row.WorkspaceId,
                 row.CanonicalRoot,

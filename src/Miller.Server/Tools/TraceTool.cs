@@ -147,9 +147,11 @@ public sealed class TraceTool
             }
             else
             {
-                output = normalizedMode == ModePath
-                    ? Run(
+                if (normalizedMode == ModePath)
+                {
+                    output = RunGraph(
                         context.Index,
+                        context.Graph,
                         context.Resolver,
                         target,
                         scope,
@@ -161,17 +163,55 @@ public sealed class TraceTool
                         json,
                         path_kind,
                         out emitted,
-                        out nodesVisited)
-                    : Run(context.Index, context.Resolver,
-                        target, scope, mode, to, depth, limit, full,
-                        json, reference_kind, include_definition,
+                        out nodesVisited);
+                }
+                else if (normalizedMode == ModeBridge && context.Index is MillerRepositoryIndex repositoryIndex)
+                {
+                    output = Run(
+                        repositoryIndex,
+                        context.Resolver,
+                        target,
+                        scope,
+                        mode,
+                        to,
+                        depth,
+                        limit,
+                        full,
+                        json,
+                        reference_kind,
+                        include_definition,
+                        (symbol, query) => ReferenceEvidenceReader.Read(context.ReadSession, symbol.SymbolId, query),
+                        context.WorkspaceId ?? "current",
+                        null,
+                        continuation,
+                        out emitted,
+                        out nodesVisited);
+                }
+                else
+                {
+                    output = RunGraph(
+                        context.Index,
+                        context.Graph,
+                        context.Resolver,
+                        target,
+                        scope,
+                        mode,
+                        to,
+                        depth,
+                        limit,
+                        full,
+                        json,
+                        reference_kind,
+                        include_definition,
                         (symbol, query) => ReferenceEvidenceReader.Read(context.ReadSession, symbol.SymbolId, query),
                         context.WorkspaceId ?? "current",
                         normalizedMode == ModeRefs
                             ? ReferenceEvidenceReader.ReadSnapshot(context.ReadSession)
                             : null,
                         continuation,
-                        out emitted, out nodesVisited);
+                        out emitted,
+                        out nodesVisited);
+                }
             }
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
             ToolDiagnostic? diagnostic;
@@ -180,7 +220,7 @@ public sealed class TraceTool
                 IndexLevelGuard.MarkDegraded(telemetry, "resolution_converging");
                 diagnostic = IndexLevelGuard.ResolutionConverging();
             }
-            else if (IndexLevelGuard.ReferenceLayerConverging(context.Index))
+            else if (IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel))
             {
                 // The converging explanation beats the generic empty diagnostic here: an empty (or thin) trace
                 // against a symbols-level artifact is expected, not evidence about the code.

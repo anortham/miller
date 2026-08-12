@@ -170,7 +170,7 @@ public sealed partial class ContextTool
                     case ReferenceMode.Off:
                         output = RunActionableWithCancellation(
                             context.Index,
-                            context.Index.Graph,
+                            context.Graph,
                             context.Resolver,
                             query,
                             bundleTokenBudget,
@@ -196,7 +196,7 @@ public sealed partial class ContextTool
                     case ReferenceMode.Usage:
                         output = RunReferenceAwareActionableWithCancellation(
                             context.Index,
-                            context.Index.Graph,
+                            context.Graph,
                             context.Resolver,
                             query,
                             bundleTokenBudget,

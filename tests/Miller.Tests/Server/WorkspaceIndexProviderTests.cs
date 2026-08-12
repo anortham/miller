@@ -133,7 +133,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
-    public void Resolve_RegisteredFamilyStoreCachesByManifestAndNeverLoadsTheLegacyArtifact()
+    public void Resolve_RegisteredFamilyStoreCachesBoundedLookupByManifestAndNeverLoadsFullIndex()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
         using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
@@ -150,10 +150,11 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             registry,
             loadIndex: _ => throw new InvalidOperationException("legacy artifact load was not expected"),
             openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(snapshot)),
-            loadSessionIndex: _ =>
+            loadSessionIndex: _ => throw new InvalidOperationException("full session index load was not expected"),
+            loadSessionSymbolSearch: _ =>
             {
                 loadCount++;
-                return RepositoryIndexLoader.Load(target.DbPath);
+                return SymbolSearchProjectionLoader.Load(target.DbPath);
             });
 
         using WorkspaceReadContext first = provider.Resolve("target-ws", ensureFresh: false);
@@ -176,6 +177,65 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal(13, afterStoreLogChange.Revision);
         Assert.Equal(IndexLevels.SymbolsMetadataValue, afterLevelChange.Snapshot.IndexLevel);
         Assert.Equal(4, loadCount);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredFamilyStoreUsesBoundedLookupAndNeverLoadsFullIndex()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-store-bounded-read");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        WorkspaceReadSnapshot snapshot = StoreSnapshot(root, "manifest-a");
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadIndex: _ => throw new InvalidOperationException("legacy artifact load was not expected"),
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(snapshot, target.DbPath)),
+            loadSessionIndex: _ => throw new InvalidOperationException("full session index load was not expected"));
+
+        using WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: false);
+
+        Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.IsType<TargetResolution.Symbol>(context.Resolver.Resolve("TargetType"));
+    }
+
+    [Fact]
+    public void ResolveSymbolRead_RegisteredFamilyStoreUsesGenerationCheckedSidecarRoute()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-store-symbol-read");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot snapshot = StoreSnapshot(root, "manifest-a");
+        int sidecarOpenCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: new SymbolSearchSidecar(enabled: true),
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(snapshot)),
+            loadSessionSymbolSearch: _ =>
+                throw new InvalidOperationException("projection fallback was not expected"),
+            openStoreSymbolSearch: _ =>
+            {
+                sidecarOpenCount++;
+                return SymbolSearchProjectionLoader.Load(target.DbPath);
+            });
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        using WorkspaceSymbolReadContext currentContext = provider.ResolveSymbolRead(null, ensureFresh: false);
+
+        Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.Single(currentContext.Index.FindByName("TargetType"));
+        Assert.Equal(2, sidecarOpenCount);
     }
 
     [Fact]
@@ -1655,7 +1715,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         SymbolSearchSidecar? sidecar = null,
         Func<string, string, string?, WorkspaceReadHandle>? openReadSession = null,
         Func<IWorkspaceReadSession, MillerRepositoryIndex>? loadSessionIndex = null,
-        Func<IWorkspaceReadSession, SymbolSearchProjection>? loadSessionSymbolSearch = null) =>
+        Func<IWorkspaceReadSession, SymbolSearchProjection>? loadSessionSymbolSearch = null,
+        Func<WorkspaceReadHandle, ISymbolLookupIndex>? openStoreSymbolSearch = null) =>
         new(
             holder,
             workspace,
@@ -1672,7 +1733,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             sidecar ?? SymbolSearchSidecar.Disabled,
             openReadSession,
             loadSessionIndex,
-            loadSessionSymbolSearch);
+            loadSessionSymbolSearch,
+            openStoreSymbolSearch);
 
     private static WorkspaceReadSnapshot StoreSnapshot(
         string root,
@@ -1709,6 +1771,27 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         public TResult Read<TResult>(Func<SqliteConnection, TResult> query) =>
             throw new InvalidOperationException("direct session reads were not expected");
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class FixtureReadSession(WorkspaceReadSnapshot snapshot, string dbPath) : IWorkspaceReadSession
+    {
+        public WorkspaceReadSnapshot Snapshot { get; } = snapshot;
+
+        public TResult Read<TResult>(Func<SqliteConnection, TResult> query)
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            return query(connection);
+        }
 
         public void Dispose()
         {

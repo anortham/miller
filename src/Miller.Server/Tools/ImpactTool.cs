@@ -225,7 +225,7 @@ public sealed class ImpactTool
                 ImpactExecution execution = RunIndexRevisionDeltaExecution(
                     snapshot,
                     context.Index,
-                    context.Index.Graph,
+                    context.Graph,
                     max_depth,
                     limit,
                     json,
@@ -252,7 +252,7 @@ public sealed class ImpactTool
             {
                 ImpactExecution execution = RunCore(
                     context.Index,
-                    context.Index.Graph,
+                    context.Graph,
                     context.Resolver,
                     target,
                     changed_paths,
@@ -275,7 +275,7 @@ public sealed class ImpactTool
                 IndexLevelGuard.MarkDegraded(telemetry, "resolution_converging");
                 diagnostic = IndexLevelGuard.ResolutionConverging();
             }
-            else if (IndexLevelGuard.ReferenceLayerConverging(context.Index))
+            else if (IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel))
             {
                 // Blast-radius math over a symbols-level artifact sees relationship edges only — the impacted
                 // set is incomplete by construction, so say so instead of letting a thin result read as safety.

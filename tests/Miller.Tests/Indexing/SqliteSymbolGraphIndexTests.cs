@@ -1,5 +1,7 @@
+using Microsoft.Data.Sqlite;
 using Miller.Core.Graph;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using System.Globalization;
 using Xunit;
 
@@ -149,6 +151,54 @@ public sealed class SqliteSymbolGraphIndexTests
         Assert.Equal(expected.ReachedCount, actual.ReachedCount);
         Assert.Equal(expected.TruncatedByDepth, actual.TruncatedByDepth);
         Assert.Equal(expected.TruncatedByLimit, actual.TruncatedByLimit);
+    }
+
+    [Fact]
+    public void SessionBackedReachUsesOnePinnedReadAndDoesNotOwnTheSession()
+    {
+        const string pageId = "41100000000000000000000000000001";
+        const string widgetId = "41100000000000000000000000000002";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    pageId, "Page", "class", "razor", "Pages/Page.razor",
+                    "public partial class Page", 1, null)
+                {
+                    Metadata = """{"type":"razor-component","qualifiedName":"Pages.Page"}""",
+                },
+                new JulieDbFixture.SymbolRow(
+                    widgetId, "Widget", "class", "razor", "Shared/Widget.razor",
+                    "public partial class Widget", 1, null)
+                {
+                    Metadata = """{"type":"razor-component","qualifiedName":"Shared.Widget"}""",
+                },
+            ]);
+        fixture.AddStructuralFact(
+            "blazor-session-reference",
+            null,
+            "Pages/Page.razor",
+            language: "razor",
+            patternId: BridgeStructuralPatterns.BlazorComponentReference,
+            captureName: "component_reference",
+            nodeKind: "markup_element");
+        fixture.ExecuteWrite(
+            """
+            UPDATE structural_facts
+            SET metadata_json =
+                '{"tag":"Widget","containing_component":"Page","namespace_context":["Shared"],"generic_arguments":[]}'
+            WHERE structural_fact_id = 'blazor-session-reference';
+            """);
+        using var session = new NonReentrantReadSession(fixture.DbPath);
+        var sqlite = new SqliteSymbolGraphIndex(session);
+
+        GraphReachResult actual = sqlite.ReachWithEvidence([widgetId], 1, 10, Direction.Reverse);
+        sqlite.Dispose();
+
+        Assert.Equal(pageId, Assert.Single(actual.Nodes).Id);
+        Assert.Equal(1, session.ReadCount);
+        Assert.False(session.IsDisposed);
     }
 
     [Fact]
@@ -437,6 +487,53 @@ public sealed class SqliteSymbolGraphIndexTests
         finally
         {
             CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
+    private sealed class NonReentrantReadSession : IWorkspaceReadSession
+    {
+        private readonly SqliteConnection _connection;
+        private bool _active;
+
+        public NonReentrantReadSession(string dbPath)
+        {
+            using LegacyArtifactReadSession snapshotSource = LegacyArtifactReadSession.Open(dbPath);
+            Snapshot = snapshotSource.Snapshot;
+            _connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            _connection.Open();
+        }
+
+        public WorkspaceReadSnapshot Snapshot { get; }
+
+        public int ReadCount { get; private set; }
+
+        public bool IsDisposed { get; private set; }
+
+        public TResult Read<TResult>(Func<SqliteConnection, TResult> query)
+        {
+            if (_active)
+                throw new InvalidOperationException("nested read");
+            _active = true;
+            ReadCount++;
+            try
+            {
+                return query(_connection);
+            }
+            finally
+            {
+                _active = false;
+            }
+        }
+
+        public void Dispose()
+        {
+            IsDisposed = true;
+            _connection.Dispose();
         }
     }
 }

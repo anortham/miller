@@ -1,3 +1,4 @@
+using Miller.Core.Graph;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Server.Resolution;
@@ -5,8 +6,8 @@ using Miller.Server.Resolution;
 namespace Miller.Server.Workspaces;
 
 /// <summary>
-/// The immutable read surface for one tool call. The index and resolver are built over the same captured
-/// <see cref="MillerRepositoryIndex"/> so a concurrent holder swap cannot split resolution across two revisions.
+/// The immutable read surface for one tool call. Lookup, graph traversal, and target resolution are fixed to the
+/// same captured artifact or family-store generation.
 /// </summary>
 /// <param name="IndexLevel">
 /// The artifact's <c>artifact_metadata.index_level</c>, read through <paramref name="ReadSession"/> when the context
@@ -16,7 +17,8 @@ namespace Miller.Server.Workspaces;
 /// no guard fires.
 /// </param>
 public sealed record WorkspaceReadContext(
-    MillerRepositoryIndex Index,
+    ISymbolLookupIndex Index,
+    ISymbolGraphReachability Graph,
     SmartTargetResolver Resolver,
     WorkspaceReadHandle ReadSession,
     string? WorkspaceId,
@@ -28,6 +30,34 @@ public sealed record WorkspaceReadContext(
     string? DisplayId = null,
     string IndexLevel = IndexLevels.FullMetadataValue) : IDisposable
 {
+    public WorkspaceReadContext(
+        MillerRepositoryIndex Index,
+        SmartTargetResolver Resolver,
+        WorkspaceReadHandle ReadSession,
+        string? WorkspaceId,
+        string WorkspaceRoot,
+        long Revision,
+        bool? IndexFresh,
+        string FreshnessStatus,
+        string? WarningText,
+        string? DisplayId = null,
+        string IndexLevel = IndexLevels.FullMetadataValue)
+        : this(
+            Index,
+            Index.Graph,
+            Resolver,
+            ReadSession,
+            WorkspaceId,
+            WorkspaceRoot,
+            Revision,
+            IndexFresh,
+            FreshnessStatus,
+            WarningText,
+            DisplayId,
+            IndexLevel)
+    {
+    }
+
     public WorkspaceReadSnapshot Snapshot => ReadSession.Snapshot;
 
     public void Dispose()

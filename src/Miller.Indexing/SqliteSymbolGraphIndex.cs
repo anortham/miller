@@ -1,4 +1,6 @@
+using Miller.Core.Contracts;
 using Miller.Core.Graph;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -14,7 +16,8 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     private const int MaximumEvidenceCacheEntries = 4000;
     private static readonly IReadOnlyList<string> Empty = Array.Empty<string>();
 
-    private readonly string _dbPath;
+    private readonly string? _dbPath;
+    private readonly IWorkspaceReadSession? _readSession;
     private readonly Dictionary<(string Id, Direction Direction), IReadOnlyList<string>> _neighbourCache = new();
     private readonly Dictionary<(string Id, Direction Direction), IReadOnlyList<GraphNeighbour>>
         _evidenceCache = new();
@@ -23,6 +26,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     private readonly Dictionary<string, IReadOnlyList<string>> _nameResolutionCache = new(StringComparer.Ordinal);
     private IReadOnlyList<GraphEdge>? _supplementalEdges;
     private Microsoft.Data.Sqlite.SqliteConnection? _connection;
+    private Microsoft.Data.Sqlite.SqliteConnection? _activeSessionConnection;
 
     public SqliteSymbolGraphIndex(string dbPath)
     {
@@ -31,64 +35,73 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         _dbPath = dbPath;
     }
 
+    public SqliteSymbolGraphIndex(IWorkspaceReadSession readSession)
+    {
+        ArgumentNullException.ThrowIfNull(readSession);
+
+        _readSession = readSession;
+    }
+
     public IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir) =>
-        GraphTraversal.Reach(starts, maxDepth, limit, dir, Contains, Neighbours);
+        Read(() => GraphTraversal.Reach(starts, maxDepth, limit, dir, Contains, Neighbours));
 
     public GraphReachResult ReachWithEvidence(
         IEnumerable<string> starts,
         int maxDepth,
         int limit,
         Direction dir)
-    {
-        _evidenceCache.Clear();
-        try
-        {
-            GraphReachResult result =
-                GraphTraversal.ReachWithEvidence(
-                    starts,
-                    maxDepth,
-                    limit,
-                    dir,
-                    Contains,
-                    null,
-                    (ids, direction) => BatchNeighbourEvidence(ids, direction),
-                    HasUnseenNeighbours);
-            return result with { Nodes = EnrichImpactEvidence(result.Nodes) };
-        }
-        finally
+        => Read(() =>
         {
             _evidenceCache.Clear();
-        }
-    }
+            try
+            {
+                GraphReachResult result =
+                    GraphTraversal.ReachWithEvidence(
+                        starts,
+                        maxDepth,
+                        limit,
+                        dir,
+                        Contains,
+                        null,
+                        (ids, direction) => BatchNeighbourEvidence(ids, direction),
+                        HasUnseenNeighbours);
+                return result with { Nodes = EnrichImpactEvidence(result.Nodes) };
+            }
+            finally
+            {
+                _evidenceCache.Clear();
+            }
+        });
 
     public IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth) =>
-        GraphTraversal.ShortestPath(from, to, maxDepth, Contains, Dependencies);
+        Read(() => GraphTraversal.ShortestPath(from, to, maxDepth, Contains, Dependencies));
 
     public GraphPath? ShortestPathWithEvidence(
         string from,
         string to,
         int maxDepth,
         Func<GraphNeighbour, bool> edgeFilter)
-    {
-        _evidenceCache.Clear();
-        try
-        {
-            return GraphTraversal.ShortestPathWithEvidence(
-                from,
-                to,
-                maxDepth,
-                Contains,
-                id => BatchNeighbourEvidence([id], Direction.Forward)
-                    .TryGetValue(id, out IReadOnlyList<GraphNeighbour>? neighbours)
-                        ? neighbours
-                        : Array.Empty<GraphNeighbour>(),
-                edgeFilter);
-        }
-        finally
+        => Read(() =>
         {
             _evidenceCache.Clear();
-        }
-    }
+            try
+            {
+                return GraphTraversal.ShortestPathWithEvidence(
+                    from,
+                    to,
+                    maxDepth,
+                    Contains,
+                    id => BatchNeighbourEvidence([id], Direction.Forward)
+                        .TryGetValue(id, out IReadOnlyList<GraphNeighbour>? neighbours)
+                            ? neighbours
+                            : Array.Empty<GraphNeighbour>(),
+                    edgeFilter);
+            }
+            finally
+            {
+                _evidenceCache.Clear();
+            }
+        });
 
     private IReadOnlyList<ReachedNode> EnrichImpactEvidence(IReadOnlyList<ReachedNode> nodes)
     {
@@ -458,16 +471,20 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     private static string NeighbourId(GraphEdge edge, string currentId) =>
         string.Equals(edge.From, currentId, StringComparison.Ordinal) ? edge.To : edge.From;
 
-    private IReadOnlyList<GraphEdge> SupplementalEdges() =>
-        _supplementalEdges ??=
-        [
-            .. TestLinkageReader.Read(Connection),
-            .. BlazorComponentGraphReader.Read(
-                _dbPath,
-                SqliteBridgeReader.ReadStructuralFacts(
-                    _dbPath,
-                    [BridgeStructuralPatterns.BlazorComponentReference])),
-        ];
+    private IReadOnlyList<GraphEdge> SupplementalEdges() => _supplementalEdges ??= LoadSupplementalEdges();
+
+    private IReadOnlyList<GraphEdge> LoadSupplementalEdges()
+    {
+        IReadOnlyList<StructuralFactRecord> facts = SqliteBridgeReader.ReadStructuralFacts(
+            Connection,
+            [BridgeStructuralPatterns.BlazorComponentReference]);
+        IReadOnlyList<GraphEdge> componentEdges = _readSession is null
+            ? BlazorComponentGraphReader.Read(_dbPath!, facts)
+            : BlazorComponentGraphReader.ReadSession(
+                new BorrowedReadSession(_readSession.Snapshot, Connection),
+                facts);
+        return [.. TestLinkageReader.Read(Connection), .. componentEdges];
+    }
 
     private IReadOnlyList<string> LoadDependencies(string id)
     {
@@ -629,7 +646,28 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         _connection = null;
     }
 
-    private Microsoft.Data.Sqlite.SqliteConnection Connection => _connection ??= SqliteReadOnlyAccess.Open(_dbPath);
+    private Microsoft.Data.Sqlite.SqliteConnection Connection =>
+        _activeSessionConnection ?? (_connection ??= SqliteReadOnlyAccess.Open(_dbPath!));
+
+    private TResult Read<TResult>(Func<TResult> query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        if (_readSession is null)
+            return query();
+
+        return _readSession.Read(connection =>
+        {
+            _activeSessionConnection = connection;
+            try
+            {
+                return query();
+            }
+            finally
+            {
+                _activeSessionConnection = null;
+            }
+        });
+    }
 
     private static void AddCandidate(SortedSet<string> ids, string sourceId, string candidateId)
     {
@@ -679,5 +717,19 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         IReadOnlyList<string> result = ids.Count == 0 ? Empty : ids.ToArray();
         _nameResolutionCache[name] = result;
         return result;
+    }
+
+    private sealed class BorrowedReadSession(
+        WorkspaceReadSnapshot snapshot,
+        Microsoft.Data.Sqlite.SqliteConnection connection) : IWorkspaceReadSession
+    {
+        public WorkspaceReadSnapshot Snapshot { get; } = snapshot;
+
+        public TResult Read<TResult>(Func<Microsoft.Data.Sqlite.SqliteConnection, TResult> query) =>
+            query(connection);
+
+        public void Dispose()
+        {
+        }
     }
 }
