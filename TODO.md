@@ -2,14 +2,6 @@
 
 ## Active
 
-- julie-extract 2.32.0 scoped resolution expanded one changed Miller test file (86 touched names) to more than
-  253k identifier resolutions and remained CPU-bound past 17 minutes, versus the prior 2m24 full-corpus baseline.
-  Fix the closure explosion and add a real-corpus one-file performance regression before Miller release prep.
-
-- julie-extract 2.32.0 `store import --from-artifact` can outlive its writer lease without heartbeating, then fail
-  `store-writer lease fencing check failed` after loading a 1.03 GB partial legacy artifact. The request remains
-  claimed by the exited process with no terminal result. Add lease-heartbeat and stale-claim recovery coverage.
-
 - Semantic activation after `miller semantic prepare` requires a session restart (found 2026-08-02 fresh-machine
   dogfood; evidence `.memories/2026-08-02/224155_d317.md`). Two latches: the broker stats the model cache only at
   spawn, and Miller's embedding session opens its circuit permanently on `model_not_prepared`. Fix:
@@ -27,6 +19,14 @@
   (found 2026-08-11 dogfood; evidence `.memories/2026-08-11/125539_bf6d.md`).
 
 ## Closed
+
+- julie-extract 2.32.0 scoped resolution no longer expands a one-file change into the pathological closure found
+  during dogfood. Clean replay measured an 18.309s scoped median versus 31.971s forced full with zero canonical
+  diffs; the real-corpus crossover improved from about 20 minutes to 165.512s, with producer regression coverage.
+
+- Long julie-extract 2.32.0 `store import --from-artifact` requests now heartbeat the writer lease and reconcile
+  stale dead claims. The real 1.03 GB Julie recovery committed both request IDs, reached exact manifest generation
+  2 in 364.057s, and completed a subsequent refresh in 242.611s.
 
 - A valid family-store pointer whose store root disappeared no longer blocks its own repair at the extractor
   eligibility gate. Miller uses the preserved legacy binary version only for downgrade safety in that exact case

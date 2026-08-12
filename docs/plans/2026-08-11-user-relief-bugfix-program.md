@@ -34,9 +34,12 @@
 - `miller semantic prepare` leaves a live unready broker and Miller session latched until restart. The sidecar retains a loader but does not invoke it from `health`; Miller maps a valid `model_not_prepared` refusal to `CircuitOpen`.
 - `julie-extract` runs `powershell.exe -Command "(Get-Volume -FilePath $args[0]).SizeRemaining" <path>`. Windows PowerShell consumes the path as command text instead of binding `$args[0]`, causing `capacity_probe_failed` during family-store bootstrap.
 - Repeated `source=Roots` bindings are request-time recovery from `BootstrapPhase.Failed`, not a second retry timer. Fix the producer failure and its diagnostics; do not add another bootstrap retry policy in this program.
-- 2026-08-11 integration dogfood found two additional 2.32.0 producer blockers: scoped closure expanded one
-  changed file to more than 253k identifiers and remained CPU-bound past 17 minutes, and a 1.03 GB
-  `from_artifact` import lost its writer lease after 17.62 seconds and left a non-terminal claimed request.
+- 2026-08-11 integration dogfood found and subsequently closed two additional 2.32.0 producer blockers. Scoped
+  closure had expanded one changed file to more than 253k identifiers and remained CPU-bound past 17 minutes;
+  clean replay now measures 18.309s scoped versus 31.971s forced full with zero canonical diffs, and the real
+  crossover completes in 165.512s instead of about 20 minutes. A 1.03 GB `from_artifact` import had lost its
+  writer lease after 17.62 seconds and left a non-terminal claim; heartbeat/stale-claim recovery committed both
+  request paths and recovered the real Julie workspace to exact manifest generation 2 in 364.057 seconds.
 - The same dogfood found and fixed a Miller boundary defect: a valid dangling store pointer was rejected before
   RootRebind. The recovery gate now distinguishes an absent store root from a malformed pointer or corrupt
   existing store and retains downgrade protection using the preserved legacy version.
@@ -282,6 +285,13 @@
 **What to build:** Restore both fixed producer binaries from source into Miller, run all repository branch gates, then repeat the original JSON convergence, minimal context, inspect/trace, semantic prepare→health→embed, and store bootstrap repros. Record hard assertions and report-only timings. Remove the two Active TODO entries only after their acceptance criteria pass; do not alter excluded product backlog entries.
 
 **Approach:** Record repository path/branch/commit/dirty state before and after integration. Use the same context parameters and machine as the baseline. Run Miller fast and Scale suites separately, then Release build. On Windows, use the PR CI result or an equivalent real Windows runner; Linux cannot stand in for the failed PowerShell path. Produce release notes/version/pin changes only after the user separately approves publication.
+
+**Task 4 integration evidence:** Released julie-extract 2.32.0 recovery is exact for both real workspaces. Miller's
+local search/content/vector sidecars and semantic broker are ready; Julie's foreign-workspace vectors remain
+honestly unavailable because embeddings are leader-owned. Public MCP report-only timings are search 183ms,
+inspect 1.819s, context 8.935s, impact 6.390s, trace 6.139s, and non-writing edit preview 26ms. The published
+Windows asset digest/layout/version were inspected, while actual Windows evidence comes from successful release
+build and `Windows Capacity Store Probe` CI execution at `076db37d1921013468b9b1882c23707a01341c07`.
 
 **Acceptance criteria:**
 - [ ] All hard gates in the Verification Strategy pass with ledger entries tied to exact commits.

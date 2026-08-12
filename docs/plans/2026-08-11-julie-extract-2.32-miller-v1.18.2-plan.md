@@ -197,14 +197,14 @@
 **Approach:** Capture before/after state and phase timings. Prefer bounded CLI candidate processes so this session's MCP transport remains available until code exploration is complete. Run any required restart/leadership handoff last and re-check all related worktrees afterward.
 
 **Acceptance criteria:**
-- [ ] The failed Julie workspace recovers from partial resolution and becomes readable/exact.
-- [ ] Miller workspace reaches exact resolution with search/content/vectors current and semantic broker healthy or honestly degraded.
-- [ ] Public read surfaces and edit preview return valid compact/JSON output with no stale fallback.
-- [ ] Legacy compatibility mode exports the current view and never serves an older artifact.
-- [ ] Scoped/default and forced-full results are canonically equivalent; timings are recorded.
-- [ ] Windows release asset layout/version and upstream Windows gates are verified; any Miller-hosted Windows gate still requiring a push is named explicitly.
-- [x] The Miller dangling-pointer RootRebind dogfood fix passes its real-producer Scale regression and 84 affected
-  pure tests and is committed locally; producer blockers remain open.
+- [x] The failed Julie workspace recovers from partial resolution and becomes readable/exact.
+- [x] Miller workspace reaches exact resolution with search/content/vectors current and semantic broker healthy or honestly degraded.
+- [x] Public read surfaces and edit preview return valid compact/JSON output with no stale fallback.
+- [x] Legacy compatibility mode exports the current view and never serves an older artifact.
+- [x] Scoped/default and forced-full results are canonically equivalent; timings are recorded.
+- [x] Windows release asset layout/version and upstream Windows gates are verified; no additional Miller-hosted
+  Windows gate is required for Task 4.
+- [x] Dogfood fixes pass focused pure and real-producer Scale tests and are committed locally through `47421be3`.
 
 ### Task 5: Prepare and gate Miller v1.18.2
 

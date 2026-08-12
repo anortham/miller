@@ -71,16 +71,28 @@ The Miller Scale gate used the source-built extractor and passed the real family
 bootstrap/reuse tests, with improved producer failure detail available on assertion failure. The extractor
 default and contract gates passed the native capacity tests and real public store import.
 
-This Linux host cannot prove the original Windows PowerShell failure is gone. The extractor now has a
-source-built Windows Capacity Store Probe job, but it has not run remotely. Miller's Windows Scale pull-request
-gate therefore remains disabled while the repository pin is `2.31.4`.
+At the time of this source-built run, the Linux host could not prove the original Windows PowerShell failure was
+gone. Follow-up released-2.32.0 evidence closes that remote gate: the release-build Windows job and the
+`Windows Capacity Store Probe` both succeeded at `076db37d1921013468b9b1882c23707a01341c07`. The published
+Windows asset also matched its SHA-256, archive layout, embedded checksum, PE x64 metadata, and 2.32.0 version.
+Linux archive inspection is not presented as Windows runtime execution; the CI jobs provide that proof.
+
+### Released 2.32.0 integration follow-up
+
+The real Julie workspace recovered to exact manifest generation 2 after the producer heartbeat/stale-claim fixes;
+both request IDs committed. Miller is exact with local search/content/vector sidecars ready. Clean resolution replay
+measured 18.309s scoped versus 31.971s forced full with zero canonical diffs, while the previously pathological
+real crossover completed in 165.512s instead of about 20 minutes. Public MCP context measured 8.935s, consistent
+with the targeted-reference result above.
 
 ## Disposition
 
 - Closed locally: convergence-time JSON diagnostics.
 - Closed locally: context reference SQL and bounded term-rescue performance regression.
 - Closed locally: prepare-time semantic activation and Miller recovery/status behavior.
-- Pending: real Windows source CI and `cargo-deny`.
-- Recommended candidates after those gates and separate approval: semantic sidecar `0.1.1`, julie-extract
-  `2.31.5`, then Miller `1.18.2` with the new producer pins and Windows Scale pull-request gate.
+- Closed by released follow-up: real Windows source CI and julie-extract 2.32.0 recovery/performance dogfood.
+- Pending from this earlier relief gate: `cargo-deny` was unavailable locally; use the existing remote
+  dependency-policy result for release review.
+- Recommended next step after the final Miller branch gate and separate approval: Miller `1.18.2` with the released
+  julie-extract 2.32.0 pin.
 - No pin, workflow, version, tag, push, publication, package, or release was changed or performed.

@@ -1,61 +1,82 @@
-# julie-extract 2.32.0 Dogfood — Blocked Findings
+# julie-extract 2.32.0 Dogfood — Passed
 
 ## Result
 
-Miller's released-producer compatibility tests pass, but live dogfood is not release-ready. The run found one
-Miller recovery defect, now fixed and focused-green, plus two julie-extract 2.32.0 producer blockers. The failed
-Julie workspace is still unreadable and the Miller workspace is still resolving; the remaining public-surface,
-legacy-off, package, and Windows gates must be repeated after the producer fixes.
+The released julie-extract 2.32.0 integration is ready for Miller release-candidate gating. Both workspaces are
+exact, the current Miller workspace has all derived sidecars ready, public reads and edit preview work, legacy-off
+compatibility is green, scoped resolution is faster than forced full, and the published Windows asset plus upstream
+Windows CI are verified. No push, tag, publication, or Miller release occurred.
 
-## Why partial resolution persisted
+The Julie workspace is honestly degraded only for foreign-workspace semantic vectors: its semantic broker is ready,
+but embeddings are produced only by the resident workspace leader. Search and content are current, and no vector
+readiness is claimed for that foreign workspace.
 
-- The live Miller leader is `1.18.1+470cfc1d` and records bundled extractor `2.31.4`, while the artifact records
-  `2.32.0`. It remained the leader after the copied tool was replaced and launched the new binary from the old host.
-- Resolver PID 1729619 is conclusively 2.32.0: `/proc/1729619/exe` SHA-256
-  `5a5a32a60f6e060d2bc583e1f81968ee227deaf827f4fa86c9aae3655fa26877`, identical to both restored binaries.
-- One changed file, `tests/Miller.Tests/Indexing/MillerExtractContractTests.cs`, recorded 86 touched names. The scoped
-  scratch database expanded that to 189,880 and then 253,882 identifier resolutions; phase 1 and phase 3 were ready
-  while phase 2 never became ready. At the last bounded observation the process had run 17m20s at 98% CPU, about
-  27 MB RSS, with no terminal result. This exceeds the prior 2.31.4 full-corpus baseline of about 2m24s.
-- Store/view/request IDs: family `a271f2bd-7368-4da6-b5aa-24ffad69fb1f`, view
-  `7857a50b-4b5a-47ba-8c45-d4df703cc79e`, request `6a4c1fc90bfb47a8871177daa21f7398`.
+## Recovery and correctness
 
-## Julie workspace recovery
+- `/home/murphy/source/julie-extractors` recovered from partial/unpublished state through the public `workspace
+  open` path. The recovery reconciled both the new and stale dead requests; both request IDs reached `committed`.
+- The recovery completed in 364.057 seconds with maximum RSS 1,633,148 KB. A subsequent refresh completed in
+  242.611 seconds.
+- The resulting Julie view is readable and exact at manifest generation 2. Search and content are current.
+- `/home/murphy/source/miller` is exact with search, content, and vectors current/ready. Its semantic broker is ready.
+- Exact state was read from the published family view; Miller did not fabricate exactness from the preserved partial
+  legacy artifact and did not serve a stale legacy fallback.
 
-Before recovery, `/home/murphy/source/julie-extractors/.miller/store.json` pointed to a missing family root and the
-preserved 2.31.3 legacy artifact reported `reference_resolution_status=partial`. Its dead 1.17.0/2.29.0 leader
-journal recorded 87 failed `RootRebind` attempts.
+## Defects found and closed during dogfood
 
-The first current-candidate `workspace open --path /home/murphy/source/julie-extractors --json` exposed a Miller
-defect: a valid pointer to an absent store was refused as `ineligible_extractor` before RootRebind. A real-producer
-Scale regression failed `Expected: Refreshed; Actual: IneligibleExtractor`. The fix allows legacy version evidence
-only for this precise absent-store-root case and selects `ScanIntent.RootRebind`; malformed pointers and corrupt
-existing stores still refuse leadership. The exact Scale regression passed, followed by 84 affected pure tests.
+- A valid pointer to a missing store root was rejected before `RootRebind`. Miller now distinguishes true absence
+  from inaccessible/corrupt roots and keeps the safe refusal behavior for the latter.
+- The explicit recovery override was intercepted before leadership policy. It now reaches the existing eligibility
+  decision without changing the default refusal path.
+- A populated family could contain a serving generation but no published view for the failed workspace. Explicit
+  recovery now selects `RootRebind`, re-plans only that unpublished member, and treats only `Planned + ViewNotFound`
+  as an absent pre-import state. Other store corruption still propagates.
+- julie-extract's long import now heartbeats its writer lease and reconciles stale claimed requests.
+- Scoped resolution no longer explodes one changed file into an unbounded closure; producer regression coverage
+  protects the corrected expansion.
 
-With that fix, the public recovery reached 2.32.0 `store import --from-artifact`, then failed after 17.62s with
-`store-writer lease fencing check failed` and peak RSS 1,024,140 KB. Request
-`ddc314ef493946158b7a9d013465af67` remains claimed by exited PID 1738073, with no terminal log/result. The import
-created the store and loaded data, but a likely un-heartbeated 15-second writer lease expired before publication.
-A bounded retry created no new request or mutation and was safely refused against the unreadable incomplete store.
+## Performance evidence
 
-## Before-state facts
+All measurements are report-only wall-clock observations on the same machine; correctness and canonical equality
+remain hard gates.
 
-- Candidate: Miller `1.18.1+720fb88d652a`, pinned julie-extract `2.32.0`, clean Release rebuild.
-- Miller store: 2,681,700,480 bytes; `store.db` 1,871,900,672; search 358,821,888; content 128,643,072;
-  vector 16,613,376. Cursor 8327, resolution converging, search/content stale, vectors unstamped.
-- Semantic broker was honestly ready on Vulkan with the configured model and accelerator lease.
-- Julie legacy `.miller`: 1,450,540,588 bytes; `symbols.db` 1,029,136,384; search 314,146,816;
-  content 90,804,224; vectors 14,540,800.
-- Candidate status/health JSON parsed successfully. Status took 0.33s and health 0.48s for Miller; Julie status
-  took 0.17s and health 0.18s.
+- Clean replay median: scoped default 18.309 seconds versus forced full 31.971 seconds, with zero canonical diffs.
+- Real-corpus crossover: 165.512 seconds versus the prior approximately 20-minute pathological run, about 7.4x
+  faster.
+- Public MCP timings: search 183 ms, inspect 1,819 ms, context 8,935 ms, impact 6,390 ms, trace 6,139 ms, and edit
+  preview 26 ms. Edit preview wrote nothing.
+- The original 2.31.4 comparison was about 2m24s for full store resolution and roughly 8–12 seconds for context
+  after targeted reads. The corrected 2.32 path restores that operating range while retaining scoped/full equality.
+
+## Public and compatibility surfaces
+
+- Candidate version/capabilities, workspace status/health, lexical and semantic search, source/content search,
+  patterns, inspect, trace, impact, context, compact/JSON diagnostics, edit dry-run, and cross-workspace reads were
+  exercised against exact stores.
+- JSON outputs parsed; edit preview completed in 26 ms and wrote nothing.
+- `StoreOffBootstrapExportsCurrentStoreBeforeServingLegacy` and
+  `ReleasedStoreAndLegacyArtifactProduceEquivalentPublicReads` passed 2/2. The off-switch exports the current view
+  before serving legacy mode and does not fall back to an older artifact.
+- Task 3's released-producer replay already proved scoped-default and `JULIE_STORE_RESOLUTION_DELTA=off` forced-full
+  canonical equivalence; final clean replay again found zero diffs.
+
+## Windows evidence
+
+- Published asset `julie-extract-v2.32.0-x86_64-pc-windows-msvc.zip` matched SHA-256
+  `4d42f077e5f118b31178350b5881e5738b34c9d63ce5e520c98b7fd39884be6b`.
+- Archive layout, embedded checksum, PE x64 metadata, and embedded `julie-extract 2.32.0` version metadata were
+  verified without executing the Windows binary on Linux.
+- Upstream commit `076db37d1921013468b9b1882c23707a01341c07` has successful release-build Windows execution and a successful
+  `Windows Capacity Store Probe` CI job. This is the Windows runtime evidence; Linux inspection is not presented as
+  Windows execution.
 
 ## Gate disposition
 
-- Hard gate passed: bundled/version/capability contract and focused consumer equivalence from Task 3.
-- Hard gate passed: Miller dangling-pointer RootRebind recovery regression and affected pure tests.
-- Hard gate failed: live Julie workspace exact recovery (`store-writer lease fencing check failed`).
-- Hard gate failed: live Miller exact convergence and sidecar readiness (2.32 scoped resolution CPU regression).
-- Blocked behind those failures: repeatable context/search performance, all public read/edit surfaces,
-  legacy-off compatibility, Windows asset/CI proof, and Miller release preparation.
+- PASS: Julie recovery is exact/readable and both previously dead request paths terminalized.
+- PASS: Miller is exact with all local sidecars ready; Julie foreign vectors are honestly unavailable.
+- PASS: public reads, diagnostics, cross-workspace routing, and non-writing edit preview.
+- PASS: legacy-off current-view export with no stale fallback.
+- PASS: scoped/default and forced-full canonical equality plus performance evidence.
+- PASS: published Windows asset and upstream Windows execution/CI evidence.
 
-No push, tag, publish, release, process signal, store deletion, or stale legacy fallback occurred.
+Task 4 is complete. Task 5 owns the final Miller branch gate, version/release metadata, and release-candidate decision.
