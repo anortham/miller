@@ -166,11 +166,11 @@
 **Approach:** Keep pure tests fast and extractor launches Scale-tagged. Confirm both scoped-default and forced-full escape-hatch behavior where the public process contract permits it.
 
 **Acceptance criteria:**
-- [ ] Pin/contract focused tests pass.
-- [ ] Atomic base rotation remains readable without mixed-generation state.
-- [ ] Partial resolution is classified and repaired through `RootRebind` to exact state.
-- [ ] Released 2.32.0 works without a Miller schema/tool-surface change.
-- [ ] Focused verification passes and any required fix is committed locally.
+- [x] Pin/contract focused tests pass.
+- [x] Atomic base rotation remains readable without mixed-generation state.
+- [x] Partial resolution is classified and repaired through `RootRebind` to exact state.
+- [x] Released 2.32.0 works without a Miller schema/tool-surface change.
+- [x] Focused verification passes and any required fix is committed locally.
 
 ### Task 4: Dogfood the complete integration
 
