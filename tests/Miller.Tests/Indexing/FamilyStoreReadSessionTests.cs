@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Core.Graph;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
@@ -421,6 +422,121 @@ public sealed class FamilyStoreReadSessionTests
         Assert.Equal("target-after", ReadResolutionTarget(after));
     }
 
+    [Fact]
+    public void ResolutionViewsExposeTargetVersionForIndexedReverseGraphReads()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        InstallResolutionBase(
+            fixture,
+            "base-target-version",
+            "manifest-current",
+            baseVersionId: 2,
+            baseTargetSymbolId: "symbol",
+            deltaTargetSymbolId: null,
+            sequence: 3,
+            deltaGeneration: 1);
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+
+        (string[] IdentifierColumns, string[] PendingColumns) columns = session.Read(connection =>
+        {
+            static string[] ReadColumns(SqliteConnection connection, string view)
+            {
+                using SqliteCommand command = connection.CreateCommand();
+                command.CommandText = $"PRAGMA table_info({view});";
+                using SqliteDataReader reader = command.ExecuteReader();
+                var names = new List<string>();
+                while (reader.Read())
+                    names.Add(reader.GetString(1));
+                return names.ToArray();
+            }
+
+            return (
+                ReadColumns(connection, "identifier_resolutions"),
+                ReadColumns(connection, "pending_resolutions"));
+        });
+
+        Assert.Contains("target_version_id", columns.IdentifierColumns);
+        Assert.Contains("target_version_id", columns.PendingColumns);
+    }
+
+    [Fact]
+    public void ReverseGraphReadsUseTargetVersionIndexesOnPinnedFamilyView()
+    {
+        const string targetId = "60000000000000000000000000000001";
+        const string identifierCallerId = "60000000000000000000000000000002";
+        const string pendingCallerId = "60000000000000000000000000000003";
+        using StoreFixture fixture = StoreFixture.Create();
+        InstallResolutionBase(
+            fixture,
+            "base-graph-plan",
+            "manifest-current",
+            baseVersionId: 2,
+            baseTargetSymbolId: targetId,
+            deltaTargetSymbolId: null,
+            sequence: 3,
+            deltaGeneration: 1,
+            includeGraphRows: true);
+        InstallGraphRows(fixture, targetId, identifierCallerId, pendingCallerId);
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        session.Read(connection =>
+        {
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "PRAGMA automatic_index=OFF;";
+            command.ExecuteNonQuery();
+            return 0;
+        });
+        session.CaptureGraphResolutionQueryPlan = true;
+        using var graph = new SqliteSymbolGraphIndex(session);
+
+        IReadOnlyList<ReachedNode> result = graph.Reach([targetId], 1, 10, Direction.Reverse);
+
+        Assert.Equal([identifierCallerId, pendingCallerId], result.Select(static node => node.Id));
+        Assert.True(
+            session.LastGraphResolutionQueryPlan.Any(detail =>
+                detail.Contains("idx_read_resolution_identifiers_target", StringComparison.Ordinal) &&
+                detail.Contains("target_version_id=? AND target_symbol_id=?", StringComparison.Ordinal)),
+            string.Join(Environment.NewLine, session.LastGraphResolutionQueryPlan));
+        Assert.True(
+            session.LastGraphResolutionQueryPlan.Any(detail =>
+                detail.Contains("idx_read_resolution_pending_target", StringComparison.Ordinal) &&
+                detail.Contains("target_version_id=? AND target_symbol_id=?", StringComparison.Ordinal)),
+            string.Join(Environment.NewLine, session.LastGraphResolutionQueryPlan));
+        Assert.DoesNotContain(
+            session.LastGraphResolutionQueryPlan,
+            detail => detail.Contains("AUTOMATIC", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GraphResolutionReadsHonorDeltaReplacementAndPendingTombstone()
+    {
+        const string baseTargetId = "61000000000000000000000000000001";
+        const string deltaTargetId = "61000000000000000000000000000002";
+        const string identifierCallerId = "61000000000000000000000000000003";
+        const string pendingCallerId = "61000000000000000000000000000004";
+        using StoreFixture fixture = StoreFixture.Create();
+        InstallResolutionBase(
+            fixture,
+            "base-graph-overlay",
+            "manifest-current",
+            baseVersionId: 2,
+            baseTargetSymbolId: baseTargetId,
+            deltaTargetSymbolId: deltaTargetId,
+            sequence: 3,
+            deltaGeneration: 1,
+            includeGraphRows: true);
+        InstallGraphRows(fixture, baseTargetId, identifierCallerId, pendingCallerId);
+        InstallGraphOverlayRows(fixture, deltaTargetId);
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        using var graph = new SqliteSymbolGraphIndex(session);
+
+        IReadOnlyList<ReachedNode> baseResult = graph.Reach([baseTargetId], 1, 10, Direction.Reverse);
+        IReadOnlyList<ReachedNode> deltaResult = graph.Reach([deltaTargetId], 1, 10, Direction.Reverse);
+
+        Assert.Empty(baseResult);
+        ReachedNode reached = Assert.Single(deltaResult);
+        Assert.Equal(identifierCallerId, reached.Id);
+    }
+
     private static long ReadStoreLogSequence(StoreFixture fixture)
     {
         using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
@@ -444,6 +560,27 @@ public sealed class FamilyStoreReadSessionTests
         string? deltaTargetSymbolId,
         long sequence,
         long deltaGeneration)
+        => InstallResolutionBase(
+            fixture,
+            baseId,
+            baseManifestHash,
+            baseVersionId,
+            baseTargetSymbolId,
+            deltaTargetSymbolId,
+            sequence,
+            deltaGeneration,
+            includeGraphRows: false);
+
+    private static void InstallResolutionBase(
+        StoreFixture fixture,
+        string baseId,
+        string baseManifestHash,
+        long baseVersionId,
+        string baseTargetSymbolId,
+        string? deltaTargetSymbolId,
+        long sequence,
+        long deltaGeneration,
+        bool includeGraphRows)
     {
         string basePath = ResolutionBasePath(fixture, baseId);
         using (var baseConnection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -483,12 +620,19 @@ public sealed class FamilyStoreReadSessionTests
                   confidence REAL NOT NULL,
                   method TEXT NOT NULL,
                   PRIMARY KEY(version_id,pending_relationship_id)) STRICT;
+                CREATE INDEX idx_read_resolution_identifiers_target ON identifier_resolutions(
+                  target_version_id,target_symbol_id,version_id,identifier_id);
+                CREATE INDEX idx_read_resolution_pending_target ON pending_resolutions(
+                  target_version_id,target_symbol_id,version_id,pending_relationship_id);
                 INSERT INTO identifier_resolutions
                   VALUES ($version,'identifier',$version,$baseTarget,1,1.0,'exact','resolved',1);
+                INSERT INTO pending_resolutions
+                  SELECT $version,'pending',$version,$baseTarget,1,1.0,'exact' WHERE $graph=1;
                 """;
             command.Parameters.AddWithValue("$manifest", baseManifestHash);
             command.Parameters.AddWithValue("$version", baseVersionId);
             command.Parameters.AddWithValue("$baseTarget", baseTargetSymbolId);
+            command.Parameters.AddWithValue("$graph", includeGraphRows ? 1 : 0);
             command.ExecuteNonQuery();
         }
         long bytes = new FileInfo(basePath).Length;
@@ -566,7 +710,7 @@ public sealed class FamilyStoreReadSessionTests
               method TEXT,
               PRIMARY KEY(view_id,delta_generation,version_id,pending_relationship_id)) STRICT;
             INSERT INTO resolution_bases VALUES
-              ($base,$baseManifest,6,'ready',$relative,1,0,$bytes,$sha,$request,$now,$now);
+              ($base,$baseManifest,6,'ready',$relative,1,$pendingCount,$bytes,$sha,$request,$now,$now);
             INSERT INTO resolution_base_versions VALUES ($base,$baseVersion);
             INSERT INTO resolution_deltas VALUES
               ('view-a',$delta,$base,2,'manifest-current',6,$identifierReplacements,0,0,0,0,
@@ -591,9 +735,81 @@ public sealed class FamilyStoreReadSessionTests
         store.Parameters.AddWithValue("$now", $"2026-08-09T00:00:0{sequence}Z");
         store.Parameters.AddWithValue("$delta", deltaGeneration);
         store.Parameters.AddWithValue("$identifierReplacements", deltaTargetSymbolId is null ? 0 : 1);
+        store.Parameters.AddWithValue("$pendingCount", includeGraphRows ? 1 : 0);
         store.Parameters.AddWithValue("$deltaTarget", (object?)deltaTargetSymbolId ?? DBNull.Value);
         store.Parameters.AddWithValue("$sequence", sequence);
         store.ExecuteNonQuery();
+    }
+
+    private static void InstallGraphRows(
+        StoreFixture fixture,
+        string targetId,
+        string identifierCallerId,
+        string pendingCallerId)
+    {
+        string storePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = storePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            CREATE TABLE identifiers (
+              version_id INTEGER NOT NULL,identifier_id TEXT NOT NULL,reference_site_id TEXT,path TEXT NOT NULL,
+              language TEXT NOT NULL,name TEXT NOT NULL,kind TEXT NOT NULL,containing_symbol_id TEXT,
+              start_line INTEGER NOT NULL,start_column INTEGER NOT NULL,end_line INTEGER NOT NULL,end_column INTEGER NOT NULL,
+              start_byte INTEGER NOT NULL,end_byte INTEGER NOT NULL,confidence REAL,code_context TEXT,metadata_json TEXT,
+              PRIMARY KEY(version_id,identifier_id)) STRICT;
+            CREATE TABLE relationships (
+              version_id INTEGER NOT NULL,relationship_id TEXT NOT NULL,reference_site_id TEXT,from_symbol_id TEXT NOT NULL,
+              to_symbol_id TEXT NOT NULL,path TEXT NOT NULL,kind TEXT NOT NULL,start_line INTEGER,start_column INTEGER,
+              end_line INTEGER,end_column INTEGER,start_byte INTEGER,end_byte INTEGER,confidence REAL,metadata_json TEXT,
+              PRIMARY KEY(version_id,relationship_id)) STRICT;
+            CREATE TABLE pending_relationships (
+              version_id INTEGER NOT NULL,pending_relationship_id TEXT NOT NULL,reference_site_id TEXT,
+              from_symbol_id TEXT NOT NULL,caller_scope_symbol_id TEXT,path TEXT NOT NULL,kind TEXT NOT NULL,
+              target_display_name TEXT NOT NULL,target_terminal_name TEXT NOT NULL,target_receiver TEXT,
+              target_namespace_json TEXT,target_import_context TEXT,start_line INTEGER,start_column INTEGER,
+              end_line INTEGER,end_column INTEGER,start_byte INTEGER,end_byte INTEGER,confidence REAL,metadata_json TEXT,
+              PRIMARY KEY(version_id,pending_relationship_id)) STRICT;
+            INSERT INTO symbols VALUES
+              (2,$target,'same.cs','csharp','Target','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+              (2,$identifierCaller,'same.cs','csharp','IdentifierCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+              (2,$pendingCaller,'same.cs','csharp','PendingCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+            INSERT INTO identifiers VALUES
+              (2,'identifier',NULL,'same.cs','csharp','Target','call',$identifierCaller,1,1,1,2,0,1,1.0,NULL,NULL);
+            INSERT INTO pending_relationships VALUES
+              (2,'pending',NULL,$pendingCaller,$pendingCaller,'same.cs','calls','Target','Target',NULL,'[]',NULL,
+               1,1,1,2,0,1,1.0,NULL);
+            """;
+        command.Parameters.AddWithValue("$target", targetId);
+        command.Parameters.AddWithValue("$identifierCaller", identifierCallerId);
+        command.Parameters.AddWithValue("$pendingCaller", pendingCallerId);
+        command.ExecuteNonQuery();
+    }
+
+    private static void InstallGraphOverlayRows(StoreFixture fixture, string deltaTargetId)
+    {
+        string storePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = storePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO symbols VALUES
+              (2,$target,'same.cs','csharp','DeltaTarget','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+            INSERT INTO resolution_pending_deltas VALUES
+              ('view-a',1,2,'pending','tombstone',NULL,NULL,NULL,NULL,NULL);
+            """;
+        command.Parameters.AddWithValue("$target", deltaTargetId);
+        command.ExecuteNonQuery();
     }
 
     private static string ResolutionBasePath(StoreFixture fixture, string baseId) =>

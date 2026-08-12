@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
+using Miller.Core.Graph;
 using Miller.Indexing.Store;
 
 namespace Miller.Indexing.Reads;
@@ -33,7 +34,7 @@ public sealed class FamilyStoreReadException(
     public FamilyStoreReadFailure Failure { get; } = failure;
 }
 
-public sealed class FamilyStoreReadSession : IWorkspaceReadSession
+public sealed class FamilyStoreReadSession : IWorkspaceReadSession, IFamilyGraphResolutionReader
 {
     private const int StoreSchemaVersion = 2;
     private const int StoreFormatEpoch = 1;
@@ -46,6 +47,10 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
     private readonly SqliteConnection _connection;
     private readonly object _gate = new();
     private bool _disposed;
+
+    internal bool CaptureGraphResolutionQueryPlan { get; set; }
+
+    internal IReadOnlyList<string> LastGraphResolutionQueryPlan { get; private set; } = [];
 
     private FamilyStoreReadSession(
         SqliteConnection connection,
@@ -198,6 +203,235 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             return query(_connection);
         }
     }
+
+    IReadOnlyList<FamilyGraphResolutionEdge> IFamilyGraphResolutionReader.ReadResolutionEdges(
+        IReadOnlyList<string> candidateIds,
+        Direction direction)
+    {
+        if (candidateIds.Count == 0 || Visibility.ResolutionState != "exact")
+            return [];
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            IReadOnlyList<(string Id, long VersionId)> candidates = ReadGraphCandidates(candidateIds);
+            if (candidates.Count == 0)
+                return [];
+
+            var edges = new List<FamilyGraphResolutionEdge>();
+            var plans = new List<string>();
+            if (direction is Direction.Forward or Direction.Both)
+            {
+                ReadGraphResolutionArm(candidates, IdentifierBaseForwardSql, edges, plans);
+                ReadGraphResolutionArm(candidates, IdentifierDeltaForwardSql, edges, plans);
+                ReadGraphResolutionArm(candidates, PendingBaseForwardSql, edges, plans);
+                ReadGraphResolutionArm(candidates, PendingDeltaForwardSql, edges, plans);
+            }
+            if (direction is Direction.Reverse or Direction.Both)
+            {
+                ReadGraphResolutionArm(candidates, IdentifierBaseReverseSql, edges, plans);
+                ReadGraphResolutionArm(candidates, IdentifierDeltaReverseSql, edges, plans);
+                ReadGraphResolutionArm(candidates, PendingBaseReverseSql, edges, plans);
+                ReadGraphResolutionArm(candidates, PendingDeltaReverseSql, edges, plans);
+            }
+            LastGraphResolutionQueryPlan = plans;
+            return edges;
+        }
+    }
+
+    private IReadOnlyList<(string Id, long VersionId)> ReadGraphCandidates(IReadOnlyList<string> candidateIds)
+    {
+        string values = string.Join(", ", Enumerable.Range(0, candidateIds.Count).Select(index => $"($id{index})"));
+        using SqliteCommand command = _connection.CreateCommand();
+        command.CommandText = $"""
+            WITH candidate_ids(id) AS (VALUES {values})
+            SELECT candidate_ids.id,s.version_id
+            FROM candidate_ids
+            JOIN _miller_visible_entries AS visible
+            JOIN main.symbols AS s
+              ON s.version_id=visible.version_id AND s.symbol_id=candidate_ids.id;
+            """;
+        for (int index = 0; index < candidateIds.Count; index++)
+            command.Parameters.AddWithValue($"$id{index}", candidateIds[index]);
+        using SqliteDataReader reader = command.ExecuteReader();
+        var candidates = new List<(string Id, long VersionId)>();
+        while (reader.Read())
+            candidates.Add((reader.GetString(0), reader.GetInt64(1)));
+        return candidates;
+    }
+
+    private void ReadGraphResolutionArm(
+        IReadOnlyList<(string Id, long VersionId)> candidates,
+        string sql,
+        List<FamilyGraphResolutionEdge> edges,
+        List<string> plans)
+    {
+        string values = string.Join(", ", Enumerable.Range(0, candidates.Count).Select(index => $"($id{index},$version{index})"));
+        using SqliteCommand command = _connection.CreateCommand();
+        command.CommandText = $"WITH candidates(id,version_id) AS (VALUES {values})\n" + sql;
+        for (int index = 0; index < candidates.Count; index++)
+        {
+            command.Parameters.AddWithValue($"$id{index}", candidates[index].Id);
+            command.Parameters.AddWithValue($"$version{index}", candidates[index].VersionId);
+        }
+        if (CaptureGraphResolutionQueryPlan)
+            plans.AddRange(ReadQueryPlan(command));
+
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            edges.Add(new FamilyGraphResolutionEdge(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetDouble(4),
+                reader.GetString(5)));
+        }
+    }
+
+    private static IReadOnlyList<string> ReadQueryPlan(SqliteCommand command)
+    {
+        using SqliteCommand explain = command.Connection!.CreateCommand();
+        explain.CommandText = "EXPLAIN QUERY PLAN " + command.CommandText;
+        foreach (SqliteParameter parameter in command.Parameters)
+            explain.Parameters.AddWithValue(parameter.ParameterName, parameter.Value);
+        using SqliteDataReader reader = explain.ExecuteReader();
+        var plan = new List<string>();
+        while (reader.Read())
+            plan.Add(reader.GetString(3));
+        return plan;
+    }
+
+    private const string IdentifierBaseForwardSql = """
+        SELECT candidates.id,i.containing_symbol_id,r.target_symbol_id,i.kind,
+               COALESCE(r.confidence,i.confidence),'identifier_target'
+        FROM candidates
+        JOIN main.identifiers AS i ON i.version_id=candidates.version_id AND i.containing_symbol_id=candidates.id
+        JOIN resolution_base.identifier_resolutions AS r
+          ON r.version_id=i.version_id AND r.identifier_id=i.identifier_id
+        JOIN _miller_visible_entries AS target_visible ON target_visible.version_id=r.target_version_id
+        JOIN main.symbols AS target
+          ON target.version_id=r.target_version_id AND target.symbol_id=r.target_symbol_id
+        WHERE NOT EXISTS (
+          SELECT 1 FROM main.resolution_identifier_deltas AS d
+          WHERE d.view_id=(SELECT view_id FROM _miller_session)
+            AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
+            AND d.version_id=r.version_id AND d.identifier_id=r.identifier_id);
+        """;
+
+    private const string IdentifierDeltaForwardSql = """
+        SELECT candidates.id,i.containing_symbol_id,d.target_symbol_id,i.kind,
+               COALESCE(d.confidence,i.confidence),'identifier_target'
+        FROM candidates
+        JOIN main.identifiers AS i ON i.version_id=candidates.version_id AND i.containing_symbol_id=candidates.id
+        JOIN main.resolution_identifier_deltas AS d
+          ON d.view_id=(SELECT view_id FROM _miller_session)
+         AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
+         AND d.version_id=i.version_id AND d.identifier_id=i.identifier_id
+        JOIN _miller_visible_entries AS target_visible ON target_visible.version_id=d.target_version_id
+        JOIN main.symbols AS target
+          ON target.version_id=d.target_version_id AND target.symbol_id=d.target_symbol_id;
+        """;
+
+    private const string PendingBaseForwardSql = """
+        SELECT candidates.id,p.from_symbol_id,r.target_symbol_id,p.kind,
+               MIN(p.confidence,r.confidence),'pending_resolution'
+        FROM candidates
+        JOIN main.pending_relationships AS p
+          ON p.version_id=candidates.version_id AND p.from_symbol_id=candidates.id
+        JOIN resolution_base.pending_resolutions AS r
+          ON r.version_id=p.version_id AND r.pending_relationship_id=p.pending_relationship_id
+        JOIN _miller_visible_entries AS target_visible ON target_visible.version_id=r.target_version_id
+        JOIN main.symbols AS target
+          ON target.version_id=r.target_version_id AND target.symbol_id=r.target_symbol_id
+        WHERE NOT EXISTS (
+          SELECT 1 FROM main.resolution_pending_deltas AS d
+          WHERE d.view_id=(SELECT view_id FROM _miller_session)
+            AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
+            AND d.version_id=r.version_id AND d.pending_relationship_id=r.pending_relationship_id);
+        """;
+
+    private const string PendingDeltaForwardSql = """
+        SELECT candidates.id,p.from_symbol_id,d.target_symbol_id,p.kind,
+               MIN(p.confidence,d.confidence),'pending_resolution'
+        FROM candidates
+        JOIN main.pending_relationships AS p
+          ON p.version_id=candidates.version_id AND p.from_symbol_id=candidates.id
+        JOIN main.resolution_pending_deltas AS d
+          ON d.view_id=(SELECT view_id FROM _miller_session)
+         AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
+         AND d.version_id=p.version_id AND d.pending_relationship_id=p.pending_relationship_id
+         AND d.operation='replace'
+        JOIN _miller_visible_entries AS target_visible ON target_visible.version_id=d.target_version_id
+        JOIN main.symbols AS target
+          ON target.version_id=d.target_version_id AND target.symbol_id=d.target_symbol_id;
+        """;
+
+    private const string IdentifierBaseReverseSql = """
+        SELECT candidates.id,i.containing_symbol_id,r.target_symbol_id,i.kind,
+               COALESCE(r.confidence,i.confidence),'identifier_target'
+        FROM candidates
+        JOIN resolution_base.identifier_resolutions AS r
+          ON r.target_version_id=candidates.version_id AND r.target_symbol_id=candidates.id
+        JOIN _miller_visible_entries AS source_visible ON source_visible.version_id=r.version_id
+        JOIN main.identifiers AS i ON i.version_id=r.version_id AND i.identifier_id=r.identifier_id
+        JOIN main.symbols AS source
+          ON source.version_id=i.version_id AND source.symbol_id=i.containing_symbol_id
+        WHERE NOT EXISTS (
+          SELECT 1 FROM main.resolution_identifier_deltas AS d
+          WHERE d.view_id=(SELECT view_id FROM _miller_session)
+            AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
+            AND d.version_id=r.version_id AND d.identifier_id=r.identifier_id);
+        """;
+
+    private const string IdentifierDeltaReverseSql = """
+        SELECT candidates.id,i.containing_symbol_id,d.target_symbol_id,i.kind,
+               COALESCE(d.confidence,i.confidence),'identifier_target'
+        FROM candidates
+        JOIN main.resolution_identifier_deltas AS d
+          ON d.view_id=(SELECT view_id FROM _miller_session)
+         AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
+         AND d.target_version_id=candidates.version_id AND d.target_symbol_id=candidates.id
+        JOIN _miller_visible_entries AS source_visible ON source_visible.version_id=d.version_id
+        JOIN main.identifiers AS i ON i.version_id=d.version_id AND i.identifier_id=d.identifier_id
+        JOIN main.symbols AS source
+          ON source.version_id=i.version_id AND source.symbol_id=i.containing_symbol_id;
+        """;
+
+    private const string PendingBaseReverseSql = """
+        SELECT candidates.id,p.from_symbol_id,r.target_symbol_id,p.kind,
+               MIN(p.confidence,r.confidence),'pending_resolution'
+        FROM candidates
+        JOIN resolution_base.pending_resolutions AS r
+          ON r.target_version_id=candidates.version_id AND r.target_symbol_id=candidates.id
+        JOIN _miller_visible_entries AS source_visible ON source_visible.version_id=r.version_id
+        JOIN main.pending_relationships AS p
+          ON p.version_id=r.version_id AND p.pending_relationship_id=r.pending_relationship_id
+        JOIN main.symbols AS source
+          ON source.version_id=p.version_id AND source.symbol_id=p.from_symbol_id
+        WHERE NOT EXISTS (
+          SELECT 1 FROM main.resolution_pending_deltas AS d
+          WHERE d.view_id=(SELECT view_id FROM _miller_session)
+            AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
+            AND d.version_id=r.version_id AND d.pending_relationship_id=r.pending_relationship_id);
+        """;
+
+    private const string PendingDeltaReverseSql = """
+        SELECT candidates.id,p.from_symbol_id,d.target_symbol_id,p.kind,
+               MIN(p.confidence,d.confidence),'pending_resolution'
+        FROM candidates
+        JOIN main.resolution_pending_deltas AS d
+          ON d.view_id=(SELECT view_id FROM _miller_session)
+         AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
+         AND d.target_version_id=candidates.version_id AND d.target_symbol_id=candidates.id
+         AND d.operation='replace'
+        JOIN _miller_visible_entries AS source_visible ON source_visible.version_id=d.version_id
+        JOIN main.pending_relationships AS p
+          ON p.version_id=d.version_id AND p.pending_relationship_id=d.pending_relationship_id
+        JOIN main.symbols AS source
+          ON source.version_id=p.version_id AND source.symbol_id=p.from_symbol_id;
+        """;
 
     public void Dispose()
     {
@@ -879,7 +1113,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             ?
             """
             CREATE TEMP VIEW identifier_resolutions AS
-            SELECT b.identifier_id,b.target_symbol_id,b.tier,b.confidence,b.method,b.outcome,b.candidates,
+            SELECT b.identifier_id,b.target_version_id,b.target_symbol_id,b.tier,b.confidence,b.method,b.outcome,b.candidates,
                    (SELECT generation FROM _miller_session) AS resolved_at_revision
             FROM resolution_base.identifier_resolutions AS b
             JOIN _miller_visible_entries AS e ON e.version_id=b.version_id
@@ -889,14 +1123,14 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
                 AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
                 AND d.version_id=b.version_id AND d.identifier_id=b.identifier_id)
             UNION ALL
-            SELECT d.identifier_id,d.target_symbol_id,d.tier,d.confidence,d.method,d.outcome,d.candidates,
+            SELECT d.identifier_id,d.target_version_id,d.target_symbol_id,d.tier,d.confidence,d.method,d.outcome,d.candidates,
                    (SELECT generation FROM _miller_session)
             FROM main.resolution_identifier_deltas AS d
             JOIN _miller_visible_entries AS e ON e.version_id=d.version_id
             WHERE d.view_id=(SELECT view_id FROM _miller_session)
               AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session);
             CREATE TEMP VIEW pending_resolutions AS
-            SELECT b.pending_relationship_id,b.target_symbol_id,b.tier,b.confidence,b.method,
+            SELECT b.pending_relationship_id,b.target_version_id,b.target_symbol_id,b.tier,b.confidence,b.method,
                    (SELECT generation FROM _miller_session) AS resolved_at_revision
             FROM resolution_base.pending_resolutions AS b
             JOIN _miller_visible_entries AS e ON e.version_id=b.version_id
@@ -906,7 +1140,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
                 AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
                 AND d.version_id=b.version_id AND d.pending_relationship_id=b.pending_relationship_id)
             UNION ALL
-            SELECT d.pending_relationship_id,d.target_symbol_id,d.tier,d.confidence,d.method,
+            SELECT d.pending_relationship_id,d.target_version_id,d.target_symbol_id,d.tier,d.confidence,d.method,
                    (SELECT generation FROM _miller_session)
             FROM main.resolution_pending_deltas AS d
             JOIN _miller_visible_entries AS e ON e.version_id=d.version_id
@@ -917,13 +1151,15 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             :
             """
             CREATE TEMP VIEW identifier_resolutions AS
-            SELECT CAST(NULL AS TEXT) AS identifier_id,CAST(NULL AS TEXT) AS target_symbol_id,
+            SELECT CAST(NULL AS TEXT) AS identifier_id,CAST(NULL AS INTEGER) AS target_version_id,
+                   CAST(NULL AS TEXT) AS target_symbol_id,
                    CAST(NULL AS INTEGER) AS tier,CAST(NULL AS REAL) AS confidence,
                    CAST(NULL AS TEXT) AS method,CAST(NULL AS TEXT) AS outcome,
                    CAST(NULL AS INTEGER) AS candidates,CAST(NULL AS INTEGER) AS resolved_at_revision
             WHERE 0;
             CREATE TEMP VIEW pending_resolutions AS
-            SELECT CAST(NULL AS TEXT) AS pending_relationship_id,CAST(NULL AS TEXT) AS target_symbol_id,
+            SELECT CAST(NULL AS TEXT) AS pending_relationship_id,CAST(NULL AS INTEGER) AS target_version_id,
+                   CAST(NULL AS TEXT) AS target_symbol_id,
                    CAST(NULL AS INTEGER) AS tier,CAST(NULL AS REAL) AS confidence,
                    CAST(NULL AS TEXT) AS method,CAST(NULL AS INTEGER) AS resolved_at_revision
             WHERE 0;

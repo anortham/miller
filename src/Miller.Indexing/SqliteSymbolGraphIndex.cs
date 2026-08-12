@@ -1,6 +1,7 @@
 using Miller.Core.Contracts;
 using Miller.Core.Graph;
 using Miller.Indexing.Reads;
+using System.Diagnostics;
 
 namespace Miller.Indexing;
 
@@ -27,6 +28,9 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     private IReadOnlyList<GraphEdge>? _supplementalEdges;
     private Microsoft.Data.Sqlite.SqliteConnection? _connection;
     private Microsoft.Data.Sqlite.SqliteConnection? _activeSessionConnection;
+    private readonly GraphQueryTelemetry _queryTelemetry = new();
+
+    internal GraphQueryTelemetrySnapshot QueryTelemetry => _queryTelemetry.Snapshot();
 
     public SqliteSymbolGraphIndex(string dbPath)
     {
@@ -43,7 +47,50 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     }
 
     public IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir) =>
-        Read(() => GraphTraversal.Reach(starts, maxDepth, limit, dir, Contains, Neighbours));
+        Read(() => ReachBatched(starts, maxDepth, limit, dir));
+
+    private IReadOnlyList<ReachedNode> ReachBatched(
+        IEnumerable<string> starts,
+        int maxDepth,
+        int limit,
+        Direction direction)
+    {
+        ArgumentNullException.ThrowIfNull(starts);
+        if (maxDepth <= 0 || limit <= 0)
+            return [];
+
+        var hops = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (string start in starts)
+        {
+            if (Contains(start))
+                hops.TryAdd(start, 0);
+        }
+
+        string[] frontier = hops.Keys.ToArray();
+        for (int hop = 1; hop <= maxDepth && frontier.Length > 0; hop++)
+        {
+            IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>> neighbours =
+                BatchNeighbourEvidence(frontier, direction);
+            var next = new List<string>();
+            foreach (string current in frontier)
+            {
+                foreach (GraphNeighbour neighbour in neighbours[current])
+                {
+                    if (hops.TryAdd(neighbour.Id, hop))
+                        next.Add(neighbour.Id);
+                }
+            }
+            frontier = next.ToArray();
+        }
+
+        return hops
+            .Where(static pair => pair.Value > 0)
+            .OrderBy(static pair => pair.Value)
+            .ThenBy(static pair => pair.Key, StringComparer.Ordinal)
+            .Take(limit)
+            .Select(static pair => new ReachedNode(pair.Key, pair.Value))
+            .ToArray();
+    }
 
     public GraphReachResult ReachWithEvidence(
         IEnumerable<string> starts,
@@ -251,6 +298,49 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         string values = string.Join(
             ", ",
             Enumerable.Range(0, missingIds.Length).Select(index => $"($id{index})"));
+        string resolutionArms = _readSession is IFamilyGraphResolutionReader
+            ? string.Empty
+            : """
+                UNION ALL
+                SELECT candidates.id, p.from_symbol_id, pr.target_symbol_id, p.kind,
+                       MIN(p.confidence, pr.confidence), 'pending_resolution'
+                FROM candidates
+                JOIN pending_relationships p ON p.from_symbol_id = candidates.id
+                JOIN pending_resolutions pr
+                  ON pr.pending_relationship_id = p.pending_relationship_id
+                JOIN symbols target_symbol ON target_symbol.symbol_id = pr.target_symbol_id
+                WHERE $forward = 1
+                UNION ALL
+                SELECT candidates.id, p.from_symbol_id, pr.target_symbol_id, p.kind,
+                       MIN(p.confidence, pr.confidence), 'pending_resolution'
+                FROM candidates
+                JOIN pending_resolutions pr ON pr.target_symbol_id = candidates.id
+                JOIN pending_relationships p
+                  ON p.pending_relationship_id = pr.pending_relationship_id
+                JOIN symbols source_symbol ON source_symbol.symbol_id = p.from_symbol_id
+                WHERE $reverse = 1
+                UNION ALL
+                SELECT candidates.id,
+                       i.containing_symbol_id,
+                       ir.target_symbol_id,
+                       i.kind,
+                       COALESCE(ir.confidence, i.confidence),
+                       'identifier_target'
+                FROM candidates
+                JOIN identifiers i ON i.containing_symbol_id = candidates.id
+                JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
+                JOIN symbols target_symbol
+                  ON target_symbol.symbol_id = ir.target_symbol_id
+                WHERE $forward = 1
+                UNION ALL
+                SELECT candidates.id, i.containing_symbol_id, ir.target_symbol_id,
+                       i.kind, COALESCE(ir.confidence, i.confidence), 'identifier_target'
+                FROM candidates
+                JOIN identifier_resolutions ir ON ir.target_symbol_id = candidates.id
+                JOIN identifiers i ON i.identifier_id = ir.identifier_id
+                JOIN symbols source_symbol ON source_symbol.symbol_id = i.containing_symbol_id
+                WHERE $reverse = 1
+                """;
         using (var command = Connection.CreateCommand())
         {
             command.CommandText = $"""
@@ -269,45 +359,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                     JOIN relationships r ON r.to_symbol_id = candidates.id
                     JOIN symbols source_symbol ON source_symbol.symbol_id = r.from_symbol_id
                     WHERE $reverse = 1
-                    UNION ALL
-                    SELECT candidates.id, p.from_symbol_id, pr.target_symbol_id, p.kind,
-                           MIN(p.confidence, pr.confidence), 'pending_resolution'
-                    FROM candidates
-                    JOIN pending_relationships p ON p.from_symbol_id = candidates.id
-                    JOIN pending_resolutions pr
-                      ON pr.pending_relationship_id = p.pending_relationship_id
-                    JOIN symbols target_symbol ON target_symbol.symbol_id = pr.target_symbol_id
-                    WHERE $forward = 1
-                    UNION ALL
-                    SELECT candidates.id, p.from_symbol_id, pr.target_symbol_id, p.kind,
-                           MIN(p.confidence, pr.confidence), 'pending_resolution'
-                    FROM candidates
-                    JOIN pending_resolutions pr ON pr.target_symbol_id = candidates.id
-                    JOIN pending_relationships p
-                      ON p.pending_relationship_id = pr.pending_relationship_id
-                    JOIN symbols source_symbol ON source_symbol.symbol_id = p.from_symbol_id
-                    WHERE $reverse = 1
-                    UNION ALL
-                    SELECT candidates.id,
-                           i.containing_symbol_id,
-                           ir.target_symbol_id,
-                           i.kind,
-                           COALESCE(ir.confidence, i.confidence),
-                           'identifier_target'
-                    FROM candidates
-                    JOIN identifiers i ON i.containing_symbol_id = candidates.id
-                    JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-                    JOIN symbols target_symbol
-                      ON target_symbol.symbol_id = ir.target_symbol_id
-                    WHERE $forward = 1
-                    UNION ALL
-                    SELECT candidates.id, i.containing_symbol_id, ir.target_symbol_id,
-                           i.kind, COALESCE(ir.confidence, i.confidence), 'identifier_target'
-                    FROM candidates
-                    JOIN identifier_resolutions ir ON ir.target_symbol_id = candidates.id
-                    JOIN identifiers i ON i.identifier_id = ir.identifier_id
-                    JOIN symbols source_symbol ON source_symbol.symbol_id = i.containing_symbol_id
-                    WHERE $reverse = 1
+                    {resolutionArms}
                     UNION ALL
                     SELECT candidates.id, i.containing_symbol_id, target_symbol.symbol_id,
                            i.kind, i.confidence * 0.5, 'identifier_name'
@@ -353,6 +405,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 "$reverse",
                 direction is Direction.Reverse or Direction.Both ? 1 : 0);
 
+            long started = Stopwatch.GetTimestamp();
             using var reader = command.ExecuteReader();
             int currentOrdinal = reader.GetOrdinal("current_id");
             int fromOrdinal = reader.GetOrdinal("from_id");
@@ -360,8 +413,10 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             int kindOrdinal = reader.GetOrdinal("kind");
             int confidenceOrdinal = reader.GetOrdinal("confidence");
             int sourceOrdinal = reader.GetOrdinal("source");
+            int rows = 0;
             while (reader.Read())
             {
+                rows++;
                 string current = reader.GetString(currentOrdinal);
                 string from = reader.GetString(fromOrdinal);
                 string to = reader.GetString(toOrdinal);
@@ -376,6 +431,24 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                         reader.GetString(kindOrdinal),
                         reader.GetDouble(confidenceOrdinal),
                         reader.GetString(sourceOrdinal)));
+            }
+            _queryTelemetry.FrontierBatch.Add(rows, Stopwatch.GetElapsedTime(started));
+        }
+
+        if (_readSession is IFamilyGraphResolutionReader resolutionReader)
+        {
+            foreach (FamilyGraphResolutionEdge edge in resolutionReader.ReadResolutionEdges(missingIds, direction))
+            {
+                if (!edgesById.TryGetValue(edge.CurrentId, out Dictionary<string, GraphEdge>? currentEdges))
+                    continue;
+                string neighbour = string.Equals(edge.FromId, edge.CurrentId, StringComparison.Ordinal)
+                    ? edge.ToId
+                    : edge.FromId;
+                AddEdge(
+                    currentEdges,
+                    edge.CurrentId,
+                    neighbour,
+                    new GraphEdge(edge.FromId, edge.ToId, edge.Kind, edge.Confidence, edge.Source));
             }
         }
 
@@ -471,7 +544,16 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     private static string NeighbourId(GraphEdge edge, string currentId) =>
         string.Equals(edge.From, currentId, StringComparison.Ordinal) ? edge.To : edge.From;
 
-    private IReadOnlyList<GraphEdge> SupplementalEdges() => _supplementalEdges ??= LoadSupplementalEdges();
+    private IReadOnlyList<GraphEdge> SupplementalEdges()
+    {
+        if (_supplementalEdges is not null)
+            return _supplementalEdges;
+
+        long started = Stopwatch.GetTimestamp();
+        _supplementalEdges = LoadSupplementalEdges();
+        _queryTelemetry.SupplementalEdges.Add(_supplementalEdges.Count, Stopwatch.GetElapsedTime(started));
+        return _supplementalEdges;
+    }
 
     private IReadOnlyList<GraphEdge> LoadSupplementalEdges()
     {
@@ -501,9 +583,15 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 WHERE r.from_symbol_id = $id;
                 """;
             command.Parameters.AddWithValue("$id", id);
+            long started = Stopwatch.GetTimestamp();
             using var reader = command.ExecuteReader();
+            int rows = 0;
             while (reader.Read())
+            {
+                rows++;
                 AddCandidate(ids, id, reader.GetString(0));
+            }
+            _queryTelemetry.RelationshipsForward.Add(rows, Stopwatch.GetElapsedTime(started));
         }
 
         using (var command = Connection.CreateCommand())
@@ -517,9 +605,15 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 WHERE p.from_symbol_id = $id;
                 """;
             command.Parameters.AddWithValue("$id", id);
+            long started = Stopwatch.GetTimestamp();
             using var reader = command.ExecuteReader();
+            int rows = 0;
             while (reader.Read())
+            {
+                rows++;
                 AddCandidate(ids, id, reader.GetString(0));
+            }
+            _queryTelemetry.PendingForward.Add(rows, Stopwatch.GetElapsedTime(started));
         }
 
         using (var command = Connection.CreateCommand())
@@ -537,9 +631,12 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                   );
                 """;
             command.Parameters.AddWithValue("$id", id);
+            long started = Stopwatch.GetTimestamp();
             using var reader = command.ExecuteReader();
+            int rows = 0;
             while (reader.Read())
             {
+                rows++;
                 if (!reader.IsDBNull(1))
                 {
                     AddCandidate(ids, id, reader.GetString(1));
@@ -550,6 +647,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 if (targets.Count == 1)
                     AddCandidate(ids, id, targets[0]);
             }
+            _queryTelemetry.IdentifiersForward.Add(rows, Stopwatch.GetElapsedTime(started));
         }
 
         foreach (GraphEdge edge in SupplementalEdges())
@@ -577,9 +675,15 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 WHERE r.to_symbol_id = $id;
                 """;
             command.Parameters.AddWithValue("$id", id);
+            long started = Stopwatch.GetTimestamp();
             using var reader = command.ExecuteReader();
+            int rows = 0;
             while (reader.Read())
+            {
+                rows++;
                 AddCandidate(ids, id, reader.GetString(0));
+            }
+            _queryTelemetry.RelationshipsReverse.Add(rows, Stopwatch.GetElapsedTime(started));
         }
 
         using (var command = Connection.CreateCommand())
@@ -593,9 +697,15 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 WHERE pr.target_symbol_id = $id;
                 """;
             command.Parameters.AddWithValue("$id", id);
+            long started = Stopwatch.GetTimestamp();
             using var reader = command.ExecuteReader();
+            int rows = 0;
             while (reader.Read())
+            {
+                rows++;
                 AddCandidate(ids, id, reader.GetString(0));
+            }
+            _queryTelemetry.PendingReverse.Add(rows, Stopwatch.GetElapsedTime(started));
         }
 
         using (var command = Connection.CreateCommand())
@@ -608,9 +718,15 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 WHERE ir.target_symbol_id = $id;
                 """;
             command.Parameters.AddWithValue("$id", id);
+            long started = Stopwatch.GetTimestamp();
             using var reader = command.ExecuteReader();
+            int rows = 0;
             while (reader.Read())
+            {
+                rows++;
                 AddCandidate(ids, id, reader.GetString(0));
+            }
+            _queryTelemetry.IdentifiersReverse.Add(rows, Stopwatch.GetElapsedTime(started));
         }
 
         IReadOnlyList<string> nameTargets = ResolveNameIds(targetName);
@@ -626,9 +742,15 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                   AND ir.target_symbol_id IS NULL;
                 """;
             command.Parameters.AddWithValue("$name", targetName);
+            long started = Stopwatch.GetTimestamp();
             using var reader = command.ExecuteReader();
+            int rows = 0;
             while (reader.Read())
+            {
+                rows++;
                 AddCandidate(ids, id, reader.GetString(0));
+            }
+            _queryTelemetry.UnresolvedIdentifiersReverse.Add(rows, Stopwatch.GetElapsedTime(started));
         }
 
         foreach (GraphEdge edge in SupplementalEdges())
@@ -683,7 +805,9 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         using var command = Connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM symbols WHERE symbol_id = $id LIMIT 1;";
         command.Parameters.AddWithValue("$id", id);
+        long started = Stopwatch.GetTimestamp();
         exists = command.ExecuteScalar() is not null;
+        _queryTelemetry.SymbolExists.Add(exists ? 1 : 0, Stopwatch.GetElapsedTime(started));
         _symbolExistsCache[id] = exists;
         return exists;
     }
@@ -696,7 +820,9 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         using var command = Connection.CreateCommand();
         command.CommandText = "SELECT name FROM symbols WHERE symbol_id = $id LIMIT 1;";
         command.Parameters.AddWithValue("$id", id);
+        long started = Stopwatch.GetTimestamp();
         string? name = command.ExecuteScalar() as string;
+        _queryTelemetry.SymbolName.Add(name is null ? 0 : 1, Stopwatch.GetElapsedTime(started));
         _symbolNameCache[id] = name;
         return name;
     }
@@ -709,10 +835,12 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         using var command = Connection.CreateCommand();
         command.CommandText = "SELECT symbol_id FROM symbols WHERE name = $name ORDER BY symbol_id;";
         command.Parameters.AddWithValue("$name", name);
+        long started = Stopwatch.GetTimestamp();
         using var reader = command.ExecuteReader();
         var ids = new List<string>();
         while (reader.Read())
             ids.Add(reader.GetString(0));
+        _queryTelemetry.ResolveName.Add(ids.Count, Stopwatch.GetElapsedTime(started));
 
         IReadOnlyList<string> result = ids.Count == 0 ? Empty : ids.ToArray();
         _nameResolutionCache[name] = result;
@@ -732,4 +860,79 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         {
         }
     }
+}
+
+internal sealed record GraphQueryFamilyTelemetry(int Executions, long Rows, TimeSpan Elapsed);
+
+internal sealed record GraphQueryTelemetrySnapshot(
+    GraphQueryFamilyTelemetry SymbolExists,
+    GraphQueryFamilyTelemetry SymbolName,
+    GraphQueryFamilyTelemetry RelationshipsForward,
+    GraphQueryFamilyTelemetry PendingForward,
+    GraphQueryFamilyTelemetry IdentifiersForward,
+    GraphQueryFamilyTelemetry RelationshipsReverse,
+    GraphQueryFamilyTelemetry PendingReverse,
+    GraphQueryFamilyTelemetry IdentifiersReverse,
+    GraphQueryFamilyTelemetry UnresolvedIdentifiersReverse,
+    GraphQueryFamilyTelemetry ResolveName,
+    GraphQueryFamilyTelemetry FrontierBatch,
+    GraphQueryFamilyTelemetry SupplementalEdges)
+{
+    public int TotalExecutions =>
+        SymbolExists.Executions + SymbolName.Executions + RelationshipsForward.Executions +
+        PendingForward.Executions + IdentifiersForward.Executions + RelationshipsReverse.Executions +
+        PendingReverse.Executions + IdentifiersReverse.Executions + UnresolvedIdentifiersReverse.Executions +
+        ResolveName.Executions + FrontierBatch.Executions + SupplementalEdges.Executions;
+
+    public TimeSpan TotalElapsed =>
+        SymbolExists.Elapsed + SymbolName.Elapsed + RelationshipsForward.Elapsed + PendingForward.Elapsed +
+        IdentifiersForward.Elapsed + RelationshipsReverse.Elapsed + PendingReverse.Elapsed +
+        IdentifiersReverse.Elapsed + UnresolvedIdentifiersReverse.Elapsed + ResolveName.Elapsed +
+        FrontierBatch.Elapsed + SupplementalEdges.Elapsed;
+}
+
+internal sealed class GraphQueryTelemetry
+{
+    internal GraphQueryFamilyAccumulator SymbolExists { get; } = new();
+    internal GraphQueryFamilyAccumulator SymbolName { get; } = new();
+    internal GraphQueryFamilyAccumulator RelationshipsForward { get; } = new();
+    internal GraphQueryFamilyAccumulator PendingForward { get; } = new();
+    internal GraphQueryFamilyAccumulator IdentifiersForward { get; } = new();
+    internal GraphQueryFamilyAccumulator RelationshipsReverse { get; } = new();
+    internal GraphQueryFamilyAccumulator PendingReverse { get; } = new();
+    internal GraphQueryFamilyAccumulator IdentifiersReverse { get; } = new();
+    internal GraphQueryFamilyAccumulator UnresolvedIdentifiersReverse { get; } = new();
+    internal GraphQueryFamilyAccumulator ResolveName { get; } = new();
+    internal GraphQueryFamilyAccumulator FrontierBatch { get; } = new();
+    internal GraphQueryFamilyAccumulator SupplementalEdges { get; } = new();
+
+    internal GraphQueryTelemetrySnapshot Snapshot() => new(
+        SymbolExists.Snapshot(),
+        SymbolName.Snapshot(),
+        RelationshipsForward.Snapshot(),
+        PendingForward.Snapshot(),
+        IdentifiersForward.Snapshot(),
+        RelationshipsReverse.Snapshot(),
+        PendingReverse.Snapshot(),
+        IdentifiersReverse.Snapshot(),
+        UnresolvedIdentifiersReverse.Snapshot(),
+        ResolveName.Snapshot(),
+        FrontierBatch.Snapshot(),
+        SupplementalEdges.Snapshot());
+}
+
+internal sealed class GraphQueryFamilyAccumulator
+{
+    private int _executions;
+    private long _rows;
+    private TimeSpan _elapsed;
+
+    internal void Add(long rows, TimeSpan elapsed)
+    {
+        _executions++;
+        _rows += rows;
+        _elapsed += elapsed;
+    }
+
+    internal GraphQueryFamilyTelemetry Snapshot() => new(_executions, _rows, _elapsed);
 }

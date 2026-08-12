@@ -32,6 +32,87 @@ public sealed class SqliteSymbolGraphIndexTests
         }
     }
 
+    [Fact]
+    public void Reach_QueryTelemetryReportsFixedSqlFamilies()
+    {
+        const string sourceId = "40100000000000000000000000000001";
+        const string targetId = "40100000000000000000000000000002";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(sourceId, "Source", "method", "csharp", "src/Source.cs", "void Source()", 1, null),
+                new(targetId, "Target", "method", "csharp", "src/Target.cs", "void Target()", 1, null),
+            ],
+            relationships: [new("source-target", sourceId, targetId, "calls")]);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+        ISymbolGraphReachability graph = sqlite;
+
+        IReadOnlyList<ReachedNode> reached = graph.Reach([sourceId], 1, 10, Direction.Forward);
+        GraphQueryTelemetrySnapshot telemetry = sqlite.QueryTelemetry;
+
+        Assert.Equal(targetId, Assert.Single(reached).Id);
+        Assert.Equal(new GraphQueryFamilyTelemetry(1, 1, telemetry.SymbolExists.Elapsed), telemetry.SymbolExists);
+        Assert.Equal(new GraphQueryFamilyTelemetry(0, 0, telemetry.RelationshipsForward.Elapsed), telemetry.RelationshipsForward);
+        Assert.Equal(new GraphQueryFamilyTelemetry(0, 0, telemetry.PendingForward.Elapsed), telemetry.PendingForward);
+        Assert.Equal(new GraphQueryFamilyTelemetry(0, 0, telemetry.IdentifiersForward.Elapsed), telemetry.IdentifiersForward);
+        Assert.Equal(new GraphQueryFamilyTelemetry(1, 1, telemetry.FrontierBatch.Elapsed), telemetry.FrontierBatch);
+        Assert.Equal(1, telemetry.SupplementalEdges.Executions);
+        Assert.Equal(0, telemetry.SupplementalEdges.Rows);
+        Assert.Equal(0, telemetry.RelationshipsReverse.Executions);
+        Assert.Equal(0, telemetry.PendingReverse.Executions);
+        Assert.Equal(0, telemetry.IdentifiersReverse.Executions);
+        Assert.Equal(0, telemetry.UnresolvedIdentifiersReverse.Executions);
+        Assert.Equal(0, telemetry.ResolveName.Executions);
+        Assert.True(telemetry.TotalElapsed > TimeSpan.Zero);
+    }
+
+    [Fact]
+    public void Reach_HighFrontierUsesBoundedSqlBatches()
+    {
+        const string rootId = "40200000000000000000000000000001";
+        const string leafId = "40200000000000000000000000000002";
+        JulieDbFixture.SymbolRow[] frontier = Enumerable.Range(0, 200)
+            .Select(index => new JulieDbFixture.SymbolRow(
+                $"403{index:00000000000000000000000000000}",
+                $"Frontier{index}",
+                "method",
+                "csharp",
+                $"src/Frontier{index}.cs",
+                $"void Frontier{index}()",
+                1,
+                null))
+            .ToArray();
+        JulieDbFixture.RelationshipRow[] relationships =
+        [
+            .. frontier.Select((symbol, index) =>
+                new JulieDbFixture.RelationshipRow($"root-frontier-{index}", rootId, symbol.Id, "calls")),
+            .. frontier.Select((symbol, index) =>
+                new JulieDbFixture.RelationshipRow($"frontier-leaf-{index}", symbol.Id, leafId, "calls")),
+        ];
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(rootId, "Root", "method", "csharp", "src/Root.cs", "void Root()", 1, null),
+                new(leafId, "Leaf", "method", "csharp", "src/Leaf.cs", "void Leaf()", 1, null),
+                .. frontier,
+            ],
+            relationships: relationships);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+        ISymbolGraphReachability graph = sqlite;
+
+        IReadOnlyList<ReachedNode> result = graph.Reach([rootId], 2, 500, Direction.Forward);
+        GraphQueryTelemetrySnapshot telemetry = sqlite.QueryTelemetry;
+
+        Assert.Equal(201, result.Count);
+        Assert.Equal(200, result.Count(node => node.Hop == 1));
+        Assert.Equal(new ReachedNode(leafId, 2), result.Single(node => node.Hop == 2));
+        Assert.True(telemetry.TotalExecutions <= 10, $"SQL executions: {telemetry.TotalExecutions}");
+        Assert.Equal(2, telemetry.FrontierBatch.Executions);
+        Assert.Equal(400, telemetry.FrontierBatch.Rows);
+    }
+
     [Theory]
     [InlineData(Direction.Forward, 1, 1)]
     [InlineData(Direction.Reverse, 1, 1)]
