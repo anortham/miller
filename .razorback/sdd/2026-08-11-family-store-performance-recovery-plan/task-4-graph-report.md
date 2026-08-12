@@ -113,3 +113,12 @@
 - GREEN: `FamilyResolutionObserverReportsOnlyCompletedArmsBeforeCancellation` passed 1/1 in 90 ms. It stops after completed `pending_base_forward` and observes only the four prior main frontier phases plus identifier base/delta forward and pending base forward; no pending delta, reverse, outer resolution, supplemental, or completion event is emitted.
 - `FamilyStoreReadSessionTests` plus `SqliteSymbolGraphIndexTests` passed 52/52 in 554 ms. Release build passed in 9.33 s with zero warnings/errors.
 - No candidate process/context call was run; lead owns the one replay that will select the first incomplete family resolution arm.
+
+## Round 8: isolated identifier-base-forward evidence
+
+- The `a9bf810b` replay completed unresolved-name reverse and none of the eight family arms, selecting the first executed arm `identifier_base_forward` for one isolated real-session measurement.
+- A temporary opt-in Scale harness reflected the production `IdentifierBaseForwardSql` constant, persisted EXPLAIN before execution, then invoked the actual `IFamilyGraphResolutionReader.ReadResolutionEdges` path and stopped through its observer immediately after that arm completed. The same pinned family view and known explicit `WorkspaceIndexProvider` id were used; execution had a five-second outer bound.
+- Result: 28 rows in 3.364 ms query wall; test duration 162 ms. Plan: `/tmp/miller-identifier-base-forward-a9bf.txt`.
+- Plan uses `idx_export_resolution_identifiers_order(version_id=?)`, the identifier primary index `(version_id,identifier_id)`, target-symbol primary index `(version_id,symbol_id)`, and visible-version index. It contains no scan of the resolution base.
+- The isolated known-entry candidate is therefore bounded and does not reproduce the real timeout. Per the gate, no RED or production behavior fix was added. The missing evidence is the exact real four-pivot candidate/version shape entering family resolution; the explicit entry alone is insufficient.
+- The temporary diagnostic harness was removed. No context call was run and `PERF.md` was not touched.
