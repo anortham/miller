@@ -43,6 +43,25 @@ internal readonly record struct SearchRequestFamilyTelemetry(
     long ElapsedMilliseconds,
     long ReturnedRowCount);
 
+internal sealed record FtsSearchQueryTelemetrySnapshot(
+    SearchRequestFamilyTelemetry ConnectionOpen,
+    SearchRequestFamilyTelemetry AndIntersectionProbe,
+    SearchRequestFamilyTelemetry WordCandidates,
+    SearchRequestFamilyTelemetry WordScoring,
+    SearchRequestFamilyTelemetry TrigramCandidates,
+    SearchRequestFamilyTelemetry TrigramScoring,
+    SearchRequestFamilyTelemetry FinalOrdering)
+{
+    internal long TotalCallCount =>
+        ConnectionOpen.CallCount +
+        AndIntersectionProbe.CallCount +
+        WordCandidates.CallCount +
+        WordScoring.CallCount +
+        TrigramCandidates.CallCount +
+        TrigramScoring.CallCount +
+        FinalOrdering.CallCount;
+}
+
 internal sealed record SearchRequestTelemetrySnapshot(
     SearchRequestFamilyTelemetry FirstQuery,
     SearchRequestFamilyTelemetry ModeVariant,
@@ -96,7 +115,9 @@ internal sealed record ContextLookupPhaseObservation(
     SymbolLookupTelemetrySnapshot Delta,
     SymbolLookupTelemetrySnapshot Total,
     SearchRequestTelemetrySnapshot SearchDelta,
-    SearchRequestTelemetrySnapshot SearchTotal);
+    SearchRequestTelemetrySnapshot SearchTotal,
+    FtsSearchQueryTelemetrySnapshot FtsSearchDelta,
+    FtsSearchQueryTelemetrySnapshot FtsSearchTotal);
 
 internal enum SearchRequestClassification
 {
@@ -125,6 +146,9 @@ internal sealed class ReadPhaseTelemetry
     private ReadMeasurementSnapshot[] _lookupPhaseBaseline;
     private readonly SearchRequestTelemetryCollector _searchTelemetry = new();
     private SearchRequestTelemetrySnapshot _searchPhaseBaseline = SearchRequestTelemetryCollector.EmptySnapshot;
+    private readonly FtsSearchQueryTelemetryCollector _ftsSearchTelemetry = new();
+    private FtsSearchQueryMeasurementSnapshot _ftsSearchPhaseBaseline =
+        FtsSearchQueryTelemetryCollector.EmptySnapshot;
     private readonly MeasuredSymbolGraphReachability? _graph;
     private readonly ReadMeasurementSnapshot _graphBaseline;
 
@@ -166,18 +190,23 @@ internal sealed class ReadPhaseTelemetry
     {
         ReadMeasurementSnapshot[] current = _lookup.SnapshotByFamily();
         SearchRequestTelemetrySnapshot searchCurrent = _searchTelemetry.Snapshot();
+        FtsSearchQueryMeasurementSnapshot ftsSearchCurrent = _ftsSearchTelemetry.Snapshot();
         var observation = new ContextLookupPhaseObservation(
             phase,
             LookupTelemetry(current, _lookupPhaseBaseline),
             LookupTelemetry(current, _lookupFamilyBaseline),
             SearchTelemetryDelta(searchCurrent, _searchPhaseBaseline),
-            searchCurrent);
+            searchCurrent,
+            FtsSearchTelemetryDelta(ftsSearchCurrent, _ftsSearchPhaseBaseline),
+            FtsSearchTelemetry(ftsSearchCurrent));
         _lookupPhaseBaseline = current;
         _searchPhaseBaseline = searchCurrent;
+        _ftsSearchPhaseBaseline = ftsSearchCurrent;
         return observation;
     }
 
-    internal IDisposable ActivateSearchTelemetry() => _searchTelemetry.Activate();
+    internal IDisposable ActivateSearchTelemetry() =>
+        new CompositeActivation(_searchTelemetry.Activate(), _ftsSearchTelemetry.Activate());
 
     private static ReadMeasurementSnapshot Delta(
         ReadMeasurementSnapshot current,
@@ -235,6 +264,58 @@ internal sealed class ReadPhaseTelemetry
             Math.Max(0, current.CallCount - baseline.CallCount),
             Math.Max(0, current.ElapsedMilliseconds - baseline.ElapsedMilliseconds),
             Math.Max(0, current.ReturnedRowCount - baseline.ReturnedRowCount));
+
+    private static FtsSearchQueryTelemetrySnapshot FtsSearchTelemetryDelta(
+        FtsSearchQueryMeasurementSnapshot current,
+        FtsSearchQueryMeasurementSnapshot baseline) =>
+        new(
+            FtsSearchFamilyDelta(current.ConnectionOpen, baseline.ConnectionOpen),
+            FtsSearchFamilyDelta(current.AndIntersectionProbe, baseline.AndIntersectionProbe),
+            FtsSearchFamilyDelta(current.WordCandidates, baseline.WordCandidates),
+            FtsSearchFamilyDelta(current.WordScoring, baseline.WordScoring),
+            FtsSearchFamilyDelta(current.TrigramCandidates, baseline.TrigramCandidates),
+            FtsSearchFamilyDelta(current.TrigramScoring, baseline.TrigramScoring),
+            FtsSearchFamilyDelta(current.FinalOrdering, baseline.FinalOrdering));
+
+    private static FtsSearchQueryTelemetrySnapshot FtsSearchTelemetry(
+        FtsSearchQueryMeasurementSnapshot current) =>
+        new(
+            FtsSearchFamily(current.ConnectionOpen),
+            FtsSearchFamily(current.AndIntersectionProbe),
+            FtsSearchFamily(current.WordCandidates),
+            FtsSearchFamily(current.WordScoring),
+            FtsSearchFamily(current.TrigramCandidates),
+            FtsSearchFamily(current.TrigramScoring),
+            FtsSearchFamily(current.FinalOrdering));
+
+    private static SearchRequestFamilyTelemetry FtsSearchFamilyDelta(
+        FtsSearchQueryFamilyMeasurement current,
+        FtsSearchQueryFamilyMeasurement baseline) =>
+        FtsSearchFamily(new FtsSearchQueryFamilyMeasurement(
+            Math.Max(0, current.CallCount - baseline.CallCount),
+            Math.Max(0, current.ElapsedTicks - baseline.ElapsedTicks),
+            Math.Max(0, current.ReturnedRowCount - baseline.ReturnedRowCount)));
+
+    private static SearchRequestFamilyTelemetry FtsSearchFamily(
+        FtsSearchQueryFamilyMeasurement measurement) =>
+        new(
+            measurement.CallCount,
+            Math.Max(0, (long)TimeSpan.FromTicks(measurement.ElapsedTicks).TotalMilliseconds),
+            measurement.ReturnedRowCount);
+
+    private sealed class CompositeActivation(IDisposable first, IDisposable second) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            second.Dispose();
+            first.Dispose();
+        }
+    }
 }
 
 internal sealed class SearchRequestTelemetryAccumulator

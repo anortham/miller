@@ -498,6 +498,58 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_OrMode_ObservesEveryCompletedFixedStageInOrder()
+    {
+        var syms = Corpus(
+            ("a", "AlphaBeta", "class AlphaBeta", "class", "csharp", "src/A.cs"),
+            ("b", "Alphabet", "class Alphabet", "class", "csharp", "src/B.cs"));
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+        var observations = new List<FtsSearchQueryObservation>();
+        var index = FtsSymbolSearchIndex.Open(_dbPath, observations.Add);
+
+        _ = index.Search("alpha", limit: 10, mode: SearchMode.Or);
+
+        Assert.Equal(
+            [
+                FtsSearchQueryFamily.ConnectionOpen,
+                FtsSearchQueryFamily.WordCandidates,
+                FtsSearchQueryFamily.WordScoring,
+                FtsSearchQueryFamily.TrigramCandidates,
+                FtsSearchQueryFamily.TrigramScoring,
+                FtsSearchQueryFamily.FinalOrdering,
+            ],
+            observations.Select(static observation => observation.Family));
+        Assert.Equal(0, observations[0].Rows);
+        Assert.All(observations, static observation => Assert.True(observation.Rows >= 0));
+        Assert.All(observations, static observation => Assert.True(observation.Elapsed >= TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void Search_ObservationIsEmptyForZeroWorkAndStopsAfterCompletedStageThrows()
+    {
+        var syms = Corpus(("a", "AlphaBeta", "class AlphaBeta", "class", "csharp", "src/A.cs"));
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+        var observations = new List<FtsSearchQueryObservation>();
+        var index = FtsSymbolSearchIndex.Open(
+            _dbPath,
+            observation =>
+            {
+                observations.Add(observation);
+                if (observation.Family == FtsSearchQueryFamily.WordCandidates)
+                    throw new OperationCanceledException("stop after completed word candidate query");
+            });
+
+        Assert.Empty(index.Search(string.Empty, limit: 10, mode: SearchMode.Or));
+        Assert.Empty(observations);
+
+        Assert.Throws<OperationCanceledException>(() =>
+            index.Search("alpha", limit: 10, mode: SearchMode.Or));
+        Assert.Equal(
+            [FtsSearchQueryFamily.ConnectionOpen, FtsSearchQueryFamily.WordCandidates],
+            observations.Select(static observation => observation.Family));
+    }
+
+    [Fact]
     public void Search_TrigramArm_FindsInteriorAndBoundaryCrossingSubstring()
     {
         var syms = Corpus(

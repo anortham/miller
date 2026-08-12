@@ -367,12 +367,15 @@ public sealed partial class ContextTool
             Serilog.Log.Information(
                 "Context lookup phase {ContextLookupPhase} completed with delta {@ContextLookupDelta} " +
                 "and total {@ContextLookupTotal}, search delta {@ContextSearchDelta}, " +
-                "and search total {@ContextSearchTotal} for cid {CorrelationId}",
+                "search total {@ContextSearchTotal}, FTS search delta {@ContextFtsSearchDelta}, " +
+                "and FTS search total {@ContextFtsSearchTotal} for cid {CorrelationId}",
                 completedLookupPhase,
                 observation.Delta,
                 observation.Total,
                 observation.SearchDelta,
                 observation.SearchTotal,
+                observation.FtsSearchDelta,
+                observation.FtsSearchTotal,
                 telemetry?.CorrelationId ?? "unmeasured");
         }
         Serilog.Log.Information(

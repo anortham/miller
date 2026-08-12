@@ -259,6 +259,17 @@ without first adding new phase, query-count, or resource evidence.
   1,567 ms, including Search 13 / 1,291 ms; graph reach remained 285 ms. The 3,378-byte, 10-result response consumed
   2,066,491,374 logical-read characters and 438,272 physical-write bytes, peaking at 155,465 KB PSS / 198,784 KB
   RSS. Impact, trace, and idle were skipped because context remained over gate.
+- **Empty-AND short-circuit acceptance:** Release was rebuilt from clean `971d9deb`; context completed successfully
+  in 2,531.825 ms, another improvement but still over the 2 s gate. Query retrieval issued first 1 / 3 ms / 0
+  rows, mode variant 1 / 247 ms / 18 rows, and window variant 2 / 190 ms / 50 rows; its boolean split was AND 2 /
+  4 ms / 0 rows and OR 2 / 437 ms / 68 rows. Term retrieval issued first 8 / 363 ms / 272 rows and window variant
+  1 / 5 ms / 210 rows, all OR 9 / 368 ms / 482 rows. Anchor resolution reused cache 8 / 0 ms / 272 rows and
+  issued no Search calls. Final actual totals were first 9 / 366 ms / 272 rows, mode 1 / 247 ms / 18 rows,
+  window 3 / 195 ms / 260 rows, exact repeat 0, cache hit 8 / 0 ms / 272 rows, AND 2 / 4 ms / 0 rows, and OR
+  11 / 805 ms / 550 rows; dropped 0. Lookup telemetry was 1,594 calls / 1,085 ms, including Search 13 / 809 ms;
+  graph reach was 305 ms. The 3,378-byte, 10-result response consumed 1,861,922,088 logical-read characters and
+  393,216 physical-write bytes, peaking at 140,406 KB PSS / 183,856 KB RSS. Impact, trace, and idle were skipped
+  because context remained over gate.
 - **Gate:** Add exact graph query/row counters, prove the amplified SQL through `ISymbolGraphReachability`, then make
   the smallest TDD fix before one more rebuilt context replay. Do not repeat the unchanged process measurement.
 

@@ -207,17 +207,16 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
             return Array.Empty<SearchHit>();
 
         using var connection = new SqliteConnection(_connectionString);
+        long connectionStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         connection.Open();
+        Observe(FtsSearchQueryFamily.ConnectionOpen, rows: 0, connectionStarted);
 
         if (mode == SearchMode.And && distinctTerms.Count > 1)
         {
             string andMatch = string.Join(" AND ", distinctTerms.Select(QuoteFts));
             long probeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             bool hasIntersection = HasAndIntersection(connection, andMatch);
-            _queryObserver?.Invoke(new FtsSearchQueryObservation(
-                FtsSearchQueryFamily.AndIntersectionProbe,
-                hasIntersection ? 1 : 0,
-                System.Diagnostics.Stopwatch.GetElapsedTime(probeStarted)));
+            Observe(FtsSearchQueryFamily.AndIntersectionProbe, hasIntersection ? 1 : 0, probeStarted);
             if (!hasIntersection)
                 return Array.Empty<SearchHit>();
         }
@@ -235,11 +234,9 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
             string orMatch = string.Join(" OR ", distinctTerms.Select(QuoteFts));
             long wordCandidatesStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             IReadOnlyList<DiskSymbol> candidates = WordCandidates(connection, orMatch);
-            _queryObserver?.Invoke(new FtsSearchQueryObservation(
-                FtsSearchQueryFamily.WordCandidates,
-                candidates.Count,
-                System.Diagnostics.Stopwatch.GetElapsedTime(wordCandidatesStarted)));
+            Observe(FtsSearchQueryFamily.WordCandidates, candidates.Count, wordCandidatesStarted);
 
+            long wordScoringStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             var tokens = new List<string>(16);
             var df = new int[distinctTerms.Count];
             var scoredCandidates = new List<WordCandidateScore>(candidates.Count);
@@ -295,6 +292,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
                 int byScore = b.Score.CompareTo(a.Score);
                 return byScore != 0 ? byScore : a.Document.DocId.CompareTo(b.Document.DocId);
             });
+            Observe(FtsSearchQueryFamily.WordScoring, wordHits.Count, wordScoringStarted);
         }
 
         // ---- Trigram arm (OR only): additive interior-substring recall over the collapsed name, windowed
@@ -302,17 +300,28 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         List<SearchHit>? trigramOnly = null;
         if (wantTrigram)
         {
-            foreach (DiskSymbol candidate in TrigramCandidates(connection, QuoteFts(collapsedQuery), TrigramWindow))
+            long trigramCandidatesStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            IReadOnlyList<DiskSymbol> trigramCandidates =
+                TrigramCandidates(connection, QuoteFts(collapsedQuery), TrigramWindow);
+            Observe(FtsSearchQueryFamily.TrigramCandidates, trigramCandidates.Count, trigramCandidatesStarted);
+
+            long trigramScoringStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            foreach (DiskSymbol candidate in trigramCandidates)
             {
                 IndexedSymbol symbol = candidate.Symbol;
                 if (wordMatched.Contains(symbol.DocId)) continue;
                 (trigramOnly ??= new List<SearchHit>()).Add(new SearchHit(symbol.ToSearchableDocument(), 0.0));
             }
             trigramOnly?.Sort(static (a, b) => a.Document.DocId.CompareTo(b.Document.DocId));
+            Observe(FtsSearchQueryFamily.TrigramScoring, trigramOnly?.Count ?? 0, trigramScoringStarted);
         }
 
+        long finalOrderingStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         if (wordHits.Count == 0 && trigramOnly is null)
+        {
+            Observe(FtsSearchQueryFamily.FinalOrdering, rows: 0, finalOrderingStarted);
             return Array.Empty<SearchHit>();
+        }
 
         var results = new List<SearchHit>(wordHits.Count + (trigramOnly?.Count ?? 0));
         results.AddRange(wordHits);
@@ -320,7 +329,18 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
             results.AddRange(trigramOnly);
         if (results.Count > limit)
             results.RemoveRange(limit, results.Count - limit);
+        Observe(FtsSearchQueryFamily.FinalOrdering, results.Count, finalOrderingStarted);
         return results;
+    }
+
+    private void Observe(FtsSearchQueryFamily family, int rows, long startedAt)
+    {
+        var observation = new FtsSearchQueryObservation(
+            family,
+            rows,
+            System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
+        FtsSearchQueryTelemetryCollector.Current?.Record(observation);
+        _queryObserver?.Invoke(observation);
     }
 
     /// <summary>How many trigram-arm candidates to window in (interior-substring recall is purely additive).</summary>
@@ -677,11 +697,90 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
 
 internal enum FtsSearchQueryFamily
 {
+    ConnectionOpen,
     AndIntersectionProbe,
     WordCandidates,
+    WordScoring,
+    TrigramCandidates,
+    TrigramScoring,
+    FinalOrdering,
 }
 
-internal sealed record FtsSearchQueryObservation(
+internal readonly record struct FtsSearchQueryObservation(
     FtsSearchQueryFamily Family,
     int Rows,
     TimeSpan Elapsed);
+
+internal readonly record struct FtsSearchQueryFamilyMeasurement(
+    long CallCount,
+    long ElapsedTicks,
+    long ReturnedRowCount);
+
+internal sealed record FtsSearchQueryMeasurementSnapshot(
+    FtsSearchQueryFamilyMeasurement ConnectionOpen,
+    FtsSearchQueryFamilyMeasurement AndIntersectionProbe,
+    FtsSearchQueryFamilyMeasurement WordCandidates,
+    FtsSearchQueryFamilyMeasurement WordScoring,
+    FtsSearchQueryFamilyMeasurement TrigramCandidates,
+    FtsSearchQueryFamilyMeasurement TrigramScoring,
+    FtsSearchQueryFamilyMeasurement FinalOrdering);
+
+internal sealed class FtsSearchQueryTelemetryCollector
+{
+    private static readonly AsyncLocal<FtsSearchQueryTelemetryCollector?> CurrentCollector = new();
+    private readonly long[] _calls = new long[Enum.GetValues<FtsSearchQueryFamily>().Length];
+    private readonly long[] _elapsedTicks = new long[Enum.GetValues<FtsSearchQueryFamily>().Length];
+    private readonly long[] _rows = new long[Enum.GetValues<FtsSearchQueryFamily>().Length];
+
+    internal static FtsSearchQueryMeasurementSnapshot EmptySnapshot { get; } =
+        new(default, default, default, default, default, default, default);
+
+    internal static FtsSearchQueryTelemetryCollector? Current => CurrentCollector.Value;
+
+    internal IDisposable Activate()
+    {
+        FtsSearchQueryTelemetryCollector? previous = CurrentCollector.Value;
+        CurrentCollector.Value = this;
+        return new Activation(previous);
+    }
+
+    internal void Record(FtsSearchQueryObservation observation)
+    {
+        int index = (int)observation.Family;
+        Interlocked.Increment(ref _calls[index]);
+        Interlocked.Add(ref _elapsedTicks[index], observation.Elapsed.Ticks);
+        Interlocked.Add(ref _rows[index], observation.Rows);
+    }
+
+    internal FtsSearchQueryMeasurementSnapshot Snapshot() =>
+        new(
+            Family(FtsSearchQueryFamily.ConnectionOpen),
+            Family(FtsSearchQueryFamily.AndIntersectionProbe),
+            Family(FtsSearchQueryFamily.WordCandidates),
+            Family(FtsSearchQueryFamily.WordScoring),
+            Family(FtsSearchQueryFamily.TrigramCandidates),
+            Family(FtsSearchQueryFamily.TrigramScoring),
+            Family(FtsSearchQueryFamily.FinalOrdering));
+
+    private FtsSearchQueryFamilyMeasurement Family(FtsSearchQueryFamily family)
+    {
+        int index = (int)family;
+        return new FtsSearchQueryFamilyMeasurement(
+            Interlocked.Read(ref _calls[index]),
+            Interlocked.Read(ref _elapsedTicks[index]),
+            Interlocked.Read(ref _rows[index]));
+    }
+
+    private sealed class Activation(FtsSearchQueryTelemetryCollector? previous) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            CurrentCollector.Value = previous;
+        }
+    }
+}

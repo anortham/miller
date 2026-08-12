@@ -324,6 +324,83 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void LookupPhaseTelemetryCorrelatesCachedFtsStagesAcrossInterleavedContexts()
+    {
+        string searchDbPath = Path.Combine(_dir, "phase-search.db");
+        SearchIndexWriter.Write(
+            searchDbPath,
+            [
+                new IndexedSymbol(
+                    0,
+                    "alpha",
+                    "AlphaBeta",
+                    "class AlphaBeta",
+                    "class",
+                    "csharp",
+                    "src/A.cs",
+                    1,
+                    2,
+                    null,
+                    false),
+            ],
+            revision: 1);
+        var measured = new MeasuredSymbolLookupIndex(FtsSymbolSearchIndex.Open(searchDbPath));
+        var firstTelemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using IDisposable firstActivation = firstTelemetry.ActivateSearchTelemetry();
+        _ = measured.Search("alpha", 10, SearchMode.Or);
+
+        ContextLookupPhaseObservation second;
+        var secondTelemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using (secondTelemetry.ActivateSearchTelemetry())
+        {
+            _ = measured.Search("missing", 10, SearchMode.Or);
+            second = secondTelemetry.CompleteLookupPhase(ContextLookupPhase.QueryRetrieval);
+        }
+
+        _ = measured.Search("alpha", 10, SearchMode.Or);
+        ContextLookupPhaseObservation first =
+            firstTelemetry.CompleteLookupPhase(ContextLookupPhase.QueryRetrieval);
+        ContextLookupPhaseObservation firstZeroDelta =
+            firstTelemetry.CompleteLookupPhase(ContextLookupPhase.TermRetrieval);
+
+        Assert.Equal(2, first.FtsSearchDelta.ConnectionOpen.CallCount);
+        Assert.Equal(2, first.FtsSearchDelta.WordCandidates.CallCount);
+        Assert.Equal(2, first.FtsSearchDelta.WordScoring.CallCount);
+        Assert.Equal(2, first.FtsSearchDelta.TrigramCandidates.CallCount);
+        Assert.Equal(2, first.FtsSearchDelta.TrigramScoring.CallCount);
+        Assert.Equal(2, first.FtsSearchDelta.FinalOrdering.CallCount);
+        Assert.Equal(1, second.FtsSearchDelta.ConnectionOpen.CallCount);
+        Assert.Equal(1, second.FtsSearchDelta.WordCandidates.CallCount);
+        Assert.Equal(1, second.FtsSearchDelta.WordScoring.CallCount);
+        Assert.Equal(1, second.FtsSearchDelta.TrigramCandidates.CallCount);
+        Assert.Equal(1, second.FtsSearchDelta.TrigramScoring.CallCount);
+        Assert.Equal(1, second.FtsSearchDelta.FinalOrdering.CallCount);
+        Assert.Equal(0, firstZeroDelta.FtsSearchDelta.TotalCallCount);
+        Assert.Equal(2, firstZeroDelta.FtsSearchTotal.ConnectionOpen.CallCount);
+    }
+
+    [Fact]
+    public void LookupPhaseTelemetryPreservesFtsStageTimeSpanUnits()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        var measured = new MeasuredSymbolLookupIndex(inner);
+        var telemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+        using IDisposable activation = telemetry.ActivateSearchTelemetry();
+
+        FtsSearchQueryTelemetryCollector.Current!.Record(new FtsSearchQueryObservation(
+            FtsSearchQueryFamily.WordCandidates,
+            Rows: 12,
+            Elapsed: TimeSpan.FromMilliseconds(250)));
+        ContextLookupPhaseObservation observation =
+            telemetry.CompleteLookupPhase(ContextLookupPhase.QueryRetrieval);
+
+        Assert.Equal(1, observation.FtsSearchDelta.WordCandidates.CallCount);
+        Assert.Equal(250, observation.FtsSearchDelta.WordCandidates.ElapsedMilliseconds);
+        Assert.Equal(12, observation.FtsSearchDelta.WordCandidates.ReturnedRowCount);
+    }
+
+    [Fact]
     public void MeasuredSearchPreservesNullForgivenInnerBehavior()
     {
         using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
