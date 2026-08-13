@@ -112,6 +112,69 @@ internal static class WorkspaceFactsAssembler
             : snapshot with { HolderPid = null, HolderWorkspaceRoot = null };
 
     /// <summary>
+    /// Freshness for a family-store workspace, MEASURED rather than assumed.
+    /// </summary>
+    /// <remarks>
+    /// <para>This branch used to hardcode <c>IndexFresh: true</c> and <c>FreshnessStatus: "current"</c>. Store
+    /// mode is default-on, so that made a stale index unreportable: the value could never be anything but
+    /// "fresh". It also set <c>BuiltRevision</c> and <c>LatestObservedRevision</c> from the SAME snapshot read,
+    /// so even the comparison that defines freshness in legacy mode collapsed to <c>x == x</c>. A workspace
+    /// whose every convergence path was failing still rendered <c>fresh</c> (2026-08-13 dogfood: five
+    /// consecutive whole-repo scan failures and a permanently `converging` view, reported as fresh).</para>
+    ///
+    /// <para>It also contradicted the honesty contract on <see cref="Miller.Server.Hosting.IndexFreshProbe"/>:
+    /// an unmeasurable freshness yields <c>null</c> — "not measured" — never a fabricated true or false.</para>
+    ///
+    /// <para>Store mode has no second revision to compare against here, but it does have three direct
+    /// convergence signals, all already read by the caller. Any one of them being unhealthy means the served
+    /// view does NOT reflect the workspace:</para>
+    /// <list type="bullet">
+    ///   <item>a persisted scan-failure record — new work is not reaching the store at all;</item>
+    ///   <item>a resolution state that is not <c>exact</c> — the view has not finished binding;</item>
+    ///   <item>a stale or unavailable search/content sidecar — the derived artifacts lag the store.</item>
+    /// </list>
+    /// <para>All healthy ⇒ fresh. Otherwise the reason is named, never glossed.</para>
+    /// </remarks>
+    internal static (bool? Fresh, string Status, string? Warning) StoreFreshness(
+        ScanFailureRecord? scanFailure,
+        string? resolution,
+        SearchSidecarFacts search,
+        ContentCorpusFacts content)
+    {
+        if (scanFailure is { ConsecutiveFailures: > 0 } failure)
+        {
+            return (
+                false,
+                "scan_failing",
+                $"{failure.ConsecutiveFailures} consecutive scan failure(s) since " +
+                $"{failure.LastFailureAtUtc:u}; the next attempt is not before " +
+                $"{failure.NextAttemptAtUtc:u}. The served view may not reflect the workspace.");
+        }
+
+        // A blank resolution state is genuinely unknown, not a failure: report "not measured" per the
+        // IndexFreshProbe honesty contract rather than inventing either answer.
+        if (string.IsNullOrWhiteSpace(resolution))
+            return (null, "unknown", null);
+
+        if (!string.Equals(resolution, "exact", StringComparison.OrdinalIgnoreCase))
+        {
+            return (
+                false,
+                "resolving",
+                $"The store view resolution is '{resolution}', not exact. " +
+                "Symbol-level reads may be unavailable until it converges.");
+        }
+
+        if (!string.Equals(search.State, "current", StringComparison.Ordinal))
+            return (false, "sidecar_stale", $"The search sidecar is '{search.State}'; run `miller workspace refresh`.");
+
+        if (!string.Equals(content.State, "current", StringComparison.Ordinal))
+            return (false, "sidecar_stale", $"The content corpus is '{content.State}'; run `miller workspace refresh`.");
+
+        return (true, "current", null);
+    }
+
+    /// <summary>
     /// The workspace's persisted whole-repo scan-failure record, or null when none is recorded. Null renders
     /// nowhere, so a healthy workspace's status/health output stays byte-identical to a build without it. The
     /// record is the ONLY place a repeatedly-killed extractor is visible without reading Miller's log, so status
@@ -219,6 +282,11 @@ internal static class WorkspaceFactsAssembler
                     ?? session.Snapshot.Freshness.Revision;
                 StoreMemberSummary members = session.Read(connection =>
                     StoreMemberSummaryReader.Read(connection, session.Snapshot.ViewId, maxLabels: 5));
+                ScanFailureRecord? storeScanFailure = ScanFailureFacts(row.IndexDbPath);
+                SearchSidecarFacts storeSearch = sidecar.InspectStore(storeRoot, session.Snapshot);
+                ContentCorpusFacts storeContent = contentSidecar.InspectStore(storeRoot, session.Snapshot);
+                (bool? storeFresh, string storeFreshness, string? storeWarning) =
+                    StoreFreshness(storeScanFailure, session.Snapshot.ResolutionState, storeSearch, storeContent);
                 return new WorkspaceFacts(
                     Root: row.CanonicalRoot,
                     WorkspaceId: row.WorkspaceId,
@@ -228,16 +296,16 @@ internal static class WorkspaceFactsAssembler
                     KnownExtensionsCount: indexFacts.KnownExtensionsCount,
                     BuiltRevision: storeRevision,
                     LatestObservedRevision: storeRevision,
-                    IndexFresh: true,
+                    IndexFresh: storeFresh,
                     QueueEmpty: true,
                     ArtifactId: session.Snapshot.ArtifactOrStoreId,
-                    FreshnessStatus: "current",
-                    WarningText: null,
+                    FreshnessStatus: storeFreshness,
+                    WarningText: storeWarning,
                     DisplayId: row.DisplayId,
                     ServerVersion: MillerVersion.Current,
                     ServerProcessId: Environment.ProcessId,
-                    SearchSidecar: sidecar.InspectStore(storeRoot, session.Snapshot),
-                    ContentCorpus: contentSidecar.InspectStore(storeRoot, session.Snapshot),
+                    SearchSidecar: storeSearch,
+                    ContentCorpus: storeContent,
                     Vectors: resolvedVectors.InspectStore(storeRoot, session.Snapshot),
                     SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null),
                     ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor),

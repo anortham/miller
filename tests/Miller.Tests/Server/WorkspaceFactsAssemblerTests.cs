@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Server;
@@ -624,5 +625,95 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
 
         Assert.Equal(1, probes);
         Assert.Equal(ScanGovernorStates.HoldingElsewhere, facts?.State);
+    }
+
+    private static SearchSidecarFacts Search(string state) =>
+        new(state, "search.db", 10, 10, 100, null);
+
+    private static ContentCorpusFacts Content(string state) =>
+        new(state, "content.db", 1, 10, 5, 20, 1000, 2000);
+
+    private static ScanFailureRecord Failing(int streak) =>
+        new(ScanIntent.IncrementalReconcile, null, streak, 4, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(30));
+
+    [Fact]
+    public void StoreFreshness_AllSignalsHealthy_IsFresh()
+    {
+        var (fresh, status, warning) =
+            WorkspaceFactsAssembler.StoreFreshness(null, "exact", Search("current"), Content("current"));
+
+        Assert.True(fresh);
+        Assert.Equal("current", status);
+        Assert.Null(warning);
+    }
+
+    /// <summary>
+    /// The defect this whole helper exists for. The family-store branch hardcoded IndexFresh: true, so a
+    /// workspace with five consecutive whole-repo scan failures still rendered "fresh" (2026-08-13 dogfood).
+    /// A scan failure means new work is not reaching the store at all, which is the least fresh a served view
+    /// can be.
+    /// </summary>
+    [Fact]
+    public void StoreFreshness_AScanFailureRecord_IsNotFresh_AndNamesTheStreak()
+    {
+        var (fresh, status, warning) =
+            WorkspaceFactsAssembler.StoreFreshness(Failing(5), "exact", Search("current"), Content("current"));
+
+        Assert.False(fresh);
+        Assert.Equal("scan_failing", status);
+        Assert.Contains("5 consecutive scan failure", warning);
+    }
+
+    [Fact]
+    public void StoreFreshness_AConvergingView_IsNotFresh()
+    {
+        var (fresh, status, warning) =
+            WorkspaceFactsAssembler.StoreFreshness(null, "converging", Search("current"), Content("current"));
+
+        Assert.False(fresh);
+        Assert.Equal("resolving", status);
+        Assert.Contains("converging", warning);
+    }
+
+    [Theory]
+    [InlineData("stale")]
+    [InlineData("missing")]
+    public void StoreFreshness_AStaleSidecar_IsNotFresh(string state)
+    {
+        var (searchFresh, searchStatus, _) =
+            WorkspaceFactsAssembler.StoreFreshness(null, "exact", Search(state), Content("current"));
+        var (contentFresh, contentStatus, _) =
+            WorkspaceFactsAssembler.StoreFreshness(null, "exact", Search("current"), Content(state));
+
+        Assert.False(searchFresh);
+        Assert.Equal("sidecar_stale", searchStatus);
+        Assert.False(contentFresh);
+        Assert.Equal("sidecar_stale", contentStatus);
+    }
+
+    /// <summary>
+    /// The IndexFreshProbe honesty contract: an unmeasurable freshness is null — "not measured" — never a
+    /// fabricated true or false. A blank resolution state is unknown, not broken.
+    /// </summary>
+    [Fact]
+    public void StoreFreshness_AnUnknownResolutionState_ReportsNotMeasured()
+    {
+        var (fresh, status, warning) =
+            WorkspaceFactsAssembler.StoreFreshness(null, null, Search("current"), Content("current"));
+
+        Assert.Null(fresh);
+        Assert.Equal("unknown", status);
+        Assert.Null(warning);
+    }
+
+    /// <summary>A scan failure outranks a converging view: it is the more fundamental breakage.</summary>
+    [Fact]
+    public void StoreFreshness_ScanFailureOutranksResolution()
+    {
+        var (fresh, status, _) =
+            WorkspaceFactsAssembler.StoreFreshness(Failing(2), "converging", Search("stale"), Content("stale"));
+
+        Assert.False(fresh);
+        Assert.Equal("scan_failing", status);
     }
 }
