@@ -136,6 +136,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the `patterns` MCP/CLI surface.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
 - [`release-notes/v1.19.0.md`](release-notes/v1.19.0.md) - latest release notes: index-convergence and Windows correctness, the `MILLER_HOME` override, and the `julie-extract 2.33.0` pin.
+- [`findings/2026-08-13-fast-suite-flakiness.md`](findings/2026-08-13-fast-suite-flakiness.md) - measured: the fast suite is ~30% red on an unchanged tree, three different victims with three different mechanisms across ten runs; one fixed, two open, plus why a single red CI run is not evidence of a regression.
 - [`findings/2026-08-13-v1.19.0-release-verification.md`](findings/2026-08-13-v1.19.0-release-verification.md) - live `v1.19.0` release verification: stable publication, eight assets, checksums, local gates, and the open red `windows-fast` CI job with the two attempts that failed to reproduce it.
 - [`release-notes/v1.18.3.md`](release-notes/v1.18.3.md) - previous release notes.
 - [`findings/2026-08-12-v1.18.3-release-candidate.md`](findings/2026-08-12-v1.18.3-release-candidate.md) - local `v1.18.3` candidate evidence; local gates and the semantic broker soak passed before publication.

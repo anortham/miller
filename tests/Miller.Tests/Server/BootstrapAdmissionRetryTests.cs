@@ -261,9 +261,24 @@ public sealed class BootstrapAdmissionRetryTests : IDisposable
             workspace, new IndexHolder(MillerRepositoryIndex.Build([]), builtRevision: 1));
     }
 
+    /// <summary>
+    /// Waits for a background bootstrap to reach a state. The deadline is a LIVENESS BACKSTOP, not a
+    /// performance budget.
+    /// </summary>
+    /// <remarks>
+    /// It was 5 seconds, and that made <c>AStoreRollbackFailureRetriesUntilTheBootstrapBinds</c> flaky: the
+    /// work being awaited is a thread-pool continuation behind a 20 ms retry delay, and the fast suite runs
+    /// ~6,500 tests in parallel. Under that contention the pool can starve the continuation well past five
+    /// seconds, so the test failed at exactly its deadline while nothing was actually wrong. Measured 1 failure
+    /// in 3 consecutive local runs (2026-08-13); CI runners have fewer cores and contend harder.
+    ///
+    /// <para>Raising it cannot make a passing test slower — the loop returns the instant the condition holds.
+    /// It only stops a starved pool from reading as a defect. A genuinely stuck bootstrap still fails here, and
+    /// CI's <c>--blame-hang-timeout 120s</c> remains the outer backstop, so this stays comfortably below it.</para>
+    /// </remarks>
     private static bool WaitUntil(Func<bool> condition)
     {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(60);
         while (DateTimeOffset.UtcNow < deadline)
         {
             if (condition())

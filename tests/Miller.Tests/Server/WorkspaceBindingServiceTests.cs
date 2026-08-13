@@ -706,9 +706,15 @@ public sealed class WorkspaceBindingServiceTests
             MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>()), builtRevision: 0));
     }
 
+    /// <summary>
+    /// Waits for a background binding to reach a state. The deadline is a LIVENESS BACKSTOP, not a performance
+    /// budget — see the same helper in <c>BootstrapAdmissionRetryTests</c> for the measured flake that set this
+    /// value. The loop returns the instant the condition holds, so a longer deadline costs a passing test
+    /// nothing and only stops a starved thread pool from reading as a defect.
+    /// </summary>
     private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
     {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(60);
         while (DateTimeOffset.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
