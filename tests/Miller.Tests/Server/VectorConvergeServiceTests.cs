@@ -203,7 +203,18 @@ public sealed class VectorConvergePortScaleTests : IDisposable
 
         string vectorsPath = Path.Combine(
             Path.GetDirectoryName(workspace.CanonicalExtractDbPath)!, "vectors.db");
-        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={vectorsPath}"))
+        // Pooling=false to match every production opener (all 58 `new SqliteConnection` sites under src/ build
+        // through SqliteConnectionStringBuilder with pooling off, including all four vectors.db openers).
+        // With the Microsoft.Data.Sqlite default of Pooling=true, disposing this connection returns it to the
+        // process-global pool with OS handles still open on vectors.db-wal, and Windows SQLite holds that file
+        // without FILE_SHARE_DELETE — so the later MakeSelfContained(ActivePath) threw. The product was never
+        // capable of this; only the test was.
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = vectorsPath,
+                Pooling = false,
+            }.ToString()))
         {
             connection.Open();
             using var command = connection.CreateCommand();

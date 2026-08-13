@@ -16,10 +16,14 @@ namespace Miller.Tests.Indexing;
 /// <para><c>[Trait("Category","Scale")]</c>: real subprocesses, real extraction. SKIPS (never fails) when the
 /// pinned <c>.tools/julie-extract</c> or a built <c>miller</c> binary is absent.</para>
 ///
-/// <para><b>Home override.</b> The CLI derives miller home from
-/// <see cref="Environment.SpecialFolder.UserProfile"/>, which reads <c>HOME</c> on Unix and <c>USERPROFILE</c>
-/// on Windows — both are set on every spawned child so a test never touches the developer's real
-/// <c>~/.miller</c>.</para>
+/// <para><b>Home override.</b> Every spawned child gets <c>MILLER_HOME</c> (see
+/// <see cref="Miller.Indexing.MillerHome"/>), which is the ONLY switch that actually moves miller home.
+/// <c>HOME</c>/<c>USERPROFILE</c> are still set for anything else in the child that consults them, but they
+/// are NOT sufficient on their own: <see cref="Environment.SpecialFolder.UserProfile"/> resolves through the
+/// Windows known-folder API and ignores both. This class previously relied on them alone, so on Windows the
+/// fixture governed a lock under the temp home while every child governed the developer's real one — two
+/// disjoint files, so the held lease could never refuse a child and all five tests failed for one reason
+/// (2026-08-12 triage).</para>
 ///
 /// <para><b>Observed state is <c>holding_elsewhere</c>, not <c>waiting</c>.</b> <c>waiting</c> lives in the
 /// waiting process's own <see cref="ScanGovernorState"/>, so only that process can render it. A one-shot CLI
@@ -257,6 +261,9 @@ public sealed class ScanGovernorContentionScaleTests
             };
             foreach (string arg in args)
                 info.ArgumentList.Add(arg);
+            // MILLER_HOME is the load-bearing one; HOME/USERPROFILE do NOT move Environment.SpecialFolder
+            // .UserProfile on Windows. Keep all three so the child's home is consistent whoever asks.
+            info.Environment[MillerHome.EnvironmentVariable] = _home;
             info.Environment["HOME"] = _home;
             info.Environment["USERPROFILE"] = _home;
             // These tests govern SCANS, not semantics, and the broker's unix socket path is composed under the

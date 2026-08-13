@@ -86,11 +86,30 @@ public static class WatchPathFilter
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(absolutePath);
 
+        if (IsWorkspaceRootItself(root, absolutePath))
+            return false;
         if (HasSkippedSegment(root, absolutePath))
             return false;
         if (HasUnsupportedExtension(absolutePath, supportedExtensions))
             return false;
         return !WorkspaceIgnorePolicy.IsIgnored(root, absolutePath);
+    }
+
+    /// <summary>
+    /// True when the event names the workspace ROOT rather than a file inside it. Such an event is never
+    /// actionable as a per-file op — <c>delete(&lt;root&gt;\)</c> reached the extractor and came back
+    /// <c>invalid_file_path</c> on the Miller workspace itself (2026-08-12 triage).
+    /// </summary>
+    /// <remarks>
+    /// The source is an EMPTY-NAME <see cref="FileSystemWatcher"/> notification: a rename whose old-name
+    /// record landed in the previous buffer read surfaces as a <c>Renamed</c> event with a null old name, and
+    /// the handler stats only the new path — which resolves back to the root. Common under the rename traffic
+    /// of a Release build. Nothing below the root can produce <c>"."</c>, so this rejects only the root.
+    /// </remarks>
+    private static bool IsWorkspaceRootItself(string root, string absolutePath)
+    {
+        string? relative = TryRootRelative(root, absolutePath);
+        return relative is not null && (relative.Length == 0 || relative == ".");
     }
 
     private static bool HasSkippedSegment(string root, string absolutePath)

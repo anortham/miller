@@ -51,6 +51,22 @@ public static class WorkspaceIndexFactsReader
         return new WorkspaceSymbolCounts(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2));
     }
 
+    /// <summary>
+    /// The distinct-extension count on its own, for a caller that already has the symbol counts and only needs
+    /// to refresh this when the file set actually changed.
+    /// </summary>
+    /// <remarks>
+    /// This is the expensive half of <see cref="ReadSession"/>: it streams every symbol-bearing path
+    /// (92-97 ms against a 226k-symbol store) where the counts query is a single 35-38 ms statement. The
+    /// freshness swap ran both on every poll, in every process — ~145 ms twice a second for a store that had
+    /// not changed (2026-08-12 triage).
+    /// </remarks>
+    public static int ReadKnownExtensionsCount(IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(ReadKnownExtensionsCount);
+    }
+
     private static long ReadDocumentCount(SqliteConnection connection)
     {
         using SqliteCommand command = connection.CreateCommand();

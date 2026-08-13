@@ -16,6 +16,7 @@ public sealed class SemanticBrokerScaleTests : IDisposable
     public async Task EightSameModelProcesses_LoadOneBrokerAndCompleteWithoutHangs()
     {
         BrokerCandidate candidate = RequireBrokerCandidate();
+        SkipWhenAForeignBrokerOwnsTheRendezvous();
         string probe = Path.Combine(
             ScaleTestSupport.RepoRoot(),
             "scripts",
@@ -151,6 +152,56 @@ public sealed class SemanticBrokerScaleTests : IDisposable
         }
 
         return Process.Start(start)!;
+    }
+
+    /// <summary>
+    /// Skips when a broker outside this test already owns the machine's rendezvous for the pinned model.
+    /// </summary>
+    /// <remarks>
+    /// <para>On Windows the rendezvous is a MACHINE-GLOBAL named pipe: <c>SemanticBrokerEndpoint.Identity</c>
+    /// hashes the model id and sha only, so <c>millerHome</c> shapes the unix socket and lock paths but NOT
+    /// <c>WindowsPipeName</c>. A dogfooding machine running the Miller plugin therefore already has a broker
+    /// on the exact pipe this test's probes will connect to. They attach to it as non-owners, no probe ever
+    /// spawns a broker under the temp home, and the owner count sums to 0 — the test was unpassable on any
+    /// machine with a live Miller (2026-08-12 triage).</para>
+    ///
+    /// <para>Skipping is the honest outcome: the alternative is home-scoping the pipe name, and that is frozen
+    /// by <c>docs/contracts/semantic-broker-v1.md</c> §Identity/§Discovery. Splitting mixed-version Miller
+    /// processes onto different pipes mid-rollout would give two brokers, two model loads and one accelerator
+    /// lease — directly against the CLAUDE.md invariant that same-identity sessions share one broker.
+    /// <c>scripts/semantic-broker-soak.ps1</c> takes the same position and hard-fails on a foreign broker.</para>
+    /// </remarks>
+    private void SkipWhenAForeignBrokerOwnsTheRendezvous()
+    {
+        SemanticBrokerEndpoint endpoint =
+            SemanticBrokerEndpoint.Create(_millerHome, MillerSemanticContract.DefaultEncoder);
+        bool occupied = OperatingSystem.IsWindows()
+            ? WindowsPipeExists(endpoint.WindowsPipeName)
+            : File.Exists(endpoint.UnixSocketPath);
+
+        Assert.SkipWhen(
+            occupied,
+            $"A semantic broker outside this test already owns the rendezvous '{endpoint.ServerEndpoint}' for " +
+            "the pinned model. The Windows pipe name is machine-global by frozen contract, so the probes would " +
+            "attach to it as non-owners and no broker would start under this test's home. Stop the other " +
+            "Miller (or run scripts/semantic-broker-soak) and retry.");
+    }
+
+    private static bool WindowsPipeExists(string pipeName)
+    {
+        try
+        {
+            return Directory
+                .EnumerateFiles(@"\\.\pipe\")
+                .Any(path => string.Equals(
+                    Path.GetFileName(path),
+                    pipeName,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false; // cannot enumerate: fall through and let the assertions speak
+        }
     }
 
     private void WaitForBrokerEndpoint()

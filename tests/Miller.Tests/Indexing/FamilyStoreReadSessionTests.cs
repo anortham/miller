@@ -64,6 +64,56 @@ public sealed class FamilyStoreReadSessionTests
         Assert.Equal(5, ReadStoreLogSequence(fixture));
     }
 
+    // A whole-repo `store import` emits one progress chunk per commit batch with view_id NULL, version_id
+    // NULL and terminal 0 — 1,971 of them against 20 real events on the Miller workspace itself
+    // (2026-08-12 triage). Counting them advanced the cursor ~2x/second during an import that changed
+    // nothing, so every reader re-swapped its view (~145 ms each) and the derived sidecars chased a target
+    // that moved again before they could stamp it. The pre-existing fixtures all wrote chunk rows with a
+    // non-null view_id, which is not what the producer emits, so nothing caught this.
+    [Fact]
+    public void StoreLogCursorIgnoresInFlightImportProgressChunks()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+
+        Assert.Equal(2, ReadStoreLogSequence(fixture));
+        AppendGlobalStoreLogEvent(fixture, 3, "store_import_l1_chunk", terminal: 0);
+        AppendGlobalStoreLogEvent(fixture, 4, "store_import_l3_chunk", terminal: 0);
+        AppendGlobalStoreLogEvent(fixture, 5, "store_update_l3_chunk", terminal: 0);
+
+        Assert.Equal(2, ReadStoreLogSequence(fixture));
+    }
+
+    // The L1 publish is the manifest flip that lets bootstrap serve, and it is terminal 0 — so the cursor
+    // must NOT be reduced to `terminal = 1`.
+    [Fact]
+    public void StoreLogCursorTracksTheNonTerminalL1PublishAndTheCompletedImport()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+
+        AppendGlobalStoreLogEvent(fixture, 3, "store_import_l3_chunk", terminal: 0);
+        Assert.Equal(2, ReadStoreLogSequence(fixture));
+
+        AppendGlobalStoreLogEvent(fixture, 4, "store_import_l1_published", terminal: 0);
+        Assert.Equal(4, ReadStoreLogSequence(fixture));
+
+        AppendGlobalStoreLogEvent(fixture, 5, "store_import_l3_chunk", terminal: 0);
+        Assert.Equal(4, ReadStoreLogSequence(fixture));
+
+        AppendGlobalStoreLogEvent(fixture, 6, "store_import_completed", terminal: 1);
+        Assert.Equal(6, ReadStoreLogSequence(fixture));
+    }
+
+    // Defensive: the name test is second, so a chunk kind that ever becomes terminal still counts.
+    [Fact]
+    public void StoreLogCursorTracksATerminalChunkEvent()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+
+        AppendGlobalStoreLogEvent(fixture, 3, "store_import_l3_chunk", terminal: 1);
+
+        Assert.Equal(3, ReadStoreLogSequence(fixture));
+    }
+
     [Fact]
     public void SnapshotRevisionUsesStoreLogSequenceWhenItDiffersFromManifestGeneration()
     {
@@ -1206,6 +1256,30 @@ public sealed class FamilyStoreReadSessionTests
         command.Parameters.AddWithValue("$request", $"request-{sequence}");
         command.Parameters.AddWithValue("$view", (object?)viewId ?? DBNull.Value);
         command.Parameters.AddWithValue("$version", (object?)versionId ?? DBNull.Value);
+        command.ExecuteNonQuery();
+    }
+
+    // A store-wide event exactly as the producer writes it: view_id NULL, generation NULL, version_id NULL.
+    private static void AppendGlobalStoreLogEvent(
+        StoreFixture fixture,
+        long sequence,
+        string eventKind,
+        int terminal)
+    {
+        string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            "INSERT INTO store_log VALUES ($sequence,$request,$kind,NULL,NULL,NULL,NULL,$terminal,'{}','2026-08-12T00:00:00Z')";
+        command.Parameters.AddWithValue("$sequence", sequence);
+        command.Parameters.AddWithValue("$request", $"request-{sequence}");
+        command.Parameters.AddWithValue("$kind", eventKind);
+        command.Parameters.AddWithValue("$terminal", terminal);
         command.ExecuteNonQuery();
     }
 

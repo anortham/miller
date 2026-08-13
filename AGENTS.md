@@ -24,9 +24,13 @@ local analysis reports** (`metrics churn|clones|complexity|risk`, the composed `
 and confidence/evidence views, embeddings-as-a-service orchestration, suppression persistence, and commercial
 orchestration.
 
-The versioned family store is a producer-owned public contract. `julie-extract` is the only writer of
-`store.db`, `coord.db`, manifests, resolution bases, and generation files; Miller reads a pinned view and
-writes only its own derived sidecars. Store mode is default-on when `MILLER_INDEX_STORE` is unset or blank.
+The versioned family store is a shared contract between `julie-extract` and Miller, but **both repos have the
+same owner and neither side is off-limits**. In normal operation `julie-extract` writes `store.db`, `coord.db`,
+manifests, resolution bases, and generation files while Miller reads a pinned view and writes its own derived
+sidecars — keep that split because it keeps the design clean, not because the files are sacred. When the store
+or coordinator is wedged (a stranded `claimed` row, a stale lease, a corrupt generation), **repair it directly
+and fix the root cause in whichever repo owns it.** Do not stall a diagnosis or leave a broken index in place
+out of deference to the boundary. Store mode is default-on when `MILLER_INDEX_STORE` is unset or blank.
 `MILLER_INDEX_STORE=off` exports the current view to the legacy standalone artifact before serving it; Miller
 must never fall back to a stale legacy artifact.
 (2026-07-06 consensus, Eros not shipping: Miller absorbed the deterministic signals/hotspot workflows —

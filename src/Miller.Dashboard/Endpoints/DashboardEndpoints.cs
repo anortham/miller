@@ -367,7 +367,7 @@ internal static class DashboardEndpoints
     private static DashboardRuntimeInfo BuildRuntimeInfo(DashboardPaths paths, string launchDirectory)
     {
         string machineMillerDir = Path.GetDirectoryName(paths.RegistryDbPath)
-            ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            ?? Miller.Indexing.MillerHome.Resolve();
         return new DashboardRuntimeInfo(
             paths.RegistryDbPath,
             paths.TelemetryDbPath,

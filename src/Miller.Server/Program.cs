@@ -50,10 +50,7 @@ else if (startupWorkspace is not null)
 // Deferred launches log to machine-global ~/.miller/logs until MCP roots bind the primary workspace.
 var logsPath = eagerBootstrap
     ? Path.Combine(workspacePath, ".miller", "logs")
-    : Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".miller",
-        "logs");
+    : Path.Combine(MillerHome.ResolveMillerDirectory(), "logs");
 Directory.CreateDirectory(logsPath);
 
 int processId = Environment.ProcessId;

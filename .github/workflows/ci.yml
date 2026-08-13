@@ -172,8 +172,14 @@ jobs:
       - name: Build (warnings are errors via Directory.Build.props)
         run: dotnet build Miller.slnx --no-restore -c Release
 
-      - name: "Test (Windows scale smoke: leadership, WAL, full rebuild, live store, bridges)"
+      # This allowlist is the ONLY place any Scale test runs on Windows (scale-test is ubuntu-only), so a class
+      # missing from it is a class no Windows CI has ever executed. That is exactly how 12 Windows-only test
+      # defects accumulated undetected until 2026-08-12 — four of them Windows-specific by construction
+      # (known-folder home resolution, \\?\ path prefixes, unlink-while-open, a machine-global pipe), i.e.
+      # invisible to ubuntu no matter how green it is. Add new Scale classes here unless they are genuinely
+      # too slow for a hosted runner; the job is capped at timeout-minutes: 30.
+      - name: "Test (Windows scale smoke: leadership, WAL, full rebuild, live store, bridges, governor, rebind)"
         shell: pwsh
         run: >
           dotnet test Miller.slnx --no-build -c Release
-          --filter "FullyQualifiedName~VersionAwareLeadershipScaleTests|FullyQualifiedName~MultiProcessWalTests|FullyQualifiedName~FullRebuildScanScaleTests|FullyQualifiedName~StoreWorkspaceIndexProviderScaleTests|FullyQualifiedName~LiveJulieStoreClientScaleTests|FullyQualifiedName~LiveBridgeTraceTests"
+          --filter "FullyQualifiedName~VersionAwareLeadershipScaleTests|FullyQualifiedName~MultiProcessWalTests|FullyQualifiedName~FullRebuildScanScaleTests|FullyQualifiedName~StoreWorkspaceIndexProviderScaleTests|FullyQualifiedName~LiveJulieStoreClientScaleTests|FullyQualifiedName~LiveBridgeTraceTests|FullyQualifiedName~ScanGovernorContentionScaleTests|FullyQualifiedName~RebindVerbScaleTests|FullyQualifiedName~CliBinarySubprocessTests"

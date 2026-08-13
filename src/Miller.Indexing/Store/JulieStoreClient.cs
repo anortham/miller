@@ -652,6 +652,7 @@ public sealed class JulieStoreClient : IJulieStoreClient
     private static StoreResolutionState ParseResolutionState(string? value) => value switch
     {
         "unbound" => StoreResolutionState.Unbound,
+        "converging" => StoreResolutionState.Converging,
         "exact" => StoreResolutionState.Exact,
         _ => throw ContractFailure($"Unknown resolution state '{value ?? "null"}'."),
     };

@@ -344,9 +344,31 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         return Report(result, after, changed, changedFiles, deletedFiles);
     }
 
+    /// <summary>
+    /// Decides whether a store request actually failed.
+    ///
+    /// <para><b>State is authoritative, not the exit code (load-bearing).</b> The coordinator commits the
+    /// request and THEN runs a writer lease-fencing check, so a request can be durably
+    /// <c>committed</c> — populated <c>result_json</c>, no <c>error_json</c>, every <c>file_version</c>
+    /// written — and still exit nonzero because the post-commit check lost the fence. Testing
+    /// <c>ExitCode != 0</c> first threw that committed work away, and because
+    /// <see cref="RequireCommittedAndCompleteJournal"/> treats a committed request as terminal it also
+    /// retired the dedupe entry on the throw path — so the next attempt minted a fresh request id and
+    /// re-ran the whole import. That chain produced 7 redundant whole-repo imports of an unchanged
+    /// 1,628-file tree in 37 minutes on the Miller workspace itself (2026-08-12 triage), all of them
+    /// reporting <c>manifest_disposition:"reused"</c> with byte-identical row counts.</para>
+    ///
+    /// <para>A nonzero exit AFTER a commit says something about the producer's post-commit bookkeeping, not
+    /// about the data — and the data is what Miller reads. A genuinely failed request reports
+    /// <see cref="StoreRequestState.Failed"/>, which is still a hard failure here.</para>
+    /// </summary>
     private static void RequireCommitted(StoreRequest request, StoreRequestResult result)
     {
-        if (result.ExitCode != 0 || result.State is StoreRequestState.Failed)
+        // Durable outcomes win outright. Do NOT add an exit-code test to this branch.
+        if (result.State is StoreRequestState.Committed or StoreRequestState.Acknowledged)
+            return;
+
+        if (result.State is StoreRequestState.Failed || result.ExitCode != 0)
         {
             throw new StoreWorkspaceOperationException(
                 request.Operation,
@@ -354,13 +376,13 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
                 result.Failure.Message ??
                 $"julie-extract store {request.Operation.ToString().ToLowerInvariant()} failed as {result.Failure.Class.Code}.");
         }
-        if (result.State is not (StoreRequestState.Committed or StoreRequestState.Acknowledged))
-        {
-            throw new StoreWorkspaceOperationException(
-                request.Operation,
-                new StoreFailureClass("request_not_terminal"),
-                $"julie-extract store request '{result.Request.Id}' returned non-terminal state '{result.State}'.");
-        }
+
+        // Queued/Claimed with a clean exit: the request is still owned by a live executor and its work may
+        // yet land. Not committed, so the caller must not treat it as done.
+        throw new StoreWorkspaceOperationException(
+            request.Operation,
+            new StoreFailureClass("request_not_terminal"),
+            $"julie-extract store request '{result.Request.Id}' returned non-terminal state '{result.State}'.");
     }
 
     private void RequireCommittedAndCompleteJournal(StoreRequest request, StoreRequestResult result)

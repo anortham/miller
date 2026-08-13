@@ -140,8 +140,11 @@ public sealed class CliBinarySubprocessTests : IDisposable
             UseShellExecute = false,
         };
         // Isolate the machine-global Miller home (registry + telemetry) into the test's temp home so a real
-        // `workspace open` registers there, never in the dev machine's ~/.miller. HOME drives UserProfile on
-        // POSIX; USERPROFILE on Windows — set both for a cross-platform isolation.
+        // `workspace open` registers there, never in the dev machine's ~/.miller.
+        // MILLER_HOME is what actually moves it: HOME/USERPROFILE do NOT change
+        // Environment.SpecialFolder.UserProfile on Windows (it resolves through the known-folder API), so the
+        // original two-variable "isolation" was a no-op there and this test wrote to the real registry.
+        psi.Environment[MillerHome.EnvironmentVariable] = _home;
         psi.Environment["HOME"] = _home;
         psi.Environment["USERPROFILE"] = _home;
         psi.ArgumentList.Add(millerDll);

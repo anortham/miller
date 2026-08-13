@@ -40,8 +40,19 @@ public sealed class RebindVerbScaleTests
             RebindReport rebound = runner.Rebind(copy, target, TestContext.Current.CancellationToken);
 
             Assert.True(rebound.Changed);
-            Assert.Equal(PathCanonicalizer.CanonicalizeRoot(source), rebound.PreviousRoot);
-            Assert.Equal(PathCanonicalizer.CanonicalizeRoot(target), rebound.NewRoot);
+            // Identity, not string equality. julie-extract canonicalizes through Rust's std::fs::canonicalize
+            // and so emits the Win32 \\?\ extended-length prefix, while PathCanonicalizer.CanonicalizeRoot
+            // deliberately strips it and ParseRebindReport carries julie's strings verbatim by design.
+            // ArtifactRootIdentity.Matches strips both operands — and also absorbs the second Windows
+            // divergence a bare strip would miss, that Rust reflects on-disk casing while Miller preserves
+            // as-launched casing. Production is already prefix-immune this way (WorkspaceId strips before
+            // hashing, so both spellings yield one workspace_id); only these assertions were not.
+            Assert.True(
+                ArtifactRootIdentity.Matches(rebound.PreviousRoot, PathCanonicalizer.CanonicalizeRoot(source)),
+                $"previous root '{rebound.PreviousRoot}' should identify the source root '{source}'");
+            Assert.True(
+                ArtifactRootIdentity.Matches(rebound.NewRoot, PathCanonicalizer.CanonicalizeRoot(target)),
+                $"new root '{rebound.NewRoot}' should identify the target root '{target}'");
             Assert.Equal(sourceArtifactId, rebound.PreviousArtifactId);
             Assert.NotEqual(rebound.PreviousArtifactId, rebound.NewArtifactId);
             Assert.Equal(rebound.NewArtifactId, ReadArtifactId(copy));

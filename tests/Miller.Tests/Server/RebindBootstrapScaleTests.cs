@@ -37,8 +37,16 @@ public sealed class RebindBootstrapScaleTests
 
         string worktreeDb = Path.Combine(worktree, ".miller", "symbols.db");
         Assert.True(File.Exists(worktreeDb));
-        Assert.Equal(worktree, fx.ReadMetadata(worktreeDb, "root_path"));
-        Assert.Equal(fx.MainRoot, fx.ReadMetadata(worktreeDb, "rebound_from_root"));
+        // Identity, not string equality: julie-extract writes these metadata rows through Rust's
+        // std::fs::canonicalize, so on Windows they carry the \\?\ extended-length prefix (and on-disk
+        // casing) that Miller's own canonicalizer strips. ArtifactRootIdentity.Matches is the same relation
+        // production uses to decide whether an artifact describes a root.
+        Assert.True(
+            ArtifactRootIdentity.Matches(fx.ReadMetadata(worktreeDb, "root_path"), worktree),
+            $"root_path '{fx.ReadMetadata(worktreeDb, "root_path")}' should identify '{worktree}'");
+        Assert.True(
+            ArtifactRootIdentity.Matches(fx.ReadMetadata(worktreeDb, "rebound_from_root"), fx.MainRoot),
+            $"rebound_from_root '{fx.ReadMetadata(worktreeDb, "rebound_from_root")}' should identify '{fx.MainRoot}'");
         Assert.Equal(sourceArtifactId, fx.ReadMetadata(worktreeDb, "rebound_from_artifact_id"));
         Assert.NotNull(fx.ReadMetadata(worktreeDb, "rebound_at"));
         Assert.NotEqual(sourceArtifactId, fx.ReadMetadata(worktreeDb, "artifact_id"));

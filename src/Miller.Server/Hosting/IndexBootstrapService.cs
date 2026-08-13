@@ -935,6 +935,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             StoreFamilyBinding? binding = null;
             bool lockAcquired = false;
             bool winnerArtifactUsable = false;
+            // A cold start that lands mid-import blocks here with a 10-minute budget and, before this,
+            // emitted NOTHING — the 35 s bootstrap on the Miller workspace itself was invisible in the log
+            // (2026-08-12 triage). Counting through the sleep delegate keeps the pure helper untouched.
+            var leaseWaitClock = System.Diagnostics.Stopwatch.StartNew();
+            int leaseWaitPolls = 0;
             BootstrapScanLease<SingleWriterLock> storeLease = AcquireBootstrapScanLease(
                 tryAcquire: () =>
                 {
@@ -978,7 +983,33 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 wait: BootstrapScanLockWait(),
                 pollInterval: BootstrapScanLockPollInterval,
                 utcNow: () => DateTimeOffset.UtcNow,
-                sleep: Thread.Sleep);
+                sleep: delay =>
+                {
+                    // Name what is being waited for on the FIRST failed acquire. Deliberately not
+                    // DescribeBootstrapLockHolder: that reads leader.json, which does not exist when the
+                    // blocker is a store importer — which is the case that actually stalls a cold start.
+                    if (leaseWaitPolls++ == 0)
+                    {
+                        _logger.LogInformation(
+                            "Bootstrap is waiting for a readable family-store view for {Root}; the writer lock on " +
+                            "{MillerDir} is held. Polling every {PollMs} ms for up to {WaitSeconds}s.",
+                            canonicalRoot,
+                            millerDir,
+                            (int)BootstrapScanLockPollInterval.TotalMilliseconds,
+                            (int)BootstrapScanLockWait().TotalSeconds);
+                    }
+
+                    Thread.Sleep(delay);
+                });
+            if (leaseWaitPolls > 0)
+            {
+                _logger.LogInformation(
+                    "Bootstrap writer-lock wait ended as {Outcome} after {ElapsedMs} ms and {Polls} poll(s).",
+                    storeLease.Outcome,
+                    leaseWaitClock.ElapsedMilliseconds,
+                    leaseWaitPolls);
+            }
+
             using SingleWriterLock? bootstrapLease = storeLease.Lease;
             if (storeLease.Outcome == BootstrapLeaseOutcome.TimedOut)
             {

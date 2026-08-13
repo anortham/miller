@@ -82,6 +82,24 @@ public sealed class WatchPathFilterTests
         Assert.False(WatchPathFilter.ShouldProcess(Root, path));
     }
 
+    // An empty-name FileSystemWatcher notification (a rename whose old-name record landed in the previous
+    // buffer read) resolves back to the workspace root itself, and the root reached the extractor as
+    // delete(<root>\) -> invalid_file_path (2026-08-12 triage). The root is not a file; never dispatch it.
+    [Theory]
+    [InlineData("/repo")]
+    [InlineData("/repo/")]
+    [InlineData("/repo/.")]
+    public void Skips_TheWorkspaceRootItself(string path)
+    {
+        Assert.False(WatchPathFilter.ShouldProcess(Root, path));
+    }
+
+    [Fact]
+    public void Skips_TheWorkspaceRootItself_EvenWithTheExtensionGateActive()
+    {
+        Assert.False(WatchPathFilter.ShouldProcess(Root, Root, new HashSet<string> { "cs" }));
+    }
+
     [Fact]
     public void Skip_IsScopedToASegment_NotASubstring()
     {

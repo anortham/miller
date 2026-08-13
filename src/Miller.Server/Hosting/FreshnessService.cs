@@ -55,6 +55,11 @@ public sealed class FreshnessService : BackgroundService
     private long _lastObservedRevision = -1;
     private string? _lastObservedStoreIdentity;
 
+    // Memo for the expensive half of the swap's facts read (see ReadFactsReusingExtensions).
+    private string? _factsManifestHash;
+    private long _factsFileCount = -1;
+    private int _factsKnownExtensionsCount;
+
     public FreshnessService(
         IndexBootstrapService bootstrap,
         ILogger<FreshnessService> logger,
@@ -237,7 +242,7 @@ public sealed class FreshnessService : BackgroundService
                     workspaceRoot,
                     workspace.WorkspaceId,
                     true);
-                WorkspaceIndexFacts facts = WorkspaceIndexFactsReader.ReadSession(reader);
+                WorkspaceIndexFacts facts = ReadFactsReusingExtensions(reader);
                 string indexIdentity = reader.Snapshot.IndexIdentity;
                 return new LazyFreshnessRebuildResult(
                     () => LoadPinnedStoreIndex(
@@ -273,6 +278,45 @@ public sealed class FreshnessService : BackgroundService
         else if (swapped)
             _logger.LogDebug("Freshness: swapped index view to revision {Revision}.", latest);
         return new PollResult(swapped, latest);
+    }
+
+    /// <summary>
+    /// The swap's index facts, recomputing the distinct-extension count only when the file set can actually
+    /// have changed.
+    /// </summary>
+    /// <remarks>
+    /// <para>Reading both halves cost ~145 ms per swap in EVERY Miller process — measured against the live
+    /// 882 MB store as session open 9-15 ms + counts 35-38 ms + the streaming distinct-path scan 92-97 ms —
+    /// and the swap ran roughly twice a second while nothing changed (2026-08-12 triage). The counts query is
+    /// one statement and stays; only the path scan is memoized.</para>
+    ///
+    /// <para>The guard is (manifest hash, symbol-bearing FILE count), not the manifest hash alone: within a
+    /// single manifest generation a progressive level upgrade adds symbols, so the symbol-bearing path set —
+    /// and therefore the extension count — can still grow. Keying on the file count as well means a new
+    /// extension cannot slip through, because a new extension implies a new path implies a higher count.</para>
+    ///
+    /// <para>Deliberately NOT sourced from <c>_miller_visible_entries</c>: that is a different set (all visible
+    /// manifest entries, against symbol-bearing paths here), so the displayed <c>ext</c> count would change
+    /// on the first swap.</para>
+    /// </remarks>
+    private WorkspaceIndexFacts ReadFactsReusingExtensions(IWorkspaceReadSession session)
+    {
+        WorkspaceSymbolCounts counts = WorkspaceIndexFactsReader.ReadSymbolCounts(session);
+        string? manifestHash = session.Snapshot.Freshness.ManifestHash;
+
+        if (manifestHash is not null
+            && _factsManifestHash is not null
+            && string.Equals(manifestHash, _factsManifestHash, StringComparison.Ordinal)
+            && _factsFileCount == counts.Files)
+        {
+            return new WorkspaceIndexFacts(counts.Symbols, _factsKnownExtensionsCount);
+        }
+
+        int extensions = WorkspaceIndexFactsReader.ReadKnownExtensionsCount(session);
+        _factsManifestHash = manifestHash;
+        _factsFileCount = counts.Files;
+        _factsKnownExtensionsCount = extensions;
+        return new WorkspaceIndexFacts(counts.Symbols, extensions);
     }
 
     private MillerRepositoryIndex LoadPinnedStoreIndex(

@@ -9,8 +9,7 @@ internal sealed record DashboardPaths(
 {
     public static DashboardPaths FromEnvironment(string appBaseDirectory)
     {
-        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string millerHome = Path.Combine(home, ".miller");
+        string millerHome = Miller.Indexing.MillerHome.ResolveMillerDirectory();
         string registry = Environment.GetEnvironmentVariable("MILLER_REGISTRY_DB")
             ?? Path.Combine(millerHome, "workspaces.db");
         string telemetry = Environment.GetEnvironmentVariable("MILLER_TELEMETRY_DB")

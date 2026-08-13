@@ -57,3 +57,24 @@
 # it more specific (e.g., "**/vendor/lib/**" vs "**/lib/**")
 
 /.claude/worktrees/
+
+# ═══════════════════════════════════════════════════════════════
+# Benchmark / eval output (added 2026-08-12 after the corpus audit)
+# ═══════════════════════════════════════════════════════════════
+# These are recorded RESULTS, not source. They were 112,933 of 226,107 symbols
+# (JSON alone outnumbered C# 136,928 to 74,250) and 155,558 of 164,580
+# structural_facts rows — 94.5% — which inflated every store import payload and
+# the search sidecar while adding nothing an agent navigates to.
+#
+# TRADEOFF, made deliberately: ContentCorpusWriter enumerates the same `files`
+# table, so these leave the content corpus too — `search mode=content` no longer
+# reaches benchmark result bodies. The .md summaries beside them stay indexed.
+#
+# Honest magnitude: this removes ~half the SYMBOL count but only ~29% of stored
+# text, because identifiers + reference_sites (183 MB, 90%+ C#, zero JSON rows)
+# dominate the store. It will not halve store.db or the cold bootstrap.
+spike/**/out*/
+eval/**/out/
+scripts/benchmarks/*.json
+docs/findings/**/*results.json*
+**/results.json

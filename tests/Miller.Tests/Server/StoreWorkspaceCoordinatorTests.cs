@@ -54,6 +54,94 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.IsType<StoreResolveRequest>(client.Requests[1]);
     }
 
+    // The producer commits, then runs a writer lease-fencing check; losing that fence exits nonzero on a
+    // request whose data is already durable. Reading the exit code first discarded the committed import and
+    // retired its journal entry, so the next attempt re-ran the whole thing — 7 redundant whole-repo imports
+    // of an unchanged tree in 37 minutes (2026-08-12 triage).
+    [Fact]
+    public void ACommittedRequestSucceedsEvenWhenTheProducerExitsNonzero()
+    {
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            exitCode: 1,
+            failureClass: "resolution_failed",
+            stateOverride: StoreRequestState.Committed);
+        var snapshots = new Queue<StoreWorkspaceState>([new(41, "full"), new(42, "full")]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => snapshots.Dequeue(),
+            () => "request-a");
+
+        ExtractReport report = coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs"));
+
+        Assert.Equal("completed", report.Status);
+        Assert.Equal(42, report.Revision);
+    }
+
+    [Fact]
+    public void AnAcknowledgedRequestSucceedsEvenWhenTheProducerExitsNonzero()
+    {
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            exitCode: 1,
+            failureClass: "resolution_failed",
+            stateOverride: StoreRequestState.Acknowledged);
+        var snapshots = new Queue<StoreWorkspaceState>([new(41, "full"), new(42, "full")]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => snapshots.Dequeue(),
+            () => "request-a");
+
+        Assert.Equal("completed", coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs")).Status);
+    }
+
+    // The other half of the contract: a genuinely failed request must still be a hard failure, so the
+    // backoff/latch machinery keeps working. Do not widen the committed branch to cover this.
+    [Fact]
+    public void AFailedRequestIsStillAHardFailure()
+    {
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            exitCode: 1,
+            failureClass: "resolution_failed",
+            stateOverride: StoreRequestState.Failed);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => new StoreWorkspaceState(41, "full"),
+            () => "request-a");
+
+        StoreWorkspaceOperationException failure = Assert.Throws<StoreWorkspaceOperationException>(
+            () => coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs")));
+
+        Assert.Equal("resolution_failed", failure.FailureClass.Code);
+    }
+
+    // Queued/Claimed with a clean exit: still owned by a live executor, nothing durable yet.
+    [Fact]
+    public void ANonTerminalRequestIsNotTreatedAsCommitted()
+    {
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            stateOverride: StoreRequestState.Claimed);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => new StoreWorkspaceState(41, "full"),
+            () => "request-a");
+
+        StoreWorkspaceOperationException failure = Assert.Throws<StoreWorkspaceOperationException>(
+            () => coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs")));
+
+        Assert.Equal("request_not_terminal", failure.FailureClass.Code);
+    }
+
     [Fact]
     public void MissingDeleteIsANoChangeAndKeepsTheLatestStoreCursor()
     {
@@ -562,11 +650,16 @@ public sealed class StoreWorkspaceCoordinatorTests
         return Assert.IsType<StoreImportRequest>(client.SingleRequest);
     }
 
+    // stateOverride exists because the real producer can commit a request and STILL exit nonzero (its
+    // post-commit lease-fencing check). Defaulting state from the exit code — as this fake did originally —
+    // made that combination unrepresentable, which is why the "committed work discarded on a nonzero exit"
+    // defect shipped untested. Leave the default coupling alone so existing cases are unchanged.
     private sealed class RecordingStoreClient(
         StoreOperation expectedOperation,
         StoreManifestDisposition manifestDisposition = StoreManifestDisposition.Created,
         int exitCode = 0,
-        string failureClass = "none") : IJulieStoreClient
+        string failureClass = "none",
+        StoreRequestState? stateOverride = null) : IJulieStoreClient
     {
         private readonly List<StoreRequest> _requests = [];
 
@@ -588,6 +681,9 @@ public sealed class StoreWorkspaceCoordinatorTests
                 StoreUpdateRequest update => update.Level,
                 _ => StoreLevel.NotApplicable,
             };
+            StoreRequestState state = stateOverride
+                ?? (exitCode == 0 ? StoreRequestState.Committed : StoreRequestState.Failed);
+            bool durable = state is StoreRequestState.Committed or StoreRequestState.Acknowledged;
             return new StoreRequestResult(
                 JulieStoreContract.ReportSchemaVersion,
                 request.Operation,
@@ -603,7 +699,7 @@ public sealed class StoreWorkspaceCoordinatorTests
                 Binding.FamilyId.ToString("D"),
                 Binding.ViewId,
                 Binding.WorkspaceRoot,
-                exitCode == 0 ? StoreRequestState.Committed : StoreRequestState.Failed,
+                state,
                 level,
                 new StoreLevelCompletion(true, level == StoreLevel.Full, level == StoreLevel.Full),
                 new StoreManifestResult(1, "manifest-hash", manifestDisposition),
@@ -612,7 +708,7 @@ public sealed class StoreWorkspaceCoordinatorTests
                     ? new StoreResolutionResult(StoreResolutionState.Exact, true, "base", 1, 1, 0, 0, 0)
                     : new StoreResolutionResult(StoreResolutionState.Unbound, false, null, null, null, null, null, null),
                 null,
-                exitCode == 0 ? StoreCoordinatorDisposition.Committed : StoreCoordinatorDisposition.Failed,
+                durable ? StoreCoordinatorDisposition.Committed : StoreCoordinatorDisposition.Failed,
                 new StoreFailure(new StoreFailureClass(failureClass), exitCode == 0 ? null : "failed"),
                 exitCode);
         }

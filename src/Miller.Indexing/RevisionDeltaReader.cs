@@ -348,19 +348,7 @@ public static class RevisionDeltaReader
     private static long StoreLogSequence(SqliteConnection connection, string viewId, long generation)
     {
         using SqliteCommand command = connection.CreateCommand();
-        command.CommandText =
-            """
-            SELECT COALESCE(MAX(log.sequence),0)
-            FROM store_log AS log
-            WHERE log.view_id=$view_id
-               OR (log.view_id IS NULL AND log.version_id IS NULL)
-               OR EXISTS (
-                    SELECT 1
-                    FROM manifest_entries AS entry
-                    WHERE entry.view_id=$view_id
-                      AND entry.generation=$generation
-                      AND entry.version_id=log.version_id)
-            """;
+        command.CommandText = StoreLogCursor.MaxSequenceSql;
         command.Parameters.AddWithValue("$view_id", viewId);
         command.Parameters.AddWithValue("$generation", generation);
         return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);

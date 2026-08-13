@@ -21,6 +21,20 @@ public enum StoreManifestDisposition
 public enum StoreResolutionState
 {
     Unbound,
+
+    /// <summary>
+    /// A resolution pass is in flight: bases are published and deltas are accumulating, but the view has not
+    /// yet reached an exact binding.
+    /// </summary>
+    /// <remarks>
+    /// julie-extract has emitted this since the resolution-binding contract landed
+    /// (<c>ViewResolutionState::Converging</c>, <c>store/model.rs:130-143</c>), but Miller's parser knew only
+    /// <c>unbound</c> and <c>exact</c> and threw <c>Unknown resolution state 'converging'</c> on the whole
+    /// report. It stayed hidden while whole-repo resolves were being killed at the quantum cap and never got
+    /// far enough to report it; the first scan that ran to completion surfaced it immediately.
+    /// </remarks>
+    Converging,
+
     Exact,
 }
 

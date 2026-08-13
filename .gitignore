@@ -25,6 +25,7 @@ models/*.bin
 
 # Local implementation worktrees
 .worktrees/
+.claude/worktrees/
 
 # Soak/eval run output. Never committed, and ignoring it also keeps the indexer from converging on it:
 # scripts/semantic-broker-soak.* writes JSONL here for ~30 minutes, and on a machine indexing this workspace

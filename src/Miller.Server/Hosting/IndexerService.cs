@@ -1615,9 +1615,35 @@ public sealed class IndexerService : BackgroundService
         }
 
         LogRequestDrainStats("file-converge", result.ExpiredDiscarded, result.ClaimSkipped);
+
+        // These paths arrive from ANOTHER process (a reader's write-through), so they have never been through
+        // the watcher's filter. Apply it here too — otherwise a request naming the root, a build-output path,
+        // or an ignored file becomes an extract op that the watcher would have dropped.
+        // millerDir is <root>/.miller by construction.
+        string? convergeRoot = Path.GetDirectoryName(Path.GetFullPath(millerDir));
+        int enqueued = 0;
+        int dropped = 0;
         foreach (string path in result.Paths)
+        {
+            // Requests carry absolute paths (LeaderScanRequestQueue.RequestFileConverge takes `fullPaths`);
+            // a relative one is resolved against the root for the DECISION only, so the value handed to the
+            // queue stays exactly what the requester asked for.
+            if (convergeRoot is not null
+                && !WatchPathFilter.ShouldProcess(
+                    convergeRoot,
+                    Path.IsPathRooted(path) ? path : Path.Combine(convergeRoot, path)))
+            {
+                dropped++;
+                continue;
+            }
+
             core.Enqueue(new WatchEvent(path, WatchEventKind.Modified));
-        return result.Paths.Count > 0;
+            enqueued++;
+        }
+
+        if (dropped > 0)
+            _logger.LogDebug("Dropped {Dropped} file-converge request(s) that the watch filter rejects.", dropped);
+        return enqueued > 0;
     }
 
     // M2/M4 drain bookkeeping: discarded-expired requests are an Information fact (a leader on an old build let

@@ -40,8 +40,7 @@ public static class MillerServiceRegistration
         // from the user profile directly: the governor is workspace-independent, and reading an
         // IndexBootstrapService getter here would throw (the host constructs every hosted service before any
         // StartAsync — the lifecycle contract above).
-        services.AddSingleton(_ => ScanGovernor.FromEnvironment(
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".miller")));
+        services.AddSingleton(_ => ScanGovernor.FromEnvironment(MillerHome.ResolveMillerDirectory()));
 
         // The bootstrap holds the built current-workspace state. Registered as a singleton AND as the FIRST hosted service so
         // its StartAsync (index build + ledger open + holder seed + canonical-root resolve) completes before any

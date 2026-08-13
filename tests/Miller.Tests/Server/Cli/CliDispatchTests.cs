@@ -314,7 +314,7 @@ public sealed class CliDispatchTests : IDisposable
     {
         var (code, outText, _) = Run(new[] { "version" }, Context(Path.Combine(_dir, "symbols.db")));
         Assert.Equal(0, code);
-        Assert.StartsWith("1.18.3", outText.Trim());
+        Assert.StartsWith("1.19.0", outText.Trim());
     }
 
     [Fact]
@@ -329,10 +329,10 @@ public sealed class CliDispatchTests : IDisposable
         using JsonDocument doc = JsonDocument.Parse(outText);
         JsonElement root = doc.RootElement;
 
-        Assert.StartsWith("1.18.3", root.GetProperty("miller").GetProperty("version").GetString());
+        Assert.StartsWith("1.19.0", root.GetProperty("miller").GetProperty("version").GetString());
 
         JsonElement julie = root.GetProperty("julie_extract");
-        Assert.Equal("2.32.1", julie.GetProperty("pinned_version").GetString());
+        Assert.Equal("2.33.0", julie.GetProperty("pinned_version").GetString());
         Assert.Equal(6, julie.GetProperty("sqlite_schema_version").GetInt64());
         Assert.Equal(4, julie.GetProperty("extract_contract_version").GetInt64());
         Assert.Equal(3, julie.GetProperty("report_schema_version").GetInt64());
@@ -3119,7 +3119,7 @@ public sealed class CliDispatchTests : IDisposable
         // binary's version into the status header (the dogfooding "which build is live" signal).
         var (code, outText, _) = Run(new[] { "workspace", "status" }, Context(fx.DbPath));
         Assert.Equal(0, code);
-        Assert.Contains("miller 1.18.3", outText);
+        Assert.Contains("miller 1.19.0", outText);
         Assert.Contains("pid ", outText);
         Assert.Contains("symbols:", outText);
     }
@@ -3127,6 +3127,7 @@ public sealed class CliDispatchTests : IDisposable
     [Fact]
     public void WorkspaceStatus_UnsetSemanticReportsNotStartedWithoutCreatingBrokerState()
     {
+        SkipWhenAForeignBrokerOwnsTheRendezvous(_dir);
         string? previous = Environment.GetEnvironmentVariable(SemanticActivation.EnvVar);
         Environment.SetEnvironmentVariable(SemanticActivation.EnvVar, null);
         try
@@ -3157,6 +3158,7 @@ public sealed class CliDispatchTests : IDisposable
     public async Task WorkspaceStatus_DefaultOnAndShadowPassivelyObserveAnExistingSharedBroker(
         string? semanticValue)
     {
+        SkipWhenAForeignBrokerOwnsTheRendezvous(_dir);
         string? previous = Environment.GetEnvironmentVariable(SemanticActivation.EnvVar);
         Environment.SetEnvironmentVariable(SemanticActivation.EnvVar, semanticValue);
         string counter = Path.Combine(_dir, "broker-loads.txt");
@@ -5055,6 +5057,60 @@ public sealed class CliDispatchTests : IDisposable
                 RestartBackoffCap = TimeSpan.Zero,
                 Delay = static (_, _) => Task.CompletedTask,
             });
+
+    /// <summary>
+    /// Skips when a broker outside this test already owns the machine's rendezvous for the pinned model.
+    /// </summary>
+    /// <remarks>
+    /// <para>On Windows the rendezvous is a MACHINE-GLOBAL named pipe. <c>SemanticBrokerEndpoint.Identity</c>
+    /// hashes the model id and sha only, so <c>millerHome</c> shapes the unix socket and the lock paths but
+    /// NOT <c>WindowsPipeName</c>. A machine that runs the Miller plugin therefore already holds a broker on
+    /// the exact pipe these tests probe. They attach to it as non-owners: <c>status</c> reports a ready broker
+    /// instead of <c>not_started</c>, and the owner-side probe never loads a model, so the load counter stays
+    /// empty. No temp home can escape that, because the pipe name does not carry the home.</para>
+    ///
+    /// <para>Skipping is the honest outcome. Home-scoping the pipe name is the alternative and it is frozen by
+    /// <c>docs/contracts/semantic-broker-v1.md</c> §Identity/§Discovery, which fixes the flat
+    /// <c>miller-semantic-&lt;identity&gt;</c> form. <c>SemanticBrokerScaleTests</c> and
+    /// <c>scripts/semantic-broker-soak.ps1</c> take the same position. See
+    /// <c>docs/findings/2026-08-13-windows-broker-pipe-scope.md</c> for the open question.</para>
+    /// </remarks>
+    private static void SkipWhenAForeignBrokerOwnsTheRendezvous(string millerHome)
+    {
+        SemanticBrokerEndpoint endpoint =
+            SemanticBrokerEndpoint.Create(millerHome, SemanticEncoderSelection.Active);
+        bool occupied = OperatingSystem.IsWindows()
+            ? WindowsPipeExists(endpoint.WindowsPipeName)
+            : File.Exists(endpoint.UnixSocketPath);
+
+        Assert.SkipWhen(
+            occupied,
+            $"A semantic broker outside this test already owns the rendezvous '{endpoint.ServerEndpoint}' for " +
+            "the pinned model. The Windows pipe name is machine-global by frozen contract, so this test would " +
+            "attach to it as a non-owner and no broker would start under its own home. Stop the other Miller " +
+            "and retry.");
+    }
+
+    private static bool WindowsPipeExists(string pipeName)
+    {
+        try
+        {
+            return Directory
+                .EnumerateFiles(@"\\.\pipe\")
+                .Any(path => string.Equals(
+                    Path.GetFileName(path),
+                    pipeName,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     private static string RequireBrokerHostExecutable()
     {

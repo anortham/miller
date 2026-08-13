@@ -105,6 +105,11 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
         {
             Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, priorStoreMode);
             Environment.SetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE", priorOverride);
+            // `using var registry` above is scoped to the whole METHOD, so on Windows it still holds
+            // workspaces.db open when the delete below runs and the delete throws IOException. POSIX allows
+            // unlink-while-open, which is why only the Windows runs were red. Dispose is idempotent, so
+            // releasing it here leaves the using declaration harmless.
+            registry.Dispose();
             SqliteConnection.ClearAllPools();
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
@@ -164,11 +169,17 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
 
             Assert.True(bootstrap.IsBound, bootstrap.Snapshot.FailureMessage);
             Assert.NotNull(StoreWorkspacePointer.Read(root));
-            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+            // Scoped, not a `using` declaration: this session ATTACHes the generation's base-*.db onto its
+            // connection, so leaving it open until the end of the try block held that file when the
+            // Directory.Delete below ran — an IOException on Windows only, since POSIX permits
+            // unlink-while-open.
+            using (WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
                 artifact,
                 root,
-                bootstrap.Workspace.WorkspaceId);
-            Assert.Equal("exact", session.Snapshot.ResolutionState);
+                bootstrap.Workspace.WorkspaceId))
+            {
+                Assert.Equal("exact", session.Snapshot.ResolutionState);
+            }
 
             StoreWorkspacePointerDocument pointer = Assert.IsType<StoreWorkspacePointerDocument>(
                 StoreWorkspacePointer.Read(root));

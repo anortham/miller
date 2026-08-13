@@ -1,3 +1,5 @@
+using Miller.Indexing;
+
 namespace Miller.Server;
 
 /// <summary>
@@ -39,7 +41,7 @@ public sealed record WorkspaceContext(
         string root = Path.GetFullPath(workspaceRoot);
         string home = Path.GetFullPath(
             string.IsNullOrWhiteSpace(homeDirectory)
-                ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+                ? MillerHome.Resolve()
                 : homeDirectory);
         return new WorkspaceContext(
             WorkspaceRoot: root,
