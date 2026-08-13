@@ -118,9 +118,12 @@ post-refresh artifact facts when available:
   Use this for fleet-sweep extract-duration telemetry.
 - `duration_ms`: wall milliseconds of the whole refresh attempt (lock wait, scan, sidecar convergence), when
   measured; `null` on paths that do not measure it.
-- `search_sidecar`: state, path, revision, expected revision, document count, and error for `.miller/search.db`.
+- `search_sidecar`: state, path, revision, expected revision, document count, and error for the search sidecar
+  this workspace actually serves. Read the `path` field; do not assume a location. A family-store workspace
+  serves `<store>/sidecars/search-<view>.db`, and only a legacy workspace serves `.miller/search.db`.
 - `content_corpus`: state, path, schema version, workspace revision, source/chunk counts, byte counts, skip counts,
-  and error for `.miller/content.db`.
+  and error for the content sidecar this workspace actually serves, under the same rule:
+  `<store>/sidecars/content-<view>.db` for a family store, `.miller/content.db` for a legacy workspace.
 
 `--wait` is a contract flag. The Miller CLI refresh path is already synchronous: it returns only after the
 lock-holding refresh attempt converges, observes another writer, or reports an operational failure.

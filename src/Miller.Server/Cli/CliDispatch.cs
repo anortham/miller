@@ -3463,6 +3463,8 @@ public static class CliDispatch
             _ => null,
         };
 
+        var refreshSidecars = OpenRefreshSidecarFacts(result, sidecar, revision);
+
         return new WorkspaceActionResult(
             Operation: force ? "full" : "refresh",
             Scanned: result.Scanned,
@@ -3473,11 +3475,74 @@ public static class CliDispatch
             Root: result.WorkspaceRoot,
             Status: result.StatusText,
             IndexFresh: indexFresh,
-            SearchSidecar: sidecar.Inspect(result.IndexDbPath, revision),
-            ContentCorpus: new ContentCorpusSidecar().Inspect(result.IndexDbPath, revision),
+            SearchSidecar: refreshSidecars.Search,
+            ContentCorpus: refreshSidecars.Content,
             ScanDurationMs: (long?)result.ScanDuration?.TotalMilliseconds,
             DurationMs: (long?)result.TotalDuration?.TotalMilliseconds,
             ArtifactId: ArtifactIdForAction(result, registry));
+    }
+
+    /// <summary>
+    /// Opens the refreshed workspace's read session so the reported sidecars are the ones it actually
+    /// serves. Any read failure falls back to the artifact-relative paths rather than failing the refresh:
+    /// the sidecar block is reporting, not the result.
+    /// </summary>
+    private static (SearchSidecarFacts Search, ContentCorpusFacts Content) OpenRefreshSidecarFacts(
+        WorkspaceRefreshResult result,
+        SymbolSearchSidecar sidecar,
+        long revision)
+    {
+        var contentSidecar = new ContentCorpusSidecar();
+        try
+        {
+            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                result.IndexDbPath,
+                result.WorkspaceRoot,
+                result.WorkspaceId);
+            return RefreshSidecarFacts(
+                session.FamilyStoreRoot,
+                session.Snapshot,
+                result.IndexDbPath,
+                revision,
+                sidecar,
+                contentSidecar);
+        }
+        catch (Exception ex) when (
+            ex is FamilyStoreReadException or SqliteException or InvalidOperationException
+                or IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return RefreshSidecarFacts(null, null, result.IndexDbPath, revision, sidecar, contentSidecar);
+        }
+    }
+
+    /// <summary>
+    /// Sidecar facts for a refresh response. A family-store workspace keeps its search and content sidecars
+    /// under the store's <c>sidecars/</c> directory, NOT under <c>&lt;workspace&gt;/.miller/</c>. Reading the
+    /// workspace path there reported two present, healthy sidecars as <c>missing</c> at paths holding no such
+    /// file, which is what every Eros reader of <c>refresh --json</c> saw
+    /// (<c>docs/contracts/cli-eros-v1.md</c>). A legacy workspace keeps the artifact-relative paths.
+    /// </summary>
+    internal static (SearchSidecarFacts Search, ContentCorpusFacts Content) RefreshSidecarFacts(
+        string? familyStoreRoot,
+        WorkspaceReadSnapshot? snapshot,
+        string indexDbPath,
+        long revision,
+        SymbolSearchSidecar sidecar,
+        ContentCorpusSidecar contentSidecar)
+    {
+        ArgumentNullException.ThrowIfNull(sidecar);
+        ArgumentNullException.ThrowIfNull(contentSidecar);
+
+        if (snapshot?.Mode == WorkspaceReadMode.FamilyStore && !string.IsNullOrWhiteSpace(familyStoreRoot))
+        {
+            return (
+                sidecar.InspectStore(familyStoreRoot, snapshot),
+                contentSidecar.InspectStore(familyStoreRoot, snapshot));
+        }
+
+        return (
+            sidecar.Inspect(indexDbPath, revision),
+            contentSidecar.Inspect(indexDbPath, revision));
     }
 
     private static string? VectorRefreshNote(SemanticMode mode, bool currentWorkspace)

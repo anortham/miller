@@ -6,6 +6,7 @@ using System.Text.Json;
 using Miller.Core.Freshness;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
 using Miller.Server;
 using Miller.Server.Cli;
@@ -5230,5 +5231,73 @@ public sealed class CliDispatchTests : IDisposable
         public string? ResolveIndexedFilePath(string target) =>
             symbols.FirstOrDefault(symbol => string.Equals(symbol.FilePath, target, StringComparison.Ordinal))
                 ?.FilePath;
+    }
+
+    /// <summary>
+    /// The Eros contract (docs/contracts/cli-eros-v1.md) publishes search_sidecar and content_corpus
+    /// from `refresh --json`. Under store mode the sidecars live in the store's `sidecars/` directory,
+    /// so inspecting the workspace `.miller/` path reported two healthy multi-hundred-megabyte sidecars
+    /// as `missing`, at paths that hold no such file. Every Eros reader saw a broken workspace.
+    /// </summary>
+    [Fact]
+    public void RefreshSidecarFacts_UnderStoreMode_ReadTheStoreSidecarsNotTheWorkspaceMillerDirectory()
+    {
+        string storeRoot = Path.Combine(_dir, "family-store");
+        string workspaceRoot = Path.Combine(_dir, "store-workspace");
+        string indexDbPath = Path.Combine(workspaceRoot, ".miller", "symbols.db");
+        Directory.CreateDirectory(storeRoot);
+        WorkspaceReadSnapshot snapshot = new(
+            workspaceRoot,
+            "workspace-id",
+            "family-id",
+            "view-store",
+            new WorkspaceFreshnessToken(
+                "family-id",
+                7,
+                "blake3:manifest",
+                4242,
+                "base-1:delta-3:4242",
+                StoreInstanceId: "family-id:GEN-00000000000000000007",
+                ViewId: "view-store",
+                GenerationName: "GEN-00000000000000000007",
+                ManifestGeneration: 7,
+                IndexLevel: "full",
+                LevelStampL1: "l1",
+                LevelStampL2: "l2",
+                LevelStampL3: "l3"),
+            "full",
+            WorkspaceReadMode.FamilyStore);
+
+        var (search, content) = CliDispatch.RefreshSidecarFacts(
+            storeRoot,
+            snapshot,
+            indexDbPath,
+            revision: 4242,
+            SymbolSearchSidecar.FromEnvironment(),
+            new ContentCorpusSidecar());
+
+        Assert.StartsWith(storeRoot, search.Path, StringComparison.Ordinal);
+        Assert.StartsWith(storeRoot, content.Path, StringComparison.Ordinal);
+        Assert.DoesNotContain(".miller", search.Path, StringComparison.Ordinal);
+        Assert.DoesNotContain(".miller", content.Path, StringComparison.Ordinal);
+    }
+
+    /// <summary>A legacy workspace has no store, so it must keep reading the artifact-relative sidecars.</summary>
+    [Fact]
+    public void RefreshSidecarFacts_WithoutAStore_KeepReadingTheArtifactRelativeSidecars()
+    {
+        string workspaceRoot = Path.Combine(_dir, "legacy-workspace");
+        string indexDbPath = Path.Combine(workspaceRoot, ".miller", "symbols.db");
+
+        var (search, content) = CliDispatch.RefreshSidecarFacts(
+            familyStoreRoot: null,
+            snapshot: null,
+            indexDbPath,
+            revision: 11,
+            SymbolSearchSidecar.FromEnvironment(),
+            new ContentCorpusSidecar());
+
+        Assert.Equal(Path.Combine(workspaceRoot, ".miller", "search.db"), search.Path);
+        Assert.Equal(Path.Combine(workspaceRoot, ".miller", "content.db"), content.Path);
     }
 }
