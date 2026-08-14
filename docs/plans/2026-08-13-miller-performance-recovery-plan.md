@@ -27,7 +27,7 @@
 - Any extraction-backed behavior must pass `SELECT language, kind, COUNT(*) FROM symbols GROUP BY 1,2` on a real supported-language extract, plus the equivalent grouping on the specific new extraction table when one is introduced.
 - Every full-resolution optimization must prove the same exact digest as the existing full resolver before becoming the default.
 - Never classify exit code 135 as OOM without captured process or operating-system evidence; only exit 137 retains the current OOM retry policy.
-- Never mutate the live coordinator or store during development. Stop writers and create a verified whole-family snapshot containing `CURRENT`, the selected generation, coordinator, resolution bases, and required sidecars; reject a snapshot with WAL/SHM or hashes that change during copy. Reflink is optional on Linux and never assumed on Windows.
+- Never mutate the live coordinator or store during development. Stop writers and create a verified whole-family snapshot containing `CURRENT`, the selected generation, coordinator, resolution bases, and required sidecars. A source database with a nonempty WAL must be copied through SQLite's read-only backup API, never raw-copied or checkpointed in place; the destination snapshot must be WAL/SHM-free and source facts must remain stable through the backup. Reflink is optional only for WAL-free files on Linux and never assumed on Windows.
 - Do not run concurrent Rust builds, .NET builds, or performance workloads on the acceptance machine.
 - Do not rerun a passing expensive scope on an unchanged commit; reuse its verification-ledger entry.
 - Do not add a new MCP tool, public CLI verb, Store Contract version, dependency, release, tag, push, or pin bump without applicable explicit approval.
@@ -243,7 +243,7 @@ Add manifest validation that rejects a startup workload unless `execution_kind=m
 
 **Step 2: Create and validate a whole-family snapshot**
 
-`perf-store-snapshot.py` requires explicit source and destination roots, refuses aliases, refuses live or unknown owners, permits definitively dead/stale claims so the incident remains reproducible, and requires absent or zero-length WAL/SHM files. It captures source hashes, copies `CURRENT`, `coord.db`, the selected generation, every referenced resolution base, and required store-owned files without shell-specific commands, then verifies source hashes did not change and destination hashes match. The script never checkpoints, heals, or writes the live family. On Windows it uses ordinary filesystem copy to a local short scratch path; antivirus state is recorded, never changed automatically.
+`perf-store-snapshot.py` requires explicit source and destination roots, refuses aliases, refuses live or unknown owners, and permits definitively dead/stale claims so the incident remains reproducible. For every SQLite database it opens the source read-only and uses SQLite backup into the destination, which incorporates a stable source WAL without checkpointing or writing the source; raw copy is allowed only for WAL-free non-database files. It copies `CURRENT`, `coord.db`, the selected generation, every referenced resolution base, and required store-owned files without shell-specific commands, then verifies source identity/facts did not change, destination databases pass `quick_check`, and no destination WAL/SHM remains. On Windows it uses ordinary local filesystem destinations; antivirus state is recorded, never changed automatically.
 
 **Step 3: Replace diagnostic workloads with faithful workloads**
 
