@@ -24,6 +24,7 @@ from typing import Any
 
 CLAIM_STALE_MS = 5_000
 DIGEST_CHUNK_SIZE = 1024 * 1024
+TRANSIENT_STORE_DIRECTORIES = frozenset({"spool", "scratch"})
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 STILL_ACTIVE = 259
 WINDOWS_DEAD_PROBE_ERRORS = frozenset({2, 6, 87, 1168})
@@ -395,7 +396,11 @@ def _copy_family_files(source: Path, destination: Path) -> tuple[list[Path], lis
     generation = _read_current(source)
     databases: list[Path] = []
     copied: list[Path] = []
+    for directory in TRANSIENT_STORE_DIRECTORIES:
+        (destination / directory).mkdir(parents=True, exist_ok=True)
     for relative in _source_files(source):
+        if relative.parts and relative.parts[0] in TRANSIENT_STORE_DIRECTORIES:
+            continue
         source_path = source / relative
         if source_path.name.endswith(("-wal", "-shm")):
             continue

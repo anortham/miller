@@ -81,8 +81,29 @@ class PerfStoreSnapshotTests(unittest.TestCase):
         self.assertEqual(before, (self.source / "coord.db").read_bytes())
         with closing(sqlite3.connect(self.destination / "gen-001" / "store.db")) as connection:
             self.assertEqual("store", connection.execute("SELECT name FROM facts").fetchone()[0])
+        self.assertTrue((self.destination / "spool").is_dir())
+        self.assertTrue((self.destination / "scratch").is_dir())
+        self.assertEqual([], list((self.destination / "spool").iterdir()))
+        self.assertEqual([], list((self.destination / "scratch").iterdir()))
         self.assertFalse(list(self.destination.rglob("*.db-wal")))
         self.assertFalse(list(self.destination.rglob("*.db-shm")))
+
+    def test_snapshot_does_not_copy_transient_store_directory_contents(self) -> None:
+        spool_file = self.source / "spool" / "stale.spool"
+        scratch_file = self.source / "scratch" / "working.tmp"
+        spool_file.parent.mkdir()
+        scratch_file.parent.mkdir()
+        spool_file.write_bytes(b"transient spool")
+        scratch_file.write_bytes(b"transient scratch")
+
+        snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+
+        self.assertTrue((self.destination / "spool").is_dir())
+        self.assertTrue((self.destination / "scratch").is_dir())
+        self.assertEqual([], list((self.destination / "spool").iterdir()))
+        self.assertEqual([], list((self.destination / "scratch").iterdir()))
+        self.assertFalse((self.destination / "spool" / spool_file.name).exists())
+        self.assertFalse((self.destination / "scratch" / scratch_file.name).exists())
 
     def test_snapshot_requires_live_root_for_api_and_cli(self) -> None:
         with self.assertRaisesRegex(ValueError, "live root"):
