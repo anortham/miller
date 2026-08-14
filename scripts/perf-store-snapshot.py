@@ -71,6 +71,13 @@ def _sqlite_uri(path: Path) -> str:
     return f"{absolute.resolve(strict=False).as_uri()}?mode=ro"
 
 
+def _sqlite_immutable_uri(path: Path) -> str:
+    absolute = path.expanduser()
+    if not absolute.is_absolute():
+        absolute = Path.cwd() / absolute
+    return f"{absolute.resolve(strict=False).as_uri()}?immutable=1"
+
+
 def _copy_file_stream(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with source.open("rb") as source_handle, destination.open("wb") as destination_handle:
@@ -83,9 +90,16 @@ def _database_state(path: Path) -> tuple[tuple[str, tuple[Any, ...] | None, str 
     for suffix in ("", "-wal"):
         member = Path(f"{path}{suffix}")
         facts = _file_facts(member)
+        if suffix == "-wal" and facts is not None and facts[2] == 0:
+            facts = None
         digest = _digest_files(member.parent, [Path(member.name)]) if facts is not None else None
         state.append((suffix, facts, digest))
     return tuple(state)
+
+
+def _has_nonempty_wal(path: Path) -> bool:
+    facts = _file_facts(Path(f"{path}-wal"))
+    return facts is not None and facts[2] > 0
 
 
 @contextmanager
@@ -306,33 +320,91 @@ def _sqlite_facts(
             connection.close()
 
 
+def _read_only_quick_check(path: Path) -> str:
+    facts = _file_facts(path)
+    if facts is None or facts[2] == 0:
+        return "skipped"
+    try:
+        with path.open("rb") as handle:
+            if handle.read(16) != b"SQLite format 3\x00":
+                return "skipped"
+    except OSError:
+        return "skipped"
+
+    try:
+        connection = sqlite3.connect(_sqlite_immutable_uri(path), uri=True)
+        try:
+            check = connection.execute("PRAGMA quick_check").fetchone()[0]
+        finally:
+            connection.close()
+    except sqlite3.DatabaseError as exc:
+        raise ValueError(f"destination quick_check failed: {path}") from exc
+    if str(check).casefold() != "ok":
+        raise ValueError(f"destination quick_check failed: {path}")
+    return str(check)
+
+
+def _remove_database_sidecars(path: Path) -> None:
+    for suffix in ("-wal", "-shm"):
+        try:
+            Path(f"{path}{suffix}").unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _copy_raw_database(source: Path, destination: Path) -> str:
+    before_source = _database_state(source)
+    if before_source[0][1] is None:
+        raise ValueError(f"source database is missing: {source}")
+    source_digest = before_source[0][2]
+    assert source_digest is not None
+    _copy_file_stream(source, destination)
+    after_source = _database_state(source)
+    if before_source != after_source:
+        raise ValueError(f"source changed during raw database copy: {source}")
+    destination_facts = _file_facts(destination)
+    destination_digest = _digest_files(destination.parent, [Path(destination.name)])
+    if destination_facts is None or destination_facts[2] != before_source[0][1][2]:
+        raise ValueError(f"raw database size changed during copy: {source}")
+    if destination_digest != source_digest:
+        raise ValueError(f"raw database content changed during copy: {source}")
+    return _read_only_quick_check(destination)
+
+
 def _backup_database(source: Path, destination: Path) -> str:
     destination.parent.mkdir(parents=True, exist_ok=True)
     source_connection: sqlite3.Connection | None = None
     destination_connection: sqlite3.Connection | None = None
-    with _database_input(source, scratch_dir=destination.parent) as readable_source:
-        try:
-            source_connection = sqlite3.connect(_sqlite_uri(readable_source), uri=True)
-            destination_connection = sqlite3.connect(destination)
-            before_sqlite = _sqlite_facts(readable_source, source_connection)
-            before_source = _database_state(source)
-            source_connection.backup(destination_connection)
-            destination_connection.commit()
-            destination_connection.execute("PRAGMA journal_mode=DELETE")
-            destination_connection.commit()
-            check = destination_connection.execute("PRAGMA quick_check").fetchone()[0]
-            if str(check).casefold() != "ok":
-                raise ValueError(f"destination quick_check failed: {destination}")
-            after_sqlite = _sqlite_facts(readable_source, source_connection)
-            after_source = _database_state(source)
-            if before_sqlite[3:] != after_sqlite[3:] or before_source != after_source:
-                raise ValueError(f"source changed during read-only backup: {source}")
-        finally:
-            if destination_connection is not None:
-                destination_connection.close()
-            if source_connection is not None:
-                source_connection.close()
-    return str(check)
+    try:
+        with _database_input(source, scratch_dir=destination.parent) as readable_source:
+            try:
+                source_connection = sqlite3.connect(_sqlite_uri(readable_source), uri=True)
+                destination_connection = sqlite3.connect(destination)
+                before_sqlite = _sqlite_facts(readable_source, source_connection)
+                before_source = _database_state(source)
+                source_connection.backup(destination_connection)
+                destination_connection.commit()
+                journal_mode = destination_connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+                if str(journal_mode).casefold() != "wal":
+                    raise ValueError(f"destination journal mode is not WAL: {destination}")
+                destination_connection.commit()
+                destination_connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                destination_connection.commit()
+                check = destination_connection.execute("PRAGMA quick_check").fetchone()[0]
+                if str(check).casefold() != "ok":
+                    raise ValueError(f"destination quick_check failed: {destination}")
+                after_sqlite = _sqlite_facts(readable_source, source_connection)
+                after_source = _database_state(source)
+                if before_sqlite[3:] != after_sqlite[3:] or before_source != after_source:
+                    raise ValueError(f"source changed during read-only backup: {source}")
+            finally:
+                if destination_connection is not None:
+                    destination_connection.close()
+                if source_connection is not None:
+                    source_connection.close()
+    finally:
+        _remove_database_sidecars(destination)
+    return _read_only_quick_check(destination)
 
 
 def _is_sqlite_file(path: Path) -> bool:
@@ -352,6 +424,10 @@ def _source_files(source: Path) -> list[Path]:
             continue
         if _path_has_reparse_point(path):
             raise ValueError(f"source family contains a symlink or reparse alias: {path}")
+        if path.name.endswith("-wal"):
+            item_facts = _file_facts(path)
+            if item_facts is not None and item_facts[2] == 0:
+                continue
         if path.is_file():
             files.append(path.relative_to(source))
     return sorted(files, key=lambda path: path.as_posix())
@@ -387,14 +463,16 @@ def _database_digest(path: Path) -> str:
     files = [Path(path.name)]
     for suffix in ("-wal", "-shm"):
         sidecar = Path(f"{path.name}{suffix}")
-        if (path.parent / sidecar).exists():
+        if (path.parent / sidecar).is_file() and (
+            suffix != "-wal" or (path.parent / sidecar).stat().st_size > 0
+        ):
             files.append(sidecar)
     return _digest_files(path.parent, files)
 
 
 def _copy_family_files(source: Path, destination: Path) -> tuple[list[Path], list[Path]]:
     generation = _read_current(source)
-    databases: list[Path] = []
+    databases: list[tuple[Path, str]] = []
     copied: list[Path] = []
     for directory in TRANSIENT_STORE_DIRECTORIES:
         (destination / directory).mkdir(parents=True, exist_ok=True)
@@ -406,8 +484,11 @@ def _copy_family_files(source: Path, destination: Path) -> tuple[list[Path], lis
             continue
         destination_path = destination / relative
         if _is_sqlite_file(source_path):
-            _backup_database(source_path, destination_path)
-            databases.append(destination_path)
+            if _has_nonempty_wal(source_path):
+                check = _backup_database(source_path, destination_path)
+            else:
+                check = _copy_raw_database(source_path, destination_path)
+            databases.append((destination_path, check))
         else:
             destination_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, destination_path)
@@ -532,8 +613,8 @@ def snapshot_family(
         if any(path.name.endswith(("-wal", "-shm")) for path in destination_files):
             raise ValueError("snapshot contains a WAL or SHM sidecar")
         quick_checks = {
-            str(path.relative_to(temporary)): "ok"
-            for path in databases
+            str(path.relative_to(temporary)): check
+            for path, check in databases
         }
         destination_digest = _digest_files(temporary, destination_files)
         if os.path.lexists(destination_input):

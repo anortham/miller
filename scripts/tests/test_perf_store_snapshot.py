@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import os
 import sqlite3
 import subprocess
@@ -308,6 +309,36 @@ class PerfStoreSnapshotTests(unittest.TestCase):
             "gen-001/sidecars/search.db",
         }.issubset(result["databases"]))
 
+    def test_snapshot_copies_wal_free_base_byte_identically(self) -> None:
+        base = self.source / "resolution" / "bases" / "base-001.db"
+        base.parent.mkdir(parents=True)
+        self._database(base, "base")
+        Path(f"{base}-wal").touch()
+        source_bytes = base.read_bytes()
+        source_digest = hashlib.sha256(source_bytes).hexdigest()
+
+        result = snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+
+        copied = self.destination / "resolution" / "bases" / "base-001.db"
+        self.assertEqual(source_bytes, copied.read_bytes())
+        self.assertEqual(source_digest, hashlib.sha256(copied.read_bytes()).hexdigest())
+        self.assertEqual(len(source_bytes), copied.stat().st_size)
+        self.assertEqual("ok", result["databases"]["resolution/bases/base-001.db"])
+        self.assertFalse(Path(f"{copied}-wal").exists())
+
+    def test_snapshot_preserves_zero_byte_partial_database(self) -> None:
+        partial = self.source / "resolution" / "bases" / "partial.db"
+        partial.parent.mkdir(parents=True)
+        partial.write_bytes(b"")
+
+        result = snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+
+        copied = self.destination / "resolution" / "bases" / "partial.db"
+        self.assertTrue(copied.is_file())
+        self.assertEqual(b"", copied.read_bytes())
+        self.assertEqual(0, copied.stat().st_size)
+        self.assertEqual("skipped", result["databases"]["resolution/bases/partial.db"])
+
     def test_snapshot_rejects_live_maintenance_owner_even_when_expired(self) -> None:
         self._insert_maintenance_intent(os.getpid())
         with self.assertRaisesRegex(ValueError, "live owner"):
@@ -462,14 +493,17 @@ class PerfStoreSnapshotTests(unittest.TestCase):
             for item in source_paths
         }
         self.assertEqual(before, after)
-        with closing(sqlite3.connect(self.destination / "gen-001" / "store.db")) as destination_connection:
+        self.assertFalse(Path(f"{self.destination / 'gen-001' / 'store.db'}-wal").exists())
+        self.assertFalse(Path(f"{self.destination / 'gen-001' / 'store.db'}-shm").exists())
+        with closing(
+            sqlite3.connect(snapshot._sqlite_uri(self.destination / "gen-001" / "store.db"), uri=True)
+        ) as destination_connection:
+            self.assertEqual("wal", destination_connection.execute("PRAGMA journal_mode").fetchone()[0])
             self.assertEqual(
                 "wal",
                 destination_connection.execute("SELECT name FROM facts WHERE name = 'wal'").fetchone()[0],
             )
         self.assertEqual("ok", result["quick_check"])
-        self.assertFalse(Path(f"{self.destination / 'gen-001' / 'store.db'}-wal").exists())
-        self.assertFalse(Path(f"{self.destination / 'gen-001' / 'store.db'}-shm").exists())
 
     def test_snapshot_streams_digest_in_bounded_chunks(self) -> None:
         path = self.source / "payload.bin"
