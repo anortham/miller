@@ -135,3 +135,19 @@ Risks: Windows native execution was not available locally; Windows API behavior 
 - Implementation commit: `dd2b83d9` (`perf: use private shadows for store snapshots`), with checkpoint `.memories/2026-08-14/081813_222c.md` (`checkpoint_222cc173`) included.
 - Final state: owned implementation paths, report, and checkpoint are clean after commits `dd2b83d9` and `e344b130`; only the lead-owned `docs/plans/2026-08-13-miller-performance-recovery-plan.md` remains modified and unstaged.
 - Risks: native Windows execution was unavailable; mocked Windows PID coverage remains the available check. Private shadowing adds a bounded stream copy per SQLite database and uses the local temporary filesystem. No real incident/store snapshot or replay was run.
+
+## Snapshot correction cycle 4 — durable WAL inputs only
+
+- Worktree: `/home/murphy/source/miller/.worktrees/performance-recovery`
+- Branch: `feature/performance-recovery`
+- Correction start: `3ea9f2b7ad1b7d1a46716b97796183d0a8cfad95`
+- Starting dirty state: `.memories/briefs/miller-performance-recovery-implementation.md` and `docs/plans/2026-08-13-miller-performance-recovery-plan.md` were pre-existing modified, unstaged files; both were preserved and not staged.
+- Miller was used first. Workspace `performance-recovery-9ee5b2dc77a2` reported `freshness: error` / `scan_failing`, and the named script bodies were stale or unavailable; bounded source inspection followed. No refresh, live-store access, replay, producer/store execution, or .NET test was run.
+- RED: the new `test_snapshot_allows_shm_churn_during_wal_backup` failed with `ValueError: source database changed while creating read-only shadow` before the production change, proving source `-shm` churn was incorrectly treated as a durable mutation.
+- GREEN: `PYTHONDONTWRITEBYTECODE=1 python scripts/tests/test_perf_store_snapshot.py` — **32 passed**, 0 failed, 0 skipped. The test's expected CLI usage diagnostic is captured; the process exited 0.
+- Additional coverage proves committed WAL content is retained, source main/WAL bytes and device/inode/mtime/ctime/mode remain unchanged, source `-shm` churn is tolerated and never stream-copied, same-size WAL mutations still fail, destination WAL/SHM files are absent, and cleanup/promotion guards remain green.
+- AST validation of both Python files passed; `git diff --check` passed.
+- Behavior: `_database_state` and `_database_input` now treat only the main database and `-wal` as durable inputs. `_source_files` skips `-shm` before alias/reparse checks. SQLite still creates its own SHM inside the writable private shadow; the source is never opened, checkpointed, chmodded, or gated on SHM state.
+- Owned implementation commit: `d7f636ca` (`perf: ignore source SQLite shm churn`), including Goldfish checkpoint `.memories/2026-08-14/085031_6615.md` (`checkpoint_6615f278`).
+- Owned implementation files: `scripts/perf-store-snapshot.py`, `scripts/tests/test_perf_store_snapshot.py`, and the checkpoint. This report is updated in a separate report commit.
+- Risks: native Windows execution remains unavailable locally; disposable mocked Windows coverage is unchanged. No real incident/store snapshot or replay was run.
