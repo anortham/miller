@@ -143,6 +143,18 @@ class PerfRecoveryTests(unittest.TestCase):
             hard_gate_passed=True,
         )
 
+    @staticmethod
+    def _mcp_workload(workload_id: str) -> perf_recovery.Workload:
+        return perf_recovery.Workload(
+            workload_id=workload_id,
+            command=("serve",),
+            warmups=0,
+            runs=1,
+            hard_budget_ms={"development": 2_000, "windows": 5_000},
+            timeout_ms=60_000,
+            execution_kind="mcp_bootstrap",
+        )
+
     def test_refuses_live_store_path_before_process_launch(self) -> None:
         marker = self.root / "launched"
         request = self._request(store_copy=self.live_store)
@@ -716,6 +728,37 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertTrue(all(record["pid"] == 123 for record in records))
         self.assertEqual("completed", records[-1]["Outcome"])
 
+    def test_phase_poll_preserves_incomplete_json_until_newline(self) -> None:
+        logs = self.workspace / ".miller" / "logs"
+        logs.mkdir()
+        path = logs / "miller-test.jsonl"
+        partial = b'{"Phase":"startup_total","pid":123,"Outcome":"completed"'
+        path.write_bytes(partial)
+        offsets: dict[Path, int] = {}
+        self.assertEqual([], perf_recovery._phase_records(self.workspace, "startup_total", offsets, pid=123))
+        self.assertEqual(0, offsets[path])
+        path.write_bytes(partial + b"}\n")
+        records = perf_recovery._phase_records(self.workspace, "startup_total", offsets, pid=123)
+        self.assertEqual("completed", records[-1]["Outcome"])
+        self.assertEqual(path.stat().st_size, offsets[path])
+
+    def test_phase_poll_bounds_oversized_partial_lines(self) -> None:
+        logs = self.workspace / ".miller" / "logs"
+        logs.mkdir()
+        path = logs / "miller-test.jsonl"
+        first = b'{"Phase":"startup_total","pid":123,"Outcome":"completed"}\n'
+        partial = b'{"Phase":"startup_total","pid":123,"Outcome":"completed","payload":"' + (
+            b"x" * (perf_recovery.MAX_PHASE_LINE_BYTES * 2)
+        )
+        path.write_bytes(first + partial)
+        offsets: dict[Path, int] = {}
+        records = perf_recovery._phase_records(self.workspace, "startup_total", offsets, pid=123)
+        self.assertEqual(1, len(records))
+        self.assertEqual(len(first), offsets[path])
+        path.write_bytes(first + partial + b'"}\n')
+        self.assertEqual([], perf_recovery._phase_records(self.workspace, "startup_total", offsets, pid=123))
+        self.assertEqual(path.stat().st_size, offsets[path])
+
     def test_phase_wait_returns_failed_outcome_without_promoting_it(self) -> None:
         logs = self.workspace / ".miller" / "logs"
         logs.mkdir()
@@ -749,6 +792,22 @@ class PerfRecoveryTests(unittest.TestCase):
         )
         self.assertEqual(9, result.exit_code)
         self.assertFalse(result.completed)
+
+    def test_mcp_close_failure_cannot_synthesize_success(self) -> None:
+        for returncode in (None, 0):
+            with self.subTest(returncode=returncode):
+                session = object.__new__(perf_recovery._McpSession)
+                session.process = SimpleNamespace(returncode=returncode)
+                session._peaks = {}
+                session._stderr = []
+                session.close = mock.Mock(return_value=False)
+                result = session.result(
+                    10.0,
+                    {"phase": {"Outcome": "completed"}, "completed": True, "ready_at": 10.1},
+                    False,
+                )
+                self.assertEqual(returncode, result.exit_code)
+                self.assertFalse(result.completed)
 
     def test_mcp_pipe_setup_is_utf8_with_replacement(self) -> None:
         class FakeProcess:
@@ -799,6 +858,59 @@ class PerfRecoveryTests(unittest.TestCase):
         )
         self.assertEqual(0, result.exit_code)
         self.assertLessEqual(len(result.stdout), perf_recovery.MAX_CAPTURE_BYTES)
+
+    def test_run_process_terminates_inherited_pipe_child_after_parent_exit(self) -> None:
+        if os.name == "nt":
+            self.skipTest("POSIX process-group teardown")
+        child_path = self.root / "child.pid"
+        source = """
+            import pathlib
+            import subprocess
+            import sys
+
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+            pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding="ascii")
+        """
+        child_pid: int | None = None
+        try:
+            result = perf_recovery._run_process(
+                self._request(),
+                _python_command(source) + [str(child_path)],
+                5_000,
+                dict(os.environ),
+            )
+            for _ in range(50):
+                if child_path.exists():
+                    break
+                time.sleep(0.02)
+            child_pid = int(child_path.read_text(encoding="ascii"))
+            self.assertEqual(0, result.exit_code)
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
+                stat_path = Path(f"/proc/{child_pid}/stat")
+                try:
+                    if stat_path.read_text(encoding="ascii").split()[2] == "Z":
+                        break
+                except (FileNotFoundError, OSError, IndexError):
+                    break
+                time.sleep(0.02)
+            else:
+                self.fail("inherited-pipe child survived process-group teardown")
+        finally:
+            if child_pid is None and child_path.exists():
+                try:
+                    child_pid = int(child_path.read_text(encoding="ascii"))
+                except (OSError, ValueError):
+                    child_pid = None
+            if child_pid is not None:
+                try:
+                    os.kill(child_pid, perf_recovery.signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
 
     def test_posix_termination_waits_after_sigkill(self) -> None:
         if os.name == "nt":
@@ -867,6 +979,30 @@ class PerfRecoveryTests(unittest.TestCase):
                 perf_recovery._terminate_process(process)
         self.assertIn("timeout", run.call_args.kwargs)
         self.assertLessEqual(run.call_args.kwargs["timeout"], perf_recovery.PROCESS_TEARDOWN_TIMEOUT_SECONDS)
+
+    def test_windows_normal_parent_exit_still_runs_tree_cleanup(self) -> None:
+        process = SimpleNamespace(pid=123, poll=lambda: 0, wait=mock.Mock(return_value=0), kill=mock.Mock())
+        with mock.patch.object(perf_recovery.os, "name", "nt"):
+            with mock.patch.object(
+                perf_recovery.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0),
+            ) as run:
+                perf_recovery._terminate_process(process)
+        run.assert_called_once()
+        self.assertEqual(["taskkill", "/PID", "123", "/T", "/F"], run.call_args.args[0])
+
+    def test_windows_normal_parent_exit_retries_failed_tree_cleanup(self) -> None:
+        process = SimpleNamespace(pid=123, poll=lambda: 0, wait=mock.Mock(return_value=0), kill=mock.Mock())
+        with mock.patch.object(perf_recovery.os, "name", "nt"):
+            with mock.patch.object(
+                perf_recovery.subprocess,
+                "run",
+                side_effect=[subprocess.TimeoutExpired("taskkill", 1), SimpleNamespace(returncode=0)],
+            ) as run:
+                perf_recovery._terminate_process(process)
+        self.assertEqual(2, run.call_count)
+        self.assertTrue(all(call.kwargs["timeout"] <= perf_recovery.PROCESS_TEARDOWN_TIMEOUT_SECONDS for call in run.call_args_list))
 
     def test_context_facts_capture_pivots_order_and_truncation(self) -> None:
         facts = perf_recovery._context_facts(
@@ -1064,6 +1200,36 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertFalse(timed_out)
         self.assertFalse(evidence["completed"])
 
+    def test_mcp_bootstrap_stops_before_initialized_on_initialize_error(self) -> None:
+        class FakeSession:
+            process = SimpleNamespace(pid=1, poll=lambda: None)
+
+            def __init__(self, _request, _environment):
+                self.notify_calls = 0
+                self.status_calls = 0
+
+            def request_json(self, _method, _params, _deadline):
+                return {"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "no"}}
+
+            def notify(self, _method, _params, _deadline):
+                self.notify_calls += 1
+
+            def workspace_status(self, _deadline):
+                self.status_calls += 1
+                return {"result": {"ready": True}}
+
+        request = self._request()
+        with mock.patch.object(perf_recovery, "_McpSession", FakeSession):
+            session, _, evidence, timed_out = perf_recovery._bootstrap_session(
+                request,
+                timeout_ms=1_000,
+                environment={},
+            )
+        self.assertFalse(timed_out)
+        self.assertFalse(evidence["completed"])
+        self.assertEqual(0, session.notify_calls)
+        self.assertEqual(0, session.status_calls)
+
     def test_mcp_leader_attempts_are_real_and_only_final_session_is_retained(self) -> None:
         class FakeSession:
             def __init__(self, number):
@@ -1140,7 +1306,39 @@ class PerfRecoveryTests(unittest.TestCase):
             session.close()
         self.assertTrue(process.stdin.closed)
         self.assertEqual(1, process.wait_calls)
-        terminate.assert_not_called()
+        terminate.assert_called_once_with(process)
+
+    def test_run_replay_rejects_reader_without_selected_leader(self) -> None:
+        reader = self._mcp_workload("startup.reader.warm")
+        with mock.patch.object(perf_recovery, "run_workload") as run_workload:
+            with self.assertRaisesRegex(ValueError, "leader"):
+                perf_recovery.run_replay(self._request(), {reader.workload_id: reader})
+        run_workload.assert_not_called()
+
+    def test_run_replay_rejects_reader_before_selected_leader(self) -> None:
+        reader = self._mcp_workload("startup.reader.warm")
+        leader = self._mcp_workload("startup.leader.no_change")
+        workloads = {reader.workload_id: reader, leader.workload_id: leader}
+        with mock.patch.object(perf_recovery, "run_workload") as run_workload:
+            with mock.patch.object(perf_recovery, "_run_mcp_workload") as mcp_workload:
+                with self.assertRaisesRegex(ValueError, "ordered"):
+                    perf_recovery.run_replay(self._request(), workloads)
+        run_workload.assert_not_called()
+        mcp_workload.assert_not_called()
+
+    def test_run_replay_rejects_reader_when_leader_did_not_stay_alive(self) -> None:
+        reader = self._mcp_workload("startup.reader.warm")
+        leader = self._mcp_workload("startup.leader.no_change")
+        workloads = {leader.workload_id: leader, reader.workload_id: reader}
+        with mock.patch.object(
+            perf_recovery,
+            "_run_mcp_workload",
+            return_value=([self._record_for_pair(leader.workload_id)], None),
+        ):
+            with mock.patch.object(perf_recovery, "run_workload") as run_workload:
+                with self.assertRaisesRegex(RuntimeError, "established leader"):
+                    perf_recovery.run_replay(self._request(), workloads)
+        run_workload.assert_not_called()
 
     def test_depth_pair_records_semantic_delta_without_cross_depth_byte_gate(self) -> None:
         facts = {"pivot_ids": ["pivot-a"], "order": ["pivot-a"], "truncation": False, "bytes": 100}

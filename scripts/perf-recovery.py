@@ -34,6 +34,7 @@ except ImportError:  # pragma: no cover - Windows does not expose resource.
 FIRST_ATTEMPT_TIMEOUT_MS = 60_000
 MAX_CAPTURE_BYTES = 1_048_576
 MAX_MCP_LINE_BYTES = 64 * 1024
+MAX_PHASE_LINE_BYTES = 64 * 1024
 MAX_PHASE_RECORDS = 128
 PROCESS_TEARDOWN_TIMEOUT_SECONDS = 1.0
 STREAM_READ_CHUNK_BYTES = 64 * 1024
@@ -658,8 +659,9 @@ def _resource_delta(before: Mapping[str, float | int] | None, after: Mapping[str
     }
 
 
-def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+def _terminate_process(process: subprocess.Popen[bytes]) -> bool:
     reaped = False
+    parent_exited = process.poll() is not None
 
     def wait_bounded() -> bool:
         nonlocal reaped
@@ -683,14 +685,12 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
             return False
         return getattr(result, "returncode", 1) == 0
 
-    if process.poll() is not None:
-        wait_bounded()
-        return
-
     try:
         if os.name == "nt":
-            kill_windows_tree()
-            if not wait_bounded():
+            tree_killed = kill_windows_tree()
+            if parent_exited and not tree_killed:
+                kill_windows_tree()
+            elif not wait_bounded():
                 kill_windows_tree()
                 if not wait_bounded():
                     try:
@@ -699,14 +699,21 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
                         pass
                     wait_bounded()
         else:
+            tree_signalled = False
             try:
                 os.killpg(process.pid, signal.SIGTERM)
+                tree_signalled = True
             except ProcessLookupError:
                 pass
-            if not wait_bounded():
+            if tree_signalled and parent_exited:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
+                    pass
+            if not wait_bounded():
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
                     pass
                 if not wait_bounded():
                     try:
@@ -714,6 +721,11 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
                     except (ProcessLookupError, OSError):
                         pass
                     wait_bounded()
+            elif tree_signalled and not parent_exited and process.poll() is not None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
     except (ProcessLookupError, PermissionError, OSError):
         try:
             process.kill()
@@ -723,6 +735,7 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
     finally:
         if not reaped:
             wait_bounded()
+    return reaped and getattr(process, "returncode", None) is not None
 
 
 def _monitor_process(process: subprocess.Popen[bytes], platform_name: str, stop: threading.Event, peaks: dict[str, int]) -> None:
@@ -898,8 +911,8 @@ def _run_process(request: ReplayRequest, argv: list[str], timeout_ms: int, envir
         process.wait(timeout=timeout_ms / 1000)
     except subprocess.TimeoutExpired:
         timed_out = True
-        _terminate_process(process)
     finally:
+        _terminate_process(process)
         for thread in output_threads:
             thread.join(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
         _close_stream(process.stdout)
@@ -1615,14 +1628,29 @@ def _phase_records(
     matches: list[dict[str, Any]] = []
     for path in sorted(logs.glob("miller-*.jsonl")):
         try:
-            with path.open("r", encoding="utf-8", errors="replace") as handle:
-                if offsets is not None:
-                    handle.seek(offsets.get(path, 0))
-                lines = handle
-                for line in lines:
+            with path.open("rb") as handle:
+                start_offset = offsets.get(path, 0) if offsets is not None else 0
+                handle.seek(start_offset)
+                last_complete_offset = start_offset
+                while True:
+                    line = handle.readline(MAX_PHASE_LINE_BYTES + 1)
+                    if not line:
+                        break
+                    if b"\n" not in line:
+                        if len(line) <= MAX_PHASE_LINE_BYTES:
+                            break
+                        while line and b"\n" not in line:
+                            line = handle.readline(MAX_PHASE_LINE_BYTES + 1)
+                        if not line or b"\n" not in line:
+                            break
+                        last_complete_offset = handle.tell()
+                        continue
+                    last_complete_offset = handle.tell()
+                    if len(line) > MAX_PHASE_LINE_BYTES:
+                        continue
                     try:
                         value = json.loads(line)
-                    except json.JSONDecodeError:
+                    except (UnicodeDecodeError, json.JSONDecodeError):
                         continue
                     if not isinstance(value, Mapping) or _phase_value(value, "Phase") != phase:
                         continue
@@ -1637,7 +1665,7 @@ def _phase_records(
                     if len(matches) > MAX_PHASE_RECORDS:
                         del matches[: len(matches) - MAX_PHASE_RECORDS]
                 if offsets is not None:
-                    offsets[path] = handle.tell()
+                    offsets[path] = last_complete_offset
         except OSError:
             continue
     return matches
@@ -1689,6 +1717,7 @@ class _McpSession:
         self._stderr: list[str] = []
         self._next_id = 1
         self._closed = False
+        self._close_succeeded: bool | None = None
         self._stop = threading.Event()
         self._peaks: dict[str, int] = {}
         self._stdout_thread = threading.Thread(
@@ -1799,9 +1828,9 @@ class _McpSession:
             time.sleep(0.05)
         return None
 
-    def close(self) -> None:
+    def close(self) -> bool:
         if self._closed:
-            return
+            return self._close_succeeded is True
         self._closed = True
         self._stop.set()
         if self.process.stdin is not None:
@@ -1812,14 +1841,18 @@ class _McpSession:
         try:
             self.process.wait(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
-            _terminate_process(self.process)
+            pass
         except (OSError, ValueError):
-            _terminate_process(self.process)
+            pass
+        finally:
+            terminated = _terminate_process(self.process)
+        self._close_succeeded = terminated and getattr(self.process, "returncode", None) is not None
         _close_stream(getattr(self.process, "stdout", None))
         _close_stream(getattr(self.process, "stderr", None))
         self._monitor.join(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
         self._stdout_thread.join(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
         self._stderr_thread.join(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
+        return self._close_succeeded
 
     def result(
         self,
@@ -1829,8 +1862,9 @@ class _McpSession:
         *,
         close: bool = True,
     ) -> CommandResult:
+        close_succeeded = True
         if close:
-            self.close()
+            close_succeeded = self.close()
         metrics = normalise_memory_metrics(_platform_name(), self._peaks)
         phase = evidence.get("phase")
         status = evidence.get("workspace_status")
@@ -1839,15 +1873,15 @@ class _McpSession:
             sort_keys=True,
         ).encode()
         stderr = "".join(self._stderr).encode()
-        exit_code = self.process.returncode
-        completed = (
-            bool(evidence.get("completed"))
-            and not timed_out
-            and (exit_code is None or exit_code == 0)
-        )
+        exit_code = getattr(self.process, "returncode", None)
+        completed = bool(evidence.get("completed")) and not timed_out
+        if close:
+            completed = completed and close_succeeded and exit_code == 0
+        else:
+            completed = completed and (exit_code is None or exit_code == 0)
         ended = float(evidence.get("ready_at") or evidence.get("observed_at") or time.perf_counter())
         return CommandResult(
-            exit_code=0 if completed and exit_code is None else exit_code,
+            exit_code=0 if not close and completed and exit_code is None else exit_code,
             timed_out=timed_out,
             wall_ms=max(0, round((ended - started) * 1000)),
             cpu_ms=None,
@@ -1881,7 +1915,7 @@ def _bootstrap_session(
     timed_out = False
     completed = False
     try:
-        session.request_json(
+        initialize_response = session.request_json(
             "initialize",
             {
                 "protocolVersion": "2024-11-05",
@@ -1890,6 +1924,8 @@ def _bootstrap_session(
             },
             deadline,
         )
+        if initialize_response.get("error") is not None:
+            raise RuntimeError("MCP initialize failed")
         session.notify("notifications/initialized", {}, deadline)
         while True:
             if session.process.poll() is not None:
@@ -2206,6 +2242,14 @@ def _attach_parity(records: list[ReplayRecord], workloads: Mapping[str, Workload
 
 def run_replay(request: ReplayRequest, workloads: Mapping[str, Workload]) -> list[ReplayRecord]:
     request = validate_request(request)
+    reader_id = "startup.reader.warm"
+    leader_id = "startup.leader.no_change"
+    if reader_id in workloads:
+        if leader_id not in workloads:
+            raise ValueError(f"{reader_id} requires selected {leader_id}")
+        workload_order = list(workloads)
+        if workload_order.index(reader_id) < workload_order.index(leader_id):
+            raise ValueError(f"{reader_id} must be ordered after {leader_id}")
     records: list[ReplayRecord] = []
     leader_session: _McpSession | None = None
     try:
@@ -2219,7 +2263,9 @@ def run_replay(request: ReplayRequest, workloads: Mapping[str, Workload]) -> lis
             ):
                 leader_records, leader_session = _run_mcp_workload(request, workload, keep_alive=True)
                 records.extend(leader_records)
-            elif workload_id == "startup.reader.warm" and leader_session is not None:
+            elif workload_id == "startup.reader.warm":
+                if leader_session is None:
+                    raise RuntimeError(f"{workload_id} requires an established leader session")
                 reader_records, _ = _run_mcp_workload(request, workload, keep_alive=False)
                 records.extend(reader_records)
                 leader_session.close()
