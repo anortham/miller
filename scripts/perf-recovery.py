@@ -1077,10 +1077,29 @@ def _status_probe_state(payload: Any) -> str:
         bootstrap = _find_value(bootstrap, {"state", "status", "phase"})
     if isinstance(bootstrap, str):
         state = bootstrap.casefold()
-        if state == "running":
+        if state in {"running", "idle"}:
             return "running"
         if state in {"failed", "error", "unavailable"}:
             return "failed"
+    content = _find_value(result, {"content"})
+    if isinstance(content, list):
+        content_text = " ".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, Mapping) and isinstance(item.get("text"), str)
+        )
+    else:
+        content_text = ""
+    match = re.search(
+        r"\bbootstrap\s*:\s*(running|idle|failed|unavailable)\b",
+        content_text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        state = match.group(1).casefold()
+        if state in {"running", "idle"}:
+            return "running"
+        return "failed"
     return "ready"
 
 

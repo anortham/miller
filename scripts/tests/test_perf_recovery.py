@@ -906,6 +906,84 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual(2, len(deadlines) - 2)
         self.assertEqual(1, len({id(value) for value in deadlines}))
 
+    def test_mcp_bootstrap_parses_workspace_binding_call_tool_text(self) -> None:
+        statuses = [
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "result": {
+                    "content": [{"type": "text", "text": "BOOTSTRAP: RUNNING /tmp/workspace"}],
+                    "isError": False,
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "result": {
+                    "content": [{"type": "text", "text": "bootstrap: idle"}],
+                    "isError": False,
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "result": {
+                    "content": [{"type": "text", "text": "workspace bound: /tmp/workspace"}],
+                    "isError": False,
+                },
+            },
+        ]
+        deadlines: list[object] = []
+
+        class FakeSession:
+            process = SimpleNamespace(pid=1, poll=lambda: None)
+
+            def __init__(self, _request, _environment):
+                self.status_calls = 0
+
+            def request_json(self, _method, _params, deadline):
+                deadlines.append(deadline)
+                return {"result": {}}
+
+            def notify(self, _method, _params, deadline):
+                deadlines.append(deadline)
+
+            def workspace_status(self, deadline):
+                deadlines.append(deadline)
+                self.status_calls += 1
+                return statuses.pop(0)
+
+        for text, expected in (
+            ("BOOTSTRAP: FAILED — unable to bind", "failed"),
+            ("bootstrap: unavailable", "failed"),
+        ):
+            self.assertEqual(
+                expected,
+                perf_recovery._status_probe_state(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 6,
+                        "result": {
+                            "content": [{"type": "text", "text": text}],
+                            "isError": False,
+                        },
+                    }
+                ),
+            )
+
+        request = self._request()
+        with mock.patch.object(perf_recovery, "_McpSession", FakeSession):
+            with mock.patch.object(perf_recovery.time, "sleep"):
+                _, _, evidence, timed_out = perf_recovery._bootstrap_session(
+                    request,
+                    timeout_ms=1_000,
+                    environment={},
+                )
+        self.assertFalse(timed_out)
+        self.assertTrue(evidence["completed"])
+        self.assertEqual(3, len(deadlines) - 2)
+        self.assertEqual(1, len({id(value) for value in deadlines}))
+
     def test_mcp_bootstrap_stops_on_status_hard_failure(self) -> None:
         class FakeSession:
             process = SimpleNamespace(pid=1, poll=lambda: None)
