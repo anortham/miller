@@ -119,6 +119,7 @@ public sealed class ImpactTool
         {
             max_depth = NormalizeDepth(max_depth);
             limit = NormalizeLimit(limit);
+            ImpactTelemetrySnapshot? impactTelemetry = null;
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             continuationWorkspaceId =
@@ -237,6 +238,7 @@ public sealed class ImpactTool
                 unseededPaths = execution.UnseededPaths;
                 emptyReason = execution.EmptyReason;
                 diagnosticTraceTarget = execution.DiagnosticTraceTarget;
+                impactTelemetry = execution.Telemetry;
             }
             else if (emptyGitDiff)
             {
@@ -267,6 +269,7 @@ public sealed class ImpactTool
                 unseededPaths = execution.UnseededPaths;
                 emptyReason = execution.EmptyReason;
                 diagnosticTraceTarget = execution.DiagnosticTraceTarget;
+                impactTelemetry = execution.Telemetry;
             }
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
             ToolDiagnostic? diagnostic = null;
@@ -311,6 +314,16 @@ public sealed class ImpactTool
                 telemetry.SetMetadata("format", json ? "json" : "compact");
                 telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
                 telemetry.SetMetadata("max_depth_bucket", DepthBucket(max_depth));
+                ImpactTelemetrySnapshot facts = impactTelemetry ??
+                    ImpactTelemetrySnapshot.Empty(RankingCandidateLimit(limit));
+                telemetry.SetMetadata("traversal_candidate_limit", facts.TraversalCandidateLimit);
+                telemetry.SetMetadata("graph_reached_count", facts.GraphReachedCount);
+                telemetry.SetMetadata("heuristic_test_candidate_count", facts.HeuristicTestCandidateCount);
+                telemetry.SetMetadata("graph_displacement_count", facts.GraphDisplacementCount);
+                telemetry.SetMetadata("selected_count", facts.SelectedCount);
+                telemetry.SetMetadata("test_candidates_truncated", facts.TestCandidatesTruncated);
+                telemetry.SetMetadata("truncated_by_depth", facts.TruncatedByDepth);
+                telemetry.SetMetadata("truncated_by_limit", facts.TruncatedByLimit);
             }
             if (diagnostic is not null)
             {
@@ -635,7 +648,8 @@ public sealed class ImpactTool
             rankedImpact.ReturnedTestCandidateCount,
             rankedImpact.TestCandidatesTruncated,
             rankedImpact.Status,
-            rankedImpact.Reason);
+            rankedImpact.Reason,
+            rankedImpact.Telemetry);
         string rendered = json
             ? RenderJson(traversal, note, maxDepth, limit)
             : RenderCompact(traversal, note, maxDepth, limit);
@@ -648,7 +662,8 @@ public sealed class ImpactTool
             rankedImpact.Impacted.Count + rankedImpact.Tests.Count == 0
                 ? ImpactEmptyReason.NoDependents
                 : null,
-            targetWasFile ? seedIds.FirstOrDefault() : target);
+            targetWasFile ? seedIds.FirstOrDefault() : target,
+            rankedImpact.Telemetry);
     }
 
     // ---------- index-revision delta (CT revision-delta contract R0–R2) ----------
@@ -847,7 +862,9 @@ public sealed class ImpactTool
             traversal.Impacted.Count + traversal.Tests.Count,
             traversal.Graph?.ReachedCount ?? 0,
             traversal.UnseededPaths,
-            null);
+            null,
+            null,
+            traversal.Telemetry);
 
         static ImpactTraversal NotRun(string reason, IReadOnlyList<string> deleted) =>
             new([], [], null, [], [], deleted, 0, false, "not_run", reason);
@@ -892,7 +909,8 @@ public sealed class ImpactTool
             rankedImpact.ReturnedTestCandidateCount,
             rankedImpact.TestCandidatesTruncated,
             rankedImpact.Status,
-            rankedImpact.Reason);
+            rankedImpact.Reason,
+            rankedImpact.Telemetry);
     }
 
     private static RankedImpactResult TraverseAndRankImpact(
@@ -902,9 +920,9 @@ public sealed class ImpactTool
         int maxDepth,
         int limit)
     {
-        int candidateLimit = RankingCandidateLimit(limit);
+        int traversalCandidateLimit = RankingCandidateLimit(limit);
         GraphReachResult graphResult =
-            graph.ReachWithEvidence(seedIds, maxDepth, candidateLimit, Direction.Reverse);
+            graph.ReachWithEvidence(seedIds, maxDepth, traversalCandidateLimit, Direction.Reverse);
         TestCandidateExpansion expansion = AddHeuristicTestCandidates(
             index, seedIds, graphResult.Nodes, graphResult.Nodes.Count + limit);
         var symbolsById =
@@ -942,6 +960,15 @@ public sealed class ImpactTool
         };
         (string status, string reason) =
             TraversalDisposition(truthfulGraph, testCandidatesTruncated);
+        var telemetry = new ImpactTelemetrySnapshot(
+            traversalCandidateLimit,
+            graphResult.Nodes.Count,
+            expansion.CandidateCount,
+            Math.Max(0, resolvableGraphRows - returnedGraphCount),
+            selected.Length,
+            testCandidatesTruncated,
+            graphResult.TruncatedByDepth,
+            truthfulGraph.TruncatedByLimit);
         return new RankedImpactResult(
             impacted,
             tests,
@@ -949,7 +976,8 @@ public sealed class ImpactTool
             returnedTestCandidateCount,
             testCandidatesTruncated,
             status,
-            reason);
+            reason,
+            telemetry);
     }
 
     private static (string Status, string Reason) TraversalDisposition(
@@ -1188,7 +1216,8 @@ public sealed class ImpactTool
         int TestCandidateCount,
         bool TestCandidatesTruncated,
         string Status,
-        string Reason);
+        string Reason,
+        ImpactTelemetrySnapshot? Telemetry = null);
 
     private sealed record TestCandidateExpansion(
         IReadOnlyList<ReachedNode> Nodes,
@@ -1202,7 +1231,22 @@ public sealed class ImpactTool
         int ReturnedTestCandidateCount,
         bool TestCandidatesTruncated,
         string Status,
-        string Reason);
+        string Reason,
+        ImpactTelemetrySnapshot Telemetry);
+
+    internal sealed record ImpactTelemetrySnapshot(
+        int TraversalCandidateLimit,
+        int GraphReachedCount,
+        int HeuristicTestCandidateCount,
+        int GraphDisplacementCount,
+        int SelectedCount,
+        bool TestCandidatesTruncated,
+        bool TruncatedByDepth,
+        bool TruncatedByLimit)
+    {
+        internal static ImpactTelemetrySnapshot Empty(int traversalCandidateLimit) =>
+            new(traversalCandidateLimit, 0, 0, 0, 0, false, false, false);
+    }
 
     internal enum ImpactEmptyReason
     {
@@ -1221,7 +1265,8 @@ public sealed class ImpactTool
         int NodesVisited,
         IReadOnlyList<string> UnseededPaths,
         ImpactEmptyReason? EmptyReason,
-        string? DiagnosticTraceTarget = null);
+        string? DiagnosticTraceTarget = null,
+        ImpactTelemetrySnapshot? Telemetry = null);
 
     // ---------- seed resolution ----------
 

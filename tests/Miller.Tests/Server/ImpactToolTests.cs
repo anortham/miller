@@ -1256,6 +1256,14 @@ public sealed class ImpactToolTests
             using var metadata = JsonDocument.Parse(ReadTelemetryMetadata(telemetryDb));
             Assert.Equal("3-5", metadata.RootElement.GetProperty("max_depth_bucket").GetString());
             Assert.Equal("501-1000", metadata.RootElement.GetProperty("limit_bucket").GetString());
+            Assert.Equal(2000, metadata.RootElement.GetProperty("traversal_candidate_limit").GetInt32());
+            Assert.Equal(0, metadata.RootElement.GetProperty("graph_reached_count").GetInt32());
+            Assert.Equal(1, metadata.RootElement.GetProperty("heuristic_test_candidate_count").GetInt32());
+            Assert.Equal(0, metadata.RootElement.GetProperty("graph_displacement_count").GetInt32());
+            Assert.Equal(1, metadata.RootElement.GetProperty("selected_count").GetInt32());
+            Assert.False(metadata.RootElement.GetProperty("test_candidates_truncated").GetBoolean());
+            Assert.False(metadata.RootElement.GetProperty("truncated_by_depth").GetBoolean());
+            Assert.False(metadata.RootElement.GetProperty("truncated_by_limit").GetBoolean());
         }
         finally
         {
