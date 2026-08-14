@@ -41,6 +41,18 @@ MAX_PHASE_RECORDS = 128
 PROCESS_TEARDOWN_TIMEOUT_SECONDS = 1.0
 STREAM_READ_CHUNK_BYTES = 64 * 1024
 MANIFEST_SCHEMA_VERSION = 1
+STARTUP_PHASES = (
+    "bind",
+    "import",
+    "resolve",
+    "coordinator_total",
+    "content",
+    "search",
+    "metrics",
+    "vector",
+    "sidecar_total",
+    "startup_total",
+)
 KNOWN_WORKLOAD_IDS = (
     "startup.leader.no_change",
     "startup.reader.warm",
@@ -1853,6 +1865,7 @@ def _phase_records(
     offsets: dict[Path, int] | None = None,
     *,
     pid: int | None = None,
+    stop_after_phase: str | None = None,
 ) -> list[dict[str, Any]]:
     logs = workspace / ".miller" / "logs"
     if not logs.is_dir():
@@ -1884,7 +1897,7 @@ def _phase_records(
                         value = json.loads(line)
                     except (UnicodeDecodeError, json.JSONDecodeError):
                         continue
-                    if not isinstance(value, Mapping) or _phase_value(value, "Phase") != phase:
+                    if not isinstance(value, Mapping):
                         continue
                     if pid is not None:
                         try:
@@ -1893,14 +1906,43 @@ def _phase_records(
                             continue
                         if record_pid != pid:
                             continue
-                    matches.append(dict(value))
+                    record_phase = _phase_value(value, "Phase")
+                    if record_phase == phase:
+                        matches.append(dict(value))
                     if len(matches) > MAX_PHASE_RECORDS:
                         del matches[: len(matches) - MAX_PHASE_RECORDS]
+                    if stop_after_phase is not None and record_phase == stop_after_phase:
+                        break
                 if offsets is not None:
                     offsets[path] = last_complete_offset
         except OSError:
             continue
     return matches
+
+
+def _startup_phase_records(
+    workspace: Path,
+    offsets: dict[Path, int],
+    *,
+    pid: int,
+) -> tuple[dict[str, dict[str, Any]], dict[Path, int]]:
+    start_offsets = dict(offsets)
+    next_offsets = dict(start_offsets)
+    phases: dict[str, dict[str, Any]] = {}
+    for phase in STARTUP_PHASES:
+        phase_offsets = dict(start_offsets)
+        records = _phase_records(
+            workspace,
+            phase,
+            phase_offsets,
+            pid=pid,
+            stop_after_phase=None if phase == "startup_total" else "startup_total",
+        )
+        if records:
+            phases[phase] = records[-1]
+        for path, offset in phase_offsets.items():
+            next_offsets[path] = max(next_offsets.get(path, 0), offset)
+    return phases, next_offsets
 
 
 def _bounded_text(line: str, *, max_bytes: int = MAX_CAPTURE_BYTES) -> str:
@@ -1930,6 +1972,7 @@ class _McpSession:
             for path in logs.glob("miller-*.jsonl")
             if path.is_file()
         } if logs.is_dir() else {}
+        self._startup_phases: dict[str, dict[str, Any]] = {}
         self.process = subprocess.Popen(
             _mcp_argv(request),
             cwd=str(request.workspace),
@@ -2042,16 +2085,40 @@ class _McpSession:
             deadline,
         )
 
+    def collect_startup_phases(self) -> Mapping[str, Mapping[str, Any]]:
+        phases, offsets = _startup_phase_records(
+            self.request.workspace,
+            getattr(self, "_log_offsets", {}),
+            pid=self.process.pid,
+        )
+        self._log_offsets = offsets
+        cached = getattr(self, "_startup_phases", {})
+        cached.update(phases)
+        self._startup_phases = cached
+        return dict(cached)
+
+    def startup_phase_records(self) -> Mapping[str, Mapping[str, Any]]:
+        return dict(getattr(self, "_startup_phases", {}))
+
     def wait_for_phase(self, phase: str, deadline: float) -> Mapping[str, Any] | None:
         while time.monotonic() < deadline:
-            records = _phase_records(self.request.workspace, phase, self._log_offsets, pid=self.process.pid)
-            if records:
-                for record in reversed(records):
+            if phase == "startup_total":
+                record = self.collect_startup_phases().get(phase)
+                if record is not None:
                     outcome = str(_phase_value(record, "Outcome")).casefold()
                     if outcome in {"completed", "failed"}:
                         return record
-                if self.process.poll() is not None:
-                    return records[-1]
+                    if self.process.poll() is not None:
+                        return record
+            else:
+                records = _phase_records(self.request.workspace, phase, self._log_offsets, pid=self.process.pid)
+                if records:
+                    for record in reversed(records):
+                        outcome = str(_phase_value(record, "Outcome")).casefold()
+                        if outcome in {"completed", "failed"}:
+                            return record
+                    if self.process.poll() is not None:
+                        return records[-1]
             if self.process.poll() is not None:
                 return None
             time.sleep(0.05)
@@ -2096,9 +2163,26 @@ class _McpSession:
             close_succeeded = self.close()
         metrics = normalise_memory_metrics(_platform_name(), self._peaks)
         phase = evidence.get("phase")
+        phases: dict[str, dict[str, Any]] = {
+            name: dict(record)
+            for name, record in getattr(self, "_startup_phases", {}).items()
+            if isinstance(record, Mapping)
+        }
+        supplied_phases = evidence.get("phases")
+        if isinstance(supplied_phases, Mapping):
+            phases.update(
+                {
+                    str(name): dict(record)
+                    for name, record in supplied_phases.items()
+                    if isinstance(record, Mapping)
+                }
+            )
+        if isinstance(phase, Mapping):
+            phases["startup_total"] = dict(phase)
+        phases.setdefault("startup_total", {})
         status = evidence.get("workspace_status")
         stdout = json.dumps(
-            {"phases": {"startup_total": dict(phase or {})}, "workspace_status": status},
+            {"phases": phases, "workspace_status": status},
             sort_keys=True,
         ).encode()
         stderr = "".join(self._stderr).encode()
@@ -2139,6 +2223,7 @@ def _bootstrap_session(
     deadline = time.monotonic() + timeout_ms / 1000
     session = _McpSession(request, environment)
     phase: Mapping[str, Any] | None = None
+    phase_records: Mapping[str, Mapping[str, Any]] = {}
     status: Mapping[str, Any] | None = None
     ready_at: float | None = None
     timed_out = False
@@ -2171,13 +2256,23 @@ def _bootstrap_session(
             time.sleep(min(0.05, remaining))
         if require_phase:
             phase = session.wait_for_phase("startup_total", deadline)
+            get_phase_records = getattr(session, "startup_phase_records", None)
+            if callable(get_phase_records):
+                phase_records = get_phase_records()
             completed = (
                 phase is not None
                 and str(_phase_value(phase, "Outcome")).casefold() == "completed"
             )
         else:
-            phase_records = _phase_records(request.workspace, "startup_total", pid=session.process.pid)
-            phase = phase_records[-1] if phase_records else None
+            collect_phase_records = getattr(session, "collect_startup_phases", None)
+            get_phase_records = getattr(session, "startup_phase_records", None)
+            if callable(collect_phase_records) and callable(get_phase_records):
+                collect_phase_records()
+                phase_records = get_phase_records()
+                phase = phase_records.get("startup_total")
+            else:
+                startup_records = _phase_records(request.workspace, "startup_total", pid=session.process.pid)
+                phase = startup_records[-1] if startup_records else None
             completed = phase is None or str(_phase_value(phase, "Outcome")).casefold() == "completed"
         ready_at = time.perf_counter()
     except (OSError, RuntimeError, TimeoutError):
@@ -2185,6 +2280,7 @@ def _bootstrap_session(
     observed_at = time.perf_counter()
     evidence: dict[str, Any] = {
         "phase": phase,
+        "phases": phase_records,
         "workspace_status": status,
         "ready_at": ready_at,
         "observed_at": observed_at,

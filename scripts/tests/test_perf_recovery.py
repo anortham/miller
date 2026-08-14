@@ -1342,6 +1342,98 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertTrue(all(record["pid"] == 123 for record in records))
         self.assertEqual("completed", records[-1]["Outcome"])
 
+    def test_mcp_startup_result_projects_child_phases_through_first_startup_total(self) -> None:
+        logs = self.workspace / ".miller" / "logs"
+        logs.mkdir()
+        path = logs / "miller-test.jsonl"
+        path.write_text(
+            json.dumps({"Phase": "bind", "pid": 123, "ElapsedMilliseconds": 99}) + "\n",
+            encoding="utf-8",
+        )
+        offsets = {path: path.stat().st_size}
+        phase_names = [
+            "bind",
+            "import",
+            "resolve",
+            "coordinator_total",
+            "content",
+            "search",
+            "metrics",
+            "vector",
+            "sidecar_total",
+            "startup_total",
+        ]
+        lines = [
+            {"Phase": "bind", "pid": 999, "ElapsedMilliseconds": 77},
+            *[
+                {
+                    "Phase": phase,
+                    "pid": 123,
+                    "Outcome": "completed",
+                    "ElapsedMilliseconds": index + 1,
+                }
+                for index, phase in enumerate(phase_names)
+            ],
+            {"Phase": "bind", "pid": 123, "ElapsedMilliseconds": 999},
+        ]
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write("\n".join(json.dumps(line) for line in lines) + "\n")
+
+        session = object.__new__(perf_recovery._McpSession)
+        session.request = self._request()
+        session.process = SimpleNamespace(pid=123, returncode=0)
+        session._log_offsets = offsets
+        session._peaks = {}
+        session._stderr = []
+        phase = session.wait_for_phase("startup_total", time.monotonic() + 1)
+        result = session.result(
+            10.0,
+            {"phase": phase, "completed": True, "ready_at": 10.1},
+            False,
+            close=False,
+        )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(set(phase_names), set(payload["phases"]))
+        self.assertEqual(1, payload["phases"]["bind"]["ElapsedMilliseconds"])
+        self.assertEqual(10, payload["phases"]["startup_total"]["ElapsedMilliseconds"])
+        record = perf_recovery._record_from_result(
+            self._request(),
+            self._mcp_workload("startup.leader.no_change"),
+            result,
+            attempt=1,
+            warmup=False,
+            timeout_ms=60_000,
+            environment={},
+            commit=None,
+        )
+        self.assertEqual(set(phase_names), set(record.phase_timings))
+
+    def test_mcp_startup_result_tolerates_absent_optional_phases(self) -> None:
+        logs = self.workspace / ".miller" / "logs"
+        logs.mkdir()
+        path = logs / "miller-test.jsonl"
+        path.write_text(
+            json.dumps({"Phase": "startup_total", "pid": 123, "Outcome": "completed"}) + "\n",
+            encoding="utf-8",
+        )
+
+        session = object.__new__(perf_recovery._McpSession)
+        session.request = self._request()
+        session.process = SimpleNamespace(pid=123, returncode=0)
+        session._log_offsets = {path: 0}
+        session._peaks = {}
+        session._stderr = []
+        phase = session.wait_for_phase("startup_total", time.monotonic() + 1)
+        result = session.result(
+            10.0,
+            {"phase": phase, "completed": True, "ready_at": 10.1},
+            False,
+            close=False,
+        )
+
+        self.assertEqual(["startup_total"], list(json.loads(result.stdout)["phases"]))
+
     def test_phase_poll_preserves_incomplete_json_until_newline(self) -> None:
         logs = self.workspace / ".miller" / "logs"
         logs.mkdir()
