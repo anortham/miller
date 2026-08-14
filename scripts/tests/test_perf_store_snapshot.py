@@ -45,6 +45,34 @@ class PerfStoreSnapshotTests(unittest.TestCase):
             connection.execute("INSERT INTO facts(name) VALUES (?)", (table,))
             connection.commit()
 
+    def _insert_maintenance_intent(self, owner_pid: int) -> None:
+        with closing(sqlite3.connect(self.source / "coord.db")) as connection:
+            connection.execute(
+                "CREATE TABLE maintenance_intent ("
+                "resource TEXT, run_id TEXT, action TEXT, source_generation_name TEXT, "
+                "owner_id TEXT, owner_pid INTEGER, fencing_token INTEGER, heartbeat_at INTEGER, "
+                "expires_at INTEGER, started_at INTEGER, plan_fingerprint TEXT, source_min_writer_version TEXT"
+                ")"
+            )
+            connection.execute(
+                "INSERT INTO maintenance_intent VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "store-maintenance",
+                    "run-1",
+                    "gc",
+                    "gen-001",
+                    "owner-1",
+                    owner_pid,
+                    1,
+                    0,
+                    1,
+                    0,
+                    "plan-1",
+                    "julie-1",
+                ),
+            )
+            connection.commit()
+
     def test_snapshot_uses_read_only_backup_and_verifies_family(self) -> None:
         before = (self.source / "coord.db").read_bytes()
         result = snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
@@ -103,13 +131,103 @@ class PerfStoreSnapshotTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "live|alias|symlink|reparse"):
             snapshot.snapshot_family(self.source, self.destination, live_root=live)
 
-    def test_snapshot_backs_up_original_source_without_shadow_copy(self) -> None:
-        with mock.patch.object(
-            snapshot,
-            "_database_input",
-            side_effect=AssertionError("shadow database copy is forbidden"),
-            create=True,
+    def test_snapshot_uses_private_read_only_shadow_without_mutating_source(self) -> None:
+        source = self.source_generation / "store.db"
+        destination = self.root / "copy.db"
+        producer = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os, sqlite3, sys; "
+                    "connection = sqlite3.connect(sys.argv[1]); "
+                    "connection.execute('PRAGMA journal_mode=WAL'); "
+                    "connection.execute('PRAGMA wal_autocheckpoint=0'); "
+                    "connection.execute(\"INSERT INTO facts(name) VALUES ('shadow-wal')\"); "
+                    "connection.commit(); os._exit(0)"
+                ),
+                str(source),
+            ],
+            check=False,
+        )
+        self.assertEqual(0, producer.returncode)
+        connect_inputs = []
+        copy_inputs = []
+        original_connect = snapshot.sqlite3.connect
+        original_copy = snapshot._copy_file_stream
+
+        before = snapshot._database_state(source)
+
+        def connect(database, *args, **kwargs):
+            connect_inputs.append(database)
+            return original_connect(database, *args, **kwargs)
+
+        def copy_file(source_path, destination_path):
+            copy_inputs.append((source_path, destination_path))
+            original_copy(source_path, destination_path)
+
+        with mock.patch.object(snapshot.sqlite3, "connect", side_effect=connect), mock.patch.object(
+            snapshot, "_copy_file_stream", side_effect=copy_file
         ):
+            result = snapshot._backup_database(source, destination)
+        self.assertEqual("ok", result)
+        self.assertEqual(before, snapshot._database_state(source))
+        self.assertTrue(copy_inputs)
+        self.assertTrue(all(path == source or path.name.startswith("store.db-") for path, _ in copy_inputs))
+        self.assertTrue(all(destination_path != source for _, destination_path in copy_inputs))
+        shadow_roots = {destination_path.parent for _, destination_path in copy_inputs}
+        self.assertTrue(all(root.name.startswith(".perf-store-input-") for root in shadow_roots))
+        self.assertTrue(all(not root.exists() for root in shadow_roots))
+        read_only_inputs = [value for value in connect_inputs if isinstance(value, str) and "mode=ro" in value]
+        self.assertTrue(read_only_inputs)
+        self.assertTrue(all(str(source) not in value for value in read_only_inputs))
+        with closing(sqlite3.connect(destination)) as connection:
+            self.assertEqual(
+                "shadow-wal",
+                connection.execute("SELECT name FROM facts WHERE name = 'shadow-wal'").fetchone()[0],
+            )
+
+    def test_snapshot_copies_all_generations_bases_and_sidecars(self) -> None:
+        second_generation = self.source / "gen-002"
+        second_generation.mkdir()
+        self._database(second_generation / "store.db", "second")
+        base = self.source / "resolution" / "bases" / "base-001.db"
+        base.parent.mkdir(parents=True)
+        self._database(base, "base")
+        sidecar = self.source / "gen-001" / "sidecars" / "search.db"
+        sidecar.parent.mkdir()
+        self._database(sidecar, "sidecar")
+        (self.source / "manifest.json").write_text("{\"generation\":4}\n", encoding="utf-8")
+
+        result = snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+
+        for relative in (
+            Path("gen-002/store.db"),
+            Path("resolution/bases/base-001.db"),
+            Path("gen-001/sidecars/search.db"),
+            Path("manifest.json"),
+        ):
+            self.assertTrue((self.destination / relative).is_file())
+        self.assertTrue({
+            "gen-002/store.db",
+            "resolution/bases/base-001.db",
+            "gen-001/sidecars/search.db",
+        }.issubset(result["databases"]))
+
+    def test_snapshot_rejects_live_maintenance_owner_even_when_expired(self) -> None:
+        self._insert_maintenance_intent(os.getpid())
+        with self.assertRaisesRegex(ValueError, "live owner"):
+            snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+
+    def test_snapshot_rejects_unknown_maintenance_owner_even_when_expired(self) -> None:
+        self._insert_maintenance_intent(424242)
+        with mock.patch.object(snapshot, "_pid_is_alive", return_value=None):
+            with self.assertRaisesRegex(ValueError, "unknown owner"):
+                snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+
+    def test_snapshot_allows_dead_maintenance_owner(self) -> None:
+        self._insert_maintenance_intent(424242)
+        with mock.patch.object(snapshot, "_pid_is_alive", return_value=False):
             result = snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
         self.assertEqual("ok", result["quick_check"])
 
@@ -227,12 +345,26 @@ class PerfStoreSnapshotTests(unittest.TestCase):
         source_paths = [path, Path(f"{path}-wal"), Path(f"{path}-shm")]
         self.assertTrue(all(item.exists() for item in source_paths))
         before = {
-            item: (item.read_bytes(), item.stat().st_ino, item.stat().st_size, item.stat().st_mtime_ns)
+            item: (
+                item.read_bytes(),
+                item.stat().st_ino,
+                item.stat().st_size,
+                item.stat().st_mtime_ns,
+                item.stat().st_ctime_ns,
+                item.stat().st_mode,
+            )
             for item in source_paths
         }
         result = snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
         after = {
-            item: (item.read_bytes(), item.stat().st_ino, item.stat().st_size, item.stat().st_mtime_ns)
+            item: (
+                item.read_bytes(),
+                item.stat().st_ino,
+                item.stat().st_size,
+                item.stat().st_mtime_ns,
+                item.stat().st_ctime_ns,
+                item.stat().st_mode,
+            )
             for item in source_paths
         }
         self.assertEqual(before, after)

@@ -70,23 +70,39 @@ def _sqlite_uri(path: Path) -> str:
     return f"{absolute.resolve(strict=False).as_uri()}?mode=ro"
 
 
+def _copy_file_stream(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with source.open("rb") as source_handle, destination.open("wb") as destination_handle:
+        while chunk := source_handle.read(DIGEST_CHUNK_SIZE):
+            destination_handle.write(chunk)
+
+
+def _database_state(path: Path) -> tuple[tuple[str, tuple[Any, ...] | None, str | None], ...]:
+    state: list[tuple[str, tuple[Any, ...] | None, str | None]] = []
+    for suffix in ("", "-wal", "-shm"):
+        member = Path(f"{path}{suffix}")
+        facts = _file_facts(member)
+        digest = _digest_files(member.parent, [Path(member.name)]) if facts is not None else None
+        state.append((suffix, facts, digest))
+    return tuple(state)
+
+
 @contextmanager
-def _read_only_sidecar(path: Path) -> Iterable[None]:
-    sidecar = Path(f"{path}-shm")
-    try:
-        original_mode = stat.S_IMODE(sidecar.stat().st_mode)
-    except FileNotFoundError:
-        yield
-        return
-    read_only_mode = original_mode & ~0o222
-    changed = read_only_mode != original_mode
-    if changed:
-        os.chmod(sidecar, read_only_mode)
-    try:
-        yield
-    finally:
-        if changed:
-            os.chmod(sidecar, original_mode)
+def _database_input(path: Path, *, scratch_dir: Path | None = None) -> Iterable[Path]:
+    before = _database_state(path)
+    if before[0][1] is None:
+        raise ValueError(f"source database is missing: {path}")
+    temporary_directory = str(scratch_dir) if scratch_dir is not None else None
+    with tempfile.TemporaryDirectory(prefix=".perf-store-input-", dir=temporary_directory) as directory:
+        shadow = Path(directory) / path.name
+        for suffix, facts, _digest in before:
+            if facts is not None:
+                _copy_file_stream(Path(f"{path}{suffix}"), Path(f"{shadow}{suffix}"))
+        if _database_state(path) != before:
+            raise ValueError(f"source database changed while creating read-only shadow: {path}")
+        yield shadow
+        if _database_state(path) != before:
+            raise ValueError(f"source database changed while using read-only shadow: {path}")
 
 
 def _read_current(source: Path) -> str:
@@ -203,8 +219,8 @@ def _claim_is_stale(heartbeat: Any, now_ms: int) -> bool:
 def _check_claims(coordinator: Path) -> None:
     now_ms = int(time.time() * 1000)
     try:
-        with _read_only_sidecar(coordinator):
-            connection = sqlite3.connect(_sqlite_uri(coordinator), uri=True)
+        with _database_input(coordinator) as readable_coordinator:
+            connection = sqlite3.connect(_sqlite_uri(readable_coordinator), uri=True)
             try:
                 writer_pids: dict[str, int] = {}
                 owner_states: dict[int, bool | None] = {}
@@ -254,7 +270,14 @@ def _file_facts(path: Path) -> tuple[Any, ...] | None:
         item_stat = path.stat()
     except FileNotFoundError:
         return None
-    return (item_stat.st_dev, item_stat.st_ino, item_stat.st_size, item_stat.st_mtime_ns)
+    return (
+        item_stat.st_dev,
+        item_stat.st_ino,
+        item_stat.st_size,
+        item_stat.st_mtime_ns,
+        getattr(item_stat, "st_ctime_ns", None),
+        item_stat.st_mode,
+    )
 
 
 def _sqlite_facts(
@@ -286,11 +309,12 @@ def _backup_database(source: Path, destination: Path) -> str:
     destination.parent.mkdir(parents=True, exist_ok=True)
     source_connection: sqlite3.Connection | None = None
     destination_connection: sqlite3.Connection | None = None
-    with _read_only_sidecar(source):
+    with _database_input(source, scratch_dir=destination.parent) as readable_source:
         try:
-            source_connection = sqlite3.connect(_sqlite_uri(source), uri=True)
+            source_connection = sqlite3.connect(_sqlite_uri(readable_source), uri=True)
             destination_connection = sqlite3.connect(destination)
-            before = (_sqlite_facts(source, source_connection), _database_digest(source))
+            before_sqlite = _sqlite_facts(readable_source, source_connection)
+            before_source = _database_state(source)
             source_connection.backup(destination_connection)
             destination_connection.commit()
             destination_connection.execute("PRAGMA journal_mode=DELETE")
@@ -298,8 +322,9 @@ def _backup_database(source: Path, destination: Path) -> str:
             check = destination_connection.execute("PRAGMA quick_check").fetchone()[0]
             if str(check).casefold() != "ok":
                 raise ValueError(f"destination quick_check failed: {destination}")
-            after = (_sqlite_facts(source, source_connection), _database_digest(source))
-            if after != before:
+            after_sqlite = _sqlite_facts(readable_source, source_connection)
+            after_source = _database_state(source)
+            if before_sqlite[3:] != after_sqlite[3:] or before_source != after_source:
                 raise ValueError(f"source changed during read-only backup: {source}")
         finally:
             if destination_connection is not None:
@@ -336,14 +361,10 @@ def _source_tree_facts(
     facts: dict[Path, tuple[Any, ...]] = {}
     relatives = _source_files(source) if files is None else files
     for relative in relatives:
-        item_stat = (source / relative).stat()
-        facts[relative] = (
-            item_stat.st_dev,
-            item_stat.st_ino,
-            item_stat.st_size,
-            item_stat.st_mtime_ns,
-            stat.S_IFMT(item_stat.st_mode),
-        )
+        item_facts = _file_facts(source / relative)
+        if item_facts is None:
+            raise ValueError(f"source file disappeared while reading: {source / relative}")
+        facts[relative] = item_facts
     return facts
 
 
@@ -489,9 +510,11 @@ def snapshot_family(
     generation = _read_current(source_path)
     _validate_source_tree(source_path, live_path)
     coordinator = source_path / "coord.db"
-    destination_path.parent.mkdir(parents=True, exist_ok=True)
-    _check_claims(coordinator)
     source_state = _source_state(source_path)
+    _check_claims(coordinator)
+    if _source_state(source_path) != source_state:
+        raise ValueError("source family changed during owner check")
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=".perf-store-snapshot-", dir=destination_path.parent))
     try:
         databases, copied = _copy_family_files(source_path, temporary)
