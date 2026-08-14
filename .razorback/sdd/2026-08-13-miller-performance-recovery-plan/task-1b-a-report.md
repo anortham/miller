@@ -6,7 +6,9 @@
 - Branch: `feature/performance-recovery`
 - Base / starting commit: `a53b138dcef4eb67b88b0ef10146e7316ef36ee2`
 - Starting state: clean at the requested base.
-- Final commit: recorded after the checkpoint/commit step.
+- Final implementation commit: `6c7e030c536bbcad1c1563c632b3e3241fb5f4d2` (`perf: add faithful recovery replay harness`).
+- Goldfish checkpoint committed at `.memories/2026-08-14/064352_353b.md`.
+- Final owned-tree state after the implementation commit: clean for owned paths; the lead-only plan edit remains modified and unstaged.
 - A lead-only edit to `docs/plans/2026-08-13-miller-performance-recovery-plan.md` was already present while this packet ran; it is not part of this packet and was not staged.
 
 Miller evidence was used first. The assigned workspace was registered as `performance-recovery-9ee5b2dc77a2`, but its index reported `freshness: error` after `julie-extract store import` exited 135. Context, inspect, impact, and trace were still used for the indexed `ContextTool` seam; script/manifest/snapshot files were unindexed, so bounded reads were used without refresh or replay.
