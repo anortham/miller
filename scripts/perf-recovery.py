@@ -143,6 +143,7 @@ PLACEHOLDER_NAMES = {
     "target",
     "family",
     "view",
+    "retry_identity",
 }
 SEMANTIC_WORKLOAD_LOCK = threading.Lock()
 
@@ -160,6 +161,7 @@ class ReplayRequest:
     source_root: Path | None = None
     change_root: Path | None = None
     view_override: str | None = None
+    retry_identity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -477,22 +479,30 @@ def _require_producer_binding(
     payload: Any,
     *,
     label: str,
+    result: CommandResult | None = None,
+    expected_view: str | None = None,
     expected_generation: int | str | None = None,
 ) -> ActiveStore:
     actual = resolve_active_store(request)
+    producer_failed = (
+        result is not None and (result.timed_out or result.exit_code != 0 or not result.completed)
+    ) or _producer_report_failed(payload)
+    if producer_failed:
+        return actual
     expected_identity = (expected.mode, expected.root, expected.family_id, expected.view_id)
     actual_identity = (actual.mode, actual.root, actual.family_id, actual.view_id)
     if actual_identity != expected_identity:
         raise RuntimeError(f"{label} changed the staged family/view; explicitly adopt the new binding")
     observed_view, _ = _view_and_generation(payload)
     observed_generation = _report_generation(payload)
-    if observed_view is not None and observed_view != actual.view_id:
+    binding_view = expected_view or actual.view_id
+    if observed_view is None or observed_view != binding_view:
         raise RuntimeError(f"{label} returned an unadopted view {observed_view!r}")
-    durable_generation = _durable_view_generation(actual)
+    durable_generation = _durable_view_generation(actual, view_id=binding_view)
     binding_generation = durable_generation if durable_generation is not None else expected_generation
-    if binding_generation is not None and (
-        observed_generation is None or str(observed_generation) != str(binding_generation)
-    ):
+    if observed_generation is None:
+        raise RuntimeError(f"{label} returned an unadopted generation None")
+    if binding_generation is not None and str(observed_generation) != str(binding_generation):
         raise RuntimeError(f"{label} returned an unadopted generation {observed_generation!r}")
     return actual
 
@@ -1259,6 +1269,41 @@ def _report_generation(payload: Any) -> int | str | None:
     return _view_and_generation(payload)[1]
 
 
+def _producer_failure_facts(payload: Any) -> dict[str, Any] | None:
+    state = _find_value(payload, {"state", "outcome", "status"})
+    failure_class = _find_value(payload, {"failure_class", "failureclass"})
+    coordinator = _find_value(payload, {"coordinator"})
+    error = _find_value(payload, {"error"})
+    state_failed = isinstance(state, str) and state.casefold() in {
+        "failed",
+        "error",
+        "aborted",
+        "cancelled",
+        "canceled",
+        "timed_out",
+        "timeout",
+    }
+    class_failed = failure_class is not None and str(failure_class).casefold() not in {"", "none", "success"}
+    coordinator_failed = isinstance(coordinator, str) and coordinator.casefold() in {"failed", "error"}
+    error_present = error is not None
+    if not (state_failed or class_failed or coordinator_failed or error_present):
+        return None
+    facts: dict[str, Any] = {}
+    if state is not None:
+        facts["state"] = state
+    if failure_class is not None:
+        facts["failure_class"] = failure_class
+    if coordinator is not None:
+        facts["coordinator"] = coordinator
+    if error is not None:
+        facts["error"] = error
+    return facts
+
+
+def _producer_report_failed(payload: Any) -> bool:
+    return _producer_failure_facts(payload) is not None
+
+
 def _durable_view_generation(active: ActiveStore, *, view_id: str | None = None) -> int | str | None:
     selected_view = view_id or active.view_id
     database = active.artifact_path
@@ -1311,11 +1356,15 @@ def _record_from_result(
     view, _ = _view_and_generation(payload)
     generation = _report_generation(payload)
     active = resolve_active_store(request)
-    view = view or active.view_id
-    generation = generation if generation is not None else active.generation
     platform_name = _platform_name()
     resolution_gate = _resolution_gate(payload, workload)
     metadata = dict(workload.metadata)
+    producer_failure = _producer_failure_facts(payload) if workload.execution_kind == "julie_store" else None
+    if producer_failure is not None:
+        metadata["producer_failure"] = producer_failure
+    view = view or active.view_id
+    if generation is None and producer_failure is None:
+        generation = active.generation
     if resolution_gate is not None:
         metadata["resolution_gate"] = dict(resolution_gate)
         metadata["resolution_report"] = dict(_find_mapping(payload, {"resolution"}) or {})
@@ -1330,6 +1379,8 @@ def _record_from_result(
         hard_memory_bytes=result.hard_memory_bytes,
         platform_name=platform_name,
     ) and result.completed
+    if producer_failure is not None:
+        gate_passed = False
     if resolution_gate is not None:
         gate_passed = gate_passed and bool(resolution_gate["passed"])
     return ReplayRecord(
@@ -1492,6 +1543,10 @@ def _replace_placeholders(token: str, request: ReplayRequest, target: str | None
         "store_copy": str(request.store_copy),
         "target": target or "",
     }
+    if "{retry_identity}" in token:
+        if request.retry_identity is None:
+            raise ValueError("retry identity is available only for an isolated workload")
+        values["retry_identity"] = request.retry_identity
     if "{source_view}" in token:
         _, source_details = _source_pointer_binding(request)
         values["source_view"] = str(source_details["view_id"])
@@ -2189,6 +2244,10 @@ def _snapshot_helper_module() -> Any:
     return module
 
 
+def _new_retry_identity() -> str:
+    return f"perf-recovery-retry-{uuid.uuid4().hex}"
+
+
 def _isolated_request(
     request: ReplayRequest,
     *,
@@ -2229,6 +2288,7 @@ def _isolated_request(
         miller_home=root / "miller-home",
         source_root=isolated_workspace if source_changing else source_root,
         change_root=None,
+        retry_identity=_new_retry_identity(),
     )
     return validate_request(isolated_request), temporary
 
@@ -2510,11 +2570,14 @@ def run_workload(
             with lock:
                 result = _run_process(request, list(producer_command), effective_timeout, environment)
             payload = _parse_json_payload(result.stdout)
+            producer_view = producer_command[producer_command.index("--view") + 1]
             _require_producer_binding(
                 request,
                 prepared_binding,
                 payload,
                 label=f"{workload.workload_id} producer",
+                result=result,
+                expected_view=producer_view,
                 expected_generation=setup_generation,
             )
         else:

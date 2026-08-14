@@ -537,6 +537,8 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertIn("{spool_dir}", retry_command)
         self.assertIn("{progress_file}", retry_command)
         self.assertIn("{parent_pid}", retry_command)
+        self.assertEqual("{retry_identity}", retry_command[retry_command.index("--request-id") + 1])
+        self.assertEqual("{retry_identity}", retry_command[retry_command.index("--idempotency-key") + 1])
         full_command = manifest["producer.resolve.full"].command
         producer_timeout_ms = int(full_command[full_command.index("--request-timeout-seconds") + 1]) * 1000
         self.assertGreater(
@@ -687,6 +689,98 @@ class PerfRecoveryTests(unittest.TestCase):
         progress = Path(argv[argv.index("--progress-file") + 1])
         self.assertEqual("spool", spool.name)
         self.assertEqual(spool.parent, progress.parent)
+
+    def test_retry_uses_one_generated_identity_across_attempts_and_avoids_history_conflict(self) -> None:
+        live_family = self._family_root("live-family")
+        source_root = self.root / "source-root"
+        (source_root / ".miller").mkdir(parents=True)
+        self._write_pointer_at(source_root, live_family, view_id="source-view")
+        request = self._request(source_root=source_root, live_store=live_family)
+        manifest_path = Path(__file__).resolve().parents[1] / "benchmarks" / "perf-recovery-workloads.json"
+        workload = perf_recovery.load_manifest(manifest_path)["producer.retry.identical"]
+        history = {"perf-recovery-import"}
+        calls: list[tuple[str, str, str]] = []
+
+        def copy_family(source: Path, destination: Path, *, live_root: Path | None = None) -> None:
+            shutil.copytree(source, destination)
+
+        def run_process(process_request, argv, _timeout, _environment):
+            request_id = argv[argv.index("--request-id") + 1]
+            idempotency_key = argv[argv.index("--idempotency-key") + 1]
+            view = argv[argv.index("--view") + 1]
+            calls.append((request_id, idempotency_key, view))
+            if request_id in history:
+                payload = {
+                    "state": "failed",
+                    "family_id": perf_recovery.resolve_active_store(process_request).family_id,
+                    "view_id": view,
+                    "manifest": {"generation": None},
+                    "failure_class": "idempotency_conflict",
+                }
+            else:
+                payload = {
+                    "state": "committed",
+                    "family_id": perf_recovery.resolve_active_store(process_request).family_id,
+                    "view_id": view,
+                    "manifest": {"generation": 5},
+                }
+            return self._result(stdout=json.dumps(payload).encode())
+
+        with mock.patch.object(
+            perf_recovery,
+            "_snapshot_helper_module",
+            return_value=SimpleNamespace(snapshot_family=copy_family),
+        ), mock.patch.object(perf_recovery, "_run_process", side_effect=run_process):
+            records = perf_recovery.run_workload(request, workload)
+
+        self.assertEqual(4, len(records))
+        self.assertEqual(1, len({request_id for request_id, _, _ in calls}))
+        self.assertEqual(1, len({idempotency for _, idempotency, _ in calls}))
+        self.assertEqual(calls[0][0], calls[0][1])
+        self.assertNotIn(calls[0][0], history)
+        self.assertRegex(calls[0][0], r"^perf-recovery-retry-[0-9a-f]{32}$")
+        self.assertNotEqual("view-1", calls[0][2])
+        self.assertTrue(all(record.hard_gate_passed for record in records))
+
+    def test_failed_retry_report_with_null_manifest_generation_is_recorded(self) -> None:
+        live_family = self._family_root("live-family")
+        source_root = self.root / "source-root"
+        (source_root / ".miller").mkdir(parents=True)
+        self._write_pointer_at(source_root, live_family, view_id="source-view")
+        request = self._request(source_root=source_root, live_store=live_family)
+        manifest_path = Path(__file__).resolve().parents[1] / "benchmarks" / "perf-recovery-workloads.json"
+        workload = dataclasses.replace(
+            perf_recovery.load_manifest(manifest_path)["producer.retry.identical"],
+            warmups=0,
+            runs=1,
+        )
+
+        def copy_family(source: Path, destination: Path, *, live_root: Path | None = None) -> None:
+            shutil.copytree(source, destination)
+
+        def run_process(process_request, argv, _timeout, _environment):
+            payload = {
+                "state": "failed",
+                "family_id": perf_recovery.resolve_active_store(process_request).family_id,
+                "view_id": argv[argv.index("--view") + 1],
+                "manifest": {"generation": None, "disposition": "not_published"},
+                "failure_class": "idempotency_conflict",
+                "error": {"class": "idempotency_conflict", "message": "idempotency_conflict"},
+            }
+            return self._result(stdout=json.dumps(payload).encode())
+
+        with mock.patch.object(
+            perf_recovery,
+            "_snapshot_helper_module",
+            return_value=SimpleNamespace(snapshot_family=copy_family),
+        ), mock.patch.object(perf_recovery, "_run_process", side_effect=run_process):
+            records = perf_recovery.run_workload(request, workload)
+
+        self.assertEqual(1, len(records))
+        self.assertFalse(records[0].hard_gate_passed)
+        self.assertEqual(0, records[0].exit_code)
+        self.assertIsNone(records[0].generation)
+        self.assertEqual("idempotency_conflict", records[0].metadata["producer_failure"]["failure_class"])
 
     def test_retry_source_pointer_must_match_copied_family_and_live_store(self) -> None:
         live_family = self._family_root("live-family")

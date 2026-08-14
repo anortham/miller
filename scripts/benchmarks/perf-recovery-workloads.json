@@ -37,7 +37,7 @@
     {
       "id": "producer.retry.identical",
       "execution_kind": "julie_store",
-      "command": ["store", "import", "--store", "{store_copy}", "--family", "{family}", "--root", "{source_root}", "--view", "{source_view}", "--level", "full", "--spool-dir", "{spool_dir}", "--progress-file", "{progress_file}", "--parent-pid", "{parent_pid}", "--request-id", "perf-recovery-import", "--idempotency-key", "perf-recovery-import", "--request-timeout-seconds", "30", "--json"],
+      "command": ["store", "import", "--store", "{store_copy}", "--family", "{family}", "--root", "{source_root}", "--view", "{source_view}", "--level", "full", "--spool-dir", "{spool_dir}", "--progress-file", "{progress_file}", "--parent-pid", "{parent_pid}", "--request-id", "{retry_identity}", "--idempotency-key", "{retry_identity}", "--request-timeout-seconds", "30", "--json"],
       "warmups": 1,
       "runs": 3,
       "timeout_ms": 60000,
