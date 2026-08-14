@@ -2407,6 +2407,325 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual(12, windows["private_usage_bytes"])
         self.assertIsNone(windows["peak_pss_bytes"])
 
+    def _verification_workloads(self) -> dict[str, perf_recovery.Workload]:
+        manifest_path = Path(__file__).resolve().parents[1] / "benchmarks" / "perf-recovery-workloads.json"
+        return perf_recovery.load_manifest(manifest_path)
+
+    def _verification_records(
+        self,
+        *,
+        platform: str = "linux",
+        workloads: dict[str, perf_recovery.Workload] | None = None,
+    ) -> list[perf_recovery.ReplayRecord]:
+        workloads = workloads or self._verification_workloads()
+        budget_key = "windows" if platform.startswith("win") else "development"
+        records: list[perf_recovery.ReplayRecord] = []
+        for workload in workloads.values():
+            timing_budget = workload.hard_budget_ms[budget_key]
+            memory_budget = workload.hard_budget_memory_bytes
+            hard_memory = memory_budget if memory_budget is not None else None
+            metadata: dict[str, object] = {}
+            parity: dict[str, object] | None = None
+            if workload.parity_with is not None:
+                parity = {
+                    "paired_workload_id": workload.parity_with,
+                    "output_digest_match": True,
+                    "exit_code_match": True,
+                    "timeout_match": True,
+                }
+            if workload.workload_id == "tool.context.references.depth1":
+                metadata["depth_pair"] = {
+                    "stable_pivot_match": True,
+                    "symbol_neighbour_match": True,
+                    "ordering_match": True,
+                    "truncation_match": True,
+                    "truncation_changed": False,
+                    "truncation_shape_valid": True,
+                }
+            if workload.metadata.get("resolution_scope") in {"one_file", "full"}:
+                metadata["resolution_gate"] = {"passed": True}
+                metadata["resolution_report"] = {"state": "exact", "exact_at_matches": True}
+            for attempt in range(1, 4):
+                records.append(
+                    perf_recovery.ReplayRecord(
+                        workload_id=workload.workload_id,
+                        platform=platform,
+                        commit="abc",
+                        producer_version=None,
+                        wall_ms=timing_budget,
+                        cpu_ms=1,
+                        peak_rss_bytes=None,
+                        peak_pss_bytes=hard_memory if platform.startswith("linux") else None,
+                        output_sha256=f"{workload.workload_id}-{attempt}",
+                        exit_code=0,
+                        timed_out=False,
+                        hard_gate_passed=True,
+                        attempt=attempt,
+                        warmup=False,
+                        hard_memory_bytes=hard_memory,
+                        hard_memory_metric=(
+                            "linux_pss"
+                            if platform.startswith("linux") and hard_memory is not None
+                            else "windows_private_usage"
+                            if platform.startswith("win") and hard_memory is not None
+                            else None
+                        ),
+                        private_usage_bytes=hard_memory if platform.startswith("win") else None,
+                        metadata=metadata,
+                        parity=parity,
+                    )
+                )
+        return records
+
+    def test_verification_report_rejects_missing_hard_gate(self) -> None:
+        workloads = self._verification_workloads()
+        records = [
+            record
+            for record in self._verification_records(workloads=workloads)
+            if record.workload_id != "tool.context.references.depth1"
+        ]
+        with self.assertRaisesRegex(ValueError, "missing hard gate: tool.context.references.depth1"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_fewer_than_three_measured_attempts(self) -> None:
+        workloads = self._verification_workloads()
+        records = self._verification_records(workloads=workloads)
+        records = [
+            record
+            for record in records
+            if record.workload_id != "tool.inspect.warm" or record.attempt != 3
+        ]
+        with self.assertRaisesRegex(ValueError, "requires at least 3 measured attempts: tool.inspect.warm"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_missing_platform_identity(self) -> None:
+        workloads = self._verification_workloads()
+        records = self._verification_records(workloads=workloads)
+        records[0] = dataclasses.replace(records[0], platform="")
+        with self.assertRaisesRegex(ValueError, "missing platform identity"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_failed_parity_invariant(self) -> None:
+        workloads = self._verification_workloads()
+        records = self._verification_records(workloads=workloads)
+        index = next(
+            index
+            for index, record in enumerate(records)
+            if record.workload_id == "tool.context.references.depth1.batch_on" and not record.warmup
+        )
+        records[index] = dataclasses.replace(
+            records[index],
+            parity={
+                "paired_workload_id": "tool.context.references.depth1.batch_off",
+                "output_digest_match": False,
+                "exit_code_match": True,
+                "timeout_match": True,
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "parity invariant failed: tool.context.references.depth1.batch_on"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_failed_depth_pair_invariant(self) -> None:
+        workloads = self._verification_workloads()
+        records = self._verification_records(workloads=workloads)
+        index = next(
+            index
+            for index, record in enumerate(records)
+            if record.workload_id == "tool.context.references.depth1" and not record.warmup
+        )
+        metadata = dict(records[index].metadata)
+        metadata["depth_pair"] = {
+            "stable_pivot_match": True,
+            "symbol_neighbour_match": True,
+            "ordering_match": False,
+            "truncation_match": True,
+            "truncation_changed": False,
+            "truncation_shape_valid": True,
+        }
+        records[index] = dataclasses.replace(records[index], metadata=metadata)
+        with self.assertRaisesRegex(ValueError, "semantic invariant failed: tool.context.references.depth1"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_allows_valid_truncation_change(self) -> None:
+        records = self._verification_records()
+        index = next(
+            index
+            for index, record in enumerate(records)
+            if record.workload_id == "tool.context.references.depth1" and not record.warmup
+        )
+        metadata = dict(records[index].metadata)
+        metadata["depth_pair"] = {
+            **metadata["depth_pair"],
+            "truncation_match": False,
+            "truncation_changed": True,
+            "truncation_shape_valid": True,
+        }
+        records[index] = dataclasses.replace(records[index], metadata=metadata)
+        report = perf_recovery.build_verification_report(records, platform="linux")
+        self.assertTrue(report["passed"])
+
+    def test_verification_report_rejects_missing_truncation_evidence(self) -> None:
+        records = self._verification_records()
+        index = next(
+            index
+            for index, record in enumerate(records)
+            if record.workload_id == "tool.context.references.depth1" and not record.warmup
+        )
+        metadata = dict(records[index].metadata)
+        depth_pair = dict(metadata["depth_pair"])
+        depth_pair.pop("truncation_match")
+        metadata["depth_pair"] = depth_pair
+        records[index] = dataclasses.replace(records[index], metadata=metadata)
+        with self.assertRaisesRegex(ValueError, "missing semantic invariant evidence: tool.context.references.depth1"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_invalid_truncation_relation(self) -> None:
+        records = self._verification_records()
+        index = next(
+            index
+            for index, record in enumerate(records)
+            if record.workload_id == "tool.context.references.depth1" and not record.warmup
+        )
+        metadata = dict(records[index].metadata)
+        metadata["depth_pair"] = {
+            **metadata["depth_pair"],
+            "truncation_match": False,
+            "truncation_changed": False,
+        }
+        records[index] = dataclasses.replace(records[index], metadata=metadata)
+        with self.assertRaisesRegex(ValueError, "invalid truncation relation: tool.context.references.depth1"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_missing_parity_evidence(self) -> None:
+        records = self._verification_records()
+        index = next(
+            index
+            for index, record in enumerate(records)
+            if record.workload_id == "tool.context.references.depth1.batch_on" and not record.warmup
+        )
+        records[index] = dataclasses.replace(records[index], parity=None)
+        with self.assertRaisesRegex(ValueError, "missing parity evidence: tool.context.references.depth1.batch_on"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_missing_depth_pair_evidence(self) -> None:
+        records = self._verification_records()
+        index = next(
+            index
+            for index, record in enumerate(records)
+            if record.workload_id == "tool.context.references.depth1" and not record.warmup
+        )
+        metadata = dict(records[index].metadata)
+        metadata.pop("depth_pair")
+        records[index] = dataclasses.replace(records[index], metadata=metadata)
+        with self.assertRaisesRegex(ValueError, "missing semantic invariant evidence: tool.context.references.depth1"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_missing_resolution_exact_evidence(self) -> None:
+        records = self._verification_records()
+        index = next(
+            index
+            for index, record in enumerate(records)
+            if record.workload_id == "producer.resolve.full" and not record.warmup
+        )
+        metadata = dict(records[index].metadata)
+        metadata["resolution_report"] = {"state": "exact"}
+        records[index] = dataclasses.replace(records[index], metadata=metadata)
+        with self.assertRaisesRegex(ValueError, "missing resolution exact evidence: producer.resolve.full"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_failed_resolution_exact_parity(self) -> None:
+        records = self._verification_records()
+        index = next(
+            index
+            for index, record in enumerate(records)
+            if record.workload_id == "producer.resolve.one_file" and not record.warmup
+        )
+        metadata = dict(records[index].metadata)
+        metadata["resolution_report"] = {"state": "converging", "exact_at_matches": False}
+        records[index] = dataclasses.replace(records[index], metadata=metadata)
+        with self.assertRaisesRegex(ValueError, "resolution exact parity failed: producer.resolve.one_file"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_over_budget_median(self) -> None:
+        workloads = self._verification_workloads()
+        records = self._verification_records(workloads=workloads)
+        workload = workloads["tool.inspect.warm"]
+        budget = workload.hard_budget_ms["development"]
+        records = [
+            dataclasses.replace(record, wall_ms=budget + 1)
+            if record.workload_id == workload.workload_id
+            else record
+            for record in records
+        ]
+        with self.assertRaisesRegex(ValueError, "budget exceeded: tool.inspect.warm"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_windows_missing_private_usage(self) -> None:
+        workloads = self._verification_workloads()
+        records = self._verification_records(platform="windows", workloads=workloads)
+        index = next(index for index, record in enumerate(records) if not record.warmup)
+        records[index] = dataclasses.replace(
+            records[index],
+            private_usage_bytes=None,
+            hard_memory_bytes=None,
+            hard_memory_metric=None,
+        )
+        with self.assertRaisesRegex(ValueError, "missing Windows PrivateUsage"):
+            perf_recovery.build_verification_report(records, platform="windows")
+
+    def test_verification_report_rejects_memory_overage(self) -> None:
+        workloads = self._verification_workloads()
+        records = self._verification_records(workloads=workloads)
+        workload = workloads["startup.leader.no_change"]
+        memory_budget = workload.hard_budget_memory_bytes
+        assert memory_budget is not None
+        index = next(index for index, record in enumerate(records) if not record.warmup)
+        records[index] = dataclasses.replace(
+            records[index],
+            peak_pss_bytes=memory_budget + 1,
+            hard_memory_bytes=memory_budget + 1,
+        )
+        with self.assertRaisesRegex(ValueError, "memory budget exceeded: startup.leader.no_change"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_accepts_complete_three_run_pass(self) -> None:
+        workloads = self._verification_workloads()
+        records = self._verification_records(workloads=workloads)
+        report = perf_recovery.build_verification_report(records, platform="linux")
+        self.assertTrue(report["passed"])
+        self.assertEqual("linux", report["platform"])
+        self.assertEqual(len(workloads), len(report["workloads"]))
+        self.assertTrue(all(item["measured_runs"] == 3 for item in report["workloads"].values()))
+
+    def test_verification_report_rejects_duplicate_measured_attempt_identity(self) -> None:
+        records = self._verification_records()
+        index = next(
+            index
+            for index, record in enumerate(records)
+            if record.workload_id == "tool.inspect.warm" and record.attempt == 3
+        )
+        records[index] = dataclasses.replace(records[index], attempt=2)
+        with self.assertRaisesRegex(ValueError, "duplicate measured attempt: tool.inspect.warm"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_cannot_override_required_manifest_workloads(self) -> None:
+        workloads = self._verification_workloads()
+        omitted_id = "tool.context.references.depth1"
+        subset = {
+            workload_id: workload
+            for workload_id, workload in workloads.items()
+            if workload_id != omitted_id
+        }
+        records = [
+            record
+            for record in self._verification_records(workloads=workloads)
+            if record.workload_id != omitted_id
+        ]
+        with self.assertRaisesRegex(ValueError, f"missing hard gate: {omitted_id}"):
+            perf_recovery.build_verification_report(records, platform="linux")
+        with self.assertRaises(TypeError):
+            perf_recovery.build_verification_report(records, workloads=subset, platform="linux")
+
     def test_jsonl_records_are_one_line_per_attempt_and_sorted(self) -> None:
         request = self._request()
         workload = perf_recovery.Workload(

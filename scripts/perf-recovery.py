@@ -41,6 +41,7 @@ MAX_PHASE_RECORDS = 128
 PROCESS_TEARDOWN_TIMEOUT_SECONDS = 1.0
 STREAM_READ_CHUNK_BYTES = 64 * 1024
 MANIFEST_SCHEMA_VERSION = 1
+MIN_MEASURED_ATTEMPTS = 3
 STARTUP_PHASES = (
     "bind",
     "import",
@@ -1836,6 +1837,320 @@ def select_workloads(
             continue
         selected[workload_id] = dataclasses.replace(workload, runs=runs) if runs is not None else workload
     return selected
+
+
+def load_records(path: Path | str) -> list[Mapping[str, Any]]:
+    records: list[Mapping[str, Any]] = []
+    record_path = Path(path)
+    try:
+        lines = record_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"cannot read replay records: {record_path}: {exc}") from exc
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid replay record JSON at line {line_number}: {exc}") from exc
+        if not isinstance(value, Mapping):
+            raise ValueError(f"replay record at line {line_number} must be an object")
+        records.append(value)
+    return records
+
+
+_INVARIANT_CONTAINERS = frozenset({"parity", "depth_pair", "semantic", "semantic_invariants", "invariants"})
+_INVARIANT_FAILURE_KEYS = frozenset(
+    {
+        "passed",
+        "ok",
+        "output_digest_match",
+        "exit_code_match",
+        "timeout_match",
+        "stable_pivot_match",
+        "symbol_neighbour_match",
+        "ordering_match",
+        "truncation_shape_valid",
+    }
+)
+_PARITY_EVIDENCE_KEYS = ("output_digest_match", "exit_code_match", "timeout_match")
+_DEPTH_PAIR_EVIDENCE_KEYS = (
+    "stable_pivot_match",
+    "symbol_neighbour_match",
+    "ordering_match",
+    "truncation_shape_valid",
+    "truncation_match",
+    "truncation_changed",
+)
+
+
+def _record_value(record: ReplayRecord | Mapping[str, Any], key: str, default: Any = None) -> Any:
+    if isinstance(record, ReplayRecord):
+        return getattr(record, key, default)
+    if isinstance(record, Mapping):
+        return record.get(key, default)
+    raise ValueError("replay records must be ReplayRecord objects or mappings")
+
+
+def _platform_family(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"win32", "win64", "windows"}:
+        return "windows"
+    if normalized in {"linux", "linux2"}:
+        return "linux"
+    return normalized
+
+
+def _verification_workloads() -> dict[str, Workload]:
+    selected = load_manifest(_default_manifest())
+    if not selected:
+        raise ValueError("verification manifest has no workloads")
+    for workload_id, workload in selected.items():
+        if not isinstance(workload, Workload) or workload_id != workload.workload_id:
+            raise ValueError(f"verification workload mapping is invalid: {workload_id!r}")
+    return selected
+
+
+def _false_invariant_keys(value: Any, *, container: str) -> list[str]:
+    if isinstance(value, bool):
+        return [container] if not value else []
+    if not isinstance(value, Mapping):
+        return []
+    failures: list[str] = []
+    for key, item in value.items():
+        key_name = str(key)
+        if key_name == "truncation_changed":
+            continue
+        if key_name in _INVARIANT_FAILURE_KEYS and item is False:
+            failures.append(key_name)
+        elif key_name in _INVARIANT_CONTAINERS:
+            failures.extend(_false_invariant_keys(item, container=key_name))
+    return failures
+
+
+def _record_invariant_failures(record: ReplayRecord | Mapping[str, Any]) -> list[str]:
+    failures: list[str] = []
+    parity = _record_value(record, "parity")
+    if parity is not None:
+        failures.extend(_false_invariant_keys(parity, container="parity"))
+    metadata = _record_value(record, "metadata", {})
+    if isinstance(metadata, Mapping):
+        for key in _INVARIANT_CONTAINERS:
+            if key in metadata:
+                failures.extend(_false_invariant_keys(metadata[key], container=key))
+    return failures
+
+
+def _record_metadata(record: ReplayRecord | Mapping[str, Any]) -> Mapping[str, Any]:
+    metadata = _record_value(record, "metadata", {})
+    return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _require_record_evidence(record: ReplayRecord | Mapping[str, Any], workload: Workload) -> None:
+    workload_id = workload.workload_id
+    if workload.parity_with is not None:
+        parity = _record_value(record, "parity")
+        if not isinstance(parity, Mapping):
+            raise ValueError(f"missing parity evidence: {workload_id}")
+        if parity.get("paired_workload_id") != workload.parity_with:
+            raise ValueError(f"parity evidence mismatch: {workload_id}")
+        if any(type(parity.get(key)) is not bool for key in _PARITY_EVIDENCE_KEYS):
+            raise ValueError(f"missing parity evidence: {workload_id}")
+
+    metadata = _record_metadata(record)
+    if workload_id == "tool.context.references.depth1":
+        depth_pair = metadata.get("depth_pair")
+        if not isinstance(depth_pair, Mapping):
+            raise ValueError(f"missing semantic invariant evidence: {workload_id}")
+        if any(type(depth_pair.get(key)) is not bool for key in _DEPTH_PAIR_EVIDENCE_KEYS):
+            raise ValueError(f"missing semantic invariant evidence: {workload_id}")
+        if depth_pair["truncation_match"] is depth_pair["truncation_changed"]:
+            raise ValueError(f"invalid truncation relation: {workload_id}")
+
+    if workload.metadata.get("resolution_scope") in {"one_file", "full"}:
+        resolution_gate = metadata.get("resolution_gate")
+        if not isinstance(resolution_gate, Mapping):
+            raise ValueError(f"missing resolution gate evidence: {workload_id}")
+        if resolution_gate.get("passed") is not True:
+            raise ValueError(f"resolution gate failed: {workload_id}")
+        resolution_report = metadata.get("resolution_report")
+        if not isinstance(resolution_report, Mapping):
+            raise ValueError(f"missing resolution exact evidence: {workload_id}")
+        if "exact_at_matches" not in resolution_report or "state" not in resolution_report:
+            raise ValueError(f"missing resolution exact evidence: {workload_id}")
+        if resolution_report.get("exact_at_matches") is not True or resolution_report.get("state") != "exact":
+            raise ValueError(f"resolution exact parity failed: {workload_id}")
+
+
+def _numeric_metric(record: ReplayRecord | Mapping[str, Any], key: str, workload_id: str) -> int | float:
+    value = _record_value(record, key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"missing {key} metric: {workload_id}")
+    return value
+
+
+def _median(values: Sequence[int | float]) -> int | float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def _validate_verification_records(
+    records: Sequence[ReplayRecord | Mapping[str, Any]],
+    workloads: Mapping[str, Workload],
+    platform: str | None,
+) -> tuple[str, dict[str, list[ReplayRecord | Mapping[str, Any]]], dict[str, int | float]]:
+    selected_workloads = dict(workloads)
+    items = list(records)
+    if not items:
+        raise ValueError("replay ledger is empty")
+    observed_platforms = {_platform_family(_record_value(record, "platform")) for record in items}
+    if None in observed_platforms:
+        raise ValueError("missing platform identity")
+    observed_platforms.discard(None)
+    selected_platform = _platform_family(platform) if platform is not None else None
+    if platform is not None and selected_platform is None:
+        raise ValueError("missing platform identity")
+    if selected_platform is None:
+        if len(observed_platforms) != 1:
+            raise ValueError("mismatched platform identity")
+        selected_platform = next(iter(observed_platforms))
+    if selected_platform not in {"linux", "windows"}:
+        raise ValueError(f"unsupported platform identity: {selected_platform}")
+    if observed_platforms != {selected_platform}:
+        observed = ", ".join(sorted(observed_platforms))
+        raise ValueError(f"mismatched platform identity: expected {selected_platform}, got {observed}")
+
+    by_workload: dict[str, list[ReplayRecord | Mapping[str, Any]]] = {
+        workload_id: [] for workload_id in selected_workloads
+    }
+    for record in items:
+        workload_id = _record_value(record, "workload_id")
+        if not isinstance(workload_id, str) or not workload_id:
+            raise ValueError("missing workload identity")
+        if workload_id not in selected_workloads:
+            raise ValueError(f"unexpected workload id: {workload_id}")
+        record_platform = _platform_family(_record_value(record, "platform"))
+        if record_platform != selected_platform:
+            raise ValueError(f"mismatched platform identity: {record_platform}")
+        by_workload[workload_id].append(record)
+
+    budget_key = "windows" if selected_platform == "windows" else "development"
+    medians: dict[str, int | float] = {}
+    for workload_id, workload in selected_workloads.items():
+        measured = [record for record in by_workload[workload_id] if not bool(_record_value(record, "warmup", False))]
+        if not measured:
+            raise ValueError(f"missing hard gate: {workload_id}")
+        if len(measured) < MIN_MEASURED_ATTEMPTS:
+            raise ValueError(
+                f"requires at least {MIN_MEASURED_ATTEMPTS} measured attempts: {workload_id} (found {len(measured)})"
+            )
+        budget_ms = int(workload.hard_budget_ms[budget_key])
+        wall_values: list[int | float] = []
+        attempts: set[int] = set()
+        for record in measured:
+            attempt = _record_value(record, "attempt")
+            if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt <= 0:
+                raise ValueError(f"missing measured attempt identity: {workload_id}")
+            if attempt in attempts:
+                raise ValueError(f"duplicate measured attempt: {workload_id} (attempt {attempt})")
+            attempts.add(attempt)
+            _require_record_evidence(record, workload)
+            invariant_failures = _record_invariant_failures(record)
+            if invariant_failures:
+                label = "parity" if _record_value(record, "parity") is not None else "semantic"
+                raise ValueError(f"{label} invariant failed: {workload_id}")
+            if _record_value(record, "hard_gate_passed") is not True:
+                raise ValueError(f"hard gate failed: {workload_id}")
+            wall_ms = _numeric_metric(record, "wall_ms", workload_id)
+            wall_values.append(wall_ms)
+            if wall_ms > budget_ms:
+                raise ValueError(f"budget exceeded: {workload_id}")
+            memory_budget = workload.hard_budget_memory_bytes
+            if memory_budget is None:
+                continue
+            if selected_platform == "windows":
+                private_usage = _record_value(record, "private_usage_bytes")
+                if (
+                    isinstance(private_usage, bool)
+                    or not isinstance(private_usage, (int, float))
+                    or private_usage < 0
+                ):
+                    raise ValueError(f"missing Windows PrivateUsage: {workload_id}")
+                metric_name = "windows_private_usage"
+                hard_memory = _record_value(record, "hard_memory_bytes")
+                measured_memory = private_usage
+            elif selected_platform == "linux":
+                pss = _record_value(record, "peak_pss_bytes")
+                if isinstance(pss, bool) or not isinstance(pss, (int, float)) or pss < 0:
+                    raise ValueError(f"missing Linux PSS: {workload_id}")
+                metric_name = "linux_pss"
+                hard_memory = _record_value(record, "hard_memory_bytes")
+                measured_memory = pss
+            else:
+                metric_name = None
+                hard_memory = _record_value(record, "hard_memory_bytes")
+                measured_memory = hard_memory
+            if metric_name is not None and _record_value(record, "hard_memory_metric") != metric_name:
+                raise ValueError(f"missing hard memory metric: {workload_id}")
+            if isinstance(hard_memory, bool) or not isinstance(hard_memory, (int, float)):
+                raise ValueError(f"missing hard memory metric: {workload_id}")
+            if hard_memory != measured_memory:
+                raise ValueError(f"hard memory metric mismatch: {workload_id}")
+            if measured_memory > memory_budget:
+                raise ValueError(f"memory budget exceeded: {workload_id}")
+        median_wall_ms = _median(wall_values)
+        medians[workload_id] = median_wall_ms
+        if median_wall_ms > budget_ms:
+            raise ValueError(f"budget exceeded: {workload_id}")
+    return selected_platform, by_workload, medians
+
+
+def require_hard_gates(
+    records: Sequence[ReplayRecord | Mapping[str, Any]],
+    platform: str,
+) -> None:
+    workloads = _verification_workloads()
+    _validate_verification_records(records, workloads, platform)
+
+
+def build_verification_report(
+    records: Sequence[ReplayRecord | Mapping[str, Any]],
+    platform: str | None = None,
+) -> dict[str, Any]:
+    items = list(records)
+    selected_workloads = _verification_workloads()
+    selected_platform, by_workload, medians = _validate_verification_records(items, selected_workloads, platform)
+    budget_key = "windows" if selected_platform == "windows" else "development"
+    report_workloads: dict[str, dict[str, Any]] = {}
+    for workload_id, workload in selected_workloads.items():
+        measured = [record for record in by_workload[workload_id] if not bool(_record_value(record, "warmup", False))]
+        hard_memory_values = [
+            _record_value(record, "hard_memory_bytes")
+            for record in measured
+            if isinstance(_record_value(record, "hard_memory_bytes"), (int, float))
+            and not isinstance(_record_value(record, "hard_memory_bytes"), bool)
+        ]
+        report_workloads[workload_id] = {
+            "measured_runs": len(measured),
+            "median_wall_ms": medians[workload_id],
+            "max_wall_ms": max(_record_value(record, "wall_ms") for record in measured),
+            "timing_budget_ms": int(workload.hard_budget_ms[budget_key]),
+            "hard_memory_budget_bytes": workload.hard_budget_memory_bytes,
+            "max_hard_memory_bytes": max(hard_memory_values) if hard_memory_values else None,
+        }
+    return {
+        "passed": True,
+        "verdict": "pass",
+        "platform": selected_platform,
+        "record_count": len(items),
+        "measured_record_count": sum(item["measured_runs"] for item in report_workloads.values()),
+        "workloads": report_workloads,
+    }
 
 
 def _discovery_target(request: ReplayRequest, workload: Workload) -> str | None:
