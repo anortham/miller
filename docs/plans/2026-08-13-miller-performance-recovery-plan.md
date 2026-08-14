@@ -249,6 +249,8 @@ This boundary follows SQLite's own file contracts: the [WAL is persistent databa
 
 **Step 3: Replace diagnostic workloads with faithful workloads**
 
+Before replaying those rows, implement the fail-closed pointer-adoption and split-root design in [`2026-08-14-validated-store-pointer-adoption-design.md`](2026-08-14-validated-store-pointer-adoption-design.md). Julie rows read the original source root while writing only disposable stores; Miller rows use a staged root with a ready root-matching view. A leader with an empty isolated registry adopts that pointer only after full family/read validation, and `workspace open` must reuse rather than mint a family.
+
 - `startup.leader.no_change`: first isolated MCP host through completed startup-delta phase.
 - `startup.reader.warm`: second MCP host while the first owns leadership.
 - `producer.retry.identical`: repeat the exact producer import request/idempotency contract against a disposable snapshot.
