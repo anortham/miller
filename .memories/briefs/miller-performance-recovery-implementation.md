@@ -3,7 +3,7 @@ id: miller-performance-recovery-implementation
 title: Miller performance recovery implementation
 status: active
 created: 2026-08-14T03:57:03.433Z
-updated: 2026-08-14T09:20:22.371Z
+updated: 2026-08-14T09:42:09.767Z
 tags:
   - performance
   - family-store
@@ -26,7 +26,8 @@ Measured default relationship context takes about 11.93 seconds, leader startup 
 
 - Preserve Store Contract v1 and all existing MCP/CLI schemas and deterministic semantics.
 - A replay row must exercise the production path it names; CLI status/leader reads are diagnostic controls, not startup measurements.
-- Never mutate the live store. Refuse live/unknown owners. For SQLite inputs, capture source content/metadata, stream-copy the durable main/WAL pair to a private shadow, revalidate durable source facts, let SQLite rebuild transient SHM only in the shadow, then back up and validate/digest the WAL-free destination before atomic promotion.
+- Never mutate the live store. Refuse live/unknown owners. For SQLite inputs with a nonempty WAL, stability-check and copy main+WAL to a private shadow, rebuild SHM there, then use SQLite backup while retaining WAL journal mode and no sidecars at rest.
+- Byte-copy stable databases whose WAL is absent or empty so recorded resolution-base identity and incomplete incident artifacts remain exact; validate without writing them.
 - A runnable family snapshot includes empty store-owned `spool/` and `scratch/` directories but never copies their transient contents.
 - Keep context batching default-off until same-depth batch parity and copied-store lexical timing pass.
 - Characterize shipped incremental behavior before editing it.
@@ -46,4 +47,4 @@ Completed Tasks 1–4 remain reviewed but production-volume unproven. Task 1B su
 
 ## Status
 
-Implementation active on `feature/performance-recovery`. Tasks 1–4 and Task 5A are committed and lead-reviewed. Task 1B-A is committed and lead-verified. Task 2B proved the copied stale import recovers through Julie's public API in 37.60 seconds with correct fencing and no producer code change. The baseline remains pending because the snapshot helper dropped required empty `spool/` and `scratch/` directories; that helper defect is being corrected before regenerating the snapshot.
+Implementation active on `feature/performance-recovery`. Tasks 1–4 and Task 5A are committed and lead-reviewed. Task 2B proved public stale-import recovery with no producer code change. Task 1B-B remains active: successive safety gates found snapshot-only contract defects—missing runtime directories, forced DELETE journal mode, and changed WAL-free base identity. The helper is being corrected to preserve runnable journal mode and exact byte identity before the next regeneration.
