@@ -5,6 +5,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [`plans/2026-08-13-miller-performance-recovery-plan.md`](plans/2026-08-13-miller-performance-recovery-plan.md) - full cross-repository program for residual producer, startup, relationship-query, store-growth, and Windows performance failures; supersedes only the unfinished recovery work from the August 11 plan.
 - [`../README.md`](../README.md) - public entry point: quickstart, tool overview, architecture summary, troubleshooting.
 - [`install.md`](install.md) - full install guide: plugin details and session hooks, manual binary install, MCP configuration, instruction-tier harnesses, source checkout, local plugin development.
 - [`cli.md`](cli.md) - CLI reference: server vs one-shot modes, command examples, tool surface details, dashboard, local proof commands, text/JSON output contract.
