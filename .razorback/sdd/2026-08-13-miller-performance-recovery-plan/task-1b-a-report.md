@@ -60,3 +60,19 @@ Miller evidence was used first. The assigned workspace was registered as `perfor
 - Goldfish checkpoint: `.memories/2026-08-14/071901_9ffa.md` (`checkpoint_9ffab36c`), captured before commit.
 - Correction implementation commit: `89ec57492f65b62dc2c2586e596a006011e09491` (`perf: correct recovery replay harness contracts`).
 - Final state after the correction commit: owned paths are clean; only the lead plan edit remains modified and unstaged. No additional implementation work is required for this packet.
+
+## Snapshot and Windows safety correction packet
+
+- Worktree: `/home/murphy/source/miller/.worktrees/performance-recovery`
+- Branch: `feature/performance-recovery`
+- Correction start: `7cd7529de9d5af8e7ed2ddebb6befebaaa3305ac`
+- Start dirty state: only the lead-owned plan edit was modified and unstaged.
+- RED: after adding the correction contract tests, `PYTHONDONTWRITEBYTECODE=1 python scripts/tests/test_perf_store_snapshot.py` ran 15 tests with 11 failures and 1 error.
+- GREEN: `PYTHONDONTWRITEBYTECODE=1 python scripts/tests/test_perf_store_snapshot.py` — 17 passed, 0 failed, 0 skipped.
+- Verification: `python -m py_compile` passed and `git diff --check` passed.
+
+The snapshot helper now requires an explicit live root in both the API and CLI, rejects canonical/parent-child/symlink/reparse and per-file hardlink aliases before temporary creation, and checks only the coordinator's `requests`, `writer_lease`, and `maintenance_intent` schemas. Request owners map to writer lease holders without parsing opaque identifiers. PID probes are tri-state and Windows calls use pointer-safe signatures; inaccessible probes refuse even expired leases. SQLite URIs are percent-encoded, WAL/SHM inputs are read through disposable shadow copies so source bytes remain untouched, source facts include main/WAL/SHM identity/size/mtime plus SQLite facts, claims are rechecked before promotion, and digests stream in bounded chunks. Destination SQLite files are normalized to DELETE journaling and temporary failures clean up without promoting a destination.
+
+Owned changes are limited to `scripts/perf-store-snapshot.py`, `scripts/tests/test_perf_store_snapshot.py`, this report, and the pre-commit Goldfish checkpoint. No incident/live snapshot, real replay, dependency, harness/.NET/plan edit, push, or release was performed.
+
+Risks: Windows native execution was not available locally; Windows API behavior is covered by injectable mocked probes. WAL shadowing adds a second bounded file copy for databases with sidecars. Verification used disposable fixtures only; the harness test suite and live family were not run.

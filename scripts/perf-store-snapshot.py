@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+from ctypes import wintypes
+import errno
 import hashlib
 import json
 import os
@@ -12,13 +14,19 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
+import stat
 import tempfile
 import time
 from collections.abc import Iterable, Mapping
+from contextlib import contextmanager
 from typing import Any
 
 
 CLAIM_STALE_MS = 5_000
+DIGEST_CHUNK_SIZE = 1024 * 1024
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+STILL_ACTIVE = 259
+WINDOWS_DEAD_PROBE_ERRORS = frozenset({2, 6, 87, 1168})
 
 
 def _canonical(path: Path | str) -> Path:
@@ -41,8 +49,25 @@ def _same_file(left: Path, right: Path) -> bool:
         return False
 
 
+def _path_has_reparse_point(path: Path) -> bool:
+    candidate = path.expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    for item in (candidate, *candidate.parents):
+        try:
+            item_stat = item.lstat()
+        except OSError:
+            continue
+        if stat.S_ISLNK(item_stat.st_mode) or getattr(item_stat, "st_file_attributes", 0) & 0x400:
+            return True
+    return False
+
+
 def _sqlite_uri(path: Path) -> str:
-    return f"file:{path.as_posix()}?mode=ro"
+    absolute = path.expanduser()
+    if not absolute.is_absolute():
+        absolute = Path.cwd() / absolute
+    return f"{absolute.resolve(strict=False).as_uri()}?mode=ro"
 
 
 def _read_current(source: Path) -> str:
@@ -59,135 +84,223 @@ def _read_current(source: Path) -> str:
 
 
 def _pid_from_owner(value: Any) -> int | None:
-    if isinstance(value, int) and value > 0:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
-    if isinstance(value, str):
-        match = re.search(r"(?:^|[-_:])(?P<pid>[0-9]+)$", value)
-        if match:
-            return int(match.group("pid"))
     return None
 
 
-def _pid_is_alive(pid: int) -> bool:
+def _windows_pid_is_alive(pid: int) -> bool | None:
+    try:
+        kernel32 = ctypes.windll.kernel32
+        open_process = kernel32.OpenProcess
+        get_exit_code = kernel32.GetExitCodeProcess
+        close_handle = kernel32.CloseHandle
+        get_last_error = getattr(kernel32, "GetLastError", None)
+        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        open_process.restype = wintypes.HANDLE
+        get_exit_code.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        get_exit_code.restype = wintypes.BOOL
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+        if get_last_error is not None:
+            get_last_error.argtypes = []
+            get_last_error.restype = wintypes.DWORD
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    try:
+        handle = open_process(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    except (OSError, TypeError, ValueError):
+        return None
+    if not handle:
+        if get_last_error is not None:
+            try:
+                error = get_last_error()
+            except (OSError, TypeError, ValueError):
+                error = None
+        else:
+            try:
+                error = ctypes.get_last_error()
+            except AttributeError:
+                error = None
+        if error in WINDOWS_DEAD_PROBE_ERRORS:
+            return False
+        return None
+    try:
+        exit_code = wintypes.DWORD()
+        try:
+            if not get_exit_code(handle, ctypes.byref(exit_code)):
+                return None
+        except (OSError, TypeError, ValueError):
+            return None
+        return exit_code.value == STILL_ACTIVE
+    finally:
+        try:
+            close_handle(handle)
+        except (OSError, TypeError, ValueError):
+            pass
+
+
+def _pid_is_alive(pid: int) -> bool | None:
     if pid <= 0:
         return False
-    if os.name == "nt":  # The snapshot helper cannot import psutil or add a dependency.
-        try:
-            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-            if not handle:
-                return False
-            exit_code = ctypes.c_ulong()
-            alive = bool(ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))) and exit_code.value == 259
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return alive
-        except (AttributeError, OSError, TypeError, ValueError):
-            return pid == os.getpid()
+    if os.name == "nt":
+        return _windows_pid_is_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    except OSError:
-        return False
+    except OSError as exc:
+        if exc.errno == errno.ESRCH:
+            return False
+        if exc.errno == errno.EPERM:
+            return True
+        return None
     return True
 
 
-def _table_rows(connection: sqlite3.Connection, table: str) -> Iterable[Mapping[str, Any]]:
-    columns = [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
-    interesting = {
-        column
-        for column in columns
-        if column.casefold() in {
-            "state",
-            "owner_pid",
-            "claim_owner",
-            "holder_pid",
-            "heartbeat_at",
-            "claim_heartbeat_at",
-            "expires_at",
-        }
-    }
-    if not interesting:
-        return []
-    query = f"SELECT {', '.join(interesting)} FROM {table}"
-    return [dict(zip(interesting, row)) for row in connection.execute(query)]
+def _table_rows(
+    connection: sqlite3.Connection,
+    table: str,
+    columns: tuple[str, ...],
+) -> Iterable[Mapping[str, Any]]:
+    try:
+        return [dict(zip(columns, row)) for row in connection.execute(f"SELECT {', '.join(columns)} FROM {table}")]
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).casefold():
+            return []
+        raise
 
 
-def _check_claims(coordinator: Path) -> None:
+def _claim_is_stale(heartbeat: Any, now_ms: int) -> bool:
+    return (
+        isinstance(heartbeat, (int, float))
+        and not isinstance(heartbeat, bool)
+        and heartbeat <= now_ms - CLAIM_STALE_MS
+    )
+
+
+def _check_claims(coordinator: Path, *, scratch_dir: Path | None = None) -> None:
     now_ms = int(time.time() * 1000)
     try:
-        connection = sqlite3.connect(_sqlite_uri(coordinator), uri=True)
-    except sqlite3.Error as exc:
-        raise ValueError(f"cannot inspect coordinator read-only: {coordinator}") from exc
-    try:
-        tables = [
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            )
-        ]
-        for table in tables:
-            for row in _table_rows(connection, table):
-                state = str(row.get("state", "")).casefold()
-                claimed = state == "claimed" or table.casefold() in {"writer_lease", "maintenance_intent"}
-                if not claimed:
-                    continue
-                owner = row.get("owner_pid")
-                if owner is None:
-                    owner = row.get("holder_pid")
-                if owner is None:
+        with _database_input(coordinator, scratch_dir=scratch_dir) as readable_coordinator:
+            connection = sqlite3.connect(_sqlite_uri(readable_coordinator), uri=True)
+            try:
+                writer_pids: dict[str, int] = {}
+                owner_states: dict[int, bool | None] = {}
+                for row in _table_rows(connection, "writer_lease", ("holder_id", "holder_pid")):
+                    holder_id = row.get("holder_id")
+                    pid = _pid_from_owner(row.get("holder_pid"))
+                    if holder_id is None or pid is None:
+                        raise ValueError("unknown owner in writer_lease")
+                    writer_pids[str(holder_id)] = pid
+                    owner_states[pid] = _pid_is_alive(pid)
+                    if owner_states[pid] is not False:
+                        raise ValueError("live owner or unknown owner in writer_lease")
+
+                for row in _table_rows(connection, "maintenance_intent", ("owner_pid",)):
+                    pid = _pid_from_owner(row.get("owner_pid"))
+                    if pid is None:
+                        raise ValueError("unknown owner in maintenance_intent")
+                    owner_states[pid] = _pid_is_alive(pid)
+                    if owner_states[pid] is not False:
+                        raise ValueError("live owner or unknown owner in maintenance_intent")
+
+                for row in _table_rows(
+                    connection,
+                    "requests",
+                    ("state", "claim_owner", "claim_heartbeat_at"),
+                ):
+                    if str(row.get("state", "")).casefold() != "claimed":
+                        continue
                     owner = row.get("claim_owner")
-                pid = _pid_from_owner(owner)
-                heartbeat = row.get("claim_heartbeat_at")
-                if heartbeat is None:
-                    heartbeat = row.get("heartbeat_at")
-                expires = row.get("expires_at")
-                stale = (
-                    isinstance(heartbeat, (int, float)) and heartbeat <= now_ms - CLAIM_STALE_MS
-                ) or (isinstance(expires, (int, float)) and expires <= now_ms)
-                if pid is None and not stale:
-                    raise ValueError(f"unknown live owner in {table}")
-                if pid is not None and _pid_is_alive(pid) and not stale:
-                    raise ValueError(f"live owner in {table}")
+                    pid = writer_pids.get(str(owner)) if owner is not None else None
+                    if pid is not None:
+                        state = owner_states.setdefault(pid, _pid_is_alive(pid))
+                        if state is not False:
+                            raise ValueError("live owner or unknown owner in requests")
+                    elif not _claim_is_stale(row.get("claim_heartbeat_at"), now_ms):
+                        raise ValueError("unknown live owner in requests")
+            finally:
+                connection.close()
+    except ValueError:
+        raise
     except sqlite3.Error as exc:
         raise ValueError(f"cannot inspect coordinator claims read-only: {coordinator}") from exc
-    finally:
-        connection.close()
 
 
-def _sqlite_facts(path: Path) -> tuple[Any, ...]:
-    stat = path.stat()
+def _file_facts(path: Path) -> tuple[Any, ...] | None:
     try:
+        item_stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return (item_stat.st_dev, item_stat.st_ino, item_stat.st_size, item_stat.st_mtime_ns)
+
+
+def _sqlite_facts(
+    path: Path,
+    connection: sqlite3.Connection | None = None,
+) -> tuple[Any, ...]:
+    owns_connection = connection is None
+    if owns_connection:
         connection = sqlite3.connect(_sqlite_uri(path), uri=True)
-        facts = (
-            stat.st_ino,
-            stat.st_size,
-            stat.st_mtime_ns,
-            connection.execute("PRAGMA page_count").fetchone()[0],
-            connection.execute("PRAGMA schema_version").fetchone()[0],
+    assert connection is not None
+    try:
+        data_version = connection.execute("PRAGMA data_version").fetchone()[0]
+        page_count = connection.execute("PRAGMA page_count").fetchone()[0]
+        schema_version = connection.execute("PRAGMA schema_version").fetchone()[0]
+        return (
+            _file_facts(path),
+            _file_facts(Path(f"{path}-wal")),
+            _file_facts(Path(f"{path}-shm")),
+            data_version,
+            page_count,
+            schema_version,
         )
     finally:
-        connection.close()
-    return facts
+        if owns_connection:
+            connection.close()
+
+
+@contextmanager
+def _database_input(path: Path, *, scratch_dir: Path | None = None) -> Iterable[Path]:
+    sidecars = (Path(f"{path}-wal"), Path(f"{path}-shm"))
+    if not any(sidecar.exists() for sidecar in sidecars):
+        yield path
+        return
+    with tempfile.TemporaryDirectory(
+        prefix=".perf-store-input-",
+        dir=scratch_dir or path.parent,
+    ) as directory:
+        shadow = Path(directory) / path.name
+        shutil.copyfile(path, shadow)
+        for sidecar in sidecars:
+            if sidecar.exists():
+                shutil.copyfile(sidecar, Path(f"{shadow}{sidecar.name[len(path.name):]}"))
+        yield shadow
 
 
 def _backup_database(source: Path, destination: Path) -> str:
-    before = _sqlite_facts(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    source_connection = sqlite3.connect(_sqlite_uri(source), uri=True)
-    destination_connection = sqlite3.connect(destination)
-    try:
-        source_connection.backup(destination_connection)
-        destination_connection.commit()
-        check = destination_connection.execute("PRAGMA quick_check").fetchone()[0]
-        if str(check).casefold() != "ok":
-            raise ValueError(f"destination quick_check failed: {destination}")
-    finally:
-        destination_connection.close()
-        source_connection.close()
-    if _sqlite_facts(source) != before:
-        raise ValueError(f"source changed during read-only backup: {source}")
+    with _database_input(source, scratch_dir=destination.parent) as readable_source:
+        source_connection = sqlite3.connect(_sqlite_uri(readable_source), uri=True)
+        destination_connection = sqlite3.connect(destination)
+        try:
+            before = _sqlite_facts(readable_source, source_connection)
+            source_connection.backup(destination_connection)
+            destination_connection.commit()
+            destination_connection.execute("PRAGMA journal_mode=DELETE")
+            destination_connection.commit()
+            check = destination_connection.execute("PRAGMA quick_check").fetchone()[0]
+            if str(check).casefold() != "ok":
+                raise ValueError(f"destination quick_check failed: {destination}")
+            after = _sqlite_facts(readable_source, source_connection)
+            if after != before:
+                raise ValueError(f"source changed during read-only backup: {source}")
+        finally:
+            destination_connection.close()
+            source_connection.close()
     return str(check)
 
 
@@ -201,9 +314,28 @@ def _is_sqlite_file(path: Path) -> bool:
         return False
 
 
+def _source_tree_facts(source: Path) -> dict[Path, tuple[Any, ...]]:
+    facts: dict[Path, tuple[Any, ...]] = {}
+    for path in source.rglob("*"):
+        if not (path.is_file() or path.is_symlink()):
+            continue
+        item_stat = path.lstat()
+        facts[path.relative_to(source)] = (
+            item_stat.st_dev,
+            item_stat.st_ino,
+            item_stat.st_size,
+            item_stat.st_mtime_ns,
+            stat.S_IFMT(item_stat.st_mode),
+        )
+    return facts
+
+
 def _copy_family_files(source: Path, destination: Path) -> tuple[list[Path], list[Path]]:
     generation = _read_current(source)
-    source_files = [path for path in source.rglob("*") if path.is_file()]
+    source_files = sorted(
+        (path for path in source.rglob("*") if path.is_file()),
+        key=lambda path: path.relative_to(source).as_posix(),
+    )
     databases: list[Path] = []
     copied: list[Path] = []
     for source_path in source_files:
@@ -224,15 +356,23 @@ def _copy_family_files(source: Path, destination: Path) -> tuple[list[Path], lis
     return databases, copied
 
 
-def _validate_source_tree(source: Path, live_root: Path | None) -> None:
+def _validate_source_tree(source: Path, live_root: Path) -> None:
+    live_identities: dict[tuple[int, int], Path] = {}
+    if live_root.is_dir():
+        for live_path in live_root.rglob("*"):
+            if not live_path.is_file() or live_path.is_symlink():
+                continue
+            item_stat = live_path.stat()
+            live_identities[(item_stat.st_dev, item_stat.st_ino)] = live_path
     for path in source.rglob("*"):
-        if not path.is_symlink():
+        if _path_has_reparse_point(path):
+            raise ValueError(f"source family contains a symlink or reparse alias: {path}")
+        if not path.is_file():
             continue
-        target = path.resolve(strict=False)
-        if not target.is_relative_to(source):
-            raise ValueError(f"source family contains an alias outside the family: {path}")
-        if live_root is not None and _is_alias(target, live_root):
-            raise ValueError(f"source family contains a live-store alias: {path}")
+        item_stat = path.stat()
+        live_alias = live_identities.get((item_stat.st_dev, item_stat.st_ino))
+        if live_alias is not None:
+            raise ValueError(f"source family contains a hardlink alias: {path} -> {live_alias}")
 
 
 def _digest_files(root: Path, files: Iterable[Path]) -> str:
@@ -240,7 +380,10 @@ def _digest_files(root: Path, files: Iterable[Path]) -> str:
     for relative in sorted(files, key=lambda path: path.as_posix()):
         path = root / relative
         digest.update(relative.as_posix().encode())
-        digest.update(path.read_bytes())
+        digest.update(b"\0")
+        with path.open("rb") as handle:
+            while chunk := handle.read(DIGEST_CHUNK_SIZE):
+                digest.update(chunk)
     return digest.hexdigest()
 
 
@@ -250,38 +393,38 @@ def snapshot_family(
     *,
     live_root: Path | str | None = None,
 ) -> dict[str, Any]:
-    source_path = _canonical(source)
-    destination_path = _canonical(destination)
+    if live_root is None:
+        raise ValueError("live root is required")
+    source_input = Path(source).expanduser()
+    destination_input = Path(destination).expanduser()
+    live_input = Path(live_root).expanduser()
+    for label, path in (("source", source_input), ("destination", destination_input), ("live root", live_input)):
+        if _path_has_reparse_point(path):
+            raise ValueError(f"{label} contains a symlink or reparse point")
+    source_path = _canonical(source_input)
+    destination_path = _canonical(destination_input)
+    live_path = _canonical(live_input)
     if not source_path.is_dir():
         raise ValueError("source family must be a directory")
     if _is_alias(source_path, destination_path) or _same_file(source_path, destination_path):
         raise ValueError("source and destination are aliases")
-    if live_root is not None:
-        live_path = _canonical(live_root)
-        if _is_alias(source_path, live_path) or _same_file(source_path, live_path):
-            raise ValueError("source family is the live store")
-        if _is_alias(destination_path, live_path):
-            raise ValueError("destination aliases the live store")
-    if destination_path.exists():
+    if _is_alias(source_path, live_path) or _same_file(source_path, live_path):
+        raise ValueError("source family is the live store")
+    if _is_alias(destination_path, live_path) or _same_file(destination_path, live_path):
+        raise ValueError("destination aliases the live store")
+    if os.path.lexists(destination_input):
         raise ValueError("destination already exists")
     generation = _read_current(source_path)
-    _validate_source_tree(source_path, _canonical(live_root) if live_root is not None else None)
-    source_facts = {
-        path.relative_to(source_path): (path.stat().st_ino, path.stat().st_size, path.stat().st_mtime_ns)
-        for path in source_path.rglob("*")
-        if path.is_file() and not path.name.endswith(("-wal", "-shm"))
-    }
+    _validate_source_tree(source_path, live_path)
     coordinator = source_path / "coord.db"
-    _check_claims(coordinator)
     destination_path.parent.mkdir(parents=True, exist_ok=True)
+    _check_claims(coordinator, scratch_dir=destination_path.parent)
+    source_facts = _source_tree_facts(source_path)
     temporary = Path(tempfile.mkdtemp(prefix=".perf-store-snapshot-", dir=destination_path.parent))
     try:
         databases, copied = _copy_family_files(source_path, temporary)
-        after_facts = {
-            path.relative_to(source_path): (path.stat().st_ino, path.stat().st_size, path.stat().st_mtime_ns)
-            for path in source_path.rglob("*")
-            if path.is_file() and not path.name.endswith(("-wal", "-shm"))
-        }
+        _check_claims(coordinator, scratch_dir=destination_path.parent)
+        after_facts = _source_tree_facts(source_path)
         if after_facts != source_facts:
             raise ValueError("source family changed during snapshot")
         for path in temporary.rglob("*"):
@@ -291,6 +434,8 @@ def snapshot_family(
             str(path.relative_to(temporary)): "ok"
             for path in databases
         }
+        if os.path.lexists(destination_input):
+            raise ValueError("destination was created during snapshot")
         temporary.replace(destination_path)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -311,7 +456,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--destination", type=Path, required=True)
-    parser.add_argument("--live-root", type=Path)
+    parser.add_argument("--live-root", type=Path, required=True)
     return parser.parse_args(argv)
 
 
