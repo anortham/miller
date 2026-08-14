@@ -67,6 +67,8 @@ Miller evidence was used first. The assigned workspace was registered as `perfor
 - Branch: `feature/performance-recovery`
 - Correction start: `7cd7529de9d5af8e7ed2ddebb6befebaaa3305ac`
 - Start dirty state: only the lead-owned plan edit was modified and unstaged.
+- Implementation commit: `b99cdf90f403de271a3c23ce05a70c3485834e09` (`perf: harden store snapshot safety`).
+- Post-commit state: owned paths are clean; only `docs/plans/2026-08-13-miller-performance-recovery-plan.md` remains modified and unstaged.
 - RED: after adding the correction contract tests, `PYTHONDONTWRITEBYTECODE=1 python scripts/tests/test_perf_store_snapshot.py` ran 15 tests with 11 failures and 1 error.
 - GREEN: `PYTHONDONTWRITEBYTECODE=1 python scripts/tests/test_perf_store_snapshot.py` — 17 passed, 0 failed, 0 skipped.
 - Verification: `python -m py_compile` passed and `git diff --check` passed.
