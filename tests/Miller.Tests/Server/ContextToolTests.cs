@@ -1092,6 +1092,66 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void RunReferenceAware_DefaultsBatchReadsOff()
+    {
+        var (index, resolver) = BuildFixture();
+        ReferenceEvidenceBundle bundle = new(
+            InboundSet(),
+            OutgoingSet(),
+            new Dictionary<ReferenceKind, ReferenceEvidenceSet>(),
+            new Dictionary<ReferenceKind, OutgoingReferenceEvidenceSet>());
+        int batchCalls = 0;
+        int singularCalls = 0;
+        string? previous = Environment.GetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH");
+        Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", null);
+        try
+        {
+            ContextTool.RunReferenceAwareActionable(
+                index,
+                index.Graph,
+                resolver,
+                query: string.Empty,
+                tokenBudget: 100000,
+                maxHops: 0,
+                entrySymbols: [ServiceId],
+                editedFiles: null,
+                failingTest: null,
+                stackTrace: null,
+                semanticSeeds: null,
+                sourceSeeds: null,
+                readBody: null,
+                referenceDepth: 1,
+                excludeTests: false,
+                json: true,
+                readReferenceEvidence: _ =>
+                {
+                    singularCalls++;
+                    return bundle.Inbound;
+                },
+                readOutgoingEvidence: _ =>
+                {
+                    singularCalls++;
+                    return bundle.Outgoing;
+                },
+                readContentChunks: (_, _) => [],
+                readMany: _ =>
+                {
+                    batchCalls++;
+                    return new Dictionary<string, ReferenceEvidenceBundle> { [ServiceId] = bundle };
+                },
+                out _,
+                out _);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", previous);
+        }
+
+        Assert.Equal(0, batchCalls);
+        Assert.Equal(2, singularCalls);
+    }
+
+    [Fact]
     public void RunReferenceAware_BatchesReferenceReadsAndSupportsLegacyFallback()
     {
         var (index, resolver) = BuildFixture();
@@ -1103,7 +1163,12 @@ public sealed class ContextToolTests
         int batchCalls = 0;
         int singularCalls = 0;
 
-        string batchOutput = ContextTool.RunReferenceAwareActionable(
+        string? previousBatch = Environment.GetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH");
+        Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", "on");
+        string batchOutput;
+        try
+        {
+            batchOutput = ContextTool.RunReferenceAwareActionable(
             index,
             index.Graph,
             resolver,
@@ -1134,6 +1199,11 @@ public sealed class ContextToolTests
             },
             out _,
             out _);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", previousBatch);
+        }
 
         Assert.Equal(1, batchCalls);
         Assert.Equal(0, singularCalls);

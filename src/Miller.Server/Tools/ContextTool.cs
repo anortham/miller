@@ -496,9 +496,9 @@ public sealed partial class ContextTool
         get
         {
             string? value = Environment.GetEnvironmentVariable(ReferenceEvidenceBatchEnvironmentVariable);
-            return !string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) &&
-                   !string.Equals(value, "off", StringComparison.OrdinalIgnoreCase) &&
-                   !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase);
+            return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(value, "on", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
         }
     }
 

@@ -7,10 +7,12 @@ import argparse
 import ctypes
 import dataclasses
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -18,6 +20,7 @@ import tempfile
 import threading
 import time
 import uuid
+import queue
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -31,8 +34,8 @@ except ImportError:  # pragma: no cover - Windows does not expose resource.
 FIRST_ATTEMPT_TIMEOUT_MS = 60_000
 MANIFEST_SCHEMA_VERSION = 1
 KNOWN_WORKLOAD_IDS = (
-    "startup.reader.warm",
     "startup.leader.no_change",
+    "startup.reader.warm",
     "workspace.open.no_change",
     "producer.retry.identical",
     "producer.resolve.one_file",
@@ -40,9 +43,14 @@ KNOWN_WORKLOAD_IDS = (
     "tool.inspect.warm",
     "tool.context.references.depth0",
     "tool.context.references.depth1",
+    "tool.context.references.depth1.semantic",
+    "tool.context.references.depth1.batch_off",
+    "tool.context.references.depth1.batch_on",
     "tool.impact.bounded",
     "tool.trace.warm",
 )
+EXECUTION_KINDS = frozenset({"miller_cli", "mcp_bootstrap", "julie_store"})
+PRODUCER_STORE_COMMANDS = frozenset({"import", "resolve"})
 KNOWN_VERBS = {
     "capabilities",
     "context",
@@ -89,7 +97,7 @@ KNOWN_FLAGS = {
     "--workspace",
     "--workspace-id",
 }
-PLACEHOLDER_NAMES = {"workspace", "store_copy", "target"}
+PLACEHOLDER_NAMES = {"workspace", "store_copy", "target", "family", "view"}
 SEMANTIC_WORKLOAD_LOCK = threading.Lock()
 
 
@@ -102,6 +110,7 @@ class ReplayRequest:
     miller_home: Path | None = None
     out: Path | None = None
     store_mode: str | None = None
+    producer: str | Path = "julie-extract"
 
 
 @dataclass(frozen=True)
@@ -112,6 +121,7 @@ class ActiveStore:
     pointer_path: Path | None = None
     generation: str | None = None
     view_id: str | None = None
+    family_id: str | None = None
     artifact_path: Path | None = None
 
 
@@ -122,12 +132,16 @@ class Workload:
     warmups: int
     runs: int
     hard_budget_ms: Mapping[str, int]
+    execution_kind: str = "miller_cli"
     timeout_ms: int | None = None
     parity_with: str | None = None
     semantic: bool = False
     lexical_control: bool = True
     target_discovery: Mapping[str, Any] | None = None
     hard_budget_memory_bytes: int | None = None
+    context_batch: str | None = None
+    mutates_store: bool = False
+    isolated_snapshot: bool = False
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -315,6 +329,7 @@ def _read_family_pointer(workspace: Path) -> tuple[Path, dict[str, Any]] | None:
         "store_root": store_root,
         "generation": generation,
         "view_id": view_id,
+        "family_id": str(family_id),
         "artifact_path": database,
         "files": (current_path, database, coordinator),
     }
@@ -350,6 +365,7 @@ def resolve_active_store(request: ReplayRequest) -> ActiveStore:
             pointer_path=pointer_path,
             generation=details["generation"],
             view_id=details["view_id"],
+            family_id=details["family_id"],
         )
     if mode != "legacy":
         raise ValueError("workspace has no active family-store pointer")
@@ -416,7 +432,10 @@ def _budget_key(platform_name: str) -> str:
 def first_attempt_timeout_ms(workload: Workload, platform_name: str | None = None) -> int:
     platform_name = platform_name or _platform_name()
     published_budget = int(workload.hard_budget_ms[_budget_key(platform_name)])
-    return max(FIRST_ATTEMPT_TIMEOUT_MS, published_budget, int(workload.timeout_ms or 0))
+    timeout = max(FIRST_ATTEMPT_TIMEOUT_MS, published_budget, int(workload.timeout_ms or 0))
+    if timeout <= published_budget:
+        raise ValueError(f"{workload.workload_id} observation timeout must be strictly greater than its hard budget")
+    return timeout
 
 
 def hard_gate_passed(
@@ -431,8 +450,11 @@ def hard_gate_passed(
     budget = int(workload.hard_budget_ms[_budget_key(platform_name)])
     if timed_out or exit_code != 0 or wall_ms > budget:
         return False
-    if workload.hard_budget_memory_bytes is not None and hard_memory_bytes is not None:
-        return hard_memory_bytes <= workload.hard_budget_memory_bytes
+    if workload.hard_budget_memory_bytes is not None:
+        if platform_name.startswith("win") and hard_memory_bytes is None:
+            return False
+        if hard_memory_bytes is not None:
+            return hard_memory_bytes <= workload.hard_budget_memory_bytes
     return True
 
 
@@ -636,6 +658,8 @@ def build_environment(
     request: ReplayRequest,
     *,
     semantic: bool = False,
+    context_batch: str | None = None,
+    resolution_delta: str | None = None,
     base: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     environment = dict(base or os.environ)
@@ -653,6 +677,9 @@ def build_environment(
     environment["MILLER_PERF_SEMANTIC_SERIALIZED"] = "1" if semantic else "0"
     environment["MILLER_SEMANTIC"] = "on" if semantic else "off"
     environment["MILLER_INDEX_STORE"] = "on" if active.mode == "family" else "off"
+    environment["MILLER_CONTEXT_REFERENCE_BATCH"] = context_batch or "off"
+    if resolution_delta is not None:
+        environment["JULIE_STORE_RESOLUTION_DELTA"] = resolution_delta
     return environment
 
 
@@ -849,6 +876,8 @@ def _selected_environment(environment: Mapping[str, str]) -> dict[str, str | Non
         "MILLER_PERF_SEMANTIC_SERIALIZED",
         "MILLER_PERF_STORE_COPY",
         "MILLER_INDEX_STORE",
+        "MILLER_CONTEXT_REFERENCE_BATCH",
+        "JULIE_STORE_RESOLUTION_DELTA",
     )
     return {key: environment.get(key) for key in keys}
 
@@ -933,6 +962,10 @@ def _replace_placeholders(token: str, request: ReplayRequest, target: str | None
         "store_copy": str(request.store_copy),
         "target": target or "",
     }
+    if any("{" + name + "}" in token for name in ("family", "view")):
+        active = resolve_active_store(request)
+        values["family"] = active.family_id or ""
+        values["view"] = active.view_id or ""
     for name, value in values.items():
         token = token.replace("{" + name + "}", value)
     if "{" in token or "}" in token:
@@ -945,14 +978,43 @@ def _miller_argv(request: ReplayRequest, command: Sequence[str], target: str | N
     return miller + [_replace_placeholders(str(token), request, target) for token in command]
 
 
+def _mcp_argv(request: ReplayRequest) -> list[str]:
+    miller = [str(request.miller)] if isinstance(request.miller, (str, Path)) else [str(item) for item in request.miller]
+    return miller + ["serve"]
+
+
+def _producer_argv(request: ReplayRequest, command: Sequence[str], target: str | None = None) -> list[str]:
+    producer = [str(request.producer)] if isinstance(request.producer, (str, Path)) else [str(item) for item in request.producer]
+    return producer + [_replace_placeholders(str(token), request, target) for token in command]
+
+
 def _target_from_payload(payload: Any) -> str | None:
     value = _find_value(payload, {"symbol_id", "symbolid", "target_symbol_id", "targetsymbolid"})
     return str(value) if value is not None else None
 
 
-def _validate_command(command: Any, *, label: str) -> tuple[str, ...]:
+def _validate_command(
+    command: Any,
+    *,
+    label: str,
+    execution_kind: str = "miller_cli",
+) -> tuple[str, ...]:
     if not isinstance(command, list) or not command or not all(isinstance(item, str) and item for item in command):
         raise ValueError(f"{label} command must be a non-empty string array")
+    if execution_kind == "mcp_bootstrap":
+        if tuple(command) != ("serve",):
+            raise ValueError(f"{label} mcp_bootstrap command must be exactly ['serve']")
+        return tuple(command)
+    if execution_kind == "julie_store":
+        if len(command) < 2 or command[0] != "store" or command[1] not in PRODUCER_STORE_COMMANDS:
+            raise ValueError(f"{label} julie_store command must be store import or store resolve")
+        flags = {item.split("=", 1)[0] for item in command if item.startswith("--")}
+        required = {"--store", "--view", "--json", "--request-id", "--idempotency-key", "--request-timeout-seconds"}
+        if not required.issubset(flags):
+            raise ValueError(f"{label} julie_store command must include store/view/request identity/timeout/json")
+        if command[1] == "import" and not {"--root", "--level"}.issubset(flags):
+            raise ValueError(f"{label} store import must include root and level")
+        return tuple(command)
     for item in command:
         if item.startswith("--"):
             flag = item.split("=", 1)[0]
@@ -967,7 +1029,14 @@ def _workload_from_mapping(item: Mapping[str, Any]) -> Workload:
     workload_id = item.get("id")
     if not isinstance(workload_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]+", workload_id):
         raise ValueError(f"invalid workload id: {workload_id!r}")
-    command = _validate_command(item.get("command"), label=workload_id)
+    execution_kind = item.get("execution_kind", "miller_cli")
+    if not isinstance(execution_kind, str) or execution_kind not in EXECUTION_KINDS:
+        raise ValueError(f"{workload_id} execution_kind must be one of {sorted(EXECUTION_KINDS)}")
+    if workload_id.startswith("startup.") and execution_kind != "mcp_bootstrap":
+        raise ValueError(f"{workload_id} must use execution_kind=mcp_bootstrap")
+    if workload_id.startswith("producer.") and execution_kind != "julie_store":
+        raise ValueError(f"{workload_id} must use execution_kind=julie_store")
+    command = _validate_command(item.get("command"), label=workload_id, execution_kind=execution_kind)
     for token in command:
         for placeholder in re.findall(r"\{([^{}]+)\}", token):
             if placeholder not in PLACEHOLDER_NAMES:
@@ -984,6 +1053,11 @@ def _workload_from_mapping(item: Mapping[str, Any]) -> Workload:
     timeout_ms = item.get("timeout_ms")
     if timeout_ms is not None and (not isinstance(timeout_ms, int) or timeout_ms < FIRST_ATTEMPT_TIMEOUT_MS):
         raise ValueError(f"{workload_id} timeout_ms cannot be below the 60 s first-attempt timeout")
+    max_budget_ms = max(int(value) for value in budgets.values())
+    if timeout_ms is not None and timeout_ms <= max_budget_ms:
+        raise ValueError(f"{workload_id} timeout_ms must be strictly greater than its hard budget")
+    if timeout_ms is None and max(FIRST_ATTEMPT_TIMEOUT_MS, max_budget_ms) <= max_budget_ms:
+        raise ValueError(f"{workload_id} observation timeout must be strictly greater than its hard budget")
     target_discovery = item.get("target_discovery")
     if target_discovery is not None:
         if not isinstance(target_discovery, Mapping):
@@ -1011,18 +1085,31 @@ def _workload_from_mapping(item: Mapping[str, Any]) -> Workload:
     for name in ("semantic", "lexical_control"):
         if name in item and not isinstance(item[name], bool):
             raise ValueError(f"{workload_id} {name} must be boolean")
+    context_batch = item.get("context_batch")
+    if context_batch is not None and context_batch not in {"off", "on"}:
+        raise ValueError(f"{workload_id} context_batch must be off or on")
+    mutates_store = item.get("mutates_store", False)
+    isolated_snapshot = item.get("isolated_snapshot", False)
+    if not isinstance(mutates_store, bool) or not isinstance(isolated_snapshot, bool):
+        raise ValueError(f"{workload_id} mutates_store and isolated_snapshot must be boolean")
+    if mutates_store and not isolated_snapshot:
+        raise ValueError(f"{workload_id} mutates_store requires isolated_snapshot=true")
     return Workload(
         workload_id=workload_id,
         command=command,
         warmups=warmups,
         runs=runs,
         hard_budget_ms={str(key): int(value) for key, value in budgets.items()},
+        execution_kind=execution_kind,
         timeout_ms=timeout_ms,
         parity_with=parity_with,
         semantic=bool(item.get("semantic", False)),
         lexical_control=bool(item.get("lexical_control", not bool(item.get("semantic", False)))),
         target_discovery=target_discovery,
         hard_budget_memory_bytes=memory_budget,
+        context_batch=context_batch,
+        mutates_store=mutates_store,
+        isolated_snapshot=isolated_snapshot,
         metadata=dict(metadata),
     )
 
@@ -1099,6 +1186,389 @@ def _discovery_target(request: ReplayRequest, workload: Workload) -> str | None:
     return target
 
 
+def _phase_value(record: Mapping[str, Any], name: str) -> Any:
+    wanted = name.casefold()
+    for key, value in record.items():
+        if str(key).casefold() == wanted:
+            return value
+    return None
+
+
+def _phase_records(
+    workspace: Path,
+    phase: str,
+    offsets: dict[Path, int] | None = None,
+) -> list[dict[str, Any]]:
+    logs = workspace / ".miller" / "logs"
+    if not logs.is_dir():
+        return []
+    matches: list[dict[str, Any]] = []
+    for path in sorted(logs.glob("miller-*.jsonl")):
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                if offsets is not None:
+                    handle.seek(offsets.get(path, 0))
+                lines = handle.readlines()
+                if offsets is not None:
+                    offsets[path] = handle.tell()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, Mapping) and _phase_value(value, "Phase") == phase:
+                matches.append(dict(value))
+    return matches
+
+
+class _McpSession:
+    def __init__(self, request: ReplayRequest, environment: Mapping[str, str]) -> None:
+        self.request = request
+        self.environment = dict(environment)
+        logs = request.workspace / ".miller" / "logs"
+        self._log_offsets: dict[Path, int] = {
+            path: path.stat().st_size
+            for path in logs.glob("miller-*.jsonl")
+            if path.is_file()
+        } if logs.is_dir() else {}
+        self.process = subprocess.Popen(
+            _mcp_argv(request),
+            cwd=str(request.workspace),
+            env=self.environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+            text=True,
+            bufsize=1,
+            start_new_session=os.name != "nt",
+        )
+        self._stdout: queue.Queue[str] = queue.Queue()
+        self._responses: list[str] = []
+        self._stderr: list[str] = []
+        self._next_id = 1
+        self._closed = False
+        self._stop = threading.Event()
+        self._peaks: dict[str, int] = {}
+        self._stdout_thread = threading.Thread(
+            target=self._read_lines,
+            args=(self.process.stdout, self._stdout, None),
+            name="perf-recovery-mcp-stdout",
+            daemon=True,
+        )
+        self._stderr_thread = threading.Thread(
+            target=self._read_lines,
+            args=(self.process.stderr, None, self._stderr),
+            name="perf-recovery-mcp-stderr",
+            daemon=True,
+        )
+        self._stdout_thread.start()
+        self._stderr_thread.start()
+        self._monitor = threading.Thread(
+            target=_monitor_process,
+            args=(self.process, _platform_name(), self._stop, self._peaks),
+            name="perf-recovery-mcp-memory",
+            daemon=True,
+        )
+        self._monitor.start()
+
+    @staticmethod
+    def _read_lines(
+        stream: Any,
+        output: queue.Queue[str] | None,
+        captured: list[str] | None,
+    ) -> None:
+        if stream is None:
+            return
+        for line in iter(stream.readline, ""):
+            if output is not None:
+                output.put(line)
+            if captured is not None:
+                captured.append(line)
+
+    def request_json(self, method: str, params: Mapping[str, Any], timeout_ms: int) -> Mapping[str, Any]:
+        if self.process.stdin is None:
+            raise RuntimeError("MCP stdin is unavailable")
+        request_id = self._next_id
+        self._next_id += 1
+        message = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": dict(params)}
+        self.process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
+        self.process.stdin.flush()
+        deadline = time.monotonic() + timeout_ms / 1000
+        while time.monotonic() < deadline:
+            try:
+                line = self._stdout.get(timeout=min(0.1, max(0.01, deadline - time.monotonic())))
+            except queue.Empty:
+                if self.process.poll() is not None:
+                    raise RuntimeError("MCP host exited before its response")
+                continue
+            self._responses.append(line)
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, Mapping) and value.get("id") == request_id:
+                return value
+        raise TimeoutError(f"timed out waiting for MCP response {method}")
+
+    def notify(self, method: str, params: Mapping[str, Any]) -> None:
+        if self.process.stdin is None:
+            raise RuntimeError("MCP stdin is unavailable")
+        self.process.stdin.write(
+            json.dumps({"jsonrpc": "2.0", "method": method, "params": dict(params)}, separators=(",", ":")) + "\n"
+        )
+        self.process.stdin.flush()
+
+    def wait_for_phase(self, phase: str, timeout_ms: int) -> Mapping[str, Any] | None:
+        deadline = time.monotonic() + timeout_ms / 1000
+        while time.monotonic() < deadline:
+            records = _phase_records(self.request.workspace, phase, self._log_offsets)
+            if records:
+                return records[-1]
+            if self.process.poll() is not None:
+                return None
+            time.sleep(0.05)
+        return None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._stop.set()
+        _terminate_process(self.process)
+        self._monitor.join(timeout=1)
+        self._stdout_thread.join(timeout=1)
+        self._stderr_thread.join(timeout=1)
+
+    def result(
+        self,
+        started: float,
+        phase: Mapping[str, Any] | None,
+        timed_out: bool,
+        *,
+        close: bool = True,
+    ) -> CommandResult:
+        if close:
+            self.close()
+        metrics = normalise_memory_metrics(_platform_name(), self._peaks)
+        stdout = json.dumps({"phases": {"startup_total": dict(phase or {})}}, sort_keys=True).encode()
+        stderr = "".join(self._stderr).encode()
+        return CommandResult(
+            exit_code=0 if phase is not None and not timed_out else self.process.returncode,
+            timed_out=timed_out,
+            wall_ms=max(0, round((time.perf_counter() - started) * 1000)),
+            cpu_ms=None,
+            output_sha256=hashlib.sha256(stdout).hexdigest(),
+            stderr_sha256=hashlib.sha256(stderr).hexdigest(),
+            peak_rss_bytes=metrics["peak_rss_bytes"],
+            peak_pss_bytes=metrics["peak_pss_bytes"],
+            private_usage_bytes=metrics["private_usage_bytes"],
+            hard_memory_bytes=metrics["hard_memory_bytes"],
+            hard_memory_metric=metrics["hard_memory_metric"],
+            io={"read_bytes": None, "write_bytes": None, "read_syscalls": None, "write_syscalls": None},
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+
+def _bootstrap_session(
+    request: ReplayRequest,
+    *,
+    timeout_ms: int,
+    environment: Mapping[str, str],
+) -> tuple[_McpSession, float, Mapping[str, Any] | None, bool]:
+    started = time.perf_counter()
+    session = _McpSession(request, environment)
+    phase: Mapping[str, Any] | None = None
+    timed_out = False
+    try:
+        session.request_json(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "miller-perf-recovery", "version": "1"},
+            },
+            timeout_ms,
+        )
+        session.notify("notifications/initialized", {})
+        phase = session.wait_for_phase("startup_total", timeout_ms)
+        timed_out = phase is None
+    except (OSError, RuntimeError, TimeoutError):
+        timed_out = True
+    return session, started, phase, timed_out
+
+
+def _run_mcp_bootstrap(
+    request: ReplayRequest,
+    workload: Workload,
+    *,
+    timeout_ms: int,
+    environment: Mapping[str, str],
+) -> CommandResult:
+    session, started, phase, timed_out = _bootstrap_session(
+        request,
+        timeout_ms=timeout_ms,
+        environment=environment,
+    )
+    return session.result(started, phase, timed_out)
+
+
+def _run_mcp_workload(
+    request: ReplayRequest,
+    workload: Workload,
+    *,
+    keep_alive: bool,
+) -> tuple[list[ReplayRecord], _McpSession | None]:
+    effective_timeout = first_attempt_timeout_ms(workload)
+    environment = build_environment(
+        request,
+        semantic=workload.semantic and not workload.lexical_control,
+        context_batch=workload.context_batch,
+    )
+    commit = _commit_for_workspace(request.workspace)
+    records: list[ReplayRecord] = []
+    if keep_alive:
+        session, started, phase, timed_out = _bootstrap_session(
+            request,
+            timeout_ms=effective_timeout,
+            environment=environment,
+        )
+        result = session.result(started, phase, timed_out, close=False)
+        for index in range(workload.warmups + workload.runs):
+            records.append(
+                _record_from_result(
+                    request,
+                    workload,
+                    result,
+                    attempt=index + 1,
+                    warmup=index < workload.warmups,
+                    timeout_ms=effective_timeout,
+                    environment=environment,
+                    commit=commit,
+                )
+            )
+        return records, session
+    for index in range(workload.warmups + workload.runs):
+        result = _run_mcp_bootstrap(
+            request,
+            workload,
+            timeout_ms=effective_timeout,
+            environment=environment,
+        )
+        records.append(
+            _record_from_result(
+                request,
+                workload,
+                result,
+                attempt=index + 1,
+                warmup=index < workload.warmups,
+                timeout_ms=effective_timeout,
+                environment=environment,
+                commit=commit,
+            )
+        )
+    return records, None
+
+
+def _snapshot_helper_module() -> Any:
+    script = Path(__file__).with_name("perf-store-snapshot.py")
+    spec = importlib.util.spec_from_file_location("perf_store_snapshot_runtime", script)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load snapshot helper: {script}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _isolated_request(request: ReplayRequest) -> tuple[ReplayRequest, tempfile.TemporaryDirectory[str]]:
+    active = resolve_active_store(request)
+    temporary = tempfile.TemporaryDirectory(prefix="miller-perf-workload-")
+    root = Path(temporary.name)
+    isolated_workspace = root / "workspace"
+    shutil.copytree(
+        request.workspace,
+        isolated_workspace,
+        ignore=shutil.ignore_patterns(".miller", ".git"),
+    )
+    isolated_miller = isolated_workspace / ".miller"
+    isolated_miller.mkdir(parents=True, exist_ok=True)
+    isolated_store = root / "store-family"
+    if active.mode == "family":
+        _snapshot_helper_module().snapshot_family(active.root, isolated_store, live_root=request.live_store)
+        pointer_path = request.workspace / ".miller" / "store.json"
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+        pointer["store_root"] = str(isolated_store)
+        pointer["workspace_root"] = str(isolated_workspace)
+        (isolated_miller / "store.json").write_text(json.dumps(pointer), encoding="utf-8")
+        isolated_copy = isolated_store
+    else:
+        isolated_copy = isolated_miller / "symbols.db"
+        shutil.copy2(active.artifact_path or active.root, isolated_copy)
+    isolated_request = dataclasses.replace(
+        request,
+        workspace=isolated_workspace,
+        store_copy=isolated_copy,
+        miller_home=root / "miller-home",
+    )
+    return validate_request(isolated_request), temporary
+
+
+def _one_file_path(request: ReplayRequest, workload: Workload) -> Path:
+    requested = workload.metadata.get("changed_path")
+    if isinstance(requested, str) and requested.strip():
+        candidate = (request.workspace / requested).resolve(strict=False)
+        if candidate.is_file() and _is_contained(candidate, request.workspace):
+            return candidate
+    candidates = sorted(
+        path
+        for path in request.workspace.rglob("*")
+        if path.is_file() and ".miller" not in path.parts and ".git" not in path.parts
+    )
+    if not candidates:
+        raise RuntimeError(f"{workload.workload_id} has no staged file to change")
+    return candidates[0]
+
+
+def _prepare_one_file_resolution(
+    request: ReplayRequest,
+    workload: Workload,
+    environment: Mapping[str, str],
+    timeout_ms: int,
+) -> None:
+    changed = _one_file_path(request, workload)
+    changed.write_bytes(changed.read_bytes() + b"\n")
+    active = resolve_active_store(request)
+    import_command = (
+        "store",
+        "import",
+        "--store",
+        "{store_copy}",
+        "--family",
+        "{family}",
+        "--root",
+        "{workspace}",
+        "--view",
+        "{view}",
+        "--level",
+        "full",
+        "--request-id",
+        "perf-recovery-one-file-import",
+        "--idempotency-key",
+        "perf-recovery-one-file-import",
+        "--request-timeout-seconds",
+        "30",
+        "--json",
+    )
+    if active.mode != "family":
+        raise RuntimeError("one-file producer resolution requires a family store")
+    result = _run_process(request, _producer_argv(request, import_command), timeout_ms, environment)
+    if result.timed_out or result.exit_code != 0:
+        raise RuntimeError(f"{workload.workload_id} staged import failed")
+
+
 def run_workload(
     request: ReplayRequest,
     workload: Workload,
@@ -1107,22 +1577,57 @@ def run_workload(
     target: str | None = None,
 ) -> list[ReplayRecord]:
     request = validate_request(request)
+    if workload.mutates_store:
+        if not workload.isolated_snapshot:
+            raise ValueError(f"{workload.workload_id} requires isolated_snapshot=true")
+        isolated_request, temporary = _isolated_request(request)
+        try:
+            return run_workload(
+                isolated_request,
+                dataclasses.replace(workload, mutates_store=False, isolated_snapshot=False),
+                command=command,
+                target=target,
+            )
+        finally:
+            temporary.cleanup()
     target = target or _discovery_target(request, workload)
     effective_timeout = first_attempt_timeout_ms(workload)
     actual_command = tuple(command) if command is not None else workload.command
+    semantic = workload.semantic and not workload.lexical_control
+    resolution_delta = "off" if workload.metadata.get("resolution_scope") == "full" else None
+    environment = build_environment(
+        request,
+        semantic=semantic,
+        context_batch=workload.context_batch,
+        resolution_delta=resolution_delta,
+    )
+    if workload.execution_kind == "julie_store" and workload.metadata.get("resolution_scope") == "one_file":
+        _prepare_one_file_resolution(request, workload, environment, effective_timeout)
     process_command = actual_command if command is not None else _miller_argv(request, actual_command, target)
-    environment = build_environment(request, semantic=workload.semantic and not workload.lexical_control)
     commit = _commit_for_workspace(request.workspace)
     records: list[ReplayRecord] = []
     for index in range(workload.warmups + workload.runs):
         warmup = index < workload.warmups
-        result = run_command(
-            request,
-            process_command,
-            timeout_ms=effective_timeout,
-            env=environment,
-            semantic=workload.semantic and not workload.lexical_control,
-        )
+        if workload.execution_kind == "mcp_bootstrap":
+            result = _run_mcp_bootstrap(
+                request,
+                workload,
+                timeout_ms=effective_timeout,
+                environment=environment,
+            )
+        elif workload.execution_kind == "julie_store":
+            producer_command = actual_command if command is not None else _producer_argv(request, actual_command, target)
+            lock = SEMANTIC_WORKLOAD_LOCK if semantic else _NullLock()
+            with lock:
+                result = _run_process(request, list(producer_command), effective_timeout, environment)
+        else:
+            result = run_command(
+                request,
+                process_command,
+                timeout_ms=effective_timeout,
+                env=environment,
+                semantic=semantic,
+            )
         records.append(
             _record_from_result(
                 request,
@@ -1169,10 +1674,26 @@ def _attach_parity(records: list[ReplayRecord], workloads: Mapping[str, Workload
 def run_replay(request: ReplayRequest, workloads: Mapping[str, Workload]) -> list[ReplayRecord]:
     request = validate_request(request)
     records: list[ReplayRecord] = []
-    for workload_id, workload in workloads.items():
-        if workload_id != workload.workload_id:
-            raise ValueError(f"manifest key does not match workload id: {workload_id}")
-        records.extend(run_workload(request, workload))
+    leader_session: _McpSession | None = None
+    try:
+        for workload_id, workload in workloads.items():
+            if workload_id != workload.workload_id:
+                raise ValueError(f"manifest key does not match workload id: {workload_id}")
+            if (
+                workload_id == "startup.leader.no_change"
+                and workload.execution_kind == "mcp_bootstrap"
+                and "startup.reader.warm" in workloads
+            ):
+                leader_records, leader_session = _run_mcp_workload(request, workload, keep_alive=True)
+                records.extend(leader_records)
+            elif workload_id == "startup.reader.warm" and leader_session is not None:
+                reader_records, _ = _run_mcp_workload(request, workload, keep_alive=False)
+                records.extend(reader_records)
+            else:
+                records.extend(run_workload(request, workload))
+    finally:
+        if leader_session is not None:
+            leader_session.close()
     return _attach_parity(records, workloads)
 
 

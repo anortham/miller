@@ -416,6 +416,9 @@ class PerfRecoveryTests(unittest.TestCase):
             "tool.inspect.warm",
             "tool.context.references.depth0",
             "tool.context.references.depth1",
+            "tool.context.references.depth1.semantic",
+            "tool.context.references.depth1.batch_off",
+            "tool.context.references.depth1.batch_on",
             "tool.impact.bounded",
             "tool.trace.warm",
         }
@@ -427,14 +430,110 @@ class PerfRecoveryTests(unittest.TestCase):
             self.assertGreaterEqual(workload.hard_budget_ms["windows"], 1)
             self.assertIsInstance(workload.command, tuple)
             self.assertNotIn("shell", workload.metadata)
+        self.assertEqual("mcp_bootstrap", manifest["startup.leader.no_change"].execution_kind)
+        self.assertEqual("mcp_bootstrap", manifest["startup.reader.warm"].execution_kind)
+        self.assertEqual("julie_store", manifest["producer.resolve.one_file"].execution_kind)
+        self.assertEqual("julie_store", manifest["producer.resolve.full"].execution_kind)
+        self.assertEqual("store", manifest["producer.resolve.full"].command[0])
+        self.assertEqual("resolve", manifest["producer.resolve.full"].command[1])
+        self.assertIsNone(manifest["tool.context.references.depth1"].parity_with)
         self.assertEqual(
-            ("refresh", "--json", "--wait", "--full"),
-            manifest["producer.resolve.full"].command,
+            "tool.context.references.depth1.batch_off",
+            manifest["tool.context.references.depth1.batch_on"].parity_with,
         )
-        self.assertEqual(
-            "tool.context.references.depth0",
-            manifest["tool.context.references.depth1"].parity_with,
+        self.assertTrue(all(workload.timeout_ms is not None for workload in manifest.values()))
+        for workload in manifest.values():
+            self.assertGreater(workload.timeout_ms, max(workload.hard_budget_ms.values()))
+
+    def test_execution_kind_validation_rejects_misclassified_startup_and_producer(self) -> None:
+        base = {
+            "schema_version": 1,
+            "workloads": [
+                {
+                    "id": "startup.bad",
+                    "execution_kind": "miller_cli",
+                    "command": ["version"],
+                    "warmups": 0,
+                    "runs": 1,
+                    "timeout_ms": 61_000,
+                    "hard_budget_ms": {"development": 1_000, "windows": 2_000},
+                }
+            ],
+        }
+        path = self.root / "bad-kind.json"
+        path.write_text(json.dumps(base), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "mcp_bootstrap"):
+            perf_recovery.load_manifest(path, require_fixed_ids=False)
+
+        base["workloads"][0] = {
+            "id": "producer.resolve.bad",
+            "execution_kind": "miller_cli",
+            "command": ["refresh"],
+            "warmups": 0,
+            "runs": 1,
+            "timeout_ms": 61_000,
+            "hard_budget_ms": {"development": 1_000, "windows": 2_000},
+        }
+        path.write_text(json.dumps(base), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "julie_store"):
+            perf_recovery.load_manifest(path, require_fixed_ids=False)
+
+    def test_execution_kind_argvs_use_mcp_and_producer_contracts(self) -> None:
+        request = self._request(miller="miller", producer="julie-extract")
+        self.assertEqual(["miller", "serve"], perf_recovery._mcp_argv(request))
+        workload = perf_recovery.Workload(
+            workload_id="producer.resolve.full",
+            command=(
+                "store",
+                "resolve",
+                "--store",
+                "{store_copy}",
+                "--family",
+                "{family}",
+                "--view",
+                "{view}",
+                "--json",
+            ),
+            warmups=0,
+            runs=1,
+            hard_budget_ms={"development": 1_000, "windows": 2_000},
+            timeout_ms=3_000,
+            execution_kind="julie_store",
         )
+        argv = perf_recovery._producer_argv(request, workload.command)
+        self.assertEqual("julie-extract", argv[0])
+        self.assertEqual("store", argv[1])
+        self.assertIn(str(self.store_copy), argv)
+
+    def test_mutating_workloads_require_isolated_snapshot_metadata(self) -> None:
+        item = {
+            "id": "producer.resolve.full",
+            "execution_kind": "julie_store",
+            "command": [
+                "store",
+                "resolve",
+                "--store",
+                "{store_copy}",
+                "--view",
+                "{view}",
+                "--request-id",
+                "id",
+                "--idempotency-key",
+                "idempotency",
+                "--request-timeout-seconds",
+                "30",
+                "--json",
+            ],
+            "warmups": 0,
+            "runs": 1,
+            "timeout_ms": 60_000,
+            "hard_budget_ms": {"development": 1_000, "windows": 2_000},
+            "mutates_store": True,
+        }
+        with self.assertRaisesRegex(ValueError, "isolated_snapshot"):
+            perf_recovery._workload_from_mapping(item)
+        item["isolated_snapshot"] = True
+        self.assertTrue(perf_recovery._workload_from_mapping(item).isolated_snapshot)
 
     def test_manifest_rejects_missing_contract_and_short_timeout(self) -> None:
         value = {
@@ -458,7 +557,10 @@ class PerfRecoveryTests(unittest.TestCase):
     def test_manifest_rejects_unvalidated_runtime_placeholder(self) -> None:
         manifest_path = Path(__file__).resolve().parents[1] / "benchmarks" / "perf-recovery-workloads.json"
         value = json.loads(manifest_path.read_text(encoding="utf-8"))
-        value["workloads"][0]["command"] = ["version", "{machine_specific_target}"]
+        next(item for item in value["workloads"] if item["id"] == "tool.inspect.warm")["command"] = [
+            "version",
+            "{machine_specific_target}",
+        ]
         path = self.root / "bad-placeholder.json"
         path.write_text(json.dumps(value), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "placeholder"):
@@ -481,6 +583,16 @@ class PerfRecoveryTests(unittest.TestCase):
                 timed_out=False,
                 hard_memory_bytes=None,
                 platform_name="darwin",
+            )
+        )
+        self.assertFalse(
+            perf_recovery.hard_gate_passed(
+                workload,
+                wall_ms=99,
+                exit_code=0,
+                timed_out=False,
+                hard_memory_bytes=None,
+                platform_name="win32",
             )
         )
         self.assertFalse(
