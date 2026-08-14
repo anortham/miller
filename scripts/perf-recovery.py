@@ -33,6 +33,7 @@ except ImportError:  # pragma: no cover - Windows does not expose resource.
 
 
 FIRST_ATTEMPT_TIMEOUT_MS = 60_000
+SETUP_OBSERVER_GRACE_MS = 30_000
 MAX_CAPTURE_BYTES = 1_048_576
 MAX_MCP_LINE_BYTES = 64 * 1024
 MAX_PHASE_LINE_BYTES = 64 * 1024
@@ -185,6 +186,7 @@ class Workload:
     hard_budget_ms: Mapping[str, int]
     execution_kind: str = "miller_cli"
     timeout_ms: int | None = None
+    setup_timeout_ms: int | None = None
     parity_with: str | None = None
     semantic: bool = False
     lexical_control: bool = True
@@ -580,6 +582,14 @@ def first_attempt_timeout_ms(workload: Workload, platform_name: str | None = Non
     if timeout <= published_budget:
         raise ValueError(f"{workload.workload_id} observation timeout must be strictly greater than its hard budget")
     return timeout
+
+
+def producer_request_timeout_seconds(observation_timeout_ms: int) -> int:
+    request_timeout_ms = observation_timeout_ms - SETUP_OBSERVER_GRACE_MS
+    request_timeout_seconds = request_timeout_ms // 1000
+    if request_timeout_seconds <= 0:
+        raise ValueError("producer request timeout must stay positive after observer grace")
+    return request_timeout_seconds
 
 
 def hard_gate_passed(
@@ -1723,6 +1733,19 @@ def _workload_from_mapping(item: Mapping[str, Any]) -> Workload:
         raise ValueError(f"{workload_id} mutates_store and isolated_snapshot must be boolean")
     if mutates_store and not isolated_snapshot:
         raise ValueError(f"{workload_id} mutates_store requires isolated_snapshot=true")
+    setup_timeout_ms = item.get("setup_timeout_ms")
+    if setup_timeout_ms is not None:
+        if isinstance(setup_timeout_ms, bool) or not isinstance(setup_timeout_ms, int) or setup_timeout_ms < FIRST_ATTEMPT_TIMEOUT_MS:
+            raise ValueError(f"{workload_id} setup_timeout_ms cannot be below the 60 s first-attempt timeout")
+        if (
+            execution_kind != "julie_store"
+            or not mutates_store
+            or not isolated_snapshot
+            or metadata.get("resolution_scope") not in {"one_file", "full"}
+        ):
+            raise ValueError(
+                f"{workload_id} setup_timeout_ms is only valid for isolated mutating Julie resolution workloads"
+            )
     return Workload(
         workload_id=workload_id,
         command=command,
@@ -1731,6 +1754,7 @@ def _workload_from_mapping(item: Mapping[str, Any]) -> Workload:
         hard_budget_ms={str(key): int(value) for key, value in budgets.items()},
         execution_kind=execution_kind,
         timeout_ms=timeout_ms,
+        setup_timeout_ms=setup_timeout_ms,
         parity_with=parity_with,
         semantic=bool(item.get("semantic", False)),
         lexical_control=bool(item.get("lexical_control", not bool(item.get("semantic", False)))),
@@ -2377,6 +2401,8 @@ def _prepare_resolve_resolution(
     setup_request = _setup_request(request, fresh_view)
     setup_environment = dict(environment)
     setup_environment.pop("JULIE_STORE_RESOLUTION_DELTA", None)
+    setup_timeout_ms = workload.setup_timeout_ms if workload.setup_timeout_ms is not None else timeout_ms
+    setup_request_timeout_seconds = producer_request_timeout_seconds(setup_timeout_ms)
     identity = f"perf-recovery-{workload.metadata.get('resolution_scope', 'resolve')}-{fresh_view}"
     baseline_import = (
         "store",
@@ -2402,13 +2428,13 @@ def _prepare_resolve_resolution(
         "--idempotency-key",
         f"{identity}-baseline-import-key",
         "--request-timeout-seconds",
-        "30",
+        str(setup_request_timeout_seconds),
         "--json",
     )
     result = _run_process(
         setup_request,
         _producer_argv(setup_request, baseline_import),
-        timeout_ms,
+        setup_timeout_ms,
         setup_environment,
     )
     baseline_payload = _validate_setup_result(
@@ -2435,13 +2461,13 @@ def _prepare_resolve_resolution(
         "--idempotency-key",
         f"{identity}-baseline-resolve-key",
         "--request-timeout-seconds",
-        "30",
+        str(setup_request_timeout_seconds),
         "--json",
     )
     result = _run_process(
         setup_request,
         _producer_argv(setup_request, baseline_resolve),
-        timeout_ms,
+        setup_timeout_ms,
         setup_environment,
     )
     _validate_setup_result(
@@ -2479,13 +2505,13 @@ def _prepare_resolve_resolution(
         "--idempotency-key",
         f"{identity}-changed-import-key",
         "--request-timeout-seconds",
-        "30",
+        str(setup_request_timeout_seconds),
         "--json",
     )
     result = _run_process(
         request,
         _producer_argv(request, changed_import),
-        timeout_ms,
+        setup_timeout_ms,
         setup_environment,
     )
     changed_payload = _validate_setup_result(

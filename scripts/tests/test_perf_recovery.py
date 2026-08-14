@@ -545,7 +545,14 @@ class PerfRecoveryTests(unittest.TestCase):
             producer_timeout_ms,
             1_500_000,
         )
+        self.assertEqual("1501", full_command[full_command.index("--request-timeout-seconds") + 1])
+        self.assertEqual(60_000, manifest["producer.resolve.one_file"].timeout_ms)
+        self.assertEqual(1_531_000, manifest["producer.resolve.full"].timeout_ms)
         self.assertGreaterEqual(manifest["producer.resolve.full"].timeout_ms, producer_timeout_ms + 30_000)
+        self.assertEqual(1_531_000, manifest["producer.resolve.one_file"].setup_timeout_ms)
+        self.assertEqual(1_531_000, manifest["producer.resolve.full"].setup_timeout_ms)
+        one_file_command = manifest["producer.resolve.one_file"].command
+        self.assertEqual("30", one_file_command[one_file_command.index("--request-timeout-seconds") + 1])
         self.assertIsNone(manifest["tool.context.references.depth1"].parity_with)
         self.assertEqual(
             "tool.context.references.depth1.batch_off",
@@ -888,6 +895,49 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual(b"original\n\n", calls[2][3])
         self.assertEqual(source_pointer_before, source_pointer.read_bytes())
         self.assertEqual(source_file_before, source_file.read_bytes())
+
+    def test_resolve_setup_uses_manifest_timeout_and_observer_grace(self) -> None:
+        live_family = self._family_root("live-family")
+        source_root = self.root / "source-root"
+        source_miller = source_root / ".miller"
+        source_miller.mkdir(parents=True)
+        (source_root / "README.md").write_text("original\n", encoding="utf-8")
+        self._write_pointer_at(source_root, live_family, view_id="source-view")
+        request = self._request(source_root=source_root, live_store=live_family)
+        item = self._resolve_item(resolution_scope="one_file")
+        item["mutates_store"] = True
+        item["isolated_snapshot"] = True
+        item["hard_budget_ms"] = {"development": 5_000, "windows": 10_000}
+        item["setup_timeout_ms"] = 1_531_000
+        workload = perf_recovery._workload_from_mapping(item)
+        calls: list[tuple[list[str], int]] = []
+
+        def copy_family(source: Path, destination: Path, *, live_root: Path | None = None) -> None:
+            shutil.copytree(source, destination)
+
+        def run_process(process_request, argv, timeout, _environment):
+            calls.append((list(argv), timeout))
+            view = argv[argv.index("--view") + 1]
+            family = perf_recovery.resolve_active_store(process_request).family_id
+            payload = {"family_id": family, "view": view, "manifest": {"generation": 5}}
+            return self._result(stdout=json.dumps(payload).encode())
+
+        with mock.patch.object(
+            perf_recovery,
+            "_snapshot_helper_module",
+            return_value=SimpleNamespace(snapshot_family=copy_family),
+        ), mock.patch.object(perf_recovery, "_run_process", side_effect=run_process):
+            records = perf_recovery.run_workload(request, workload)
+
+        self.assertEqual(1, len(records))
+        self.assertEqual(
+            [1_531_000, 1_531_000, 1_531_000, 60_000],
+            [timeout for _, timeout in calls],
+        )
+        self.assertEqual(
+            ["1501", "1501", "1501", "30"],
+            [argv[argv.index("--request-timeout-seconds") + 1] for argv, _ in calls],
+        )
 
     def test_source_changing_baseline_failure_aborts_before_file_change_or_measurement(self) -> None:
         live_family = self._family_root("live-family")
@@ -2154,6 +2204,24 @@ class PerfRecoveryTests(unittest.TestCase):
         path.write_text(json.dumps(value), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "workload id|timeout_ms"):
             perf_recovery.load_manifest(path)
+
+    def test_manifest_rejects_invalid_or_unsupported_setup_timeout(self) -> None:
+        item = self._resolve_item(resolution_scope="full")
+        item["setup_timeout_ms"] = perf_recovery.FIRST_ATTEMPT_TIMEOUT_MS - 1
+        with self.assertRaisesRegex(ValueError, "setup_timeout_ms"):
+            perf_recovery._workload_from_mapping(item)
+
+        item = {
+            "id": "tool.setup-timeout",
+            "command": ["version"],
+            "warmups": 0,
+            "runs": 1,
+            "timeout_ms": 61_000,
+            "setup_timeout_ms": 61_000,
+            "hard_budget_ms": {"development": 1_000, "windows": 2_000},
+        }
+        with self.assertRaisesRegex(ValueError, "isolated mutating Julie resolution"):
+            perf_recovery._workload_from_mapping(item)
 
     def test_manifest_rejects_unvalidated_runtime_placeholder(self) -> None:
         manifest_path = Path(__file__).resolve().parents[1] / "benchmarks" / "perf-recovery-workloads.json"
