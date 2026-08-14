@@ -3,7 +3,7 @@ id: miller-performance-recovery-implementation
 title: Miller performance recovery implementation
 status: active
 created: 2026-08-14T03:57:03.433Z
-updated: 2026-08-14T08:40:28.709Z
+updated: 2026-08-14T08:47:12.883Z
 tags:
   - performance
   - family-store
@@ -26,7 +26,7 @@ Measured default relationship context takes about 11.93 seconds, leader startup 
 
 - Preserve Store Contract v1 and all existing MCP/CLI schemas and deterministic semantics.
 - A replay row must exercise the production path it names; CLI status/leader reads are diagnostic controls, not startup measurements.
-- Never mutate the live store. Refuse live/unknown owners. For SQLite inputs, capture source content/metadata, stream-copy main/WAL/SHM to a private shadow, revalidate the source, then back up from the shadow; validate and digest the WAL-free destination before atomic promotion.
+- Never mutate the live store. Refuse live/unknown owners. For SQLite inputs, capture source content/metadata, stream-copy the durable main/WAL pair to a private shadow, revalidate durable source facts, let SQLite rebuild transient SHM only in the shadow, then back up and validate/digest the WAL-free destination before atomic promotion.
 - Keep context batching default-off until same-depth batch parity and copied-store lexical timing pass.
 - Characterize shipped incremental behavior before editing it.
 - Split store lifecycle rebase/collection from query/index/statistics tuning so each has independent evidence and rollback.
@@ -45,4 +45,4 @@ Completed Tasks 1–4 remain reviewed but production-volume unproven. Task 1B su
 
 ## Status
 
-Implementation active on `feature/performance-recovery`. Tasks 1–4 and Task 5A are committed and lead-reviewed. Task 1B-A is committed and lead-verified: faithful MCP/producer execution, bounded lifecycle handling, default-off context batching, and the non-mutating whole-family snapshot helper are ready. The next serialized step is Task 1B-B: create a verified copied-store snapshot and capture the immutable Linux baseline without touching the incident store.
+Implementation active on `feature/performance-recovery`. Tasks 1–4 and Task 5A are committed and lead-reviewed. Task 1B-A is committed and lead-verified. The first Task 1B-B snapshot attempt safely aborted because a reader changed transient source SHM; official SQLite documentation confirms SHM contains no database content and is rebuilt from WAL. The snapshot helper is being narrowed to durable main+WAL inputs before retrying the copied-store baseline.
