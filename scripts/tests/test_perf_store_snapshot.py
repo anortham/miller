@@ -187,6 +187,79 @@ class PerfStoreSnapshotTests(unittest.TestCase):
                 connection.execute("SELECT name FROM facts WHERE name = 'shadow-wal'").fetchone()[0],
             )
 
+    def test_snapshot_allows_shm_churn_during_wal_backup(self) -> None:
+        source = self.source_generation / "store.db"
+        destination = self.root / "copy.db"
+        producer = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os, sqlite3, sys; "
+                    "connection = sqlite3.connect(sys.argv[1]); "
+                    "connection.execute('PRAGMA journal_mode=WAL'); "
+                    "connection.execute('PRAGMA wal_autocheckpoint=0'); "
+                    "connection.execute(\"INSERT INTO facts(name) VALUES ('shm-churn')\"); "
+                    "connection.commit(); os._exit(0)"
+                ),
+                str(source),
+            ],
+            check=False,
+        )
+        self.assertEqual(0, producer.returncode)
+        shm = Path(f"{source}-shm")
+        self.assertTrue(shm.exists())
+        durable_members = (source, Path(f"{source}-wal"))
+        before = {
+            member: (
+                member.read_bytes(),
+                member.stat().st_dev,
+                member.stat().st_ino,
+                member.stat().st_mtime_ns,
+                member.stat().st_ctime_ns,
+                member.stat().st_mode,
+            )
+            for member in durable_members
+        }
+        original_copy = snapshot._copy_file_stream
+        mutated = False
+        copy_inputs = []
+
+        def copy_with_shm_churn(source_path: Path, destination_path: Path) -> None:
+            nonlocal mutated
+            copy_inputs.append((source_path, destination_path))
+            original_copy(source_path, destination_path)
+            if source_path == source and not mutated:
+                shm.write_bytes(shm.read_bytes() + b"churn")
+                item_stat = shm.stat()
+                os.utime(shm, ns=(item_stat.st_atime_ns, item_stat.st_mtime_ns + 1))
+                mutated = True
+
+        with mock.patch.object(snapshot, "_copy_file_stream", side_effect=copy_with_shm_churn):
+            result = snapshot.snapshot_family(self.source, destination, live_root=self.root / "live")
+
+        after = {
+            member: (
+                member.read_bytes(),
+                member.stat().st_dev,
+                member.stat().st_ino,
+                member.stat().st_mtime_ns,
+                member.stat().st_ctime_ns,
+                member.stat().st_mode,
+            )
+            for member in durable_members
+        }
+        self.assertTrue(mutated)
+        self.assertEqual(before, after)
+        self.assertNotIn(shm, [source_path for source_path, _ in copy_inputs])
+        self.assertEqual("ok", result["quick_check"])
+        with closing(sqlite3.connect(destination / "gen-001" / "store.db")) as connection:
+            self.assertEqual(
+                "shm-churn",
+                connection.execute("SELECT name FROM facts WHERE name = 'shm-churn'").fetchone()[0],
+            )
+        self.assertFalse(list(destination.rglob("*.db-shm")))
+
     def test_snapshot_copies_all_generations_bases_and_sidecars(self) -> None:
         second_generation = self.source / "gen-002"
         second_generation.mkdir()
@@ -419,6 +492,42 @@ class PerfStoreSnapshotTests(unittest.TestCase):
                 connection.execute("UPDATE facts SET name = 'change'")
                 connection.commit()
             os.utime(database, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+            return result
+
+        with mock.patch.object(snapshot, "_copy_family_files", side_effect=copy_then_mutate):
+            with self.assertRaisesRegex(ValueError, "source family changed"):
+                snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+        self.assertFalse(self.destination.exists())
+
+    def test_snapshot_rejects_same_size_restored_mtime_wal_change(self) -> None:
+        database = self.source_generation / "store.db"
+        producer = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os, sqlite3, sys; "
+                    "connection = sqlite3.connect(sys.argv[1]); "
+                    "connection.execute('PRAGMA journal_mode=WAL'); "
+                    "connection.execute('PRAGMA wal_autocheckpoint=0'); "
+                    "connection.execute(\"INSERT INTO facts(name) VALUES ('wal-change')\"); "
+                    "connection.commit(); os._exit(0)"
+                ),
+                str(database),
+            ],
+            check=False,
+        )
+        self.assertEqual(0, producer.returncode)
+        wal = Path(f"{database}-wal")
+        self.assertTrue(wal.exists())
+        original_copy = snapshot._copy_family_files
+        original_stat = wal.stat()
+
+        def copy_then_mutate(source: Path, destination: Path):
+            result = original_copy(source, destination)
+            payload = wal.read_bytes()
+            wal.write_bytes(payload[::-1])
+            os.utime(wal, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
             return result
 
         with mock.patch.object(snapshot, "_copy_family_files", side_effect=copy_then_mutate):

@@ -79,7 +79,7 @@ def _copy_file_stream(source: Path, destination: Path) -> None:
 
 def _database_state(path: Path) -> tuple[tuple[str, tuple[Any, ...] | None, str | None], ...]:
     state: list[tuple[str, tuple[Any, ...] | None, str | None]] = []
-    for suffix in ("", "-wal", "-shm"):
+    for suffix in ("", "-wal"):
         member = Path(f"{path}{suffix}")
         facts = _file_facts(member)
         digest = _digest_files(member.parent, [Path(member.name)]) if facts is not None else None
@@ -347,6 +347,8 @@ def _is_sqlite_file(path: Path) -> bool:
 def _source_files(source: Path) -> list[Path]:
     files: list[Path] = []
     for path in source.rglob("*"):
+        if path.name.endswith("-shm"):
+            continue
         if _path_has_reparse_point(path):
             raise ValueError(f"source family contains a symlink or reparse alias: {path}")
         if path.is_file():
