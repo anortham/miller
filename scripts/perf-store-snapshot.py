@@ -470,7 +470,7 @@ def _database_digest(path: Path) -> str:
     return _digest_files(path.parent, files)
 
 
-def _copy_family_files(source: Path, destination: Path) -> tuple[list[Path], list[Path]]:
+def _copy_family_files(source: Path, destination: Path) -> tuple[list[tuple[Path, str]], list[Path]]:
     generation = _read_current(source)
     databases: list[tuple[Path, str]] = []
     copied: list[Path] = []
