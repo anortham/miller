@@ -74,7 +74,7 @@ the shared process.
 `<miller-home>` is the directory containing Miller's user-global registry. All paths are derived
 only after semantics is known to be enabled.
 
-The v1 layout is flat and exact:
+The v1 layout is flat and exact for locks and for Unix socket paths that fit the platform limit:
 
 ```text
 Unix directory:        <miller-home>/semantic/
@@ -84,6 +84,29 @@ Accelerator lock:      <miller-home>/semantic/accelerator-v1.lock
 Windows short pipe:    miller-semantic-<identity>
 Windows server pipe:   \\.\pipe\miller-semantic-<identity>
 ```
+
+All service and accelerator locks remain under `<miller-home>/semantic/`. On Unix, Miller uses the
+legacy socket path above whenever its UTF-8 byte count is at most the platform limit: 107 bytes on
+Linux and 103 bytes on macOS. When the legacy path exceeds that limit, Miller uses this ASCII-only
+fallback instead:
+
+```text
+Unix fallback parent: /tmp/miller-semantic-u<user-hash>/
+Unix fallback endpoint: /tmp/miller-semantic-u<user-hash>/broker-<home-hash>-<identity>.sock
+```
+
+`user-hash` is the first 16 lowercase hexadecimal characters of SHA-256 over the current user's
+UTF-8 username. `home-hash` is the first 16 lowercase hexadecimal characters of SHA-256 over the
+UTF-8 encoding of the absolute normalized Miller-home path returned by `Path.GetFullPath`. The fallback parent is dedicated to this broker namespace because
+the sidecar sets the endpoint parent mode to `0700`; Miller never uses `Path.GetTempPath()` for this
+fallback. If the computed fallback itself exceeds the platform limit, endpoint creation fails
+explicitly. The fallback changes only the Unix endpoint address: identity, lock paths, and all
+Windows pipe names remain unchanged.
+
+This conditional fallback is mixed-version safe. A pre-fallback Miller binary derives only the
+legacy path, so it cannot bind a fallback endpoint in a long-home case; short-home cases continue
+to use the byte-identical legacy path. No binary-version or model-identity change is needed, and
+the existing service-lock election still prevents two brokers from loading the same model.
 
 The spawning Miller factory is the owner: it retains the owner stdin lease and, on Windows, the
 Job Object ownership handle. The sidecar process is the service broker. A Miller factory probes
@@ -104,8 +127,10 @@ cannot overcommit the same accelerator by racing model initialization.
 ## Unix transport and permissions
 
 The Unix endpoint is an absolute Unix domain socket path. Before binding, the service-lock holder
-ensures `<miller-home>/semantic/` has mode `0700`. After binding, it ensures the socket has mode
-`0600`. A permission failure prevents broker readiness; it does not relax permissions.
+ensures the selected endpoint parent has mode `0700`: `<miller-home>/semantic/` for the legacy
+layout or the dedicated `/tmp/miller-semantic-u<user-hash>/` parent for the fallback. After binding,
+it ensures the socket has mode `0600`. A permission failure prevents broker readiness; it does not
+relax permissions.
 
 The socket is local to the current user. The service-lock holder removes its socket on orderly
 shutdown. Crash residue is removed only by the next service-lock holder.
@@ -207,6 +232,8 @@ demote the engine and are not retried as out-of-memory failures. A second
 - Broker adoption does not change vector-artifact ownership: Miller continues to own
   `<workspace>/.miller/vectors.db`.
 
-This contract can gain clarifying text without changing behavior. Any change to identity,
-discovery paths, ownership, wire behavior, scheduling ratios, security, or failure policy
-requires a new broker contract version and compatibility review.
+This contract can gain clarifying text without changing behavior. The conditional long-path Unix
+fallback above is part of v1 because it leaves short paths and all broker identity/lock behavior
+unchanged, while older binaries cannot bind fallback cases. Any other change to identity,
+discovery paths, ownership, wire behavior, scheduling ratios, security, or failure policy requires
+a new broker contract version and compatibility review.
