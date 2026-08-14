@@ -8,6 +8,7 @@ import io
 import json
 import os
 import subprocess
+import shutil
 import sys
 import tempfile
 import textwrap
@@ -318,9 +319,13 @@ class PerfRecoveryTests(unittest.TestCase):
         live_family = self._family_root("live-family")
         copied_family = self._family_root("copied-family")
         self._write_pointer(copied_family)
+        source_root = self.root / "source-root"
+        source_root.mkdir()
         marker = self.root / "cli-launched"
 
         def fake_replay(request, workloads):
+            self.assertEqual(source_root, request.source_root)
+            self.assertEqual(self.workspace, request.workspace)
             self.assertEqual(["startup.reader.warm", "tool.trace.warm"], list(workloads))
             self.assertEqual(3, workloads["startup.reader.warm"].runs)
             self.assertEqual(1, workloads["startup.reader.warm"].warmups)
@@ -343,6 +348,8 @@ class PerfRecoveryTests(unittest.TestCase):
                     "unused-miller",
                     "--workspace",
                     str(self.workspace),
+                    "--source-root",
+                    str(source_root),
                     "--store-copy",
                     str(copied_family),
                     "--live-store",
@@ -599,6 +606,182 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual("julie-extract", argv[0])
         self.assertEqual("store", argv[1])
         self.assertIn(str(self.store_copy), argv)
+
+    def test_producer_import_uses_explicit_source_root(self) -> None:
+        source_root = self.root / "source-root"
+        source_root.mkdir()
+        request = self._request(source_root=source_root)
+        command = (
+            "store",
+            "import",
+            "--store",
+            "{store_copy}",
+            "--family",
+            "{family}",
+            "--root",
+            "{source_root}",
+            "--view",
+            "{view}",
+            "--level",
+            "full",
+            "--request-id",
+            "import",
+            "--idempotency-key",
+            "import-key",
+            "--request-timeout-seconds",
+            "30",
+            "--json",
+        )
+        argv = perf_recovery._producer_argv(request, command)
+        self.assertIn(str(source_root), argv)
+
+    def test_source_root_is_read_only_and_resolve_gets_a_staged_change_root(self) -> None:
+        source_root = self.root / "source-root"
+        source_miller = source_root / ".miller"
+        source_miller.mkdir(parents=True)
+        source_file = source_root / "README.md"
+        source_file.write_text("original\n", encoding="utf-8")
+        source_pointer = source_miller / "store.json"
+        source_pointer.write_text("original-pointer\n", encoding="utf-8")
+        request = self._request(source_root=source_root)
+
+        def copy_family(source: Path, destination: Path, *, live_root: Path | None = None) -> None:
+            shutil.copytree(source, destination)
+
+        with mock.patch.object(
+            perf_recovery,
+            "_snapshot_helper_module",
+            return_value=SimpleNamespace(snapshot_family=copy_family),
+        ):
+            isolated, temporary = perf_recovery._isolated_request(request, source_changing=True)
+        try:
+            self.assertNotEqual(source_root, isolated.change_root)
+            self.assertEqual("original\n", source_file.read_text(encoding="utf-8"))
+            self.assertEqual("original-pointer\n", source_pointer.read_text(encoding="utf-8"))
+            changed = isolated.change_root / "README.md"
+            changed.write_text("changed\n", encoding="utf-8")
+            self.assertEqual("original\n", source_file.read_text(encoding="utf-8"))
+        finally:
+            temporary.cleanup()
+
+    def test_mutating_resolve_setup_does_not_edit_original_source(self) -> None:
+        source_root = self.root / "source-root"
+        source_miller = source_root / ".miller"
+        source_miller.mkdir(parents=True)
+        source_file = source_root / "README.md"
+        source_file.write_text("original\n", encoding="utf-8")
+        source_pointer = source_miller / "store.json"
+        source_pointer.write_text("original-pointer\n", encoding="utf-8")
+        request = self._request(source_root=source_root)
+        item = self._resolve_item(resolution_scope="one_file")
+        item["mutates_store"] = True
+        item["isolated_snapshot"] = True
+        item["timeout_ms"] = 121_000
+        workload = perf_recovery._workload_from_mapping(item)
+        calls: list[list[str]] = []
+
+        def copy_family(source: Path, destination: Path, *, live_root: Path | None = None) -> None:
+            shutil.copytree(source, destination)
+
+        def run_process(_request, argv, _timeout, _environment):
+            calls.append(list(argv))
+            return self._result(stdout=json.dumps({"resolution": {"resolution_mode": "scoped"}}).encode())
+
+        with mock.patch.object(
+            perf_recovery,
+            "_snapshot_helper_module",
+            return_value=SimpleNamespace(snapshot_family=copy_family),
+        ), mock.patch.object(perf_recovery, "_run_process", side_effect=run_process):
+            perf_recovery.run_workload(request, workload)
+
+        self.assertEqual("import", calls[0][2])
+        staged_change_root = Path(calls[0][calls[0].index("--root") + 1])
+        self.assertNotEqual(source_root, staged_change_root)
+        self.assertEqual("original\n", source_file.read_text(encoding="utf-8"))
+        self.assertEqual("original-pointer\n", source_pointer.read_text(encoding="utf-8"))
+
+    def test_workspace_open_fails_if_setup_mints_a_new_binding(self) -> None:
+        request = self._request()
+        workload = perf_recovery.Workload(
+            workload_id="workspace.open.no_change",
+            command=("workspace", "open", "--path", "{workspace}", "--json"),
+            warmups=0,
+            runs=1,
+            hard_budget_ms={"development": 5_000, "windows": 10_000},
+            timeout_ms=60_000,
+        )
+
+        def run_command(_request, _command, **_kwargs):
+            pointer_path = self.workspace / ".miller" / "store.json"
+            pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+            pointer["family_id"] = "22222222-2222-2222-2222-222222222222"
+            pointer["view_id"] = "view-2"
+            pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+            return self._result()
+
+        with mock.patch.object(perf_recovery, "run_command", side_effect=run_command):
+            with self.assertRaisesRegex(RuntimeError, "binding|family|view"):
+                perf_recovery.run_workload(request, workload)
+
+    def test_producer_view_change_requires_explicit_staged_adoption(self) -> None:
+        request = self._request()
+        workload = perf_recovery.Workload(
+            workload_id="producer.resolve.full",
+            command=(
+                "store",
+                "resolve",
+                "--store",
+                "{store_copy}",
+                "--view",
+                "{view}",
+                "--request-id",
+                "resolve",
+                "--idempotency-key",
+                "resolve-key",
+                "--request-timeout-seconds",
+                "30",
+                "--json",
+            ),
+            warmups=0,
+            runs=1,
+            hard_budget_ms={"development": 1_000, "windows": 2_000},
+            timeout_ms=3_000,
+            execution_kind="julie_store",
+        )
+        result = self._result(stdout=json.dumps({"view_id": "view-2"}).encode())
+        with mock.patch.object(perf_recovery, "_run_process", return_value=result):
+            with self.assertRaisesRegex(RuntimeError, "adopt|view"):
+                perf_recovery.run_workload(request, workload)
+
+    def test_producer_generation_must_match_the_adopted_current_generation(self) -> None:
+        request = self._request()
+        workload = perf_recovery.Workload(
+            workload_id="producer.resolve.full",
+            command=(
+                "store",
+                "resolve",
+                "--store",
+                "{store_copy}",
+                "--view",
+                "{view}",
+                "--request-id",
+                "resolve",
+                "--idempotency-key",
+                "resolve-key",
+                "--request-timeout-seconds",
+                "30",
+                "--json",
+            ),
+            warmups=0,
+            runs=1,
+            hard_budget_ms={"development": 1_000, "windows": 2_000},
+            timeout_ms=3_000,
+            execution_kind="julie_store",
+        )
+        result = self._result(stdout=json.dumps({"generation": "gen-999"}).encode())
+        with mock.patch.object(perf_recovery, "_run_process", return_value=result):
+            with self.assertRaisesRegex(RuntimeError, "generation|adopt"):
+                perf_recovery.run_workload(request, workload)
 
     def test_producer_paths_require_operation_specific_runtime_placeholders(self) -> None:
         item = self._resolve_item()

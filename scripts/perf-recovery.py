@@ -127,7 +127,15 @@ KNOWN_FLAGS = {
     "--workspace",
     "--workspace-id",
 }
-PLACEHOLDER_NAMES = {"workspace", "store_copy", "target", "family", "view"}
+PLACEHOLDER_NAMES = {
+    "workspace",
+    "source_root",
+    "change_root",
+    "store_copy",
+    "target",
+    "family",
+    "view",
+}
 SEMANTIC_WORKLOAD_LOCK = threading.Lock()
 
 
@@ -141,6 +149,8 @@ class ReplayRequest:
     out: Path | None = None
     store_mode: str | None = None
     producer: str | Path = "julie-extract"
+    source_root: Path | None = None
+    change_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -415,6 +425,44 @@ def resolve_active_store(request: ReplayRequest) -> ActiveStore:
     return ActiveStore(mode="legacy", root=artifact, files=(artifact,), artifact_path=artifact)
 
 
+def _active_binding(active: ActiveStore) -> tuple[str, Path, str | None, str | None, str | None]:
+    return (active.mode, active.root, active.family_id, active.view_id, active.generation)
+
+
+def _require_staged_binding(
+    request: ReplayRequest,
+    expected: ActiveStore,
+    *,
+    label: str,
+) -> ActiveStore:
+    actual = resolve_active_store(request)
+    if _active_binding(actual) != _active_binding(expected):
+        raise RuntimeError(
+            f"{label} changed the staged family/view or generation; explicitly adopt the new binding"
+        )
+    return actual
+
+
+def _require_producer_binding(
+    request: ReplayRequest,
+    expected: ActiveStore,
+    payload: Any,
+    *,
+    label: str,
+) -> ActiveStore:
+    actual = resolve_active_store(request)
+    expected_identity = (expected.mode, expected.root, expected.family_id, expected.view_id)
+    actual_identity = (actual.mode, actual.root, actual.family_id, actual.view_id)
+    if actual_identity != expected_identity:
+        raise RuntimeError(f"{label} changed the staged family/view; explicitly adopt the new binding")
+    observed_view, observed_generation = _view_and_generation(payload)
+    if observed_view is not None and observed_view != actual.view_id:
+        raise RuntimeError(f"{label} returned an unadopted view {observed_view!r}")
+    if observed_generation is not None and str(observed_generation) != str(actual.generation):
+        raise RuntimeError(f"{label} returned an unadopted generation {observed_generation!r}")
+    return actual
+
+
 def _store_copy_matches_active(active: ActiveStore, store_copy: Path) -> bool:
     canonical_copy = _canonical(store_copy)
     if canonical_copy == active.root:
@@ -436,6 +484,12 @@ def validate_request(request: ReplayRequest) -> ReplayRequest:
     workspace = _canonical(request.workspace)
     if not workspace.exists() or not workspace.is_dir():
         raise ValueError(f"workspace does not exist or is not a directory: {workspace}")
+    source_root = _canonical(request.source_root) if request.source_root is not None else workspace
+    if not source_root.exists() or not source_root.is_dir():
+        raise ValueError(f"source root does not exist or is not a directory: {source_root}")
+    change_root = _canonical(request.change_root) if request.change_root is not None else None
+    if change_root is not None and (not change_root.exists() or not change_root.is_dir()):
+        raise ValueError(f"change root does not exist or is not a directory: {change_root}")
     if request.miller_home is not None:
         home = _canonical(request.miller_home)
         if _is_alias(home, live_store):
@@ -445,6 +499,8 @@ def validate_request(request: ReplayRequest) -> ReplayRequest:
         live_store=live_store,
         store_copy=store_copy,
         workspace=workspace,
+        source_root=source_root,
+        change_root=change_root,
         miller_home=_canonical(request.miller_home) if request.miller_home is not None else None,
         out=_canonical(request.out) if request.out is not None else None,
     )
@@ -1354,8 +1410,11 @@ def _attach_depth_pair(records: list[ReplayRecord]) -> list[ReplayRecord]:
 
 
 def _replace_placeholders(token: str, request: ReplayRequest, target: str | None) -> str:
+    source_root = request.source_root or request.workspace
     values = {
         "workspace": str(request.workspace),
+        "source_root": str(source_root),
+        "change_root": str(request.change_root or source_root),
         "store_copy": str(request.store_copy),
         "target": target or "",
     }
@@ -1442,7 +1501,9 @@ def _validate_command(
             if not {"--root", "--family", "--level"}.issubset(flags):
                 raise ValueError(f"{label} store import must include root, family, and level")
             required_placeholder("--family", "family")
-            required_placeholder("--root", "workspace")
+            root_values = flag_values("--root")
+            if root_values not in (["{source_root}"], ["{change_root}"]):
+                raise ValueError(f"{label} --root must be bound to {{source_root}} or {{change_root}} runtime placeholder")
         else:
             if "--family" in flags:
                 required_placeholder("--family", "family")
@@ -2049,8 +2110,14 @@ def _snapshot_helper_module() -> Any:
     return module
 
 
-def _isolated_request(request: ReplayRequest) -> tuple[ReplayRequest, tempfile.TemporaryDirectory[str]]:
+def _isolated_request(
+    request: ReplayRequest,
+    *,
+    source_changing: bool = False,
+) -> tuple[ReplayRequest, tempfile.TemporaryDirectory[str]]:
     active = resolve_active_store(request)
+    source_root = _canonical(request.source_root or request.workspace)
+    workspace_root = _canonical(request.workspace)
     temporary = tempfile.TemporaryDirectory(prefix="miller-perf-workload-")
     root = Path(temporary.name)
     isolated_workspace = root / "workspace"
@@ -2059,6 +2126,18 @@ def _isolated_request(request: ReplayRequest) -> tuple[ReplayRequest, tempfile.T
         isolated_workspace,
         ignore=shutil.ignore_patterns(".miller", ".git"),
     )
+    if source_changing:
+        if source_root == workspace_root:
+            isolated_change_root = isolated_workspace
+        else:
+            isolated_change_root = root / "change-root"
+            shutil.copytree(
+                source_root,
+                isolated_change_root,
+                ignore=shutil.ignore_patterns(".miller", ".git"),
+            )
+    else:
+        isolated_change_root = None
     isolated_miller = isolated_workspace / ".miller"
     isolated_miller.mkdir(parents=True, exist_ok=True)
     isolated_store = root / "store-family"
@@ -2078,19 +2157,22 @@ def _isolated_request(request: ReplayRequest) -> tuple[ReplayRequest, tempfile.T
         workspace=isolated_workspace,
         store_copy=isolated_copy,
         miller_home=root / "miller-home",
+        source_root=source_root,
+        change_root=isolated_change_root,
     )
     return validate_request(isolated_request), temporary
 
 
-def _one_file_path(request: ReplayRequest, workload: Workload) -> Path:
+def _one_file_path(request: ReplayRequest, workload: Workload, *, root: Path | None = None) -> Path:
+    change_root = root or request.workspace
     requested = workload.metadata.get("changed_path")
     if isinstance(requested, str) and requested.strip():
-        candidate = (request.workspace / requested).resolve(strict=False)
-        if candidate.is_file() and _is_contained(candidate, request.workspace):
+        candidate = (change_root / requested).resolve(strict=False)
+        if candidate.is_file() and _is_contained(candidate, change_root):
             return candidate
     candidates = sorted(
         path
-        for path in request.workspace.rglob("*")
+        for path in change_root.rglob("*")
         if path.is_file() and ".miller" not in path.parts and ".git" not in path.parts
     )
     if not candidates:
@@ -2104,7 +2186,14 @@ def _prepare_resolve_resolution(
     environment: Mapping[str, str],
     timeout_ms: int,
 ) -> None:
-    changed = _one_file_path(request, workload)
+    change_root = request.change_root
+    source_root = _canonical(request.source_root or request.workspace)
+    workspace_root = _canonical(request.workspace)
+    if change_root is None:
+        if source_root != workspace_root:
+            raise RuntimeError(f"{workload.workload_id} requires an isolated staged change root")
+        change_root = workspace_root
+    changed = _one_file_path(request, workload, root=change_root)
     changed.write_bytes(changed.read_bytes() + b"\n")
     active = resolve_active_store(request)
     import_command = (
@@ -2115,7 +2204,7 @@ def _prepare_resolve_resolution(
         "--family",
         "{family}",
         "--root",
-        "{workspace}",
+        "{change_root}",
         "--view",
         "{view}",
         "--level",
@@ -2148,7 +2237,8 @@ def run_workload(
     if workload.mutates_store:
         if not workload.isolated_snapshot:
             raise ValueError(f"{workload.workload_id} requires isolated_snapshot=true")
-        isolated_request, temporary = _isolated_request(request)
+        source_changing = workload.metadata.get("resolution_scope") in {"one_file", "full"}
+        isolated_request, temporary = _isolated_request(request, source_changing=source_changing)
         try:
             return run_workload(
                 isolated_request,
@@ -2176,6 +2266,7 @@ def run_workload(
     process_command = actual_command if command is not None else _miller_argv(request, actual_command, target)
     commit = _commit_for_workspace(request.workspace)
     if workload.workload_id == "workspace.open.no_change":
+        prepared_binding = resolve_active_store(request)
         setup = run_command(
             request,
             process_command,
@@ -2185,6 +2276,7 @@ def run_workload(
         )
         if setup.timed_out or setup.exit_code != 0 or not setup.completed:
             raise RuntimeError("workspace.open.no_change setup failed")
+        _require_staged_binding(request, prepared_binding, label="workspace.open.no_change setup")
     records: list[ReplayRecord] = []
     for index in range(workload.warmups + workload.runs):
         warmup = index < workload.warmups
@@ -2197,9 +2289,17 @@ def run_workload(
             )
         elif workload.execution_kind == "julie_store":
             producer_command = _producer_argv(request, actual_command, target)
+            prepared_binding = resolve_active_store(request)
             lock = SEMANTIC_WORKLOAD_LOCK if semantic else _NullLock()
             with lock:
                 result = _run_process(request, list(producer_command), effective_timeout, environment)
+            payload = _parse_json_payload(result.stdout)
+            _require_producer_binding(
+                request,
+                prepared_binding,
+                payload,
+                label=f"{workload.workload_id} producer",
+            )
         else:
             result = run_command(
                 request,
@@ -2331,6 +2431,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--miller", default="miller")
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
+    parser.add_argument("--source-root", type=Path)
     parser.add_argument("--store-copy", type=Path, required=True)
     parser.add_argument("--live-store", type=Path, required=True)
     parser.add_argument("--only", help="comma-separated workload IDs to run")
@@ -2347,6 +2448,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 store_copy=args.store_copy,
                 live_store=args.live_store,
                 workspace=workspace,
+                source_root=args.source_root,
                 miller=args.miller,
                 out=args.out,
             )
