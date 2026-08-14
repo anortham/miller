@@ -1127,6 +1127,40 @@ class PerfRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "generation|adopt"):
                 perf_recovery.run_workload(request, workload)
 
+    def test_resolve_report_treats_blank_roots_as_unavailable(self) -> None:
+        request = self._request()
+        active = perf_recovery.resolve_active_store(request)
+        payload = {
+            "family_id": str(active.family_id),
+            "view_id": active.view_id,
+            "manifest": {"generation": 5},
+            "root": "",
+        }
+
+        for root in ("", " \t\n"):
+            with self.subTest(root=repr(root)):
+                payload["root"] = root
+                self.assertEqual(
+                    payload,
+                    perf_recovery._validate_setup_result(
+                        request,
+                        self._result(stdout=json.dumps(payload).encode()),
+                        expected_view=active.view_id,
+                        label="resolve",
+                        require_pointer_view=True,
+                    ),
+                )
+
+        payload["root"] = str(self.root / "other-workspace")
+        with self.assertRaisesRegex(RuntimeError, "JSON root does not match"):
+            perf_recovery._validate_setup_result(
+                request,
+                self._result(stdout=json.dumps(payload).encode()),
+                expected_view=active.view_id,
+                label="resolve",
+                require_pointer_view=True,
+            )
+
     def test_nested_manifest_generation_matches_the_selected_view_not_current_directory(self) -> None:
         database = self.store_copy / "gen-001" / "store.db"
         database.unlink()

@@ -2370,6 +2370,8 @@ def _validate_setup_result(
     if require_pointer_view and active.view_id != expected_view:
         raise RuntimeError(f"{label} did not produce the adopted view")
     reported_root = _find_value(payload, {"root", "root_path", "workspace_root", "source_root"})
+    if isinstance(reported_root, str) and not reported_root.strip():
+        reported_root = None
     if reported_root is not None and _canonical(str(reported_root)) != _canonical(request.workspace):
         raise RuntimeError(f"{label} JSON root does not match the temporary workspace")
     return payload
