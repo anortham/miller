@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "workloads": [
+    {
+      "id": "startup.reader.warm",
+      "command": ["workspace", "status", "--json"],
+      "warmups": 1,
+      "runs": 3,
+      "hard_budget_ms": {"development": 5000, "windows": 10000},
+      "hard_budget_memory_bytes": 629145600,
+      "metadata": {"perf_row": "startup reader"}
+    },
+    {
+      "id": "startup.leader.no_change",
+      "command": ["workspace", "leader", "--json"],
+      "warmups": 1,
+      "runs": 3,
+      "hard_budget_ms": {"development": 2000, "windows": 5000},
+      "hard_budget_memory_bytes": 629145600,
+      "metadata": {"perf_row": "leader no-change convergence"}
+    },
+    {
+      "id": "workspace.open.no_change",
+      "command": ["workspace", "open", "--path", "{workspace}", "--json"],
+      "warmups": 1,
+      "runs": 3,
+      "hard_budget_ms": {"development": 5000, "windows": 10000},
+      "hard_budget_memory_bytes": 629145600,
+      "metadata": {"perf_row": "PERF-010 workspace open"}
+    },
+    {
+      "id": "producer.retry.identical",
+      "command": ["refresh", "--json", "--wait"],
+      "warmups": 1,
+      "runs": 3,
+      "hard_budget_ms": {"development": 2000, "windows": 5000},
+      "hard_budget_memory_bytes": 629145600,
+      "metadata": {"perf_row": "stranded import and byte-identical retry"}
+    },
+    {
+      "id": "producer.resolve.one_file",
+      "command": ["refresh", "--json", "--wait"],
+      "warmups": 0,
+      "runs": 1,
+      "hard_budget_ms": {"development": 5000, "windows": 10000},
+      "hard_budget_memory_bytes": 629145600,
+      "metadata": {"perf_row": "resolution/store growth one-file scope", "resolution_scope": "one_file"}
+    },
+    {
+      "id": "producer.resolve.full",
+      "command": ["refresh", "--json", "--wait", "--full"],
+      "warmups": 0,
+      "runs": 1,
+      "hard_budget_ms": {"development": 60000, "windows": 120000},
+      "hard_budget_memory_bytes": 629145600,
+      "metadata": {"perf_row": "resolution/store growth full scope", "resolution_scope": "full"}
+    },
+    {
+      "id": "tool.inspect.warm",
+      "command": ["inspect", "src/Miller.Server/Tools/WorkspaceTool.cs", "--depth", "overview", "--limit", "1", "--json"],
+      "warmups": 1,
+      "runs": 3,
+      "hard_budget_ms": {"development": 500, "windows": 2000},
+      "hard_budget_memory_bytes": 629145600,
+      "metadata": {"perf_row": "warm inspect"}
+    },
+    {
+      "id": "tool.context.references.depth0",
+      "command": ["context", "CLI workspace routing", "--reference-mode", "usage", "--reference-depth", "0", "--token-budget", "1200", "--max-hops", "1", "--json"],
+      "warmups": 1,
+      "runs": 3,
+      "hard_budget_ms": {"development": 2000, "windows": 5000},
+      "hard_budget_memory_bytes": 629145600,
+      "semantic": true,
+      "lexical_control": false,
+      "metadata": {"perf_row": "context reference depth baseline", "reference_depth": 0}
+    },
+    {
+      "id": "tool.context.references.depth1",
+      "command": ["context", "CLI workspace routing", "--reference-mode", "usage", "--reference-depth", "1", "--token-budget", "1200", "--max-hops", "1", "--json"],
+      "warmups": 1,
+      "runs": 3,
+      "hard_budget_ms": {"development": 2000, "windows": 5000},
+      "hard_budget_memory_bytes": 629145600,
+      "parity_with": "tool.context.references.depth0",
+      "semantic": true,
+      "lexical_control": false,
+      "metadata": {"perf_row": "context N+1 reference work", "reference_depth": 1}
+    },
+    {
+      "id": "tool.impact.bounded",
+      "command": ["impact", "src/Miller.Server/Tools/WorkspaceTool.cs", "--max-depth", "1", "--limit", "20", "--json"],
+      "warmups": 1,
+      "runs": 3,
+      "hard_budget_ms": {"development": 2000, "windows": 5000},
+      "hard_budget_memory_bytes": 629145600,
+      "metadata": {"perf_row": "impact graph/query work"}
+    },
+    {
+      "id": "tool.trace.warm",
+      "command": ["trace", "{target}", "--mode", "refs", "--limit", "20", "--json"],
+      "target_discovery": {"command": ["search", "WorkspaceTool", "--limit", "1", "--json"], "field": "symbol_id"},
+      "warmups": 1,
+      "runs": 3,
+      "hard_budget_ms": {"development": 2000, "windows": 5000},
+      "hard_budget_memory_bytes": 629145600,
+      "metadata": {"perf_row": "warm trace"}
+    }
+  ]
+}

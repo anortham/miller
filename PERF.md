@@ -18,6 +18,36 @@ without first adding new phase, query-count, or resource evidence.
 | Full real Miller resolution | 60 s | 120 s |
 | Byte-identical artifact retry after source verification | 2 s | 5 s |
 
+## Performance-recovery replay workload ledger
+
+The bounded replay harness is `scripts/perf-recovery.py` with the fixed workload contract in
+[`scripts/benchmarks/perf-recovery-workloads.json`](scripts/benchmarks/perf-recovery-workloads.json). It writes one
+JSONL record per warmup or measured attempt, runs with a caller-supplied store copy, rejects every canonical alias of
+the live store before launching a child process, and keeps semantic workloads serialized. CLI callers must provide both
+`--live-store` (the original family/artifact path) and `--store-copy`. Family-mode replays require `.miller/store.json`
+to resolve to the exact copied family root, or its active generation `store.db` selector; legacy-mode replays require
+`MILLER_INDEX_STORE=off` and an exact/same-file `.miller/symbols.db` selector. `MILLER_HOME` isolates the Miller user
+directory; lexical controls set `MILLER_SEMANTIC=off` explicitly. A real replay is still required before closing any
+row below. Use `--only ID,ID` for a nonempty unique subset of the fixed workload IDs (the manifest order is retained)
+and `--runs N` for a positive measured-attempt override; warmups are unchanged.
+
+| Workload | Evidence row | Development / Windows budget | Status |
+|---|---|---:|---|
+| `startup.reader.warm` | Warm reader startup and retained host state | 5 s / 10 s | Harnessed |
+| `startup.leader.no_change` | Leader no-change convergence | 2 s / 5 s | Harnessed |
+| `workspace.open.no_change` | PERF-010 registration/open with no source change; cold family read budget (closes PERF-010 when it passes) | 5 s / 10 s | Gate pending |
+| `producer.retry.identical` | Stranded import recovery and byte-identical retry | 2 s / 5 s | Gate pending |
+| `producer.resolve.one_file` | Resolution/store growth for one-file scope | 5 s / 10 s | Gate pending |
+| `producer.resolve.full` | Resolution/store growth for full scope | 60 s / 120 s | Gate pending |
+| `tool.inspect.warm` | Warm family-store inspect | 500 ms / 2 s | Harnessed |
+| `tool.context.references.depth0` + `tool.context.references.depth1` | Context reference N+1 comparison with output parity | 2 s / 5 s | Gate pending |
+| `tool.impact.bounded` | Impact graph/query work at bounded depth and limit | 2 s / 5 s | Gate pending |
+| `tool.trace.warm` | Warm trace references with deterministic target discovery | 2 s / 5 s | Harnessed |
+
+The harness records producer import/resolve/bind timings, content/search/metric/vector phase timings, view and
+generation identity, I/O counters, broker identity/health when returned by Miller, and Linux PSS or Windows
+`PROCESS_MEMORY_COUNTERS_EX.PrivateUsage` as the hard memory metric. Unsupported report-only metrics are `null`.
+
 ## Active blockers
 
 ### PERF-001 — Family-store graph reads hydrate the full repository in every MCP host
