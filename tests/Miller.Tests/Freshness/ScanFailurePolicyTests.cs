@@ -119,6 +119,7 @@ public sealed class ScanFailurePolicyTests
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
+    [InlineData(135)]
     [InlineData(null)]
     public void Decide_AfterANonSigkillFailure_LeavesTheJobsCapToTheAmbientPolicy(int? exitCode)
     {

@@ -468,6 +468,18 @@ public sealed class JulieExtractRunnerTests
     }
 
     [Fact]
+    public void Interpret_Exit135_PreservesTheUnknownCodeWithoutInferringOom()
+    {
+        var ex = Assert.Throws<JulieExtractException>(() =>
+            JulieExtractRunner.Interpret(exitCode: 135, stdout: "", stderr: "terminated"));
+
+        Assert.Equal(135, ex.ExitCode);
+        Assert.Equal("terminated", ex.StandardError);
+        Assert.Contains("135", ex.Message);
+        Assert.DoesNotContain("OOM", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Interpret_DeleteNotFound_Exit0_IsTolerated_NotAFailure()
     {
         // `delete` of an absent file -> status "not_found", exit 0. Tolerant, NOT a failure.
