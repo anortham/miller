@@ -70,6 +70,25 @@ def _sqlite_uri(path: Path) -> str:
     return f"{absolute.resolve(strict=False).as_uri()}?mode=ro"
 
 
+@contextmanager
+def _read_only_sidecar(path: Path) -> Iterable[None]:
+    sidecar = Path(f"{path}-shm")
+    try:
+        original_mode = stat.S_IMODE(sidecar.stat().st_mode)
+    except FileNotFoundError:
+        yield
+        return
+    read_only_mode = original_mode & ~0o222
+    changed = read_only_mode != original_mode
+    if changed:
+        os.chmod(sidecar, read_only_mode)
+    try:
+        yield
+    finally:
+        if changed:
+            os.chmod(sidecar, original_mode)
+
+
 def _read_current(source: Path) -> str:
     current = source / "CURRENT"
     if not current.is_file():
@@ -181,11 +200,11 @@ def _claim_is_stale(heartbeat: Any, now_ms: int) -> bool:
     )
 
 
-def _check_claims(coordinator: Path, *, scratch_dir: Path | None = None) -> None:
+def _check_claims(coordinator: Path) -> None:
     now_ms = int(time.time() * 1000)
     try:
-        with _database_input(coordinator, scratch_dir=scratch_dir) as readable_coordinator:
-            connection = sqlite3.connect(_sqlite_uri(readable_coordinator), uri=True)
+        with _read_only_sidecar(coordinator):
+            connection = sqlite3.connect(_sqlite_uri(coordinator), uri=True)
             try:
                 writer_pids: dict[str, int] = {}
                 owner_states: dict[int, bool | None] = {}
@@ -263,31 +282,15 @@ def _sqlite_facts(
             connection.close()
 
 
-@contextmanager
-def _database_input(path: Path, *, scratch_dir: Path | None = None) -> Iterable[Path]:
-    sidecars = (Path(f"{path}-wal"), Path(f"{path}-shm"))
-    if not any(sidecar.exists() for sidecar in sidecars):
-        yield path
-        return
-    with tempfile.TemporaryDirectory(
-        prefix=".perf-store-input-",
-        dir=scratch_dir or path.parent,
-    ) as directory:
-        shadow = Path(directory) / path.name
-        shutil.copyfile(path, shadow)
-        for sidecar in sidecars:
-            if sidecar.exists():
-                shutil.copyfile(sidecar, Path(f"{shadow}{sidecar.name[len(path.name):]}"))
-        yield shadow
-
-
 def _backup_database(source: Path, destination: Path) -> str:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with _database_input(source, scratch_dir=destination.parent) as readable_source:
-        source_connection = sqlite3.connect(_sqlite_uri(readable_source), uri=True)
-        destination_connection = sqlite3.connect(destination)
+    source_connection: sqlite3.Connection | None = None
+    destination_connection: sqlite3.Connection | None = None
+    with _read_only_sidecar(source):
         try:
-            before = _sqlite_facts(readable_source, source_connection)
+            source_connection = sqlite3.connect(_sqlite_uri(source), uri=True)
+            destination_connection = sqlite3.connect(destination)
+            before = (_sqlite_facts(source, source_connection), _database_digest(source))
             source_connection.backup(destination_connection)
             destination_connection.commit()
             destination_connection.execute("PRAGMA journal_mode=DELETE")
@@ -295,12 +298,14 @@ def _backup_database(source: Path, destination: Path) -> str:
             check = destination_connection.execute("PRAGMA quick_check").fetchone()[0]
             if str(check).casefold() != "ok":
                 raise ValueError(f"destination quick_check failed: {destination}")
-            after = _sqlite_facts(readable_source, source_connection)
+            after = (_sqlite_facts(source, source_connection), _database_digest(source))
             if after != before:
                 raise ValueError(f"source changed during read-only backup: {source}")
         finally:
-            destination_connection.close()
-            source_connection.close()
+            if destination_connection is not None:
+                destination_connection.close()
+            if source_connection is not None:
+                source_connection.close()
     return str(check)
 
 
@@ -314,13 +319,25 @@ def _is_sqlite_file(path: Path) -> bool:
         return False
 
 
-def _source_tree_facts(source: Path) -> dict[Path, tuple[Any, ...]]:
-    facts: dict[Path, tuple[Any, ...]] = {}
+def _source_files(source: Path) -> list[Path]:
+    files: list[Path] = []
     for path in source.rglob("*"):
-        if not (path.is_file() or path.is_symlink()):
-            continue
-        item_stat = path.lstat()
-        facts[path.relative_to(source)] = (
+        if _path_has_reparse_point(path):
+            raise ValueError(f"source family contains a symlink or reparse alias: {path}")
+        if path.is_file():
+            files.append(path.relative_to(source))
+    return sorted(files, key=lambda path: path.as_posix())
+
+
+def _source_tree_facts(
+    source: Path,
+    files: Iterable[Path] | None = None,
+) -> dict[Path, tuple[Any, ...]]:
+    facts: dict[Path, tuple[Any, ...]] = {}
+    relatives = _source_files(source) if files is None else files
+    for relative in relatives:
+        item_stat = (source / relative).stat()
+        facts[relative] = (
             item_stat.st_dev,
             item_stat.st_ino,
             item_stat.st_size,
@@ -330,16 +347,33 @@ def _source_tree_facts(source: Path) -> dict[Path, tuple[Any, ...]]:
     return facts
 
 
+def _source_state(source: Path) -> tuple[list[Path], dict[Path, tuple[Any, ...]], str]:
+    files = _source_files(source)
+    facts = _source_tree_facts(source, files)
+    digest = _digest_files(source, files)
+    after_files = _source_files(source)
+    after_facts = _source_tree_facts(source, after_files)
+    after_digest = _digest_files(source, after_files)
+    if files != after_files or facts != after_facts or digest != after_digest:
+        raise ValueError("source family changed while reading")
+    return files, facts, digest
+
+
+def _database_digest(path: Path) -> str:
+    files = [Path(path.name)]
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(f"{path.name}{suffix}")
+        if (path.parent / sidecar).exists():
+            files.append(sidecar)
+    return _digest_files(path.parent, files)
+
+
 def _copy_family_files(source: Path, destination: Path) -> tuple[list[Path], list[Path]]:
     generation = _read_current(source)
-    source_files = sorted(
-        (path for path in source.rglob("*") if path.is_file()),
-        key=lambda path: path.relative_to(source).as_posix(),
-    )
     databases: list[Path] = []
     copied: list[Path] = []
-    for source_path in source_files:
-        relative = source_path.relative_to(source)
+    for relative in _source_files(source):
+        source_path = source / relative
         if source_path.name.endswith(("-wal", "-shm")):
             continue
         destination_path = destination / relative
@@ -357,18 +391,18 @@ def _copy_family_files(source: Path, destination: Path) -> tuple[list[Path], lis
 
 
 def _validate_source_tree(source: Path, live_root: Path) -> None:
+    if not live_root.is_dir():
+        raise ValueError("live root must be an existing directory")
     live_identities: dict[tuple[int, int], Path] = {}
-    if live_root.is_dir():
-        for live_path in live_root.rglob("*"):
-            if not live_path.is_file() or live_path.is_symlink():
-                continue
-            item_stat = live_path.stat()
-            live_identities[(item_stat.st_dev, item_stat.st_ino)] = live_path
-    for path in source.rglob("*"):
-        if _path_has_reparse_point(path):
-            raise ValueError(f"source family contains a symlink or reparse alias: {path}")
-        if not path.is_file():
+    for live_path in live_root.rglob("*"):
+        if _path_has_reparse_point(live_path):
+            raise ValueError(f"live root contains a symlink or reparse alias: {live_path}")
+        if not live_path.is_file():
             continue
+        item_stat = live_path.stat()
+        live_identities[(item_stat.st_dev, item_stat.st_ino)] = live_path
+    for relative in _source_files(source):
+        path = source / relative
         item_stat = path.stat()
         live_alias = live_identities.get((item_stat.st_dev, item_stat.st_ino))
         if live_alias is not None:
@@ -385,6 +419,42 @@ def _digest_files(root: Path, files: Iterable[Path]) -> str:
             while chunk := handle.read(DIGEST_CHUNK_SIZE):
                 digest.update(chunk)
     return digest.hexdigest()
+
+
+def _destination_files(root: Path) -> list[Path]:
+    files: list[Path] = []
+    for path in root.rglob("*"):
+        if _path_has_reparse_point(path):
+            raise ValueError(f"snapshot contains a symlink or reparse alias: {path}")
+        if path.is_file():
+            files.append(path.relative_to(root))
+    return sorted(files, key=lambda path: path.as_posix())
+
+
+def _cleanup_failed_snapshot(
+    temporary: Path,
+    destination_input: Path,
+    destination_path: Path,
+) -> None:
+    cleanup_error: Exception | None = None
+    try:
+        shutil.rmtree(temporary)
+    except Exception as exc:
+        cleanup_error = exc
+
+    destination_error: Exception | None = None
+    try:
+        if os.path.lexists(destination_input) or os.path.lexists(destination_path):
+            destination_error = ValueError("destination must remain absent after snapshot failure")
+    except Exception as exc:
+        destination_error = exc
+
+    if cleanup_error is not None:
+        if destination_error is not None:
+            raise cleanup_error from destination_error
+        raise cleanup_error
+    if destination_error is not None:
+        raise destination_error
 
 
 def snapshot_family(
@@ -406,6 +476,8 @@ def snapshot_family(
     live_path = _canonical(live_input)
     if not source_path.is_dir():
         raise ValueError("source family must be a directory")
+    if not live_path.is_dir():
+        raise ValueError("live root must be an existing directory")
     if _is_alias(source_path, destination_path) or _same_file(source_path, destination_path):
         raise ValueError("source and destination are aliases")
     if _is_alias(source_path, live_path) or _same_file(source_path, live_path):
@@ -418,27 +490,30 @@ def snapshot_family(
     _validate_source_tree(source_path, live_path)
     coordinator = source_path / "coord.db"
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    _check_claims(coordinator, scratch_dir=destination_path.parent)
-    source_facts = _source_tree_facts(source_path)
+    _check_claims(coordinator)
+    source_state = _source_state(source_path)
     temporary = Path(tempfile.mkdtemp(prefix=".perf-store-snapshot-", dir=destination_path.parent))
     try:
         databases, copied = _copy_family_files(source_path, temporary)
-        _check_claims(coordinator, scratch_dir=destination_path.parent)
-        after_facts = _source_tree_facts(source_path)
-        if after_facts != source_facts:
+        _check_claims(coordinator)
+        if _source_state(source_path) != source_state:
             raise ValueError("source family changed during snapshot")
-        for path in temporary.rglob("*"):
-            if path.name.endswith(("-wal", "-shm")):
-                raise ValueError("snapshot contains a WAL or SHM sidecar")
+        destination_files = _destination_files(temporary)
+        if any(path.name.endswith(("-wal", "-shm")) for path in destination_files):
+            raise ValueError("snapshot contains a WAL or SHM sidecar")
         quick_checks = {
             str(path.relative_to(temporary)): "ok"
             for path in databases
         }
+        destination_digest = _digest_files(temporary, destination_files)
         if os.path.lexists(destination_input):
             raise ValueError("destination was created during snapshot")
         temporary.replace(destination_path)
-    except Exception:
-        shutil.rmtree(temporary, ignore_errors=True)
+    except Exception as error:
+        try:
+            _cleanup_failed_snapshot(temporary, destination_input, destination_path)
+        except Exception as cleanup_error:
+            raise cleanup_error from error
         raise
     return {
         "source": str(source_path),
@@ -447,7 +522,7 @@ def snapshot_family(
         "files": [path.as_posix() for path in copied],
         "databases": quick_checks,
         "quick_check": "ok",
-        "sha256": _digest_files(destination_path, copied),
+        "sha256": destination_digest,
         "wal_shm": False,
     }
 

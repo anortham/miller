@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -26,8 +27,10 @@ class PerfStoreSnapshotTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.source = self.root / "source"
         self.destination = self.root / "destination"
+        self.live = self.root / "live"
         self.source_generation = self.source / "gen-001"
         self.source_generation.mkdir(parents=True)
+        self.live.mkdir()
         (self.source / "CURRENT").write_text("gen-001\n", encoding="utf-8")
         self._database(self.source_generation / "store.db", "store")
         self._database(self.source / "coord.db", "coord")
@@ -61,6 +64,15 @@ class PerfStoreSnapshotTests(unittest.TestCase):
                 ["--source", str(self.source), "--destination", str(self.destination)]
             )
 
+    def test_snapshot_requires_existing_directory_live_root(self) -> None:
+        with self.assertRaisesRegex(ValueError, "live root"):
+            snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "missing-live")
+
+        live_file = self.root / "live-file"
+        live_file.write_text("not a family", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "live root"):
+            snapshot.snapshot_family(self.source, self.destination, live_root=live_file)
+
     def test_snapshot_rejects_source_destination_alias_and_live_root(self) -> None:
         with self.assertRaisesRegex(ValueError, "alias"):
             snapshot.snapshot_family(self.source, self.source, live_root=self.root / "live")
@@ -69,7 +81,6 @@ class PerfStoreSnapshotTests(unittest.TestCase):
 
     def test_snapshot_rejects_live_parent_child_and_hardlink_aliases(self) -> None:
         live = self.root / "live"
-        live.mkdir()
         with self.assertRaisesRegex(ValueError, "live"):
             snapshot.snapshot_family(self.source, live / "snapshot", live_root=live)
 
@@ -85,6 +96,22 @@ class PerfStoreSnapshotTests(unittest.TestCase):
         alias.symlink_to(self.source_generation / "store.db")
         with self.assertRaisesRegex(ValueError, "alias|symlink|reparse"):
             snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+
+    def test_snapshot_rejects_live_root_symlink_entries(self) -> None:
+        live = self.root / "live"
+        (live / "source-alias.db").symlink_to(self.source_generation / "store.db")
+        with self.assertRaisesRegex(ValueError, "live|alias|symlink|reparse"):
+            snapshot.snapshot_family(self.source, self.destination, live_root=live)
+
+    def test_snapshot_backs_up_original_source_without_shadow_copy(self) -> None:
+        with mock.patch.object(
+            snapshot,
+            "_database_input",
+            side_effect=AssertionError("shadow database copy is forbidden"),
+            create=True,
+        ):
+            result = snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+        self.assertEqual("ok", result["quick_check"])
 
     def test_snapshot_rejects_live_owner_but_allows_dead_stale_claim(self) -> None:
         with closing(sqlite3.connect(self.source / "coord.db")) as connection:
@@ -180,33 +207,43 @@ class PerfStoreSnapshotTests(unittest.TestCase):
 
     def test_snapshot_preserves_wal_and_source_bytes(self) -> None:
         path = self.source_generation / "store.db"
-        writer = sqlite3.connect(path)
-        try:
-            writer.execute("PRAGMA journal_mode=WAL")
-            writer.execute("PRAGMA wal_autocheckpoint=0")
-            writer.execute("INSERT INTO facts(name) VALUES (?)", ("wal",))
-            writer.commit()
-            source_paths = [path, Path(f"{path}-wal"), Path(f"{path}-shm")]
-            before = {
-                item: (item.read_bytes(), item.stat().st_ino, item.stat().st_size, item.stat().st_mtime_ns)
-                for item in source_paths
-            }
-            result = snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
-            after = {
-                item: (item.read_bytes(), item.stat().st_ino, item.stat().st_size, item.stat().st_mtime_ns)
-                for item in source_paths
-            }
-            self.assertEqual(before, after)
-            with closing(sqlite3.connect(self.destination / "gen-001" / "store.db")) as destination_connection:
-                self.assertEqual(
-                    "wal",
-                    destination_connection.execute("SELECT name FROM facts WHERE name = 'wal'").fetchone()[0],
-                )
-            self.assertEqual("ok", result["quick_check"])
-            self.assertFalse(Path(f"{self.destination / 'gen-001' / 'store.db'}-wal").exists())
-            self.assertFalse(Path(f"{self.destination / 'gen-001' / 'store.db'}-shm").exists())
-        finally:
-            writer.close()
+        producer = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os, sqlite3, sys; "
+                    "connection = sqlite3.connect(sys.argv[1]); "
+                    "connection.execute('PRAGMA journal_mode=WAL'); "
+                    "connection.execute('PRAGMA wal_autocheckpoint=0'); "
+                    "connection.execute(\"INSERT INTO facts(name) VALUES ('wal')\"); "
+                    "connection.commit(); os._exit(0)"
+                ),
+                str(path),
+            ],
+            check=False,
+        )
+        self.assertEqual(0, producer.returncode)
+        source_paths = [path, Path(f"{path}-wal"), Path(f"{path}-shm")]
+        self.assertTrue(all(item.exists() for item in source_paths))
+        before = {
+            item: (item.read_bytes(), item.stat().st_ino, item.stat().st_size, item.stat().st_mtime_ns)
+            for item in source_paths
+        }
+        result = snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+        after = {
+            item: (item.read_bytes(), item.stat().st_ino, item.stat().st_size, item.stat().st_mtime_ns)
+            for item in source_paths
+        }
+        self.assertEqual(before, after)
+        with closing(sqlite3.connect(self.destination / "gen-001" / "store.db")) as destination_connection:
+            self.assertEqual(
+                "wal",
+                destination_connection.execute("SELECT name FROM facts WHERE name = 'wal'").fetchone()[0],
+            )
+        self.assertEqual("ok", result["quick_check"])
+        self.assertFalse(Path(f"{self.destination / 'gen-001' / 'store.db'}-wal").exists())
+        self.assertFalse(Path(f"{self.destination / 'gen-001' / 'store.db'}-shm").exists())
 
     def test_snapshot_streams_digest_in_bounded_chunks(self) -> None:
         path = self.source / "payload.bin"
@@ -221,6 +258,85 @@ class PerfStoreSnapshotTests(unittest.TestCase):
                 snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
         self.assertFalse(self.destination.exists())
         self.assertFalse(list(self.root.glob(".perf-store-snapshot-*")))
+
+    def test_snapshot_rejects_same_size_restored_mtime_source_change(self) -> None:
+        marker = self.source / "marker.txt"
+        marker.write_text("before", encoding="utf-8")
+        original_copy = snapshot._copy_family_files
+        original_stat = marker.stat()
+
+        def copy_then_mutate(source: Path, destination: Path):
+            result = original_copy(source, destination)
+            marker.write_text("after!", encoding="utf-8")
+            os.utime(marker, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+            return result
+
+        with mock.patch.object(snapshot, "_copy_family_files", side_effect=copy_then_mutate):
+            with self.assertRaisesRegex(ValueError, "source family changed"):
+                snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+        self.assertFalse(self.destination.exists())
+
+    def test_snapshot_rejects_same_size_restored_mtime_database_change(self) -> None:
+        database = self.source_generation / "store.db"
+        original_copy = snapshot._copy_family_files
+        original_stat = database.stat()
+
+        def copy_then_mutate(source: Path, destination: Path):
+            result = original_copy(source, destination)
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("UPDATE facts SET name = 'change'")
+                connection.commit()
+            os.utime(database, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+            return result
+
+        with mock.patch.object(snapshot, "_copy_family_files", side_effect=copy_then_mutate):
+            with self.assertRaisesRegex(ValueError, "source family changed"):
+                snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+        self.assertFalse(self.destination.exists())
+
+    def test_backup_closes_source_when_destination_connect_fails(self) -> None:
+        source_connection = mock.Mock()
+        connect = mock.Mock(side_effect=[source_connection, sqlite3.OperationalError("destination connect")])
+        with mock.patch.object(snapshot.sqlite3, "connect", side_effect=connect):
+            with self.assertRaisesRegex(sqlite3.OperationalError, "destination connect"):
+                snapshot._backup_database(self.source_generation / "store.db", self.root / "copy.db")
+        source_connection.close.assert_called_once_with()
+
+    def test_backup_closes_both_connections_when_backup_fails(self) -> None:
+        source_connection = mock.Mock()
+        destination_connection = mock.Mock()
+        source_connection.backup.side_effect = RuntimeError("backup failed")
+        with mock.patch.object(
+            snapshot.sqlite3,
+            "connect",
+            side_effect=[source_connection, destination_connection],
+        ), mock.patch.object(snapshot, "_sqlite_facts", return_value=("stable",)):
+            with self.assertRaisesRegex(RuntimeError, "backup failed"):
+                snapshot._backup_database(self.source_generation / "store.db", self.root / "copy.db")
+        source_connection.close.assert_called_once_with()
+        destination_connection.close.assert_called_once_with()
+
+    def test_snapshot_digest_failure_cleans_before_promotion(self) -> None:
+        original_digest = snapshot._digest_files
+
+        def fail_temporary_digest(root: Path, files):
+            if root.name.startswith(".perf-store-snapshot-"):
+                raise RuntimeError("digest failed")
+            return original_digest(root, files)
+
+        with mock.patch.object(snapshot, "_digest_files", side_effect=fail_temporary_digest):
+            with self.assertRaisesRegex(RuntimeError, "digest failed"):
+                snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(list(self.root.glob(".perf-store-snapshot-*")))
+
+    def test_snapshot_surfaces_cleanup_failure_and_keeps_destination_absent(self) -> None:
+        with mock.patch.object(snapshot, "_copy_family_files", side_effect=RuntimeError("copy failed")), mock.patch.object(
+            snapshot.shutil, "rmtree", side_effect=OSError("cleanup failed")
+        ):
+            with self.assertRaisesRegex(OSError, "cleanup failed"):
+                snapshot.snapshot_family(self.source, self.destination, live_root=self.root / "live")
+        self.assertFalse(self.destination.exists())
 
     def test_snapshot_rejects_source_tree_change_before_promotion(self) -> None:
         marker = self.source / "marker.txt"
