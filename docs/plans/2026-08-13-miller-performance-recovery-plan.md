@@ -280,6 +280,16 @@ Expected: path-kind validation, snapshot refusal/integrity, MCP framing, produce
 
 - `serial-worker-commit`: checkpoint, commit owned files, and record the SHA.
 
+**Task 1B-B status (2026-08-14):** The production-volume Linux baseline is frozen in
+[`findings/2026-08-14-performance-recovery-baseline.md`](../findings/2026-08-14-performance-recovery-baseline.md).
+The snapshot and row hashes are recorded, but leader startup, workspace-open, tool wall, one-file
+resolution, and full resolution fail their hard timing gates; warm-reader, retry, and memory gates
+pass. `DidWork=false` with sequence churn requires Task 5B phase attribution. Full resolution's
+`171.696 s` resolution phase remains separately owned by Task 6's equivalence gate and the Task 7A/7B
+retained-history/read-plan work. This closes evidence only: it does not claim performance recovery or
+Windows completion. The context batch switch remains default-off because same-depth parity passed
+without a speedup; the long semantic socket-path issue remains open for Task 8.
+
 ### Task 2: Recover and Fence Stranded Producer Claims
 
 **Files:**

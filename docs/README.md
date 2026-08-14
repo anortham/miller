@@ -6,6 +6,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 ## Current docs
 
 - [`plans/2026-08-13-miller-performance-recovery-plan.md`](plans/2026-08-13-miller-performance-recovery-plan.md) - full cross-repository program for residual producer, startup, relationship-query, store-growth, and Windows performance failures; supersedes only the unfinished recovery work from the August 11 plan.
+- [`findings/2026-08-14-performance-recovery-baseline.md`](findings/2026-08-14-performance-recovery-baseline.md) - frozen production-volume Linux Task 1B-B baseline: exact snapshot/JSONL hashes, failed startup/workspace/resolution gates, phase evidence, isolation, and open Windows/path work.
 - [`plans/2026-08-14-validated-store-pointer-adoption-design.md`](plans/2026-08-14-validated-store-pointer-adoption-design.md) - fail-closed pointer adoption and split source/staged-root design required for faithful copied-family replay.
 - [`../README.md`](../README.md) - public entry point: quickstart, tool overview, architecture summary, troubleshooting.
 - [`install.md`](install.md) - full install guide: plugin details and session hooks, manual binary install, MCP configuration, instruction-tier harnesses, source checkout, local plugin development.
