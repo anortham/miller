@@ -14,6 +14,7 @@ from pathlib import Path
 import queue
 import re
 import shutil
+import sqlite3
 import signal
 import subprocess
 import sys
@@ -64,6 +65,9 @@ PRODUCER_IMPORT_FLAGS = frozenset(
         "--root",
         "--view",
         "--level",
+        "--spool-dir",
+        "--progress-file",
+        "--parent-pid",
         "--request-id",
         "--idempotency-key",
         "--request-timeout-seconds",
@@ -131,6 +135,10 @@ PLACEHOLDER_NAMES = {
     "workspace",
     "source_root",
     "change_root",
+    "source_view",
+    "spool_dir",
+    "progress_file",
+    "parent_pid",
     "store_copy",
     "target",
     "family",
@@ -151,6 +159,7 @@ class ReplayRequest:
     producer: str | Path = "julie-extract"
     source_root: Path | None = None
     change_root: Path | None = None
+    view_override: str | None = None
 
 
 @dataclass(frozen=True)
@@ -385,6 +394,25 @@ def _read_family_pointer(workspace: Path) -> tuple[Path, dict[str, Any]] | None:
     }
 
 
+def _source_pointer_binding(request: ReplayRequest) -> tuple[Path, dict[str, Any]]:
+    source_root = _canonical(request.source_root or request.workspace)
+    pointer = _read_family_pointer(source_root)
+    if pointer is None:
+        raise ValueError(f"source root has no family-store pointer: {source_root}")
+    pointer_path, details = pointer
+    active = resolve_active_store(request)
+    if details["family_id"] != active.family_id:
+        raise ValueError("source pointer family does not match the copied family")
+    live_store = _canonical(request.live_store)
+    source_store = details["store_root"]
+    live_matches = source_store == live_store
+    if live_store.is_file():
+        live_matches = live_matches or any(_same_file(live_store, path) for path in _family_store_paths(source_store))
+    if not live_matches:
+        raise ValueError("source pointer store does not match the explicit live store")
+    return pointer_path, details
+
+
 def _store_mode(request: ReplayRequest) -> str | None:
     value = request.store_mode
     if value is None:
@@ -449,16 +477,22 @@ def _require_producer_binding(
     payload: Any,
     *,
     label: str,
+    expected_generation: int | str | None = None,
 ) -> ActiveStore:
     actual = resolve_active_store(request)
     expected_identity = (expected.mode, expected.root, expected.family_id, expected.view_id)
     actual_identity = (actual.mode, actual.root, actual.family_id, actual.view_id)
     if actual_identity != expected_identity:
         raise RuntimeError(f"{label} changed the staged family/view; explicitly adopt the new binding")
-    observed_view, observed_generation = _view_and_generation(payload)
+    observed_view, _ = _view_and_generation(payload)
+    observed_generation = _report_generation(payload)
     if observed_view is not None and observed_view != actual.view_id:
         raise RuntimeError(f"{label} returned an unadopted view {observed_view!r}")
-    if observed_generation is not None and str(observed_generation) != str(actual.generation):
+    durable_generation = _durable_view_generation(actual)
+    binding_generation = durable_generation if durable_generation is not None else expected_generation
+    if binding_generation is not None and (
+        observed_generation is None or str(observed_generation) != str(binding_generation)
+    ):
         raise RuntimeError(f"{label} returned an unadopted generation {observed_generation!r}")
     return actual
 
@@ -1216,6 +1250,39 @@ def _view_and_generation(payload: Any) -> tuple[str | None, int | str | None]:
     return (str(view) if view is not None else None, generation)
 
 
+def _report_generation(payload: Any) -> int | str | None:
+    manifest = _find_mapping(payload, {"manifest"})
+    if manifest is not None:
+        generation = _find_value(manifest, {"generation"})
+        if generation is not None:
+            return generation
+    return _view_and_generation(payload)[1]
+
+
+def _durable_view_generation(active: ActiveStore, *, view_id: str | None = None) -> int | str | None:
+    selected_view = view_id or active.view_id
+    database = active.artifact_path
+    if active.mode != "family" or database is None or selected_view is None or not database.is_file():
+        return None
+    connection: sqlite3.Connection | None = None
+    row: tuple[Any, ...] | None = None
+    try:
+        connection = sqlite3.connect(database.as_uri() + "?mode=ro", timeout=0.5, uri=True)
+        connection.execute("PRAGMA query_only = ON")
+        row = connection.execute(
+            "SELECT current_generation FROM views WHERE view_id = ?",
+            (selected_view,),
+        ).fetchone()
+    except (OSError, sqlite3.Error):
+        return None
+    finally:
+        if connection is not None:
+            connection.close()
+    if not row or row[0] is None or isinstance(row[0], bool):
+        return None
+    return row[0] if isinstance(row[0], (int, str)) else None
+
+
 def _selected_environment(environment: Mapping[str, str]) -> dict[str, str | None]:
     keys = (
         "MILLER_HOME",
@@ -1241,7 +1308,8 @@ def _record_from_result(
     commit: str | None,
 ) -> ReplayRecord:
     payload = _parse_json_payload(result.stdout)
-    view, generation = _view_and_generation(payload)
+    view, _ = _view_and_generation(payload)
+    generation = _report_generation(payload)
     active = resolve_active_store(request)
     view = view or active.view_id
     generation = generation if generation is not None else active.generation
@@ -1411,17 +1479,26 @@ def _attach_depth_pair(records: list[ReplayRecord]) -> list[ReplayRecord]:
 
 def _replace_placeholders(token: str, request: ReplayRequest, target: str | None) -> str:
     source_root = request.source_root or request.workspace
+    store_root = _canonical(request.store_copy)
+    if store_root.is_file():
+        store_root = store_root.parent
     values = {
         "workspace": str(request.workspace),
         "source_root": str(source_root),
         "change_root": str(request.change_root or source_root),
+        "spool_dir": str(store_root / "spool"),
+        "progress_file": str(store_root / "scan.progress"),
+        "parent_pid": str(os.getpid()),
         "store_copy": str(request.store_copy),
         "target": target or "",
     }
+    if "{source_view}" in token:
+        _, source_details = _source_pointer_binding(request)
+        values["source_view"] = str(source_details["view_id"])
     if any("{" + name + "}" in token for name in ("family", "view")):
         active = resolve_active_store(request)
         values["family"] = active.family_id or ""
-        values["view"] = active.view_id or ""
+        values["view"] = request.view_override or active.view_id or ""
     for name, value in values.items():
         token = token.replace("{" + name + "}", value)
     if "{" in token or "}" in token:
@@ -1496,7 +1573,9 @@ def _validate_command(
                 raise ValueError(f"{label} {flag} must be bound to {{{placeholder}}} runtime placeholder")
 
         required_placeholder("--store", "store_copy")
-        required_placeholder("--view", "view")
+        view_values = flag_values("--view")
+        if view_values not in (["{view}"], ["{source_view}"]):
+            raise ValueError(f"{label} --view must be bound to {{view}} or {{source_view}} runtime placeholder")
         if command[1] == "import":
             if not {"--root", "--family", "--level"}.issubset(flags):
                 raise ValueError(f"{label} store import must include root, family, and level")
@@ -2121,29 +2200,20 @@ def _isolated_request(
     temporary = tempfile.TemporaryDirectory(prefix="miller-perf-workload-")
     root = Path(temporary.name)
     isolated_workspace = root / "workspace"
+    clone_root = source_root if source_changing else workspace_root
     shutil.copytree(
-        request.workspace,
+        clone_root,
         isolated_workspace,
         ignore=shutil.ignore_patterns(".miller", ".git"),
     )
-    if source_changing:
-        if source_root == workspace_root:
-            isolated_change_root = isolated_workspace
-        else:
-            isolated_change_root = root / "change-root"
-            shutil.copytree(
-                source_root,
-                isolated_change_root,
-                ignore=shutil.ignore_patterns(".miller", ".git"),
-            )
-    else:
-        isolated_change_root = None
     isolated_miller = isolated_workspace / ".miller"
     isolated_miller.mkdir(parents=True, exist_ok=True)
     isolated_store = root / "store-family"
     if active.mode == "family":
+        if source_changing:
+            _source_pointer_binding(request)
         _snapshot_helper_module().snapshot_family(active.root, isolated_store, live_root=request.live_store)
-        pointer_path = request.workspace / ".miller" / "store.json"
+        pointer_path = source_root / ".miller" / "store.json" if source_changing else request.workspace / ".miller" / "store.json"
         pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
         pointer["store_root"] = str(isolated_store)
         pointer["workspace_root"] = str(isolated_workspace)
@@ -2157,8 +2227,8 @@ def _isolated_request(
         workspace=isolated_workspace,
         store_copy=isolated_copy,
         miller_home=root / "miller-home",
-        source_root=source_root,
-        change_root=isolated_change_root,
+        source_root=isolated_workspace if source_changing else source_root,
+        change_root=None,
     )
     return validate_request(isolated_request), temporary
 
@@ -2180,23 +2250,75 @@ def _one_file_path(request: ReplayRequest, workload: Workload, *, root: Path | N
     return candidates[0]
 
 
+def _setup_request(request: ReplayRequest, view: str) -> ReplayRequest:
+    return dataclasses.replace(request, view_override=view)
+
+
+def _validate_setup_result(
+    request: ReplayRequest,
+    result: CommandResult,
+    *,
+    expected_view: str,
+    label: str,
+    require_pointer_view: bool,
+    expected_generation: int | str | None = None,
+) -> Mapping[str, Any]:
+    if result.timed_out or result.exit_code != 0 or not result.completed:
+        raise RuntimeError(f"{label} failed before the measured workload")
+    payload = _parse_json_payload(result.stdout)
+    if not isinstance(payload, Mapping):
+        raise RuntimeError(f"{label} returned no JSON store report")
+    view, _ = _view_and_generation(payload)
+    generation = _report_generation(payload)
+    if view != expected_view or generation is None:
+        raise RuntimeError(f"{label} JSON view/generation does not match the requested setup")
+    family = _find_value(payload, {"family", "family_id", "familyid"})
+    if family is None:
+        raise RuntimeError(f"{label} JSON report omitted the family identity")
+    active = resolve_active_store(request)
+    if str(family) != str(active.family_id) or active.mode != "family":
+        raise RuntimeError(f"{label} changed the active family identity")
+    durable_generation = _durable_view_generation(active, view_id=expected_view)
+    if durable_generation is not None and str(durable_generation) != str(generation):
+        raise RuntimeError(f"{label} JSON generation does not match the selected view")
+    if expected_generation is not None and str(generation) != str(expected_generation):
+        raise RuntimeError(f"{label} JSON generation does not match the preceding setup")
+    if require_pointer_view and active.view_id != expected_view:
+        raise RuntimeError(f"{label} did not produce the adopted view")
+    reported_root = _find_value(payload, {"root", "root_path", "workspace_root", "source_root"})
+    if reported_root is not None and _canonical(str(reported_root)) != _canonical(request.workspace):
+        raise RuntimeError(f"{label} JSON root does not match the temporary workspace")
+    return payload
+
+
+def _adopt_temporary_view(request: ReplayRequest, view: str) -> None:
+    active = resolve_active_store(request)
+    if active.pointer_path is None:
+        raise RuntimeError("source-changing setup has no temporary family pointer to adopt")
+    pointer = json.loads(active.pointer_path.read_text(encoding="utf-8"))
+    pointer["view_id"] = view
+    pointer["workspace_root"] = str(_canonical(request.workspace))
+    active.pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+    adopted = resolve_active_store(request)
+    if adopted.family_id != active.family_id or adopted.root != active.root or adopted.view_id != view:
+        raise RuntimeError("temporary family pointer did not adopt the prepared view")
+
+
 def _prepare_resolve_resolution(
     request: ReplayRequest,
     workload: Workload,
     environment: Mapping[str, str],
     timeout_ms: int,
-) -> None:
-    change_root = request.change_root
-    source_root = _canonical(request.source_root or request.workspace)
-    workspace_root = _canonical(request.workspace)
-    if change_root is None:
-        if source_root != workspace_root:
-            raise RuntimeError(f"{workload.workload_id} requires an isolated staged change root")
-        change_root = workspace_root
-    changed = _one_file_path(request, workload, root=change_root)
-    changed.write_bytes(changed.read_bytes() + b"\n")
+) -> int | str:
     active = resolve_active_store(request)
-    import_command = (
+    if active.mode != "family":
+        raise RuntimeError("producer resolution requires a family store")
+    fresh_view = str(uuid.uuid4())
+    setup_request = _setup_request(request, fresh_view)
+    setup_environment = dict(environment)
+    setup_environment.pop("JULIE_STORE_RESOLUTION_DELTA", None)
+    identity = f"perf-recovery-{workload.metadata.get('resolution_scope', 'resolve')}-{fresh_view}"
+    baseline_import = (
         "store",
         "import",
         "--store",
@@ -2204,26 +2326,119 @@ def _prepare_resolve_resolution(
         "--family",
         "{family}",
         "--root",
-        "{change_root}",
+        "{source_root}",
         "--view",
         "{view}",
         "--level",
         "full",
+        "--spool-dir",
+        "{spool_dir}",
+        "--progress-file",
+        "{progress_file}",
+        "--parent-pid",
+        "{parent_pid}",
         "--request-id",
-        f"perf-recovery-{workload.metadata.get('resolution_scope', 'resolve')}-setup",
+        f"{identity}-baseline-import",
         "--idempotency-key",
-        f"perf-recovery-{workload.metadata.get('resolution_scope', 'resolve')}-setup-key",
+        f"{identity}-baseline-import-key",
         "--request-timeout-seconds",
         "30",
         "--json",
     )
-    if active.mode != "family":
-        raise RuntimeError("producer resolution requires a family store")
-    setup_environment = dict(environment)
-    setup_environment.pop("JULIE_STORE_RESOLUTION_DELTA", None)
-    result = _run_process(request, _producer_argv(request, import_command), timeout_ms, setup_environment)
-    if result.timed_out or result.exit_code != 0 or not result.completed:
-        raise RuntimeError(f"{workload.workload_id} staged full import setup failed")
+    result = _run_process(
+        setup_request,
+        _producer_argv(setup_request, baseline_import),
+        timeout_ms,
+        setup_environment,
+    )
+    baseline_payload = _validate_setup_result(
+        setup_request,
+        result,
+        expected_view=fresh_view,
+        label=f"{workload.workload_id} baseline import",
+        require_pointer_view=False,
+    )
+    baseline_generation = _report_generation(baseline_payload)
+    if baseline_generation is None:
+        raise RuntimeError(f"{workload.workload_id} baseline import omitted its manifest generation")
+    baseline_resolve = (
+        "store",
+        "resolve",
+        "--store",
+        "{store_copy}",
+        "--family",
+        "{family}",
+        "--view",
+        "{view}",
+        "--request-id",
+        f"{identity}-baseline-resolve",
+        "--idempotency-key",
+        f"{identity}-baseline-resolve-key",
+        "--request-timeout-seconds",
+        "30",
+        "--json",
+    )
+    result = _run_process(
+        setup_request,
+        _producer_argv(setup_request, baseline_resolve),
+        timeout_ms,
+        setup_environment,
+    )
+    _validate_setup_result(
+        setup_request,
+        result,
+        expected_view=fresh_view,
+        label=f"{workload.workload_id} baseline resolve",
+        require_pointer_view=False,
+        expected_generation=baseline_generation,
+    )
+    _adopt_temporary_view(request, fresh_view)
+    changed = _one_file_path(request, workload, root=request.workspace)
+    changed.write_bytes(changed.read_bytes() + b"\n")
+    changed_import = (
+        "store",
+        "import",
+        "--store",
+        "{store_copy}",
+        "--family",
+        "{family}",
+        "--root",
+        "{source_root}",
+        "--view",
+        "{view}",
+        "--level",
+        "full",
+        "--spool-dir",
+        "{spool_dir}",
+        "--progress-file",
+        "{progress_file}",
+        "--parent-pid",
+        "{parent_pid}",
+        "--request-id",
+        f"{identity}-changed-import",
+        "--idempotency-key",
+        f"{identity}-changed-import-key",
+        "--request-timeout-seconds",
+        "30",
+        "--json",
+    )
+    result = _run_process(
+        request,
+        _producer_argv(request, changed_import),
+        timeout_ms,
+        setup_environment,
+    )
+    changed_payload = _validate_setup_result(
+        request,
+        result,
+        expected_view=fresh_view,
+        label=f"{workload.workload_id} changed import",
+        require_pointer_view=True,
+    )
+    changed_generation = _report_generation(changed_payload)
+    if changed_generation is None:
+        raise RuntimeError(f"{workload.workload_id} changed import omitted its manifest generation")
+    return changed_generation
 
 
 def run_workload(
@@ -2261,8 +2476,9 @@ def run_workload(
     )
     if workload.execution_kind == "julie_store":
         _validate_command(list(actual_command), label=f"{workload.workload_id} command", execution_kind="julie_store")
+    setup_generation: int | str | None = None
     if workload.execution_kind == "julie_store" and workload.metadata.get("resolution_scope") in {"one_file", "full"}:
-        _prepare_resolve_resolution(request, workload, environment, effective_timeout)
+        setup_generation = _prepare_resolve_resolution(request, workload, environment, effective_timeout)
     process_command = actual_command if command is not None else _miller_argv(request, actual_command, target)
     commit = _commit_for_workspace(request.workspace)
     if workload.workload_id == "workspace.open.no_change":
@@ -2299,6 +2515,7 @@ def run_workload(
                 prepared_binding,
                 payload,
                 label=f"{workload.workload_id} producer",
+                expected_generation=setup_generation,
             )
         else:
             result = run_command(

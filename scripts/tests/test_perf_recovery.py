@@ -7,8 +7,9 @@ import importlib.util
 import io
 import json
 import os
-import subprocess
 import shutil
+import sqlite3
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -68,15 +69,19 @@ class PerfRecoveryTests(unittest.TestCase):
         return family
 
     def _write_pointer(self, store_root: Path) -> None:
-        pointer = self.workspace / ".miller" / "store.json"
+        self._write_pointer_at(self.workspace, store_root, view_id="view-1")
+
+    @staticmethod
+    def _write_pointer_at(workspace: Path, store_root: Path, *, view_id: str, family_id: str = "11111111-1111-1111-1111-111111111111") -> None:
+        pointer = workspace / ".miller" / "store.json"
         pointer.write_text(
             json.dumps(
                 {
                     "schema_version": 1,
-                    "family_id": "11111111-1111-1111-1111-111111111111",
+                    "family_id": family_id,
                     "store_root": str(store_root),
-                    "view_id": "view-1",
-                    "workspace_root": str(self.workspace),
+                    "view_id": view_id,
+                    "workspace_root": str(workspace),
                 }
             ),
             encoding="utf-8",
@@ -527,6 +532,11 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual("julie_store", manifest["producer.resolve.full"].execution_kind)
         self.assertEqual("store", manifest["producer.resolve.full"].command[0])
         self.assertEqual("resolve", manifest["producer.resolve.full"].command[1])
+        retry_command = manifest["producer.retry.identical"].command
+        self.assertEqual("{source_view}", retry_command[retry_command.index("--view") + 1])
+        self.assertIn("{spool_dir}", retry_command)
+        self.assertIn("{progress_file}", retry_command)
+        self.assertIn("{parent_pid}", retry_command)
         full_command = manifest["producer.resolve.full"].command
         producer_timeout_ms = int(full_command[full_command.index("--request-timeout-seconds") + 1]) * 1000
         self.assertGreater(
@@ -635,44 +645,165 @@ class PerfRecoveryTests(unittest.TestCase):
         argv = perf_recovery._producer_argv(request, command)
         self.assertIn(str(source_root), argv)
 
-    def test_source_root_is_read_only_and_resolve_gets_a_staged_change_root(self) -> None:
+    def test_retry_import_uses_source_view_and_disposable_supervision_paths(self) -> None:
+        live_family = self._family_root("live-family")
+        source_root = self.root / "source-root"
+        (source_root / ".miller").mkdir(parents=True)
+        self._write_pointer_at(source_root, live_family, view_id="source-view")
+        request = self._request(source_root=source_root, live_store=live_family)
+        command = (
+            "store",
+            "import",
+            "--store",
+            "{store_copy}",
+            "--family",
+            "{family}",
+            "--root",
+            "{source_root}",
+            "--view",
+            "{source_view}",
+            "--level",
+            "full",
+            "--spool-dir",
+            "{spool_dir}",
+            "--progress-file",
+            "{progress_file}",
+            "--parent-pid",
+            "{parent_pid}",
+            "--request-id",
+            "retry",
+            "--idempotency-key",
+            "retry-key",
+            "--request-timeout-seconds",
+            "30",
+            "--json",
+        )
+
+        argv = perf_recovery._producer_argv(request, command)
+
+        self.assertEqual("source-view", argv[argv.index("--view") + 1])
+        self.assertNotEqual("view-1", argv[argv.index("--view") + 1])
+        spool = Path(argv[argv.index("--spool-dir") + 1])
+        progress = Path(argv[argv.index("--progress-file") + 1])
+        self.assertEqual("spool", spool.name)
+        self.assertEqual(spool.parent, progress.parent)
+
+    def test_retry_source_pointer_must_match_copied_family_and_live_store(self) -> None:
+        live_family = self._family_root("live-family")
+        source_root = self.root / "source-root"
+        (source_root / ".miller").mkdir(parents=True)
+        command = (
+            "store",
+            "import",
+            "--store",
+            "{store_copy}",
+            "--family",
+            "{family}",
+            "--root",
+            "{source_root}",
+            "--view",
+            "{source_view}",
+            "--level",
+            "full",
+            "--request-id",
+            "retry",
+            "--idempotency-key",
+            "retry-key",
+            "--request-timeout-seconds",
+            "30",
+            "--json",
+        )
+        self._write_pointer_at(
+            source_root,
+            live_family,
+            view_id="source-view",
+            family_id="22222222-2222-2222-2222-222222222222",
+        )
+        with self.assertRaisesRegex(ValueError, "family"):
+            perf_recovery._producer_argv(
+                self._request(source_root=source_root, live_store=live_family),
+                command,
+            )
+
+        other_family = self._family_root("other-family")
+        self._write_pointer_at(source_root, other_family, view_id="source-view")
+        with self.assertRaisesRegex(ValueError, "live store|store"):
+            perf_recovery._producer_argv(
+                self._request(source_root=source_root, live_store=live_family),
+                command,
+            )
+
+    def test_source_changing_setup_clones_source_and_adopts_fresh_view_in_order(self) -> None:
+        live_family = self._family_root("live-family")
         source_root = self.root / "source-root"
         source_miller = source_root / ".miller"
         source_miller.mkdir(parents=True)
         source_file = source_root / "README.md"
         source_file.write_text("original\n", encoding="utf-8")
         source_pointer = source_miller / "store.json"
-        source_pointer.write_text("original-pointer\n", encoding="utf-8")
-        request = self._request(source_root=source_root)
+        self._write_pointer_at(source_root, live_family, view_id="source-view")
+        source_pointer_before = source_pointer.read_bytes()
+        source_file_before = source_file.read_bytes()
+        request = self._request(source_root=source_root, live_store=live_family)
+        item = self._resolve_item(resolution_scope="one_file")
+        item["mutates_store"] = True
+        item["isolated_snapshot"] = True
+        item["timeout_ms"] = 121_000
+        workload = perf_recovery._workload_from_mapping(item)
+        calls: list[tuple[Path, list[str], str, bytes | None]] = []
+        pointer_workspace_roots: list[Path] = []
 
         def copy_family(source: Path, destination: Path, *, live_root: Path | None = None) -> None:
             shutil.copytree(source, destination)
+
+        def run_process(process_request, argv, _timeout, _environment):
+            view = argv[argv.index("--view") + 1]
+            root_arg = Path(argv[argv.index("--root") + 1]) if "--root" in argv else None
+            content_root = root_arg or process_request.workspace
+            content = (content_root / "README.md").read_bytes()
+            pointer = json.loads(
+                (process_request.workspace / ".miller" / "store.json").read_text(encoding="utf-8")
+            )
+            pointer_workspace_roots.append(Path(pointer["workspace_root"]))
+            calls.append((process_request.workspace, list(argv), pointer["view_id"], content))
+            payload = {"family_id": pointer["family_id"], "view": view, "manifest": {"generation": 5}}
+            return self._result(stdout=json.dumps(payload).encode())
 
         with mock.patch.object(
             perf_recovery,
             "_snapshot_helper_module",
             return_value=SimpleNamespace(snapshot_family=copy_family),
-        ):
-            isolated, temporary = perf_recovery._isolated_request(request, source_changing=True)
-        try:
-            self.assertNotEqual(source_root, isolated.change_root)
-            self.assertEqual("original\n", source_file.read_text(encoding="utf-8"))
-            self.assertEqual("original-pointer\n", source_pointer.read_text(encoding="utf-8"))
-            changed = isolated.change_root / "README.md"
-            changed.write_text("changed\n", encoding="utf-8")
-            self.assertEqual("original\n", source_file.read_text(encoding="utf-8"))
-        finally:
-            temporary.cleanup()
+        ), mock.patch.object(perf_recovery, "_run_process", side_effect=run_process):
+            records = perf_recovery.run_workload(request, workload)
 
-    def test_mutating_resolve_setup_does_not_edit_original_source(self) -> None:
+        self.assertEqual(1, len(records))
+        self.assertEqual(["import", "resolve", "import", "resolve"], [argv[2] for _, argv, _, _ in calls])
+        self.assertEqual(["source-view", "source-view", calls[2][1][calls[2][1].index("--view") + 1], calls[2][1][calls[2][1].index("--view") + 1]], [view for _, _, view, _ in calls])
+        self.assertNotEqual("source-view", calls[2][1][calls[2][1].index("--view") + 1])
+        self.assertTrue(all(workspace != self.workspace for workspace, _, _, _ in calls))
+        self.assertEqual([workspace for workspace, _, _, _ in calls], pointer_workspace_roots)
+        self.assertTrue(
+            all(
+                Path(argv[argv.index("--root") + 1]) == workspace
+                for workspace, argv, _, _ in calls
+                if "--root" in argv
+            )
+        )
+        self.assertEqual(b"original\n", calls[0][3])
+        self.assertEqual(b"original\n", calls[1][3])
+        self.assertEqual(b"original\n\n", calls[2][3])
+        self.assertEqual(source_pointer_before, source_pointer.read_bytes())
+        self.assertEqual(source_file_before, source_file.read_bytes())
+
+    def test_source_changing_baseline_failure_aborts_before_file_change_or_measurement(self) -> None:
+        live_family = self._family_root("live-family")
         source_root = self.root / "source-root"
-        source_miller = source_root / ".miller"
-        source_miller.mkdir(parents=True)
+        (source_root / ".miller").mkdir(parents=True)
         source_file = source_root / "README.md"
         source_file.write_text("original\n", encoding="utf-8")
-        source_pointer = source_miller / "store.json"
-        source_pointer.write_text("original-pointer\n", encoding="utf-8")
-        request = self._request(source_root=source_root)
+        self._write_pointer_at(source_root, live_family, view_id="source-view")
+        source_before = source_file.read_bytes()
+        request = self._request(source_root=source_root, live_store=live_family)
         item = self._resolve_item(resolution_scope="one_file")
         item["mutates_store"] = True
         item["isolated_snapshot"] = True
@@ -685,7 +816,83 @@ class PerfRecoveryTests(unittest.TestCase):
 
         def run_process(_request, argv, _timeout, _environment):
             calls.append(list(argv))
-            return self._result(stdout=json.dumps({"resolution": {"resolution_mode": "scoped"}}).encode())
+            view = argv[argv.index("--view") + 1]
+            payload = {"family_id": "11111111-1111-1111-1111-111111111111", "view": view, "generation": "gen-001"}
+            return self._result(stdout=json.dumps(payload).encode(), exit_code=1 if len(calls) == 2 else 0)
+
+        with mock.patch.object(
+            perf_recovery,
+            "_snapshot_helper_module",
+            return_value=SimpleNamespace(snapshot_family=copy_family),
+        ), mock.patch.object(perf_recovery, "_run_process", side_effect=run_process):
+            with self.assertRaisesRegex(RuntimeError, "baseline|setup|resolve"):
+                perf_recovery.run_workload(request, workload)
+
+        self.assertEqual(2, len(calls))
+        self.assertEqual(source_before, source_file.read_bytes())
+
+    def test_source_root_is_read_only_and_resolve_gets_a_staged_change_root(self) -> None:
+        live_family = self._family_root("source-live-family")
+        source_root = self.root / "source-root"
+        source_miller = source_root / ".miller"
+        source_miller.mkdir(parents=True)
+        source_file = source_root / "README.md"
+        source_file.write_text("original\n", encoding="utf-8")
+        source_pointer = source_miller / "store.json"
+        self._write_pointer_at(source_root, live_family, view_id="source-view")
+        source_pointer_before = source_pointer.read_bytes()
+        request = self._request(source_root=source_root, live_store=live_family)
+
+        def copy_family(source: Path, destination: Path, *, live_root: Path | None = None) -> None:
+            shutil.copytree(source, destination)
+
+        with mock.patch.object(
+            perf_recovery,
+            "_snapshot_helper_module",
+            return_value=SimpleNamespace(snapshot_family=copy_family),
+        ):
+            isolated, temporary = perf_recovery._isolated_request(request, source_changing=True)
+        try:
+            self.assertNotEqual(source_root, isolated.workspace)
+            self.assertEqual(isolated.workspace, isolated.source_root)
+            self.assertEqual("original\n", source_file.read_text(encoding="utf-8"))
+            self.assertEqual(source_pointer_before, source_pointer.read_bytes())
+            changed = isolated.workspace / "README.md"
+            changed.write_text("changed\n", encoding="utf-8")
+            self.assertEqual("original\n", source_file.read_text(encoding="utf-8"))
+        finally:
+            temporary.cleanup()
+
+    def test_mutating_resolve_setup_does_not_edit_original_source(self) -> None:
+        live_family = self._family_root("source-live-family")
+        source_root = self.root / "source-root"
+        source_miller = source_root / ".miller"
+        source_miller.mkdir(parents=True)
+        source_file = source_root / "README.md"
+        source_file.write_text("original\n", encoding="utf-8")
+        source_pointer = source_miller / "store.json"
+        self._write_pointer_at(source_root, live_family, view_id="source-view")
+        source_pointer_before = source_pointer.read_bytes()
+        request = self._request(source_root=source_root, live_store=live_family)
+        item = self._resolve_item(resolution_scope="one_file")
+        item["mutates_store"] = True
+        item["isolated_snapshot"] = True
+        item["timeout_ms"] = 121_000
+        workload = perf_recovery._workload_from_mapping(item)
+        calls: list[list[str]] = []
+
+        def copy_family(source: Path, destination: Path, *, live_root: Path | None = None) -> None:
+            shutil.copytree(source, destination)
+
+        def run_process(_request, argv, _timeout, _environment):
+            calls.append(list(argv))
+            view = argv[argv.index("--view") + 1]
+            family = perf_recovery.resolve_active_store(_request).family_id
+            return self._result(
+                stdout=json.dumps(
+                    {"family_id": family, "view": view, "manifest": {"generation": 5}}
+                ).encode()
+            )
 
         with mock.patch.object(
             perf_recovery,
@@ -698,7 +905,7 @@ class PerfRecoveryTests(unittest.TestCase):
         staged_change_root = Path(calls[0][calls[0].index("--root") + 1])
         self.assertNotEqual(source_root, staged_change_root)
         self.assertEqual("original\n", source_file.read_text(encoding="utf-8"))
-        self.assertEqual("original-pointer\n", source_pointer.read_text(encoding="utf-8"))
+        self.assertEqual(source_pointer_before, source_pointer.read_bytes())
 
     def test_workspace_open_fails_if_setup_mints_a_new_binding(self) -> None:
         request = self._request()
@@ -753,35 +960,52 @@ class PerfRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "adopt|view"):
                 perf_recovery.run_workload(request, workload)
 
-    def test_producer_generation_must_match_the_adopted_current_generation(self) -> None:
+    def test_producer_generation_must_match_the_setup_manifest_generation(self) -> None:
         request = self._request()
-        workload = perf_recovery.Workload(
-            workload_id="producer.resolve.full",
-            command=(
-                "store",
-                "resolve",
-                "--store",
-                "{store_copy}",
-                "--view",
-                "{view}",
-                "--request-id",
-                "resolve",
-                "--idempotency-key",
-                "resolve-key",
-                "--request-timeout-seconds",
-                "30",
-                "--json",
-            ),
-            warmups=0,
-            runs=1,
-            hard_budget_ms={"development": 1_000, "windows": 2_000},
-            timeout_ms=3_000,
-            execution_kind="julie_store",
-        )
-        result = self._result(stdout=json.dumps({"generation": "gen-999"}).encode())
-        with mock.patch.object(perf_recovery, "_run_process", return_value=result):
+        (self.workspace / "README.md").write_text("staged\n", encoding="utf-8")
+        item = self._resolve_item(resolution_scope="one_file")
+        item["timeout_ms"] = 121_000
+        workload = perf_recovery._workload_from_mapping(item)
+        calls: list[list[str]] = []
+
+        def run_process(process_request, argv, _timeout, _environment):
+            calls.append(list(argv))
+            view = argv[argv.index("--view") + 1]
+            family = perf_recovery.resolve_active_store(process_request).family_id
+            generation = 6 if len(calls) == 4 else 5
+            return self._result(
+                stdout=json.dumps(
+                    {"family_id": family, "view": view, "manifest": {"generation": generation}}
+                ).encode()
+            )
+
+        with mock.patch.object(perf_recovery, "_run_process", side_effect=run_process):
             with self.assertRaisesRegex(RuntimeError, "generation|adopt"):
                 perf_recovery.run_workload(request, workload)
+
+    def test_nested_manifest_generation_matches_the_selected_view_not_current_directory(self) -> None:
+        database = self.store_copy / "gen-001" / "store.db"
+        database.unlink()
+        connection = sqlite3.connect(database)
+        try:
+            connection.execute("CREATE TABLE views(view_id TEXT PRIMARY KEY, current_generation INTEGER)")
+            connection.execute("INSERT INTO views VALUES (?, ?)", ("view-1", 5))
+            connection.commit()
+        finally:
+            connection.close()
+        request = self._request()
+        active = perf_recovery.resolve_active_store(request)
+        payload = {
+            "family_id": active.family_id,
+            "view_id": active.view_id,
+            "manifest": {"generation": 5},
+        }
+        perf_recovery._require_producer_binding(
+            request,
+            active,
+            payload,
+            label="nested-generation",
+        )
 
     def test_producer_paths_require_operation_specific_runtime_placeholders(self) -> None:
         item = self._resolve_item()
@@ -849,15 +1073,21 @@ class PerfRecoveryTests(unittest.TestCase):
         workload = perf_recovery._workload_from_mapping(self._resolve_item())
         calls: list[list[str]] = []
 
-        def run_process(_request, argv, _timeout, _environment):
+        def run_process(process_request, argv, _timeout, _environment):
             calls.append(list(argv))
-            return self._result(stdout=json.dumps({"resolution": {"resolution_mode": "full"}}).encode())
+            view = argv[argv.index("--view") + 1]
+            family = perf_recovery.resolve_active_store(process_request).family_id
+            return self._result(
+                stdout=json.dumps({"family_id": family, "view": view, "generation": "gen-001"}).encode()
+            )
 
         with mock.patch.object(perf_recovery, "_run_process", side_effect=run_process):
             records = perf_recovery.run_workload(request, workload)
-        self.assertEqual(2, len(calls))
+        self.assertEqual(4, len(calls))
         self.assertEqual("import", calls[0][2])
         self.assertEqual("resolve", calls[1][2])
+        self.assertEqual("import", calls[2][2])
+        self.assertEqual("resolve", calls[3][2])
         self.assertNotEqual(calls[0][calls[0].index("--request-id") + 1], calls[1][calls[1].index("--request-id") + 1])
         self.assertEqual(1, len(records))
 
@@ -865,15 +1095,38 @@ class PerfRecoveryTests(unittest.TestCase):
         request = self._request()
         (self.workspace / "README.md").write_text("staged\n", encoding="utf-8")
         workload = perf_recovery._workload_from_mapping(self._resolve_item())
-        setup = self._result()
-        mismatch = self._result(
-            stdout=json.dumps({"resolution": {"resolution_mode": "scoped", "scope_file_count": 0}}).encode()
-        )
-        with mock.patch.object(perf_recovery, "_run_process", side_effect=[setup, mismatch]):
+        mismatch_result: perf_recovery.CommandResult | None = None
+        def run_process(process_request, argv, _timeout, _environment):
+            nonlocal mismatch_result
+            if len(calls) < 3:
+                calls.append(list(argv))
+                view = argv[argv.index("--view") + 1]
+                family = perf_recovery.resolve_active_store(process_request).family_id
+                return self._result(
+                    stdout=json.dumps({"family_id": family, "view": view, "generation": "gen-001"}).encode()
+                )
+            calls.append(list(argv))
+            view = argv[argv.index("--view") + 1]
+            family = perf_recovery.resolve_active_store(process_request).family_id
+            mismatch_result = self._result(
+                stdout=json.dumps(
+                    {
+                        "family_id": family,
+                        "view": view,
+                        "generation": "gen-001",
+                        "resolution": {"resolution_mode": "scoped", "scope_file_count": 0},
+                    }
+                ).encode()
+            )
+            return mismatch_result
+
+        calls: list[list[str]] = []
+        with mock.patch.object(perf_recovery, "_run_process", side_effect=run_process):
             record = perf_recovery.run_workload(request, workload)[0]
         self.assertFalse(record.hard_gate_passed)
         self.assertEqual("scoped", record.metadata["resolution_gate"]["actual_mode"])
-        self.assertEqual(mismatch.output_sha256, record.output_sha256)
+        self.assertIsNotNone(mismatch_result)
+        self.assertEqual(mismatch_result.output_sha256, record.output_sha256)
 
     def test_workspace_open_converges_before_measured_attempts(self) -> None:
         request = self._request()
