@@ -72,6 +72,7 @@ PRODUCER_IMPORT_FLAGS = frozenset(
 PRODUCER_RESOLVE_FLAGS = frozenset(
     {
         "--store",
+        "--family",
         "--view",
         "--request-id",
         "--idempotency-key",
@@ -658,47 +659,70 @@ def _resource_delta(before: Mapping[str, float | int] | None, after: Mapping[str
 
 
 def _terminate_process(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
+    reaped = False
 
     def wait_bounded() -> bool:
+        nonlocal reaped
         try:
             process.wait(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
+            reaped = True
             return True
         except (subprocess.TimeoutExpired, OSError, ValueError):
             return False
 
+    def kill_windows_tree() -> bool:
+        try:
+            result = subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS,
+            )
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            return False
+        return getattr(result, "returncode", 1) == 0
+
+    if process.poll() is not None:
+        wait_bounded()
+        return
+
     try:
         if os.name == "nt":
+            kill_windows_tree()
+            if not wait_bounded():
+                kill_windows_tree()
+                if not wait_bounded():
+                    try:
+                        process.kill()
+                    except (ProcessLookupError, OSError):
+                        pass
+                    wait_bounded()
+        else:
             try:
-                subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                    timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS,
-                )
-            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
                 pass
             if not wait_bounded():
-                process.kill()
-                wait_bounded()
-        else:
-            os.killpg(process.pid, signal.SIGTERM)
-            wait_bounded()
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                return
-            if not wait_bounded():
-                process.kill()
-                wait_bounded()
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                if not wait_bounded():
+                    try:
+                        process.kill()
+                    except (ProcessLookupError, OSError):
+                        pass
+                    wait_bounded()
     except (ProcessLookupError, PermissionError, OSError):
         try:
             process.kill()
         except (ProcessLookupError, OSError):
             pass
         wait_bounded()
+    finally:
+        if not reaped:
+            wait_bounded()
 
 
 def _monitor_process(process: subprocess.Popen[bytes], platform_name: str, stop: threading.Event, peaks: dict[str, int]) -> None:
@@ -1395,7 +1419,7 @@ def _validate_command(
             required_placeholder("--root", "workspace")
         else:
             if "--family" in flags:
-                raise ValueError(f"{label} store resolve does not accept --family")
+                required_placeholder("--family", "family")
             if "--root" in flags:
                 raise ValueError(f"{label} store resolve does not accept --root")
         return tuple(command)

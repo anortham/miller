@@ -121,7 +121,7 @@ class PerfRecoveryTests(unittest.TestCase):
             ],
             "warmups": 0,
             "runs": 1,
-            "timeout_ms": 1_502_000 if resolution_scope == "full" else 60_000,
+            "timeout_ms": 1_531_000 if resolution_scope == "full" else 60_000,
             "hard_budget_ms": {"development": 60_000, "windows": 120_000},
             "mutates_store": False,
             "metadata": {"resolution_scope": resolution_scope, "changed_path": "README.md"},
@@ -509,11 +509,12 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual("store", manifest["producer.resolve.full"].command[0])
         self.assertEqual("resolve", manifest["producer.resolve.full"].command[1])
         full_command = manifest["producer.resolve.full"].command
+        producer_timeout_ms = int(full_command[full_command.index("--request-timeout-seconds") + 1]) * 1000
         self.assertGreater(
-            int(full_command[full_command.index("--request-timeout-seconds") + 1]) * 1000,
+            producer_timeout_ms,
             1_500_000,
         )
-        self.assertGreater(manifest["producer.resolve.full"].timeout_ms, 1_500_000)
+        self.assertGreaterEqual(manifest["producer.resolve.full"].timeout_ms, producer_timeout_ms + 30_000)
         self.assertIsNone(manifest["tool.context.references.depth1"].parity_with)
         self.assertEqual(
             "tool.context.references.depth1.batch_off",
@@ -599,7 +600,14 @@ class PerfRecoveryTests(unittest.TestCase):
         item = self._resolve_item()
         item["id"] = "producer.resolve.family"
         item["command"] = list(item["command"]) + ["--family", "{family}"]
-        with self.assertRaisesRegex(ValueError, "family"):
+        workload = perf_recovery._workload_from_mapping(item)
+        argv = perf_recovery._producer_argv(self._request(), workload.command)
+        self.assertIn("11111111-1111-1111-1111-111111111111", argv)
+
+        item = self._resolve_item()
+        item["id"] = "producer.resolve.family_path"
+        item["command"] = list(item["command"]) + ["--family", "/tmp/family"]
+        with self.assertRaisesRegex(ValueError, "placeholder"):
             perf_recovery._workload_from_mapping(item)
 
         item = self._resolve_item()
@@ -806,6 +814,51 @@ class PerfRecoveryTests(unittest.TestCase):
         killpg.assert_any_call(123, perf_recovery.signal.SIGTERM)
         killpg.assert_any_call(123, perf_recovery.signal.SIGKILL)
         self.assertGreaterEqual(process.wait.call_count, 2)
+
+    def test_posix_sigkill_race_still_reaps_process(self) -> None:
+        if os.name == "nt":
+            self.skipTest("POSIX process-group termination")
+        process = SimpleNamespace(
+            pid=123,
+            poll=lambda: None,
+            wait=mock.Mock(side_effect=[subprocess.TimeoutExpired("test", 1), None]),
+            kill=mock.Mock(),
+        )
+        with mock.patch.object(
+            perf_recovery.os,
+            "killpg",
+            side_effect=[None, ProcessLookupError],
+        ):
+            perf_recovery._terminate_process(process)
+        self.assertEqual(2, process.wait.call_count)
+
+    def test_windows_taskkill_failure_retries_tree_and_reaps(self) -> None:
+        for first_failure in (
+            subprocess.TimeoutExpired("taskkill", 1),
+            OSError("taskkill unavailable"),
+        ):
+            with self.subTest(first_failure=type(first_failure).__name__):
+                process = SimpleNamespace(
+                    pid=123,
+                    poll=lambda: None,
+                    wait=mock.Mock(
+                        side_effect=[subprocess.TimeoutExpired("test", 1), subprocess.TimeoutExpired("test", 1), None]
+                    ),
+                    kill=mock.Mock(),
+                )
+                with mock.patch.object(perf_recovery.os, "name", "nt"):
+                    with mock.patch.object(
+                        perf_recovery.subprocess,
+                        "run",
+                        side_effect=[first_failure, SimpleNamespace(returncode=1)],
+                    ) as run:
+                        perf_recovery._terminate_process(process)
+                self.assertEqual(2, run.call_count)
+                for call in run.call_args_list:
+                    self.assertEqual(["taskkill", "/PID", "123", "/T", "/F"], call.args[0])
+                    self.assertLessEqual(call.kwargs["timeout"], perf_recovery.PROCESS_TEARDOWN_TIMEOUT_SECONDS)
+                process.kill.assert_called_once()
+                self.assertEqual(3, process.wait.call_count)
 
     def test_windows_taskkill_has_a_bounded_timeout(self) -> None:
         process = SimpleNamespace(pid=123, poll=lambda: None, wait=mock.Mock(return_value=0), kill=mock.Mock())
