@@ -152,6 +152,12 @@ Risks: Windows native execution was not available locally; Windows API behavior 
 - Owned implementation files: `scripts/perf-store-snapshot.py`, `scripts/tests/test_perf_store_snapshot.py`, and the checkpoint. This report is updated in a separate report commit.
 - Risks: native Windows execution remains unavailable locally; disposable mocked Windows coverage is unchanged. No real incident/store snapshot or replay was run.
 
+## Task 1B-B copied-store baseline — blocked at producer/Miller eligibility
+
+- State: `/home/murphy/source/miller/.worktrees/performance-recovery`, branch `feature/performance-recovery`, HEAD `25f7ca0b63629fb5fe27d7b0b35934b6d957a942`; Git-owned paths clean after the run. The task artifact directory is ignored; the copied family and staged workspace are untracked outside the worktree under `/home/murphy/.miller/perf-recovery/task-1b-baseline/`.
+- Discovery: `.miller/store.json` identified live workspace `/home/murphy/source/miller/.worktrees/performance-recovery`, family `a271f2bd-7368-4da6-b5aa-24ffad69fb1f`, view `0be23b5f-20f3-4fc9-8ea1-19d3be06b630`, store root `/home/murphy/.miller/stores/a271f2bd-7368-4da6-b5aa-24ffad69fb1f`, and generation `gen-001`. Source size was 4,187,116 KiB; preflight filesystem `/dev/nvme0n1p3` had 1,839,196,440 KiB available. `lsof`/`fuser` found no target-family DB handles; the snapshot owner gate found no live or unknown coordinator owner and passed its pre/post checks. No process was stopped.
+- Snapshot command: `PYTHONDONTWRITEBYTECODE=1 python scripts/perf-store-snapshot.py --source /home/murphy/.miller/stores/a271f2bd-7368-4da6-b5aa-24ffad69fb1f --destination /home/murphy/.miller/perf-recovery/task-1b-baseline/copied-store --live-root /home/murphy/source/miller/.worktrees/performance-recovery`. Result: PASS, generation `gen-001`, 16 SQLite databases, six resolution bases, `quick_check=ok`, `wal_shm=false`, destination SHA-256 `d81da66fb22abf43ed98af853046c37216bb281788b13c2b88db80aa5e84d6b2`, copied size 4,183,648 KiB, and no destination WAL/SHM/journal files. Source SHM churn was excluded by the verified helper contract; no source DB was opened or written by this packet.
+
 ## Snapshot correction cycle 5 — restore required runtime directories
 
 - Worktree: `/home/murphy/source/miller/.worktrees/performance-recovery`; branch: `feature/performance-recovery`; start `25f7ca0b63629fb5fe27d7b0b35934b6d957a942`.
