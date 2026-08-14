@@ -92,3 +92,19 @@ Risks: Windows native execution was not available locally; Windows API behavior 
 - Goldfish checkpoint: `.memories/2026-08-14/074656_71c5.md` (`checkpoint_71c5597e`), captured before commit.
 - Implementation commit: `c8cf2bdd0a3b0c898c050b117c168b8b7a262e42` (`perf: harden recovery harness review contracts`).
 - Final post-implementation state: the three harness files and checkpoint are clean; the lead plan, snapshot helper, and snapshot tests remain modified and unstaged. The report-only commit follows separately.
+
+## Workspace status content correction packet
+
+- Worktree: `/home/murphy/source/miller/.worktrees/performance-recovery`
+- Branch: `feature/performance-recovery`
+- Correction base / starting commit: `9a8035b7c2bad4712f123b02eb09bf230b6ef226`.
+- Starting dirty state: the lead-owned plan plus `scripts/perf-store-snapshot.py` and `scripts/tests/test_perf_store_snapshot.py` were modified and unstaged. Those files belong to other workers and were preserved without edits or staging.
+- Miller was used first. Workspace `performance-recovery-9ee5b2dc77a2` reported scan-failing/stale state; `_status_probe_state` was not available as a fresh indexed symbol, so bounded source reads were used after the Miller checks. No refresh, live-store access, replay, producer/store execution, or .NET test was attempted.
+- RED: after adding a fake session with the actual JSON-RPC `result.content` text-block shape, `PYTHONDONTWRITEBYTECODE=1 python scripts/tests/test_perf_recovery.py` ran 56 tests with 1 expected failure: content-text `bootstrap: failed` was incorrectly returned as `ready`.
+- GREEN: `PYTHONDONTWRITEBYTECODE=1 python scripts/tests/test_perf_recovery.py` — 56 passed, 0 failed, 0 skipped.
+- Behavior: `_status_probe_state` now treats case-insensitive `bootstrap: running` and `bootstrap: idle` content as retryable, `bootstrap: failed` and `bootstrap: unavailable` as failed, and bound workspace status content as ready by the existing default. Structured status handling also treats `idle` as retryable. `_bootstrap_session` and its single absolute deadline were not changed.
+- Verification: AST parsing of `scripts/perf-recovery.py` and `scripts/tests/test_perf_recovery.py` passed; `git diff --check` passed.
+- Owned changes in this correction: `scripts/perf-recovery.py`, `scripts/tests/test_perf_recovery.py`, this report, and Goldfish checkpoint `.memories/2026-08-14/075315_8c00.md` (`checkpoint_8c00cf03`).
+- Implementation commit: `cfb92605a093c4ede26e92bc7915646c4d221219` (`perf: parse MCP workspace status content`).
+- The implementation commit staged only the two harness files and the checkpoint. The report is being recorded separately; the lead plan and snapshot-worker files remain modified and unstaged.
+- No real incident replay, snapshot copy, producer/store execution, dependency/public-surface change, .NET edit, push, or release was performed.
