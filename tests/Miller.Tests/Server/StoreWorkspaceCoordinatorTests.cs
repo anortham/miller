@@ -1,6 +1,7 @@
 using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Store;
+using Miller.Server.Hosting;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -204,6 +205,7 @@ public sealed class StoreWorkspaceCoordinatorTests
     [Fact]
     public void AReusedExactFullImportDoesNotSubmitResolve()
     {
+        var phases = new RecordingPhaseSink();
         var client = new RecordingStoreClient(
             StoreOperation.Import,
             manifestDisposition: StoreManifestDisposition.Reused,
@@ -219,12 +221,46 @@ public sealed class StoreWorkspaceCoordinatorTests
             client,
             () => IndexLevelPolicy.Full,
             _ => snapshots.Dequeue(),
-            () => "request-import");
+            () => "request-import",
+            null,
+            phaseSink: phases);
 
         coordinator.Scan(jobs: 1);
 
         Assert.Single(client.Requests);
         Assert.IsType<StoreImportRequest>(client.SingleRequest);
+        Assert.Equal(["import", "resolve", "coordinator_total"], phases.Records.Select(static phase => phase.Phase));
+        Assert.False(phases.Records.Single(static phase => phase.Phase == "resolve").DidWork);
+        Assert.True(phases.Records.Single(static phase => phase.Phase == "coordinator_total").DidWork);
+    }
+
+    [Fact]
+    public void Scan_RecordsImportResolveAndCoordinatorTotal()
+    {
+        var phases = new RecordingPhaseSink();
+        var client = new RecordingStoreClient(StoreOperation.Import);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(41, "l1"),
+            new(42, "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => snapshots.Dequeue(),
+            () => "request-import",
+            null,
+            phaseSink: phases);
+
+        ExtractReport report = coordinator.Scan(jobs: 1);
+
+        Assert.Equal("completed", report.Status);
+        Assert.Equal(["import", "resolve", "coordinator_total"], phases.Records.Select(static phase => phase.Phase));
+        Assert.All(phases.Records, static phase => Assert.True(phase.ElapsedMilliseconds >= 0));
+        Assert.Equal(42, phases.Records.Single(static phase => phase.Phase == "coordinator_total").StoreSequence);
+        Assert.All(phases.Records, static phase => Assert.True(phase.DidWork));
+        Assert.All(phases.Records, static phase => Assert.Equal("completed", phase.Outcome));
     }
 
     [Fact]
@@ -466,6 +502,7 @@ public sealed class StoreWorkspaceCoordinatorTests
     [Fact]
     public void EnsureBindingPointerRepairsMalformedStoreMetadata()
     {
+        var phases = new RecordingPhaseSink();
         string root = Path.Combine(Path.GetTempPath(), "miller-store-pointer-repair-" + Guid.NewGuid().ToString("N"));
         string storeRoot = Path.Combine(root, "store");
         Directory.CreateDirectory(Path.Combine(root, ".miller"));
@@ -483,7 +520,9 @@ public sealed class StoreWorkspaceCoordinatorTests
                 new RecordingStoreClient(StoreOperation.Update),
                 () => IndexLevelPolicy.Progressive,
                 _ => new StoreWorkspaceState(1, "l1"),
-                () => "request-repair");
+                () => "request-repair",
+                null,
+                phaseSink: phases);
 
             coordinator.EnsureBindingPointer();
 
@@ -492,6 +531,10 @@ public sealed class StoreWorkspaceCoordinatorTests
             Assert.Equal(binding.FamilyId, repaired.FamilyId);
             Assert.Equal(binding.ViewId, repaired.ViewId);
             Assert.Equal(binding.StoreRoot, repaired.StoreRoot);
+            IndexerPhaseRecord phase = Assert.Single(phases.Records);
+            Assert.Equal("bind", phase.Phase);
+            Assert.True(phase.DidWork);
+            Assert.Null(phase.StoreSequence);
         }
         finally
         {
@@ -717,6 +760,13 @@ public sealed class StoreWorkspaceCoordinatorTests
         coordinator.Scan(jobs: 1);
 
         return Assert.IsType<StoreImportRequest>(client.SingleRequest);
+    }
+
+    private sealed class RecordingPhaseSink : IIndexerPhaseSink
+    {
+        public List<IndexerPhaseRecord> Records { get; } = [];
+
+        public void Record(IndexerPhaseRecord record) => Records.Add(record);
     }
 
     private sealed class RecordingStoreClient(

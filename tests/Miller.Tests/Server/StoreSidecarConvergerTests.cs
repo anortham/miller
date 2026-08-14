@@ -102,6 +102,88 @@ public sealed class StoreSidecarConvergerTests
     }
 
     [Fact]
+    public void ConvergeStore_RecordsStablePhasesAndTruthfulNoOpWork()
+    {
+        var phases = new RecordingPhaseSink();
+        var signal = new VectorConvergeSignal(enabled: true);
+        int contentRuns = 0;
+        int searchRuns = 0;
+        using var fixture = JulieDbFixture.CreateDefault();
+        using var session = new FixtureStoreSession(fixture);
+        var converger = new IndexerSidecarConverger(
+            searchEnabled: true,
+            (_, _, _, _) => false,
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            static path => path,
+            static path => path,
+            (_, _, _) => false,
+            NullLogger.Instance,
+            signal,
+            ensureStoreContent: (_, _) => ++contentRuns == 1,
+            ensureStoreSearch: (_, _) => ++searchRuns == 1,
+            phaseSink: phases);
+
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-phases-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            converger.ConvergeStore(root, session);
+            converger.ConvergeStore(root, session);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+
+        Assert.Equal(
+            ["content", "search", "metrics", "vector", "sidecar_total", "content", "search", "metrics", "vector", "sidecar_total"],
+            phases.Records.Select(static phase => phase.Phase));
+        Assert.All(phases.Records, static phase => Assert.True(phase.ElapsedMilliseconds >= 0));
+        Assert.Equal([true, true, true, true, true], phases.Records.Take(5).Select(static phase => phase.DidWork));
+        Assert.Equal([false, false, false, false, false], phases.Records.Skip(5).Select(static phase => phase.DidWork));
+        Assert.All(phases.Records, static phase => Assert.Equal(31, phase.StoreSequence));
+    }
+
+    [Fact]
+    public void ConvergeStore_RecordsContainedSidecarFailure()
+    {
+        var phases = new RecordingPhaseSink();
+        using var fixture = JulieDbFixture.CreateDefault();
+        using var session = new FixtureStoreSession(fixture);
+        var converger = new IndexerSidecarConverger(
+            searchEnabled: true,
+            (_, _, _, _) => false,
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            static path => path,
+            static path => path,
+            (_, _, _) => false,
+            NullLogger.Instance,
+            new VectorConvergeSignal(enabled: true),
+            ensureStoreContent: (_, _) => throw new TimeoutException("sidecar lease timeout"),
+            ensureStoreSearch: (_, _) => true,
+            phaseSink: phases);
+
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-phase-failure-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            converger.ConvergeStore(root, session);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+
+        IndexerPhaseRecord content = Assert.Single(phases.Records, static phase => phase.Phase == "content");
+        Assert.Equal("failed", content.Outcome);
+        Assert.False(content.DidWork);
+        Assert.Equal("completed", Assert.Single(phases.Records, static phase => phase.Phase == "search").Outcome);
+        Assert.Equal("completed", Assert.Single(phases.Records, static phase => phase.Phase == "sidecar_total").Outcome);
+    }
+
+    [Fact]
     public async Task ConvergeStore_SerializesFamilySidecarWork()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-" + Guid.NewGuid().ToString("N"));
@@ -190,6 +272,13 @@ public sealed class StoreSidecarConvergerTests
     }
 
     private static long SnapshotCount(string path) => ScalarLong(path, "SELECT COUNT(*) FROM snapshots;");
+
+    private sealed class RecordingPhaseSink : IIndexerPhaseSink
+    {
+        public List<IndexerPhaseRecord> Records { get; } = [];
+
+        public void Record(IndexerPhaseRecord record) => Records.Add(record);
+    }
 
     private sealed class FixtureStoreSession : IWorkspaceReadSession
     {

@@ -189,6 +189,13 @@ public sealed class IndexerServiceScanTests : IDisposable
         }
     }
 
+    private sealed class RecordingPhaseSink : IIndexerPhaseSink
+    {
+        public List<IndexerPhaseRecord> Records { get; } = [];
+
+        public void Record(IndexerPhaseRecord record) => Records.Add(record);
+    }
+
     // A never-started IndexerService: TryScanAsLeader reads only the published _ops under _opsGate (it never
     // touches the bootstrap), so an un-started instance is the correct, I/O-free unit-test surface. The sidecar
     // defaults OFF, so the disabled (byte-identical) path is what these no-workspace tests exercise.
@@ -227,7 +234,8 @@ public sealed class IndexerServiceScanTests : IDisposable
         TimeSpan? scanGovernorWait = null,
         Func<string, FullScanDrainResult>? drainFullScanRequests = null,
         Func<string?>? ownExtractorVersion = null,
-        TimeSpan? opsGateWait = null)
+        TimeSpan? opsGateWait = null,
+        IIndexerPhaseSink? phaseSink = null)
     {
         string tempHome = Path.GetDirectoryName(Path.GetDirectoryName(workspace.RegistryDbPath))!;
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
@@ -236,7 +244,7 @@ public sealed class IndexerServiceScanTests : IDisposable
             workspace,
             new IndexHolder(MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()), builtRevision: 0));
         if (drainFileConvergeRequests is null && scanGovernor is null && drainFullScanRequests is null &&
-            ownExtractorVersion is null && opsGateWait is null)
+            ownExtractorVersion is null && opsGateWait is null && phaseSink is null)
             return new IndexerService(
                 bootstrap, NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, sidecar);
         return new IndexerService(
@@ -253,7 +261,8 @@ public sealed class IndexerServiceScanTests : IDisposable
             ownExtractorVersion: ownExtractorVersion,
             scanGovernor: scanGovernor,
             scanGovernorWait: scanGovernorWait,
-            opsGateWait: opsGateWait);
+            opsGateWait: opsGateWait,
+            phaseSink: phaseSink);
     }
 
     private static IndexerService NewStartedService(
@@ -1509,6 +1518,27 @@ public sealed class IndexerServiceScanTests : IDisposable
         string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
         Assert.True(File.Exists(searchDb), $"expected the startup delta scan to build {searchDb}");
         Assert.NotNull(sidecar.TryOpen(julie.DbPath, expectedRevision: 13));
+    }
+
+    [Fact]
+    public void RunStartupDeltaScan_RecordsStartupTotalFromTheExtractReport()
+    {
+        using var julie = JulieDb();
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        var phases = new RecordingPhaseSink();
+        var service = NewSeededService(
+            workspace,
+            SymbolSearchSidecar.Disabled,
+            phaseSink: phases);
+        service.PublishOpsForTest(new RecordingScanOps { Revision = 13 });
+
+        service.RunStartupDeltaScanForTest(workspace);
+
+        IndexerPhaseRecord phase = Assert.Single(phases.Records, static item => item.Phase == "startup_total");
+        Assert.True(phase.ElapsedMilliseconds >= 0);
+        Assert.Equal("completed", phase.Outcome);
+        Assert.Equal(13, phase.StoreSequence);
+        Assert.True(phase.DidWork);
     }
 
     [Fact]

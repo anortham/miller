@@ -86,6 +86,7 @@ public sealed class IndexerService : BackgroundService
     // the CURRENT workspace's content.db/search.db, so convergence runs after scans and per-file updates under
     // _opsGate.
     private readonly IndexerSidecarConverger _sidecarConverger;
+    private readonly IIndexerPhaseSink _phaseSink;
     private readonly WorkspaceRegistryScanPublisher _registryPublisher;
 
     // Machine-wide (per-user) admission over whole-repo scans. Released the moment the extract subprocess returns
@@ -152,10 +153,11 @@ public sealed class IndexerService : BackgroundService
             {
                 if (WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
                 {
-                    return StoreWorkspaceCoordinator.Create(
+                    return StoreWorkspaceCoordinator.CreateWithPhaseSink(
                         workspace,
                         canonicalRoot,
-                        () => IndexLevels.ResolveForWorkspace(workspace.RegistryDbPath, workspace.WorkspaceId));
+                        () => IndexLevels.ResolveForWorkspace(workspace.RegistryDbPath, workspace.WorkspaceId),
+                        phaseSink: new LoggingIndexerPhaseSink(logger));
                 }
                 var runner = JulieExtractRunner.Locate(
                     workspace.ToolsRoot,
@@ -212,7 +214,8 @@ public sealed class IndexerService : BackgroundService
         ScanGovernor? scanGovernor = null,
         TimeSpan? scanGovernorWait = null,
         TimeSpan? opsGateWait = null,
-        Func<WorkspaceContext, string?>? readIndexLevel = null)
+        Func<WorkspaceContext, string?>? readIndexLevel = null,
+        IIndexerPhaseSink? phaseSink = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -234,7 +237,9 @@ public sealed class IndexerService : BackgroundService
         _sidecarConverger = new IndexerSidecarConverger(
             sidecar,
             contentSidecar ?? new ContentCorpusSidecar(),
-            logger);
+            logger,
+            phaseSink: phaseSink);
+        _phaseSink = phaseSink ?? new LoggingIndexerPhaseSink(logger);
         _registryPublisher = new WorkspaceRegistryScanPublisher(logger);
         _attachFileWatchers = attachFileWatchers;
         // Lazy so the production probe (which reads the bootstrap's workspace for ToolsRoot) runs inside
@@ -858,6 +863,7 @@ public sealed class IndexerService : BackgroundService
 
     private void RunStartupDeltaScan(WorkspaceContext workspace)
     {
+        using var phase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.StartupTotal);
         string stableWorkspaceId = workspace.WorkspaceId
             ?? throw new InvalidOperationException(
                 "IndexerService cannot run startup scan before bootstrap resolves the stable workspace id.");
@@ -867,6 +873,7 @@ public sealed class IndexerService : BackgroundService
         ScanAttemptDecision decision = FailurePolicy.Evaluate(ScanIntent.IncrementalReconcile);
         if (!decision.Attempt)
         {
+            phase.Skip();
             _core?.RequestWholeRepoScan(ScanIntent.IncrementalReconcile);
             _logger.LogWarning(
                 "Startup delta scan deferred until {RetryAtUtc:O} after {Failures} consecutive whole-repo scan " +
@@ -878,6 +885,7 @@ public sealed class IndexerService : BackgroundService
         using ScanGovernorAdmission? admission = TryAcquireScanAdmission("leader-startup");
         if (admission is null)
         {
+            phase.Skip();
             // Not a workspace error: the index stays valid and the debounce loop's next rescan tick retries.
             // A startup delta is incremental, so the re-armed latch stays a delta scan.
             _core?.RequestWholeRepoScan(ScanIntent.IncrementalReconcile);
@@ -889,7 +897,10 @@ public sealed class IndexerService : BackgroundService
             ExtractReport report;
             long armingGeneration = _core?.WholeRepoScanArmingGeneration ?? 0;
             if (!TryEnterOpsGateHoldingAdmission("the startup delta scan", ScanIntent.IncrementalReconcile))
+            {
+                phase.Skip();
                 return;
+            }
 
             try
             {
@@ -923,6 +934,7 @@ public sealed class IndexerService : BackgroundService
             // ran here would leave it armed for a duplicate scan.
             _core?.NoteWholeRepoScanCompleted(ScanIntent.IncrementalReconcile, armingGeneration);
             _registryPublisher.MarkScanned(workspace, stableWorkspaceId, report.Revision);
+            phase.Complete(report.Revision, report.CreatedRevision is not null);
             _logger.LogInformation(
                 "Startup delta scan complete: revision {Revision}, {Updated} files updated, {Deleted} files deleted.",
                 report.Revision, report.FilesUpdated, report.FilesDeleted);
@@ -931,6 +943,7 @@ public sealed class IndexerService : BackgroundService
         }
         catch (Exception ex)
         {
+            phase.Fail();
             // This block runs once per claim, OUTSIDE the debounce loop, so nothing else retries it: without the
             // re-arm a failed startup delta drops the reconcile for every edit made while Miller was down.
             RecordScanFailure(ScanIntent.IncrementalReconcile, decision, ex);
