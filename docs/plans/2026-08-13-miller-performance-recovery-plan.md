@@ -869,6 +869,16 @@ Before this task starts, preserve a second verified pre-maintenance snapshot. Co
 
 - `serial-worker-commit`: commit reconciled files and record original and resulting SHAs.
 
+**2026-08-14 outcome:** Task 7A is **PASS**. The producer commit added durable
+generation-fenced temporary rebase pins, retry-safe exact rebase publication, pin-aware superseded-delta
+cleanup, and an exact-identity maintenance heartbeat that spans plan validation and apply. A copied-family
+GC run with binary SHA-256 `e340ca782b2c312adc3795aa549dcdc000024359ca9a53d5af2238494749c497`
+completed in `336.31 s`, removed 170 obsolete deltas and 7 stale base files, reduced overlay rows by
+`94.50%` and logical resolution bytes by `94.16%`, left zero eligible delta parents/children, preserved
+current/scope roots, and passed all relevant SQLite integrity checks. Miller consumer gates passed `43/43`
+focused reader tests and `7/7` focused rotation Scale tests. Task 7B now owns the post-rotation eight-arm
+read baseline; Task 7A makes no read-path performance claim.
+
 ### Task 7B: Optimize Measured Bounded Reads
 
 **Files:**
