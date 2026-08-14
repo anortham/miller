@@ -27,7 +27,7 @@
 - Any extraction-backed behavior must pass `SELECT language, kind, COUNT(*) FROM symbols GROUP BY 1,2` on a real supported-language extract, plus the equivalent grouping on the specific new extraction table when one is introduced.
 - Every full-resolution optimization must prove the same exact digest as the existing full resolver before becoming the default.
 - Never classify exit code 135 as OOM without captured process or operating-system evidence; only exit 137 retains the current OOM retry policy.
-- Never mutate the live coordinator or store during development. Stop writers and create a verified whole-family snapshot containing `CURRENT`, the selected generation, coordinator, resolution bases, and required sidecars. A source database with a nonempty WAL must be copied through SQLite's read-only backup API, never raw-copied or checkpointed in place; the destination snapshot must be WAL/SHM-free and source facts must remain stable through the backup. Reflink is optional only for WAL-free files on Linux and never assumed on Windows.
+- Never mutate the live coordinator or store during development. Stop writers and create a verified whole-family snapshot containing `CURRENT`, the coordinator, every generation and resolution base referenced by current/coordinator state, and required sidecars. For a source database with a nonempty WAL, capture content and metadata facts, stream-copy the database/WAL/SHM triplet into a private temporary shadow, recapture and compare every source fact, then use SQLite backup from that stable shadow; never open, chmod, raw-promote, or checkpoint the source in place. The destination snapshot must be WAL/SHM-free and validated before atomic promotion. Reflink is optional only for WAL-free files on Linux and never assumed on Windows.
 - Do not run concurrent Rust builds, .NET builds, or performance workloads on the acceptance machine.
 - Do not rerun a passing expensive scope on an unchanged commit; reuse its verification-ledger entry.
 - Do not add a new MCP tool, public CLI verb, Store Contract version, dependency, release, tag, push, or pin bump without applicable explicit approval.
@@ -222,8 +222,8 @@ Expected: PASS for live-store rejection, isolation, timeout recording, parity, a
 - Modify: `scripts/tests/test_perf_recovery.py`
 - Modify: `scripts/benchmarks/perf-recovery-workloads.json`
 - Create: `scripts/perf-store-snapshot.py`
-- Test: `tests/Miller.Tests/Tools/ReferenceEvidenceReaderTests.cs`
-- Modify only to restore the planned rollback default: `src/Miller.Server/Tools/ReferenceEvidenceReader.cs`
+- Modify only to restore the planned rollback default: `src/Miller.Server/Tools/ContextTool.cs`
+- Test: `tests/Miller.Tests/Server/ContextToolTests.cs`
 
 **Interfaces:**
 - Consumes: Task 1's safe process runner, Miller's `serve` stdio host, `julie-extract store import`, `julie-extract store resolve`, Store Contract v1 reports, and Task 5's observation-only phase records.
@@ -243,7 +243,7 @@ Add manifest validation that rejects a startup workload unless `execution_kind=m
 
 **Step 2: Create and validate a whole-family snapshot**
 
-`perf-store-snapshot.py` requires explicit source and destination roots, refuses aliases, refuses live or unknown owners, and permits definitively dead/stale claims so the incident remains reproducible. For every SQLite database it opens the source read-only and uses SQLite backup into the destination, which incorporates a stable source WAL without checkpointing or writing the source; raw copy is allowed only for WAL-free non-database files. It copies `CURRENT`, `coord.db`, the selected generation, every referenced resolution base, and required store-owned files without shell-specific commands, then verifies source identity/facts did not change, destination databases pass `quick_check`, and no destination WAL/SHM remains. On Windows it uses ordinary local filesystem destinations; antivirus state is recorded, never changed automatically.
+`perf-store-snapshot.py` requires explicit source and destination roots, refuses aliases, refuses live or unknown owners, and permits definitively dead/stale claims so the incident remains reproducible. For every SQLite database it captures source content and metadata facts, stream-copies the database/WAL/SHM triplet into a private temporary shadow, verifies every source fact stayed stable, and uses SQLite backup from the shadow so committed WAL rows are incorporated without opening or mutating the source; raw copy is allowed only for WAL-free non-database files. It copies `CURRENT`, `coord.db`, every generation and resolution base referenced by current/coordinator state, sidecars, and required store-owned files without shell-specific commands, then verifies destination databases pass `quick_check`, no destination WAL/SHM remains, and the completed report/digest before atomic promotion. On Windows it uses ordinary local filesystem destinations; antivirus state is recorded, never changed automatically.
 
 **Step 3: Replace diagnostic workloads with faithful workloads**
 
@@ -268,7 +268,7 @@ Run three quiet Linux attempts for every non-destructive row and one complete ob
 
 Run: `python scripts/tests/test_perf_recovery.py`
 
-Run: `dotnet test --filter "FullyQualifiedName~ReferenceEvidenceReaderTests"`
+Run: `dotnet test --filter "FullyQualifiedName~ContextToolTests"`
 
 Expected: path-kind validation, snapshot refusal/integrity, MCP framing, producer invocation, timeout separation, semantic invariants, batch off/on identity, and missing-Windows-memory failure pass. Commit the corrected harness, default-off rollback, and baseline metadata/evidence; do not commit copied store data.
 

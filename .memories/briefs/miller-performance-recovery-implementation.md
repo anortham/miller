@@ -3,7 +3,7 @@ id: miller-performance-recovery-implementation
 title: Miller performance recovery implementation
 status: active
 created: 2026-08-14T03:57:03.433Z
-updated: 2026-08-14T06:26:02.532Z
+updated: 2026-08-14T08:40:28.709Z
 tags:
   - performance
   - family-store
@@ -26,7 +26,7 @@ Measured default relationship context takes about 11.93 seconds, leader startup 
 
 - Preserve Store Contract v1 and all existing MCP/CLI schemas and deterministic semantics.
 - A replay row must exercise the production path it names; CLI status/leader reads are diagnostic controls, not startup measurements.
-- Never mutate the live store. Stop or exclude live/unknown writers, then copy every SQLite database through a read-only backup so stable WAL contents are included without checkpointing the source; require a WAL/SHM-free, integrity-checked destination and unchanged source facts.
+- Never mutate the live store. Refuse live/unknown owners. For SQLite inputs, capture source content/metadata, stream-copy main/WAL/SHM to a private shadow, revalidate the source, then back up from the shadow; validate and digest the WAL-free destination before atomic promotion.
 - Keep context batching default-off until same-depth batch parity and copied-store lexical timing pass.
 - Characterize shipped incremental behavior before editing it.
 - Split store lifecycle rebase/collection from query/index/statistics tuning so each has independent evidence and rollback.
@@ -45,4 +45,4 @@ Completed Tasks 1–4 remain reviewed but production-volume unproven. Task 1B su
 
 ## Status
 
-Implementation active on `feature/performance-recovery`. Tasks 1–4 and Task 5A are committed and lead-reviewed. Grok 4.6's review was reconciled; the snapshot contract now handles a stable source WAL through read-only SQLite backup. Task 1B faithful workload implementation is next.
+Implementation active on `feature/performance-recovery`. Tasks 1–4 and Task 5A are committed and lead-reviewed. Task 1B-A is committed and lead-verified: faithful MCP/producer execution, bounded lifecycle handling, default-off context batching, and the non-mutating whole-family snapshot helper are ready. The next serialized step is Task 1B-B: create a verified copied-store snapshot and capture the immutable Linux baseline without touching the incident store.
