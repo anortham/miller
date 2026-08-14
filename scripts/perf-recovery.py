@@ -33,7 +33,10 @@ except ImportError:  # pragma: no cover - Windows does not expose resource.
 
 FIRST_ATTEMPT_TIMEOUT_MS = 60_000
 MAX_CAPTURE_BYTES = 1_048_576
+MAX_MCP_LINE_BYTES = 64 * 1024
 MAX_PHASE_RECORDS = 128
+PROCESS_TEARDOWN_TIMEOUT_SECONDS = 1.0
+STREAM_READ_CHUNK_BYTES = 64 * 1024
 MANIFEST_SCHEMA_VERSION = 1
 KNOWN_WORKLOAD_IDS = (
     "startup.leader.no_change",
@@ -53,6 +56,29 @@ KNOWN_WORKLOAD_IDS = (
 )
 EXECUTION_KINDS = frozenset({"miller_cli", "mcp_bootstrap", "julie_store"})
 PRODUCER_STORE_COMMANDS = frozenset({"import", "resolve"})
+PRODUCER_IMPORT_FLAGS = frozenset(
+    {
+        "--store",
+        "--family",
+        "--root",
+        "--view",
+        "--level",
+        "--request-id",
+        "--idempotency-key",
+        "--request-timeout-seconds",
+        "--json",
+    }
+)
+PRODUCER_RESOLVE_FLAGS = frozenset(
+    {
+        "--store",
+        "--view",
+        "--request-id",
+        "--idempotency-key",
+        "--request-timeout-seconds",
+        "--json",
+    }
+)
 KNOWN_VERBS = {
     "capabilities",
     "context",
@@ -154,8 +180,13 @@ class PairComparison:
     exit_code_match: bool
     timeout_match: bool
     stable_pivot_match: bool = True
+    symbol_neighbour_match: bool = True
     ordering_match: bool = True
     truncation_match: bool = True
+    truncation_changed: bool = False
+    truncation_shape_valid: bool = True
+    extra_reference_rows: int = 0
+    non_symbol_rows_delta: int = 0
     added_bytes: int = 0
 
 
@@ -629,25 +660,45 @@ def _resource_delta(before: Mapping[str, float | int] | None, after: Mapping[str
 def _terminate_process(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
+
+    def wait_bounded() -> bool:
+        try:
+            process.wait(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
+            return True
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            return False
+
     try:
         if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                pass
+            if not wait_bounded():
+                process.kill()
+                wait_bounded()
         else:
             os.killpg(process.pid, signal.SIGTERM)
+            wait_bounded()
             try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+            if not wait_bounded():
+                process.kill()
+                wait_bounded()
     except (ProcessLookupError, PermissionError, OSError):
         try:
             process.kill()
         except (ProcessLookupError, OSError):
             pass
+        wait_bounded()
 
 
 def _monitor_process(process: subprocess.Popen[bytes], platform_name: str, stop: threading.Event, peaks: dict[str, int]) -> None:
@@ -679,6 +730,7 @@ def build_environment(
     base: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     environment = dict(base or os.environ)
+    environment.pop("MILLER_PERF_STORE_COPY", None)
     active = resolve_active_store(request)
     if base is not None and environment.get("MILLER_HOME"):
         home = _canonical(environment["MILLER_HOME"])
@@ -688,7 +740,6 @@ def build_environment(
     else:
         home = _default_home(request)
     environment["MILLER_HOME"] = str(home)
-    environment["MILLER_PERF_STORE_COPY"] = str(request.store_copy)
     environment["MILLER_PERF_LEXICAL_CONTROL"] = "0" if semantic else "1"
     environment["MILLER_PERF_SEMANTIC_SERIALIZED"] = "1" if semantic else "0"
     environment["MILLER_SEMANTIC"] = "on" if semantic else "off"
@@ -728,6 +779,51 @@ class _NullLock:
         return None
 
 
+class _BoundedBytesCapture:
+    def __init__(self, max_bytes: int) -> None:
+        self._max_bytes = max_bytes
+        self._data = bytearray()
+        self._lock = threading.Lock()
+
+    def append(self, value: bytes) -> None:
+        if not value or self._max_bytes <= 0:
+            return
+        if len(value) >= self._max_bytes:
+            value = value[-self._max_bytes :]
+        with self._lock:
+            self._data.extend(value)
+            if len(self._data) > self._max_bytes:
+                del self._data[: len(self._data) - self._max_bytes]
+
+    def value(self) -> bytes:
+        with self._lock:
+            return bytes(self._data)
+
+
+def _read_process_stream(stream: Any, capture: _BoundedBytesCapture) -> None:
+    if stream is None:
+        return
+    try:
+        while True:
+            chunk = stream.read(STREAM_READ_CHUNK_BYTES)
+            if not chunk:
+                return
+            if isinstance(chunk, str):
+                chunk = chunk.encode("utf-8", errors="replace")
+            capture.append(bytes(chunk))
+    except (OSError, ValueError):
+        return
+
+
+def _close_stream(stream: Any) -> None:
+    if stream is None:
+        return
+    try:
+        stream.close()
+    except (OSError, ValueError):
+        return
+
+
 def _run_process(request: ReplayRequest, argv: list[str], timeout_ms: int, environment: Mapping[str, str]) -> CommandResult:
     platform_name = _platform_name()
     before_usage = _resource_snapshot()
@@ -755,16 +851,39 @@ def _run_process(request: ReplayRequest, argv: list[str], timeout_ms: int, envir
         daemon=True,
     )
     monitor.start()
+    stdout_capture = _BoundedBytesCapture(MAX_CAPTURE_BYTES)
+    stderr_capture = _BoundedBytesCapture(MAX_CAPTURE_BYTES)
+    output_threads = [
+        threading.Thread(
+            target=_read_process_stream,
+            args=(process.stdout, stdout_capture),
+            name="perf-recovery-stdout",
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_read_process_stream,
+            args=(process.stderr, stderr_capture),
+            name="perf-recovery-stderr",
+            daemon=True,
+        ),
+    ]
+    for thread in output_threads:
+        thread.start()
     timed_out = False
     try:
-        stdout, stderr = process.communicate(timeout=timeout_ms / 1000)
+        process.wait(timeout=timeout_ms / 1000)
     except subprocess.TimeoutExpired:
         timed_out = True
         _terminate_process(process)
-        stdout, stderr = process.communicate()
     finally:
+        for thread in output_threads:
+            thread.join(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
+        _close_stream(process.stdout)
+        _close_stream(process.stderr)
+        for thread in output_threads:
+            thread.join(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
         stop.set()
-        monitor.join(timeout=1)
+        monitor.join(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
     wall_ms = max(0, round((time.perf_counter() - started) * 1000))
     after_usage = _resource_snapshot()
     cpu_ms, io = _resource_delta(before_usage, after_usage)
@@ -776,16 +895,16 @@ def _run_process(request: ReplayRequest, argv: list[str], timeout_ms: int, envir
         timed_out=timed_out,
         wall_ms=wall_ms,
         cpu_ms=cpu_ms,
-        output_sha256=hashlib.sha256(stdout).hexdigest(),
-        stderr_sha256=hashlib.sha256(stderr).hexdigest(),
+        output_sha256=hashlib.sha256(stdout_capture.value()).hexdigest(),
+        stderr_sha256=hashlib.sha256(stderr_capture.value()).hexdigest(),
         peak_rss_bytes=metrics["peak_rss_bytes"],
         peak_pss_bytes=metrics["peak_pss_bytes"],
         private_usage_bytes=metrics["private_usage_bytes"],
         hard_memory_bytes=metrics["hard_memory_bytes"],
         hard_memory_metric=metrics["hard_memory_metric"],
         io=io,
-        stdout=stdout,
-        stderr=stderr,
+        stdout=stdout_capture.value(),
+        stderr=stderr_capture.value(),
         completed=not timed_out,
     )
 
@@ -896,10 +1015,18 @@ def _context_facts(payload: Any, output_bytes: int) -> Mapping[str, Any] | None:
 
     order: list[str] = []
     pivot_ids: list[str] = []
+    symbol_neighbour_ids: list[str] = []
+    symbol_order: list[str] = []
     body_truncated: list[str] = []
+    item_types: list[str] = []
+    identifier_rows = 0
     for index, item in enumerate(bundle_value):
         if not isinstance(item, Mapping):
             continue
+        item_type = str(_find_value(item, {"item_type", "itemtype"}) or "symbol").casefold()
+        item_types.append(item_type)
+        if item_type == "identifier":
+            identifier_rows += 1
         identifier = _find_value(item, {"symbol_id", "symbolid", "source_id", "sourceid", "chunk_id", "chunkid"})
         if identifier is None:
             name = _find_value(item, {"name"})
@@ -911,6 +1038,10 @@ def _context_facts(payload: Any, output_bytes: int) -> Mapping[str, Any] | None:
         role = str(_find_value(item, {"role"}) or "").casefold()
         if role == "pivot":
             pivot_ids.append(identifier)
+        if item_type == "symbol":
+            symbol_order.append(identifier)
+            if role in {"neighbour", "neighbor"}:
+                symbol_neighbour_ids.append(identifier)
         if _find_value(item, {"body_truncated", "bodytruncated"}) is True:
             body_truncated.append(identifier)
 
@@ -923,10 +1054,34 @@ def _context_facts(payload: Any, output_bytes: int) -> Mapping[str, Any] | None:
     return {
         "available": True,
         "pivot_ids": pivot_ids,
+        "symbol_pivot_ids": pivot_ids,
+        "symbol_neighbour_ids": symbol_neighbour_ids,
+        "symbol_order": symbol_order,
         "order": order,
         "truncation": _jsonable(truncation),
+        "identifier_rows": identifier_rows,
+        "non_symbol_rows": max(0, len(item_types) - sum(item_type == "symbol" for item_type in item_types)),
+        "item_types": item_types,
         "bytes": output_bytes,
     }
+
+
+def _status_probe_state(payload: Any) -> str:
+    if not isinstance(payload, Mapping) or "error" in payload:
+        return "failed"
+    result = payload.get("result")
+    if not isinstance(result, Mapping) or result.get("isError") is True:
+        return "failed"
+    bootstrap = _find_value(result, {"bootstrap"})
+    if isinstance(bootstrap, Mapping):
+        bootstrap = _find_value(bootstrap, {"state", "status", "phase"})
+    if isinstance(bootstrap, str):
+        state = bootstrap.casefold()
+        if state == "running":
+            return "running"
+        if state in {"failed", "error", "unavailable"}:
+            return "failed"
+    return "ready"
 
 
 def _broker_mapping(payload: Any) -> Mapping[str, Any] | None:
@@ -952,7 +1107,6 @@ def _selected_environment(environment: Mapping[str, str]) -> dict[str, str | Non
         "MILLER_SEMANTIC",
         "MILLER_PERF_LEXICAL_CONTROL",
         "MILLER_PERF_SEMANTIC_SERIALIZED",
-        "MILLER_PERF_STORE_COPY",
         "MILLER_INDEX_STORE",
         "MILLER_CONTEXT_REFERENCE_BATCH",
         "JULIE_STORE_RESOLUTION_DELTA",
@@ -1049,16 +1203,40 @@ def compare_pair(depth0: ReplayRecord | Mapping[str, Any], depth1: ReplayRecord 
     right_facts = right_facts if isinstance(right_facts, Mapping) else {}
     left_available = bool(left_facts) and left_facts.get("available", True) is not False
     right_available = bool(right_facts) and right_facts.get("available", True) is not False
+    left_pivots = left_facts.get("symbol_pivot_ids", left_facts.get("pivot_ids", []))
+    right_pivots = right_facts.get("symbol_pivot_ids", right_facts.get("pivot_ids", []))
+    left_neighbours = left_facts.get("symbol_neighbour_ids", left_facts.get("order", []))
+    right_neighbours = right_facts.get("symbol_neighbour_ids", right_facts.get("order", []))
     left_bytes = int(left_facts.get("bytes", 0) or 0)
     right_bytes = int(right_facts.get("bytes", 0) or 0)
+    left_truncation = left_facts.get("truncation")
+    right_truncation = right_facts.get("truncation")
+    def valid_truncation_shape(facts: Mapping[str, Any]) -> bool:
+        if not facts:
+            return False
+        truncation = facts.get("truncation")
+        if isinstance(truncation, Mapping):
+            return isinstance(truncation.get("body_truncated"), list)
+        return isinstance(truncation, bool) or truncation is None
+
+    truncation_shape_valid = valid_truncation_shape(left_facts) and valid_truncation_shape(right_facts)
+    left_identifier_rows = int(left_facts.get("identifier_rows", 0) or 0)
+    right_identifier_rows = int(right_facts.get("identifier_rows", 0) or 0)
+    left_non_symbol_rows = int(left_facts.get("non_symbol_rows", 0) or 0)
+    right_non_symbol_rows = int(right_facts.get("non_symbol_rows", 0) or 0)
     return PairComparison(
         output_digest_match=value(depth0, "output_sha256") == value(depth1, "output_sha256"),
         delta_wall_ms=int(value(depth1, "wall_ms")) - int(value(depth0, "wall_ms")),
         exit_code_match=value(depth0, "exit_code") == value(depth1, "exit_code"),
         timeout_match=value(depth0, "timed_out") == value(depth1, "timed_out"),
-        stable_pivot_match=left_available and right_available and left_facts.get("pivot_ids") == right_facts.get("pivot_ids"),
-        ordering_match=left_available and right_available and left_facts.get("order") == right_facts.get("order"),
-        truncation_match=left_available and right_available and left_facts.get("truncation") == right_facts.get("truncation"),
+        stable_pivot_match=left_available and right_available and left_pivots == right_pivots,
+        symbol_neighbour_match=left_available and right_available and left_neighbours == right_neighbours,
+        ordering_match=left_available and right_available and left_pivots == right_pivots and left_neighbours == right_neighbours,
+        truncation_match=left_available and right_available and left_truncation == right_truncation,
+        truncation_changed=left_available and right_available and left_truncation != right_truncation,
+        truncation_shape_valid=left_available and right_available and truncation_shape_valid,
+        extra_reference_rows=right_identifier_rows - left_identifier_rows,
+        non_symbol_rows_delta=right_non_symbol_rows - left_non_symbol_rows,
         added_bytes=right_bytes - left_bytes,
     )
 
@@ -1078,10 +1256,21 @@ def _attach_depth_pair(records: list[ReplayRecord]) -> list[ReplayRecord]:
             continue
         comparison = compare_pair(left, record)
         metadata = dict(record.metadata)
+        left_context = left.metadata.get("context_facts", {})
+        right_context = record.metadata.get("context_facts", {})
+        left_context = left_context if isinstance(left_context, Mapping) else {}
+        right_context = right_context if isinstance(right_context, Mapping) else {}
         metadata["depth_pair"] = {
             "stable_pivot_match": comparison.stable_pivot_match,
+            "symbol_neighbour_match": comparison.symbol_neighbour_match,
             "ordering_match": comparison.ordering_match,
             "truncation_match": comparison.truncation_match,
+            "truncation_changed": comparison.truncation_changed,
+            "truncation_shape_valid": comparison.truncation_shape_valid,
+            "extra_reference_rows": comparison.extra_reference_rows,
+            "non_symbol_rows_delta": comparison.non_symbol_rows_delta,
+            "truncation_before": left_context.get("truncation"),
+            "truncation_after": right_context.get("truncation"),
             "added_bytes": comparison.added_bytes,
         }
         updated[index] = dataclasses.replace(
@@ -1089,8 +1278,8 @@ def _attach_depth_pair(records: list[ReplayRecord]) -> list[ReplayRecord]:
             metadata=metadata,
             hard_gate_passed=record.hard_gate_passed
             and comparison.stable_pivot_match
-            and comparison.ordering_match
-            and comparison.truncation_match,
+            and comparison.symbol_neighbour_match
+            and comparison.truncation_shape_valid,
         )
     return updated
 
@@ -1149,6 +1338,10 @@ def _validate_command(
         if len(command) < 2 or command[0] != "store" or command[1] not in PRODUCER_STORE_COMMANDS:
             raise ValueError(f"{label} julie_store command must be store import or store resolve")
         flags = {item.split("=", 1)[0] for item in command if item.startswith("--")}
+        allowed_flags = PRODUCER_IMPORT_FLAGS if command[1] == "import" else PRODUCER_RESOLVE_FLAGS
+        unknown_flags = flags - allowed_flags
+        if unknown_flags:
+            raise ValueError(f"{label} uses unknown producer flag(s): {', '.join(sorted(unknown_flags))}")
         required = {"--store", "--view", "--json", "--request-id", "--idempotency-key", "--request-timeout-seconds"}
         if not required.issubset(flags):
             raise ValueError(f"{label} julie_store command must include store/view/request identity/timeout/json")
@@ -1443,6 +1636,8 @@ class _McpSession:
             stderr=subprocess.PIPE,
             shell=False,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             start_new_session=os.name != "nt",
         )
@@ -1483,13 +1678,18 @@ class _McpSession:
     ) -> None:
         if stream is None:
             return
-        for line in iter(stream.readline, ""):
+        for line in iter(lambda: stream.readline(MAX_MCP_LINE_BYTES), ""):
             bounded_line = _bounded_text(line)
             if output is not None:
-                try:
-                    output.put_nowait(bounded_line)
-                except queue.Full:
-                    pass
+                while True:
+                    try:
+                        output.put_nowait(bounded_line)
+                        break
+                    except queue.Full:
+                        try:
+                            output.get_nowait()
+                        except queue.Empty:
+                            break
             if captured is not None:
                 _append_bounded(captured, bounded_line)
 
@@ -1567,14 +1767,16 @@ class _McpSession:
             except (OSError, ValueError):
                 pass
         try:
-            self.process.wait(timeout=1)
+            self.process.wait(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             _terminate_process(self.process)
         except (OSError, ValueError):
             _terminate_process(self.process)
-        self._monitor.join(timeout=1)
-        self._stdout_thread.join(timeout=1)
-        self._stderr_thread.join(timeout=1)
+        _close_stream(getattr(self.process, "stdout", None))
+        _close_stream(getattr(self.process, "stderr", None))
+        self._monitor.join(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
+        self._stdout_thread.join(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
+        self._stderr_thread.join(timeout=PROCESS_TEARDOWN_TIMEOUT_SECONDS)
 
     def result(
         self,
@@ -1594,10 +1796,15 @@ class _McpSession:
             sort_keys=True,
         ).encode()
         stderr = "".join(self._stderr).encode()
-        completed = bool(evidence.get("completed")) and not timed_out
+        exit_code = self.process.returncode
+        completed = (
+            bool(evidence.get("completed"))
+            and not timed_out
+            and (exit_code is None or exit_code == 0)
+        )
         ended = float(evidence.get("ready_at") or evidence.get("observed_at") or time.perf_counter())
         return CommandResult(
-            exit_code=0 if completed else self.process.returncode,
+            exit_code=0 if completed and exit_code is None else exit_code,
             timed_out=timed_out,
             wall_ms=max(0, round((ended - started) * 1000)),
             cpu_ms=None,
@@ -1641,11 +1848,19 @@ def _bootstrap_session(
             deadline,
         )
         session.notify("notifications/initialized", {}, deadline)
-        status = session.workspace_status(deadline)
-        status_result = status.get("result") if isinstance(status, Mapping) else None
-        status_ready = isinstance(status_result, Mapping) and status_result.get("isError") is not True
-        if not status_ready:
-            raise RuntimeError("MCP workspace status probe did not complete successfully")
+        while True:
+            if session.process.poll() is not None:
+                raise RuntimeError("MCP host exited before workspace readiness")
+            status = session.workspace_status(deadline)
+            status_state = _status_probe_state(status)
+            if status_state == "ready":
+                break
+            if status_state == "failed":
+                raise RuntimeError("MCP workspace status probe failed")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("timed out waiting for MCP workspace readiness")
+            time.sleep(min(0.05, remaining))
         if require_phase:
             phase = session.wait_for_phase("startup_total", deadline)
             completed = (
@@ -1714,6 +1929,7 @@ def _run_mcp_workload(
             and index == total_attempts - 1
             and not timed_out
             and bool(evidence.get("completed"))
+            and session.process.poll() is None
         )
         result = session.result(started, evidence, timed_out, close=not retain)
         if retain:

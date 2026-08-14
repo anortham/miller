@@ -63,10 +63,10 @@
     {
       "id": "producer.resolve.full",
       "execution_kind": "julie_store",
-      "command": ["store", "resolve", "--store", "{store_copy}", "--view", "{view}", "--request-id", "perf-recovery-resolve-full", "--idempotency-key", "perf-recovery-resolve-full", "--request-timeout-seconds", "1253", "--json"],
+      "command": ["store", "resolve", "--store", "{store_copy}", "--view", "{view}", "--request-id", "perf-recovery-resolve-full", "--idempotency-key", "perf-recovery-resolve-full", "--request-timeout-seconds", "1501", "--json"],
       "warmups": 0,
       "runs": 1,
-      "timeout_ms": 1254000,
+      "timeout_ms": 1502000,
       "hard_budget_ms": {"development": 60000, "windows": 120000},
       "hard_budget_memory_bytes": 629145600,
       "mutates_store": true,

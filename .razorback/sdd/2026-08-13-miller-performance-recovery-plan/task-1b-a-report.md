@@ -78,3 +78,16 @@ The snapshot helper now requires an explicit live root in both the API and CLI, 
 Owned changes are limited to `scripts/perf-store-snapshot.py`, `scripts/tests/test_perf_store_snapshot.py`, this report, and the pre-commit Goldfish checkpoint. No incident/live snapshot, real replay, dependency, harness/.NET/plan edit, push, or release was performed.
 
 Risks: Windows native execution was not available locally; Windows API behavior is covered by injectable mocked probes. WAL shadowing adds a second bounded file copy for databases with sidecars. Verification used disposable fixtures only; the harness test suite and live family were not run.
+
+## Harness review cycle 2
+
+- Start: `/home/murphy/source/miller/.worktrees/performance-recovery`, branch `feature/performance-recovery`, base `29b37d6bdd6580a43846e27b39a82a90943d19a9`.
+- Start dirty state: the lead-owned plan and an unrelated snapshot-helper edit were already modified and unstaged. The snapshot helper was not touched, tested, staged, or committed by this packet.
+- Miller was used first: workspace `performance-recovery-9ee5b2dc77a2` reported `freshness_status=scan_failing`; indexed `_McpSession`/`_validate_command` inspection and harness impact were available. No refresh, live-store access, replay, or producer/store execution was attempted.
+- RED: after adding the cycle-2 contract tests and before behavior changes, `PYTHONDONTWRITEBYTECODE=1 python scripts/tests/test_perf_recovery.py` ran 54 tests with 8 failures and 3 errors. Failures covered running-status retry, nonzero MCP exit preservation, bounded teardown/capture, UTF-8/queue behavior, context depth semantics, full deadline margin, producer flag whitelisting, and environment-marker removal.
+- GREEN: `PYTHONDONTWRITEBYTECODE=1 python scripts/tests/test_perf_recovery.py` — 55 passed, 0 failed, 0 skipped.
+- Verification: `git diff --check` passed; AST parsing of the two Python files passed.
+- Cycle-2 files changed: `scripts/perf-recovery.py`, `scripts/tests/test_perf_recovery.py`, and `scripts/benchmarks/perf-recovery-workloads.json`. No snapshot, .NET, dependency, public-surface, lead-plan, replay, store, push, or release changes were made.
+- Full resolve now uses a 1,501-second producer request deadline and 1,502,000ms harness timeout; hard budgets remain 60/120 seconds.
+- Goldfish checkpoint: `.memories/2026-08-14/074656_71c5.md` (`checkpoint_71c5597e`), captured before commit.
+- Implementation commit and final post-commit state will be recorded after staging only the three harness files, this report, and the checkpoint; the lead plan and snapshot-helper edits will remain unstaged.
