@@ -1092,6 +1092,183 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void RunReferenceAware_BatchesReferenceReadsAndSupportsLegacyFallback()
+    {
+        var (index, resolver) = BuildFixture();
+        ReferenceEvidenceBundle bundle = new(
+            InboundSet(),
+            OutgoingSet(),
+            new Dictionary<ReferenceKind, ReferenceEvidenceSet>(),
+            new Dictionary<ReferenceKind, OutgoingReferenceEvidenceSet>());
+        int batchCalls = 0;
+        int singularCalls = 0;
+
+        string batchOutput = ContextTool.RunReferenceAwareActionable(
+            index,
+            index.Graph,
+            resolver,
+            query: string.Empty,
+            tokenBudget: 100000,
+            maxHops: 0,
+            entrySymbols: [ServiceId],
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            referenceDepth: 1,
+            excludeTests: false,
+            json: true,
+            readReferenceEvidence: _ => throw new InvalidOperationException("singular inbound read"),
+            readOutgoingEvidence: _ => throw new InvalidOperationException("singular outgoing read"),
+            readContentChunks: (_, _) => [],
+            readMany: symbols =>
+            {
+                batchCalls++;
+                Assert.Equal([ServiceId], symbols.Select(static symbol => symbol.SymbolId));
+                return new Dictionary<string, ReferenceEvidenceBundle>
+                {
+                    [ServiceId] = bundle,
+                };
+            },
+            out _,
+            out _);
+
+        Assert.Equal(1, batchCalls);
+        Assert.Equal(0, singularCalls);
+
+        string? previous = Environment.GetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH");
+        Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", "off");
+        try
+        {
+            string fallbackOutput = ContextTool.RunReferenceAware(
+                index,
+                index.Graph,
+                resolver,
+                query: string.Empty,
+                tokenBudget: 100000,
+                maxHops: 0,
+                entrySymbols: [ServiceId],
+                failingTest: null,
+                stackTrace: null,
+                referenceDepth: 1,
+                excludeTests: false,
+                json: true,
+                readReferenceEvidence: _ =>
+                {
+                    singularCalls++;
+                    return bundle.Inbound;
+                },
+                readOutgoingEvidence: _ =>
+                {
+                    singularCalls++;
+                    return bundle.Outgoing;
+                },
+                readContentChunks: (_, _) => [],
+                out _,
+                out _);
+
+            Assert.Equal(batchOutput, fallbackOutput);
+            Assert.Equal(2, singularCalls);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", previous);
+        }
+    }
+
+    [Fact]
+    public void RunReferenceAware_WhenNoIdentifierCanFit_PerformsNoEvidenceRead()
+    {
+        var (index, resolver) = BuildFixture();
+        int batchCalls = 0;
+
+        string output = ContextTool.RunReferenceAwareActionable(
+            index,
+            index.Graph,
+            resolver,
+            query: string.Empty,
+            tokenBudget: 1,
+            maxHops: 0,
+            entrySymbols: [ServiceId],
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            referenceDepth: 1,
+            excludeTests: false,
+            json: true,
+            readReferenceEvidence: _ => throw new InvalidOperationException("singular inbound read"),
+            readOutgoingEvidence: _ => throw new InvalidOperationException("singular outgoing read"),
+            readContentChunks: (_, _) => [],
+            readMany: _ =>
+            {
+                batchCalls++;
+                return new Dictionary<string, ReferenceEvidenceBundle>();
+            },
+            out _,
+            out _);
+
+        Assert.Equal(0, batchCalls);
+        Assert.Equal("{}", output);
+    }
+
+    [Fact]
+    public void RunReferenceAware_WhenBaseBundleConsumesBudget_PerformsNoEvidenceRead()
+    {
+        var (index, resolver) = BuildFixture();
+        string baseOutput = ContextTool.RunReferenceAware(
+            index,
+            index.Graph,
+            resolver,
+            query: string.Empty,
+            tokenBudget: 100000,
+            maxHops: 0,
+            entrySymbols: [ServiceId],
+            failingTest: null,
+            stackTrace: null,
+            referenceDepth: 0,
+            excludeTests: false,
+            json: true,
+            readReferenceEvidence: _ => InboundSet(),
+            readOutgoingEvidence: _ => OutgoingSet(),
+            readContentChunks: (_, _) => [],
+            out _,
+            out _);
+        int batchCalls = 0;
+
+        string output = ContextTool.RunReferenceAware(
+            index,
+            index.Graph,
+            resolver,
+            query: string.Empty,
+            tokenBudget: checked((int)TokenEstimator.Count(baseOutput)),
+            maxHops: 0,
+            entrySymbols: [ServiceId],
+            failingTest: null,
+            stackTrace: null,
+            referenceDepth: 1,
+            excludeTests: false,
+            json: true,
+            readReferenceEvidence: _ => throw new InvalidOperationException("singular inbound read"),
+            readOutgoingEvidence: _ => throw new InvalidOperationException("singular outgoing read"),
+            readContentChunks: (_, _) => [],
+            readMany: _ =>
+            {
+                batchCalls++;
+                return new Dictionary<string, ReferenceEvidenceBundle>();
+            },
+            out _,
+            out _);
+
+        Assert.Equal(0, batchCalls);
+        Assert.Equal(baseOutput, output);
+    }
+
+    [Fact]
     public void RunReferenceAware_Compact_RendersReasonsAndConfidence()
     {
         var (index, resolver) = BuildFixture();

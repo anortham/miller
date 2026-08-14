@@ -14,6 +14,8 @@ public sealed record ReferenceEvidenceBundle(
 /// <summary>Reads bounded, normalized reference evidence keyed by resolved symbol IDs.</summary>
 public static partial class ReferenceEvidenceReader
 {
+    private const int ReadManyChunkSize = 128;
+
     private static readonly string[] RequiredResolutionTables =
         ["reference_sites", "identifier_resolutions", "pending_resolutions", "pending_relationships"];
 
@@ -108,7 +110,34 @@ public static partial class ReferenceEvidenceReader
                     outgoingExactRows,
                     outgoingFallbackRows,
                     new ReferenceEvidenceQuery(kindBounds, kind),
-                    snapshot)));
+                snapshot)));
+    }
+
+    /// <summary>Read bounded inbound and outgoing evidence for several symbols from one snapshot.</summary>
+    public static IReadOnlyDictionary<string, ReferenceEvidenceBundle> ReadMany(
+        IWorkspaceReadSession session,
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(symbolIds);
+        query.Validate();
+
+        var orderedIds = new List<string>(symbolIds.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string symbolId in symbolIds)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
+            if (seen.Add(symbolId))
+                orderedIds.Add(symbolId);
+        }
+
+        if (orderedIds.Count == 0)
+            return new Dictionary<string, ReferenceEvidenceBundle>(StringComparer.Ordinal);
+
+        return session.Read(connection => IsFamilyStoreResolutionProjection(connection)
+            ? ReadManyFromFamilyStore(connection, orderedIds, query)
+            : ReadManyFromLegacyArtifact(connection, orderedIds, query));
     }
 
     /// <summary>Read exact inbound sites and separately typed fallback candidates for one symbol.</summary>
@@ -250,6 +279,309 @@ public static partial class ReferenceEvidenceReader
             ExactCallerSymbolIds = ExactContainingSymbolIds(exact, callLike: true),
             ExactReferencedBySymbolIds = ExactContainingSymbolIds(exact, callLike: false),
         };
+    }
+
+    private static IReadOnlyDictionary<string, ReferenceEvidenceBundle> ReadManyFromLegacyArtifact(
+        SqliteConnection connection,
+        IReadOnlyList<string> orderedIds,
+        ReferenceEvidenceQuery query)
+    {
+        JulieSchemaGate.Verify(connection);
+        RequireResolutionTables(connection);
+        var targetInfo = new Dictionary<string, ReferenceEvidenceTargetInfo>(
+            orderedIds.Count,
+            StringComparer.Ordinal);
+        foreach (IReadOnlyList<string> chunk in Chunk(orderedIds))
+            MergeTargetInfo(targetInfo, ReadTargetInfoMany(connection, chunk));
+        EnsureAllTargetsKnown(orderedIds, targetInfo);
+
+        var inboundExact = new Dictionary<string, List<ReferenceEvidence>>(StringComparer.Ordinal);
+        var inboundFallback = new Dictionary<string, List<ReferenceEvidence>>(StringComparer.Ordinal);
+        var outgoingExact = new Dictionary<string, List<OutgoingReferenceEvidence>>(StringComparer.Ordinal);
+        var outgoingFallback = new Dictionary<string, List<OutgoingReferenceEvidence>>(StringComparer.Ordinal);
+        foreach (IReadOnlyList<string> chunk in Chunk(orderedIds))
+        {
+            MergeRows(inboundExact, ReadExactMany(connection, chunk));
+            MergeRows(inboundFallback, ReadFallbackMany(connection, chunk));
+            MergeRows(outgoingExact, ReadOutgoingExactMany(connection, chunk));
+            MergeRows(outgoingFallback, ReadOutgoingFallbackMany(connection, chunk));
+        }
+
+        ReferenceEvidenceSnapshot snapshot = ReadSnapshot(connection);
+        var result = new Dictionary<string, ReferenceEvidenceBundle>(orderedIds.Count, StringComparer.Ordinal);
+        foreach (string symbolId in orderedIds)
+        {
+            ReferenceEvidenceTargetInfo target = targetInfo[symbolId];
+            result.Add(
+                symbolId,
+                new ReferenceEvidenceBundle(
+                    BuildInboundSet(
+                        GetRows(inboundExact, symbolId),
+                        GetRows(inboundFallback, symbolId),
+                        query,
+                        target.SameNameDefinitionCount,
+                        snapshot),
+                    BuildOutgoingSet(
+                        GetRows(outgoingExact, symbolId),
+                        GetRows(outgoingFallback, symbolId),
+                        query,
+                        snapshot),
+                    new Dictionary<ReferenceKind, ReferenceEvidenceSet>(),
+                    new Dictionary<ReferenceKind, OutgoingReferenceEvidenceSet>()));
+        }
+
+        return result;
+    }
+
+    private static Dictionary<string, ReferenceEvidenceTargetInfo> ReadTargetInfoMany(
+        SqliteConnection connection,
+        IReadOnlyList<string> symbolIds)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = $"""
+            WITH requested(symbol_id) AS ({ValuesRelation(symbolIds)})
+            SELECT target.symbol_id,
+                   target.name,
+                   (
+                     SELECT COUNT(*)
+                     FROM symbols AS same
+                     WHERE same.name=target.name
+                       AND (same.symbol_id=target.symbol_id OR same.kind NOT IN ('constructor','import'))
+                   ) AS same_name_definition_count
+            FROM symbols AS target
+            JOIN requested AS r ON r.symbol_id=target.symbol_id;
+            """;
+        AddParameters(command, symbolIds);
+
+        using SqliteDataReader reader = command.ExecuteReader();
+        var result = new Dictionary<string, ReferenceEvidenceTargetInfo>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            result.Add(
+                reader.GetString(0),
+                new ReferenceEvidenceTargetInfo(
+                    reader.GetString(1),
+                    reader.GetInt32(2)));
+        }
+
+        return result;
+    }
+
+    private static List<ReferenceEvidence> GetRows(
+        Dictionary<string, List<ReferenceEvidence>> rows,
+        string symbolId) =>
+        rows.TryGetValue(symbolId, out List<ReferenceEvidence>? found)
+            ? found
+            : [];
+
+    private static List<OutgoingReferenceEvidence> GetRows(
+        Dictionary<string, List<OutgoingReferenceEvidence>> rows,
+        string symbolId) =>
+        rows.TryGetValue(symbolId, out List<OutgoingReferenceEvidence>? found)
+            ? found
+            : [];
+
+    private static void MergeTargetInfo(
+        Dictionary<string, ReferenceEvidenceTargetInfo> destination,
+        Dictionary<string, ReferenceEvidenceTargetInfo> source)
+    {
+        foreach ((string symbolId, ReferenceEvidenceTargetInfo info) in source)
+            destination.Add(symbolId, info);
+    }
+
+    private static void EnsureAllTargetsKnown(
+        IReadOnlyList<string> orderedIds,
+        IReadOnlyDictionary<string, ReferenceEvidenceTargetInfo> targetInfo)
+    {
+        foreach (string symbolId in orderedIds)
+        {
+            if (!targetInfo.ContainsKey(symbolId))
+                throw new ArgumentException($"Unknown symbol ID '{symbolId}'.", nameof(orderedIds));
+        }
+    }
+
+    private static IEnumerable<IReadOnlyList<string>> Chunk(IReadOnlyList<string> symbolIds)
+    {
+        for (int offset = 0; offset < symbolIds.Count; offset += ReadManyChunkSize)
+            yield return symbolIds.Skip(offset).Take(ReadManyChunkSize).ToArray();
+    }
+
+    private static string ValuesRelation(IReadOnlyList<string> symbolIds) =>
+        "VALUES " + string.Join(",", symbolIds.Select(static (_, index) => $"($id{index})"));
+
+    private static void AddParameters(SqliteCommand command, IReadOnlyList<string> symbolIds)
+    {
+        for (int index = 0; index < symbolIds.Count; index++)
+            command.Parameters.AddWithValue($"$id{index}", symbolIds[index]);
+    }
+
+    private static void MergeRows<T>(
+        Dictionary<string, List<T>> destination,
+        Dictionary<string, List<T>> source)
+    {
+        foreach ((string symbolId, List<T> rows) in source)
+        {
+            if (!destination.TryGetValue(symbolId, out List<T>? existing))
+            {
+                destination.Add(symbolId, rows);
+                continue;
+            }
+
+            existing.AddRange(rows);
+        }
+    }
+
+    private static Dictionary<string, List<ReferenceEvidence>> ReadExactMany(
+        SqliteConnection connection,
+        IReadOnlyList<string> symbolIds)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = $"""
+            WITH requested(symbol_id) AS ({ValuesRelation(symbolIds)})
+            SELECT ir.target_symbol_id AS requested_symbol_id,
+                   s.containing_symbol_id, s.path, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, i.kind, COALESCE(ir.confidence, i.confidence),
+                   'identifier_resolution' AS source, ir.tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
+            FROM identifier_resolutions AS ir
+            JOIN requested AS r ON r.symbol_id=ir.target_symbol_id
+            JOIN identifiers AS i ON i.identifier_id=ir.identifier_id
+            JOIN reference_sites AS s ON s.reference_site_id=i.reference_site_id
+            UNION ALL
+            SELECT r.to_symbol_id AS requested_symbol_id,
+                   s.containing_symbol_id, s.path, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, r.kind, r.confidence, 'relationship' AS source,
+                   NULL AS tier, s.language, s.reference_site_id, s.is_exact, s.provenance
+            FROM relationships AS r
+            JOIN requested AS q ON q.symbol_id=r.to_symbol_id
+            JOIN reference_sites AS s ON s.reference_site_id=r.reference_site_id
+            UNION ALL
+            SELECT pr.target_symbol_id AS requested_symbol_id,
+                   s.containing_symbol_id, s.path, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, p.kind, MIN(p.confidence, pr.confidence),
+                   'pending_resolution' AS source, pr.tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
+            FROM pending_resolutions AS pr
+            JOIN requested AS q ON q.symbol_id=pr.target_symbol_id
+            JOIN pending_relationships AS p ON p.pending_relationship_id=pr.pending_relationship_id
+            JOIN reference_sites AS s ON s.reference_site_id=p.reference_site_id
+            ORDER BY 3, 8, 4, 10, 12, 15;
+            """;
+        AddParameters(command, symbolIds);
+        return ReadRowsBySymbol(command, ReferenceResolutionStatus.Exact);
+    }
+
+    private static Dictionary<string, List<ReferenceEvidence>> ReadFallbackMany(
+        SqliteConnection connection,
+        IReadOnlyList<string> symbolIds)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = $"""
+            WITH requested(symbol_id) AS ({ValuesRelation(symbolIds)}),
+            targets AS MATERIALIZED (
+              SELECT target.symbol_id,target.name
+              FROM symbols AS target
+              JOIN requested AS q ON q.symbol_id=target.symbol_id
+            )
+            SELECT target.symbol_id AS requested_symbol_id,
+                   s.containing_symbol_id, s.path, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, i.kind, MIN(i.confidence, 0.5), 'name_fallback' AS source,
+                   NULL AS tier, s.language, s.reference_site_id, s.is_exact, s.provenance
+            FROM targets AS target
+            JOIN identifiers AS i ON i.name=target.name
+            JOIN reference_sites AS s ON s.reference_site_id=i.reference_site_id
+            WHERE NOT EXISTS (
+                SELECT 1 FROM identifier_resolutions AS ir
+                WHERE ir.identifier_id=i.identifier_id AND ir.target_symbol_id IS NOT NULL)
+            ORDER BY 3, 8, 4, 10, 15;
+            """;
+        AddParameters(command, symbolIds);
+        return ReadRowsBySymbol(command, ReferenceResolutionStatus.Fallback);
+    }
+
+    private static Dictionary<string, List<OutgoingReferenceEvidence>> ReadOutgoingExactMany(
+        SqliteConnection connection,
+        IReadOnlyList<string> symbolIds)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = $"""
+            WITH requested(symbol_id) AS ({ValuesRelation(symbolIds)})
+            SELECT i.containing_symbol_id AS requested_symbol_id,
+                   ir.target_symbol_id, target.name, s.path,
+                   s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, i.kind, COALESCE(ir.confidence, i.confidence),
+                   'identifier_resolution' AS source, ir.tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
+            FROM identifier_resolutions AS ir
+            JOIN identifiers AS i ON i.identifier_id=ir.identifier_id
+            JOIN requested AS q ON q.symbol_id=i.containing_symbol_id
+            JOIN symbols AS target ON target.symbol_id=ir.target_symbol_id
+            JOIN reference_sites AS s ON s.reference_site_id=i.reference_site_id
+            UNION ALL
+            SELECT r.from_symbol_id AS requested_symbol_id,
+                   r.to_symbol_id, target.name, s.path,
+                   s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, r.kind, r.confidence,
+                   'relationship' AS source, NULL AS tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
+            FROM relationships AS r
+            JOIN requested AS q ON q.symbol_id=r.from_symbol_id
+            JOIN symbols AS target ON target.symbol_id=r.to_symbol_id
+            JOIN reference_sites AS s ON s.reference_site_id=r.reference_site_id
+            UNION ALL
+            SELECT COALESCE(p.caller_scope_symbol_id, p.from_symbol_id) AS requested_symbol_id,
+                   pr.target_symbol_id, target.name, s.path,
+                   s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, p.kind, MIN(p.confidence, pr.confidence),
+                   'pending_resolution' AS source, pr.tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
+            FROM pending_resolutions AS pr
+            JOIN pending_relationships AS p ON p.pending_relationship_id=pr.pending_relationship_id
+            JOIN requested AS q ON q.symbol_id=COALESCE(p.caller_scope_symbol_id, p.from_symbol_id)
+            JOIN symbols AS target ON target.symbol_id=pr.target_symbol_id
+            JOIN reference_sites AS s ON s.reference_site_id=p.reference_site_id
+            ORDER BY 4, 9, 5, 11, 13, 3, 2, 16;
+            """;
+        AddParameters(command, symbolIds);
+        return ReadOutgoingRowsBySymbol(command, ReferenceResolutionStatus.Exact);
+    }
+
+    private static Dictionary<string, List<OutgoingReferenceEvidence>> ReadOutgoingFallbackMany(
+        SqliteConnection connection,
+        IReadOnlyList<string> symbolIds)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = $"""
+            WITH requested(symbol_id) AS ({ValuesRelation(symbolIds)})
+            SELECT i.containing_symbol_id AS requested_symbol_id,
+                   NULL AS target_symbol_id, i.name, s.path,
+                   s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, i.kind, MIN(i.confidence, 0.5),
+                   'name_fallback' AS source, NULL AS tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
+            FROM identifiers AS i
+            JOIN requested AS q ON q.symbol_id=i.containing_symbol_id
+            JOIN reference_sites AS s ON s.reference_site_id=i.reference_site_id
+            WHERE NOT EXISTS (
+                SELECT 1 FROM identifier_resolutions AS ir
+                WHERE ir.identifier_id=i.identifier_id AND ir.target_symbol_id IS NOT NULL)
+            UNION ALL
+            SELECT COALESCE(p.caller_scope_symbol_id, p.from_symbol_id) AS requested_symbol_id,
+                   NULL AS target_symbol_id, p.target_display_name, s.path,
+                   s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, p.kind, MIN(p.confidence, 0.5),
+                   'name_fallback' AS source, NULL AS tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
+            FROM pending_relationships AS p
+            JOIN requested AS q ON q.symbol_id=COALESCE(p.caller_scope_symbol_id, p.from_symbol_id)
+            JOIN reference_sites AS s ON s.reference_site_id=p.reference_site_id
+            WHERE NOT EXISTS (
+                SELECT 1 FROM pending_resolutions AS pr
+                WHERE pr.pending_relationship_id=p.pending_relationship_id)
+            ORDER BY 4, 9, 5, 11, 3, 16;
+            """;
+        AddParameters(command, symbolIds);
+        return ReadOutgoingRowsBySymbol(command, ReferenceResolutionStatus.Fallback);
     }
 
     /// <summary>Read resolved outgoing sites and separately typed unresolved fallbacks for one symbol.</summary>
@@ -826,6 +1158,98 @@ public static partial class ReferenceEvidenceReader
         return rows;
     }
 
+    private static Dictionary<string, List<ReferenceEvidence>> ReadRowsBySymbol(
+        SqliteCommand command,
+        ReferenceResolutionStatus resolutionStatus)
+    {
+        using SqliteDataReader reader = command.ExecuteReader();
+        var rows = new Dictionary<string, List<ReferenceEvidence>>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            string symbolId = reader.GetString(0);
+            string sourceKind = reader.GetString(9);
+            string source = reader.GetString(11);
+            AddRow(
+                rows,
+                symbolId,
+                new ReferenceEvidence(
+                    resolutionStatus == ReferenceResolutionStatus.Exact ? symbolId : null,
+                    ReadString(reader, 1),
+                    reader.GetString(2),
+                    ReadInt32(reader, 3),
+                    ReadInt32(reader, 4),
+                    ReadInt32(reader, 5),
+                    ReadInt32(reader, 6),
+                    ReadInt64(reader, 7),
+                    ReadInt64(reader, 8),
+                    NormalizeKind(sourceKind),
+                    sourceKind,
+                    ParseSource(source),
+                    ReadInt32(reader, 12),
+                    reader.GetDouble(10),
+                    resolutionStatus,
+                    ReadString(reader, 13),
+                    reader.GetString(14),
+                    reader.GetInt64(15) == 1,
+                    reader.GetString(16)));
+        }
+
+        return rows;
+    }
+
+    private static Dictionary<string, List<OutgoingReferenceEvidence>> ReadOutgoingRowsBySymbol(
+        SqliteCommand command,
+        ReferenceResolutionStatus resolutionStatus)
+    {
+        using SqliteDataReader reader = command.ExecuteReader();
+        var rows = new Dictionary<string, List<OutgoingReferenceEvidence>>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            string symbolId = reader.GetString(0);
+            string sourceKind = reader.GetString(10);
+            AddRow(
+                rows,
+                symbolId,
+                new OutgoingReferenceEvidence(
+                    symbolId,
+                    ReadString(reader, 1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    ReadInt32(reader, 4),
+                    ReadInt32(reader, 5),
+                    ReadInt32(reader, 6),
+                    ReadInt32(reader, 7),
+                    ReadInt64(reader, 8),
+                    ReadInt64(reader, 9),
+                    NormalizeKind(sourceKind),
+                    sourceKind,
+                    ParseSource(reader.GetString(12)),
+                    ReadInt32(reader, 13),
+                    reader.GetDouble(11),
+                    resolutionStatus,
+                    ReadString(reader, 14),
+                    reader.GetString(15),
+                    reader.GetInt64(16) == 1,
+                    reader.GetString(17)));
+        }
+
+        return rows;
+    }
+
+    private static void AddRow<T>(
+        Dictionary<string, List<T>> rows,
+        string symbolId,
+        T row)
+    {
+        if (!rows.TryGetValue(symbolId, out List<T>? existing))
+        {
+            existing = [];
+            rows.Add(symbolId, existing);
+        }
+
+        existing.Add(row);
+    }
+
     private static ReferenceEvidenceSource ParseSource(string source) => source switch
     {
         "identifier_direct" => ReferenceEvidenceSource.IdentifierDirect,
@@ -876,4 +1300,8 @@ public static partial class ReferenceEvidenceReader
         string? TargetSymbolId,
         string TargetName,
         ReferenceKind Kind);
+
+    private readonly record struct ReferenceEvidenceTargetInfo(
+        string Name,
+        int SameNameDefinitionCount);
 }

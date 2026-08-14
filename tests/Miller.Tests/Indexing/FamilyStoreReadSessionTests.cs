@@ -1,9 +1,11 @@
 using Microsoft.Data.Sqlite;
 using Miller.Core.Graph;
+using Miller.Core.References;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -470,6 +472,74 @@ public sealed class FamilyStoreReadSessionTests
         using FamilyStoreReadSession after = FamilyStoreReadSession.Open(fixture.Binding);
         Assert.Equal(4, after.Snapshot.Freshness.StoreLogSequence);
         Assert.Equal("target-after", ReadResolutionTarget(after));
+    }
+
+    [Fact]
+    public void RotatedResolutionBaseReadManyMatchesSingularEvidence()
+    {
+        const string targetBeforeId = "65000000000000000000000000000001";
+        const string targetAfterId = "65000000000000000000000000000002";
+        const string callerId = "65000000000000000000000000000003";
+        const string pendingCallerId = "65000000000000000000000000000004";
+        using StoreFixture fixture = StoreFixture.Create();
+        InstallResolutionBase(
+            fixture,
+            "base-evidence-before",
+            "manifest-evidence-before",
+            baseVersionId: 2,
+            baseTargetSymbolId: targetBeforeId,
+            deltaTargetSymbolId: null,
+            sequence: 3,
+            deltaGeneration: 1);
+        InstallGraphRows(fixture, targetBeforeId, callerId, pendingCallerId);
+        InstallReferenceEvidenceRows(fixture, callerId);
+
+        AssertBatchMatchesSingular(fixture.Binding, targetBeforeId, callerId);
+
+        AddVisibleSymbol(fixture, targetAfterId);
+        InstallResolutionBase(
+            fixture,
+            "base-evidence-after",
+            "manifest-evidence-after",
+            baseVersionId: 2,
+            baseTargetSymbolId: targetAfterId,
+            deltaTargetSymbolId: null,
+            sequence: 4,
+            deltaGeneration: 2);
+
+        AssertBatchMatchesSingular(fixture.Binding, targetAfterId, callerId);
+    }
+
+    [Fact]
+    public void FamilyReadManyTargetInfoReadsAreChunkedBeyondTheReadManyChunkSize()
+    {
+        string[] symbolIds = Enumerable.Range(0, 129)
+            .Select(static index => "660000000000000000000000000000" + index.ToString("x2"))
+            .ToArray();
+        const string callerId = "66000000000000000000000000000129";
+        const string pendingCallerId = "66000000000000000000000000000130";
+        using StoreFixture fixture = StoreFixture.Create();
+        InstallResolutionBase(
+            fixture,
+            "base-evidence-many",
+            "manifest-evidence-many",
+            baseVersionId: 2,
+            baseTargetSymbolId: symbolIds[0],
+            deltaTargetSymbolId: null,
+            sequence: 3,
+            deltaGeneration: 1);
+        InstallGraphRows(fixture, symbolIds[0], callerId, pendingCallerId);
+        InstallReferenceEvidenceRows(fixture, callerId);
+        AddVisibleSymbols(fixture, symbolIds.Skip(1).ToArray());
+
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        IReadOnlyDictionary<string, ReferenceEvidenceBundle> actual = ReferenceEvidenceReader.ReadMany(
+            session,
+            symbolIds,
+            new ReferenceEvidenceQuery(new ReferenceEvidenceBounds(ExactLimit: 1, FallbackLimit: 1)));
+
+        Assert.Equal(symbolIds.Length, actual.Count);
+        Assert.Equal(symbolIds, actual.Keys);
     }
 
     [Fact]
@@ -1052,6 +1122,103 @@ public sealed class FamilyStoreReadSessionTests
         command.Parameters.AddWithValue("$identifierCaller", identifierCallerId);
         command.Parameters.AddWithValue("$pendingCaller", pendingCallerId);
         command.ExecuteNonQuery();
+    }
+
+    private static void InstallReferenceEvidenceRows(StoreFixture fixture, string callerId)
+    {
+        string storePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = storePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            CREATE TABLE reference_sites (
+              version_id INTEGER NOT NULL,reference_site_id TEXT NOT NULL,path TEXT NOT NULL,language TEXT NOT NULL,
+              containing_symbol_id TEXT,start_line INTEGER,start_column INTEGER,end_line INTEGER,end_column INTEGER,
+              start_byte INTEGER,end_byte INTEGER,is_exact INTEGER NOT NULL,provenance TEXT NOT NULL,
+              PRIMARY KEY(version_id,reference_site_id)) STRICT;
+            INSERT INTO reference_sites VALUES
+              (2,'identifier-site','same.cs','csharp',$caller,1,1,1,2,0,1,1,'target_token');
+            UPDATE identifiers
+            SET reference_site_id='identifier-site'
+            WHERE version_id=2 AND identifier_id='identifier';
+            """;
+        command.Parameters.AddWithValue("$caller", callerId);
+        command.ExecuteNonQuery();
+    }
+
+    private static void AddVisibleSymbol(StoreFixture fixture, string symbolId)
+    {
+        string storePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = storePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO symbols VALUES
+              (2,$symbol,'same.cs','csharp','Target','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+            """;
+        command.Parameters.AddWithValue("$symbol", symbolId);
+        command.ExecuteNonQuery();
+    }
+
+    private static void AddVisibleSymbols(StoreFixture fixture, IReadOnlyList<string> symbolIds)
+    {
+        string storePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = storePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO symbols VALUES
+              (2,$symbol,'same.cs','csharp','Target','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+            """;
+        SqliteParameter symbol = command.Parameters.Add("$symbol", SqliteType.Text);
+        foreach (string symbolId in symbolIds)
+        {
+            symbol.Value = symbolId;
+            command.ExecuteNonQuery();
+        }
+    }
+
+    private static void AssertBatchMatchesSingular(
+        StoreFamilyBinding binding,
+        string targetId,
+        string callerId)
+    {
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding);
+        ReferenceEvidenceQuery query = new(new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+        IReadOnlyDictionary<string, ReferenceEvidenceBundle> actual = ReferenceEvidenceReader.ReadMany(
+            session,
+            [targetId, callerId, targetId],
+            query);
+
+        Assert.Equal([targetId, callerId], actual.Keys);
+        Assert.Single(actual[targetId].Inbound.Exact);
+        Assert.Single(actual[callerId].Outgoing.Exact);
+        foreach (string symbolId in actual.Keys)
+        {
+            var expected = new ReferenceEvidenceBundle(
+                ReferenceEvidenceReader.Read(session, symbolId, query),
+                ReferenceEvidenceReader.ReadOutgoing(session, symbolId, query),
+                new Dictionary<ReferenceKind, ReferenceEvidenceSet>(),
+                new Dictionary<ReferenceKind, OutgoingReferenceEvidenceSet>());
+            Assert.Equal(
+                JsonSerializer.Serialize(expected),
+                JsonSerializer.Serialize(actual[symbolId]));
+        }
     }
 
     private static void InstallGraphOverlayRows(StoreFixture fixture, string deltaTargetId)

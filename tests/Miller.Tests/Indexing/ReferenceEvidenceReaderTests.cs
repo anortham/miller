@@ -1,5 +1,6 @@
 using Miller.Core.References;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -10,6 +11,8 @@ public sealed class ReferenceEvidenceReaderTests
     private const string SecondTargetId = "10000000000000000000000000000002";
     private const string FirstCallerId = "20000000000000000000000000000001";
     private const string SecondCallerId = "20000000000000000000000000000002";
+    private const string FallbackTargetId = "30000000000000000000000000000001";
+    private const string FallbackCallerId = "40000000000000000000000000000001";
 
     [Theory]
     [InlineData("import")]
@@ -753,6 +756,99 @@ public sealed class ReferenceEvidenceReaderTests
         Assert.Equal(result.Inbound.Snapshot, result.Outgoing.Snapshot);
         Assert.All(result.InboundKinds.Values, evidence => Assert.Equal(result.Inbound.Snapshot, evidence.Snapshot));
         Assert.All(result.OutgoingKinds.Values, evidence => Assert.Equal(result.Inbound.Snapshot, evidence.Snapshot));
+    }
+
+    [Fact]
+    public void ReadMany_MatchesSingularSnapshotsAndPreservesFirstSeenOrder()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "First", "method", "csharp", "src/First.cs", "void First()", 1, null),
+                new(SecondTargetId, "Second", "method", "csharp", "src/Second.cs", "void Second()", 1, null),
+                new(FallbackTargetId, "Fallback", "method", "csharp", "src/Fallback.cs", "void Fallback()", 1, null),
+                new(FirstCallerId, "FirstCaller", "method", "csharp", "src/FirstCaller.cs", "void FirstCaller()", 1, null),
+                new(SecondCallerId, "SecondCaller", "method", "csharp", "src/SecondCaller.cs", "void SecondCaller()", 1, null),
+                new(FallbackCallerId, "FallbackCaller", "method", "csharp", "src/FallbackCaller.cs", "void FallbackCaller()", 1, null),
+            ],
+            identifiers:
+            [
+                new("identifier-first-1", "First", "call", "csharp", "src/FirstCaller.cs", 10, FirstCallerId),
+                new("identifier-first-2", "First", "call", "csharp", "src/FirstCaller.cs", 11, FirstCallerId),
+                new("identifier-first-3", "First", "call", "csharp", "src/FirstCaller.cs", 12, FirstCallerId),
+                new("identifier-second-1", "Second", "call", "csharp", "src/SecondCaller.cs", 20, SecondCallerId),
+                new("identifier-second-2", "Second", "call", "csharp", "src/SecondCaller.cs", 21, SecondCallerId),
+                new("identifier-fallback-1", "Fallback", "call", "csharp", "src/FallbackCaller.cs", 30, FallbackCallerId),
+                new("identifier-fallback-2", "Fallback", "call", "csharp", "src/FallbackCaller.cs", 31, FallbackCallerId),
+                new("identifier-fallback-3", "Fallback", "call", "csharp", "src/FallbackCaller.cs", 32, FallbackCallerId),
+            ]);
+        fixture.AddIdentifierResolution("identifier-first-1", FirstTargetId);
+        fixture.AddIdentifierResolution("identifier-first-2", FirstTargetId);
+        fixture.AddIdentifierResolution("identifier-first-3", FirstTargetId);
+        fixture.AddIdentifierResolution("identifier-second-1", SecondTargetId);
+        fixture.AddIdentifierResolution("identifier-second-2", SecondTargetId);
+
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(fixture.DbPath);
+        ReferenceEvidenceQuery query = new(
+            new ReferenceEvidenceBounds(ExactLimit: 1, FallbackLimit: 1),
+            ExactOffset: 1,
+            FallbackOffset: 1);
+
+        IReadOnlyDictionary<string, ReferenceEvidenceBundle> actual = ReferenceEvidenceReader.ReadMany(
+            session,
+            [SecondTargetId, FirstTargetId, FallbackTargetId, FirstCallerId, FallbackCallerId, SecondTargetId, FirstTargetId],
+            query);
+
+        Assert.Equal(
+            [SecondTargetId, FirstTargetId, FallbackTargetId, FirstCallerId, FallbackCallerId],
+            actual.Keys);
+        Assert.Equal(11, Assert.Single(actual[FirstTargetId].Inbound.Exact).StartLine);
+        Assert.True(actual[FirstTargetId].Inbound.Coverage.ExactTruncated);
+        Assert.Equal(31, Assert.Single(actual[FallbackTargetId].Inbound.Fallback).StartLine);
+        Assert.True(actual[FallbackTargetId].Inbound.Coverage.FallbackTruncated);
+        foreach (string symbolId in actual.Keys)
+        {
+            var expected = new ReferenceEvidenceBundle(
+                ReferenceEvidenceReader.Read(session, symbolId, query),
+                ReferenceEvidenceReader.ReadOutgoing(session, symbolId, query),
+                new Dictionary<ReferenceKind, ReferenceEvidenceSet>(),
+                new Dictionary<ReferenceKind, OutgoingReferenceEvidenceSet>());
+            Assert.Equal(
+                System.Text.Json.JsonSerializer.Serialize(expected),
+                System.Text.Json.JsonSerializer.Serialize(actual[symbolId]));
+        }
+    }
+
+    [Fact]
+    public void ReadMany_TargetInfoReadsAreChunkedBeyondTheReadManyChunkSize()
+    {
+        string[] symbolIds = Enumerable.Range(0, 1001)
+            .Select(static index => index.ToString("x32"))
+            .ToArray();
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            symbolIds
+                .Select((symbolId, index) => new JulieDbFixture.SymbolRow(
+                    symbolId,
+                    $"Target{index}",
+                    "method",
+                    "csharp",
+                    $"src/Target{index}.cs",
+                    $"void Target{index}()",
+                    1,
+                    null))
+                .ToArray());
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(fixture.DbPath);
+
+        IReadOnlyDictionary<string, ReferenceEvidenceBundle> actual = ReferenceEvidenceReader.ReadMany(
+            session,
+            symbolIds,
+            new ReferenceEvidenceQuery(new ReferenceEvidenceBounds(ExactLimit: 1, FallbackLimit: 1)));
+
+        Assert.Equal(symbolIds.Length, actual.Count);
+        Assert.Equal(symbolIds, actual.Keys);
     }
 
     [Fact]

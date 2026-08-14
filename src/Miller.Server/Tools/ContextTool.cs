@@ -244,6 +244,11 @@ public sealed partial class ContextTool
                                 context.ReadSession,
                                 symbols,
                                 excludeTests),
+                            readMany: symbols => ReferenceEvidenceReader.ReadMany(
+                                context.ReadSession,
+                                symbols.Select(static symbol => symbol.SymbolId).ToArray(),
+                                new ReferenceEvidenceQuery(
+                                    new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol))),
                             out selectedCount, out candidatesExamined,
                             cancellationToken);
                         break;
@@ -452,6 +457,7 @@ public sealed partial class ContextTool
     private const int NoRetrievalRank = int.MaxValue;
     private const int ReachCap = 500;
     internal const int ReferenceRowsPerSymbol = 12;
+    internal const string ReferenceEvidenceBatchEnvironmentVariable = "MILLER_CONTEXT_REFERENCE_BATCH";
     internal const int ContentChunksPerSymbol = 2;
     /// <summary>Term-rescue <see cref="ContextPivotSignal.AnchorStrength"/> ceiling (below full-query affinity band).</summary>
     internal const int TermRescueStrengthCap = 18;
@@ -483,6 +489,17 @@ public sealed partial class ContextTool
     {
         Off,
         Usage,
+    }
+
+    private static bool ReferenceEvidenceBatchEnabled
+    {
+        get
+        {
+            string? value = Environment.GetEnvironmentVariable(ReferenceEvidenceBatchEnvironmentVariable);
+            return !string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) &&
+                   !string.Equals(value, "off", StringComparison.OrdinalIgnoreCase) &&
+                   !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private static ReferenceMode ParseReferenceMode(string? mode) =>
@@ -916,6 +933,40 @@ public sealed partial class ContextTool
             out selectedCount,
             out candidatesExamined);
 
+    internal static string RunReferenceAware(
+        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
+        string query, int tokenBudget, int maxHops,
+        IReadOnlyList<string>? entrySymbols, string? failingTest, string? stackTrace,
+        int referenceDepth, bool excludeTests, bool json,
+        Func<IndexedSymbol, ReferenceEvidenceSet> readReferenceEvidence,
+        Func<IndexedSymbol, OutgoingReferenceEvidenceSet> readOutgoingEvidence,
+        Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
+        Func<IReadOnlyList<IndexedSymbol>, IReadOnlyDictionary<string, ReferenceEvidenceBundle>> readMany,
+        out int selectedCount, out int candidatesExamined)
+        => RunReferenceAwareActionable(
+            index,
+            graph,
+            resolver,
+            query,
+            tokenBudget,
+            maxHops,
+            entrySymbols,
+            editedFiles: null,
+            failingTest,
+            stackTrace,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            referenceDepth,
+            excludeTests,
+            json,
+            readReferenceEvidence,
+            readOutgoingEvidence,
+            readContentChunks,
+            readMany,
+            out selectedCount,
+            out candidatesExamined);
+
     internal static string RunReferenceAwareActionable(
         ISymbolLookupIndex index,
         ISymbolGraphReachability graph,
@@ -1006,6 +1057,54 @@ public sealed partial class ContextTool
             out candidatesExamined,
             CancellationToken.None);
 
+    internal static string RunReferenceAwareActionable(
+        ISymbolLookupIndex index,
+        ISymbolGraphReachability graph,
+        SmartTargetResolver resolver,
+        string query,
+        int tokenBudget,
+        int maxHops,
+        IReadOnlyList<string>? entrySymbols,
+        IReadOnlyList<string>? editedFiles,
+        string? failingTest,
+        string? stackTrace,
+        IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
+        IReadOnlyList<ContextSourceSeed>? sourceSeeds,
+        Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
+        int referenceDepth,
+        bool excludeTests,
+        bool json,
+        Func<IndexedSymbol, ReferenceEvidenceSet> readReferenceEvidence,
+        Func<IndexedSymbol, OutgoingReferenceEvidenceSet> readOutgoingEvidence,
+        Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
+        Func<IReadOnlyList<IndexedSymbol>, IReadOnlyDictionary<string, ReferenceEvidenceBundle>> readMany,
+        out int selectedCount,
+        out int candidatesExamined) =>
+        RunReferenceAwareActionableWithCancellation(
+            index,
+            graph,
+            resolver,
+            query,
+            tokenBudget,
+            maxHops,
+            entrySymbols,
+            editedFiles,
+            failingTest,
+            stackTrace,
+            semanticSeeds,
+            sourceSeeds,
+            readBody,
+            referenceDepth,
+            excludeTests,
+            json,
+            readReferenceEvidence,
+            readOutgoingEvidence,
+            readContentChunks,
+            readMany,
+            out selectedCount,
+            out candidatesExamined,
+            CancellationToken.None);
+
     internal static string RunReferenceAwareActionableWithCancellation(
         ISymbolLookupIndex index,
         ISymbolGraphReachability graph,
@@ -1026,6 +1125,55 @@ public sealed partial class ContextTool
         Func<IndexedSymbol, ReferenceEvidenceSet> readReferenceEvidence,
         Func<IndexedSymbol, OutgoingReferenceEvidenceSet> readOutgoingEvidence,
         Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
+        out int selectedCount,
+        out int candidatesExamined,
+        CancellationToken cancellationToken) =>
+        RunReferenceAwareActionableWithCancellation(
+            index,
+            graph,
+            resolver,
+            query,
+            tokenBudget,
+            maxHops,
+            entrySymbols,
+            editedFiles,
+            failingTest,
+            stackTrace,
+            semanticSeeds,
+            sourceSeeds,
+            readBody,
+            referenceDepth,
+            excludeTests,
+            json,
+            readReferenceEvidence,
+            readOutgoingEvidence,
+            readContentChunks,
+            readMany: null,
+            out selectedCount,
+            out candidatesExamined,
+            cancellationToken);
+
+    internal static string RunReferenceAwareActionableWithCancellation(
+        ISymbolLookupIndex index,
+        ISymbolGraphReachability graph,
+        SmartTargetResolver resolver,
+        string query,
+        int tokenBudget,
+        int maxHops,
+        IReadOnlyList<string>? entrySymbols,
+        IReadOnlyList<string>? editedFiles,
+        string? failingTest,
+        string? stackTrace,
+        IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
+        IReadOnlyList<ContextSourceSeed>? sourceSeeds,
+        Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
+        int referenceDepth,
+        bool excludeTests,
+        bool json,
+        Func<IndexedSymbol, ReferenceEvidenceSet> readReferenceEvidence,
+        Func<IndexedSymbol, OutgoingReferenceEvidenceSet> readOutgoingEvidence,
+        Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
+        Func<IReadOnlyList<IndexedSymbol>, IReadOnlyDictionary<string, ReferenceEvidenceBundle>>? readMany,
         out int selectedCount,
         out int candidatesExamined,
         CancellationToken cancellationToken)
@@ -1080,11 +1228,16 @@ public sealed partial class ContextTool
 
         IReadOnlyList<ReferenceContextItem> items = BuildReferenceItems(
             candidates,
+            tokenBudget,
             referenceDepth,
             excludeTests,
             readReferenceEvidence,
             readOutgoingEvidence,
             readContentChunks,
+            readMany,
+            json,
+            anchorDiagnostics,
+            query,
             cancellationToken);
         var packCandidates = new List<PackCandidate<ReferenceContextItem>>(items.Count);
         foreach (ReferenceContextItem item in items)
@@ -2280,11 +2433,16 @@ public sealed partial class ContextTool
 
     private static IReadOnlyList<ReferenceContextItem> BuildReferenceItems(
         IReadOnlyList<Candidate> candidates,
+        int tokenBudget,
         int referenceDepth,
         bool excludeTests,
         Func<IndexedSymbol, ReferenceEvidenceSet> readReferenceEvidence,
         Func<IndexedSymbol, OutgoingReferenceEvidenceSet> readOutgoingEvidence,
         Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
+        Func<IReadOnlyList<IndexedSymbol>, IReadOnlyDictionary<string, ReferenceEvidenceBundle>>? readMany,
+        bool json,
+        IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
+        string query,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -2355,13 +2513,55 @@ public sealed partial class ContextTool
                 Snippet: hit.Snippet));
         }
 
-        if (referenceDepth >= 1)
+        ReferenceContextItem minimumIdentifier = new(
+            "identifier", string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, 0);
+        ReferenceContextItem[] fixedItems = items
+            .Where(static item => ReferenceAllocationTier(item) <= 1)
+            .ToArray();
+        ReferenceContextItem[] minimumEvidenceItems = [.. fixedItems, minimumIdentifier];
+        int renderBudget = tokenBudget >= 512
+            ? Math.Max(1, tokenBudget * 3 / 4)
+            : tokenBudget;
+        string fixedOutput = json
+            ? RenderReferenceJson(fixedItems, anchorDiagnostics, query, boundOptionalFields: true)
+            : RenderReferenceCompact(fixedItems, anchorDiagnostics, query);
+        string minimumEvidenceOutput = json
+            ? RenderReferenceJson(minimumEvidenceItems, anchorDiagnostics, query, boundOptionalFields: true)
+            : RenderReferenceCompact(minimumEvidenceItems, anchorDiagnostics, query);
+        bool evidenceFits = tokenBudget > 0 &&
+            TokenEstimator.Count(minimumEvidenceOutput) <= renderBudget &&
+            TokenEstimator.Count(fixedOutput) <= renderBudget;
+
+        if (referenceDepth >= 1 && evidenceFits)
         {
+            IReadOnlyDictionary<string, ReferenceEvidenceBundle>? evidenceById = null;
+            if (readMany is not null && ReferenceEvidenceBatchEnabled)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                evidenceById = readMany(symbols);
+                ArgumentNullException.ThrowIfNull(evidenceById);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
             foreach (Candidate candidate in usableCandidates)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 IndexedSymbol symbol = candidate.Symbol;
-                OutgoingReferenceEvidenceSet outgoing = readOutgoingEvidence(symbol);
+                OutgoingReferenceEvidenceSet outgoing;
+                ReferenceEvidenceSet inbound;
+                if (evidenceById is not null)
+                {
+                    if (!evidenceById.TryGetValue(symbol.SymbolId, out ReferenceEvidenceBundle? evidence))
+                        continue;
+                    outgoing = evidence.Outgoing;
+                    inbound = evidence.Inbound;
+                }
+                else
+                {
+                    outgoing = readOutgoingEvidence(symbol);
+                    inbound = readReferenceEvidence(symbol);
+                }
+
                 cancellationToken.ThrowIfCancellationRequested();
                 foreach (OutgoingReferenceEvidence callee in outgoing.Exact)
                 {
@@ -2402,7 +2602,6 @@ public sealed partial class ContextTool
                         EvidenceConfidence: callee.Confidence));
                 }
 
-                ReferenceEvidenceSet inbound = readReferenceEvidence(symbol);
                 cancellationToken.ThrowIfCancellationRequested();
                 foreach (ReferenceEvidence reference in inbound.Exact)
                 {
