@@ -90,4 +90,5 @@ Risks: Windows native execution was not available locally; Windows API behavior 
 - Cycle-2 files changed: `scripts/perf-recovery.py`, `scripts/tests/test_perf_recovery.py`, and `scripts/benchmarks/perf-recovery-workloads.json`. No snapshot, .NET, dependency, public-surface, lead-plan, replay, store, push, or release changes were made.
 - Full resolve now uses a 1,501-second producer request deadline and 1,502,000ms harness timeout; hard budgets remain 60/120 seconds.
 - Goldfish checkpoint: `.memories/2026-08-14/074656_71c5.md` (`checkpoint_71c5597e`), captured before commit.
-- Implementation commit and final post-commit state will be recorded after staging only the three harness files, this report, and the checkpoint; the lead plan and snapshot-helper edits will remain unstaged.
+- Implementation commit: `c8cf2bdd0a3b0c898c050b117c168b8b7a262e42` (`perf: harden recovery harness review contracts`).
+- Final post-implementation state: the three harness files and checkpoint are clean; the lead plan, snapshot helper, and snapshot tests remain modified and unstaged. The report-only commit follows separately.
