@@ -2960,7 +2960,7 @@ class _McpSession:
                 record = self.collect_startup_phases().get(phase)
                 if record is not None:
                     outcome = str(_phase_value(record, "Outcome")).casefold()
-                    if outcome in {"completed", "failed"}:
+                    if outcome in {"completed", "failed", "skipped"}:
                         return record
                     if self.process.poll() is not None:
                         return record
@@ -2969,7 +2969,7 @@ class _McpSession:
                 if records:
                     for record in reversed(records):
                         outcome = str(_phase_value(record, "Outcome")).casefold()
-                        if outcome in {"completed", "failed"}:
+                        if outcome in {"completed", "failed", "skipped"}:
                             return record
                     if self.process.poll() is not None:
                         return records[-1]

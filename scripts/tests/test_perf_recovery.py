@@ -1605,6 +1605,23 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual("failed", phase["Outcome"])
         sleep.assert_not_called()
 
+    def test_phase_wait_returns_skipped_outcome_while_process_is_alive(self) -> None:
+        logs = self.workspace / ".miller" / "logs"
+        logs.mkdir()
+        (logs / "miller-test.jsonl").write_text(
+            json.dumps({"Phase": "startup_total", "pid": 123, "Outcome": "skipped"}) + "\n",
+            encoding="utf-8",
+        )
+        session = object.__new__(perf_recovery._McpSession)
+        session.request = self._request()
+        session.process = SimpleNamespace(pid=123, poll=lambda: None)
+        session._log_offsets = {}
+        with mock.patch.object(perf_recovery.time, "sleep") as sleep:
+            phase = session.wait_for_phase("startup_total", time.monotonic() + 0.05)
+        self.assertIsNotNone(phase)
+        self.assertEqual("skipped", phase["Outcome"])
+        sleep.assert_not_called()
+
     def test_mcp_capture_is_bounded_by_bytes(self) -> None:
         captured: list[str] = []
         perf_recovery._append_bounded(captured, "x" * 20, max_bytes=8)
