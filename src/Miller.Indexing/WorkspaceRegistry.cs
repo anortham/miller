@@ -401,6 +401,81 @@ public sealed class WorkspaceRegistry : IDisposable
         }
     }
 
+    internal StoreFamilyRegistryRow AdoptStoreFamily(
+        Guid familyId,
+        string lineageKey,
+        string? canonicalCommonDir,
+        DateTimeOffset? commonDirCreatedAtUtc,
+        string storeRoot,
+        DateTimeOffset? nowUtc = null)
+    {
+        ThrowIfDisposed();
+        if (familyId == Guid.Empty)
+            throw new ArgumentOutOfRangeException(nameof(familyId));
+        ValidateRequired(lineageKey, nameof(lineageKey));
+        ValidateRequired(storeRoot, nameof(storeRoot));
+        DateTimeOffset now = NormalizeUtc(nowUtc ?? DateTimeOffset.UtcNow);
+        string absoluteStoreRoot = Path.GetFullPath(storeRoot);
+
+        lock (_gate)
+        {
+            StoreFamilyRegistryRow? byLineage = GetStoreFamilyByLineageUnderLock(lineageKey);
+            if (byLineage is not null)
+            {
+                if (byLineage.FamilyId != familyId ||
+                    !ArtifactRootIdentity.Matches(byLineage.StoreRoot, absoluteStoreRoot))
+                {
+                    throw new InvalidOperationException(
+                        $"Store lineage '{lineageKey}' is already bound to another family or root.");
+                }
+                return byLineage;
+            }
+
+            StoreFamilyRegistryRow? byId = GetStoreFamilyUnderLock(familyId);
+            if (byId is not null)
+            {
+                bool sameLineage = string.Equals(byId.LineageKey, lineageKey, StringComparison.Ordinal) ||
+                    (canonicalCommonDir is not null &&
+                     byId.CanonicalCommonDir is not null &&
+                     ArtifactRootIdentity.Matches(byId.CanonicalCommonDir, canonicalCommonDir) &&
+                     byId.CommonDirCreatedAtUtc == commonDirCreatedAtUtc?.ToUniversalTime());
+                if (!ArtifactRootIdentity.Matches(byId.StoreRoot, absoluteStoreRoot) || !sameLineage)
+                {
+                    throw new InvalidOperationException(
+                        $"Store family '{familyId:D}' is already bound to another lineage or root.");
+                }
+                return byId;
+            }
+
+            StoreFamilyRegistryRow? byRoot = GetStoreFamilyByRootUnderLock(absoluteStoreRoot);
+            if (byRoot is not null)
+                throw new InvalidOperationException(
+                    $"Store root '{absoluteStoreRoot}' is already bound to family '{byRoot.FamilyId:D}'.");
+
+            using var command = _connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO store_families(
+                    family_id, lineage_key, canonical_common_dir, common_dir_created_at,
+                    store_root, created_at, updated_at)
+                VALUES(
+                    $family_id, $lineage_key, $canonical_common_dir, $common_dir_created_at,
+                    $store_root, $created_at, $updated_at)
+                """;
+            command.Parameters.AddWithValue("$family_id", familyId.ToString("D"));
+            command.Parameters.AddWithValue("$lineage_key", lineageKey);
+            command.Parameters.AddWithValue("$canonical_common_dir", (object?)canonicalCommonDir ?? DBNull.Value);
+            command.Parameters.AddWithValue(
+                "$common_dir_created_at",
+                commonDirCreatedAtUtc is { } created ? FormatTimestamp(created) : DBNull.Value);
+            command.Parameters.AddWithValue("$store_root", absoluteStoreRoot);
+            command.Parameters.AddWithValue("$created_at", FormatTimestamp(now));
+            command.Parameters.AddWithValue("$updated_at", FormatTimestamp(now));
+            command.ExecuteNonQuery();
+            return GetStoreFamilyUnderLock(familyId) ?? throw new InvalidOperationException(
+                $"Store family '{familyId:D}' was not persisted.");
+        }
+    }
+
     public StoreFamilyRegistryRow? GetStoreFamily(Guid familyId)
     {
         ThrowIfDisposed();
@@ -816,6 +891,27 @@ public sealed class WorkspaceRegistry : IDisposable
             WHERE family_id = $family_id
             """;
         command.Parameters.AddWithValue("$family_id", familyId.ToString("D"));
+        using SqliteDataReader reader = command.ExecuteReader();
+        return reader.Read() ? ReadStoreFamily(reader) : null;
+    }
+
+    private StoreFamilyRegistryRow? GetStoreFamilyByRootUnderLock(string storeRoot)
+    {
+        using SqliteCommand command = _connection.CreateCommand();
+        command.CommandText = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? """
+              SELECT family_id, lineage_key, canonical_common_dir, common_dir_created_at,
+                     store_root, created_at, updated_at
+              FROM store_families
+              WHERE store_root COLLATE NOCASE = $store_root COLLATE NOCASE
+              """
+            : """
+            SELECT family_id, lineage_key, canonical_common_dir, common_dir_created_at,
+                   store_root, created_at, updated_at
+            FROM store_families
+            WHERE store_root = $store_root
+            """;
+        command.Parameters.AddWithValue("$store_root", storeRoot);
         using SqliteDataReader reader = command.ExecuteReader();
         return reader.Read() ? ReadStoreFamily(reader) : null;
     }

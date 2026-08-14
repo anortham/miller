@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing.Store;
 
@@ -118,6 +119,10 @@ public sealed class StoreFamilyResolver
         }
         else
         {
+            StoreFamilyBinding? adopted = AdoptPointerIfPresent(facts);
+            if (adopted is not null)
+                return adopted;
+
             family = ResolveFamily(facts);
             StoreCatalog? catalog = ReadCatalog(family.StoreRoot);
             if (catalog is null)
@@ -229,15 +234,8 @@ public sealed class StoreFamilyResolver
 
     private StoreFamilyRegistryRow ResolveFamily(WorkspaceRootFacts facts)
     {
-        string? commonDir = facts.CanonicalGitCommonDir is null
-            ? null
-            : Path.GetFullPath(facts.CanonicalGitCommonDir);
-        string lineageKey = commonDir is null
-            ? "workspace|" + facts.WorkspaceId
-            : "git|" + commonDir + "|" + (
-                facts.GitCommonDirCreatedAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture) ??
-                "unknown");
-        if (commonDir is not null && facts.GitCommonDirCreatedAtUtc is { } created)
+        (string lineageKey, string? commonDir, DateTimeOffset? commonDirCreatedAt) = Lineage(facts);
+        if (commonDir is not null && commonDirCreatedAt is { } created)
         {
             StoreFamilyRegistryRow? exact = _registry.GetStoreFamilyByLineage(lineageKey);
             if (exact is not null)
@@ -255,9 +253,136 @@ public sealed class StoreFamilyResolver
         return _registry.GetOrCreateStoreFamily(
             lineageKey,
             commonDir,
-            facts.GitCommonDirCreatedAtUtc,
+            commonDirCreatedAt,
             _storesRoot,
             _mintId);
+    }
+
+    private StoreFamilyBinding? AdoptPointerIfPresent(WorkspaceRootFacts facts)
+    {
+        StoreWorkspacePointerDocument? pointer;
+        try
+        {
+            pointer = StoreWorkspacePointer.Read(facts.WorkspaceRoot);
+        }
+        catch (StorePointerFormatException ex)
+        {
+            throw new StoreBindingMismatchException($"The workspace store pointer could not be adopted: {ex.Message}");
+        }
+
+        if (pointer is null)
+            return null;
+        if (facts.RootReplacementObserved)
+            throw new StoreBindingMismatchException(
+                "A store pointer cannot be adopted after a workspace root replacement.");
+
+        var candidate = new StoreFamilyBinding(
+            pointer.FamilyId,
+            pointer.StoreRoot,
+            pointer.ViewId,
+            pointer.WorkspaceRoot,
+            StoreBindingState.Ready);
+        try
+        {
+            StoreCatalog catalog = ReadCatalog(pointer.StoreRoot) ?? throw new StoreBindingMismatchException(
+                "The store pointer names a family without a current serving generation.");
+            if (catalog.FamilyId != pointer.FamilyId)
+                throw new StoreBindingMismatchException("The store pointer family does not match the serving catalog.");
+            StoreCatalogView? view = catalog.Views.SingleOrDefault(item =>
+                string.Equals(item.ViewId, pointer.ViewId, StringComparison.Ordinal));
+            if (view is null || !ArtifactRootIdentity.Matches(view.Root, facts.WorkspaceRoot))
+                throw new StoreBindingMismatchException(
+                    "The store pointer view does not match the current workspace root.");
+
+            using FamilyStoreReadSession session = FamilyStoreReadSession.Open(candidate, facts.WorkspaceId);
+            (string lineageKey, string? commonDir, DateTimeOffset? commonDirCreatedAt) = Lineage(facts);
+            ValidatePointerLineage(
+                pointer,
+                facts.WorkspaceId,
+                lineageKey,
+                commonDir,
+                commonDirCreatedAt);
+            _registry.AdoptStoreFamily(
+                pointer.FamilyId,
+                lineageKey,
+                commonDir,
+                commonDirCreatedAt,
+                pointer.StoreRoot);
+            StoreMemberRegistryRow member = _registry.UpsertStoreMember(
+                facts.WorkspaceId,
+                pointer.FamilyId,
+                pointer.ViewId,
+                facts.WorkspaceRoot,
+                facts.RootIdentity);
+            return candidate with { ViewId = member.ViewId };
+        }
+        catch (StoreBindingMismatchException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (
+            ex is FamilyStoreReadException or IOException or UnauthorizedAccessException or ArgumentException
+                or FormatException or InvalidOperationException or SqliteException)
+        {
+            throw new StoreBindingMismatchException($"The workspace store pointer could not be adopted: {ex.Message}");
+        }
+    }
+
+    private void ValidatePointerLineage(
+        StoreWorkspacePointerDocument pointer,
+        string workspaceId,
+        string lineageKey,
+        string? commonDir,
+        DateTimeOffset? commonDirCreatedAt)
+    {
+        StoreFamilyRegistryRow? byLineage = _registry.GetStoreFamilyByLineage(lineageKey);
+        if (byLineage is not null &&
+            (byLineage.FamilyId != pointer.FamilyId ||
+             !ArtifactRootIdentity.Matches(byLineage.StoreRoot, pointer.StoreRoot)))
+        {
+            throw new StoreBindingMismatchException(
+                "The store pointer conflicts with the registered workspace lineage.");
+        }
+
+        foreach (StoreMemberRegistryRow member in _registry.ListStoreMembers())
+        {
+            if (!string.Equals(member.WorkspaceId, workspaceId, StringComparison.Ordinal) &&
+                member.FamilyId == pointer.FamilyId &&
+                string.Equals(member.ViewId, pointer.ViewId, StringComparison.Ordinal))
+            {
+                throw new StoreBindingMismatchException(
+                    "The store pointer view is already registered to another workspace.");
+            }
+        }
+
+        if (commonDir is null)
+            return;
+        StoreFamilyRegistryRow? byCommonDir = _registry.FindStoreFamilyByCommonDir(commonDir);
+        if (byCommonDir is null)
+            return;
+        if (commonDirCreatedAt is not null && byCommonDir.CommonDirCreatedAtUtc is not null &&
+            byCommonDir.CommonDirCreatedAtUtc != commonDirCreatedAt.Value.ToUniversalTime())
+        {
+            throw new StoreBindingMismatchException(
+                "The store pointer conflicts with the replaced workspace lineage.");
+        }
+        if (byCommonDir.FamilyId != pointer.FamilyId)
+            throw new StoreBindingMismatchException(
+                "The store pointer conflicts with the registered git lineage.");
+    }
+
+    private static (string LineageKey, string? CommonDir, DateTimeOffset? CommonDirCreatedAt) Lineage(
+        WorkspaceRootFacts facts)
+    {
+        string? commonDir = facts.CanonicalGitCommonDir is null
+            ? null
+            : Path.GetFullPath(facts.CanonicalGitCommonDir);
+        DateTimeOffset? commonDirCreatedAt = facts.GitCommonDirCreatedAtUtc?.ToUniversalTime();
+        string lineageKey = commonDir is null
+            ? "workspace|" + facts.WorkspaceId
+            : "git|" + commonDir + "|" + (
+                commonDirCreatedAt?.ToString("O", CultureInfo.InvariantCulture) ?? "unknown");
+        return (lineageKey, commonDir, commonDirCreatedAt);
     }
 
     private static bool CanPromoteUnknownLineage(
