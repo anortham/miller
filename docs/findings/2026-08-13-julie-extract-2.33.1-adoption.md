@@ -32,7 +32,8 @@ Read from the GitHub API on 2026-08-13, not from the upstream release notes.
 | Fact | Value |
 |---|---|
 | Tag | `v2.33.1` |
-| Tagged commit | `81500f1c0b50aafeb959538478f3ab387ae2b989` |
+| Annotated tag object | `81500f1c0b50aafeb959538478f3ab387ae2b989` |
+| Dereferenced commit | `ff8ab576fc916416a58410d2942ef946bd29dbce` |
 | Target | `main` |
 | Draft | false |
 | Prerelease | false |

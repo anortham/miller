@@ -120,10 +120,11 @@ post-refresh artifact facts when available:
   measured; `null` on paths that do not measure it.
 - `search_sidecar`: state, path, revision, expected revision, document count, and error for the search sidecar
   this workspace actually serves. Read the `path` field; do not assume a location. A family-store workspace
-  serves `<store>/sidecars/search-<view>.db`, and only a legacy workspace serves `.miller/search.db`.
+  serves `<store>/sidecars/search-<sha256(view-id)>.db`, where the filename suffix is the lowercase hexadecimal
+  SHA-256 of the view ID, and only a legacy workspace serves `.miller/search.db`.
 - `content_corpus`: state, path, schema version, workspace revision, source/chunk counts, byte counts, skip counts,
   and error for the content sidecar this workspace actually serves, under the same rule:
-  `<store>/sidecars/content-<view>.db` for a family store, `.miller/content.db` for a legacy workspace.
+  `<store>/sidecars/content-<sha256(view-id)>.db` for a family store, `.miller/content.db` for a legacy workspace.
 
 `--wait` is a contract flag. The Miller CLI refresh path is already synchronous: it returns only after the
 lock-holding refresh attempt converges, observes another writer, or reports an operational failure.

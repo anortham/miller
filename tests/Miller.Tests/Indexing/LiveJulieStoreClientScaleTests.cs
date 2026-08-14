@@ -177,6 +177,7 @@ public sealed class LiveJulieStoreClientScaleTests : IDisposable
 
     public void Dispose()
     {
+        SqliteConnection.ClearAllPools();
         if (Directory.Exists(_directory))
             Directory.Delete(_directory, recursive: true);
     }

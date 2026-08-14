@@ -271,9 +271,9 @@ public sealed class SemanticBrokerScaleTests : IDisposable
         windowsStart.ArgumentList.Add("-NoProfile");
         windowsStart.ArgumentList.Add("-Command");
         windowsStart.ArgumentList.Add(
-            "(Get-CimInstance Win32_Process | Where-Object { " +
+            "@((Get-CimInstance Win32_Process | Where-Object { " +
             "$_.CommandLine -like \"*$env:TASK8_CANDIDATE* broker *\" -and " +
-            "$_.CommandLine -like \"*$env:TASK8_HOME*\" }).Count");
+            "$_.CommandLine -like \"*$env:TASK8_HOME*\" })).Count");
         using Process windowsProcess = Process.Start(windowsStart)!;
         string windowsOutput = windowsProcess.StandardOutput.ReadToEnd().Trim();
         windowsProcess.WaitForExit();

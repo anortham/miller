@@ -54,10 +54,6 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.IsType<StoreResolveRequest>(client.Requests[1]);
     }
 
-    // The producer commits, then runs a writer lease-fencing check; losing that fence exits nonzero on a
-    // request whose data is already durable. Reading the exit code first discarded the committed import and
-    // retired its journal entry, so the next attempt re-ran the whole thing — 7 redundant whole-repo imports
-    // of an unchanged tree in 37 minutes (2026-08-12 triage).
     [Fact]
     public void ACommittedRequestSucceedsEvenWhenTheProducerExitsNonzero()
     {
@@ -99,8 +95,6 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.Equal("completed", coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs")).Status);
     }
 
-    // The other half of the contract: a genuinely failed request must still be a hard failure, so the
-    // backoff/latch machinery keeps working. Do not widen the committed branch to cover this.
     [Fact]
     public void AFailedRequestIsStillAHardFailure()
     {
@@ -122,7 +116,6 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.Equal("resolution_failed", failure.FailureClass.Code);
     }
 
-    // Queued/Claimed with a clean exit: still owned by a live executor, nothing durable yet.
     [Fact]
     public void ANonTerminalRequestIsNotTreatedAsCommitted()
     {
@@ -206,6 +199,82 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.Equal(artifact.DbPath, request.FromArtifact);
         Assert.Equal("request-import", report.Input?.Format);
         Assert.Equal(expected == StoreLevel.Full, client.Requests.Any(request => request.Operation == StoreOperation.Resolve));
+    }
+
+    [Fact]
+    public void AReusedExactFullImportDoesNotSubmitResolve()
+    {
+        var client = new RecordingStoreClient(
+            StoreOperation.Import,
+            manifestDisposition: StoreManifestDisposition.Reused,
+            importResolutionState: StoreResolutionState.Exact,
+            importExactAtMatches: true);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(41, "l1"),
+            new(42, "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => snapshots.Dequeue(),
+            () => "request-import");
+
+        coordinator.Scan(jobs: 1);
+
+        Assert.Single(client.Requests);
+        Assert.IsType<StoreImportRequest>(client.SingleRequest);
+    }
+
+    [Fact]
+    public void AReusedExactImportWithAMismatchedFenceSubmitsResolve()
+    {
+        var client = new RecordingStoreClient(
+            StoreOperation.Import,
+            manifestDisposition: StoreManifestDisposition.Reused,
+            importResolutionState: StoreResolutionState.Exact,
+            importExactAtMatches: false);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(41, "l1"),
+            new(42, "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => snapshots.Dequeue(),
+            () => "request-import");
+
+        coordinator.Scan(jobs: 1);
+
+        Assert.Equal(2, client.Requests.Count);
+        Assert.IsType<StoreImportRequest>(client.Requests[0]);
+        Assert.IsType<StoreResolveRequest>(client.Requests[1]);
+    }
+
+    [Fact]
+    public void AFullImportWithoutExactResolutionStillSubmitsResolve()
+    {
+        var client = new RecordingStoreClient(StoreOperation.Import);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(41, "l1"),
+            new(42, "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => snapshots.Dequeue(),
+            () => "request-import");
+
+        coordinator.Scan(jobs: 1);
+
+        Assert.Equal(2, client.Requests.Count);
+        Assert.IsType<StoreImportRequest>(client.Requests[0]);
+        Assert.IsType<StoreResolveRequest>(client.Requests[1]);
     }
 
     [Fact]
@@ -650,16 +719,14 @@ public sealed class StoreWorkspaceCoordinatorTests
         return Assert.IsType<StoreImportRequest>(client.SingleRequest);
     }
 
-    // stateOverride exists because the real producer can commit a request and STILL exit nonzero (its
-    // post-commit lease-fencing check). Defaulting state from the exit code — as this fake did originally —
-    // made that combination unrepresentable, which is why the "committed work discarded on a nonzero exit"
-    // defect shipped untested. Leave the default coupling alone so existing cases are unchanged.
     private sealed class RecordingStoreClient(
         StoreOperation expectedOperation,
         StoreManifestDisposition manifestDisposition = StoreManifestDisposition.Created,
         int exitCode = 0,
         string failureClass = "none",
-        StoreRequestState? stateOverride = null) : IJulieStoreClient
+        StoreRequestState? stateOverride = null,
+        StoreResolutionState importResolutionState = StoreResolutionState.Unbound,
+        bool importExactAtMatches = false) : IJulieStoreClient
     {
         private readonly List<StoreRequest> _requests = [];
 
@@ -706,7 +773,15 @@ public sealed class StoreWorkspaceCoordinatorTests
                 new StoreRowCounts(1, 1, level == StoreLevel.Full ? 1 : 0, level == StoreLevel.Full ? 1 : 0),
                 request.Operation == StoreOperation.Resolve
                     ? new StoreResolutionResult(StoreResolutionState.Exact, true, "base", 1, 1, 0, 0, 0)
-                    : new StoreResolutionResult(StoreResolutionState.Unbound, false, null, null, null, null, null, null),
+                    : new StoreResolutionResult(
+                        importResolutionState,
+                        importExactAtMatches,
+                        importResolutionState == StoreResolutionState.Exact ? "base" : null,
+                        importResolutionState == StoreResolutionState.Exact ? 1 : null,
+                        importResolutionState == StoreResolutionState.Exact ? 1 : null,
+                        null,
+                        null,
+                        null),
                 null,
                 durable ? StoreCoordinatorDisposition.Committed : StoreCoordinatorDisposition.Failed,
                 new StoreFailure(new StoreFailureClass(failureClass), exitCode == 0 ? null : "failed"),

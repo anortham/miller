@@ -315,7 +315,7 @@ public sealed class CliDispatchTests : IDisposable
     {
         var (code, outText, _) = Run(new[] { "version" }, Context(Path.Combine(_dir, "symbols.db")));
         Assert.Equal(0, code);
-        Assert.StartsWith("1.19.0", outText.Trim());
+        Assert.StartsWith("1.19.1", outText.Trim());
     }
 
     [Fact]
@@ -330,10 +330,10 @@ public sealed class CliDispatchTests : IDisposable
         using JsonDocument doc = JsonDocument.Parse(outText);
         JsonElement root = doc.RootElement;
 
-        Assert.StartsWith("1.19.0", root.GetProperty("miller").GetProperty("version").GetString());
+        Assert.StartsWith("1.19.1", root.GetProperty("miller").GetProperty("version").GetString());
 
         JsonElement julie = root.GetProperty("julie_extract");
-        Assert.Equal("2.33.1", julie.GetProperty("pinned_version").GetString());
+        Assert.Equal("2.33.2", julie.GetProperty("pinned_version").GetString());
         Assert.Equal(6, julie.GetProperty("sqlite_schema_version").GetInt64());
         Assert.Equal(4, julie.GetProperty("extract_contract_version").GetInt64());
         Assert.Equal(3, julie.GetProperty("report_schema_version").GetInt64());
@@ -3120,7 +3120,7 @@ public sealed class CliDispatchTests : IDisposable
         // binary's version into the status header (the dogfooding "which build is live" signal).
         var (code, outText, _) = Run(new[] { "workspace", "status" }, Context(fx.DbPath));
         Assert.Equal(0, code);
-        Assert.Contains("miller 1.19.0", outText);
+        Assert.Contains("miller 1.19.1", outText);
         Assert.Contains("pid ", outText);
         Assert.Contains("symbols:", outText);
     }
@@ -5233,12 +5233,6 @@ public sealed class CliDispatchTests : IDisposable
                 ?.FilePath;
     }
 
-    /// <summary>
-    /// The Eros contract (docs/contracts/cli-eros-v1.md) publishes search_sidecar and content_corpus
-    /// from `refresh --json`. Under store mode the sidecars live in the store's `sidecars/` directory,
-    /// so inspecting the workspace `.miller/` path reported two healthy multi-hundred-megabyte sidecars
-    /// as `missing`, at paths that hold no such file. Every Eros reader saw a broken workspace.
-    /// </summary>
     [Fact]
     public void RefreshSidecarFacts_UnderStoreMode_ReadTheStoreSidecarsNotTheWorkspaceMillerDirectory()
     {
@@ -5282,7 +5276,6 @@ public sealed class CliDispatchTests : IDisposable
         Assert.DoesNotContain(".miller", content.Path, StringComparison.Ordinal);
     }
 
-    /// <summary>A legacy workspace has no store, so it must keep reading the artifact-relative sidecars.</summary>
     [Fact]
     public void RefreshSidecarFacts_WithoutAStore_KeepReadingTheArtifactRelativeSidecars()
     {

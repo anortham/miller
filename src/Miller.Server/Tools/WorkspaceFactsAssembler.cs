@@ -130,17 +130,20 @@ internal static class WorkspaceFactsAssembler
     /// view does NOT reflect the workspace:</para>
     /// <list type="bullet">
     ///   <item>a persisted scan-failure record — new work is not reaching the store at all;</item>
-    ///   <item>a resolution state that is not <c>exact</c> — the view has not finished binding;</item>
-    ///   <item>a stale or unavailable search/content sidecar — the derived artifacts lag the store.</item>
+    ///   <item>a resolution fence that is not exact at the current manifest — the view has not finished binding;</item>
+    ///   <item>a stale or unavailable search/content sidecar — the derived artifacts lag the store (an intentionally
+    ///   disabled search sidecar is supported because the in-memory backend remains available).</item>
     /// </list>
     /// <para>All healthy ⇒ fresh. Otherwise the reason is named, never glossed.</para>
     /// </remarks>
     internal static (bool? Fresh, string Status, string? Warning) StoreFreshness(
         ScanFailureRecord? scanFailure,
-        string? resolution,
+        WorkspaceReadSnapshot snapshot,
         SearchSidecarFacts search,
         ContentCorpusFacts content)
     {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
         if (scanFailure is { ConsecutiveFailures: > 0 } failure)
         {
             return (
@@ -153,19 +156,20 @@ internal static class WorkspaceFactsAssembler
 
         // A blank resolution state is genuinely unknown, not a failure: report "not measured" per the
         // IndexFreshProbe honesty contract rather than inventing either answer.
-        if (string.IsNullOrWhiteSpace(resolution))
+        if (string.IsNullOrWhiteSpace(snapshot.ResolutionState))
             return (null, "unknown", null);
 
-        if (!string.Equals(resolution, "exact", StringComparison.OrdinalIgnoreCase))
+        if (IndexLevelGuard.ResolutionLayerConverging(snapshot))
         {
             return (
                 false,
                 "resolving",
-                $"The store view resolution is '{resolution}', not exact. " +
+                $"The store view resolution is '{snapshot.ResolutionState}', not exact at the current manifest. " +
                 "Symbol-level reads may be unavailable until it converges.");
         }
 
-        if (!string.Equals(search.State, "current", StringComparison.Ordinal))
+        if (!string.Equals(search.State, "current", StringComparison.Ordinal) &&
+            !string.Equals(search.State, "disabled", StringComparison.Ordinal))
             return (false, "sidecar_stale", $"The search sidecar is '{search.State}'; run `miller workspace refresh`.");
 
         if (!string.Equals(content.State, "current", StringComparison.Ordinal))
@@ -286,7 +290,7 @@ internal static class WorkspaceFactsAssembler
                 SearchSidecarFacts storeSearch = sidecar.InspectStore(storeRoot, session.Snapshot);
                 ContentCorpusFacts storeContent = contentSidecar.InspectStore(storeRoot, session.Snapshot);
                 (bool? storeFresh, string storeFreshness, string? storeWarning) =
-                    StoreFreshness(storeScanFailure, session.Snapshot.ResolutionState, storeSearch, storeContent);
+                    StoreFreshness(storeScanFailure, session.Snapshot, storeSearch, storeContent);
                 return new WorkspaceFacts(
                     Root: row.CanonicalRoot,
                     WorkspaceId: row.WorkspaceId,
@@ -309,7 +313,7 @@ internal static class WorkspaceFactsAssembler
                     Vectors: resolvedVectors.InspectStore(storeRoot, session.Snapshot),
                     SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null),
                     ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor),
-                    ScanFailure: ScanFailureFacts(row.IndexDbPath),
+                    ScanFailure: storeScanFailure,
                     IndexLevel: IndexLevelFactsFor(session.Snapshot, row.LevelPolicy),
                     RebindProvenance: null,
                     Store: StoreFactsFor(

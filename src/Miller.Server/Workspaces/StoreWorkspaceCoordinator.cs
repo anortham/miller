@@ -316,7 +316,10 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             result = _client.Submit(freshImport);
             RequireCommittedAndCompleteJournal(freshImport, result);
         }
-        if (resolveAfter)
+        if (resolveAfter &&
+            !(request is StoreImportRequest { Level: StoreLevel.Full } &&
+                result.Resolution.State == StoreResolutionState.Exact &&
+                result.Resolution.ExactAtMatches))
         {
             string resolveFingerprint = ResolveFingerprint();
             StoreRequestControls controls = Controls(resolveFingerprint, StoreOperation.Resolve);

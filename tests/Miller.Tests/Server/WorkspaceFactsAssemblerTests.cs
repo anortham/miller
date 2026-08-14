@@ -470,8 +470,6 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
             Directory.Delete(_temp, recursive: true);
     }
 
-    // ---- W3 F5/F8: the scan-governor key, and the corroboration the holding_elsewhere fallback needs ----
-
     private string NewMillerHome() =>
         Directory.CreateDirectory(Path.Combine(_temp, "home-" + Guid.NewGuid().ToString("N"))).FullName;
 
@@ -599,8 +597,6 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
         Assert.Equal("/repo/other-worktree", facts?.HolderWorkspaceRoot);
     }
 
-    // The display path must corroborate WITHOUT opening the lease: two concurrent status reads would otherwise
-    // corroborate each other over a free lease, and each would deny a real acquirer's poll while it probed.
     [Fact]
     public void ScanGovernorFacts_DoesNotTouchTheLease_SoAnAcquirerIsNeverBlocked()
     {
@@ -627,6 +623,31 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
         Assert.Equal(ScanGovernorStates.HoldingElsewhere, facts?.State);
     }
 
+    private static WorkspaceReadSnapshot StoreSnapshot(
+        string? resolution = "exact",
+        string? baseId = "base-1",
+        long? deltaGeneration = 3,
+        long? exactAt = 7) =>
+        new(
+            WorkspaceRoot: "/repo/worktree",
+            WorkspaceId: "workspace-id",
+            ArtifactOrStoreId: "family-id",
+            ViewId: "view-worktree",
+            Freshness: new WorkspaceFreshnessToken(
+                "family-id",
+                7,
+                ManifestHash: "manifest-hash",
+                StoreLogSequence: 91,
+                ManifestGeneration: 7),
+            IndexLevel: "full",
+            Mode: WorkspaceReadMode.FamilyStore,
+            GenerationName: "GEN-00000000000000000007",
+            ManifestGeneration: 7,
+            ResolutionState: resolution,
+            ResolutionBaseId: baseId,
+            ResolutionDeltaGeneration: deltaGeneration,
+            ResolutionExactAt: exactAt);
+
     private static SearchSidecarFacts Search(string state) =>
         new(state, "search.db", 10, 10, 100, null);
 
@@ -640,24 +661,18 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
     public void StoreFreshness_AllSignalsHealthy_IsFresh()
     {
         var (fresh, status, warning) =
-            WorkspaceFactsAssembler.StoreFreshness(null, "exact", Search("current"), Content("current"));
+            WorkspaceFactsAssembler.StoreFreshness(null, StoreSnapshot(), Search("current"), Content("current"));
 
         Assert.True(fresh);
         Assert.Equal("current", status);
         Assert.Null(warning);
     }
 
-    /// <summary>
-    /// The defect this whole helper exists for. The family-store branch hardcoded IndexFresh: true, so a
-    /// workspace with five consecutive whole-repo scan failures still rendered "fresh" (2026-08-13 dogfood).
-    /// A scan failure means new work is not reaching the store at all, which is the least fresh a served view
-    /// can be.
-    /// </summary>
     [Fact]
     public void StoreFreshness_AScanFailureRecord_IsNotFresh_AndNamesTheStreak()
     {
         var (fresh, status, warning) =
-            WorkspaceFactsAssembler.StoreFreshness(Failing(5), "exact", Search("current"), Content("current"));
+            WorkspaceFactsAssembler.StoreFreshness(Failing(5), StoreSnapshot(), Search("current"), Content("current"));
 
         Assert.False(fresh);
         Assert.Equal("scan_failing", status);
@@ -668,7 +683,7 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
     public void StoreFreshness_AConvergingView_IsNotFresh()
     {
         var (fresh, status, warning) =
-            WorkspaceFactsAssembler.StoreFreshness(null, "converging", Search("current"), Content("current"));
+            WorkspaceFactsAssembler.StoreFreshness(null, StoreSnapshot("converging"), Search("current"), Content("current"));
 
         Assert.False(fresh);
         Assert.Equal("resolving", status);
@@ -681,9 +696,9 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
     public void StoreFreshness_AStaleSidecar_IsNotFresh(string state)
     {
         var (searchFresh, searchStatus, _) =
-            WorkspaceFactsAssembler.StoreFreshness(null, "exact", Search(state), Content("current"));
+            WorkspaceFactsAssembler.StoreFreshness(null, StoreSnapshot(), Search(state), Content("current"));
         var (contentFresh, contentStatus, _) =
-            WorkspaceFactsAssembler.StoreFreshness(null, "exact", Search("current"), Content(state));
+            WorkspaceFactsAssembler.StoreFreshness(null, StoreSnapshot(), Search("current"), Content(state));
 
         Assert.False(searchFresh);
         Assert.Equal("sidecar_stale", searchStatus);
@@ -691,27 +706,53 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
         Assert.Equal("sidecar_stale", contentStatus);
     }
 
-    /// <summary>
-    /// The IndexFreshProbe honesty contract: an unmeasurable freshness is null — "not measured" — never a
-    /// fabricated true or false. A blank resolution state is unknown, not broken.
-    /// </summary>
+    [Fact]
+    public void StoreFreshness_ADisabledSearchSidecar_IsFresh()
+    {
+        var (fresh, status, warning) =
+            WorkspaceFactsAssembler.StoreFreshness(null, StoreSnapshot(), Search("disabled"), Content("current"));
+
+        Assert.True(fresh);
+        Assert.Equal("current", status);
+        Assert.Null(warning);
+    }
+
+    [Theory]
+    [InlineData(6L, "base-1", 3L)]
+    [InlineData(7L, null, 3L)]
+    [InlineData(7L, "base-1", null)]
+    public void StoreFreshness_AnExactViewWithoutTheCurrentResolutionFence_IsNotFresh(
+        long exactAt,
+        string? baseId,
+        long? deltaGeneration)
+    {
+        var (fresh, status, warning) = WorkspaceFactsAssembler.StoreFreshness(
+            null,
+            StoreSnapshot(baseId: baseId, deltaGeneration: deltaGeneration, exactAt: exactAt),
+            Search("current"),
+            Content("current"));
+
+        Assert.False(fresh);
+        Assert.Equal("resolving", status);
+        Assert.Contains("current manifest", warning);
+    }
+
     [Fact]
     public void StoreFreshness_AnUnknownResolutionState_ReportsNotMeasured()
     {
         var (fresh, status, warning) =
-            WorkspaceFactsAssembler.StoreFreshness(null, null, Search("current"), Content("current"));
+            WorkspaceFactsAssembler.StoreFreshness(null, StoreSnapshot(null), Search("current"), Content("current"));
 
         Assert.Null(fresh);
         Assert.Equal("unknown", status);
         Assert.Null(warning);
     }
 
-    /// <summary>A scan failure outranks a converging view: it is the more fundamental breakage.</summary>
     [Fact]
     public void StoreFreshness_ScanFailureOutranksResolution()
     {
         var (fresh, status, _) =
-            WorkspaceFactsAssembler.StoreFreshness(Failing(2), "converging", Search("stale"), Content("stale"));
+            WorkspaceFactsAssembler.StoreFreshness(Failing(2), StoreSnapshot("converging"), Search("stale"), Content("stale"));
 
         Assert.False(fresh);
         Assert.Equal("scan_failing", status);
