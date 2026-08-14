@@ -142,7 +142,10 @@ public sealed class StoreSidecarConvergerTests
         Assert.All(phases.Records, static phase => Assert.True(phase.ElapsedMilliseconds >= 0));
         Assert.Equal([true, true, true, true, true], phases.Records.Take(5).Select(static phase => phase.DidWork));
         Assert.Equal([false, false, false, false, false], phases.Records.Skip(5).Select(static phase => phase.DidWork));
-        Assert.All(phases.Records, static phase => Assert.Equal(31, phase.StoreSequence));
+        Assert.All(phases.Records, static phase =>
+            Assert.Equal(
+                phase.Phase is "content" or "search" ? null : 31,
+                phase.StoreSequence));
     }
 
     [Fact]
@@ -181,6 +184,77 @@ public sealed class StoreSidecarConvergerTests
         Assert.False(content.DidWork);
         Assert.Equal("completed", Assert.Single(phases.Records, static phase => phase.Phase == "search").Outcome);
         Assert.Equal("completed", Assert.Single(phases.Records, static phase => phase.Phase == "sidecar_total").Outcome);
+    }
+
+    [Fact]
+    public void ConvergeStore_RunsSidecarsBeforeRejectingMissingStoreSequence()
+    {
+        var calls = new List<string>();
+        var phases = new RecordingPhaseSink();
+        using var session = new FakeStoreSession(storeLogSequence: null);
+        var converger = new IndexerSidecarConverger(
+            searchEnabled: true,
+            (_, _, _, _) => false,
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            static path => path,
+            static path => path,
+            (_, _, _) => false,
+            NullLogger.Instance,
+            new VectorConvergeSignal(enabled: true),
+            ensureStoreContent: (_, _) => { calls.Add("content"); return true; },
+            ensureStoreSearch: (_, _) => { calls.Add("search"); return true; },
+            phaseSink: phases);
+
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-missing-sequence-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Assert.Throws<InvalidOperationException>(() => converger.ConvergeStore(root, session));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+
+        Assert.Equal(["content", "search"], calls);
+        Assert.Equal(["content", "search", "sidecar_total"], phases.Records.Select(static phase => phase.Phase));
+        Assert.All(phases.Records, static phase => Assert.Null(phase.StoreSequence));
+        Assert.Equal("failed", phases.Records[^1].Outcome);
+    }
+
+    [Fact]
+    public void ConvergeStore_WhenPhaseSinkThrows_PreservesSidecarConvergence()
+    {
+        using var session = new FakeStoreSession();
+        var signal = new VectorConvergeSignal(enabled: true);
+        int contentCalls = 0;
+        var converger = new IndexerSidecarConverger(
+            searchEnabled: false,
+            (_, _, _, _) => false,
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            static path => path,
+            static path => path,
+            (_, _, _) => false,
+            NullLogger.Instance,
+            signal,
+            ensureStoreContent: (_, _) => { contentCalls++; return true; },
+            phaseSink: new ThrowingPhaseSink());
+
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-sink-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            converger.ConvergeStore(root, session);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+
+        Assert.Equal(1, contentCalls);
+        Assert.Equal(31, signal.TargetRevision);
     }
 
     [Fact]
@@ -280,11 +354,16 @@ public sealed class StoreSidecarConvergerTests
         public void Record(IndexerPhaseRecord record) => Records.Add(record);
     }
 
+    private sealed class ThrowingPhaseSink : IIndexerPhaseSink
+    {
+        public void Record(IndexerPhaseRecord record) => throw new InvalidOperationException("sink failed");
+    }
+
     private sealed class FixtureStoreSession : IWorkspaceReadSession
     {
         private readonly string _dbPath;
 
-        public FixtureStoreSession(JulieDbFixture fixture)
+        public FixtureStoreSession(JulieDbFixture fixture, long? storeLogSequence = 31)
         {
             _dbPath = fixture.DbPath;
             Snapshot = new WorkspaceReadSnapshot(
@@ -296,7 +375,7 @@ public sealed class StoreSidecarConvergerTests
                     "family-a",
                     2,
                     "manifest-a",
-                    31,
+                    storeLogSequence,
                     "resolution-a",
                     StoreInstanceId: "family-a:gen-001",
                     ViewId: "view-a",
@@ -333,8 +412,9 @@ public sealed class StoreSidecarConvergerTests
 
     private sealed class FakeStoreSession : IWorkspaceReadSession
     {
-        public WorkspaceReadSnapshot Snapshot { get; } =
-            new(
+        public FakeStoreSession(long? storeLogSequence = 31)
+        {
+            Snapshot = new WorkspaceReadSnapshot(
                 "/workspace",
                 "workspace-a",
                 "family-a",
@@ -343,7 +423,7 @@ public sealed class StoreSidecarConvergerTests
                     "family-a",
                     2,
                     "manifest-a",
-                    31,
+                    storeLogSequence,
                     "resolution-a",
                     StoreInstanceId: "family-a:gen-001",
                     ViewId: "view-a",
@@ -357,6 +437,9 @@ public sealed class StoreSidecarConvergerTests
                 WorkspaceReadMode.FamilyStore,
                 GenerationName: "gen-001",
                 ManifestGeneration: 2);
+        }
+
+        public WorkspaceReadSnapshot Snapshot { get; }
 
         public TResult Read<TResult>(Func<SqliteConnection, TResult> query) =>
             throw new NotSupportedException();

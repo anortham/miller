@@ -151,8 +151,7 @@ internal sealed class IndexerSidecarConverger
         if (session.Snapshot.Mode != WorkspaceReadMode.FamilyStore)
             throw new ArgumentException("Store sidecar convergence requires a family-store read session.", nameof(session));
 
-        long target = session.Snapshot.Freshness.StoreLogSequence
-            ?? throw new InvalidOperationException("The family-store snapshot has no store_log sequence.");
+        long? target = null;
         bool contentRecorded = false;
         bool searchRecorded = false;
         try
@@ -198,43 +197,47 @@ internal sealed class IndexerSidecarConverger
                 "Family-store sidecar lease acquisition or release failed; derived sidecars will retry on the next convergence.");
         }
 
+        target = session.Snapshot.Freshness.StoreLogSequence
+            ?? throw new InvalidOperationException("The family-store snapshot has no store_log sequence.");
+        long storeSequence = target.Value;
+
         using (var metricsPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.Metrics))
         {
             MetricHistoryWriteResult? metrics = MetricSnapshotAggregates.RecordConverge(
                 session,
                 session.Snapshot.WorkspaceId,
-                target,
+                storeSequence,
                 MillerVersion.Current,
                 onError: ex => _logger.LogWarning(
                     ex,
                     "Metric-history store converge snapshot skipped; the trend will have a gap at store sequence {Sequence}.",
-                    target));
+                    storeSequence));
             if (metrics is null)
-                metricsPhase.Skip(target);
+                metricsPhase.Skip(storeSequence);
             else
             {
                 bool metricsDidWork = metrics == MetricHistoryWriteResult.Recorded;
                 didWork |= metricsDidWork;
-                metricsPhase.Complete(target, metricsDidWork);
+                metricsPhase.Complete(storeSequence, metricsDidWork);
             }
         }
 
         using (var vectorPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.Vector))
         {
             long previousTarget = _vectorSignal.TargetRevision;
-            _vectorSignal.StampTarget(target, fullRebuild: false);
+            _vectorSignal.StampTarget(storeSequence, fullRebuild: false);
             long currentTarget = _vectorSignal.TargetRevision;
             bool vectorDidWork = currentTarget > previousTarget;
             didWork |= vectorDidWork;
             if (_vectorSignal.Enabled)
-                vectorPhase.Complete(target, vectorDidWork);
+                vectorPhase.Complete(storeSequence, vectorDidWork);
             else
-                vectorPhase.Skip(target);
+                vectorPhase.Skip(storeSequence);
         }
-        totalPhase.Complete(target, didWork);
+        totalPhase.Complete(storeSequence, didWork);
     }
 
-    private bool ConvergeStoreSidecar(string kind, Func<bool> converge, long storeSequence)
+    private bool ConvergeStoreSidecar(string kind, Func<bool> converge, long? storeSequence)
     {
         using var phase = new IndexerPhaseScope(_phaseSink, kind);
         try

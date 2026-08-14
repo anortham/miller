@@ -372,7 +372,11 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             request.Operation == StoreOperation.Import,
             IndexerPhaseNames.Import,
             () => SubmitRequest(request, replayedImport),
-            submitted => submitted.Manifest.Disposition == StoreManifestDisposition.Created || before is null);
+            submitted => submitted.Manifest.Disposition == StoreManifestDisposition.Created
+                || before is null
+                || request is StoreImportRequest import
+                    && (import.Level == StoreLevel.Full)
+                    != string.Equals(before.IndexLevel, "full", StringComparison.Ordinal));
         bool resolveSubmitted = false;
         if (resolveAfter &&
             !(request is StoreImportRequest { Level: StoreLevel.Full } &&

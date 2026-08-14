@@ -196,6 +196,11 @@ public sealed class IndexerServiceScanTests : IDisposable
         public void Record(IndexerPhaseRecord record) => Records.Add(record);
     }
 
+    private sealed class ThrowingPhaseSink : IIndexerPhaseSink
+    {
+        public void Record(IndexerPhaseRecord record) => throw new InvalidOperationException("sink failed");
+    }
+
     // A never-started IndexerService: TryScanAsLeader reads only the published _ops under _opsGate (it never
     // touches the bootstrap), so an un-started instance is the correct, I/O-free unit-test surface. The sidecar
     // defaults OFF, so the disabled (byte-identical) path is what these no-workspace tests exercise.
@@ -1619,14 +1624,18 @@ public sealed class IndexerServiceScanTests : IDisposable
     // Every wholeRepoScanAdmitted assertion used to live in IndexerCoreTests with the boolean supplied by hand,
     // so the expression that COMPUTES it in IndexerService was guarded by nothing. These drive RunDrainTick.
 
-    private static IndexerService NewGovernedDrainService(string home, string dbPath) =>
+    private static IndexerService NewGovernedDrainService(
+        string home,
+        string dbPath,
+        IIndexerPhaseSink? phaseSink = null) =>
         NewSeededService(
             WorkspaceWithDb(dbPath),
             SymbolSearchSidecar.Disabled,
             drainFileConvergeRequests: _ => FileConvergeDrainResult.Empty,
             scanGovernor: ScanGovernor.ForMillerHome(home),
             scanGovernorWait: TimeSpan.Zero,
-            drainFullScanRequests: _ => FullScanDrainResult.Empty);
+            drainFullScanRequests: _ => FullScanDrainResult.Empty,
+            phaseSink: phaseSink);
 
     [Fact]
     public void DrainTick_WithASignalledRescan_AndTheGovernorHeldElsewhere_RunsNoExtract_ButStillAppliesEdits()
@@ -1753,7 +1762,8 @@ public sealed class IndexerServiceScanTests : IDisposable
             JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
         string home = CreateTempHome();
         WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
-        var service = NewGovernedDrainService(home, julie.DbPath);
+        var phases = new RecordingPhaseSink();
+        var service = NewGovernedDrainService(home, julie.DbPath, phases);
         DateTimeOffset now = new(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
         service.PublishFailurePolicyForTest(
             new InMemoryScanFailurePolicy(utcNow: () => now, jitter: static () => 0));
@@ -1776,6 +1786,27 @@ public sealed class IndexerServiceScanTests : IDisposable
 
         Assert.Equal(new[] { false, false }, ops.ScanForce);
         Assert.True(service.QueueEmpty);
+        IndexerPhaseRecord phase = Assert.Single(phases.Records, static item => item.Phase == "startup_total");
+        Assert.Equal("failed", phase.Outcome);
+        Assert.False(phase.DidWork);
+    }
+
+    [Fact]
+    public void RunStartupDeltaScan_WhenPhaseSinkThrows_PreservesScanContainment()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        var service = NewSeededService(
+            workspace,
+            SymbolSearchSidecar.Disabled,
+            phaseSink: new ThrowingPhaseSink());
+        var ops = new RecordingScanOps { Revision = 13 };
+        service.PublishOpsForTest(ops);
+
+        service.RunStartupDeltaScanForTest(workspace);
+
+        Assert.Equal([false], ops.ScanForce);
     }
 
     // ---- W3 G2: out-of-band scans must report completion, intent-aware ----

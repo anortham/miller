@@ -118,6 +118,51 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void FailedImportRecordsFailedPhasesAndPreservesFailurePropagation()
+    {
+        var phases = new RecordingPhaseSink();
+        var client = new RecordingStoreClient(
+            StoreOperation.Import,
+            exitCode: 1,
+            failureClass: "import_failed",
+            stateOverride: StoreRequestState.Failed);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => new StoreWorkspaceState(41, "l1"),
+            () => "request-import",
+            null,
+            phases);
+
+        StoreWorkspaceOperationException failure = Assert.Throws<StoreWorkspaceOperationException>(
+            () => coordinator.Scan(jobs: 1));
+
+        Assert.Equal("import_failed", failure.FailureClass.Code);
+        Assert.Equal(["import", "coordinator_total"], phases.Records.Select(static phase => phase.Phase));
+        Assert.All(phases.Records, static phase => Assert.Equal("failed", phase.Outcome));
+    }
+
+    [Fact]
+    public void PhaseSinkFailureDoesNotChangeCoordinatorSuccess()
+    {
+        var client = new RecordingStoreClient(StoreOperation.Import);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => new StoreWorkspaceState(41, "l1"),
+            () => "request-import",
+            null,
+            new ThrowingPhaseSink());
+
+        ExtractReport report = coordinator.Scan(jobs: 1);
+
+        Assert.Equal("completed", report.Status);
+        Assert.Single(client.Requests);
+    }
+
+    [Fact]
     public void ANonTerminalRequestIsNotTreatedAsCommitted()
     {
         var client = new RecordingStoreClient(
@@ -230,6 +275,7 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.Single(client.Requests);
         Assert.IsType<StoreImportRequest>(client.SingleRequest);
         Assert.Equal(["import", "resolve", "coordinator_total"], phases.Records.Select(static phase => phase.Phase));
+        Assert.True(phases.Records.Single(static phase => phase.Phase == "import").DidWork);
         Assert.False(phases.Records.Single(static phase => phase.Phase == "resolve").DidWork);
         Assert.True(phases.Records.Single(static phase => phase.Phase == "coordinator_total").DidWork);
     }
@@ -767,6 +813,11 @@ public sealed class StoreWorkspaceCoordinatorTests
         public List<IndexerPhaseRecord> Records { get; } = [];
 
         public void Record(IndexerPhaseRecord record) => Records.Add(record);
+    }
+
+    private sealed class ThrowingPhaseSink : IIndexerPhaseSink
+    {
+        public void Record(IndexerPhaseRecord record) => throw new InvalidOperationException("sink failed");
     }
 
     private sealed class RecordingStoreClient(

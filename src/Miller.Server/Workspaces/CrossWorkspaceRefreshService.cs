@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Core.Freshness;
 using Miller.Indexing;
@@ -52,6 +53,7 @@ public sealed class CrossWorkspaceRefreshService
     private readonly Func<string, string, IJulieStoreClient, IDisposable?, StoreRollbackExportResult> _exportStoreRollback;
     private readonly Func<string, string, IDisposable, string?> _deleteStorePointerAfterSourceRebuild;
     private readonly IndexerSidecarConverger _sidecarConverger;
+    private readonly IIndexerPhaseSink _phaseSink;
 
     // Appended to the eligibility verdict's reason when a one-shot refresh is refused (D2): the remedy is a
     // restore/upgrade, and the env hatch exists only for INTENTIONAL downgrades — never as a routine unblock.
@@ -66,7 +68,8 @@ public sealed class CrossWorkspaceRefreshService
         SymbolSearchSidecar sidecar,
         ScanGovernor governor,
         ContentCorpusSidecar? contentSidecar = null,
-        Func<bool>? storeEnabled = null)
+        Func<bool>? storeEnabled = null,
+        ILogger<CrossWorkspaceRefreshService>? logger = null)
         : this(
             registry,
             (root, db, force, jobs, level) => runner.Scan(root, db, force, jobs, level),
@@ -114,7 +117,8 @@ public sealed class CrossWorkspaceRefreshService
             readStoreProbe: null,
             governor: governor,
             storeClient: new JulieStoreClient(runner.BinaryPath),
-            storeEnabled: storeEnabled)
+            storeEnabled: storeEnabled,
+            phaseSink: new LoggingIndexerPhaseSink(logger ?? NullLogger<CrossWorkspaceRefreshService>.Instance))
     {
     }
 
@@ -140,7 +144,8 @@ public sealed class CrossWorkspaceRefreshService
         IJulieStoreClient? storeClient = null,
         Func<bool>? storeEnabled = null,
         Action<string>? deleteStorePointer = null,
-        Func<string, string, IJulieStoreClient, IDisposable?, StoreRollbackExportResult>? exportStoreRollback = null)
+        Func<string, string, IJulieStoreClient, IDisposable?, StoreRollbackExportResult>? exportStoreRollback = null,
+        IIndexerPhaseSink? phaseSink = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(scan);
@@ -182,6 +187,7 @@ public sealed class CrossWorkspaceRefreshService
             ?? ((dbPath, canonicalRoot) => PersistedScanFailurePolicy.For(dbPath, canonicalRoot));
         _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
         _storeClient = storeClient;
+        _phaseSink = phaseSink ?? new LoggingIndexerPhaseSink(NullLogger<CrossWorkspaceRefreshService>.Instance);
         _exportStoreRollback = exportStoreRollback ?? StoreRollbackExporter.ExportIfRequired;
         if (deleteStorePointer is null)
         {
@@ -200,7 +206,8 @@ public sealed class CrossWorkspaceRefreshService
         _sidecarConverger = new IndexerSidecarConverger(
             _sidecar,
             _contentSidecar,
-            NullLogger.Instance);
+            NullLogger.Instance,
+            phaseSink: _phaseSink);
     }
 
     /// <summary>
@@ -686,12 +693,13 @@ public sealed class CrossWorkspaceRefreshService
             recoverUnpublishedView:
                 attempt.EffectiveIntent == ScanIntent.RootRebind &&
                 Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1");
-        StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.Create(
+        StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.CreateWithPhaseSink(
             binding,
             row.WorkspaceId,
             client,
             () => IndexLevels.Resolve(row.LevelPolicy),
-            File.Exists(row.IndexDbPath) ? row.IndexDbPath : null);
+            File.Exists(row.IndexDbPath) ? row.IndexDbPath : null,
+            _phaseSink);
         return coordinator.Scan(attempt.EffectiveIntent, attempt.Jobs);
     }
 

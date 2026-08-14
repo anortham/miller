@@ -67,6 +67,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ScanGovernor _governor;
     private readonly Func<bool> _storeEnabled;
+    private readonly IIndexerPhaseSink _phaseSink;
 
     private BoundWorkspace? _bound;
     private BootstrapPhase _phase = BootstrapPhase.Idle;
@@ -84,6 +85,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     {
         ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
+        _phaseSink = new LoggingIndexerPhaseSink(logger);
         // Default = OFF, so no fast test ever opens a lease under the real user-global ~/.miller.
         _governor = scanGovernor ?? ScanGovernor.Disabled();
         _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
@@ -1041,11 +1043,12 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 ScanAttemptDecision attempt = failurePolicy.Evaluate(
                     rootReplaced ? ScanIntent.RootRebind : ScanIntent.IncrementalReconcile,
                     bypassBackoff: true);
-                StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.Create(
+                StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.CreateWithPhaseSink(
                     workspace,
                     canonicalRoot,
                     () => IndexLevels.ResolveForWorkspace(workspace.RegistryDbPath, stableWorkspaceId),
-                    rootReplaced);
+                    rootReplaced,
+                    _phaseSink);
                 TestScanObserver?.Invoke();
                 ExtractReport report = RunRecordedScan(
                     failurePolicy,
