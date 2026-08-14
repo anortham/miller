@@ -389,6 +389,103 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual(2, exit_code)
         self.assertFalse(marker.exists())
 
+    def test_public_cli_parses_optional_verification_report(self) -> None:
+        args = perf_recovery.parse_args(
+            [
+                "--out",
+                str(self.root / "records.jsonl"),
+                "--verification-report",
+                str(self.root / "verification.json"),
+                "--store-copy",
+                str(self.store_copy),
+                "--live-store",
+                str(self.live_store),
+            ]
+        )
+        self.assertEqual(self.root / "verification.json", args.verification_report)
+
+    def test_public_cli_writes_jsonl_then_atomic_strict_verification_report(self) -> None:
+        live_family = self._family_root("live-family-report")
+        copied_family = self._family_root("copied-family-report")
+        self._write_pointer_at(self.workspace, copied_family, view_id="view-1")
+        records_path = self.root / "records.jsonl"
+        report_path = self.root / "verification.json"
+        records = self._verification_records()
+        with mock.patch.object(perf_recovery, "run_replay", return_value=records):
+            exit_code = perf_recovery.main(
+                [
+                    "--out",
+                    str(records_path),
+                    "--verification-report",
+                    str(report_path),
+                    "--workspace",
+                    str(self.workspace),
+                    "--store-copy",
+                    str(copied_family),
+                    "--live-store",
+                    str(live_family),
+                ]
+            )
+        self.assertEqual(0, exit_code)
+        self.assertTrue(records_path.is_file())
+        self.assertTrue(report_path.is_file())
+        self.assertTrue(json.loads(report_path.read_text(encoding="utf-8"))["passed"])
+
+    def test_public_cli_writes_ledger_but_never_pass_report_for_failed_verification(self) -> None:
+        live_family = self._family_root("live-family-report-fail")
+        copied_family = self._family_root("copied-family-report-fail")
+        self._write_pointer_at(self.workspace, copied_family, view_id="view-1")
+        records_path = self.root / "records-fail.jsonl"
+        report_path = self.root / "verification-fail.json"
+        report_path.write_text(json.dumps({"passed": True}), encoding="utf-8")
+        records = self._verification_records()
+        records[0] = dataclasses.replace(records[0], hard_gate_passed=False)
+        with contextlib.redirect_stderr(io.StringIO()), mock.patch.object(perf_recovery, "run_replay", return_value=records):
+            exit_code = perf_recovery.main(
+                [
+                    "--out",
+                    str(records_path),
+                    "--verification-report",
+                    str(report_path),
+                    "--workspace",
+                    str(self.workspace),
+                    "--store-copy",
+                    str(copied_family),
+                    "--live-store",
+                    str(live_family),
+                ]
+            )
+        self.assertEqual(2, exit_code)
+        self.assertTrue(records_path.is_file())
+        self.assertFalse(report_path.exists())
+
+    def test_public_cli_removes_old_pass_report_when_replay_fails(self) -> None:
+        live_family = self._family_root("live-family-report-replay-fail")
+        copied_family = self._family_root("copied-family-report-replay-fail")
+        self._write_pointer_at(self.workspace, copied_family, view_id="view-1")
+        records_path = self.root / "records-replay-fail.jsonl"
+        report_path = self.root / "verification-replay-fail.json"
+        report_path.write_text(json.dumps({"passed": True}), encoding="utf-8")
+        with contextlib.redirect_stderr(io.StringIO()), mock.patch.object(
+            perf_recovery, "run_replay", side_effect=RuntimeError("replay failed")
+        ):
+            exit_code = perf_recovery.main(
+                [
+                    "--out",
+                    str(records_path),
+                    "--verification-report",
+                    str(report_path),
+                    "--workspace",
+                    str(self.workspace),
+                    "--store-copy",
+                    str(copied_family),
+                    "--live-store",
+                    str(live_family),
+                ]
+            )
+        self.assertEqual(2, exit_code)
+        self.assertFalse(report_path.exists())
+
     def test_only_selection_preserves_manifest_order_and_runs_override_preserves_warmups(self) -> None:
         manifest = perf_recovery.load_manifest(
             Path(__file__).resolve().parents[1] / "benchmarks" / "perf-recovery-workloads.json"
@@ -731,7 +828,12 @@ class PerfRecoveryTests(unittest.TestCase):
                     "view_id": view,
                     "manifest": {"generation": 5},
                 }
-            return self._result(stdout=json.dumps(payload).encode())
+            return dataclasses.replace(
+                self._result(stdout=json.dumps(payload).encode()),
+                peak_pss_bytes=1_024,
+                hard_memory_bytes=1_024,
+                hard_memory_metric="linux_pss",
+            )
 
         with mock.patch.object(
             perf_recovery,
@@ -2361,6 +2463,524 @@ class PerfRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "placeholder"):
             perf_recovery.load_manifest(path)
 
+    def test_manifest_limits_idle_memory_budget_to_startup_workloads(self) -> None:
+        workloads = self._verification_workloads()
+        self.assertEqual(367_001_600, workloads["startup.leader.no_change"].hard_idle_memory_bytes)
+        self.assertEqual(367_001_600, workloads["startup.reader.warm"].hard_idle_memory_bytes)
+        self.assertTrue(all(
+            workload.hard_idle_memory_bytes is None
+            for workload_id, workload in workloads.items()
+            if workload_id not in {"startup.leader.no_change", "startup.reader.warm"}
+        ))
+        item = dict(self._resolve_item())
+        item["id"] = "tool.idle-memory"
+        item["hard_idle_memory_bytes"] = 1_000
+        with self.assertRaisesRegex(ValueError, "hard_idle_memory_bytes.*startup"):
+            perf_recovery._workload_from_mapping(item)
+
+    def test_linux_memory_sample_sums_process_tree_and_invalidates_missing_descendants(self) -> None:
+        samples = {
+            101: {"peak_rss_bytes": 10, "peak_pss_bytes": 7, "read_bytes": 2, "write_bytes": 3, "read_syscalls": 4, "write_syscalls": 5},
+            102: {"peak_rss_bytes": 20, "peak_pss_bytes": 13, "read_bytes": 11, "write_bytes": 17, "read_syscalls": 19, "write_syscalls": 23},
+        }
+        with mock.patch.object(perf_recovery, "_linux_process_tree", return_value=(101, 102)), mock.patch.object(
+            perf_recovery, "_read_linux_memory_one", side_effect=lambda pid: samples[pid]
+        ):
+            result = perf_recovery._read_linux_memory(101)
+        self.assertEqual(30, result["peak_rss_bytes"])
+        self.assertEqual(20, result["peak_pss_bytes"])
+        self.assertEqual(2, result["process_count"])
+        self.assertEqual(20, result["write_bytes"])
+
+        with mock.patch.object(perf_recovery, "_linux_process_tree", return_value=(101, 102)), mock.patch.object(
+            perf_recovery, "_read_linux_memory_one", side_effect=[samples[101], None]
+        ):
+            invalid = perf_recovery._read_linux_memory(101)
+        self.assertIsNone(invalid["peak_pss_bytes"])
+        self.assertIsNone(invalid["process_count"])
+
+    def test_linux_process_tree_reads_children_from_every_thread(self) -> None:
+        task_paths = [Path("/proc/100/task/100/children"), Path("/proc/100/task/222/children")]
+        contents = {
+            str(task_paths[0]): "101\n",
+            str(task_paths[1]): "202\n",
+        }
+
+        def read_text(path, *args, **kwargs):
+            return contents[str(path)]
+
+        with mock.patch.object(perf_recovery.Path, "glob", return_value=task_paths), mock.patch.object(
+            perf_recovery.Path, "read_text", autospec=True, side_effect=read_text
+        ):
+            self.assertEqual((101, 202), perf_recovery._linux_process_children(100))
+
+    def test_linux_process_tree_invalidates_when_any_thread_child_read_fails(self) -> None:
+        task_paths = [Path("/proc/100/task/100/children"), Path("/proc/100/task/222/children")]
+
+        def read_text(path, *args, **kwargs):
+            if str(path).endswith("/222/children"):
+                raise OSError("transient read failure")
+            return "101\n"
+
+        with mock.patch.object(perf_recovery.Path, "glob", return_value=task_paths), mock.patch.object(
+            perf_recovery.Path, "read_text", autospec=True, side_effect=read_text
+        ):
+            self.assertIsNone(perf_recovery._linux_process_children(100))
+
+    def test_windows_tree_memory_uses_mocked_descendants_without_root_only_hard_metric(self) -> None:
+        samples = {
+            201: {"peak_rss_bytes": 10, "private_usage_bytes": 7},
+            202: {"peak_rss_bytes": 20, "private_usage_bytes": 13},
+        }
+        with mock.patch.object(perf_recovery, "_windows_process_tree", return_value=(201, 202)), mock.patch.object(
+            perf_recovery, "_read_windows_memory_one", side_effect=lambda pid: samples[pid]
+        ):
+            result = perf_recovery._read_windows_memory(201)
+        self.assertEqual(30, result["peak_rss_bytes"])
+        self.assertEqual(20, result["private_usage_bytes"])
+        self.assertEqual(2, result["process_count"])
+
+        with mock.patch.object(perf_recovery, "_windows_process_tree", return_value=None), mock.patch.object(
+            perf_recovery, "_read_windows_memory_one", return_value=samples[201]
+        ):
+            invalid = perf_recovery._read_windows_memory(201)
+        self.assertEqual(10, invalid["peak_rss_bytes"])
+        self.assertIsNone(invalid["private_usage_bytes"])
+
+    def test_windows_toolhelp_accepts_normal_end_of_snapshot(self) -> None:
+        class Function:
+            def __init__(self, callback):
+                self.callback = callback
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                return self.callback(*args)
+
+        rows = iter([(100, 1), (200, 100)])
+        last_error = [0]
+
+        def write_row(_snapshot, pointer):
+            pid, parent = next(rows)
+            entry = perf_recovery.ctypes.cast(
+                pointer, perf_recovery.ctypes.POINTER(perf_recovery._PROCESSENTRY32W)
+            ).contents
+            entry.th32ProcessID = pid
+            entry.th32ParentProcessID = parent
+            return True
+
+        def next_row(snapshot, pointer):
+            try:
+                return write_row(snapshot, pointer)
+            except StopIteration:
+                last_error[0] = 18
+                return False
+
+        kernel32 = SimpleNamespace(
+            CreateToolhelp32Snapshot=Function(lambda *_args: 1),
+            Process32FirstW=Function(write_row),
+            Process32NextW=Function(next_row),
+            GetLastError=Function(lambda: last_error[0]),
+            CloseHandle=Function(lambda *_args: 1),
+        )
+        with mock.patch.object(perf_recovery.ctypes, "windll", SimpleNamespace(kernel32=kernel32), create=True):
+            self.assertEqual((100, 200), perf_recovery._windows_process_tree(100))
+
+    def test_windows_toolhelp_mid_enumeration_error_is_not_treated_as_eof(self) -> None:
+        class Function:
+            def __init__(self, callback):
+                self.callback = callback
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                return self.callback(*args)
+
+        last_error = [0]
+
+        def first_row(_snapshot, pointer):
+            entry = perf_recovery.ctypes.cast(
+                pointer, perf_recovery.ctypes.POINTER(perf_recovery._PROCESSENTRY32W)
+            ).contents
+            entry.th32ProcessID = 100
+            entry.th32ParentProcessID = 1
+            return True
+
+        def next_row(_snapshot, _pointer):
+            last_error[0] = 5
+            return False
+
+        kernel32 = SimpleNamespace(
+            CreateToolhelp32Snapshot=Function(lambda *_args: 1),
+            Process32FirstW=Function(first_row),
+            Process32NextW=Function(next_row),
+            GetLastError=Function(lambda: last_error[0]),
+            CloseHandle=Function(lambda *_args: 1),
+        )
+        with mock.patch.object(perf_recovery.ctypes, "windll", SimpleNamespace(kernel32=kernel32), create=True):
+            self.assertIsNone(perf_recovery._windows_process_tree(100))
+
+    def test_windows_memory_uses_query_only_access(self) -> None:
+        class Function:
+            def __init__(self, value=1):
+                self.argtypes = None
+                self.restype = None
+                self.value = value
+                self.calls = []
+
+            def __call__(self, *args):
+                self.calls.append(args)
+                return self.value
+
+        open_process = Function(value=1)
+        kernel32 = SimpleNamespace(OpenProcess=open_process, CloseHandle=Function())
+        psapi = SimpleNamespace(GetProcessMemoryInfo=Function(value=False))
+        with mock.patch.object(perf_recovery.ctypes, "windll", SimpleNamespace(kernel32=kernel32, psapi=psapi), create=True):
+            perf_recovery._read_windows_memory_one(123)
+        requested_access = open_process.calls[0][0]
+        self.assertIn(requested_access, {0x0400, 0x1000})
+        self.assertEqual(0, requested_access & 0x0010)
+
+    def test_idle_gate_requires_platform_metric_and_budget(self) -> None:
+        workload = self._verification_workloads()["startup.leader.no_change"]
+        common = {
+            "workload": workload,
+            "wall_ms": 1,
+            "exit_code": 0,
+            "timed_out": False,
+            "hard_memory_bytes": 1,
+            "hard_memory_metric": "linux_pss",
+            "platform_name": "linux",
+        }
+        self.assertFalse(perf_recovery.hard_gate_passed(**common))
+        self.assertTrue(
+            perf_recovery.hard_gate_passed(
+                **common,
+                hard_idle_memory_bytes=367_001_599,
+                hard_idle_memory_metric="linux_pss",
+            )
+        )
+        self.assertFalse(
+            perf_recovery.hard_gate_passed(
+                **common,
+                hard_idle_memory_bytes=367_001_599,
+                hard_idle_memory_metric="windows_private_usage",
+            )
+        )
+        self.assertFalse(
+            perf_recovery.hard_gate_passed(
+                **common,
+                hard_idle_memory_bytes=367_001_601,
+                hard_idle_memory_metric="linux_pss",
+            )
+        )
+
+    def test_idle_sampling_does_not_change_readiness_wall_time(self) -> None:
+        evidence = {"completed": True, "ready_at": 10.042, "observed_at": 13.042}
+        result = perf_recovery._command_result_from_idle_evidence(
+            wall_ms=42,
+            evidence=evidence,
+            idle={
+                "hard_idle_memory_bytes": 11,
+                "hard_idle_memory_metric": "linux_pss",
+                "idle_pss_bytes": 11,
+                "idle_sample_ms": 3_000,
+                "idle_process_count": 2,
+            },
+        )
+        self.assertEqual(42, result.wall_ms)
+        self.assertEqual(3_000, result.idle_sample_ms)
+
+    def test_idle_sampling_policy_excludes_warmups_and_non_idle_workloads(self) -> None:
+        startup = self._verification_workloads()["startup.leader.no_change"]
+        ordinary = self._verification_workloads()["tool.inspect.warm"]
+        self.assertFalse(perf_recovery._should_sample_idle_memory(startup, warmup=True))
+        self.assertTrue(perf_recovery._should_sample_idle_memory(startup, warmup=False))
+        self.assertFalse(perf_recovery._should_sample_idle_memory(ordinary, warmup=False))
+
+    def test_mcp_bootstrap_samples_idle_only_for_measured_ready_attempts(self) -> None:
+        workload = dataclasses.replace(
+            self._mcp_workload("startup.leader.no_change"),
+            hard_idle_memory_bytes=100,
+        )
+        session = mock.Mock()
+        session.process.poll.return_value = None
+        session.sample_idle_window.return_value = {
+            "hard_idle_memory_bytes": 10,
+            "hard_idle_memory_metric": "linux_pss",
+        }
+        session.result.return_value = self._result()
+        evidence = {"completed": True, "ready_at": 1.0}
+        with mock.patch.object(perf_recovery, "_bootstrap_session", return_value=(session, 0.0, evidence, False)):
+            perf_recovery._run_mcp_bootstrap(
+                self._request(), workload, timeout_ms=60_000, environment={}, warmup=True
+            )
+            session.sample_idle_window.assert_not_called()
+            perf_recovery._run_mcp_bootstrap(
+                self._request(), workload, timeout_ms=60_000, environment={}, warmup=False
+            )
+        session.sample_idle_window.assert_called_once_with()
+
+    def test_idle_window_clean_exit_invalidates_bootstrap_evidence(self) -> None:
+        workload = dataclasses.replace(
+            self._mcp_workload("startup.leader.no_change"),
+            hard_budget_memory_bytes=100,
+            hard_idle_memory_bytes=100,
+        )
+        session = mock.Mock()
+        session.process.poll.side_effect = [None, 0]
+        session.sample_idle_window.return_value = {
+            "idle_pss_bytes": 10,
+            "hard_idle_memory_bytes": 10,
+            "hard_idle_memory_metric": "linux_pss",
+            "idle_sample_ms": 3_000,
+            "idle_process_count": 1,
+        }
+
+        def result(*_args, **kwargs):
+            base = dataclasses.replace(
+                self._result(),
+                peak_pss_bytes=1,
+                hard_memory_bytes=1,
+                hard_memory_metric="linux_pss",
+            )
+            idle = kwargs.get("idle")
+            if idle is None:
+                return base
+            return dataclasses.replace(
+                base,
+                idle_pss_bytes=idle["idle_pss_bytes"],
+                hard_idle_memory_bytes=idle["hard_idle_memory_bytes"],
+                hard_idle_memory_metric=idle["hard_idle_memory_metric"],
+                idle_sample_ms=idle["idle_sample_ms"],
+                idle_process_count=idle["idle_process_count"],
+            )
+
+        session.result.side_effect = result
+        evidence = {"completed": True, "ready_at": 1.0}
+        with mock.patch.object(
+            perf_recovery,
+            "_bootstrap_session",
+            return_value=(session, 0.0, evidence, False),
+        ):
+            command_result = perf_recovery._run_mcp_bootstrap(
+                self._request(), workload, timeout_ms=60_000, environment={}
+            )
+        record = perf_recovery._record_from_result(
+            self._request(),
+            workload,
+            command_result,
+            attempt=1,
+            warmup=False,
+            timeout_ms=60_000,
+            environment={},
+            commit=None,
+        )
+        self.assertIsNone(command_result.hard_idle_memory_bytes)
+        self.assertFalse(record.hard_gate_passed)
+
+    def test_retained_leader_idle_resample_merges_before_close(self) -> None:
+        leader = self._record_for_pair("startup.leader.no_change")
+        leader = dataclasses.replace(
+            leader,
+            idle_pss_bytes=10,
+            hard_idle_memory_bytes=10,
+            hard_idle_memory_metric="linux_pss",
+            idle_sample_ms=3_000,
+            idle_process_count=2,
+        )
+        session = mock.Mock()
+        session.process.poll.return_value = None
+        session.sample_idle_window.return_value = {
+            "idle_pss_bytes": 20,
+            "hard_idle_memory_bytes": 20,
+            "hard_idle_memory_metric": "linux_pss",
+            "idle_sample_ms": 3_000,
+            "idle_process_count": 3,
+        }
+        merged = perf_recovery._merge_idle_evidence(leader, session.sample_idle_window())
+        session.close.assert_not_called()
+        self.assertEqual(20, merged.hard_idle_memory_bytes)
+        self.assertEqual(3, merged.idle_process_count)
+
+    def test_run_replay_resamples_retained_leader_after_reader_before_close(self) -> None:
+        leader = dataclasses.replace(
+            self._mcp_workload("startup.leader.no_change"),
+            hard_idle_memory_bytes=100,
+        )
+        reader = dataclasses.replace(
+            self._mcp_workload("startup.reader.warm"),
+            hard_idle_memory_bytes=100,
+        )
+        leader_record = self._record_for_pair(leader.workload_id)
+        reader_record = self._record_for_pair(reader.workload_id)
+        events: list[str] = []
+        session = mock.Mock()
+        session.process.poll.return_value = None
+        session.sample_idle_window.side_effect = lambda: events.append("idle") or {
+            "hard_idle_memory_bytes": 20,
+            "hard_idle_memory_metric": "linux_pss",
+            "idle_pss_bytes": 20,
+            "idle_sample_ms": 3_000,
+            "idle_process_count": 2,
+        }
+        session.close.side_effect = lambda: events.append("close")
+
+        def run_mcp(_request, workload, *, keep_alive):
+            if workload.workload_id == leader.workload_id:
+                return [leader_record], session
+            events.append("reader")
+            return [reader_record], None
+
+        with mock.patch.object(perf_recovery, "_run_mcp_workload", side_effect=run_mcp):
+            records = perf_recovery.run_replay(self._request(), {leader.workload_id: leader, reader.workload_id: reader})
+        self.assertEqual(["reader", "idle", "close"], events)
+        self.assertEqual(20, records[0].hard_idle_memory_bytes)
+
+    def _run_retained_replay_with_post_reader_evidence(
+        self, *, idle, metrics=None, poll=None, close=True, returncode=None
+    ):
+        leader = dataclasses.replace(
+            self._mcp_workload("startup.leader.no_change"),
+            hard_budget_memory_bytes=100,
+            hard_idle_memory_bytes=100,
+        )
+        reader = dataclasses.replace(
+            self._mcp_workload("startup.reader.warm"),
+            hard_budget_memory_bytes=100,
+            hard_idle_memory_bytes=100,
+        )
+        leader_record = dataclasses.replace(
+            self._record_for_pair(leader.workload_id),
+            peak_pss_bytes=10,
+            hard_memory_bytes=10,
+            hard_memory_metric="linux_pss",
+            idle_pss_bytes=50,
+            hard_idle_memory_bytes=50,
+            hard_idle_memory_metric="linux_pss",
+            idle_sample_ms=3_000,
+            idle_process_count=1,
+        )
+        session = mock.Mock()
+        session.process.poll.side_effect = poll or [None, None, None]
+        session.process.returncode = returncode
+        session.sample_idle_window.return_value = idle
+        session.memory_metrics.return_value = metrics or {
+            "peak_rss_bytes": 20,
+            "peak_pss_bytes": 20,
+            "private_usage_bytes": None,
+            "hard_memory_bytes": 20,
+            "hard_memory_metric": "linux_pss",
+            "process_count": 2,
+        }
+        session.close.return_value = close
+
+        def run_mcp(_request, workload, *, keep_alive):
+            if workload.workload_id == leader.workload_id:
+                return [leader_record], session
+            return [self._record_for_pair(reader.workload_id)], None
+
+        with mock.patch.object(perf_recovery, "_run_mcp_workload", side_effect=run_mcp):
+            records = perf_recovery.run_replay(
+                self._request(),
+                {leader.workload_id: leader, reader.workload_id: reader},
+            )
+        return records[0]
+
+    def test_retained_leader_missing_second_idle_sample_fails_closed(self) -> None:
+        record = self._run_retained_replay_with_post_reader_evidence(
+            idle={
+                "idle_pss_bytes": None,
+                "hard_idle_memory_bytes": None,
+                "hard_idle_memory_metric": None,
+                "idle_sample_ms": 2_999,
+                "idle_process_count": None,
+            }
+        )
+        self.assertIsNone(record.hard_idle_memory_bytes)
+        self.assertFalse(record.hard_gate_passed)
+
+    def test_retained_leader_merges_peak_growth_and_recomputes_gate(self) -> None:
+        record = self._run_retained_replay_with_post_reader_evidence(
+            idle={
+                "idle_pss_bytes": 60,
+                "hard_idle_memory_bytes": 60,
+                "hard_idle_memory_metric": "linux_pss",
+                "idle_sample_ms": 3_000,
+                "idle_process_count": 2,
+            }
+        )
+        self.assertEqual(20, record.peak_pss_bytes)
+        self.assertEqual(20, record.hard_memory_bytes)
+        self.assertTrue(record.hard_gate_passed)
+
+    def test_retained_leader_over_budget_second_idle_sample_fails_gate(self) -> None:
+        record = self._run_retained_replay_with_post_reader_evidence(
+            idle={
+                "idle_pss_bytes": 101,
+                "hard_idle_memory_bytes": 101,
+                "hard_idle_memory_metric": "linux_pss",
+                "idle_sample_ms": 3_000,
+                "idle_process_count": 2,
+            }
+        )
+        self.assertEqual(101, record.hard_idle_memory_bytes)
+        self.assertFalse(record.hard_gate_passed)
+
+    def test_retained_leader_exit_after_reader_fails_gate(self) -> None:
+        record = self._run_retained_replay_with_post_reader_evidence(
+            idle={
+                "idle_pss_bytes": 60,
+                "hard_idle_memory_bytes": 60,
+                "hard_idle_memory_metric": "linux_pss",
+                "idle_sample_ms": 3_000,
+                "idle_process_count": 2,
+            },
+            poll=[None, 17],
+        )
+        self.assertFalse(record.hard_gate_passed)
+
+    def test_retained_leader_nonzero_exit_code_is_preserved(self) -> None:
+        record = self._run_retained_replay_with_post_reader_evidence(
+            idle={
+                "idle_pss_bytes": 60,
+                "hard_idle_memory_bytes": 60,
+                "hard_idle_memory_metric": "linux_pss",
+                "idle_sample_ms": 3_000,
+                "idle_process_count": 2,
+            },
+            poll=[None, -9],
+            returncode=-9,
+        )
+        self.assertEqual(-9, record.exit_code)
+        self.assertFalse(record.hard_gate_passed)
+
+    def test_retained_leader_exit_during_second_idle_sample_fails_gate(self) -> None:
+        record = self._run_retained_replay_with_post_reader_evidence(
+            idle={
+                "idle_pss_bytes": 60,
+                "hard_idle_memory_bytes": 60,
+                "hard_idle_memory_metric": "linux_pss",
+                "idle_sample_ms": 3_000,
+                "idle_process_count": 2,
+            },
+            poll=[None, None, 17],
+        )
+        self.assertFalse(record.hard_gate_passed)
+
+    def test_retained_leader_close_failure_fails_gate(self) -> None:
+        record = self._run_retained_replay_with_post_reader_evidence(
+            idle={
+                "idle_pss_bytes": 60,
+                "hard_idle_memory_bytes": 60,
+                "hard_idle_memory_metric": "linux_pss",
+                "idle_sample_ms": 3_000,
+                "idle_process_count": 2,
+            },
+            close=False,
+        )
+        self.assertFalse(record.hard_gate_passed)
+
     def test_hard_gate_uses_platform_budget_and_nullable_metrics(self) -> None:
         workload = perf_recovery.Workload(
             workload_id="test",
@@ -2407,6 +3027,47 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual(12, windows["private_usage_bytes"])
         self.assertIsNone(windows["peak_pss_bytes"])
 
+    def test_peak_memory_gate_fails_closed_for_missing_or_mismatched_platform_metric(self) -> None:
+        workload = perf_recovery.Workload(
+            workload_id="test",
+            command=("version",),
+            warmups=0,
+            runs=1,
+            hard_budget_ms={"development": 100, "windows": 200},
+            hard_budget_memory_bytes=1_000,
+        )
+        common = {
+            "workload": workload,
+            "wall_ms": 1,
+            "exit_code": 0,
+            "timed_out": False,
+            "hard_memory_bytes": 500,
+        }
+        self.assertFalse(perf_recovery.hard_gate_passed(**common, hard_memory_metric=None, platform_name="linux"))
+        self.assertFalse(
+            perf_recovery.hard_gate_passed(**common, hard_memory_metric="windows_private_usage", platform_name="linux")
+        )
+        self.assertFalse(
+            perf_recovery.hard_gate_passed(
+                **{**common, "hard_memory_bytes": None},
+                hard_memory_metric=None,
+                platform_name="windows",
+            )
+        )
+        self.assertFalse(
+            perf_recovery.hard_gate_passed(
+                **common,
+                hard_memory_metric="linux_pss",
+                platform_name="windows",
+            )
+        )
+        self.assertTrue(
+            perf_recovery.hard_gate_passed(**common, hard_memory_metric="linux_pss", platform_name="linux")
+        )
+        self.assertTrue(
+            perf_recovery.hard_gate_passed(**common, hard_memory_metric="windows_private_usage", platform_name="windows")
+        )
+
     def _verification_workloads(self) -> dict[str, perf_recovery.Workload]:
         manifest_path = Path(__file__).resolve().parents[1] / "benchmarks" / "perf-recovery-workloads.json"
         return perf_recovery.load_manifest(manifest_path)
@@ -2424,6 +3085,8 @@ class PerfRecoveryTests(unittest.TestCase):
             timing_budget = workload.hard_budget_ms[budget_key]
             memory_budget = workload.hard_budget_memory_bytes
             hard_memory = memory_budget if memory_budget is not None else None
+            idle_memory_budget = workload.hard_idle_memory_bytes
+            hard_idle_memory = idle_memory_budget if idle_memory_budget is not None else None
             metadata: dict[str, object] = {}
             parity: dict[str, object] | None = None
             if workload.parity_with is not None:
@@ -2471,6 +3134,18 @@ class PerfRecoveryTests(unittest.TestCase):
                             else None
                         ),
                         private_usage_bytes=hard_memory if platform.startswith("win") else None,
+                        idle_pss_bytes=hard_idle_memory if platform.startswith("linux") else None,
+                        idle_private_usage_bytes=hard_idle_memory if platform.startswith("win") else None,
+                        hard_idle_memory_bytes=hard_idle_memory,
+                        hard_idle_memory_metric=(
+                            "linux_pss"
+                            if platform.startswith("linux") and hard_idle_memory is not None
+                            else "windows_private_usage"
+                            if platform.startswith("win") and hard_idle_memory is not None
+                            else None
+                        ),
+                        idle_sample_ms=3_000 if hard_idle_memory is not None else None,
+                        idle_process_count=1 if hard_idle_memory is not None else None,
                         metadata=metadata,
                         parity=parity,
                     )
@@ -2687,6 +3362,96 @@ class PerfRecoveryTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "memory budget exceeded: startup.leader.no_change"):
             perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rechecks_exit_code_independently_of_hard_gate(self) -> None:
+        records = self._verification_records()
+        index = next(index for index, record in enumerate(records) if not record.warmup)
+        records[index] = dataclasses.replace(records[index], exit_code=9, hard_gate_passed=True)
+        with self.assertRaisesRegex(ValueError, "exit code: startup.leader.no_change"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rechecks_timeout_independently_of_hard_gate(self) -> None:
+        records = self._verification_records()
+        index = next(index for index, record in enumerate(records) if not record.warmup)
+        records[index] = dataclasses.replace(records[index], timed_out=True, hard_gate_passed=True)
+        with self.assertRaisesRegex(ValueError, "timed out: startup.leader.no_change"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_missing_idle_metric(self) -> None:
+        records = self._verification_records()
+        index = next(index for index, record in enumerate(records) if record.workload_id == "startup.leader.no_change" and not record.warmup)
+        records[index] = dataclasses.replace(
+            records[index],
+            idle_pss_bytes=None,
+            hard_idle_memory_bytes=None,
+            hard_idle_memory_metric=None,
+        )
+        with self.assertRaisesRegex(ValueError, "missing idle memory metric: startup.leader.no_change"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_requires_the_complete_idle_window(self) -> None:
+        records = self._verification_records()
+        index = next(index for index, record in enumerate(records) if record.workload_id == "startup.leader.no_change" and not record.warmup)
+        records[index] = dataclasses.replace(records[index], idle_sample_ms=2_999)
+        with self.assertRaisesRegex(ValueError, "missing idle memory sample: startup.leader.no_change"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_fractional_idle_process_count(self) -> None:
+        records = self._verification_records()
+        index = next(
+            index
+            for index, record in enumerate(records)
+            if record.workload_id == "startup.leader.no_change" and not record.warmup
+        )
+        records[index] = dataclasses.replace(records[index], idle_process_count=1.5)
+        with self.assertRaisesRegex(ValueError, "missing idle memory sample: startup.leader.no_change"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_rejects_idle_metric_mismatch_and_overage(self) -> None:
+        records = self._verification_records()
+        index = next(index for index, record in enumerate(records) if record.workload_id == "startup.reader.warm" and not record.warmup)
+        records[index] = dataclasses.replace(records[index], hard_idle_memory_metric="windows_private_usage")
+        with self.assertRaisesRegex(ValueError, "missing idle memory metric: startup.reader.warm"):
+            perf_recovery.build_verification_report(records, platform="linux")
+        records[index] = dataclasses.replace(
+            records[index],
+            hard_idle_memory_metric="linux_pss",
+            idle_pss_bytes=367_001_601,
+            hard_idle_memory_bytes=367_001_601,
+        )
+        with self.assertRaisesRegex(ValueError, "idle memory budget exceeded: startup.reader.warm"):
+            perf_recovery.build_verification_report(records, platform="linux")
+
+    def test_verification_report_keeps_peak_and_idle_memory_independent(self) -> None:
+        records = self._verification_records()
+        index = next(index for index, record in enumerate(records) if record.workload_id == "startup.reader.warm" and not record.warmup)
+        records[index] = dataclasses.replace(records[index], peak_pss_bytes=629_145_599, hard_memory_bytes=629_145_599)
+        report = perf_recovery.build_verification_report(records, platform="linux")
+        item = report["workloads"]["startup.reader.warm"]
+        self.assertEqual(367_001_600, item["max_idle_memory_bytes"])
+        self.assertEqual(367_001_600, item["idle_memory_budget_bytes"])
+        self.assertEqual(629_145_600, item["max_hard_memory_bytes"])
+
+    def test_idle_sampler_uses_fixed_window_and_ignores_invalid_samples(self) -> None:
+        ticks = [0.0]
+        samples = iter([
+            {"peak_pss_bytes": 10, "private_usage_bytes": None, "process_count": 2},
+            {"peak_pss_bytes": None, "private_usage_bytes": None, "process_count": None},
+            {"peak_pss_bytes": 20, "private_usage_bytes": None, "process_count": 3},
+            {"peak_pss_bytes": 20, "private_usage_bytes": None, "process_count": 3},
+        ])
+        result = perf_recovery._sample_idle_memory(
+            123,
+            "linux",
+            duration_seconds=3,
+            interval_seconds=1,
+            sampler=lambda _pid, _platform: next(samples),
+            clock=lambda: ticks[0],
+            sleeper=lambda seconds: ticks.__setitem__(0, ticks[0] + seconds),
+        )
+        self.assertEqual(20, result["hard_idle_memory_bytes"])
+        self.assertEqual("linux_pss", result["hard_idle_memory_metric"])
+        self.assertEqual(3, result["idle_process_count"])
 
     def test_verification_report_accepts_complete_three_run_pass(self) -> None:
         workloads = self._verification_workloads()

@@ -10,6 +10,7 @@
       "timeout_ms": 60000,
       "hard_budget_ms": {"development": 2000, "windows": 5000},
       "hard_budget_memory_bytes": 629145600,
+      "hard_idle_memory_bytes": 367001600,
       "metadata": {"perf_row": "startup leader no-change convergence"}
     },
     {
@@ -21,6 +22,7 @@
       "timeout_ms": 60000,
       "hard_budget_ms": {"development": 5000, "windows": 10000},
       "hard_budget_memory_bytes": 629145600,
+      "hard_idle_memory_bytes": 367001600,
       "metadata": {"perf_row": "startup reader"}
     },
     {

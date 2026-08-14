@@ -40,6 +40,9 @@ MAX_PHASE_LINE_BYTES = 64 * 1024
 MAX_PHASE_RECORDS = 128
 PROCESS_TEARDOWN_TIMEOUT_SECONDS = 1.0
 STREAM_READ_CHUNK_BYTES = 64 * 1024
+MEMORY_SAMPLE_INTERVAL_SECONDS = 0.02
+IDLE_SAMPLE_WINDOW_SECONDS = 3.0
+WINDOWS_ERROR_NO_MORE_FILES = 18
 MANIFEST_SCHEMA_VERSION = 1
 MIN_MEASURED_ATTEMPTS = 3
 STARTUP_PHASES = (
@@ -70,6 +73,7 @@ KNOWN_WORKLOAD_IDS = (
     "tool.impact.bounded",
     "tool.trace.warm",
 )
+IDLE_MEMORY_WORKLOAD_IDS = frozenset({"startup.leader.no_change", "startup.reader.warm"})
 EXECUTION_KINDS = frozenset({"miller_cli", "mcp_bootstrap", "julie_store"})
 PRODUCER_STORE_COMMANDS = frozenset({"import", "resolve"})
 PRODUCER_IMPORT_FLAGS = frozenset(
@@ -209,6 +213,7 @@ class Workload:
     mutates_store: bool = False
     isolated_snapshot: bool = False
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    hard_idle_memory_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -245,6 +250,12 @@ class CommandResult:
     stdout: bytes = field(repr=False, compare=False)
     stderr: bytes = field(repr=False, compare=False)
     completed: bool = True
+    idle_pss_bytes: int | None = None
+    idle_private_usage_bytes: int | None = None
+    hard_idle_memory_bytes: int | None = None
+    hard_idle_memory_metric: str | None = None
+    idle_sample_ms: int | None = None
+    idle_process_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -280,6 +291,12 @@ class ReplayRecord:
     hard_memory_metric: str | None = None
     stderr_sha256: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    idle_pss_bytes: int | None = None
+    idle_private_usage_bytes: int | None = None
+    hard_idle_memory_bytes: int | None = None
+    hard_idle_memory_metric: str | None = None
+    idle_sample_ms: int | None = None
+    idle_process_count: int | None = None
 
     @property
     def output_digest(self) -> str:
@@ -612,16 +629,33 @@ def hard_gate_passed(
     exit_code: int | None,
     timed_out: bool,
     hard_memory_bytes: int | None,
+    hard_memory_metric: str | None = None,
+    hard_idle_memory_bytes: int | None = None,
+    hard_idle_memory_metric: str | None = None,
     platform_name: str,
 ) -> bool:
     budget = int(workload.hard_budget_ms[_budget_key(platform_name)])
     if timed_out or exit_code != 0 or wall_ms > budget:
         return False
     if workload.hard_budget_memory_bytes is not None:
-        if platform_name.startswith("win") and hard_memory_bytes is None:
+        expected_metric = (
+            "windows_private_usage"
+            if platform_name.startswith("win")
+            else "linux_pss"
+            if platform_name.startswith("linux")
+            else None
+        )
+        if expected_metric is not None:
+            if hard_memory_bytes is None or hard_memory_metric != expected_metric:
+                return False
+        if hard_memory_bytes is not None and hard_memory_bytes > workload.hard_budget_memory_bytes:
             return False
-        if hard_memory_bytes is not None:
-            return hard_memory_bytes <= workload.hard_budget_memory_bytes
+    if workload.hard_idle_memory_bytes is not None:
+        expected_metric = "windows_private_usage" if platform_name.startswith("win") else "linux_pss" if platform_name.startswith("linux") else None
+        if hard_idle_memory_bytes is None or expected_metric is None or hard_idle_memory_metric != expected_metric:
+            return False
+        if hard_idle_memory_bytes > workload.hard_idle_memory_bytes:
+            return False
     return True
 
 
@@ -653,7 +687,57 @@ def normalise_memory_metrics(platform_name: str, raw: Mapping[str, int | None]) 
     }
 
 
-def _read_linux_memory(pid: int) -> dict[str, int | None]:
+def _empty_linux_memory() -> dict[str, int | None]:
+    return {
+        "peak_rss_bytes": None,
+        "peak_pss_bytes": None,
+        "read_bytes": None,
+        "write_bytes": None,
+        "read_syscalls": None,
+        "write_syscalls": None,
+        "process_count": None,
+    }
+
+
+def _linux_process_children(pid: int) -> tuple[int, ...] | None:
+    try:
+        child_paths = tuple(Path(f"/proc/{pid}/task").glob("*/children"))
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+    if not child_paths:
+        return None
+    children: list[int] = []
+    for child_path in child_paths:
+        try:
+            text = child_path.read_text(encoding="ascii", errors="strict")
+        except (FileNotFoundError, PermissionError, OSError, UnicodeError):
+            return None
+        for token in text.split():
+            try:
+                child = int(token)
+            except ValueError:
+                continue
+            if child > 0:
+                children.append(child)
+    return tuple(children)
+
+
+def _linux_process_tree(pid: int) -> tuple[int, ...] | None:
+    pending = [pid]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        children = _linux_process_children(current)
+        if children is None:
+            return None
+        pending.extend(children)
+    return tuple(sorted(seen))
+
+
+def _read_linux_memory_one(pid: int) -> dict[str, int | None]:
     values: dict[str, int | None] = {
         "peak_rss_bytes": None,
         "peak_pss_bytes": None,
@@ -661,16 +745,24 @@ def _read_linux_memory(pid: int) -> dict[str, int | None]:
         "write_bytes": None,
         "read_syscalls": None,
         "write_syscalls": None,
+        "process_count": 1,
     }
     try:
         status = Path(f"/proc/{pid}/status").read_text(encoding="utf-8", errors="replace")
         match = re.search(r"^VmRSS:\s+(\d+)\s+kB$", status, re.MULTILINE)
         if match:
             values["peak_rss_bytes"] = int(match.group(1)) * 1024
+    except (FileNotFoundError, PermissionError, OSError, ValueError):
+        values["process_count"] = None
+        return values
+    try:
         rollup = Path(f"/proc/{pid}/smaps_rollup").read_text(encoding="utf-8", errors="replace")
         match = re.search(r"^Pss:\s+(\d+)\s+kB$", rollup, re.MULTILINE)
         if match:
             values["peak_pss_bytes"] = int(match.group(1)) * 1024
+    except (FileNotFoundError, PermissionError, OSError, ValueError):
+        pass
+    try:
         io_text = Path(f"/proc/{pid}/io").read_text(encoding="utf-8", errors="replace")
         io_keys = {
             "read_bytes": "read_bytes",
@@ -685,6 +777,40 @@ def _read_linux_memory(pid: int) -> dict[str, int | None]:
     except (FileNotFoundError, PermissionError, OSError, ValueError):
         pass
     return values
+
+
+def _sum_process_tree_samples(
+    process_ids: Sequence[int],
+    reader: Any,
+    empty: Any,
+) -> dict[str, int | None]:
+    samples: list[Mapping[str, int | None]] = []
+    for process_id in process_ids:
+        sample = reader(process_id)
+        if not isinstance(sample, Mapping) or sample.get("process_count", 1) is None:
+            return empty()
+        samples.append(sample)
+    result = empty()
+    for key in (
+        "peak_rss_bytes",
+        "peak_pss_bytes",
+        "private_usage_bytes",
+        "read_bytes",
+        "write_bytes",
+        "read_syscalls",
+        "write_syscalls",
+    ):
+        values = [sample.get(key) for sample in samples]
+        result[key] = sum(int(value) for value in values) if all(value is not None for value in values) else None
+    result["process_count"] = len(samples)
+    return result
+
+
+def _read_linux_memory(pid: int) -> dict[str, int | None]:
+    process_ids = _linux_process_tree(pid)
+    if not process_ids:
+        return _empty_linux_memory()
+    return _sum_process_tree_samples(process_ids, _read_linux_memory_one, _empty_linux_memory)
 
 
 class _PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):  # pragma: no cover - Windows-only shape.
@@ -703,17 +829,90 @@ class _PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):  # pragma: no cover - Windo
     ]
 
 
-def _read_windows_memory(pid: int) -> dict[str, int | None]:  # pragma: no cover - Windows-only API.
-    values: dict[str, int | None] = {"peak_rss_bytes": None, "private_usage_bytes": None}
+class _PROCESSENTRY32W(ctypes.Structure):  # pragma: no cover - Windows-only shape.
+    _fields_ = [
+        ("dwSize", ctypes.c_uint32),
+        ("cntUsage", ctypes.c_uint32),
+        ("th32ProcessID", ctypes.c_uint32),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", ctypes.c_uint32),
+        ("cntThreads", ctypes.c_uint32),
+        ("th32ParentProcessID", ctypes.c_uint32),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", ctypes.c_uint32),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+
+def _windows_descendant_pids(root_pid: int, parent_map: Mapping[int, int]) -> tuple[int, ...]:
+    children: dict[int, list[int]] = {}
+    for child, parent in parent_map.items():
+        children.setdefault(int(parent), []).append(int(child))
+    pending = [root_pid]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        pending.extend(children.get(current, ()))
+    return tuple(sorted(seen))
+
+
+def _windows_process_tree(pid: int, kernel32: Any | None = None) -> tuple[int, ...] | None:  # pragma: no cover - Windows-only API.
+    try:
+        kernel32 = kernel32 or ctypes.windll.kernel32
+        kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+        kernel32.Process32FirstW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_PROCESSENTRY32W)]
+        kernel32.Process32FirstW.restype = ctypes.c_bool
+        kernel32.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_PROCESSENTRY32W)]
+        kernel32.Process32NextW.restype = ctypes.c_bool
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+        get_last_error = getattr(kernel32, "GetLastError", None)
+        if get_last_error is not None:
+            get_last_error.argtypes = []
+            get_last_error.restype = ctypes.c_uint32
+        snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+        if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+            return None
+        try:
+            entry = _PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(entry)
+            parent_map: dict[int, int] = {}
+            first = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+            if not first:
+                return None
+            while True:
+                parent_map[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+                if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                    if get_last_error is None or int(get_last_error()) != WINDOWS_ERROR_NO_MORE_FILES:
+                        return None
+                    break
+            if pid not in parent_map:
+                return None
+            return _windows_descendant_pids(pid, parent_map)
+        finally:
+            kernel32.CloseHandle(snapshot)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _empty_windows_memory() -> dict[str, int | None]:
+    return {"peak_rss_bytes": None, "private_usage_bytes": None, "process_count": None}
+
+
+def _read_windows_memory_one(pid: int) -> dict[str, int | None]:  # pragma: no cover - Windows-only API.
+    values: dict[str, int | None] = {"peak_rss_bytes": None, "private_usage_bytes": None, "process_count": 1}
     try:
         process_query_information = 0x0400
-        process_vm_read = 0x0010
         kernel32 = ctypes.windll.kernel32
         kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
         kernel32.OpenProcess.restype = ctypes.c_void_p
         kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
         kernel32.CloseHandle.restype = ctypes.c_int
-        handle = kernel32.OpenProcess(process_query_information | process_vm_read, False, pid)
+        handle = kernel32.OpenProcess(process_query_information, False, pid)
         if not handle:
             return values
         try:
@@ -723,13 +922,25 @@ def _read_windows_memory(pid: int) -> dict[str, int | None]:  # pragma: no cover
             get_process_memory_info.argtypes = [ctypes.c_void_p, ctypes.POINTER(_PROCESS_MEMORY_COUNTERS_EX), ctypes.c_ulong]
             get_process_memory_info.restype = ctypes.c_bool
             if get_process_memory_info(handle, ctypes.byref(counters), counters.cb):
-                values["peak_rss_bytes"] = int(counters.PeakWorkingSetSize)
+                values["peak_rss_bytes"] = int(counters.WorkingSetSize)
                 values["private_usage_bytes"] = int(counters.PrivateUsage)
         finally:
             kernel32.CloseHandle(handle)
     except (AttributeError, OSError, TypeError, ValueError):
-        pass
+        values["process_count"] = None
     return values
+
+
+def _read_windows_memory(pid: int) -> dict[str, int | None]:  # pragma: no cover - Windows-only API.
+    process_ids = _windows_process_tree(pid)
+    if process_ids:
+        return _sum_process_tree_samples(process_ids, _read_windows_memory_one, _empty_windows_memory)
+    root = _read_windows_memory_one(pid)
+    return {
+        "peak_rss_bytes": root.get("peak_rss_bytes"),
+        "private_usage_bytes": None,
+        "process_count": None,
+    }
 
 
 def _sample_memory(pid: int, platform_name: str) -> Mapping[str, int | None]:
@@ -868,12 +1079,12 @@ def _monitor_process(process: subprocess.Popen[bytes], platform_name: str, stop:
     while not stop.is_set():
         sample = _sample_memory(process.pid, platform_name)
         for key, value in sample.items():
-            if value is not None:
+            if key != "process_count" and isinstance(value, int) and not isinstance(value, bool):
                 peaks[key] = max(peaks.get(key, 0), int(value))
         stop.wait(0.02)
     sample = _sample_memory(process.pid, platform_name)
     for key, value in sample.items():
-        if value is not None:
+        if key != "process_count" and isinstance(value, int) and not isinstance(value, bool):
             peaks[key] = max(peaks.get(key, 0), int(value))
 
 
@@ -1005,7 +1216,7 @@ def _run_process(request: ReplayRequest, argv: list[str], timeout_ms: int, envir
     peaks: dict[str, int] = {}
     initial_sample = _sample_memory(process.pid, platform_name)
     for key, value in initial_sample.items():
-        if value is not None:
+        if key != "process_count" and isinstance(value, int) and not isinstance(value, bool):
             peaks[key] = int(value)
     monitor = threading.Thread(
         target=_monitor_process,
@@ -1400,6 +1611,9 @@ def _record_from_result(
         exit_code=result.exit_code,
         timed_out=result.timed_out,
         hard_memory_bytes=result.hard_memory_bytes,
+        hard_memory_metric=result.hard_memory_metric,
+        hard_idle_memory_bytes=result.hard_idle_memory_bytes,
+        hard_idle_memory_metric=result.hard_idle_memory_metric,
         platform_name=platform_name,
     ) and result.completed
     if producer_failure is not None:
@@ -1435,6 +1649,12 @@ def _record_from_result(
         private_usage_bytes=result.private_usage_bytes,
         hard_memory_bytes=result.hard_memory_bytes,
         hard_memory_metric=result.hard_memory_metric,
+        idle_pss_bytes=result.idle_pss_bytes,
+        idle_private_usage_bytes=result.idle_private_usage_bytes,
+        hard_idle_memory_bytes=result.hard_idle_memory_bytes,
+        hard_idle_memory_metric=result.hard_idle_memory_metric,
+        idle_sample_ms=result.idle_sample_ms,
+        idle_process_count=result.idle_process_count,
         stderr_sha256=result.stderr_sha256,
         metadata=metadata,
     )
@@ -1726,6 +1946,15 @@ def _workload_from_mapping(item: Mapping[str, Any]) -> Workload:
     memory_budget = item.get("hard_budget_memory_bytes")
     if memory_budget is not None and (not isinstance(memory_budget, int) or memory_budget <= 0):
         raise ValueError(f"{workload_id} hard_budget_memory_bytes must be positive")
+    idle_memory_budget = item.get("hard_idle_memory_bytes")
+    if idle_memory_budget is not None and (
+        isinstance(idle_memory_budget, bool)
+        or not isinstance(idle_memory_budget, int)
+        or idle_memory_budget <= 0
+    ):
+        raise ValueError(f"{workload_id} hard_idle_memory_bytes must be positive")
+    if idle_memory_budget is not None and workload_id not in IDLE_MEMORY_WORKLOAD_IDS:
+        raise ValueError(f"{workload_id} hard_idle_memory_bytes is only valid for startup workloads")
     metadata = item.get("metadata", {})
     if not isinstance(metadata, Mapping):
         raise ValueError(f"{workload_id} metadata must be an object")
@@ -1773,6 +2002,7 @@ def _workload_from_mapping(item: Mapping[str, Any]) -> Workload:
         lexical_control=bool(item.get("lexical_control", not bool(item.get("semantic", False)))),
         target_discovery=target_discovery,
         hard_budget_memory_bytes=memory_budget,
+        hard_idle_memory_bytes=idle_memory_budget,
         context_batch=context_batch,
         mutates_store=mutates_store,
         isolated_snapshot=isolated_snapshot,
@@ -2064,6 +2294,10 @@ def _validate_verification_records(
             if invariant_failures:
                 label = "parity" if _record_value(record, "parity") is not None else "semantic"
                 raise ValueError(f"{label} invariant failed: {workload_id}")
+            if _record_value(record, "exit_code") != 0:
+                raise ValueError(f"exit code: {workload_id}")
+            if _record_value(record, "timed_out") is not False:
+                raise ValueError(f"timed out: {workload_id}")
             if _record_value(record, "hard_gate_passed") is not True:
                 raise ValueError(f"hard gate failed: {workload_id}")
             wall_ms = _numeric_metric(record, "wall_ms", workload_id)
@@ -2071,38 +2305,67 @@ def _validate_verification_records(
             if wall_ms > budget_ms:
                 raise ValueError(f"budget exceeded: {workload_id}")
             memory_budget = workload.hard_budget_memory_bytes
-            if memory_budget is None:
+            if memory_budget is not None:
+                if selected_platform == "windows":
+                    private_usage = _record_value(record, "private_usage_bytes")
+                    if (
+                        isinstance(private_usage, bool)
+                        or not isinstance(private_usage, (int, float))
+                        or private_usage < 0
+                    ):
+                        raise ValueError(f"missing Windows PrivateUsage: {workload_id}")
+                    metric_name = "windows_private_usage"
+                    hard_memory = _record_value(record, "hard_memory_bytes")
+                    measured_memory = private_usage
+                elif selected_platform == "linux":
+                    pss = _record_value(record, "peak_pss_bytes")
+                    if isinstance(pss, bool) or not isinstance(pss, (int, float)) or pss < 0:
+                        raise ValueError(f"missing Linux PSS: {workload_id}")
+                    metric_name = "linux_pss"
+                    hard_memory = _record_value(record, "hard_memory_bytes")
+                    measured_memory = pss
+                else:
+                    metric_name = None
+                    hard_memory = _record_value(record, "hard_memory_bytes")
+                    measured_memory = hard_memory
+                if metric_name is not None and _record_value(record, "hard_memory_metric") != metric_name:
+                    raise ValueError(f"missing hard memory metric: {workload_id}")
+                if isinstance(hard_memory, bool) or not isinstance(hard_memory, (int, float)):
+                    raise ValueError(f"missing hard memory metric: {workload_id}")
+                if hard_memory != measured_memory:
+                    raise ValueError(f"hard memory metric mismatch: {workload_id}")
+                if measured_memory > memory_budget:
+                    raise ValueError(f"memory budget exceeded: {workload_id}")
+            idle_budget = workload.hard_idle_memory_bytes
+            if idle_budget is None:
                 continue
             if selected_platform == "windows":
-                private_usage = _record_value(record, "private_usage_bytes")
-                if (
-                    isinstance(private_usage, bool)
-                    or not isinstance(private_usage, (int, float))
-                    or private_usage < 0
-                ):
-                    raise ValueError(f"missing Windows PrivateUsage: {workload_id}")
-                metric_name = "windows_private_usage"
-                hard_memory = _record_value(record, "hard_memory_bytes")
-                measured_memory = private_usage
-            elif selected_platform == "linux":
-                pss = _record_value(record, "peak_pss_bytes")
-                if isinstance(pss, bool) or not isinstance(pss, (int, float)) or pss < 0:
-                    raise ValueError(f"missing Linux PSS: {workload_id}")
-                metric_name = "linux_pss"
-                hard_memory = _record_value(record, "hard_memory_bytes")
-                measured_memory = pss
+                idle_metric_name = "windows_private_usage"
+                idle_value = _record_value(record, "idle_private_usage_bytes")
             else:
-                metric_name = None
-                hard_memory = _record_value(record, "hard_memory_bytes")
-                measured_memory = hard_memory
-            if metric_name is not None and _record_value(record, "hard_memory_metric") != metric_name:
-                raise ValueError(f"missing hard memory metric: {workload_id}")
-            if isinstance(hard_memory, bool) or not isinstance(hard_memory, (int, float)):
-                raise ValueError(f"missing hard memory metric: {workload_id}")
-            if hard_memory != measured_memory:
-                raise ValueError(f"hard memory metric mismatch: {workload_id}")
-            if measured_memory > memory_budget:
-                raise ValueError(f"memory budget exceeded: {workload_id}")
+                idle_metric_name = "linux_pss"
+                idle_value = _record_value(record, "idle_pss_bytes")
+            if isinstance(idle_value, bool) or not isinstance(idle_value, (int, float)) or idle_value < 0:
+                raise ValueError(f"missing idle memory metric: {workload_id}")
+            idle_hard_memory = _record_value(record, "hard_idle_memory_bytes")
+            if _record_value(record, "hard_idle_memory_metric") != idle_metric_name:
+                raise ValueError(f"missing idle memory metric: {workload_id}")
+            if isinstance(idle_hard_memory, bool) or not isinstance(idle_hard_memory, (int, float)):
+                raise ValueError(f"missing idle memory metric: {workload_id}")
+            if idle_hard_memory != idle_value:
+                raise ValueError(f"idle memory metric mismatch: {workload_id}")
+            if idle_value > idle_budget:
+                raise ValueError(f"idle memory budget exceeded: {workload_id}")
+            idle_sample_ms = _record_value(record, "idle_sample_ms")
+            if (
+                isinstance(idle_sample_ms, bool)
+                or not isinstance(idle_sample_ms, (int, float))
+                or idle_sample_ms < IDLE_SAMPLE_WINDOW_SECONDS * 1000
+            ):
+                raise ValueError(f"missing idle memory sample: {workload_id}")
+            idle_process_count = _record_value(record, "idle_process_count")
+            if isinstance(idle_process_count, bool) or not isinstance(idle_process_count, int) or idle_process_count <= 0:
+                raise ValueError(f"missing idle memory sample: {workload_id}")
         median_wall_ms = _median(wall_values)
         medians[workload_id] = median_wall_ms
         if median_wall_ms > budget_ms:
@@ -2135,6 +2398,13 @@ def build_verification_report(
             if isinstance(_record_value(record, "hard_memory_bytes"), (int, float))
             and not isinstance(_record_value(record, "hard_memory_bytes"), bool)
         ]
+        idle_memory_values = [
+            _record_value(record, "hard_idle_memory_bytes")
+            for record in measured
+            if isinstance(_record_value(record, "hard_idle_memory_bytes"), (int, float))
+            and not isinstance(_record_value(record, "hard_idle_memory_bytes"), bool)
+        ]
+        idle_metric = _idle_metric_name(selected_platform)
         report_workloads[workload_id] = {
             "measured_runs": len(measured),
             "median_wall_ms": medians[workload_id],
@@ -2142,6 +2412,11 @@ def build_verification_report(
             "timing_budget_ms": int(workload.hard_budget_ms[budget_key]),
             "hard_memory_budget_bytes": workload.hard_budget_memory_bytes,
             "max_hard_memory_bytes": max(hard_memory_values) if hard_memory_values else None,
+            "hard_idle_memory_budget_bytes": workload.hard_idle_memory_bytes,
+            "max_hard_idle_memory_bytes": max(idle_memory_values) if idle_memory_values else None,
+            "idle_memory_budget_bytes": workload.hard_idle_memory_bytes,
+            "max_idle_memory_bytes": max(idle_memory_values) if idle_memory_values else None,
+            "idle_memory_metric": idle_metric if workload.hard_idle_memory_bytes is not None else None,
         }
     return {
         "passed": True,
@@ -2275,6 +2550,248 @@ def _append_bounded(captured: list[str], line: str, *, max_bytes: int = MAX_CAPT
     while captured and total > max_bytes:
         removed = captured.pop(0)
         total -= len(removed.encode("utf-8", errors="replace"))
+
+
+def _should_sample_idle_memory(workload: Workload, *, warmup: bool) -> bool:
+    return not warmup and workload.hard_idle_memory_bytes is not None
+
+
+def _sample_session_idle_memory(
+    session: Any,
+    workload: Workload,
+    *,
+    warmup: bool,
+    timed_out: bool,
+    completed: bool,
+) -> tuple[Mapping[str, int | None] | None, bool]:
+    if timed_out or warmup or not completed or not _should_sample_idle_memory(workload, warmup=warmup):
+        return None, False
+    process = getattr(session, "process", None)
+    poll = getattr(process, "poll", None)
+    if not callable(poll):
+        return None, False
+    try:
+        if poll() is not None:
+            return None, False
+        idle = session.sample_idle_window()
+        alive = poll() is None
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None, False
+    return (idle if alive and isinstance(idle, Mapping) else None), alive
+
+
+def _idle_metric_name(platform_name: str) -> str | None:
+    if platform_name.startswith("linux"):
+        return "linux_pss"
+    if platform_name.startswith("win"):
+        return "windows_private_usage"
+    return None
+
+
+def _sample_idle_memory(
+    pid: int,
+    platform_name: str,
+    *,
+    duration_seconds: float = IDLE_SAMPLE_WINDOW_SECONDS,
+    interval_seconds: float = MEMORY_SAMPLE_INTERVAL_SECONDS,
+    sampler: Any | None = None,
+    clock: Any | None = None,
+    sleeper: Any | None = None,
+) -> dict[str, int | None]:
+    if duration_seconds < 0 or interval_seconds <= 0:
+        raise ValueError("idle memory sampling duration/interval must be non-negative/positive")
+    sample = sampler or _sample_memory
+    now = clock or time.monotonic
+    wait = sleeper or time.sleep
+    started = now()
+    deadline = started + duration_seconds
+    max_pss: int | None = None
+    max_private: int | None = None
+    max_process_count: int | None = None
+    while True:
+        current = sample(pid, platform_name)
+        process_count = current.get("process_count")
+        metric = _idle_metric_name(platform_name)
+        value = current.get("peak_pss_bytes") if metric == "linux_pss" else current.get("private_usage_bytes")
+        if (
+            isinstance(process_count, int)
+            and not isinstance(process_count, bool)
+            and process_count > 0
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= 0
+        ):
+            if metric == "linux_pss":
+                max_pss = value if max_pss is None else max(max_pss, value)
+            elif metric == "windows_private_usage":
+                max_private = value if max_private is None else max(max_private, value)
+            max_process_count = process_count if max_process_count is None else max(max_process_count, process_count)
+        elapsed = now() - started
+        if elapsed >= duration_seconds:
+            break
+        wait(min(interval_seconds, max(0.0, deadline - now())))
+    hard_value = max_pss if platform_name.startswith("linux") else max_private if platform_name.startswith("win") else None
+    return {
+        "idle_pss_bytes": max_pss,
+        "idle_private_usage_bytes": max_private,
+        "hard_idle_memory_bytes": hard_value,
+        "hard_idle_memory_metric": _idle_metric_name(platform_name) if hard_value is not None else None,
+        "idle_sample_ms": max(0, round((now() - started) * 1000)),
+        "idle_process_count": max_process_count,
+    }
+
+
+def _command_result_from_idle_evidence(
+    *,
+    wall_ms: int,
+    evidence: Mapping[str, Any],
+    idle: Mapping[str, int | None],
+    base: CommandResult | None = None,
+) -> CommandResult:
+    if base is None:
+        base = CommandResult(
+            exit_code=0,
+            timed_out=False,
+            wall_ms=wall_ms,
+            cpu_ms=None,
+            output_sha256=hashlib.sha256(b"").hexdigest(),
+            stderr_sha256=hashlib.sha256(b"").hexdigest(),
+            peak_rss_bytes=None,
+            peak_pss_bytes=None,
+            private_usage_bytes=None,
+            hard_memory_bytes=None,
+            hard_memory_metric=None,
+            io={},
+            stdout=b"",
+            stderr=b"",
+        )
+    return dataclasses.replace(
+        base,
+        wall_ms=wall_ms,
+        idle_pss_bytes=idle.get("idle_pss_bytes"),
+        idle_private_usage_bytes=idle.get("idle_private_usage_bytes"),
+        hard_idle_memory_bytes=idle.get("hard_idle_memory_bytes"),
+        hard_idle_memory_metric=idle.get("hard_idle_memory_metric"),
+        idle_sample_ms=idle.get("idle_sample_ms"),
+        idle_process_count=idle.get("idle_process_count"),
+    )
+
+
+def _merge_idle_evidence(record: ReplayRecord, idle: Mapping[str, int | None]) -> ReplayRecord:
+    def maximum(left: int | None, right: Any) -> int | None:
+        if not isinstance(right, int) or isinstance(right, bool) or right < 0:
+            return left
+        return right if left is None else max(left, right)
+
+    hard_value = maximum(record.hard_idle_memory_bytes, idle.get("hard_idle_memory_bytes"))
+    metric = record.hard_idle_memory_metric or idle.get("hard_idle_memory_metric")
+    return dataclasses.replace(
+        record,
+        idle_pss_bytes=maximum(record.idle_pss_bytes, idle.get("idle_pss_bytes")),
+        idle_private_usage_bytes=maximum(record.idle_private_usage_bytes, idle.get("idle_private_usage_bytes")),
+        hard_idle_memory_bytes=hard_value,
+        hard_idle_memory_metric=metric if hard_value is not None else None,
+        idle_sample_ms=maximum(record.idle_sample_ms, idle.get("idle_sample_ms")),
+        idle_process_count=maximum(record.idle_process_count, idle.get("idle_process_count")),
+    )
+
+
+def _idle_evidence_is_valid(idle: Mapping[str, Any], platform_name: str) -> bool:
+    metric_name = _idle_metric_name(platform_name)
+    value_key = "idle_pss_bytes" if metric_name == "linux_pss" else "idle_private_usage_bytes"
+    value = idle.get(value_key)
+    hard_value = idle.get("hard_idle_memory_bytes")
+    sample_ms = idle.get("idle_sample_ms")
+    process_count = idle.get("idle_process_count")
+    return (
+        metric_name is not None
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= 0
+        and hard_value == value
+        and idle.get("hard_idle_memory_metric") == metric_name
+        and isinstance(sample_ms, (int, float))
+        and not isinstance(sample_ms, bool)
+        and sample_ms >= IDLE_SAMPLE_WINDOW_SECONDS * 1000
+        and isinstance(process_count, int)
+        and not isinstance(process_count, bool)
+        and process_count > 0
+    )
+
+
+def _session_memory_metrics(session: Any) -> Mapping[str, Any]:
+    reader = getattr(session, "memory_metrics", None)
+    if not callable(reader):
+        return {}
+    metrics = reader()
+    return metrics if isinstance(metrics, Mapping) else {}
+
+
+def _merge_retained_leader_evidence(
+    record: ReplayRecord,
+    workload: Workload,
+    *,
+    metrics: Mapping[str, Any],
+    idle: Mapping[str, Any] | None,
+    process_alive: bool,
+    close_succeeded: bool,
+    exit_code: int | None = None,
+) -> ReplayRecord:
+    def maximum(left: int | None, right: Any) -> int | None:
+        if not isinstance(right, int) or isinstance(right, bool) or right < 0:
+            return left
+        return right if left is None else max(left, right)
+
+    peak_rss = maximum(record.peak_rss_bytes, metrics.get("peak_rss_bytes"))
+    peak_pss = maximum(record.peak_pss_bytes, metrics.get("peak_pss_bytes"))
+    private_usage = maximum(record.private_usage_bytes, metrics.get("private_usage_bytes"))
+    if record.platform.startswith("linux"):
+        hard_memory = peak_pss
+        hard_metric = "linux_pss" if hard_memory is not None else None
+    elif record.platform.startswith("win"):
+        hard_memory = private_usage
+        hard_metric = "windows_private_usage" if hard_memory is not None else None
+    else:
+        hard_memory = None
+        hard_metric = None
+    merged = dataclasses.replace(
+        record,
+        peak_rss_bytes=peak_rss,
+        peak_pss_bytes=peak_pss,
+        private_usage_bytes=private_usage,
+        hard_memory_bytes=hard_memory,
+        hard_memory_metric=hard_metric,
+        exit_code=exit_code if isinstance(exit_code, int) and not isinstance(exit_code, bool) else record.exit_code,
+    )
+    idle_required = workload.hard_idle_memory_bytes is not None
+    valid_idle = not idle_required or idle is not None and _idle_evidence_is_valid(idle, record.platform)
+    if idle is not None and valid_idle:
+        merged = _merge_idle_evidence(merged, idle)
+    elif idle_required:
+        merged = dataclasses.replace(
+            merged,
+            idle_pss_bytes=None,
+            idle_private_usage_bytes=None,
+            hard_idle_memory_bytes=None,
+            hard_idle_memory_metric=None,
+            idle_sample_ms=None,
+            idle_process_count=None,
+        )
+    gate_passed = hard_gate_passed(
+        workload,
+        wall_ms=merged.wall_ms,
+        exit_code=merged.exit_code,
+        timed_out=merged.timed_out,
+        hard_memory_bytes=merged.hard_memory_bytes,
+        hard_memory_metric=merged.hard_memory_metric,
+        hard_idle_memory_bytes=merged.hard_idle_memory_bytes,
+        hard_idle_memory_metric=merged.hard_idle_memory_metric,
+        platform_name=merged.platform,
+    )
+    return dataclasses.replace(
+        merged,
+        hard_gate_passed=record.hard_gate_passed and gate_passed and valid_idle and process_alive and close_succeeded,
+    )
 
 
 class _McpSession:
@@ -2415,6 +2932,28 @@ class _McpSession:
     def startup_phase_records(self) -> Mapping[str, Mapping[str, Any]]:
         return dict(getattr(self, "_startup_phases", {}))
 
+    def sample_idle_window(
+        self,
+        *,
+        duration_seconds: float = IDLE_SAMPLE_WINDOW_SECONDS,
+        interval_seconds: float = MEMORY_SAMPLE_INTERVAL_SECONDS,
+        sampler: Any | None = None,
+        clock: Any | None = None,
+        sleeper: Any | None = None,
+    ) -> Mapping[str, int | None]:
+        return _sample_idle_memory(
+            self.process.pid,
+            _platform_name(),
+            duration_seconds=duration_seconds,
+            interval_seconds=interval_seconds,
+            sampler=sampler,
+            clock=clock,
+            sleeper=sleeper,
+        )
+
+    def memory_metrics(self) -> Mapping[str, int | None]:
+        return normalise_memory_metrics(_platform_name(), self._peaks)
+
     def wait_for_phase(self, phase: str, deadline: float) -> Mapping[str, Any] | None:
         while time.monotonic() < deadline:
             if phase == "startup_total":
@@ -2472,6 +3011,7 @@ class _McpSession:
         timed_out: bool,
         *,
         close: bool = True,
+        idle: Mapping[str, int | None] | None = None,
     ) -> CommandResult:
         close_succeeded = True
         if close:
@@ -2508,7 +3048,7 @@ class _McpSession:
         else:
             completed = completed and (exit_code is None or exit_code == 0)
         ended = float(evidence.get("ready_at") or evidence.get("observed_at") or time.perf_counter())
-        return CommandResult(
+        result = CommandResult(
             exit_code=0 if not close and completed and exit_code is None else exit_code,
             timed_out=timed_out,
             wall_ms=max(0, round((ended - started) * 1000)),
@@ -2524,6 +3064,12 @@ class _McpSession:
             stdout=stdout,
             stderr=stderr,
             completed=completed,
+        )
+        return _command_result_from_idle_evidence(
+            wall_ms=result.wall_ms,
+            evidence=evidence,
+            idle=idle or {},
+            base=result,
         )
 
 
@@ -2610,6 +3156,7 @@ def _run_mcp_bootstrap(
     *,
     timeout_ms: int,
     environment: Mapping[str, str],
+    warmup: bool = False,
 ) -> CommandResult:
     session, started, evidence, timed_out = _bootstrap_session(
         request,
@@ -2617,7 +3164,14 @@ def _run_mcp_bootstrap(
         environment=environment,
         require_phase=workload.workload_id == "startup.leader.no_change",
     )
-    return session.result(started, evidence, timed_out)
+    idle, _ = _sample_session_idle_memory(
+        session,
+        workload,
+        warmup=warmup,
+        timed_out=timed_out,
+        completed=bool(evidence.get("completed")),
+    )
+    return session.result(started, evidence, timed_out, idle=idle)
 
 
 def _run_mcp_workload(
@@ -2644,14 +3198,30 @@ def _run_mcp_workload(
             require_phase=workload.workload_id == "startup.leader.no_change",
         )
         final_keep_alive_attempt = keep_alive and index == total_attempts - 1
+        warmup = index < workload.warmups
+        idle = None
         if final_keep_alive_attempt:
-            result = session.result(started, evidence, timed_out, close=False)
+            idle, _ = _sample_session_idle_memory(
+                session,
+                workload,
+                warmup=warmup,
+                timed_out=timed_out,
+                completed=bool(evidence.get("completed")),
+            )
+            result = session.result(started, evidence, timed_out, close=False, idle=idle)
             retain = not timed_out and result.completed and session.process.poll() is None
             if not retain:
-                result = session.result(started, evidence, timed_out, close=True)
+                result = session.result(started, evidence, timed_out, close=True, idle=idle)
         else:
             retain = False
-            result = session.result(started, evidence, timed_out, close=True)
+            idle, _ = _sample_session_idle_memory(
+                session,
+                workload,
+                warmup=warmup,
+                timed_out=timed_out,
+                completed=bool(evidence.get("completed")),
+            )
+            result = session.result(started, evidence, timed_out, close=True, idle=idle)
         if retain:
             retained = session
         records.append(
@@ -2660,7 +3230,7 @@ def _run_mcp_workload(
                 workload,
                 result,
                 attempt=index + 1,
-                warmup=index < workload.warmups,
+                warmup=warmup,
                 timeout_ms=effective_timeout,
                 environment=environment,
                 commit=commit,
@@ -3001,6 +3571,7 @@ def run_workload(
                 workload,
                 timeout_ms=effective_timeout,
                 environment=environment,
+                warmup=warmup,
             )
         elif workload.execution_kind == "julie_store":
             producer_command = _producer_argv(request, actual_command, target)
@@ -3082,6 +3653,7 @@ def run_replay(request: ReplayRequest, workloads: Mapping[str, Workload]) -> lis
             raise ValueError(f"{reader_id} must be ordered after {leader_id}")
     records: list[ReplayRecord] = []
     leader_session: _McpSession | None = None
+    leader_record_index: int | None = None
     try:
         for workload_id, workload in workloads.items():
             if workload_id != workload.workload_id:
@@ -3093,6 +3665,7 @@ def run_replay(request: ReplayRequest, workloads: Mapping[str, Workload]) -> lis
             ):
                 leader_records, leader_session = _run_mcp_workload(request, workload, keep_alive=True)
                 records.extend(leader_records)
+                leader_record_index = len(records) - 1
             elif workload_id == "startup.reader.warm":
                 if leader_session is None:
                     raise RuntimeError(f"{workload_id} requires an established leader session")
@@ -3100,7 +3673,30 @@ def run_replay(request: ReplayRequest, workloads: Mapping[str, Workload]) -> lis
                     raise RuntimeError(f"{workload_id} requires a leader session that is still alive")
                 reader_records, _ = _run_mcp_workload(request, workload, keep_alive=False)
                 records.extend(reader_records)
-                leader_session.close()
+                if leader_record_index is not None and leader_session is not None:
+                    leader_workload = workloads[leader_id]
+                    if _should_sample_idle_memory(leader_workload, warmup=False):
+                        post_reader_idle, process_alive = _sample_session_idle_memory(
+                            leader_session,
+                            leader_workload,
+                            warmup=False,
+                            timed_out=False,
+                            completed=True,
+                        )
+                    else:
+                        post_reader_idle = None
+                        process_alive = leader_session.process.poll() is None
+                    close_succeeded = leader_session.close()
+                    leader_exit_code = getattr(leader_session.process, "returncode", None)
+                    records[leader_record_index] = _merge_retained_leader_evidence(
+                        records[leader_record_index],
+                        leader_workload,
+                        metrics=_session_memory_metrics(leader_session),
+                        idle=post_reader_idle,
+                        process_alive=process_alive,
+                        close_succeeded=close_succeeded,
+                        exit_code=leader_exit_code,
+                    )
                 leader_session = None
             else:
                 records.extend(run_workload(request, workload))
@@ -3140,6 +3736,35 @@ def write_jsonl(path: Path | str, records: Iterable[ReplayRecord]) -> None:
                 pass
 
 
+def _write_json_atomic(path: Path | str, value: Mapping[str, Any]) -> None:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(value, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, output_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def _default_manifest() -> Path:
     return Path(__file__).resolve().parent / "benchmarks" / "perf-recovery-workloads.json"
 
@@ -3155,6 +3780,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--live-store", type=Path, required=True)
     parser.add_argument("--only", help="comma-separated workload IDs to run")
     parser.add_argument("--runs", type=int, help="override measured attempts per selected workload")
+    parser.add_argument("--verification-report", type=Path)
     return parser.parse_args(argv)
 
 
@@ -3173,8 +3799,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         workloads = select_workloads(load_manifest(args.workloads), only=args.only, runs=args.runs)
+        verification_report_path: Path | None = None
+        if args.verification_report is not None:
+            verification_report_path = _canonical(args.verification_report)
+            if verification_report_path == _canonical(args.out):
+                raise ValueError("verification-report must differ from out")
+            try:
+                verification_report_path.unlink()
+            except FileNotFoundError:
+                pass
         records = run_replay(request, workloads)
         write_jsonl(args.out, records)
+        if verification_report_path is not None:
+            report = build_verification_report(records)
+            if not isinstance(report, Mapping) or report.get("passed") is not True:
+                raise ValueError("verification report did not pass")
+            _write_json_atomic(verification_report_path, report)
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         print(f"perf-recovery: {exc}", file=sys.stderr)
         return 2
