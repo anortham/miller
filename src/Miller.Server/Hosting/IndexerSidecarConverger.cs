@@ -132,7 +132,7 @@ internal sealed class IndexerSidecarConverger
             long previousTarget = _vectorSignal.TargetRevision;
             _vectorSignal.StampTarget(revision, fullRebuild);
             long currentTarget = _vectorSignal.TargetRevision;
-            bool vectorDidWork = currentTarget > previousTarget;
+            bool vectorDidWork = _vectorSignal.Enabled && (currentTarget > previousTarget || fullRebuild);
             didWork |= vectorDidWork;
             if (_vectorSignal.Enabled)
                 vectorPhase.Complete(revision, vectorDidWork);

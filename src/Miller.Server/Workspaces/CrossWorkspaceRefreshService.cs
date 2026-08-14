@@ -676,8 +676,7 @@ public sealed class CrossWorkspaceRefreshService
         }
 
         // Metric-history cheap arm on the one-shot refresh path, mirroring the leader converge. Independent of the
-        // sidecar builds above; RecordConverge never throws or blocks. This service has no logger, so a swallowed
-        // history failure is silent, matching the sidecar best-effort behaviour above.
+        // sidecar builds above; RecordConverge never throws or blocks, so history failure remains best effort.
         MetricSnapshotAggregates.RecordConverge(
             symbolsDbPath, workspaceId, revision, MillerVersion.Current);
     }

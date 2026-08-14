@@ -34,6 +34,25 @@ public sealed class IndexerSidecarConvergerTests
     }
 
     [Fact]
+    public async Task Converge_FullRebuildAtSameRevision_RecordsVectorWorkAndWake()
+    {
+        var phases = new RecordingPhaseSink();
+        var signal = new VectorConvergeSignal(enabled: true);
+        var converger = NewConverger(vectorSignal: signal, phaseSink: phases);
+
+        converger.Converge("/tmp/miller/symbols.db", "/workspace", "workspace-1", 42, fullRebuild: false);
+        await signal.WaitAsync(TestContext.Current.CancellationToken);
+        phases.Records.Clear();
+
+        converger.Converge("/tmp/miller/symbols.db", "/workspace", "workspace-1", 42, fullRebuild: true);
+
+        await signal.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.True(signal.TakeFullRebuild());
+        Assert.True(phases.Records.Single(static phase => phase.Phase == "vector").DidWork);
+        Assert.True(phases.Records.Single(static phase => phase.Phase == "sidecar_total").DidWork);
+    }
+
+    [Fact]
     public void Converge_IncrementalUpdate_UsesCurrentSearchConvergence()
     {
         var calls = new List<string>();
@@ -142,7 +161,9 @@ public sealed class IndexerSidecarConvergerTests
         Func<string, string, string?, long, bool>? ensureContentBuilt = null,
         IndexerSidecarConverger.SearchConvergence? ensureSearchBuilt = null,
         IndexerSidecarConverger.SearchConvergence? ensureSearchCurrent = null,
-        Func<Exception, string, Action, bool>? tryRecover = null) =>
+        Func<Exception, string, Action, bool>? tryRecover = null,
+        VectorConvergeSignal? vectorSignal = null,
+        IIndexerPhaseSink? phaseSink = null) =>
         new(
             searchEnabled,
             ensureContentBuilt ?? ((_, _, _, _) => false),
@@ -159,7 +180,9 @@ public sealed class IndexerSidecarConvergerTests
             symbolsDbPath => Path.Combine(Path.GetDirectoryName(symbolsDbPath)!, "content.db"),
             symbolsDbPath => Path.Combine(Path.GetDirectoryName(symbolsDbPath)!, "search.db"),
             tryRecover ?? ((_, _, _) => false),
-            NullLogger.Instance);
+            NullLogger.Instance,
+            vectorSignal: vectorSignal,
+            phaseSink: phaseSink);
 
     private static bool ThrowIfSearchBuiltCalled(
         string symbolsDbPath,
@@ -179,5 +202,12 @@ public sealed class IndexerSidecarConvergerTests
     {
         reason = null;
         throw new InvalidOperationException("Search incremental convergence should not have been called.");
+    }
+
+    private sealed class RecordingPhaseSink : IIndexerPhaseSink
+    {
+        public List<IndexerPhaseRecord> Records { get; } = [];
+
+        public void Record(IndexerPhaseRecord record) => Records.Add(record);
     }
 }

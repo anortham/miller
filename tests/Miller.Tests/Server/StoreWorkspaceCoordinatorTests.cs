@@ -281,6 +281,35 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void AReusedLevelOneImportFromFullDoesNotReportWork()
+    {
+        var phases = new RecordingPhaseSink();
+        var client = new RecordingStoreClient(
+            StoreOperation.Import,
+            manifestDisposition: StoreManifestDisposition.Reused);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(41, "full"),
+            new(42, "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.SymbolsOnly,
+            _ => snapshots.Dequeue(),
+            () => "request-import",
+            null,
+            phaseSink: phases);
+
+        ExtractReport report = coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+
+        Assert.Equal(StoreLevel.L1, Assert.IsType<StoreImportRequest>(client.SingleRequest).Level);
+        Assert.Equal("no_change", report.Status);
+        Assert.False(phases.Records.Single(static phase => phase.Phase == "import").DidWork);
+        Assert.False(phases.Records.Single(static phase => phase.Phase == "coordinator_total").DidWork);
+    }
+
+    [Fact]
     public void Scan_RecordsImportResolveAndCoordinatorTotal()
     {
         var phases = new RecordingPhaseSink();
