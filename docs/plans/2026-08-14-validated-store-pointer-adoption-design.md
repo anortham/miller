@@ -43,12 +43,19 @@ The harness gains a distinct source-root input. Julie rows use the original read
 
 ## Acceptance Criteria
 
-- [ ] A valid staged pointer with a ready root-matching view is adopted into an empty isolated registry by a lock-winning leader.
+- [x] A valid staged pointer with a ready root-matching view is adopted into an empty isolated registry by a lock-winning leader.
 - [ ] Direct CLI, warm-reader, and leader paths select the same family/view.
-- [ ] Family, view-root, store-root, generation, base, or root-identity mismatch refuses adoption without registry mutation.
-- [ ] A normal registered workspace retains the existing registry-first behavior.
-- [ ] Julie replay argv uses the original source root while Miller uses the staged root.
-- [ ] Original source files, `.miller/store.json`, and live family facts remain unchanged.
+- [x] Family, view-root, store-root, generation, base, or root-identity mismatch refuses adoption without registry mutation.
+- [x] A normal registered workspace retains the existing registry-first behavior.
+- [x] Julie replay argv uses the original source root while Miller uses the staged root.
+- [x] Original source files, `.miller/store.json`, and live family facts remain unchanged.
 - [ ] `workspace.open.no_change` reuses the copied family and does not mint a family.
-- [ ] Linux focused tests pass; Windows path/casing/reparse behavior is covered in unit tests and later native acceptance.
+- [x] Linux focused tests pass: 24 resolver tests, 97 coordinator/bootstrap tests, and 87 Python harness tests.
+- [ ] Windows path/casing/reparse behavior is covered in unit tests and later native acceptance.
 
+## Evidence note — 2026-08-14
+
+- `c3b8d7cf` preserves registry-first pointer resolution; `e78d1efc` separates Julie's source root from Miller's staged root; `ce59f021` isolates retry identities and failed reports.
+- Real producer smoke: 3,374 ms warmup, 17 ms measured attempt, hard-gate pass; the source view remained at generation 8.
+- Real leader smoke: 36,857 ms warmup, 27,751 ms measured attempt; it adopted only the copied family/view and did not mint a new family, but exceeded the development budget.
+- These results establish the checked adoption and split-root facts only. They do not complete the production-volume baseline, direct/warm parity, real `workspace.open` no-mint acceptance, or Windows/native acceptance.

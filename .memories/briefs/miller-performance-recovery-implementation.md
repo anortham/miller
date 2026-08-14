@@ -3,7 +3,7 @@ id: miller-performance-recovery-implementation
 title: Miller performance recovery implementation
 status: active
 created: 2026-08-14T03:57:03.433Z
-updated: 2026-08-14T10:20:25.713Z
+updated: 2026-08-14T11:16:11.026Z
 tags:
   - performance
   - family-store
@@ -20,25 +20,24 @@ Restore Miller startup, indexing, relationship-query, and family-store performan
 
 ## Why Now
 
-Measured default relationship context takes about 11.93 seconds, leader startup about 28.5 seconds, exact resolution about 164–172 seconds, and the live family store retains about 1.12 GB of resolution state. A stranded claimed import also demonstrated that coordination failures can compound convergence and overlay cost.
+Faithful copied-store evidence now confirms lock-winning leader startup at about 27.8 seconds against a 2-second development budget. Earlier measurements showed default relationship context around 11.93 seconds, exact resolution around 164–172 seconds, and about 1.12 GB of retained resolution state. A stranded claimed import demonstrated that coordination failures can compound convergence and overlay cost.
 
 ## Constraints
 
-- Preserve Store Contract v1 and all existing MCP/CLI schemas and deterministic semantics.
-- A replay row must exercise the production path it names; CLI status/leader reads are diagnostic controls, not startup measurements.
-- Never mutate the live store. Refuse live/unknown owners. Preserve WAL mode, durable WAL content, WAL-free database identity, and required empty runtime directories in snapshots.
-- Validated pointer adoption may repair missing isolated registry lineage only after catalog/view/root/generation/base/artifact checks pass; invalid pointers fail without registry mutation.
-- The replay models Julie's original read-only source root separately from Miller's staged workspace root.
-- Keep context batching default-off until same-depth batch parity and copied-store lexical timing pass.
+- Preserve Store Contract v1 and existing MCP/CLI schemas and deterministic semantics.
+- Every replay row must exercise the production path it names.
+- Never mutate the live store or pointer; snapshots preserve SQLite durable state and use disposable supervision paths.
+- Pointer adoption remains fail-closed and registry-first when a usable lineage already exists.
+- Model the staged Miller view, original source view, and disposable changed-source view separately.
+- Keep context batching default-off until copied-store same-depth parity passes.
 - Characterize shipped incremental behavior before editing it.
-- Split store lifecycle rebase/collection from query/index/statistics tuning so each has independent evidence and rollback.
-- Keep Windows compatibility and dedicated Windows coordinator/resolution, memory, copy/lock, and broker gates.
-- Keep source changes in the named Miller and Julie recovery worktrees.
+- Split lifecycle rebase/collection from query/index/statistics tuning.
+- Keep Windows-specific coordinator, resolution, memory, copy/lock, and broker gates.
 - No pin bump, push, tag, publish, or release without explicit approval.
 
 ## Success Criteria
 
-Completed Tasks 1–4 remain reviewed but production-volume unproven. Task 1B supplies faithful MCP/producer workloads and the immutable baseline; Task 2B closes resolve-claim and copied-field recovery; Task 5 measures before any behavior repair; Tasks 6, 7A, and 7B close resolver, lifecycle, and read-path costs separately; Task 8 closes Linux and Windows correctness, scale, memory, semantic, and timing gates.
+Task 1B-B captures the immutable production-volume baseline; Task 5 measures before behavior repair; Tasks 6, 7A, and 7B close resolver, lifecycle, and read-path costs independently; Task 8 closes Linux and Windows correctness, scale, memory, semantic, and timing gates.
 
 ## References
 
@@ -49,4 +48,4 @@ Completed Tasks 1–4 remain reviewed but production-volume unproven. Task 1B su
 
 ## Status
 
-Implementation active on `feature/performance-recovery`. Tasks 1–4, Task 5A, and Task 2B are complete. Task 1B-B remains active. Root-cause tracing proved the remaining replay blocker is structural: producer and Miller roots were conflated, while leader bootstrap ignored a valid copied-family pointer when the isolated registry lacked lineage. The accepted design adds fail-closed pointer adoption and split replay roots before regenerating the baseline.
+Implementation active on `feature/performance-recovery`. Tasks 1–4, Task 5A, Task 2B, and Task 1B-C are complete. Task 1B-B is active. Verified replay foundations include 87 Python harness tests, 24 resolver tests, 97 coordinator/bootstrap tests, a 17ms real identical producer retry, and a real empty-registry leader adopting the copied family/view without minting. The same leader path took 27.75 seconds, so correctness is restored but the startup regression remains severe.

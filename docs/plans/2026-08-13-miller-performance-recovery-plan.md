@@ -251,6 +251,8 @@ This boundary follows SQLite's own file contracts: the [WAL is persistent databa
 
 Before replaying those rows, implement the fail-closed pointer-adoption and split-root design in [`2026-08-14-validated-store-pointer-adoption-design.md`](2026-08-14-validated-store-pointer-adoption-design.md). Julie rows read the original source root while writing only disposable stores; Miller rows use a staged root with a ready root-matching view. A leader with an empty isolated registry adopts that pointer only after full family/read validation, and `workspace open` must reuse rather than mint a family.
 
+Every replay invocation that uses a staged workspace also passes `--source-root <original-source-root>`. Each disposable store copy gets its own request/idempotency namespace; an exact retry reuses only the captured pair within that copy, while setup and other mutating rows use fresh identities. Producer supervision controls (`--spool-dir` and `--progress-file`) are disposable and copy-local, never paths in the source or live store.
+
 - `startup.leader.no_change`: first isolated MCP host through completed startup-delta phase.
 - `startup.reader.warm`: second MCP host while the first owns leadership.
 - `producer.retry.identical`: repeat the exact producer import request/idempotency contract against a disposable snapshot.
@@ -661,7 +663,7 @@ Derive `didWork` from each sidecar's existing stamp/result rather than assuming 
 
 **Step 4: Replay and apply the decision table**
 
-Run: `python scripts/perf-recovery.py --workloads scripts/benchmarks/perf-recovery-workloads.json --workspace <staged-workspace> --store-copy <staged-copy> --live-store <original-live-store> --only producer.retry.identical,startup.leader.no_change,workspace.open.no_change --runs 3 --out artifacts/perf/no-change-phases.jsonl`
+Run: `python scripts/perf-recovery.py --workloads scripts/benchmarks/perf-recovery-workloads.json --workspace <staged-workspace> --source-root <original-source-root> --store-copy <staged-copy> --live-store <original-live-store> --only producer.retry.identical,startup.leader.no_change,workspace.open.no_change --runs 3 --out artifacts/perf/no-change-phases.jsonl`
 
 ```text
 claimed import dominates -> Task 2/reuse-report repair
@@ -681,7 +683,7 @@ Do not skip all of `ConvergeStore` as a shortcut; change only the failing phase 
 
 Run: `dotnet test --filter "FullyQualifiedName~StoreWorkspaceCoordinatorTests|FullyQualifiedName~IndexerServiceScanTests|FullyQualifiedName~StoreSidecarConvergerTests"`
 
-Run: `python scripts/perf-recovery.py --workloads scripts/benchmarks/perf-recovery-workloads.json --workspace <staged-workspace> --store-copy <staged-copy> --live-store <original-live-store> --only producer.retry.identical,startup.leader.no_change,workspace.open.no_change --runs 3 --out artifacts/perf/no-change-phases.jsonl`
+Run: `python scripts/perf-recovery.py --workloads scripts/benchmarks/perf-recovery-workloads.json --workspace <staged-workspace> --source-root <original-source-root> --store-copy <staged-copy> --live-store <original-live-store> --only producer.retry.identical,startup.leader.no_change,workspace.open.no_change --runs 3 --out artifacts/perf/no-change-phases.jsonl`
 
 Expected: Byte-identical retry at most 2 s, registered no-change open at most 5 s, the real MCP leader startup meets 2 s/5 s, phase records sum consistently to leader startup, every unused resolve or sidecar rebuild is a hard failure, and changed identities still perform required work. A telemetry-only green result is a valid task completion when the faithful baseline has no expensive redundant phase.
 
