@@ -708,6 +708,7 @@ Expected: Byte-identical retry at most 2 s, registered no-change open at most 5 
 - Modify: `crates/julie-extract-cli/tests/store_delta_scope_contract.rs:289-535`
 - Modify: `crates/julie-extract-cli/tests/resolution_report_scope.rs:108-205`
 - Modify: `crates/julie-extract-cli/tests/store_resolution_performance.rs:1500-1700`
+- Modify only for a proved crossover-routing failure: `crates/julie-extract-cli/src/store/delta_scope.rs:446-516`
 - Modify only for a proved correctness failure: `crates/julie-extract-cli/src/resolution.rs:1969-2105,3081-3155,3384-3445`
 - Modify only for a proved routing failure: `crates/julie-extract-cli/src/store/resolve.rs:114-292,1200-1230`
 - Create: Julie's dated incremental-resolution recovery evidence document under its existing evidence convention
@@ -718,7 +719,7 @@ Expected: Byte-identical retry at most 2 s, registered no-change open at most 5 
 
 **Contract inputs:** Incremental store resolution shipped in 2.32.0 and is enabled by default in 2.33.2. Do not reopen or redesign it merely because the live accumulated store is slow. Keep the full resolver and `JULIE_STORE_RESOLUTION_DELTA=off` as oracle and fallback.
 
-**File ownership:** Julie: scope/equivalence/report/performance tests and evidence; modify `resolution.rs:1969-2105,3081-3155,3384-3445` or `store/resolve.rs:114-292,1200-1230` only for a characterized failure
+**File ownership:** Julie: scope/equivalence/report/performance tests and evidence; modify `delta_scope.rs:446-516`, `resolution.rs:1969-2105,3081-3155,3384-3445`, or `store/resolve.rs:114-292,1200-1230` only for the characterized owner
 
 **Serialization required:** Yes
 
@@ -756,7 +757,7 @@ let resolution = resolve_workspace_with_crossover(&transaction, delta_scope, DEL
 let telemetry = ResolutionExecutionTelemetry::from_durable_payload(&resolution.durable_payload)?;
 ```
 
-Use the current function signatures discovered in the execution checkout. A routing failure is confined to `store/resolve.rs:114-292,1200-1230`; a digest/scope failure is confined to `resolution.rs`. Overlay-history cost belongs to Task 7A and post-rotation read amplification belongs to Task 7B, not this task.
+Use the current function signatures discovered in the execution checkout. A request-routing failure is confined to `store/resolve.rs:114-292,1200-1230`; a crossover-policy failure is confined to `store/delta_scope.rs:446-516`; a digest/scope failure is confined to `resolution.rs`. Overlay-history cost belongs to Task 7A and post-rotation read amplification belongs to Task 7B, not this task. Production-volume evidence on 2026-08-14 proved the crossover-policy lane: one changed path expanded to 776 selected versions and 386,163 prior identifier rows, but the unconditional one-path exemption bypassed the existing 0.7 work estimate and left scoped `ResolvedIdentifiers` CPU-bound past 600 seconds.
 
 **Step 4: Prove reports, parity, and language coverage**
 
@@ -771,6 +772,8 @@ Expected: Every language is present, scopes are truthful, and exact/exact-gap di
 Run: `cargo xtask performance store-resolution --runs 3 --out-dir target/performance/store-incremental-resolution-recovery`
 
 Expected: One-file median at most 5 s and full real-Miller median at most 60 s on development Linux. If one-file passes but accumulated-store full resolution fails because retained history dominates, Task 7A owns it; if post-rotation read plans dominate, Task 7B owns it.
+
+**2026-08-14 outcome:** The crossover-policy defect is fixed and the bounded one-file oracle is green: scoped `3,792 ms`, full `2,273 ms`, exact digest parity. The frozen production `README.md` change expanded to 776 selected versions and 386,163 prior identifier rows; removing the unconditional one-path exemption changed it from scoped `ResolvedIdentifiers` timing out beyond `600,003 ms` to `full` with `resolution_scope_crossover`, completing in `178,621 ms`. The production 5-second gate remains **FAIL** because the resolution phase still takes `171,167 ms`. Task 6 therefore closes the routing defect without claiming performance recovery; Task 7A owns retained-history lifecycle work and Task 7B owns post-rotation read amplification. The corpus language inventory is also incomplete: 8 of 11 observed languages emitted identifier rows, while 27 of 38 supported languages were absent from the corpus, so no all-language claim is made.
 
 **Step 6: Apply commit mode**
 
