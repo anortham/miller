@@ -688,11 +688,14 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> bool:
     try:
         if os.name == "nt":
             tree_killed = kill_windows_tree()
-            if parent_exited and not tree_killed:
-                kill_windows_tree()
-            elif not wait_bounded():
-                kill_windows_tree()
-                if not wait_bounded():
+            if parent_exited:
+                if not tree_killed:
+                    kill_windows_tree()
+            else:
+                parent_reaped = wait_bounded()
+                if not tree_killed or not parent_reaped:
+                    kill_windows_tree()
+                if not parent_reaped and not wait_bounded():
                     try:
                         process.kill()
                     except (ProcessLookupError, OSError):
@@ -1253,16 +1256,25 @@ def compare_pair(depth0: ReplayRecord | Mapping[str, Any], depth1: ReplayRecord 
         value = record.get("metadata")
         return value if isinstance(value, Mapping) else {}
 
+    def ids(value: Any) -> list[str]:
+        return [str(item) for item in value] if isinstance(value, list) else []
+
+    def relative_order(left: list[str], right: list[str]) -> bool:
+        common = set(left).intersection(right)
+        return [item for item in left if item in common] == [item for item in right if item in common]
+
     left_facts = metadata(depth0).get("context_facts")
     right_facts = metadata(depth1).get("context_facts")
     left_facts = left_facts if isinstance(left_facts, Mapping) else {}
     right_facts = right_facts if isinstance(right_facts, Mapping) else {}
     left_available = bool(left_facts) and left_facts.get("available", True) is not False
     right_available = bool(right_facts) and right_facts.get("available", True) is not False
-    left_pivots = left_facts.get("symbol_pivot_ids", left_facts.get("pivot_ids", []))
-    right_pivots = right_facts.get("symbol_pivot_ids", right_facts.get("pivot_ids", []))
-    left_neighbours = left_facts.get("symbol_neighbour_ids", left_facts.get("order", []))
-    right_neighbours = right_facts.get("symbol_neighbour_ids", right_facts.get("order", []))
+    left_pivots = ids(left_facts.get("symbol_pivot_ids", left_facts.get("pivot_ids", [])))
+    right_pivots = ids(right_facts.get("symbol_pivot_ids", right_facts.get("pivot_ids", [])))
+    left_neighbours = ids(left_facts.get("symbol_neighbour_ids", left_facts.get("order", [])))
+    right_neighbours = ids(right_facts.get("symbol_neighbour_ids", right_facts.get("order", [])))
+    left_symbol_order = ids(left_facts.get("symbol_order", left_facts.get("order", [])))
+    right_symbol_order = ids(right_facts.get("symbol_order", right_facts.get("order", [])))
     left_bytes = int(left_facts.get("bytes", 0) or 0)
     right_bytes = int(right_facts.get("bytes", 0) or 0)
     left_truncation = left_facts.get("truncation")
@@ -1286,8 +1298,8 @@ def compare_pair(depth0: ReplayRecord | Mapping[str, Any], depth1: ReplayRecord 
         exit_code_match=value(depth0, "exit_code") == value(depth1, "exit_code"),
         timeout_match=value(depth0, "timed_out") == value(depth1, "timed_out"),
         stable_pivot_match=left_available and right_available and left_pivots == right_pivots,
-        symbol_neighbour_match=left_available and right_available and left_neighbours == right_neighbours,
-        ordering_match=left_available and right_available and left_pivots == right_pivots and left_neighbours == right_neighbours,
+        symbol_neighbour_match=left_available and right_available and set(left_neighbours).issubset(right_neighbours),
+        ordering_match=left_available and right_available and relative_order(left_symbol_order, right_symbol_order),
         truncation_match=left_available and right_available and left_truncation == right_truncation,
         truncation_changed=left_available and right_available and left_truncation != right_truncation,
         truncation_shape_valid=left_available and right_available and truncation_shape_valid,
@@ -1335,6 +1347,7 @@ def _attach_depth_pair(records: list[ReplayRecord]) -> list[ReplayRecord]:
             hard_gate_passed=record.hard_gate_passed
             and comparison.stable_pivot_match
             and comparison.symbol_neighbour_match
+            and comparison.ordering_match
             and comparison.truncation_shape_valid,
         )
     return updated
@@ -1814,13 +1827,10 @@ class _McpSession:
         while time.monotonic() < deadline:
             records = _phase_records(self.request.workspace, phase, self._log_offsets, pid=self.process.pid)
             if records:
-                completed = [
-                    record
-                    for record in records
-                    if str(_phase_value(record, "Outcome")).casefold() == "completed"
-                ]
-                if completed:
-                    return completed[-1]
+                for record in reversed(records):
+                    outcome = str(_phase_value(record, "Outcome")).casefold()
+                    if outcome in {"completed", "failed"}:
+                        return record
                 if self.process.poll() is not None:
                     return records[-1]
             if self.process.poll() is not None:
@@ -2003,14 +2013,15 @@ def _run_mcp_workload(
             environment=environment,
             require_phase=workload.workload_id == "startup.leader.no_change",
         )
-        retain = (
-            keep_alive
-            and index == total_attempts - 1
-            and not timed_out
-            and bool(evidence.get("completed"))
-            and session.process.poll() is None
-        )
-        result = session.result(started, evidence, timed_out, close=not retain)
+        final_keep_alive_attempt = keep_alive and index == total_attempts - 1
+        if final_keep_alive_attempt:
+            result = session.result(started, evidence, timed_out, close=False)
+            retain = not timed_out and result.completed and session.process.poll() is None
+            if not retain:
+                result = session.result(started, evidence, timed_out, close=True)
+        else:
+            retain = False
+            result = session.result(started, evidence, timed_out, close=True)
         if retain:
             retained = session
         records.append(
@@ -2266,6 +2277,8 @@ def run_replay(request: ReplayRequest, workloads: Mapping[str, Workload]) -> lis
             elif workload_id == "startup.reader.warm":
                 if leader_session is None:
                     raise RuntimeError(f"{workload_id} requires an established leader session")
+                if leader_session.process.poll() is not None:
+                    raise RuntimeError(f"{workload_id} requires a leader session that is still alive")
                 reader_records, _ = _run_mcp_workload(request, workload, keep_alive=False)
                 records.extend(reader_records)
                 leader_session.close()

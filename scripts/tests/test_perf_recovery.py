@@ -763,7 +763,13 @@ class PerfRecoveryTests(unittest.TestCase):
         logs = self.workspace / ".miller" / "logs"
         logs.mkdir()
         (logs / "miller-test.jsonl").write_text(
-            json.dumps({"Phase": "startup_total", "pid": 123, "Outcome": "failed"}) + "\n",
+            "\n".join(
+                [
+                    json.dumps({"Phase": "startup_total", "pid": 123, "Outcome": "completed"}),
+                    json.dumps({"Phase": "startup_total", "pid": 123, "Outcome": "failed"}),
+                ]
+            )
+            + "\n",
             encoding="utf-8",
         )
         session = object.__new__(perf_recovery._McpSession)
@@ -773,6 +779,23 @@ class PerfRecoveryTests(unittest.TestCase):
         phase = session.wait_for_phase("startup_total", time.monotonic() + 1)
         self.assertIsNotNone(phase)
         self.assertEqual("failed", phase["Outcome"])
+
+    def test_phase_wait_returns_failed_outcome_while_process_is_alive(self) -> None:
+        logs = self.workspace / ".miller" / "logs"
+        logs.mkdir()
+        (logs / "miller-test.jsonl").write_text(
+            json.dumps({"Phase": "startup_total", "pid": 123, "Outcome": "failed"}) + "\n",
+            encoding="utf-8",
+        )
+        session = object.__new__(perf_recovery._McpSession)
+        session.request = self._request()
+        session.process = SimpleNamespace(pid=123, poll=lambda: None)
+        session._log_offsets = {}
+        with mock.patch.object(perf_recovery.time, "sleep") as sleep:
+            phase = session.wait_for_phase("startup_total", time.monotonic() + 0.05)
+        self.assertIsNotNone(phase)
+        self.assertEqual("failed", phase["Outcome"])
+        sleep.assert_not_called()
 
     def test_mcp_capture_is_bounded_by_bytes(self) -> None:
         captured: list[str] = []
@@ -1003,6 +1026,18 @@ class PerfRecoveryTests(unittest.TestCase):
                 perf_recovery._terminate_process(process)
         self.assertEqual(2, run.call_count)
         self.assertTrue(all(call.kwargs["timeout"] <= perf_recovery.PROCESS_TEARDOWN_TIMEOUT_SECONDS for call in run.call_args_list))
+
+    def test_windows_alive_parent_retries_failed_tree_cleanup_after_wait(self) -> None:
+        process = SimpleNamespace(pid=123, poll=lambda: None, wait=mock.Mock(return_value=0), kill=mock.Mock())
+        with mock.patch.object(perf_recovery.os, "name", "nt"):
+            with mock.patch.object(
+                perf_recovery.subprocess,
+                "run",
+                side_effect=[SimpleNamespace(returncode=1), SimpleNamespace(returncode=0)],
+            ) as run:
+                perf_recovery._terminate_process(process)
+        self.assertEqual(2, run.call_count)
+        self.assertTrue(all(call.args[0][-2:] == ["/T", "/F"] for call in run.call_args_list))
 
     def test_context_facts_capture_pivots_order_and_truncation(self) -> None:
         facts = perf_recovery._context_facts(
@@ -1273,6 +1308,37 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual([1, 1, 1, 0], [session.closed for session in sessions])
         self.assertEqual([1, 1, 1, 1], [session.results for session in sessions])
 
+    def test_mcp_leader_is_retained_only_after_a_successful_result(self) -> None:
+        class FakeSession:
+            def __init__(self):
+                self.closed = 0
+                self.results = 0
+                self.process = SimpleNamespace(poll=lambda: None)
+
+            def result(self, *_args, **_kwargs):
+                self.results += 1
+                if _kwargs.get("close", True):
+                    self.close()
+                return failed_result
+
+            def close(self):
+                self.closed += 1
+
+        request = self._request()
+        workload = self._mcp_workload("startup.leader.no_change")
+        failed_result = dataclasses.replace(self._result(), completed=False)
+        session = FakeSession()
+        with mock.patch.object(
+            perf_recovery,
+            "_bootstrap_session",
+            return_value=(session, 1.0, {"completed": True, "ready_at": 1.1}, False),
+        ):
+            records, retained = perf_recovery._run_mcp_workload(request, workload, keep_alive=True)
+        self.assertIsNone(retained)
+        self.assertEqual(2, session.results)
+        self.assertEqual(1, session.closed)
+        self.assertFalse(records[0].hard_gate_passed)
+
     def test_mcp_cleanup_closes_stdin_and_waits_before_fallback_termination(self) -> None:
         class Pipe:
             def __init__(self):
@@ -1340,6 +1406,28 @@ class PerfRecoveryTests(unittest.TestCase):
                     perf_recovery.run_replay(self._request(), workloads)
         run_workload.assert_not_called()
 
+    def test_run_replay_checks_retained_leader_liveness_before_reader(self) -> None:
+        reader = self._mcp_workload("startup.reader.warm")
+        leader = self._mcp_workload("startup.leader.no_change")
+        workloads = {leader.workload_id: leader, reader.workload_id: reader}
+        retained = SimpleNamespace(
+            process=SimpleNamespace(poll=lambda: 17),
+            close=mock.Mock(),
+        )
+        calls: list[str] = []
+
+        def run_mcp(*_args, **_kwargs):
+            calls.append("mcp")
+            if len(calls) == 1:
+                return [self._record_for_pair(leader.workload_id)], retained
+            raise AssertionError("reader dispatched after leader exited")
+
+        with mock.patch.object(perf_recovery, "_run_mcp_workload", side_effect=run_mcp):
+            with self.assertRaisesRegex(RuntimeError, "leader session.*alive"):
+                perf_recovery.run_replay(self._request(), workloads)
+        self.assertEqual(["mcp"], calls)
+        retained.close.assert_called_once()
+
     def test_depth_pair_records_semantic_delta_without_cross_depth_byte_gate(self) -> None:
         facts = {"pivot_ids": ["pivot-a"], "order": ["pivot-a"], "truncation": False, "bytes": 100}
         depth0 = self._result(stdout=b"depth-0")
@@ -1406,6 +1494,61 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertTrue(comparison.truncation_changed)
         updated = perf_recovery._attach_depth_pair([depth0, depth1])
         self.assertTrue(updated[1].hard_gate_passed)
+
+    def test_depth_pair_allows_new_neighbours_when_common_symbol_order_is_stable(self) -> None:
+        left_facts = {
+            "available": True,
+            "symbol_pivot_ids": ["pivot-a"],
+            "symbol_neighbour_ids": ["neighbour-a", "neighbour-b"],
+            "symbol_order": ["pivot-a", "neighbour-a", "neighbour-b"],
+            "truncation": None,
+        }
+        right_facts = {
+            "available": True,
+            "symbol_pivot_ids": ["pivot-a"],
+            "symbol_neighbour_ids": ["neighbour-a", "new-neighbour", "neighbour-b"],
+            "symbol_order": ["pivot-a", "neighbour-a", "new-neighbour", "neighbour-b"],
+            "truncation": None,
+        }
+        depth0 = dataclasses.replace(
+            self._record_for_pair("tool.context.references.depth0"),
+            metadata={"context_facts": left_facts},
+        )
+        depth1 = dataclasses.replace(
+            self._record_for_pair("tool.context.references.depth1"),
+            metadata={"context_facts": right_facts},
+        )
+        comparison = perf_recovery.compare_pair(depth0, depth1)
+        self.assertTrue(comparison.symbol_neighbour_match)
+        self.assertTrue(comparison.ordering_match)
+        self.assertTrue(perf_recovery._attach_depth_pair([depth0, depth1])[1].hard_gate_passed)
+
+    def test_depth_pair_rejects_reordered_common_symbols(self) -> None:
+        left_facts = {
+            "available": True,
+            "symbol_pivot_ids": ["pivot-a"],
+            "symbol_neighbour_ids": ["neighbour-a", "neighbour-b"],
+            "symbol_order": ["pivot-a", "neighbour-a", "neighbour-b"],
+            "truncation": None,
+        }
+        right_facts = {
+            "available": True,
+            "symbol_pivot_ids": ["pivot-a"],
+            "symbol_neighbour_ids": ["neighbour-b", "new-neighbour", "neighbour-a"],
+            "symbol_order": ["pivot-a", "neighbour-b", "new-neighbour", "neighbour-a"],
+            "truncation": None,
+        }
+        depth0 = dataclasses.replace(
+            self._record_for_pair("tool.context.references.depth0"),
+            metadata={"context_facts": left_facts},
+        )
+        depth1 = dataclasses.replace(
+            self._record_for_pair("tool.context.references.depth1"),
+            metadata={"context_facts": right_facts},
+        )
+        comparison = perf_recovery.compare_pair(depth0, depth1)
+        self.assertFalse(comparison.ordering_match)
+        self.assertFalse(perf_recovery._attach_depth_pair([depth0, depth1])[1].hard_gate_passed)
 
     def test_output_is_atomic_and_rejects_store_aliases(self) -> None:
         with self.assertRaisesRegex(ValueError, "output|alias"):
