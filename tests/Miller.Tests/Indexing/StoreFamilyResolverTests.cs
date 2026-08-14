@@ -176,6 +176,39 @@ public sealed class StoreFamilyResolverTests : IDisposable
         Assert.Single(registry.ListStoreFamilies());
     }
 
+    [Fact]
+    public void ExistingUsableLineageWinsOverMalformedPointer()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
+        WorkspaceRootFacts facts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        Guid familyId = Guid.Parse("99999999-9999-4999-8999-999999999999");
+        const string viewId = "registered-view";
+        string storesRoot = Path.Combine(_directory, "stores");
+        StoreFamilyRegistryRow family = registry.GetOrCreateStoreFamily(
+            "git|/repo/.git|" + Utc(1).ToString("O"),
+            "/repo/.git",
+            Utc(1),
+            storesRoot,
+            () => familyId);
+        WriteReadyStore(family.StoreRoot, familyId, viewId, facts.WorkspaceRoot);
+        Directory.CreateDirectory(Path.Combine(facts.WorkspaceRoot, ".miller"));
+        File.WriteAllText(Path.Combine(facts.WorkspaceRoot, ".miller", "store.json"), "not-json");
+        var resolver = Resolver(
+            registry,
+            new Queue<Guid>([Guid.Parse("11111111-1111-4111-8111-111111111111")]));
+
+        StoreFamilyBinding resolved = resolver.ResolveOrCreate(facts);
+
+        Assert.Equal(familyId, resolved.FamilyId);
+        Assert.Equal(viewId, resolved.ViewId);
+        Assert.Equal(StoreBindingState.Ready, resolved.State);
+        StoreWorkspacePointerDocument pointer = Assert.IsType<StoreWorkspacePointerDocument>(
+            StoreWorkspacePointer.Read(facts.WorkspaceRoot));
+        Assert.Equal(familyId, pointer.FamilyId);
+        Assert.Equal(viewId, pointer.ViewId);
+    }
+
     [Theory]
     [InlineData("family")]
     [InlineData("view-root")]

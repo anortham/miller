@@ -119,9 +119,12 @@ public sealed class StoreFamilyResolver
         }
         else
         {
-            StoreFamilyBinding? adopted = AdoptPointerIfPresent(facts);
-            if (adopted is not null)
-                return adopted;
+            if (!HasUsableRegisteredLineage(facts))
+            {
+                StoreFamilyBinding? adopted = AdoptPointerIfPresent(facts);
+                if (adopted is not null)
+                    return adopted;
+            }
 
             family = ResolveFamily(facts);
             StoreCatalog? catalog = ReadCatalog(family.StoreRoot);
@@ -178,6 +181,46 @@ public sealed class StoreFamilyResolver
             StoreBindingState.Planned);
         StoreWorkspacePointer.Write(facts.WorkspaceRoot, binding);
         return binding;
+    }
+
+    private bool HasUsableRegisteredLineage(WorkspaceRootFacts facts)
+    {
+        (string lineageKey, string? commonDir, DateTimeOffset? commonDirCreatedAt) = Lineage(facts);
+        StoreFamilyRegistryRow? family = _registry.GetStoreFamilyByLineage(lineageKey);
+        if (family is null && commonDir is not null && commonDirCreatedAt is not null)
+        {
+            family = _registry.FindStoreFamilyByCommonDir(commonDir);
+            if (family is null || family.CommonDirCreatedAtUtc is not null)
+                return false;
+        }
+        if (family is null)
+            return false;
+
+        try
+        {
+            StoreCatalog? catalog = ReadCatalog(family.StoreRoot);
+            if (catalog is null || catalog.FamilyId != family.FamilyId)
+                return false;
+            StoreCatalogView? view = catalog.Views.SingleOrDefault(item =>
+                ArtifactRootIdentity.Matches(item.Root, facts.WorkspaceRoot));
+            if (view is null)
+                return false;
+
+            var candidate = new StoreFamilyBinding(
+                family.FamilyId,
+                family.StoreRoot,
+                view.ViewId,
+                facts.WorkspaceRoot,
+                StoreBindingState.Ready);
+            using FamilyStoreReadSession session = FamilyStoreReadSession.Open(candidate, facts.WorkspaceId);
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is FamilyStoreReadException or IOException or UnauthorizedAccessException or ArgumentException
+                or FormatException or InvalidOperationException or SqliteException)
+        {
+            return false;
+        }
     }
 
     private StoreFamilyBinding ReconcileCatalog(
