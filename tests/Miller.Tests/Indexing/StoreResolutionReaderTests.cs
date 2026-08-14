@@ -121,6 +121,74 @@ public sealed class StoreResolutionReaderTests
     }
 
     [Fact]
+    public void FamilyStoreReadManyFallbackUsesTargetDrivenNameIndex()
+    {
+        using var session = new CollisionStoreReadSession();
+        ReferenceEvidenceQuery query = new(new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+        var observations = new List<ReferenceEvidenceObservation>();
+
+        IReadOnlyDictionary<string, ReferenceEvidenceBundle> observed = ReferenceEvidenceReader.ReadManyObserved(
+            session,
+            [OtherCollisionTargetId],
+            query,
+            new ReferenceEvidenceObservationOptions(observations.Add, CaptureQueryPlan: true));
+        IReadOnlyDictionary<string, ReferenceEvidenceBundle> expected = ReferenceEvidenceReader.ReadMany(
+            session,
+            [OtherCollisionTargetId],
+            query);
+
+        Assert.Equal(JsonSerializer.Serialize(expected), JsonSerializer.Serialize(observed));
+        ReferenceEvidenceObservation fallback = Assert.Single(
+            observations,
+            observation => observation.Phase == ReferenceEvidenceReadPhase.InboundFallback);
+        Assert.Contains(
+            fallback.QueryPlan,
+            detail => detail.Contains("SEARCH i", StringComparison.Ordinal)
+                && detail.Contains("(name=?)", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            fallback.QueryPlan,
+            detail => detail.Contains("SCAN i", StringComparison.Ordinal));
+        Assert.Single(observed[OtherCollisionTargetId].Inbound.Fallback);
+    }
+
+    [Fact]
+    public void FamilyStoreReadManyExactUsesTargetIndexesForBaseBranches()
+    {
+        using var session = new CollisionStoreReadSession();
+        ReferenceEvidenceQuery query = new(new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+        var observations = new List<ReferenceEvidenceObservation>();
+
+        IReadOnlyDictionary<string, ReferenceEvidenceBundle> observed = ReferenceEvidenceReader.ReadManyObserved(
+            session,
+            [CollisionTargetId],
+            query,
+            new ReferenceEvidenceObservationOptions(observations.Add, CaptureQueryPlan: true));
+        IReadOnlyDictionary<string, ReferenceEvidenceBundle> expected = ReferenceEvidenceReader.ReadMany(
+            session,
+            [CollisionTargetId],
+            query);
+
+        Assert.Equal(JsonSerializer.Serialize(expected), JsonSerializer.Serialize(observed));
+        ReferenceEvidenceObservation exact = Assert.Single(
+            observations,
+            observation => observation.Phase == ReferenceEvidenceReadPhase.InboundExact);
+        Assert.Contains(
+            exact.QueryPlan,
+            detail => detail.Contains("SEARCH b USING INDEX identifier_target", StringComparison.Ordinal)
+                && detail.Contains("target_version_id", StringComparison.Ordinal)
+                && detail.Contains("target_symbol_id", StringComparison.Ordinal));
+        Assert.Contains(
+            exact.QueryPlan,
+            detail => detail.Contains("SEARCH b USING INDEX pending_target", StringComparison.Ordinal)
+                && detail.Contains("target_version_id", StringComparison.Ordinal)
+                && detail.Contains("target_symbol_id", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            exact.QueryPlan,
+            detail => detail.Contains("SCAN b", StringComparison.Ordinal));
+        Assert.Single(observed[CollisionTargetId].Inbound.Exact);
+    }
+
+    [Fact]
     public void FamilyStoreReferenceEvidenceMatchesEquivalentLegacyProjection()
     {
         using var familyStore = new CollisionStoreReadSession();
@@ -275,6 +343,7 @@ public sealed class StoreResolutionReaderTests
                   end_line INTEGER,end_column INTEGER,start_byte INTEGER,end_byte INTEGER,confidence REAL,
                   PRIMARY KEY(version_id,identifier_id));
                 CREATE INDEX identifiers_containing ON identifiers(containing_symbol_id,version_id);
+                CREATE INDEX idx_read_identifiers_name_kind ON identifiers(name,kind);
                 CREATE TABLE relationships (version_id INTEGER,relationship_id TEXT,reference_site_id TEXT,
                   from_symbol_id TEXT,to_symbol_id TEXT,path TEXT,kind TEXT,confidence REAL,
                   PRIMARY KEY(version_id,relationship_id));
@@ -318,6 +387,30 @@ public sealed class StoreResolutionReaderTests
                 INSERT INTO identifiers VALUES
                   (1,'identifier-1','site-1','src/Visible.cs','csharp','Target','call','{{CollisionCallerId}}',10,2,10,8,100,106,0.9),
                   (2,'identifier-1','site-1','src/Other.cs','csharp','OtherTarget','call','10000000000000000000000000000005',20,2,20,8,200,206,0.9);
+                INSERT INTO reference_sites
+                SELECT 2,'fallback-site','src/OtherFallback.cs','csharp','10000000000000000000000000000005',30,2,30,8,300,310,1,'target_token';
+                INSERT INTO identifiers VALUES
+                  (2,'fallback-identifier','fallback-site','src/OtherFallback.cs','csharp','OtherTarget','call',
+                   '10000000000000000000000000000005',30,2,30,8,300,310,0.5);
+                WITH RECURSIVE irrelevant(n) AS (
+                  SELECT 1
+                  UNION ALL
+                  SELECT n + 1 FROM irrelevant WHERE n < 256
+                )
+                INSERT INTO reference_sites
+                SELECT 1,'irrelevant-site-' || n,'src/Irrelevant' || n || '.cs','csharp',
+                       '10000000000000000000000000000005',n,2,n,8,n * 100,n * 100 + 10,1,'target_token'
+                FROM irrelevant;
+                WITH RECURSIVE irrelevant(n) AS (
+                  SELECT 1
+                  UNION ALL
+                  SELECT n + 1 FROM irrelevant WHERE n < 256
+                )
+                INSERT INTO identifiers
+                SELECT 1,'irrelevant-identifier-' || n,'irrelevant-site-' || n,
+                       'src/Irrelevant' || n || '.cs','csharp','IrrelevantName' || n,'call',
+                       '10000000000000000000000000000005',n,2,n,8,n * 100,n * 100 + 10,0.5
+                FROM irrelevant;
                 INSERT INTO resolution_base.identifier_resolutions VALUES
                   (1,'identifier-1',1,'{{CollisionTargetId}}',1,0.9,'exact','resolved',1),
                   (2,'identifier-1',2,'{{OtherCollisionTargetId}}',1,0.9,'exact','resolved',1);

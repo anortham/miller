@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 using Miller.Core.References;
 using Miller.Indexing.Reads;
@@ -10,6 +11,26 @@ public sealed record ReferenceEvidenceBundle(
     OutgoingReferenceEvidenceSet Outgoing,
     IReadOnlyDictionary<ReferenceKind, ReferenceEvidenceSet> InboundKinds,
     IReadOnlyDictionary<ReferenceKind, OutgoingReferenceEvidenceSet> OutgoingKinds);
+
+internal enum ReferenceEvidenceReadPhase
+{
+    TargetInfo,
+    InboundExact,
+    InboundFallback,
+    OutgoingExact,
+    OutgoingFallback,
+}
+
+internal sealed record ReferenceEvidenceObservation(
+    ReferenceEvidenceReadPhase Phase,
+    int RequestedCandidateCount,
+    int ReturnedRawRowCount,
+    double ElapsedMilliseconds,
+    IReadOnlyList<string> QueryPlan);
+
+internal sealed record ReferenceEvidenceObservationOptions(
+    Action<ReferenceEvidenceObservation> Observe,
+    bool CaptureQueryPlan = false);
 
 /// <summary>Reads bounded, normalized reference evidence keyed by resolved symbol IDs.</summary>
 public static partial class ReferenceEvidenceReader
@@ -117,7 +138,14 @@ public static partial class ReferenceEvidenceReader
     public static IReadOnlyDictionary<string, ReferenceEvidenceBundle> ReadMany(
         IWorkspaceReadSession session,
         IReadOnlyList<string> symbolIds,
-        ReferenceEvidenceQuery query)
+        ReferenceEvidenceQuery query) =>
+        ReadManyObserved(session, symbolIds, query, observationOptions: null);
+
+    internal static IReadOnlyDictionary<string, ReferenceEvidenceBundle> ReadManyObserved(
+        IWorkspaceReadSession session,
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceQuery query,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(symbolIds);
@@ -136,8 +164,8 @@ public static partial class ReferenceEvidenceReader
             return new Dictionary<string, ReferenceEvidenceBundle>(StringComparer.Ordinal);
 
         return session.Read(connection => IsFamilyStoreResolutionProjection(connection)
-            ? ReadManyFromFamilyStore(connection, orderedIds, query)
-            : ReadManyFromLegacyArtifact(connection, orderedIds, query));
+            ? ReadManyFromFamilyStore(connection, orderedIds, query, observationOptions)
+            : ReadManyFromLegacyArtifact(connection, orderedIds, query, observationOptions));
     }
 
     /// <summary>Read exact inbound sites and separately typed fallback candidates for one symbol.</summary>
@@ -284,7 +312,8 @@ public static partial class ReferenceEvidenceReader
     private static IReadOnlyDictionary<string, ReferenceEvidenceBundle> ReadManyFromLegacyArtifact(
         SqliteConnection connection,
         IReadOnlyList<string> orderedIds,
-        ReferenceEvidenceQuery query)
+        ReferenceEvidenceQuery query,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         JulieSchemaGate.Verify(connection);
         RequireResolutionTables(connection);
@@ -292,7 +321,7 @@ public static partial class ReferenceEvidenceReader
             orderedIds.Count,
             StringComparer.Ordinal);
         foreach (IReadOnlyList<string> chunk in Chunk(orderedIds))
-            MergeTargetInfo(targetInfo, ReadTargetInfoMany(connection, chunk));
+            MergeTargetInfo(targetInfo, ReadTargetInfoMany(connection, chunk, observationOptions));
         EnsureAllTargetsKnown(orderedIds, targetInfo);
 
         var inboundExact = new Dictionary<string, List<ReferenceEvidence>>(StringComparer.Ordinal);
@@ -301,10 +330,10 @@ public static partial class ReferenceEvidenceReader
         var outgoingFallback = new Dictionary<string, List<OutgoingReferenceEvidence>>(StringComparer.Ordinal);
         foreach (IReadOnlyList<string> chunk in Chunk(orderedIds))
         {
-            MergeRows(inboundExact, ReadExactMany(connection, chunk));
-            MergeRows(inboundFallback, ReadFallbackMany(connection, chunk));
-            MergeRows(outgoingExact, ReadOutgoingExactMany(connection, chunk));
-            MergeRows(outgoingFallback, ReadOutgoingFallbackMany(connection, chunk));
+            MergeRows(inboundExact, ReadExactMany(connection, chunk, observationOptions));
+            MergeRows(inboundFallback, ReadFallbackMany(connection, chunk, observationOptions));
+            MergeRows(outgoingExact, ReadOutgoingExactMany(connection, chunk, observationOptions));
+            MergeRows(outgoingFallback, ReadOutgoingFallbackMany(connection, chunk, observationOptions));
         }
 
         ReferenceEvidenceSnapshot snapshot = ReadSnapshot(connection);
@@ -335,7 +364,8 @@ public static partial class ReferenceEvidenceReader
 
     private static Dictionary<string, ReferenceEvidenceTargetInfo> ReadTargetInfoMany(
         SqliteConnection connection,
-        IReadOnlyList<string> symbolIds)
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"""
@@ -352,19 +382,27 @@ public static partial class ReferenceEvidenceReader
             JOIN requested AS r ON r.symbol_id=target.symbol_id;
             """;
         AddParameters(command, symbolIds);
+        return ExecuteObserved(
+            command,
+            ReferenceEvidenceReadPhase.TargetInfo,
+            symbolIds.Count,
+            observationOptions,
+            reader =>
+            {
+                var result = new Dictionary<string, ReferenceEvidenceTargetInfo>(StringComparer.Ordinal);
+                int rawRowCount = 0;
+                while (reader.Read())
+                {
+                    rawRowCount++;
+                    result.Add(
+                        reader.GetString(0),
+                        new ReferenceEvidenceTargetInfo(
+                            reader.GetString(1),
+                            reader.GetInt32(2)));
+                }
 
-        using SqliteDataReader reader = command.ExecuteReader();
-        var result = new Dictionary<string, ReferenceEvidenceTargetInfo>(StringComparer.Ordinal);
-        while (reader.Read())
-        {
-            result.Add(
-                reader.GetString(0),
-                new ReferenceEvidenceTargetInfo(
-                    reader.GetString(1),
-                    reader.GetInt32(2)));
-        }
-
-        return result;
+                return (result, rawRowCount);
+            });
     }
 
     private static List<ReferenceEvidence> GetRows(
@@ -433,7 +471,8 @@ public static partial class ReferenceEvidenceReader
 
     private static Dictionary<string, List<ReferenceEvidence>> ReadExactMany(
         SqliteConnection connection,
-        IReadOnlyList<string> symbolIds)
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"""
@@ -468,12 +507,18 @@ public static partial class ReferenceEvidenceReader
             ORDER BY 3, 8, 4, 10, 12, 15;
             """;
         AddParameters(command, symbolIds);
-        return ReadRowsBySymbol(command, ReferenceResolutionStatus.Exact);
+        return ReadRowsBySymbol(
+            command,
+            ReferenceResolutionStatus.Exact,
+            ReferenceEvidenceReadPhase.InboundExact,
+            symbolIds.Count,
+            observationOptions);
     }
 
     private static Dictionary<string, List<ReferenceEvidence>> ReadFallbackMany(
         SqliteConnection connection,
-        IReadOnlyList<string> symbolIds)
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"""
@@ -496,12 +541,18 @@ public static partial class ReferenceEvidenceReader
             ORDER BY 3, 8, 4, 10, 15;
             """;
         AddParameters(command, symbolIds);
-        return ReadRowsBySymbol(command, ReferenceResolutionStatus.Fallback);
+        return ReadRowsBySymbol(
+            command,
+            ReferenceResolutionStatus.Fallback,
+            ReferenceEvidenceReadPhase.InboundFallback,
+            symbolIds.Count,
+            observationOptions);
     }
 
     private static Dictionary<string, List<OutgoingReferenceEvidence>> ReadOutgoingExactMany(
         SqliteConnection connection,
-        IReadOnlyList<string> symbolIds)
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"""
@@ -543,12 +594,18 @@ public static partial class ReferenceEvidenceReader
             ORDER BY 4, 9, 5, 11, 13, 3, 2, 16;
             """;
         AddParameters(command, symbolIds);
-        return ReadOutgoingRowsBySymbol(command, ReferenceResolutionStatus.Exact);
+        return ReadOutgoingRowsBySymbol(
+            command,
+            ReferenceResolutionStatus.Exact,
+            ReferenceEvidenceReadPhase.OutgoingExact,
+            symbolIds.Count,
+            observationOptions);
     }
 
     private static Dictionary<string, List<OutgoingReferenceEvidence>> ReadOutgoingFallbackMany(
         SqliteConnection connection,
-        IReadOnlyList<string> symbolIds)
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"""
@@ -581,7 +638,12 @@ public static partial class ReferenceEvidenceReader
             ORDER BY 4, 9, 5, 11, 3, 16;
             """;
         AddParameters(command, symbolIds);
-        return ReadOutgoingRowsBySymbol(command, ReferenceResolutionStatus.Fallback);
+        return ReadOutgoingRowsBySymbol(
+            command,
+            ReferenceResolutionStatus.Fallback,
+            ReferenceEvidenceReadPhase.OutgoingFallback,
+            symbolIds.Count,
+            observationOptions);
     }
 
     /// <summary>Read resolved outgoing sites and separately typed unresolved fallbacks for one symbol.</summary>
@@ -1086,6 +1148,46 @@ public static partial class ReferenceEvidenceReader
         _ => int.MaxValue,
     };
 
+    private static T ExecuteObserved<T>(
+        SqliteCommand command,
+        ReferenceEvidenceReadPhase? phase,
+        int requestedCandidateCount,
+        ReferenceEvidenceObservationOptions? observationOptions,
+        Func<SqliteDataReader, (T Result, int RawRowCount)> read)
+    {
+        IReadOnlyList<string> queryPlan = observationOptions?.CaptureQueryPlan == true
+            ? ExplainQueryPlan(command)
+            : [];
+        Stopwatch? stopwatch = observationOptions is null ? null : Stopwatch.StartNew();
+        using SqliteDataReader reader = command.ExecuteReader();
+        (T result, int rawRowCount) = read(reader);
+        if (observationOptions is not null && phase is not null)
+        {
+            observationOptions.Observe(new ReferenceEvidenceObservation(
+                phase.Value,
+                requestedCandidateCount,
+                rawRowCount,
+                stopwatch!.Elapsed.TotalMilliseconds,
+                queryPlan));
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<string> ExplainQueryPlan(SqliteCommand command)
+    {
+        using SqliteCommand explain = command.Connection!.CreateCommand();
+        explain.CommandText = "EXPLAIN QUERY PLAN " + command.CommandText;
+        foreach (SqliteParameter parameter in command.Parameters)
+            explain.Parameters.AddWithValue(parameter.ParameterName, parameter.Value);
+
+        using SqliteDataReader reader = explain.ExecuteReader();
+        var details = new List<string>();
+        while (reader.Read())
+            details.Add(reader.GetString(reader.FieldCount - 1));
+        return details;
+    }
+
     private static List<ReferenceEvidence> ReadRows(
         SqliteCommand command,
         string targetSymbolId,
@@ -1160,80 +1262,104 @@ public static partial class ReferenceEvidenceReader
 
     private static Dictionary<string, List<ReferenceEvidence>> ReadRowsBySymbol(
         SqliteCommand command,
-        ReferenceResolutionStatus resolutionStatus)
+        ReferenceResolutionStatus resolutionStatus,
+        ReferenceEvidenceReadPhase? phase = null,
+        int requestedCandidateCount = 0,
+        ReferenceEvidenceObservationOptions? observationOptions = null)
     {
-        using SqliteDataReader reader = command.ExecuteReader();
-        var rows = new Dictionary<string, List<ReferenceEvidence>>(StringComparer.Ordinal);
-        while (reader.Read())
-        {
-            string symbolId = reader.GetString(0);
-            string sourceKind = reader.GetString(9);
-            string source = reader.GetString(11);
-            AddRow(
-                rows,
-                symbolId,
-                new ReferenceEvidence(
-                    resolutionStatus == ReferenceResolutionStatus.Exact ? symbolId : null,
-                    ReadString(reader, 1),
-                    reader.GetString(2),
-                    ReadInt32(reader, 3),
-                    ReadInt32(reader, 4),
-                    ReadInt32(reader, 5),
-                    ReadInt32(reader, 6),
-                    ReadInt64(reader, 7),
-                    ReadInt64(reader, 8),
-                    NormalizeKind(sourceKind),
-                    sourceKind,
-                    ParseSource(source),
-                    ReadInt32(reader, 12),
-                    reader.GetDouble(10),
-                    resolutionStatus,
-                    ReadString(reader, 13),
-                    reader.GetString(14),
-                    reader.GetInt64(15) == 1,
-                    reader.GetString(16)));
-        }
+        return ExecuteObserved(
+            command,
+            phase,
+            requestedCandidateCount,
+            observationOptions,
+            reader =>
+            {
+                var rows = new Dictionary<string, List<ReferenceEvidence>>(StringComparer.Ordinal);
+                int rawRowCount = 0;
+                while (reader.Read())
+                {
+                    rawRowCount++;
+                    string symbolId = reader.GetString(0);
+                    string sourceKind = reader.GetString(9);
+                    string source = reader.GetString(11);
+                    AddRow(
+                        rows,
+                        symbolId,
+                        new ReferenceEvidence(
+                            resolutionStatus == ReferenceResolutionStatus.Exact ? symbolId : null,
+                            ReadString(reader, 1),
+                            reader.GetString(2),
+                            ReadInt32(reader, 3),
+                            ReadInt32(reader, 4),
+                            ReadInt32(reader, 5),
+                            ReadInt32(reader, 6),
+                            ReadInt64(reader, 7),
+                            ReadInt64(reader, 8),
+                            NormalizeKind(sourceKind),
+                            sourceKind,
+                            ParseSource(source),
+                            ReadInt32(reader, 12),
+                            reader.GetDouble(10),
+                            resolutionStatus,
+                            ReadString(reader, 13),
+                            reader.GetString(14),
+                            reader.GetInt64(15) == 1,
+                            reader.GetString(16)));
+                }
 
-        return rows;
+                return (rows, rawRowCount);
+            });
     }
 
     private static Dictionary<string, List<OutgoingReferenceEvidence>> ReadOutgoingRowsBySymbol(
         SqliteCommand command,
-        ReferenceResolutionStatus resolutionStatus)
+        ReferenceResolutionStatus resolutionStatus,
+        ReferenceEvidenceReadPhase? phase = null,
+        int requestedCandidateCount = 0,
+        ReferenceEvidenceObservationOptions? observationOptions = null)
     {
-        using SqliteDataReader reader = command.ExecuteReader();
-        var rows = new Dictionary<string, List<OutgoingReferenceEvidence>>(StringComparer.Ordinal);
-        while (reader.Read())
-        {
-            string symbolId = reader.GetString(0);
-            string sourceKind = reader.GetString(10);
-            AddRow(
-                rows,
-                symbolId,
-                new OutgoingReferenceEvidence(
-                    symbolId,
-                    ReadString(reader, 1),
-                    reader.GetString(2),
-                    reader.GetString(3),
-                    ReadInt32(reader, 4),
-                    ReadInt32(reader, 5),
-                    ReadInt32(reader, 6),
-                    ReadInt32(reader, 7),
-                    ReadInt64(reader, 8),
-                    ReadInt64(reader, 9),
-                    NormalizeKind(sourceKind),
-                    sourceKind,
-                    ParseSource(reader.GetString(12)),
-                    ReadInt32(reader, 13),
-                    reader.GetDouble(11),
-                    resolutionStatus,
-                    ReadString(reader, 14),
-                    reader.GetString(15),
-                    reader.GetInt64(16) == 1,
-                    reader.GetString(17)));
-        }
+        return ExecuteObserved(
+            command,
+            phase,
+            requestedCandidateCount,
+            observationOptions,
+            reader =>
+            {
+                var rows = new Dictionary<string, List<OutgoingReferenceEvidence>>(StringComparer.Ordinal);
+                int rawRowCount = 0;
+                while (reader.Read())
+                {
+                    rawRowCount++;
+                    string symbolId = reader.GetString(0);
+                    string sourceKind = reader.GetString(10);
+                    AddRow(
+                        rows,
+                        symbolId,
+                        new OutgoingReferenceEvidence(
+                            symbolId,
+                            ReadString(reader, 1),
+                            reader.GetString(2),
+                            reader.GetString(3),
+                            ReadInt32(reader, 4),
+                            ReadInt32(reader, 5),
+                            ReadInt32(reader, 6),
+                            ReadInt32(reader, 7),
+                            ReadInt64(reader, 8),
+                            ReadInt64(reader, 9),
+                            NormalizeKind(sourceKind),
+                            sourceKind,
+                            ParseSource(reader.GetString(12)),
+                            ReadInt32(reader, 13),
+                            reader.GetDouble(11),
+                            resolutionStatus,
+                            ReadString(reader, 14),
+                            reader.GetString(15),
+                            reader.GetInt64(16) == 1,
+                            reader.GetString(17)));
+                }
 
-        return rows;
+                return (rows, rawRowCount);
+            });
     }
 
     private static void AddRow<T>(

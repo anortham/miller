@@ -928,6 +928,15 @@ Expected: all eight arms preserve exact results, bounded reads avoid the reprodu
 
 - `serial-worker-commit`: checkpoint and commit the single measured owner change or evidence-only verdict separately from Task 7A.
 
+**2026-08-14 outcome:** Task 7B is **PASS**. The 40-cell post-rotation baseline proved two single-ID reverse
+join-order defects: inbound fallback scanned the identifier-name index at a `2,475.0633 ms` warm median, and
+inbound exact scanned the active resolution base at `145.5446 ms`, while the corresponding 100-ID forms used
+the available indexes. Target-first `CROSS JOIN ... ON` ordering changed no rows, ordering, provenance, raw
+counts, returned counts, or stable result digests. Final medians are `0.9536 ms` for single-ID reverse fallback
+and `1.3852 ms` for single-ID reverse exact; the slowest final arm is the 100-ID reverse fallback at
+`943.4084 ms`. All reverse base scans are gone. Full evidence is in
+`docs/findings/2026-08-14-performance-recovery-task7b.md`.
+
 ### Task 8: Close Linux and Windows Recovery Gates
 
 **Files:**

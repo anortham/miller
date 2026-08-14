@@ -95,7 +95,8 @@ public static partial class ReferenceEvidenceReader
     private static IReadOnlyDictionary<string, ReferenceEvidenceBundle> ReadManyFromFamilyStore(
         SqliteConnection connection,
         IReadOnlyList<string> orderedIds,
-        ReferenceEvidenceQuery query)
+        ReferenceEvidenceQuery query,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         JulieSchemaGate.Verify(connection);
         RequireResolutionTables(connection);
@@ -103,7 +104,7 @@ public static partial class ReferenceEvidenceReader
             orderedIds.Count,
             StringComparer.Ordinal);
         foreach (IReadOnlyList<string> chunk in Chunk(orderedIds))
-            MergeTargetInfo(targetInfo, ReadFamilyStoreTargetInfoMany(connection, chunk));
+            MergeTargetInfo(targetInfo, ReadFamilyStoreTargetInfoMany(connection, chunk, observationOptions));
         EnsureAllTargetsKnown(orderedIds, targetInfo);
 
         var inboundExact = new Dictionary<string, List<ReferenceEvidence>>(StringComparer.Ordinal);
@@ -112,10 +113,10 @@ public static partial class ReferenceEvidenceReader
         var outgoingFallback = new Dictionary<string, List<OutgoingReferenceEvidence>>(StringComparer.Ordinal);
         foreach (IReadOnlyList<string> chunk in Chunk(orderedIds))
         {
-            MergeRows(inboundExact, ReadFamilyStoreExactMany(connection, chunk));
-            MergeRows(inboundFallback, ReadFamilyStoreFallbackMany(connection, chunk));
-            MergeRows(outgoingExact, ReadFamilyStoreOutgoingExactMany(connection, chunk));
-            MergeRows(outgoingFallback, ReadFamilyStoreOutgoingFallbackMany(connection, chunk));
+            MergeRows(inboundExact, ReadFamilyStoreExactMany(connection, chunk, observationOptions));
+            MergeRows(inboundFallback, ReadFamilyStoreFallbackMany(connection, chunk, observationOptions));
+            MergeRows(outgoingExact, ReadFamilyStoreOutgoingExactMany(connection, chunk, observationOptions));
+            MergeRows(outgoingFallback, ReadFamilyStoreOutgoingFallbackMany(connection, chunk, observationOptions));
         }
 
         ReferenceEvidenceSnapshot snapshot = ReadSnapshot(connection);
@@ -146,7 +147,8 @@ public static partial class ReferenceEvidenceReader
 
     private static Dictionary<string, ReferenceEvidenceTargetInfo> ReadFamilyStoreTargetInfoMany(
         SqliteConnection connection,
-        IReadOnlyList<string> symbolIds)
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"""
@@ -169,22 +171,31 @@ public static partial class ReferenceEvidenceReader
             FROM targets AS target;
             """;
         AddParameters(command, symbolIds);
+        return ExecuteObserved(
+            command,
+            ReferenceEvidenceReadPhase.TargetInfo,
+            symbolIds.Count,
+            observationOptions,
+            reader =>
+            {
+                var result = new Dictionary<string, ReferenceEvidenceTargetInfo>(StringComparer.Ordinal);
+                int rawRowCount = 0;
+                while (reader.Read())
+                {
+                    rawRowCount++;
+                    result.Add(
+                        reader.GetString(0),
+                        new ReferenceEvidenceTargetInfo(reader.GetString(1), reader.GetInt32(2)));
+                }
 
-        using SqliteDataReader reader = command.ExecuteReader();
-        var result = new Dictionary<string, ReferenceEvidenceTargetInfo>(StringComparer.Ordinal);
-        while (reader.Read())
-        {
-            result.Add(
-                reader.GetString(0),
-                new ReferenceEvidenceTargetInfo(reader.GetString(1), reader.GetInt32(2)));
-        }
-
-        return result;
+                return (result, rawRowCount);
+            });
     }
 
     private static Dictionary<string, List<ReferenceEvidence>> ReadFamilyStoreExactMany(
         SqliteConnection connection,
-        IReadOnlyList<string> symbolIds)
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"""
@@ -199,7 +210,7 @@ public static partial class ReferenceEvidenceReader
               SELECT b.version_id,b.identifier_id,b.target_version_id,b.target_symbol_id,
                      b.tier,b.confidence
               FROM targets AS t
-              JOIN resolution_base.identifier_resolutions AS b
+              CROSS JOIN resolution_base.identifier_resolutions AS b
                 ON b.target_version_id=t.version_id AND b.target_symbol_id=t.symbol_id
               WHERE NOT EXISTS (
                 SELECT 1 FROM main.resolution_identifier_deltas AS d
@@ -219,7 +230,7 @@ public static partial class ReferenceEvidenceReader
               SELECT b.version_id,b.pending_relationship_id,b.target_version_id,b.target_symbol_id,
                      b.tier,b.confidence
               FROM targets AS t
-              JOIN resolution_base.pending_resolutions AS b
+              CROSS JOIN resolution_base.pending_resolutions AS b
                 ON b.target_version_id=t.version_id AND b.target_symbol_id=t.symbol_id
               WHERE NOT EXISTS (
                 SELECT 1 FROM main.resolution_pending_deltas AS d
@@ -274,12 +285,18 @@ public static partial class ReferenceEvidenceReader
             ORDER BY 3,8,4,10,12,15;
             """;
         AddParameters(command, symbolIds);
-        return ReadRowsBySymbol(command, ReferenceResolutionStatus.Exact);
+        return ReadRowsBySymbol(
+            command,
+            ReferenceResolutionStatus.Exact,
+            ReferenceEvidenceReadPhase.InboundExact,
+            symbolIds.Count,
+            observationOptions);
     }
 
     private static Dictionary<string, List<ReferenceEvidence>> ReadFamilyStoreFallbackMany(
         SqliteConnection connection,
-        IReadOnlyList<string> symbolIds)
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"""
@@ -295,7 +312,7 @@ public static partial class ReferenceEvidenceReader
                    s.start_byte,s.end_byte,i.kind,MIN(i.confidence,0.5),'name_fallback' AS source,
                    NULL AS tier,s.language,s.reference_site_id,s.is_exact,s.provenance
             FROM targets AS target
-            JOIN main.identifiers AS i ON i.name=target.name
+            CROSS JOIN main.identifiers AS i ON i.name=target.name
             JOIN main.reference_sites AS s
               ON s.version_id=i.version_id AND s.reference_site_id=i.reference_site_id
             JOIN _miller_visible_entries AS e ON e.version_id=i.version_id
@@ -317,12 +334,18 @@ public static partial class ReferenceEvidenceReader
             ORDER BY 3,8,4,10,15;
             """;
         AddParameters(command, symbolIds);
-        return ReadRowsBySymbol(command, ReferenceResolutionStatus.Fallback);
+        return ReadRowsBySymbol(
+            command,
+            ReferenceResolutionStatus.Fallback,
+            ReferenceEvidenceReadPhase.InboundFallback,
+            symbolIds.Count,
+            observationOptions);
     }
 
     private static Dictionary<string, List<OutgoingReferenceEvidence>> ReadFamilyStoreOutgoingExactMany(
         SqliteConnection connection,
-        IReadOnlyList<string> symbolIds)
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"""
@@ -431,12 +454,18 @@ public static partial class ReferenceEvidenceReader
             ORDER BY 4,9,5,11,13,3,2,16;
             """;
         AddParameters(command, symbolIds);
-        return ReadOutgoingRowsBySymbol(command, ReferenceResolutionStatus.Exact);
+        return ReadOutgoingRowsBySymbol(
+            command,
+            ReferenceResolutionStatus.Exact,
+            ReferenceEvidenceReadPhase.OutgoingExact,
+            symbolIds.Count,
+            observationOptions);
     }
 
     private static Dictionary<string, List<OutgoingReferenceEvidence>> ReadFamilyStoreOutgoingFallbackMany(
         SqliteConnection connection,
-        IReadOnlyList<string> symbolIds)
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceObservationOptions? observationOptions)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"""
@@ -499,7 +528,12 @@ public static partial class ReferenceEvidenceReader
             ORDER BY 4,9,5,11,3,16;
             """;
         AddParameters(command, symbolIds);
-        return ReadOutgoingRowsBySymbol(command, ReferenceResolutionStatus.Fallback);
+        return ReadOutgoingRowsBySymbol(
+            command,
+            ReferenceResolutionStatus.Fallback,
+            ReferenceEvidenceReadPhase.OutgoingFallback,
+            symbolIds.Count,
+            observationOptions);
     }
 
     private static List<ReferenceEvidence> ReadFamilyStoreExact(

@@ -1,6 +1,7 @@
 using Miller.Core.References;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using System.Text.Json;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -66,6 +67,75 @@ public sealed class ReferenceEvidenceReaderTests
         Assert.Equal(ReferenceResolutionStatus.Exact, secondReference.ResolutionStatus);
         Assert.Empty(second.Fallback);
         Assert.Equal(ReferenceFallbackStatus.SuppressedAmbiguousName, second.Coverage.FallbackStatus);
+    }
+
+    [Fact]
+    public void ReadManyObserved_ReportsFiveQueriesAndPreservesResults()
+    {
+        var identifier = new JulieDbFixture.IdentifierRow(
+            "identifier-observed",
+            "Run",
+            "call",
+            "csharp",
+            "src/Caller.cs",
+            10,
+            FirstCallerId)
+        {
+            StartByte = 100,
+            EndByte = 103,
+            TargetSymbolId = FirstTargetId,
+        };
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "Run", "method", "csharp", "src/Target.cs", "void Run()", 1, null),
+                new(FirstCallerId, "Caller", "method", "csharp", "src/Caller.cs", "void Caller()", 1, null),
+            ],
+            identifiers: [identifier]);
+        fixture.AddIdentifierResolution("identifier-observed", FirstTargetId);
+
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(fixture.DbPath);
+        ReferenceEvidenceQuery query = new(new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+        IReadOnlyDictionary<string, ReferenceEvidenceBundle> expected = ReferenceEvidenceReader.ReadMany(
+            session,
+            [FirstTargetId, FirstCallerId],
+            query);
+        var observations = new List<ReferenceEvidenceObservation>();
+
+        IReadOnlyDictionary<string, ReferenceEvidenceBundle> actual = ReferenceEvidenceReader.ReadManyObserved(
+            session,
+            [FirstTargetId, FirstCallerId],
+            query,
+            new ReferenceEvidenceObservationOptions(observations.Add));
+
+        Assert.Equal(JsonSerializer.Serialize(expected), JsonSerializer.Serialize(actual));
+        Assert.Equal(
+            [
+                ReferenceEvidenceReadPhase.TargetInfo,
+                ReferenceEvidenceReadPhase.InboundExact,
+                ReferenceEvidenceReadPhase.InboundFallback,
+                ReferenceEvidenceReadPhase.OutgoingExact,
+                ReferenceEvidenceReadPhase.OutgoingFallback,
+            ],
+            observations.Select(observation => observation.Phase));
+        Assert.Equal([2, 1, 0, 1, 0], observations.Select(observation => observation.ReturnedRawRowCount));
+        Assert.All(observations, observation =>
+        {
+            Assert.Equal(2, observation.RequestedCandidateCount);
+            Assert.True(observation.ElapsedMilliseconds >= 0);
+            Assert.Empty(observation.QueryPlan);
+        });
+
+        var planned = new List<ReferenceEvidenceObservation>();
+        _ = ReferenceEvidenceReader.ReadManyObserved(
+            session,
+            [FirstTargetId, FirstCallerId],
+            query,
+            new ReferenceEvidenceObservationOptions(planned.Add, CaptureQueryPlan: true));
+
+        Assert.Equal(5, planned.Count);
+        Assert.All(planned, observation => Assert.NotEmpty(observation.QueryPlan));
     }
 
     [Fact]
