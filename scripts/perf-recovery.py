@@ -11,6 +11,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import queue
 import re
 import shutil
 import signal
@@ -20,7 +21,6 @@ import tempfile
 import threading
 import time
 import uuid
-import queue
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -32,6 +32,8 @@ except ImportError:  # pragma: no cover - Windows does not expose resource.
 
 
 FIRST_ATTEMPT_TIMEOUT_MS = 60_000
+MAX_CAPTURE_BYTES = 1_048_576
+MAX_PHASE_RECORDS = 128
 MANIFEST_SCHEMA_VERSION = 1
 KNOWN_WORKLOAD_IDS = (
     "startup.leader.no_change",
@@ -151,6 +153,10 @@ class PairComparison:
     delta_wall_ms: int
     exit_code_match: bool
     timeout_match: bool
+    stable_pivot_match: bool = True
+    ordering_match: bool = True
+    truncation_match: bool = True
+    added_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -169,6 +175,7 @@ class CommandResult:
     io: Mapping[str, int | None]
     stdout: bytes = field(repr=False, compare=False)
     stderr: bytes = field(repr=False, compare=False)
+    completed: bool = True
 
 
 @dataclass(frozen=True)
@@ -418,6 +425,10 @@ def validate_request(request: ReplayRequest) -> ReplayRequest:
         raise ValueError("workspace active store resolves to the live store")
     if not _store_copy_matches_active(active, normalized.store_copy):
         raise ValueError("store-copy does not identify the active store root or generation artifact")
+    if normalized.out is not None:
+        output_aliases = (normalized.live_store, normalized.store_copy, active.root)
+        if any(_is_alias(normalized.out, candidate) or _same_file(normalized.out, candidate) for candidate in output_aliases):
+            raise ValueError("output must not alias the live, active, or copied store")
     return normalized
 
 
@@ -541,7 +552,12 @@ def _read_windows_memory(pid: int) -> dict[str, int | None]:  # pragma: no cover
     try:
         process_query_information = 0x0400
         process_vm_read = 0x0010
-        handle = ctypes.windll.kernel32.OpenProcess(process_query_information | process_vm_read, False, pid)
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+        handle = kernel32.OpenProcess(process_query_information | process_vm_read, False, pid)
         if not handle:
             return values
         try:
@@ -554,7 +570,7 @@ def _read_windows_memory(pid: int) -> dict[str, int | None]:  # pragma: no cover
                 values["peak_rss_bytes"] = int(counters.PeakWorkingSetSize)
                 values["private_usage_bytes"] = int(counters.PrivateUsage)
         finally:
-            ctypes.windll.kernel32.CloseHandle(handle)
+            kernel32.CloseHandle(handle)
     except (AttributeError, OSError, TypeError, ValueError):
         pass
     return values
@@ -770,6 +786,7 @@ def _run_process(request: ReplayRequest, argv: list[str], timeout_ms: int, envir
         io=io,
         stdout=stdout,
         stderr=stderr,
+        completed=not timed_out,
     )
 
 
@@ -851,6 +868,67 @@ def _phase_mapping(payload: Any, keys: set[str]) -> Mapping[str, Any]:
     return dict(value) if value is not None else {}
 
 
+def _resolution_gate(payload: Any, workload: Workload) -> Mapping[str, Any] | None:
+    if workload.execution_kind != "julie_store" or workload.metadata.get("resolution_scope") not in {"one_file", "full"}:
+        return None
+    resolution = _find_mapping(payload, {"resolution"}) or {}
+    mode = resolution.get("resolution_mode")
+    scope_file_count = resolution.get("scope_file_count")
+    expected_mode = "scoped" if workload.metadata.get("resolution_scope") == "one_file" else "full"
+    passed = mode == expected_mode and (
+        expected_mode != "scoped" or isinstance(scope_file_count, (int, float)) and scope_file_count > 0
+    )
+    return {
+        "expected_mode": expected_mode,
+        "actual_mode": mode,
+        "scope_file_count": scope_file_count,
+        "passed": passed,
+    }
+
+
+def _context_facts(payload: Any, output_bytes: int) -> Mapping[str, Any] | None:
+    if not isinstance(payload, Mapping):
+        return None
+
+    bundle_value = _find_value(payload, {"bundle"})
+    if not isinstance(bundle_value, list):
+        return {"available": False, "bytes": output_bytes}
+
+    order: list[str] = []
+    pivot_ids: list[str] = []
+    body_truncated: list[str] = []
+    for index, item in enumerate(bundle_value):
+        if not isinstance(item, Mapping):
+            continue
+        identifier = _find_value(item, {"symbol_id", "symbolid", "source_id", "sourceid", "chunk_id", "chunkid"})
+        if identifier is None:
+            name = _find_value(item, {"name"})
+            file_name = _find_value(item, {"file"})
+            line = _find_value(item, {"line"})
+            identifier = f"{name}|{file_name}|{line}|{index}"
+        identifier = str(identifier)
+        order.append(identifier)
+        role = str(_find_value(item, {"role"}) or "").casefold()
+        if role == "pivot":
+            pivot_ids.append(identifier)
+        if _find_value(item, {"body_truncated", "bodytruncated"}) is True:
+            body_truncated.append(identifier)
+
+    disposition = _find_mapping(payload, {"disposition"}) or {}
+    truncation = {
+        "status": disposition.get("status"),
+        "reason": disposition.get("reason"),
+        "body_truncated": body_truncated,
+    }
+    return {
+        "available": True,
+        "pivot_ids": pivot_ids,
+        "order": order,
+        "truncation": _jsonable(truncation),
+        "bytes": output_bytes,
+    }
+
+
 def _broker_mapping(payload: Any) -> Mapping[str, Any] | None:
     value = _find_mapping(payload, {"broker", "semantic_broker", "semanticbroker"})
     if value is not None:
@@ -899,6 +977,24 @@ def _record_from_result(
     view = view or active.view_id
     generation = generation if generation is not None else active.generation
     platform_name = _platform_name()
+    resolution_gate = _resolution_gate(payload, workload)
+    metadata = dict(workload.metadata)
+    if resolution_gate is not None:
+        metadata["resolution_gate"] = dict(resolution_gate)
+        metadata["resolution_report"] = dict(_find_mapping(payload, {"resolution"}) or {})
+    context_facts = _context_facts(payload, len(result.stdout))
+    if context_facts is not None:
+        metadata["context_facts"] = dict(context_facts)
+    gate_passed = hard_gate_passed(
+        workload,
+        wall_ms=result.wall_ms,
+        exit_code=result.exit_code,
+        timed_out=result.timed_out,
+        hard_memory_bytes=result.hard_memory_bytes,
+        platform_name=platform_name,
+    ) and result.completed
+    if resolution_gate is not None:
+        gate_passed = gate_passed and bool(resolution_gate["passed"])
     return ReplayRecord(
         workload_id=workload.workload_id,
         platform=platform_name,
@@ -911,14 +1007,7 @@ def _record_from_result(
         output_sha256=result.output_sha256,
         exit_code=result.exit_code,
         timed_out=result.timed_out,
-        hard_gate_passed=hard_gate_passed(
-            workload,
-            wall_ms=result.wall_ms,
-            exit_code=result.exit_code,
-            timed_out=result.timed_out,
-            hard_memory_bytes=result.hard_memory_bytes,
-            platform_name=platform_name,
-        ),
+        hard_gate_passed=gate_passed,
         attempt=attempt,
         warmup=warmup,
         timeout_ms=timeout_ms,
@@ -936,7 +1025,7 @@ def _record_from_result(
         hard_memory_bytes=result.hard_memory_bytes,
         hard_memory_metric=result.hard_memory_metric,
         stderr_sha256=result.stderr_sha256,
-        metadata=dict(workload.metadata),
+        metadata=metadata,
     )
 
 
@@ -948,12 +1037,62 @@ def compare_pair(depth0: ReplayRecord | Mapping[str, Any], depth1: ReplayRecord 
             return record[key]
         return record.get("output_digest") if key == "output_sha256" else None
 
+    def metadata(record: ReplayRecord | Mapping[str, Any]) -> Mapping[str, Any]:
+        if isinstance(record, ReplayRecord):
+            return record.metadata
+        value = record.get("metadata")
+        return value if isinstance(value, Mapping) else {}
+
+    left_facts = metadata(depth0).get("context_facts")
+    right_facts = metadata(depth1).get("context_facts")
+    left_facts = left_facts if isinstance(left_facts, Mapping) else {}
+    right_facts = right_facts if isinstance(right_facts, Mapping) else {}
+    left_available = bool(left_facts) and left_facts.get("available", True) is not False
+    right_available = bool(right_facts) and right_facts.get("available", True) is not False
+    left_bytes = int(left_facts.get("bytes", 0) or 0)
+    right_bytes = int(right_facts.get("bytes", 0) or 0)
     return PairComparison(
         output_digest_match=value(depth0, "output_sha256") == value(depth1, "output_sha256"),
         delta_wall_ms=int(value(depth1, "wall_ms")) - int(value(depth0, "wall_ms")),
         exit_code_match=value(depth0, "exit_code") == value(depth1, "exit_code"),
         timeout_match=value(depth0, "timed_out") == value(depth1, "timed_out"),
+        stable_pivot_match=left_available and right_available and left_facts.get("pivot_ids") == right_facts.get("pivot_ids"),
+        ordering_match=left_available and right_available and left_facts.get("order") == right_facts.get("order"),
+        truncation_match=left_available and right_available and left_facts.get("truncation") == right_facts.get("truncation"),
+        added_bytes=right_bytes - left_bytes,
     )
+
+
+def _attach_depth_pair(records: list[ReplayRecord]) -> list[ReplayRecord]:
+    by_attempt = {
+        record.attempt: record
+        for record in records
+        if record.workload_id == "tool.context.references.depth0"
+    }
+    updated = list(records)
+    for index, record in enumerate(records):
+        if record.workload_id != "tool.context.references.depth1":
+            continue
+        left = by_attempt.get(record.attempt)
+        if left is None:
+            continue
+        comparison = compare_pair(left, record)
+        metadata = dict(record.metadata)
+        metadata["depth_pair"] = {
+            "stable_pivot_match": comparison.stable_pivot_match,
+            "ordering_match": comparison.ordering_match,
+            "truncation_match": comparison.truncation_match,
+            "added_bytes": comparison.added_bytes,
+        }
+        updated[index] = dataclasses.replace(
+            record,
+            metadata=metadata,
+            hard_gate_passed=record.hard_gate_passed
+            and comparison.stable_pivot_match
+            and comparison.ordering_match
+            and comparison.truncation_match,
+        )
+    return updated
 
 
 def _replace_placeholders(token: str, request: ReplayRequest, target: str | None) -> str:
@@ -984,8 +1123,9 @@ def _mcp_argv(request: ReplayRequest) -> list[str]:
 
 
 def _producer_argv(request: ReplayRequest, command: Sequence[str], target: str | None = None) -> list[str]:
+    validated = _validate_command(list(command), label="producer command", execution_kind="julie_store")
     producer = [str(request.producer)] if isinstance(request.producer, (str, Path)) else [str(item) for item in request.producer]
-    return producer + [_replace_placeholders(str(token), request, target) for token in command]
+    return producer + [_replace_placeholders(str(token), request, target) for token in validated]
 
 
 def _target_from_payload(payload: Any) -> str | None:
@@ -1012,8 +1152,40 @@ def _validate_command(
         required = {"--store", "--view", "--json", "--request-id", "--idempotency-key", "--request-timeout-seconds"}
         if not required.issubset(flags):
             raise ValueError(f"{label} julie_store command must include store/view/request identity/timeout/json")
-        if command[1] == "import" and not {"--root", "--level"}.issubset(flags):
-            raise ValueError(f"{label} store import must include root and level")
+        def flag_values(flag: str) -> list[str]:
+            values: list[str] = []
+            index = 0
+            while index < len(command):
+                token = command[index]
+                if token == flag:
+                    if index + 1 >= len(command) or command[index + 1].startswith("--"):
+                        raise ValueError(f"{label} {flag} requires a value")
+                    values.append(command[index + 1])
+                    index += 2
+                    continue
+                prefix = flag + "="
+                if token.startswith(prefix):
+                    values.append(token[len(prefix):])
+                index += 1
+            return values
+
+        def required_placeholder(flag: str, placeholder: str) -> None:
+            values = flag_values(flag)
+            if values != [f"{{{placeholder}}}"]:
+                raise ValueError(f"{label} {flag} must be bound to {{{placeholder}}} runtime placeholder")
+
+        required_placeholder("--store", "store_copy")
+        required_placeholder("--view", "view")
+        if command[1] == "import":
+            if not {"--root", "--family", "--level"}.issubset(flags):
+                raise ValueError(f"{label} store import must include root, family, and level")
+            required_placeholder("--family", "family")
+            required_placeholder("--root", "workspace")
+        else:
+            if "--family" in flags:
+                raise ValueError(f"{label} store resolve does not accept --family")
+            if "--root" in flags:
+                raise ValueError(f"{label} store resolve does not accept --root")
         return tuple(command)
     for item in command:
         if item.startswith("--"):
@@ -1198,6 +1370,8 @@ def _phase_records(
     workspace: Path,
     phase: str,
     offsets: dict[Path, int] | None = None,
+    *,
+    pid: int | None = None,
 ) -> list[dict[str, Any]]:
     logs = workspace / ".miller" / "logs"
     if not logs.is_dir():
@@ -1208,19 +1382,46 @@ def _phase_records(
             with path.open("r", encoding="utf-8", errors="replace") as handle:
                 if offsets is not None:
                     handle.seek(offsets.get(path, 0))
-                lines = handle.readlines()
+                lines = handle
+                for line in lines:
+                    try:
+                        value = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(value, Mapping) or _phase_value(value, "Phase") != phase:
+                        continue
+                    if pid is not None:
+                        try:
+                            record_pid = int(_phase_value(value, "pid"))
+                        except (TypeError, ValueError):
+                            continue
+                        if record_pid != pid:
+                            continue
+                    matches.append(dict(value))
+                    if len(matches) > MAX_PHASE_RECORDS:
+                        del matches[: len(matches) - MAX_PHASE_RECORDS]
                 if offsets is not None:
                     offsets[path] = handle.tell()
         except OSError:
             continue
-        for line in lines:
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(value, Mapping) and _phase_value(value, "Phase") == phase:
-                matches.append(dict(value))
     return matches
+
+
+def _bounded_text(line: str, *, max_bytes: int = MAX_CAPTURE_BYTES) -> str:
+    if max_bytes <= 0:
+        return ""
+    encoded = line.encode("utf-8", errors="replace")
+    if len(encoded) > max_bytes:
+        return encoded[-max_bytes:].decode("utf-8", errors="replace")
+    return line
+
+
+def _append_bounded(captured: list[str], line: str, *, max_bytes: int = MAX_CAPTURE_BYTES) -> None:
+    captured.append(_bounded_text(line, max_bytes=max_bytes))
+    total = sum(len(item.encode("utf-8", errors="replace")) for item in captured)
+    while captured and total > max_bytes:
+        removed = captured.pop(0)
+        total -= len(removed.encode("utf-8", errors="replace"))
 
 
 class _McpSession:
@@ -1245,8 +1446,8 @@ class _McpSession:
             bufsize=1,
             start_new_session=os.name != "nt",
         )
-        self._stdout: queue.Queue[str] = queue.Queue()
-        self._responses: list[str] = []
+        self._stdout: queue.Queue[str] = queue.Queue(maxsize=256)
+        self._stdout_capture: list[str] = []
         self._stderr: list[str] = []
         self._next_id = 1
         self._closed = False
@@ -1254,7 +1455,7 @@ class _McpSession:
         self._peaks: dict[str, int] = {}
         self._stdout_thread = threading.Thread(
             target=self._read_lines,
-            args=(self.process.stdout, self._stdout, None),
+            args=(self.process.stdout, self._stdout, self._stdout_capture),
             name="perf-recovery-mcp-stdout",
             daemon=True,
         )
@@ -1283,20 +1484,25 @@ class _McpSession:
         if stream is None:
             return
         for line in iter(stream.readline, ""):
+            bounded_line = _bounded_text(line)
             if output is not None:
-                output.put(line)
+                try:
+                    output.put_nowait(bounded_line)
+                except queue.Full:
+                    pass
             if captured is not None:
-                captured.append(line)
+                _append_bounded(captured, bounded_line)
 
-    def request_json(self, method: str, params: Mapping[str, Any], timeout_ms: int) -> Mapping[str, Any]:
+    def request_json(self, method: str, params: Mapping[str, Any], deadline: float) -> Mapping[str, Any]:
         if self.process.stdin is None:
             raise RuntimeError("MCP stdin is unavailable")
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"timed out before MCP request {method}")
         request_id = self._next_id
         self._next_id += 1
         message = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": dict(params)}
         self.process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
         self.process.stdin.flush()
-        deadline = time.monotonic() + timeout_ms / 1000
         while time.monotonic() < deadline:
             try:
                 line = self._stdout.get(timeout=min(0.1, max(0.01, deadline - time.monotonic())))
@@ -1304,7 +1510,6 @@ class _McpSession:
                 if self.process.poll() is not None:
                     raise RuntimeError("MCP host exited before its response")
                 continue
-            self._responses.append(line)
             try:
                 value = json.loads(line)
             except json.JSONDecodeError:
@@ -1313,20 +1518,39 @@ class _McpSession:
                 return value
         raise TimeoutError(f"timed out waiting for MCP response {method}")
 
-    def notify(self, method: str, params: Mapping[str, Any]) -> None:
+    def notify(self, method: str, params: Mapping[str, Any], deadline: float) -> None:
         if self.process.stdin is None:
             raise RuntimeError("MCP stdin is unavailable")
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"timed out before MCP notification {method}")
         self.process.stdin.write(
             json.dumps({"jsonrpc": "2.0", "method": method, "params": dict(params)}, separators=(",", ":")) + "\n"
         )
         self.process.stdin.flush()
 
-    def wait_for_phase(self, phase: str, timeout_ms: int) -> Mapping[str, Any] | None:
-        deadline = time.monotonic() + timeout_ms / 1000
+    def workspace_status(self, deadline: float) -> Mapping[str, Any]:
+        return self.request_json(
+            "tools/call",
+            {
+                "name": "workspace",
+                "arguments": {"operation": "status", "path": str(self.request.workspace)},
+            },
+            deadline,
+        )
+
+    def wait_for_phase(self, phase: str, deadline: float) -> Mapping[str, Any] | None:
         while time.monotonic() < deadline:
-            records = _phase_records(self.request.workspace, phase, self._log_offsets)
+            records = _phase_records(self.request.workspace, phase, self._log_offsets, pid=self.process.pid)
             if records:
-                return records[-1]
+                completed = [
+                    record
+                    for record in records
+                    if str(_phase_value(record, "Outcome")).casefold() == "completed"
+                ]
+                if completed:
+                    return completed[-1]
+                if self.process.poll() is not None:
+                    return records[-1]
             if self.process.poll() is not None:
                 return None
             time.sleep(0.05)
@@ -1337,7 +1561,17 @@ class _McpSession:
             return
         self._closed = True
         self._stop.set()
-        _terminate_process(self.process)
+        if self.process.stdin is not None:
+            try:
+                self.process.stdin.close()
+            except (OSError, ValueError):
+                pass
+        try:
+            self.process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            _terminate_process(self.process)
+        except (OSError, ValueError):
+            _terminate_process(self.process)
         self._monitor.join(timeout=1)
         self._stdout_thread.join(timeout=1)
         self._stderr_thread.join(timeout=1)
@@ -1345,7 +1579,7 @@ class _McpSession:
     def result(
         self,
         started: float,
-        phase: Mapping[str, Any] | None,
+        evidence: Mapping[str, Any],
         timed_out: bool,
         *,
         close: bool = True,
@@ -1353,12 +1587,19 @@ class _McpSession:
         if close:
             self.close()
         metrics = normalise_memory_metrics(_platform_name(), self._peaks)
-        stdout = json.dumps({"phases": {"startup_total": dict(phase or {})}}, sort_keys=True).encode()
+        phase = evidence.get("phase")
+        status = evidence.get("workspace_status")
+        stdout = json.dumps(
+            {"phases": {"startup_total": dict(phase or {})}, "workspace_status": status},
+            sort_keys=True,
+        ).encode()
         stderr = "".join(self._stderr).encode()
+        completed = bool(evidence.get("completed")) and not timed_out
+        ended = float(evidence.get("ready_at") or evidence.get("observed_at") or time.perf_counter())
         return CommandResult(
-            exit_code=0 if phase is not None and not timed_out else self.process.returncode,
+            exit_code=0 if completed else self.process.returncode,
             timed_out=timed_out,
-            wall_ms=max(0, round((time.perf_counter() - started) * 1000)),
+            wall_ms=max(0, round((ended - started) * 1000)),
             cpu_ms=None,
             output_sha256=hashlib.sha256(stdout).hexdigest(),
             stderr_sha256=hashlib.sha256(stderr).hexdigest(),
@@ -1370,6 +1611,7 @@ class _McpSession:
             io={"read_bytes": None, "write_bytes": None, "read_syscalls": None, "write_syscalls": None},
             stdout=stdout,
             stderr=stderr,
+            completed=completed,
         )
 
 
@@ -1378,11 +1620,16 @@ def _bootstrap_session(
     *,
     timeout_ms: int,
     environment: Mapping[str, str],
-) -> tuple[_McpSession, float, Mapping[str, Any] | None, bool]:
+    require_phase: bool = False,
+) -> tuple[_McpSession, float, Mapping[str, Any], bool]:
     started = time.perf_counter()
+    deadline = time.monotonic() + timeout_ms / 1000
     session = _McpSession(request, environment)
     phase: Mapping[str, Any] | None = None
+    status: Mapping[str, Any] | None = None
+    ready_at: float | None = None
     timed_out = False
+    completed = False
     try:
         session.request_json(
             "initialize",
@@ -1391,14 +1638,36 @@ def _bootstrap_session(
                 "capabilities": {},
                 "clientInfo": {"name": "miller-perf-recovery", "version": "1"},
             },
-            timeout_ms,
+            deadline,
         )
-        session.notify("notifications/initialized", {})
-        phase = session.wait_for_phase("startup_total", timeout_ms)
-        timed_out = phase is None
+        session.notify("notifications/initialized", {}, deadline)
+        status = session.workspace_status(deadline)
+        status_result = status.get("result") if isinstance(status, Mapping) else None
+        status_ready = isinstance(status_result, Mapping) and status_result.get("isError") is not True
+        if not status_ready:
+            raise RuntimeError("MCP workspace status probe did not complete successfully")
+        if require_phase:
+            phase = session.wait_for_phase("startup_total", deadline)
+            completed = (
+                phase is not None
+                and str(_phase_value(phase, "Outcome")).casefold() == "completed"
+            )
+        else:
+            phase_records = _phase_records(request.workspace, "startup_total", pid=session.process.pid)
+            phase = phase_records[-1] if phase_records else None
+            completed = phase is None or str(_phase_value(phase, "Outcome")).casefold() == "completed"
+        ready_at = time.perf_counter()
     except (OSError, RuntimeError, TimeoutError):
-        timed_out = True
-    return session, started, phase, timed_out
+        timed_out = time.monotonic() >= deadline
+    observed_at = time.perf_counter()
+    evidence: dict[str, Any] = {
+        "phase": phase,
+        "workspace_status": status,
+        "ready_at": ready_at,
+        "observed_at": observed_at,
+        "completed": completed,
+    }
+    return session, started, evidence, timed_out
 
 
 def _run_mcp_bootstrap(
@@ -1408,12 +1677,13 @@ def _run_mcp_bootstrap(
     timeout_ms: int,
     environment: Mapping[str, str],
 ) -> CommandResult:
-    session, started, phase, timed_out = _bootstrap_session(
+    session, started, evidence, timed_out = _bootstrap_session(
         request,
         timeout_ms=timeout_ms,
         environment=environment,
+        require_phase=workload.workload_id == "startup.leader.no_change",
     )
-    return session.result(started, phase, timed_out)
+    return session.result(started, evidence, timed_out)
 
 
 def _run_mcp_workload(
@@ -1430,34 +1700,24 @@ def _run_mcp_workload(
     )
     commit = _commit_for_workspace(request.workspace)
     records: list[ReplayRecord] = []
-    if keep_alive:
-        session, started, phase, timed_out = _bootstrap_session(
+    retained: _McpSession | None = None
+    total_attempts = workload.warmups + workload.runs
+    for index in range(total_attempts):
+        session, started, evidence, timed_out = _bootstrap_session(
             request,
             timeout_ms=effective_timeout,
             environment=environment,
+            require_phase=workload.workload_id == "startup.leader.no_change",
         )
-        result = session.result(started, phase, timed_out, close=False)
-        for index in range(workload.warmups + workload.runs):
-            records.append(
-                _record_from_result(
-                    request,
-                    workload,
-                    result,
-                    attempt=index + 1,
-                    warmup=index < workload.warmups,
-                    timeout_ms=effective_timeout,
-                    environment=environment,
-                    commit=commit,
-                )
-            )
-        return records, session
-    for index in range(workload.warmups + workload.runs):
-        result = _run_mcp_bootstrap(
-            request,
-            workload,
-            timeout_ms=effective_timeout,
-            environment=environment,
+        retain = (
+            keep_alive
+            and index == total_attempts - 1
+            and not timed_out
+            and bool(evidence.get("completed"))
         )
+        result = session.result(started, evidence, timed_out, close=not retain)
+        if retain:
+            retained = session
         records.append(
             _record_from_result(
                 request,
@@ -1470,7 +1730,7 @@ def _run_mcp_workload(
                 commit=commit,
             )
         )
-    return records, None
+    return records, retained
 
 
 def _snapshot_helper_module() -> Any:
@@ -1532,7 +1792,7 @@ def _one_file_path(request: ReplayRequest, workload: Workload) -> Path:
     return candidates[0]
 
 
-def _prepare_one_file_resolution(
+def _prepare_resolve_resolution(
     request: ReplayRequest,
     workload: Workload,
     environment: Mapping[str, str],
@@ -1555,18 +1815,20 @@ def _prepare_one_file_resolution(
         "--level",
         "full",
         "--request-id",
-        "perf-recovery-one-file-import",
+        f"perf-recovery-{workload.metadata.get('resolution_scope', 'resolve')}-setup",
         "--idempotency-key",
-        "perf-recovery-one-file-import",
+        f"perf-recovery-{workload.metadata.get('resolution_scope', 'resolve')}-setup-key",
         "--request-timeout-seconds",
         "30",
         "--json",
     )
     if active.mode != "family":
-        raise RuntimeError("one-file producer resolution requires a family store")
-    result = _run_process(request, _producer_argv(request, import_command), timeout_ms, environment)
-    if result.timed_out or result.exit_code != 0:
-        raise RuntimeError(f"{workload.workload_id} staged import failed")
+        raise RuntimeError("producer resolution requires a family store")
+    setup_environment = dict(environment)
+    setup_environment.pop("JULIE_STORE_RESOLUTION_DELTA", None)
+    result = _run_process(request, _producer_argv(request, import_command), timeout_ms, setup_environment)
+    if result.timed_out or result.exit_code != 0 or not result.completed:
+        raise RuntimeError(f"{workload.workload_id} staged full import setup failed")
 
 
 def run_workload(
@@ -1601,10 +1863,22 @@ def run_workload(
         context_batch=workload.context_batch,
         resolution_delta=resolution_delta,
     )
-    if workload.execution_kind == "julie_store" and workload.metadata.get("resolution_scope") == "one_file":
-        _prepare_one_file_resolution(request, workload, environment, effective_timeout)
+    if workload.execution_kind == "julie_store":
+        _validate_command(list(actual_command), label=f"{workload.workload_id} command", execution_kind="julie_store")
+    if workload.execution_kind == "julie_store" and workload.metadata.get("resolution_scope") in {"one_file", "full"}:
+        _prepare_resolve_resolution(request, workload, environment, effective_timeout)
     process_command = actual_command if command is not None else _miller_argv(request, actual_command, target)
     commit = _commit_for_workspace(request.workspace)
+    if workload.workload_id == "workspace.open.no_change":
+        setup = run_command(
+            request,
+            process_command,
+            timeout_ms=effective_timeout,
+            env=environment,
+            semantic=semantic,
+        )
+        if setup.timed_out or setup.exit_code != 0 or not setup.completed:
+            raise RuntimeError("workspace.open.no_change setup failed")
     records: list[ReplayRecord] = []
     for index in range(workload.warmups + workload.runs):
         warmup = index < workload.warmups
@@ -1616,7 +1890,7 @@ def run_workload(
                 environment=environment,
             )
         elif workload.execution_kind == "julie_store":
-            producer_command = actual_command if command is not None else _producer_argv(request, actual_command, target)
+            producer_command = _producer_argv(request, actual_command, target)
             lock = SEMANTIC_WORKLOAD_LOCK if semantic else _NullLock()
             with lock:
                 result = _run_process(request, list(producer_command), effective_timeout, environment)
@@ -1689,21 +1963,44 @@ def run_replay(request: ReplayRequest, workloads: Mapping[str, Workload]) -> lis
             elif workload_id == "startup.reader.warm" and leader_session is not None:
                 reader_records, _ = _run_mcp_workload(request, workload, keep_alive=False)
                 records.extend(reader_records)
+                leader_session.close()
+                leader_session = None
             else:
                 records.extend(run_workload(request, workload))
     finally:
         if leader_session is not None:
             leader_session.close()
-    return _attach_parity(records, workloads)
+    return _attach_parity(_attach_depth_pair(records), workloads)
 
 
 def write_jsonl(path: Path | str, records: Iterable[ReplayRecord]) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8", newline="\n") as handle:
-        for record in records:
-            handle.write(json.dumps(record.to_dict(), sort_keys=True, separators=(",", ":")))
-            handle.write("\n")
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            for record in records:
+                handle.write(json.dumps(record.to_dict(), sort_keys=True, separators=(",", ":")))
+                handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, output_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _default_manifest() -> Path:

@@ -48,3 +48,14 @@ Miller evidence was used first. The assigned workspace was registered as `perfor
 - Per packet safety constraints, no real incident-store replay, live DB copy, baseline capture, or long producer resolve was run. The harness and snapshot paths were exercised only with disposable test fixtures.
 - The named `Server/Tools/ReferenceEvidenceReader` paths in the original brief do not exist at the base; the lead corrected ownership to the actual `ContextTool`/`ContextToolTests` seam.
 - The assigned Miller index remains unhealthy on the pre-existing exit-135 import failure; no refresh or live-store mutation was attempted.
+
+## Harness correction packet
+
+- Correction base: `d81e187fcb6d8ddf0af47bc8bd486342d9e80844` on `feature/performance-recovery`.
+- RED: after the correction tests were added and before the behavior changes, `PYTHONDONTWRITEBYTECODE=1 python scripts/tests/test_perf_recovery.py` ran 41 tests with 10 failures and 3 errors. The failures covered producer path/setup/scope contracts, workspace-open convergence, MCP status/deadline/PID/attempt/cleanup behavior, depth semantics, output atomicity, and Windows handle signatures.
+- GREEN: `PYTHONDONTWRITEBYTECODE=1 python scripts/tests/test_perf_recovery.py` — 44 passed, 0 failed, 0 skipped.
+- Verification: `git diff --check` passed.
+- Correction changes are limited to `scripts/perf-recovery.py`, `scripts/tests/test_perf_recovery.py`, and `scripts/benchmarks/perf-recovery-workloads.json`; the snapshot helper/tests, .NET files, and lead-owned plan were not changed by this packet.
+- The correction uses disposable test fixtures only. No real incident replay, live-store copy, producer resolve, snapshot copy, push, or release was run.
+- Goldfish checkpoint: `.memories/2026-08-14/071901_9ffa.md` (`checkpoint_9ffab36c`), captured before commit.
+- Pre-commit state: owned changes are present; the lead plan edit remains modified and unstaged. The correction commit SHA and final state will be recorded after commit.
