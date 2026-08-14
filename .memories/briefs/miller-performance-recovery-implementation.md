@@ -3,7 +3,7 @@ id: miller-performance-recovery-implementation
 title: Miller performance recovery implementation
 status: active
 created: 2026-08-14T03:57:03.433Z
-updated: 2026-08-14T03:57:03.433Z
+updated: 2026-08-14T05:27:25.005Z
 tags:
   - performance
   - family-store
@@ -24,16 +24,19 @@ Measured default relationship context takes about 11.93 seconds, leader startup 
 
 ## Constraints
 
-- Preserve Store Contract v1 and all existing MCP/CLI schemas and deterministic outputs.
-- Measure every performance change before and after on the same fixed workload.
+- Preserve Store Contract v1 and all existing MCP/CLI schemas and deterministic semantics.
+- A replay row must exercise the production path it names; CLI status/leader reads are diagnostic controls, not startup measurements.
+- Never mutate the live store. Use a stable, hash-verified whole-family snapshot with no live/unknown owner and no uncheckpointed WAL.
+- Keep context batching default-off until same-depth batch parity and copied-store lexical timing pass.
 - Characterize shipped incremental behavior before editing it.
-- Keep Windows compatibility and dedicated Windows memory/broker gates.
+- Split store lifecycle rebase/collection from query/index/statistics tuning so each has independent evidence and rollback.
+- Keep Windows compatibility and dedicated Windows coordinator/resolution, memory, copy/lock, and broker gates.
 - Keep source changes in the named Miller and Julie recovery worktrees.
 - No pin bump, push, tag, publish, or release without explicit approval.
 
 ## Success Criteria
 
-All eight tasks in the implementation plan are landed and lead-reviewed; Linux and Windows correctness, scale, memory, semantic, and timing gates pass; remaining PERF rows are closed with measured evidence.
+Completed Tasks 1–4 remain reviewed but production-volume unproven. Task 1B supplies faithful MCP/producer workloads and the immutable baseline; Task 2B closes resolve-claim and copied-field recovery; Task 5 measures before any behavior repair; Tasks 6, 7A, and 7B close resolver, lifecycle, and read-path costs separately; Task 8 closes Linux and Windows correctness, scale, memory, semantic, and timing gates.
 
 ## References
 
@@ -42,4 +45,4 @@ All eight tasks in the implementation plan are landed and lead-reviewed; Linux a
 
 ## Status
 
-Implementation active on `feature/performance-recovery`; Task 1 replay harness is in progress.
+Implementation active on `feature/performance-recovery`. Tasks 1–4 are committed and lead-reviewed. Grok 4.6's second review was reconciled on 2026-08-14; plan correction is pending commit before further behavior changes.

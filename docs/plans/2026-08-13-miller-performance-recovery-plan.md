@@ -21,11 +21,13 @@
 - One-file resolution must complete within 5 s on the development machine and 10 s on constrained Windows.
 - Full real-Miller resolution must complete within 60 s on the development machine and 120 s on constrained Windows.
 - A byte-identical producer retry must complete within 2 s on the development machine and 5 s on constrained Windows.
+- A replay workload must invoke the production path named by its ID: MCP startup rows start the stdio host, producer resolve rows submit a producer resolve request, and CLI status/leader reads are diagnostic controls only.
+- Workload timeouts are observation failsafes, not performance budgets. A workload timeout must exceed its published hard budget and the slowest observed baseline long enough to capture phase evidence.
 - Preserve deterministic ordering, coverage, truncation fields, selected counts, and provenance for untruncated relationship-tool outputs.
 - Any extraction-backed behavior must pass `SELECT language, kind, COUNT(*) FROM symbols GROUP BY 1,2` on a real supported-language extract, plus the equivalent grouping on the specific new extraction table when one is introduced.
 - Every full-resolution optimization must prove the same exact digest as the existing full resolver before becoming the default.
 - Never classify exit code 135 as OOM without captured process or operating-system evidence; only exit 137 retains the current OOM retry policy.
-- Never mutate the live coordinator or store during development. Reproduce against an isolated `MILLER_HOME` and a reflink, snapshot, or full copy.
+- Never mutate the live coordinator or store during development. Stop writers and create a verified whole-family snapshot containing `CURRENT`, the selected generation, coordinator, resolution bases, and required sidecars; reject a snapshot with WAL/SHM or hashes that change during copy. Reflink is optional on Linux and never assumed on Windows.
 - Do not run concurrent Rust builds, .NET builds, or performance workloads on the acceptance machine.
 - Do not rerun a passing expensive scope on an unchanged commit; reuse its verification-ledger entry.
 - Do not add a new MCP tool, public CLI verb, Store Contract version, dependency, release, tag, push, or pin bump without applicable explicit approval.
@@ -65,13 +67,14 @@ This plan supersedes only residual work from the August 11 family-store recovery
 ## Recovery Order and Rollback
 
 1. Establish an isolated replay and ledger before changing behavior.
-2. Repair or prove producer claim recovery before optimizing resolution.
-3. Prove which no-change producer or leader phase remains expensive, then fix only that phase.
-4. Characterize the already-shipped incremental resolver and stop if its one-file parity and timing gates pass.
-5. Bound store growth and prove safe base rotation and garbage collection.
-6. Batch context evidence reads and skip enrichment that cannot enter the budget.
-7. Make impact traversal limits explicit and push bounded reads into SQLite.
-8. Run Linux and Windows gates, then adopt the verified producer through the normal approval-gated pin workflow.
+2. Correct the workload contract and capture a pre-change copied-store baseline.
+3. Repair or prove import and resolve claim recovery before optimizing resolution.
+4. Prove which no-change producer or leader phase remains expensive, then fix only that phase.
+5. Characterize the already-shipped incremental resolver and stop if its one-file parity and timing gates pass.
+6. Bound store growth and prove safe base rotation and garbage collection before changing read SQL.
+7. Capture post-rotation read plans, then make only the measured query/index/statistics change.
+8. Batch context evidence reads and make it default only after lexical copied-store replay passes.
+9. Run Linux and Windows gates, then adopt the verified producer through the normal approval-gated pin workflow.
 
 Each slice builds and tests independently. Producer optimizations retain the full resolver as fallback. Miller query optimizations retain existing read paths behind internal rollback switches until replay parity is recorded.
 
@@ -81,7 +84,7 @@ Each slice builds and tests independently. Producer optimizations retain the ful
 - Start Julie execution from current `main` in one worktree on branch `feature/miller-performance-recovery-producer`; inventory and three-way-diff every existing Julie performance worktree before moving changes.
 - Treat Miller `main` as authoritative when reconciling `feature/store-incremental-resolution-consumer`. Transplant only coverage missing from `main`, preserving later cursor/base-rotation tests.
 - `JULIE_STORE_RESOLUTION_DELTA=off` is the existing producer fallback to the full resolver.
-- Add temporary internal switch `MILLER_CONTEXT_REFERENCE_BATCH=off`. Its default remains off until focused parity and replay pass, changes to on in the integrating slice, and is tested in both modes. Do not add an impact query switch unless Task 7 proves a new query or index is required.
+- Add temporary internal switch `MILLER_CONTEXT_REFERENCE_BATCH=off`. Its default remains off until focused parity and lexical copied-store replay pass, changes to on in the integrating slice, and is tested in both modes. Task 3's first implementation enabled the batch path when unset; the correction slice must restore default-off before replay. Do not add an impact query switch unless Task 7B proves a new query, index, or statistics maintenance step is required.
 - Remove neither legacy path in this recovery release. A later cleanup requires its own evidence that the fallback has not been used and its own approval.
 
 ## Verification Strategy
@@ -100,7 +103,7 @@ Each slice builds and tests independently. Producer optimizations retain the ful
 
 **Security scope:** `security-secrets`: `gitleaks detect --source . --no-banner`; `security-deps`: `dotnet list package --vulnerable --include-transitive` in Miller and `cargo audit` in Julie. Missing tooling is a branch-gate failure, not a silent skip.
 
-**Replay/metric evidence:** Hard gates are wall time, exact output/digest parity, automatic stale-claim recovery, old-owner fencing, bounded SQL/read counts, truthful truncation, Linux PSS at or below 350 MB idle/600 MB peak, and Windows `PROCESS_MEMORY_COUNTERS_EX.PrivateUsage` at or below the same 350 MB/600 MB ceilings. Windows working set is recorded report-only. CPU, I/O, phase durations, row counts, database size, query plans, and cache counts are report-only unless a task sets an explicit threshold.
+**Replay/metric evidence:** Hard gates are wall time, semantic output invariants, exact resolver digest parity, automatic stale-claim recovery, old-owner fencing, bounded SQL/read counts, truthful truncation, Linux PSS at or below 350 MB idle/600 MB peak, and Windows `PROCESS_MEMORY_COUNTERS_EX.PrivateUsage` at or below the independently enforced 350 MB/600 MB ceilings. PSS and PrivateUsage are not compared to each other. Windows working set is recorded report-only. CPU, I/O, phase durations, row counts, database size, query plans, and cache counts are report-only unless a task sets an explicit threshold.
 
 **Escalation triggers:** Run Scale for indexing, startup, store-read, graph-read, or pin changes. Run real language extraction for resolver-input changes. Run Windows filesystem/process tests for claims, promotion, rotation, supervision, or paths. Run semantic broker soak for startup or sidecar-admission changes.
 
@@ -112,16 +115,19 @@ Each slice builds and tests independently. Producer optimizations retain the ful
 
 | Task | Parallel batch | File ownership | Serialization required | Dependency reason |
 |---|---|---|---|---|
-| Task 1: Lock replay and ledger | None - serial | Miller: create `scripts/perf-recovery.py`, `scripts/tests/test_perf_recovery.py`, `scripts/benchmarks/perf-recovery-workloads.json`; modify `PERF.md` | Yes | All tasks consume its workloads and evidence schema. |
+| Task 1: Lock replay safety and ledger | None - serial | Miller: create `scripts/perf-recovery.py`, `scripts/tests/test_perf_recovery.py`, `scripts/benchmarks/perf-recovery-workloads.json`; modify `PERF.md` | Yes | All tasks consume its workloads and evidence schema. |
+| Task 1B: Correct workload fidelity and freeze the baseline | None - serial | Miller replay harness, workload manifest, replay tests, copied-store snapshot helper/evidence, plus only the context batch default and its focused test | Yes | Reopens the replay contract before Tasks 5-8 because Task 1 proved safety but several rows exercised diagnostic CLI paths rather than the named production paths. |
 | Task 2: Recover and fence claims | Batch A | Julie: `store/coordinator.rs`, `store_coordinator_contract.rs`; Miller: `JulieExtractRunner.cs`, `JulieExtractExceptions.cs`, runner/scan-failure tests | No | None - safe parallel batch. |
+| Task 2B: Validate resolve-claim coverage and copied-field healing | None - serial | Julie coordinator/CLI contract tests only for a proven coverage gap; copied-store recovery and Windows-liveness evidence | Yes | Requires Task 1B's verified snapshot; validates the already-shipped resolve recovery against the copied incident state and Windows liveness. |
 | Task 3: Batch context evidence | Batch A | Miller: `ReferenceEvidenceReader.cs`, `ReferenceEvidenceReader.FamilyStore.cs`, `ContextTool.cs`, reader and context tests | No | None - safe parallel batch. |
 | Task 4: Characterize impact relationship reads and add telemetry | Batch A | Miller: `SqliteSymbolGraphIndex.cs`, `FamilyStoreReadSession.cs`, `ImpactTool.cs`, impact and SQLite graph/read-session tests | No | None - safe parallel batch. |
-| Task 5: Measure and repair the expensive no-change phase | None - serial | Julie manifest/from-artifact/executor paths only for failed reuse; Miller `StoreWorkspaceCoordinator.cs`, `IndexerService.cs`, `IndexerSidecarConverger.cs`, coordinator/indexer/sidecar tests | Yes | Requires Task 2 claim trust and Task 1 replay. |
+| Task 5: Measure and repair the expensive no-change phase | None - serial | Julie manifest/from-artifact/executor paths only for failed reuse; Miller `StoreWorkspaceCoordinator.cs`, `IndexerService.cs`, `IndexerSidecarConverger.cs`, coordinator/indexer/sidecar tests | Yes | Requires Tasks 1B and 2B; instrumentation may land earlier, but no behavior repair is accepted before the faithful baseline. |
 | Task 6: Prove the shipped incremental resolver or stop | None - serial | Julie: scope/equivalence/report/performance tests and evidence; modify `resolution.rs:1969-2105,3081-3155,3384-3445` or `store/resolve.rs:114-292,1200-1230` only for a characterized failure | Yes | Requires trustworthy claims and Task 5 no-change evidence; may exit green with no production edit. |
-| Task 7: Rebase, collect, rotate, and tune bounded reads | None - serial | Julie maintenance/rebase and tests; Miller family read session, family evidence reader, resolution/base-rotation tests | Yes | Requires Tasks 3 and 6 and a three-way reconciliation of the existing consumer branch against current `main`. |
+| Task 7A: Rebase, collect, and rotate | None - serial | Julie maintenance/rebase and tests; Miller family read-session and base-rotation tests | Yes | Requires Task 6, a pre-maintenance snapshot, and a three-way reconciliation of the existing consumer branch against current `main`. |
+| Task 7B: Optimize measured bounded reads | None - serial | Julie resolution-base schema/statistics only if proved; Miller `FamilyStoreReadSession`, family evidence reader, graph/resolution query-plan tests | Yes | Runs only after 7A so lifecycle compaction and read-path tuning have separate evidence and rollback commits. |
 | Task 8: Close Linux and Windows gates | None - serial | Miller `PERF.md`, `docs/README.md`, `docs/findings/2026-08-13-performance-recovery-verification.md`, parity scripts only if defective; approval-gated pin inputs | Yes | Integrates all prior slices. |
 
-### Task 1: Lock Replay and Ledger
+### Task 1: Lock Replay Safety and Ledger
 
 **Files:**
 - Create: `scripts/perf-recovery.py`
@@ -133,7 +139,7 @@ Each slice builds and tests independently. Producer optimizations retain the ful
 - Consumes: Miller CLI JSON, `MILLER_HOME`, current budgets, and a caller-supplied store copy.
 - Produces: CLI options `--workloads`, `--out`, `--miller`, `--workspace`, `--store-copy`, `--live-store`, `--only`, and `--runs`, with one JSONL record per attempt.
 
-**Contract inputs:** Workload IDs are `startup.reader.warm`, `startup.leader.no_change`, `workspace.open.no_change`, `producer.retry.identical`, `producer.resolve.one_file`, `producer.resolve.full`, `tool.inspect.warm`, `tool.context.references.depth0`, `tool.context.references.depth1`, `tool.impact.bounded`, and `tool.trace.warm`. `workspace.open.no_change` closes PERF-010 and uses the cold family-read 5 s/10 s budget; a genuinely stale full refresh is governed by the one-file/full resolution budgets. Require the original `--live-store`, prove the staged workspace's active family or legacy artifact is the exact `--store-copy`, isolate `MILLER_HOME`, use shell-free arguments, and use a 60 s first-attempt timeout unless the published workload budget is larger. `--only` selects a nonempty unique subset in manifest order and `--runs` overrides measured attempts without changing warmups. `MILLER_HOME` does not isolate the machine-global Windows semantic broker: serialize semantic workloads, record broker identity/health, and run lexical-only controls with `MILLER_SEMANTIC=off` rather than assuming home isolation.
+**Contract inputs:** The safety harness initially locks IDs `startup.reader.warm`, `startup.leader.no_change`, `workspace.open.no_change`, `producer.retry.identical`, `producer.resolve.one_file`, `producer.resolve.full`, `tool.inspect.warm`, context depth/batch controls, `tool.impact.bounded`, and `tool.trace.warm`; Task 1B makes their execution paths authoritative before they are used for decisions. `workspace.open.no_change` closes PERF-010 and uses the cold family-read 5 s/10 s budget. Require the original `--live-store`, prove the staged workspace's active family or legacy artifact is the exact `--store-copy`, isolate `MILLER_HOME`, and use shell-free arguments. `--only` selects a nonempty unique subset in manifest order and `--runs` overrides measured attempts without changing warmups. `MILLER_HOME` does not isolate the machine-global Windows semantic broker: serialize semantic workloads, record broker identity/health, and run lexical-only controls with `MILLER_SEMANTIC=off` rather than assuming home isolation.
 
 **File ownership:** Miller: create `scripts/perf-recovery.py`, `scripts/tests/test_perf_recovery.py`, `scripts/benchmarks/perf-recovery-workloads.json`; modify `PERF.md`
 
@@ -149,10 +155,10 @@ def test_refuses_live_store_path(self):
     with self.assertRaisesRegex(ValueError, "store-copy must not be the live store"):
         validate_request(request)
 
-def test_depth_pair_records_output_parity(self):
-    result = compare_pair(self.depth0, self.depth1)
+def test_same_depth_batch_pair_records_output_parity(self):
+    result = compare_pair(self.batch_off, self.batch_on)
     self.assertTrue(result.output_digest_match)
-    self.assertEqual(self.depth1.wall_ms - self.depth0.wall_ms, result.delta_wall_ms)
+    self.assertEqual(self.batch_on.wall_ms - self.batch_off.wall_ms, result.delta_wall_ms)
 ```
 
 **Step 2: Verify red**
@@ -186,12 +192,14 @@ On Windows, collect `PrivateUsage` for the hard memory gate through the native p
 
 ```json
 {
-  "id": "tool.context.references.depth1",
+  "id": "tool.context.references.depth1.batch_on",
+  "execution_kind": "miller_cli",
   "command": ["context", "--json", "--reference-depth", "1"],
   "warmups": 1,
   "runs": 3,
   "hard_budget_ms": {"development": 2000, "windows": 5000},
-  "parity_with": "tool.context.references.depth0"
+  "parity_with": "tool.context.references.depth1.batch_off",
+  "environment": {"MILLER_SEMANTIC": "off", "MILLER_CONTEXT_REFERENCE_BATCH": "on"}
 }
 ```
 
@@ -206,6 +214,65 @@ Expected: PASS for live-store rejection, isolation, timeout recording, parity, a
 **Step 6: Apply commit mode**
 
 - `serial-worker-commit`: commit owned files after verification and record the SHA.
+
+### Task 1B: Correct Workload Fidelity and Freeze the Baseline
+
+**Files:**
+- Modify: `scripts/perf-recovery.py`
+- Modify: `scripts/tests/test_perf_recovery.py`
+- Modify: `scripts/benchmarks/perf-recovery-workloads.json`
+- Create: `scripts/perf-store-snapshot.py`
+- Test: `tests/Miller.Tests/Tools/ReferenceEvidenceReaderTests.cs`
+- Modify only to restore the planned rollback default: `src/Miller.Server/Tools/ReferenceEvidenceReader.cs`
+
+**Interfaces:**
+- Consumes: Task 1's safe process runner, Miller's `serve` stdio host, `julie-extract store import`, `julie-extract store resolve`, Store Contract v1 reports, and Task 5's observation-only phase records.
+- Produces: Execution kinds `miller_cli`, `mcp_bootstrap`, and `julie_store`; a verified whole-family snapshot; lexical context controls; one immutable pre-change JSONL baseline.
+
+**Contract inputs:** `workspace leader --json` and `workspace status --json` are diagnostic CLI reads and do not construct the Generic Host. `julie-extract store resolve` has `--store`, `--view`, optional request identity, timeout, and JSON flags; it derives incremental scope from store state and has no invented file-scope flag. `JULIE_STORE_RESOLUTION_DELTA=off` is the full-resolver oracle. Observation-only Task 5 instrumentation may land before this task, but no Task 5 behavior repair may precede the baseline.
+
+**File ownership:** Miller replay harness, workload manifest, replay tests, copied-store snapshot helper/evidence, plus only the context batch default and its focused test
+
+**Serialization required:** Yes
+
+**Dependency reason:** Reopens the replay contract before Tasks 5-8 because Task 1 proved safety but several rows exercised diagnostic CLI paths rather than the named production paths.
+
+**Step 1: Make workload execution paths testable**
+
+Add manifest validation that rejects a startup workload unless `execution_kind=mcp_bootstrap`, rejects a producer resolve workload unless `execution_kind=julie_store`, and rejects any workload whose timeout is not greater than its hard budget. The MCP runner starts `miller serve`, performs initialize/initialized over stdio, waits for the phase record that closes the named startup path, records it, and terminates the host through the normal protocol/process boundary. A warm-reader row keeps a leader host alive and measures a second host against the same copied store. A Windows record with a configured memory gate and null `PrivateUsage` is blocked/failed, never silently passed.
+
+**Step 2: Create and validate a whole-family snapshot**
+
+`perf-store-snapshot.py` requires explicit source and destination roots, refuses aliases, refuses live or unknown owners, permits definitively dead/stale claims so the incident remains reproducible, and requires absent or zero-length WAL/SHM files. It captures source hashes, copies `CURRENT`, `coord.db`, the selected generation, every referenced resolution base, and required store-owned files without shell-specific commands, then verifies source hashes did not change and destination hashes match. The script never checkpoints, heals, or writes the live family. On Windows it uses ordinary filesystem copy to a local short scratch path; antivirus state is recorded, never changed automatically.
+
+**Step 3: Replace diagnostic workloads with faithful workloads**
+
+- `startup.leader.no_change`: first isolated MCP host through completed startup-delta phase.
+- `startup.reader.warm`: second MCP host while the first owns leadership.
+- `producer.retry.identical`: repeat the exact producer import request/idempotency contract against a disposable snapshot.
+- `producer.resolve.one_file`: on its own snapshot, change one fixture file, import without resolve, then call `julie-extract store resolve`; assert the report chose incremental scope.
+- `producer.resolve.full`: on its own snapshot, create an unresolved full generation, then call the same resolve command with `JULIE_STORE_RESOLUTION_DELTA=off`; set the observation timeout above the 1,252 s historical maximum while retaining 60 s/120 s as the hard budget.
+- `workspace.open.no_change`: pre-register and converge the staged workspace before measurement so the row measures open/read, not an accidental extract.
+
+Each mutating workload receives a fresh snapshot. No measured retry reuses state mutated by a prior workload.
+
+**Step 4: Correct context controls and rollback semantics**
+
+Run the depth-0 and depth-1 N+1 pair with `MILLER_SEMANTIC=off`; remove byte-identity between different depths. Compare stable pivots, tier-0/tier-1 selections, ordering, and truncation semantics, and record added depth-1 bytes. Add a separate semantic-on depth-1 row. For the batching optimization, compare batch-off versus batch-on at the same depth and require byte-identical output. Restore `MILLER_CONTEXT_REFERENCE_BATCH` to default-off until that copied-store lexical gate passes.
+
+**Step 5: Capture the immutable baseline**
+
+Run three quiet Linux attempts for every non-destructive row and one complete observed attempt for the historical long full-resolve row. Record source/destination snapshot hashes, WAL state, Miller SHA, producer SHA/version, view/generation, filesystem, each phase, resolver scope, and hard-budget result. A timeout records failure and phase evidence; it never erases the row.
+
+**Step 6: Verify and apply commit mode**
+
+Run: `python scripts/tests/test_perf_recovery.py`
+
+Run: `dotnet test --filter "FullyQualifiedName~ReferenceEvidenceReaderTests"`
+
+Expected: path-kind validation, snapshot refusal/integrity, MCP framing, producer invocation, timeout separation, semantic invariants, batch off/on identity, and missing-Windows-memory failure pass. Commit the corrected harness, default-off rollback, and baseline metadata/evidence; do not commit copied store data.
+
+- `serial-worker-commit`: checkpoint, commit owned files, and record the SHA.
 
 ### Task 2: Recover and Fence Stranded Producer Claims
 
@@ -291,6 +358,48 @@ Expected: Current owners are retained, dead owners recover, and fenced owners ca
 **Step 6: Apply commit mode**
 
 - `parallel-lead-commit`: do not commit; hand verified diff or green characterization evidence to the lead.
+
+### Task 2B: Validate Resolve-Claim Coverage and Copied-Field Healing
+
+**Files:**
+- Modify only for a proven coverage gap: `crates/julie-extract-artifact/tests/store_coordinator_contract.rs`
+- Modify only for a proven coverage gap: the existing CLI contract containing `claimed_resolve_holds_no_writer_lease_and_a_short_update_completes`
+- Modify only if existing behavior is red: `crates/julie-extract-artifact/src/store/coordinator.rs`
+- Create: copied-store recovery evidence under Miller `artifacts/perf/` during execution; do not commit the copied database
+
+**Interfaces:**
+- Consumes: `claim_resolve`, resolve-request heartbeat/owner identity, process liveness, the unique claimed-resolve constraint, and Task 1B's immutable snapshot.
+- Produces: An inventory and replay of existing dead/stale resolve-claim proof, a Windows liveness matrix, and a production-API heal of the copied incident state.
+
+**Contract inputs:** The observed August 14 blocker was a claimed import with an expired writer lease; do not relabel it as a resolve. Current producer tests already cover stale/dead resolve takeover/reaping and prove that a claimed resolve has no writer lease while a short update completes. Inventory those exact tests before adding anything. Inventory and three-way-diff `fix/store-import-idempotent-retry` at `bc47d4f2`, `fix/store-resolution-scope` at `fb31da08`, `perf/store-resolution-query-amplification` at `ab3aa957`, and `fix/store-writer-heartbeat` at `0500ab1e` against the producer execution branch before modifying shared paths.
+
+**File ownership:** Julie coordinator/CLI contract tests only for a proven coverage gap; copied-store recovery and Windows-liveness evidence
+
+**Serialization required:** Yes
+
+**Dependency reason:** Requires Task 1B's verified snapshot; validates the already-shipped resolve recovery against the copied incident state and Windows liveness.
+
+**Step 1: Inventory and replay resolve-claim characterization**
+
+Run and map the existing coordinator dead/stale resolve tests and the CLI `claimed_resolve_holds_no_writer_lease_and_a_short_update_completes` contract to these invariants: owner B recovers after the stale/dead threshold, `uidx_coord_one_claimed_resolve` no longer blocks progress, resolve holds no writer lease, and owner A cannot heartbeat or publish. Add a test or production repair only when an invariant is absent or red; green existing coverage is the preferred result.
+
+**Step 2: Characterize Windows process liveness**
+
+Exercise the Windows `tasklist` adapter for same live process, dead PID, reused PID/start-identity mismatch, and probe failure/`Unknown`. A known-dead owner must recover without waiting on a Unix signal; `Unknown` must follow the explicit conservative timeout policy and remain observable rather than being treated as alive forever.
+
+**Step 3: Heal only the copied field state**
+
+Start the current producer against Task 1B's snapshot and submit the blocked operation through the normal coordinator API. Record the original request state, recovered state, new fencing token, unique-index outcome, view resolution state, and elapsed time. No SQLite hand edit is accepted as recovery evidence, and the live family remains untouched.
+
+**Step 4: Verify and apply commit mode**
+
+Run: `cargo test -p julie-extract-artifact --test store_coordinator_contract -- --test-threads=1`
+
+Run the Windows coordinator contract target serially on Windows in Task 8.
+
+Expected: existing import and resolve dead-owner shapes recover without duplicate logic, unknown liveness is bounded and visible, old owners are fenced, and the copied incident state converges through production APIs.
+
+- `serial-worker-commit`: checkpoint and commit the focused contract/repair, or a test/evidence-only characterization when production already passes.
 
 ### Task 3: Batch and Budget Context Relationship Evidence
 
@@ -398,7 +507,7 @@ Expected: Byte-identical fixed output; zero reads when nothing fits; bounded bat
 
 **Interfaces:**
 - Consumes: Existing `ISymbolGraphReachability.ReachWithEvidence`, `GraphReachResult`, `RankingCandidateLimit`, risk ranking, heuristic-test candidates, final result limit, coverage, and truncation fields.
-- Produces: A recorded before-plan/row-count verdict for every family-resolution arm plus telemetry for traversal-window, reached-graph, heuristic-candidate, displacement, and selected counts. If the existing candidate-first query still scans the active base at realistic volume, Task 7 receives the exact plan and owns the schema/overlay repair.
+- Produces: A recorded before-plan/row-count verdict for every family-resolution arm plus telemetry for traversal-window, reached-graph, heuristic-candidate, displacement, and selected counts. If the existing candidate-first query still scans the active base at realistic volume, Task 7B receives the exact plan and owns the schema/overlay repair.
 
 **Contract inputs:** Current traversal is already bounded by a 500-2,000 candidate window and the measured limit-20 workload reached only 52 candidates. `FamilyStoreReadSession.ReadResolutionEdges` already builds a bounded candidate CTE, executes eight resolution arms, records `GraphStatementObservation`, and can capture `EXPLAIN QUERY PLAN`. Preserve that window and final-after-risk-ranking behavior. The remaining measured target is the base reverse plan that can scan roughly 1.7 million rows despite candidate-first SQL, not an unbounded closure or a missing CTE.
 
@@ -447,7 +556,7 @@ var baseReverse = statementPlans.Single(item => item.Phase == GraphStatementPhas
 phaseVerdict.Record(familySession.LastGraphResolutionQueryPlan, baseReverse.Rows, baseReverse.CandidateCount, baseReverse.Elapsed);
 ```
 
-Use the existing `GraphStatementObservation` and query-plan capture instead of adding a second SQL or graph abstraction. Never apply one shared SQL `LIMIT` across all IDs because it can starve later seeds and change ranking. If realistic-volume evidence still shows a base scan, append the exact plan/rows/timing to Task 7's brief; do not add `ANALYZE`, planner pragmas, indexes, graph APIs, or new limits in this task.
+Use the existing `GraphStatementObservation` and query-plan capture instead of adding a second SQL or graph abstraction. Never apply one shared SQL `LIMIT` across all IDs because it can starve later seeds and change ranking. If realistic-volume evidence still shows a base scan, append the exact plan/rows/timing to Task 7B's brief; do not add `ANALYZE`, planner pragmas, indexes, graph APIs, or new limits in this task.
 
 **Step 4: Add non-sensitive count telemetry through the current tool scope**
 
@@ -468,7 +577,7 @@ Run: `dotnet test --filter "FullyQualifiedName~SqliteSymbolGraphIndexTests|Fully
 
 Run the isolated `tool.impact.bounded` workload three times before and after the query change.
 
-Expected: Every caller-facing item/count/truncation assertion is unchanged and the new non-sensitive telemetry is present. Record the complete real-volume plan and development median. If the base scan remains or the median exceeds 2 s, Task 7 owns the measured producer-schema/overlay repair; Task 4 still completes when its characterization and telemetry are correct.
+Expected: Every caller-facing item/count/truncation assertion is unchanged and the new non-sensitive telemetry is present. Record the complete real-volume plan and development median. If the base scan remains or the median exceeds 2 s, Task 7B owns the measured producer-schema/overlay repair; Task 4 still completes when its characterization and telemetry are correct.
 
 **Step 6: Apply commit mode**
 
@@ -496,7 +605,7 @@ Expected: Every caller-facing item/count/truncation assertion is unchanged and t
 
 **Serialization required:** Yes
 
-**Dependency reason:** Requires Task 2 claim trust and Task 1 replay.
+**Dependency reason:** Observation-only instrumentation may land after Task 2; a behavior repair requires Tasks 1B and 2B plus the faithful copied-store baseline.
 
 **Step 1: Characterize byte-identical producer reuse**
 
@@ -513,6 +622,8 @@ fn reusable_terminal_import_returns_reused_exact_manifest() {
 ```
 
 Add changed hash, origin, generation, and terminal-state negatives. Run: `cargo test -p julie-extract-artifact --features test-store-resolution --test store_manifest_contract -- --test-threads=1` and the existing CLI from-artifact contract under `--features test-store-resolution-contract`. If green, make no producer edit.
+
+Characterization result at producer commit `ebe09b4c` on 2026-08-14: manifest contract 27 passed, CLI resolution contract 24 passed, and resolution adapters 24 passed. Identical reuse and negative invalidation cases are green, so Task 5 has no producer behavior edit unless the faithful Task 1B baseline contradicts those contracts.
 
 **Step 2: Write phase-recording tests before asserting a cause**
 
@@ -549,7 +660,10 @@ Derive `didWork` from each sidecar's existing stamp/result rather than assuming 
 Run: `python scripts/perf-recovery.py --workloads scripts/benchmarks/perf-recovery-workloads.json --workspace <staged-workspace> --store-copy <staged-copy> --live-store <original-live-store> --only producer.retry.identical,startup.leader.no_change,workspace.open.no_change --runs 3 --out artifacts/perf/no-change-phases.jsonl`
 
 ```text
-claimed import or resolve dominates -> Task 2/reuse-report repair
+claimed import dominates -> Task 2/reuse-report repair
+claimed resolve dominates -> Task 2B resolve-claim repair
+import dominates and disposition is Reused -> reconcile fix/store-import-idempotent-retry and repair Julie L3/materialization, not Miller sidecar admission
+unbound generation dominates -> complete Task 2B copied-store heal before any resolver change
 bind dominates with unchanged identity -> fix binding refresh in StoreWorkspaceCoordinator.Submit
 content/search dominates with matching stamp -> fix that ensure implementation and its contract test
 metrics dominates -> fix MetricSnapshotAggregates.RecordConverge admission
@@ -565,7 +679,7 @@ Run: `dotnet test --filter "FullyQualifiedName~StoreWorkspaceCoordinatorTests|Fu
 
 Run: `python scripts/perf-recovery.py --workloads scripts/benchmarks/perf-recovery-workloads.json --workspace <staged-workspace> --store-copy <staged-copy> --live-store <original-live-store> --only producer.retry.identical,startup.leader.no_change,workspace.open.no_change --runs 3 --out artifacts/perf/no-change-phases.jsonl`
 
-Expected: Byte-identical retry at most 2 s, registered no-change open at most 5 s, phase records sum consistently to leader startup, and changed identities still perform required work. A telemetry-only green result is a valid task completion.
+Expected: Byte-identical retry at most 2 s, registered no-change open at most 5 s, the real MCP leader startup meets 2 s/5 s, phase records sum consistently to leader startup, every unused resolve or sidecar rebuild is a hard failure, and changed identities still perform required work. A telemetry-only green result is a valid task completion when the faithful baseline has no expensive redundant phase.
 
 **Step 6: Apply commit mode**
 
@@ -626,7 +740,7 @@ let resolution = resolve_workspace_with_crossover(&transaction, delta_scope, DEL
 let telemetry = ResolutionExecutionTelemetry::from_durable_payload(&resolution.durable_payload)?;
 ```
 
-Use the current function signatures discovered in the execution checkout. A routing failure is confined to `store/resolve.rs:114-292,1200-1230`; a digest/scope failure is confined to `resolution.rs`. Overlay-history cost belongs to Task 7, not this task.
+Use the current function signatures discovered in the execution checkout. A routing failure is confined to `store/resolve.rs:114-292,1200-1230`; a digest/scope failure is confined to `resolution.rs`. Overlay-history cost belongs to Task 7A and post-rotation read amplification belongs to Task 7B, not this task.
 
 **Step 4: Prove reports, parity, and language coverage**
 
@@ -640,29 +754,28 @@ Expected: Every language is present, scopes are truthful, and exact/exact-gap di
 
 Run: `cargo xtask performance store-resolution --runs 3 --out-dir target/performance/store-incremental-resolution-recovery`
 
-Expected: One-file median at most 5 s and full real-Miller median at most 60 s on development Linux. If one-file passes but accumulated-store full resolution fails, Task 7 owns the remaining work.
+Expected: One-file median at most 5 s and full real-Miller median at most 60 s on development Linux. If one-file passes but accumulated-store full resolution fails because retained history dominates, Task 7A owns it; if post-rotation read plans dominate, Task 7B owns it.
 
 **Step 6: Apply commit mode**
 
 - `serial-worker-commit`: commit tests/evidence and any narrowly proved fix after verification; record the verdict and SHA.
 
-### Task 7: Rebase, Collect, Rotate, and Optimize Bounded Reads
+### Task 7A: Rebase, Collect, and Rotate
 
 **Files:**
 - Modify: `crates/julie-extract-artifact/src/store/maintenance.rs:291-420`
 - Modify: `crates/julie-extract-cli/src/store/resolve.rs:751-860,971-1045`
 - Modify: `store_maintenance_contract.rs`, `store_maintenance_property.rs`
 - Reconcile from `feature/store-incremental-resolution-consumer`: `FamilyStoreReadSession.cs`, `FamilyStoreReadSessionTests.cs`, `StoreWorkspaceIndexProviderScaleTests.cs`
-- Modify after plan evidence: `ReferenceEvidenceReader.FamilyStore.cs:224-370`
 - Modify: `StoreResolutionReaderTests.cs:18-155`
 
 **Interfaces:**
 - Consumes: Rebase planner, strict `>25%` replacement/tombstone and `>64 MiB` gap thresholds, active pins, lease heartbeat, generation manifests, and `ReadResolutionEdges`.
-- Produces: Atomic rebase, pin-aware collection, bounded retained history, rotated-base reopen, and measured candidate-first resolution reads.
+- Produces: Atomic rebase, pin-aware collection, bounded retained history, rotated-base reopen, and an independently revertible lifecycle commit.
 
 **Contract inputs:** Publish new base/generation before collection. Never delete data reachable from a live pin. Current Miller `main` already contains `StoreSequenceAdvanceReopensTheRotatedResolutionBasePath` and later cursor coverage. Three-way-diff commits `9bf6bc26` and `382f654c` against current `main`, transplant only missing assertions such as rebase sequence/base rotation and partial-legacy rebind, and never replace newer tests with the old branch versions.
 
-**File ownership:** Julie maintenance/rebase and tests; Miller family read session, family evidence reader, resolution/base-rotation tests
+**File ownership:** Julie maintenance/rebase and tests; Miller family read-session and base-rotation tests
 
 **Serialization required:** Yes
 
@@ -719,17 +832,7 @@ collect_unreachable_resolution_history(store, active_pins(store)?, published)?;
 
 Check the lease at every durable boundary. Preserve recoverable old/prepared artifacts on Windows retry exhaustion.
 
-**Step 5: Prove a query change before making it**
-
-```csharp
-var plan = fixture.ExplainFamilyReverseQuery(query);
-Assert.DoesNotContain("SCAN resolution_base.identifier_resolutions", plan, StringComparison.Ordinal);
-Assert.Contains("SEARCH", plan, StringComparison.Ordinal);
-```
-
-Capture forward/reverse, exact/fallback, small-ID, and 100-ID plans and medians. Change query shape only if it removes the full scan and improves three-run median. Do not add planner statistics or indexes without the same proof.
-
-**Step 6: Verify green**
+**Step 5: Verify green**
 
 Run: `cargo test -p julie-extract-artifact --features test-store-resolution --test store_maintenance_contract -- --test-threads=1`
 
@@ -737,13 +840,64 @@ Run: `cargo test -p julie-extract-artifact --features test-store-resolution --te
 
 Run: `dotnet test --filter "FullyQualifiedName~FamilyStoreReadSessionTests|FullyQualifiedName~StoreResolutionReaderTests"`
 
-Expected: Pins survive, obsolete history collects, readers reopen, partial legacy state heals, and bounded reads avoid full base scans.
+Expected: Pins survive, obsolete history collects, readers reopen, partial legacy state heals, and the copied store reaches explicit retained-history ceilings. On the quiet copied store, active overlay generations are at most one, unreachable unpinned delta rows are zero, retained overlay rows fall by at least 80%, and logical resolution-table/index bytes fall by at least 25% from Task 1B's baseline; no reachable row may be lost. If the current on-disk lifecycle cannot meet a numeric ceiling without a separately proved compaction step, the task remains open rather than converting the ceiling to report-only.
 
 After the serial worker commit is integrated, the lead runs `dotnet test --filter "FullyQualifiedName~StoreWorkspaceIndexProviderScaleTests"` as the affected Scale gate.
 
-**Step 7: Apply commit mode**
+Before this task starts, preserve a second verified pre-maintenance snapshot. Collection is never tested first on the only baseline copy.
+
+**Step 6: Apply commit mode**
 
 - `serial-worker-commit`: commit reconciled files and record original and resulting SHAs.
+
+### Task 7B: Optimize Measured Bounded Reads
+
+**Files:**
+- Modify only after plan evidence: `src/Miller.Indexing/FamilyStoreReadSession.cs`
+- Modify only after plan evidence: `src/Miller.Indexing/ReferenceEvidenceReader.FamilyStore.cs:224-370`
+- Modify only after plan evidence: `src/Miller.Indexing/SqliteSymbolGraphIndex.cs`
+- Modify: `tests/Miller.Tests/Indexing/FamilyStoreReadSessionTests.cs`
+- Modify: the existing graph query-plan tests covering `LastGraphResolutionQueryPlan`
+- Modify: `tests/Miller.Tests/Indexing/StoreResolutionReaderTests.cs:18-155`
+- Modify only if a producer index or statistics lifecycle wins measurement: the current resolution-base schema/maintenance owner and its focused producer contracts
+
+**Interfaces:**
+- Consumes: Task 7A's rotated copied store, `ReadResolutionEdges`, all forward/reverse exact/fallback arms, active-base schema, delta overlays, and SQLite `EXPLAIN QUERY PLAN`.
+- Produces: One independently revertible query-shape, producer-index, or measured statistics-maintenance repair with before/after plans and actual-row/timing evidence.
+
+**Contract inputs:** Capture plans after Task 7A because rotation can remove the apparent win. The historical reverse-base scan of about 1.7 million rows is evidence to reproduce, not proof that a Miller SQL rewrite is the owner. `ANALYZE` and an index are allowed only as measured candidates after the eight-arm baseline exists; blind planner tuning remains prohibited.
+
+**File ownership:** Julie resolution-base schema/statistics only if proved; Miller `FamilyStoreReadSession`, family evidence reader, graph/resolution query-plan tests
+
+**Serialization required:** Yes
+
+**Dependency reason:** Runs only after 7A so lifecycle compaction and read-path tuning have separate evidence and rollback commits.
+
+**Step 1: Capture the eight-arm post-rotation baseline**
+
+Record forward/reverse × exact/fallback × small-ID/100-ID plans, actual candidate and returned rows, statement counts, cache state, and three-run medians. Include one reverse-base workload whose candidate count reproduces the scan risk; the prior depth-1/limit-20 impact row is telemetry, not sufficient query-plan proof.
+
+**Step 2: Test candidates one at a time**
+
+Evaluate only the owner supported by the baseline: a Miller query-shape change, a producer target-side index that matches `target_version_id` plus `target_symbol_id`, or `ANALYZE`/statistics maintenance on the copied artifact. For each candidate, require an exact before/after plan, unchanged rows/order/provenance, and a lower quiet three-run median. Do not combine candidates in one measurement.
+
+```csharp
+var plan = fixture.ExplainFamilyReverseQuery(query);
+Assert.DoesNotContain("SCAN resolution_base.identifier_resolutions", plan, StringComparison.Ordinal);
+Assert.Contains("SEARCH", plan, StringComparison.Ordinal);
+```
+
+**Step 3: Verify green**
+
+Run: `dotnet test --filter "FullyQualifiedName~FamilyStoreReadSessionTests|FullyQualifiedName~ReferenceEvidenceReaderTests|FullyQualifiedName~StoreResolutionReaderTests|FullyQualifiedName~SqliteSymbolGraphIndexTests"`
+
+Run the focused producer schema/maintenance contract only when that owner changes.
+
+Expected: all eight arms preserve exact results, bounded reads avoid the reproduced full-base scan, and the copied-store median improves. If no candidate meets all three conditions, make no production query/schema/statistics change and retain the evidence as the task result.
+
+**Step 4: Apply commit mode**
+
+- `serial-worker-commit`: checkpoint and commit the single measured owner change or evidence-only verdict separately from Task 7A.
 
 ### Task 8: Close Linux and Windows Recovery Gates
 
@@ -773,6 +927,11 @@ def test_verification_report_rejects_missing_hard_gate(self):
     records = load_records(self.fixture_path)
     with self.assertRaisesRegex(ValueError, "missing hard gate: tool.context.references.depth1"):
         build_verification_report(records[:-1])
+
+def test_windows_record_rejects_missing_private_usage(self):
+    record = windows_record(private_usage_bytes=None, hard_memory_bytes=600 * 1024 * 1024)
+    with self.assertRaisesRegex(ValueError, "missing Windows PrivateUsage"):
+        require_hard_gates([record], "windows")
 ```
 
 Reject missing IDs, fewer than three runs, parity failure, missing platform identity, and over-budget median.
@@ -797,6 +956,8 @@ Expected: PASS only when every gate is present and valid.
 
 Run Julie format, clippy, workspace, contract, and performance gates.
 
+Run the serialized `store_coordinator_contract`, `store_resolution_contract`, and maintenance contracts with their required Cargo features; do not assume the workspace default enables them.
+
 With `MILLER_JULIE_SOURCE` set to the exact tested Julie worktree, run: `scripts/restore-julie-extract.sh --from-source`.
 
 Run: `dotnet build Miller.slnx -c Release`
@@ -805,7 +966,7 @@ Run: `scripts/test.sh all`
 
 Run: `scripts/semantic-broker-soak.sh`
 
-Run the full replay three times. Expected: tests pass, 0 warnings/errors, exact parity, budgets pass.
+Run the full replay three times. Expected: tests pass, 0 warnings/errors, resolver and same-depth batch exact parity, context cross-depth semantic invariants, and budgets pass.
 
 **Step 4: Run Windows branch gates**
 
@@ -815,16 +976,21 @@ Run: `dotnet build Miller.slnx -c Release`
 
 Run: `scripts/test.ps1 all`
 
+Run the Windows `store_coordinator_contract` and `store_resolution_contract` targets serially with their required Cargo features. The current Windows allowlist and `test.ps1 all` do not substitute for these producer contracts.
+
+Run focused Windows contracts for `JulieExtractRunnerTests`/`WindowsKillOnCloseJob` descendant-tree containment, `PathCanonicalizerTests` drive/UNC/verbatim long paths, held-handle promotion/rotation retry, coordinator `tasklist` liveness, replay MCP stdio framing, and semantic broker identity. A missing platform prerequisite blocks the named gate; it is not recorded as passing.
+
 Run `scripts/semantic-broker-soak.ps1` only on a dedicated Windows runner with no other Miller broker/session. The machine-global pipe is not isolated by `MILLER_HOME`; on a shared host, record this gate as blocked rather than attributing another session's broker to the test.
 
-Run the full replay three times and assert `PROCESS_MEMORY_COUNTERS_EX.PrivateUsage` at or below 350 MB idle/600 MB peak. Expected: tests pass, Windows locking behavior is correct, exact parity, memory, and constrained timing budgets pass.
+Create the Windows scratch snapshot with Task 1B's cross-platform helper, record filesystem/antivirus state, and do not require or modify a Defender exclusion. Run the full replay three times and assert `PROCESS_MEMORY_COUNTERS_EX.PrivateUsage` at or below its independent 350 MB idle/600 MB peak gate. Expected: tests pass, Windows locking behavior is correct, resolver digest parity and context semantic invariants hold, memory passes, and constrained timing budgets pass.
 
 **Step 5: Reconcile ledger and docs**
 
 ```markdown
 | Workload | Linux median | Linux gate | Windows median | Windows gate | Parity |
 |---|---:|---|---:|---|---|
-| `tool.context.references.depth1` | measured | <= 2,000 ms | measured | <= 5,000 ms | exact |
+| `tool.context.references.depth1.lexical` | measured | <= 2,000 ms | measured | <= 5,000 ms | stable pivots/order/truncation |
+| `tool.context.references.depth1.batch_on` | measured | <= 2,000 ms | measured | <= 5,000 ms | byte-identical to batch-off at the same depth |
 ```
 
 Close only passing PERF rows; failures remain open with metric, owner, and diagnostic. Link the evidence from `PERF.md` and `docs/README.md`.
@@ -836,13 +1002,18 @@ Close only passing PERF rows; failures remain open with metric, owner, and diagn
 
 ## External Review Reconciliation
 
-Grok 4.6 reviewed the draft read-only on 2026-08-13. No external-model policy was declared in `AGENTS.md` or `CLAUDE.md`, so the required policy note is: `no external-model policy declared — diff sent to xai`.
+Grok 4.6 reviewed the draft read-only on 2026-08-13 and reviewed the in-progress plan plus Task 1-4 reports again on 2026-08-14. No external-model policy was declared in `AGENTS.md` or `CLAUDE.md`, so the required policy note is: `no external-model policy declared — plan sent to xAI`.
 
 - Accepted: incremental resolution is shipped and must be characterized before any production edit; Task 6 is now a prove-or-stop gate.
 - Accepted: leader delay does not prove sidecar rebuilding; Task 5 records all coupled phases before changing one.
 - Accepted: impact already has a bounded 500-2,000 traversal window; Task 4 preserves it and targets the measured SQLite read shape.
-- Accepted: current Miller `main` is authoritative over the old consumer commits; Task 7 transplants only missing coverage after a three-way diff.
+- Accepted: current Miller `main` is authoritative over the old consumer commits; Task 7A transplants only missing coverage after a three-way diff.
 - Accepted: Python/Cargo commands, Windows private-memory evidence, the machine-global broker constraint, worktree ownership, and overlapping `resolve.rs` ranges were corrected.
+- Accepted from the second review: Task 1's path safety is useful but `workspace status/leader` do not measure Generic Host startup; resolve workloads need producer invocations and observation timeouts above the baseline; the family copy needs a stable whole-store procedure; context needs lexical controls and same-depth batch parity; Task 7 must split lifecycle surgery from query tuning; Windows must run the feature-gated producer contracts explicitly.
+- Accepted from the second review: Tasks 3 and 4 are implemented but remain production-volume unproven until Task 1B replay. The context batch switch returns to default-off until copied-store lexical parity and timing pass.
+- Corrected after code-level audit: the observed August 14 stranded request was an import, and current Julie contracts already cover dead/stale resolve takeover plus the no-writer-lease invariant. Task 2B inventories that proof, adds only a demonstrated coverage gap, and validates copied-field healing and Windows liveness.
+- Rejected: `julie-extract store resolve` has no explicit one-file CLI flag. The faithful workload creates a one-file pending generation, then lets the production resolver derive its scope.
+- Rejected: automatically adding a Windows Defender exclusion. The snapshot/replay records antivirus state and uses ordinary local copying; it does not weaken host security or require an administrative mutation.
 - Rejected: adding an impact reachability overload or reducing the 500-candidate floor now. No evidence requires a new graph interface or semantic change, and query-plan parity is the narrower fix.
 
 ## Completion Criteria
@@ -853,7 +1024,7 @@ Grok 4.6 reviewed the draft read-only on 2026-08-13. No external-model policy wa
 - Incremental/full resolution exact digests match across supported languages and timing budgets pass.
 - Rebase thresholds, pins, publish ordering, collection, base rotation, and partial legacy recovery are tested.
 - Obsolete resolution history is bounded and bounded reverse reads avoid complete active-base scans.
-- Context output is byte-identical; no-fit requests do zero evidence reads; fitting requests batch and pass 2 s/5 s.
+- Context batch-off/on output is byte-identical at the same depth; cross-depth pivots/order/truncation semantics are stable; no-fit requests do zero evidence reads; fitting requests batch and pass 2 s/5 s.
 - Impact ranks before selection, bounds graph/SQL work, and reports truncation/displacement truthfully.
 - Linux and Windows build, test, Scale, semantic, resource, timing, and parity gates pass on the same intentional state.
 - `PERF.md`, the dated evidence, and `docs/README.md` contain measured results.
