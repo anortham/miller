@@ -3894,18 +3894,13 @@ public static class CliDispatch
             SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
             if (session.Snapshot.Mode == WorkspaceReadMode.FamilyStore)
             {
-                MillerRepositoryIndex index = RepositoryIndexLoader.LoadSession(session);
-                ISymbolLookupIndex symbolIndex = index;
-                if (requireSearchSidecar && sidecar.Enabled)
-                {
-                    symbolIndex = sidecar.OpenStoreRequired(
-                        session.FamilyStoreRoot
-                            ?? throw new InvalidOperationException(
-                                "The family-store read session has no family root."),
-                        session.Snapshot);
-                }
-
-                scope = new CliReadScope(session, index, symbolIndex, index.Graph, graphOwner: null);
+                string storeRoot = session.FamilyStoreRoot
+                    ?? throw new InvalidOperationException("The family-store read session has no family root.");
+                ISymbolLookupIndex symbolIndex = requireSearchSidecar && sidecar.Enabled
+                    ? sidecar.OpenStoreRequired(storeRoot, session.Snapshot)
+                    : SymbolSearchProjectionLoader.LoadSession(session);
+                var graph = new SqliteSymbolGraphIndex(session);
+                scope = new CliReadScope(session, index: null, symbolIndex, graph, graph);
             }
             else
             {

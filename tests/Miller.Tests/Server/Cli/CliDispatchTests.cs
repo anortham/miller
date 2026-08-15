@@ -8,6 +8,7 @@ using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
+using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Cli;
 using Miller.Server.Git;
@@ -88,6 +89,29 @@ public sealed class CliDispatchTests : IDisposable
             (not null, not null) => CliDispatch.Run(args, ctx, stdout, stderr, dashboardLauncher, gitDiffReader),
         };
         return (code, stdout.ToString(), stderr.ToString());
+    }
+
+    private (int Code, string Out, string Err) RunFamilyStore(
+        MinimalFamilyStoreFixture fixture,
+        IReadOnlyList<string> args,
+        bool sidecarEnabled = false)
+    {
+        string? previousStoreMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
+        string? previousSearchSidecar = Environment.GetEnvironmentVariable(SymbolSearchSidecar.EnvVar);
+        string? previousSemantic = Environment.GetEnvironmentVariable("MILLER_SEMANTIC");
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
+        Environment.SetEnvironmentVariable(SymbolSearchSidecar.EnvVar, sidecarEnabled ? "on" : "0");
+        Environment.SetEnvironmentVariable("MILLER_SEMANTIC", "off");
+        try
+        {
+            return Run(args, Context(fixture.LegacyArtifactPath, fixture.WorkspaceRoot));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, previousStoreMode);
+            Environment.SetEnvironmentVariable(SymbolSearchSidecar.EnvVar, previousSearchSidecar);
+            Environment.SetEnvironmentVariable("MILLER_SEMANTIC", previousSemantic);
+        }
     }
 
     private static (int Code, string Out, string Err) RunUntilSemanticBrokerReady(
@@ -870,6 +894,117 @@ public sealed class CliDispatchTests : IDisposable
         var (code, outText, _) = Run(new[] { "search", "UserService" }, Context(fx.DbPath));
         Assert.Equal(0, code);
         Assert.Contains("UserService", outText);
+    }
+
+    [Fact]
+    public void FamilyStoreSearch_UsesThePinnedProjectionWithoutHydratingTheBridgeIndex()
+    {
+        using var fx = MinimalFamilyStoreFixture.Create();
+
+        var (code, output, error) = RunFamilyStore(fx, ["search", "VisibleType", "--arm", "lexical"]);
+
+        Assert.True(code == 0, error);
+        Assert.Empty(error);
+        Assert.Contains("VisibleType", output);
+        Assert.Contains("src/Visible.cs", output);
+    }
+
+    [Fact]
+    public void FamilyStoreInspect_UsesThePinnedProjectionAndReadSession()
+    {
+        using var fx = MinimalFamilyStoreFixture.Create();
+
+        var (code, output, error) = RunFamilyStore(fx, ["inspect", "VisibleType"]);
+
+        Assert.True(code == 0, error);
+        Assert.Empty(error);
+        Assert.Contains("VisibleType", output);
+    }
+
+    [Fact]
+    public void FamilyStoreImpact_UsesThePinnedGraphAndReadSession()
+    {
+        using var fx = MinimalFamilyStoreFixture.Create();
+
+        var (code, output, error) = RunFamilyStore(fx, ["impact", "VisibleType"]);
+
+        Assert.True(code == 0, error);
+        Assert.Empty(error);
+        Assert.Contains("VisibleType", output);
+    }
+
+    [Fact]
+    public void FamilyStoreTraceRefsAndPath_UseThePinnedGraphAndReadSession()
+    {
+        using var fx = MinimalFamilyStoreFixture.Create();
+
+        var refs = RunFamilyStore(fx, ["trace", "VisibleType", "--mode", "refs"]);
+        var path = RunFamilyStore(fx, ["trace", "VisibleType", "--mode", "path", "--to", "VisibleType"]);
+
+        Assert.Equal(0, refs.Code);
+        Assert.Empty(refs.Err);
+        Assert.Contains("VisibleType", refs.Out);
+        Assert.Equal(0, path.Code);
+        Assert.Empty(path.Err);
+        Assert.Contains("VisibleType", path.Out);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("1")]
+    public void FamilyStoreContext_UsesThePinnedGraphAtEachRequestedDepth(string maxHops)
+    {
+        using var fx = MinimalFamilyStoreFixture.Create();
+
+        var (code, output, error) = RunFamilyStore(fx, ["context", "VisibleType", "--max-hops", maxHops]);
+
+        Assert.True(code == 0, error);
+        Assert.Empty(error);
+        Assert.Contains("VisibleType", output);
+    }
+
+    [Fact]
+    public void FamilyStoreBridgeTrace_LazilyLoadsTheFullIndex()
+    {
+        using var fx = MinimalFamilyStoreFixture.Create(includeBridgeTables: true);
+
+        var (code, output, error) = RunFamilyStore(fx, ["trace", "VisibleType", "--mode", "bridge"]);
+
+        Assert.Equal(0, code);
+        Assert.Empty(error);
+        Assert.Contains("VisibleType", output);
+    }
+
+    [Fact]
+    public void FamilyStoreSearch_RequiredMissingSidecarFailsVisibly()
+    {
+        using var fx = MinimalFamilyStoreFixture.Create();
+
+        var (code, output, error) = RunFamilyStore(
+            fx,
+            ["search", "VisibleType", "--arm", "lexical"],
+            sidecarEnabled: true);
+
+        Assert.Equal(3, code);
+        Assert.Empty(output);
+        Assert.Contains("missing or stale", error);
+    }
+
+    [Fact]
+    public void FamilyStoreSearch_RequiredCorruptSidecarFailsVisibly()
+    {
+        using var fx = MinimalFamilyStoreFixture.Create();
+        Directory.CreateDirectory(Path.GetDirectoryName(fx.SearchSidecarPath)!);
+        File.WriteAllBytes(fx.SearchSidecarPath, []);
+
+        var (code, output, error) = RunFamilyStore(
+            fx,
+            ["search", "VisibleType", "--arm", "lexical"],
+            sidecarEnabled: true);
+
+        Assert.Equal(3, code);
+        Assert.Empty(output);
+        Assert.Contains("missing or stale", error);
     }
 
     [Fact]
@@ -5058,6 +5193,380 @@ public sealed class CliDispatchTests : IDisposable
                 RestartBackoffCap = TimeSpan.Zero,
                 Delay = static (_, _) => Task.CompletedTask,
             });
+
+    private sealed class MinimalFamilyStoreFixture : IDisposable
+    {
+        private MinimalFamilyStoreFixture(string root, string workspaceRoot, string storeRoot)
+        {
+            Root = root;
+            WorkspaceRoot = workspaceRoot;
+            StoreRoot = storeRoot;
+            LegacyArtifactPath = Path.Combine(workspaceRoot, ".miller", "symbols.db");
+        }
+
+        private string Root { get; }
+
+        public string WorkspaceRoot { get; }
+
+        private string StoreRoot { get; }
+
+        public string LegacyArtifactPath { get; }
+
+        public string SearchSidecarPath => StoreSidecarCatalog.PathFor(
+            StoreRoot,
+            StoreSidecarKind.Search,
+            "view-a");
+
+        public static MinimalFamilyStoreFixture Create(bool includeBridgeTables = false)
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "miller-cli-family-" + Guid.NewGuid().ToString("N"));
+            string workspace = Path.Combine(root, "workspace");
+            string store = Path.Combine(root, "store");
+            string generation = Path.Combine(store, "gen-001");
+            Directory.CreateDirectory(workspace);
+            Directory.CreateDirectory(Path.Combine(generation, "bases"));
+            File.WriteAllText(Path.Combine(store, "CURRENT"), "gen-001\n");
+            CreateCoordinator(Path.Combine(store, "coord.db"));
+
+            string canonicalWorkspace = PathCanonicalizer.CanonicalizeRoot(workspace);
+            string canonicalStore = PathCanonicalizer.CanonicalizeRoot(store);
+            CreateStore(Path.Combine(generation, "store.db"), canonicalWorkspace, includeBridgeTables);
+            StoreWorkspacePointer.Write(
+                canonicalWorkspace,
+                new StoreFamilyBinding(
+                    Guid.Parse("11111111-1111-4111-8111-111111111111"),
+                    canonicalStore,
+                    "view-a",
+                    canonicalWorkspace,
+                    StoreBindingState.Ready));
+            Directory.CreateDirectory(Path.Combine(canonicalWorkspace, "src"));
+            File.WriteAllText(
+                Path.Combine(canonicalWorkspace, "src", "Visible.cs"),
+                "public class VisibleType { public void Run() { } }\n");
+            return new MinimalFamilyStoreFixture(root, canonicalWorkspace, canonicalStore);
+        }
+
+        public void Dispose()
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(Root))
+                Directory.Delete(Root, recursive: true);
+        }
+
+        private static void CreateCoordinator(string path)
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText =
+                "CREATE TABLE consumer_cursors (consumer_id TEXT PRIMARY KEY, generation_name TEXT NOT NULL, " +
+                "store_log_sequence INTEGER NOT NULL, updated_at INTEGER NOT NULL);";
+            command.ExecuteNonQuery();
+        }
+
+        private static void CreateStore(string path, string workspaceRoot, bool includeBridgeTables)
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText =
+                """
+                CREATE TABLE store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO store_meta VALUES
+                  ('family_id','11111111-1111-4111-8111-111111111111'),
+                  ('store_sqlite_schema_version','2'),
+                  ('store_format_epoch','1'),
+                  ('min_reader_version','2.31.0'),
+                  ('binary_version','2.31.0'),
+                  ('extraction_identity_epoch','1'),
+                  ('generation_state','serving');
+                CREATE TABLE views (
+                  view_id TEXT PRIMARY KEY,
+                  root TEXT NOT NULL,
+                  current_generation INTEGER,
+                  resolution_state TEXT NOT NULL,
+                  resolution_base_id TEXT,
+                  resolution_delta_generation INTEGER,
+                  resolution_exact_at INTEGER,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL);
+                CREATE TABLE manifests (
+                  view_id TEXT NOT NULL,
+                  generation INTEGER NOT NULL,
+                  manifest_hash TEXT NOT NULL,
+                  request_id TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  PRIMARY KEY(view_id,generation));
+                CREATE TABLE file_versions (
+                  version_id INTEGER PRIMARY KEY,
+                  path TEXT NOT NULL,
+                  content_hash TEXT NOT NULL,
+                  extraction_epoch INTEGER NOT NULL,
+                  language TEXT NOT NULL,
+                  content_bytes INTEGER NOT NULL,
+                  line_count INTEGER,
+                  metadata_json TEXT,
+                  complete_l1 INTEGER,
+                  complete_l2 INTEGER,
+                  complete_l3 INTEGER);
+                CREATE TABLE manifest_entries (
+                  view_id TEXT NOT NULL,
+                  generation INTEGER NOT NULL,
+                  path TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  version_id INTEGER,
+                  status TEXT NOT NULL,
+                  observed_content_hash TEXT,
+                  indexed_at TEXT NOT NULL,
+                  error_class TEXT,
+                  error_json TEXT,
+                  PRIMARY KEY(view_id,generation,path));
+                CREATE TABLE symbols (
+                  version_id INTEGER NOT NULL,
+                  symbol_id TEXT NOT NULL,
+                  path TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  name TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  signature TEXT,
+                  doc_comment TEXT,
+                  visibility TEXT,
+                  parent_symbol_id TEXT,
+                  start_line INTEGER NOT NULL,
+                  start_column INTEGER NOT NULL,
+                  end_line INTEGER NOT NULL,
+                  end_column INTEGER NOT NULL,
+                  start_byte INTEGER NOT NULL,
+                  end_byte INTEGER NOT NULL,
+                  body_start_line INTEGER,
+                  body_start_column INTEGER,
+                  body_end_line INTEGER,
+                  body_end_column INTEGER,
+                  body_start_byte INTEGER,
+                  body_end_byte INTEGER,
+                  body_hash TEXT,
+                  semantic_group TEXT,
+                  confidence REAL,
+                  content_type TEXT,
+                  is_test INTEGER NOT NULL,
+                  test_container INTEGER NOT NULL,
+                  test_lifecycle INTEGER NOT NULL,
+                  metadata_json TEXT,
+                  PRIMARY KEY(version_id,symbol_id));
+                CREATE TABLE parse_diagnostics (
+                  diagnostic_id TEXT PRIMARY KEY,
+                  version_id INTEGER NOT NULL,
+                  path TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  message TEXT,
+                  start_line INTEGER NOT NULL,
+                  start_column INTEGER NOT NULL,
+                  end_line INTEGER NOT NULL,
+                  end_column INTEGER NOT NULL,
+                  start_byte INTEGER NOT NULL,
+                  end_byte INTEGER NOT NULL,
+                  metadata_json TEXT);
+                CREATE TABLE structural_facts (
+                  structural_fact_id TEXT NOT NULL,
+                  version_id INTEGER NOT NULL,
+                  path TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  pattern_id TEXT NOT NULL,
+                  capture_name TEXT NOT NULL,
+                  node_kind TEXT NOT NULL,
+                  containing_symbol_id TEXT,
+                  start_line INTEGER NOT NULL,
+                  start_column INTEGER NOT NULL,
+                  end_line INTEGER NOT NULL,
+                  end_column INTEGER NOT NULL,
+                  start_byte INTEGER NOT NULL,
+                  end_byte INTEGER NOT NULL,
+                  confidence REAL,
+                  metadata_json TEXT);
+                CREATE TABLE reference_sites (
+                  version_id INTEGER NOT NULL,
+                  reference_site_id TEXT NOT NULL,
+                  path TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  containing_symbol_id TEXT,
+                  start_line INTEGER,
+                  start_column INTEGER,
+                  end_line INTEGER,
+                  end_column INTEGER,
+                  start_byte INTEGER,
+                  end_byte INTEGER,
+                  is_exact INTEGER NOT NULL,
+                  provenance TEXT NOT NULL);
+                CREATE TABLE identifiers (
+                  version_id INTEGER NOT NULL,
+                  identifier_id TEXT NOT NULL,
+                  reference_site_id TEXT,
+                  path TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  name TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  containing_symbol_id TEXT,
+                  start_line INTEGER,
+                  start_column INTEGER,
+                  end_line INTEGER,
+                  end_column INTEGER,
+                  start_byte INTEGER,
+                  end_byte INTEGER,
+                  confidence REAL NOT NULL,
+                  code_context TEXT,
+                  metadata_json TEXT);
+                CREATE TABLE relationships (
+                  version_id INTEGER NOT NULL,
+                  relationship_id TEXT NOT NULL,
+                  reference_site_id TEXT,
+                  from_symbol_id TEXT NOT NULL,
+                  to_symbol_id TEXT NOT NULL,
+                  path TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  start_line INTEGER,
+                  start_column INTEGER,
+                  end_line INTEGER,
+                  end_column INTEGER,
+                  start_byte INTEGER,
+                  end_byte INTEGER,
+                  confidence REAL NOT NULL,
+                  metadata_json TEXT);
+                CREATE TABLE pending_relationships (
+                  version_id INTEGER NOT NULL,
+                  pending_relationship_id TEXT NOT NULL,
+                  reference_site_id TEXT,
+                  from_symbol_id TEXT NOT NULL,
+                  caller_scope_symbol_id TEXT,
+                  path TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  target_display_name TEXT NOT NULL,
+                  target_terminal_name TEXT NOT NULL,
+                  target_receiver TEXT,
+                  target_namespace_json TEXT,
+                  target_import_context TEXT,
+                  start_line INTEGER,
+                  start_column INTEGER,
+                  end_line INTEGER,
+                  end_column INTEGER,
+                  start_byte INTEGER,
+                  end_byte INTEGER,
+                  confidence REAL NOT NULL,
+                  metadata_json TEXT);
+                CREATE TABLE resolution_identifier_deltas (
+                  view_id TEXT NOT NULL,
+                  delta_generation INTEGER NOT NULL,
+                  version_id INTEGER NOT NULL,
+                  identifier_id TEXT NOT NULL,
+                  target_version_id INTEGER,
+                  target_symbol_id TEXT,
+                  tier INTEGER,
+                  confidence REAL,
+                  method TEXT,
+                  outcome TEXT,
+                  candidates INTEGER,
+                  operation TEXT);
+                CREATE TABLE resolution_pending_deltas (
+                  view_id TEXT NOT NULL,
+                  delta_generation INTEGER NOT NULL,
+                  version_id INTEGER NOT NULL,
+                  pending_relationship_id TEXT NOT NULL,
+                  target_version_id INTEGER,
+                  target_symbol_id TEXT,
+                  tier INTEGER,
+                  confidence REAL,
+                  method TEXT,
+                  operation TEXT);
+                CREATE TABLE store_log (
+                  sequence INTEGER PRIMARY KEY,
+                  request_id TEXT NOT NULL,
+                  event_kind TEXT NOT NULL,
+                  view_id TEXT,
+                  generation INTEGER,
+                  version_id INTEGER,
+                  level INTEGER,
+                  terminal INTEGER NOT NULL,
+                  payload_json TEXT NOT NULL,
+                  created_at TEXT NOT NULL);
+                INSERT INTO views VALUES
+                  ('view-a',$root,1,'unbound',NULL,NULL,NULL,'2026-08-09T00:00:00Z','2026-08-09T00:00:00Z');
+                INSERT INTO manifests VALUES
+                  ('view-a',1,'manifest-current','request-a','2026-08-09T00:00:00Z');
+                INSERT INTO file_versions VALUES
+                  (1,'src/Visible.cs','blake3:visible',1,'csharp',32,3,NULL,1,2,3);
+                INSERT INTO manifest_entries VALUES
+                  ('view-a',1,'src/Visible.cs','csharp',1,'indexed','blake3:visible',
+                   '2026-08-09T00:00:00Z',NULL,NULL);
+                INSERT INTO symbols VALUES
+                  (1,'sym-visible','src/Visible.cs','csharp','VisibleType','class',
+                   'public class VisibleType',NULL,'public',NULL,1,1,3,1,0,31,
+                   NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+                INSERT INTO store_log VALUES
+                  (1,'request-a','manifest_flipped','view-a',1,NULL,NULL,1,'{}','2026-08-09T00:00:01Z');
+                """;
+            command.Parameters.AddWithValue("$root", workspaceRoot);
+            command.ExecuteNonQuery();
+
+            if (includeBridgeTables)
+            {
+                command.CommandText =
+                    """
+                    CREATE TABLE type_argument_usages (
+                      usage_id TEXT NOT NULL,
+                      identifier_id TEXT,
+                      version_id INTEGER NOT NULL,
+                      path TEXT NOT NULL,
+                      language TEXT NOT NULL,
+                      metadata_json TEXT);
+                    CREATE TABLE type_arguments (
+                      type_argument_id TEXT NOT NULL,
+                      usage_id TEXT NOT NULL,
+                      version_id INTEGER NOT NULL,
+                      parent_type_argument_id TEXT,
+                      ordinal INTEGER,
+                      type_name TEXT);
+                    CREATE TABLE literals (
+                      literal_id TEXT NOT NULL,
+                      version_id INTEGER NOT NULL,
+                      path TEXT NOT NULL,
+                      language TEXT NOT NULL,
+                      literal_text TEXT,
+                      kind TEXT,
+                      carrier TEXT,
+                      arg_position INTEGER,
+                      containing_symbol_id TEXT,
+                      start_line INTEGER,
+                      start_column INTEGER,
+                      end_line INTEGER,
+                      end_column INTEGER,
+                      start_byte INTEGER,
+                      end_byte INTEGER,
+                      confidence REAL,
+                      metadata_json TEXT);
+                    CREATE TABLE symbol_annotations (
+                      version_id INTEGER NOT NULL,
+                      annotation_id TEXT NOT NULL,
+                      symbol_id TEXT,
+                      annotation TEXT,
+                      annotation_key TEXT,
+                      raw_text TEXT,
+                      carrier TEXT,
+                      metadata_json TEXT);
+                    """;
+                command.ExecuteNonQuery();
+            }
+        }
+    }
 
     /// <summary>
     /// Skips when a broker outside this test already owns the machine's rendezvous for the pinned model.
