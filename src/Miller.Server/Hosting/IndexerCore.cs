@@ -85,9 +85,18 @@ public sealed class IndexerCore
     {
         get
         {
-            lock (_gate)
+            if (!Monitor.TryEnter(_gate))
+                return true;
+
+            try
+            {
                 return Queue.Count > 0 || Queue.NeedsRescan || _overflowSignaled ||
                     _pendingWholeRepoScanIntents.Count > 0;
+            }
+            finally
+            {
+                Monitor.Exit(_gate);
+            }
         }
     }
 

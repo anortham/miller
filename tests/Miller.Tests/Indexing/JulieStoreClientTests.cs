@@ -1,5 +1,6 @@
 using Miller.Indexing;
 using Miller.Indexing.Store;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -450,6 +451,119 @@ public sealed class JulieStoreClientTests
     }
 
     [Fact]
+    public void StoreMutationAnchorCoversProcessExecution()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-anchor-" + Guid.NewGuid().ToString("N"));
+        string generation = Path.Combine(root, "gen-001");
+        string database = Path.Combine(generation, "store.db");
+        string coordinator = Path.Combine(root, "coord.db");
+        Directory.CreateDirectory(generation);
+        File.WriteAllText(Path.Combine(root, "CURRENT"), "gen-001");
+        SqliteConnection? setup = null;
+        SqliteConnection? coordinatorSetup = null;
+        try
+        {
+            setup = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = database,
+                Mode = SqliteOpenMode.ReadWriteCreate,
+                Pooling = false,
+            }.ToString());
+            setup.Open();
+            using (SqliteCommand command = setup.CreateCommand())
+            {
+                command.CommandText = "PRAGMA journal_mode=WAL;";
+                command.ExecuteNonQuery();
+                command.CommandText = "PRAGMA wal_autocheckpoint=0;";
+                command.ExecuteNonQuery();
+                command.CommandText = "CREATE TABLE store_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);";
+                command.ExecuteNonQuery();
+                command.CommandText = "INSERT INTO store_meta(key, value) VALUES ('generation_state', 'serving');";
+                command.ExecuteNonQuery();
+            }
+            coordinatorSetup = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = coordinator,
+                Mode = SqliteOpenMode.ReadWriteCreate,
+                Pooling = false,
+            }.ToString());
+            coordinatorSetup.Open();
+            using (SqliteCommand command = coordinatorSetup.CreateCommand())
+            {
+                command.CommandText = "PRAGMA journal_mode=WAL;";
+                command.ExecuteNonQuery();
+                command.CommandText = "PRAGMA wal_autocheckpoint=0;";
+                command.ExecuteNonQuery();
+                command.CommandText = "CREATE TABLE requests(request_id TEXT PRIMARY KEY);";
+                command.ExecuteNonQuery();
+                command.CommandText = "INSERT INTO requests(request_id) VALUES ('request-a');";
+                command.ExecuteNonQuery();
+            }
+
+            var request = new StoreUpdateRequest(
+                root,
+                null,
+                "view-a",
+                "/workspace",
+                "/workspace/file.cs",
+                StoreLevel.L1,
+                Controls(),
+                StoreScanControls.Default);
+            IDisposable? anchor = JulieStoreClient.OpenStoreMutationAnchor(request);
+            Assert.NotNull(anchor);
+            try
+            {
+                Assert.Equal(1, WalCheckpointBusy(database));
+                Assert.Equal(1, WalCheckpointBusy(coordinator));
+            }
+            finally
+            {
+                anchor.Dispose();
+            }
+
+            Assert.Equal(0, WalCheckpointBusy(database));
+            Assert.Equal(0, WalCheckpointBusy(coordinator));
+        }
+        finally
+        {
+            setup?.Dispose();
+            coordinatorSetup?.Dispose();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void StoreMutationAnchorSkipsMissingStoreCurrentAndDatabase()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-anchor-missing-" + Guid.NewGuid().ToString("N"));
+        var request = new StoreUpdateRequest(
+            root,
+            null,
+            "view-a",
+            "/workspace",
+            "/workspace/file.cs",
+            StoreLevel.L1,
+            Controls(),
+            StoreScanControls.Default);
+        try
+        {
+            Assert.Null(JulieStoreClient.OpenStoreMutationAnchor(request));
+            Directory.CreateDirectory(root);
+            Assert.Null(JulieStoreClient.OpenStoreMutationAnchor(request));
+            File.WriteAllText(Path.Combine(root, "CURRENT"), "gen-001");
+            Assert.Null(JulieStoreClient.OpenStoreMutationAnchor(request));
+            Directory.CreateDirectory(Path.Combine(root, "gen-001"));
+            Assert.Null(JulieStoreClient.OpenStoreMutationAnchor(request));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void SubmitHonorsAnAlreadyCanceledTokenBeforeStartingAProcess()
     {
         using var canceled = new CancellationTokenSource();
@@ -462,6 +576,23 @@ public sealed class JulieStoreClientTests
 
     private static StoreRequestControls Controls(TimeSpan? timeout = null) =>
         new("request-a", "key-a", timeout ?? TimeSpan.FromSeconds(30));
+
+    private static int WalCheckpointBusy(string database)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = database,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+            DefaultTimeout = 1,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+        using SqliteDataReader reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        return reader.GetInt32(0);
+    }
 
     private const string SuccessReport = """
         {"report_schema_version":1,"operation":"import","request":{"id":"request-a","idempotency_key":"key-a"},"family_id":"11111111-1111-4111-8111-111111111111","view_id":"view-a","root":"/workspace","state":"committed","requested_level":"l1","completion":{"l1":true,"l2":false,"l3":false},"manifest":{"generation":4,"hash":"abc123","disposition":"created"},"row_counts":{"file_versions":2,"l1":30,"l2":0,"l3":0},"resolution":{"state":"unbound","exact_at_matches":false},"coordinator":"committed","failure_class":"none","error":null}

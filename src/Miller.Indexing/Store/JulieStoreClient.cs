@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 
 namespace Miller.Indexing.Store;
 
@@ -85,6 +86,7 @@ public sealed class JulieStoreClient : IJulieStoreClient
         foreach (string argument in arguments)
             startInfo.ArgumentList.Add(argument);
 
+        using IDisposable? storeMutationAnchor = OpenStoreMutationAnchor(request);
         using var process = new Process { StartInfo = startInfo };
         try
         {
@@ -168,6 +170,147 @@ public sealed class JulieStoreClient : IJulieStoreClient
         string stdout = ReadCompleted(stdoutTask).TrimEnd('\r', '\n');
         string stderr = ReadCompleted(stderrTask).TrimEnd('\r', '\n');
         return Interpret(process.ExitCode, stdout, stderr, request.Operation);
+    }
+
+    internal static IDisposable? OpenStoreMutationAnchor(StoreRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Operation is StoreOperation.Export ||
+            request is StoreImportRequest { FromArtifact: not null })
+        {
+            return null;
+        }
+
+        var anchors = new List<StoreDatabaseAnchor>(capacity: 2);
+        if (TryResolveCoordinatorDatabase(request.StoreRoot) is { } coordinatorPath &&
+            TryOpenDatabaseAnchor(coordinatorPath, "SELECT name FROM sqlite_master WHERE type='table' AND name='requests' LIMIT 1") is { } coordinatorAnchor)
+        {
+            anchors.Add(coordinatorAnchor);
+        }
+
+        if (TryResolveServingStoreDatabase(request.StoreRoot) is { } databasePath &&
+            TryOpenDatabaseAnchor(databasePath, "SELECT key FROM store_meta ORDER BY key LIMIT 1") is { } storeAnchor)
+        {
+            anchors.Add(storeAnchor);
+        }
+
+        return anchors.Count == 0 ? null : new StoreMutationAnchor(anchors);
+    }
+
+    private static string? TryResolveCoordinatorDatabase(string storeRoot)
+    {
+        try
+        {
+            string canonicalStoreRoot = PathCanonicalizer.CanonicalizeRoot(storeRoot);
+            string databasePath = PathCanonicalizer.CanonicalizeFile(canonicalStoreRoot, "coord.db");
+            return File.Exists(databasePath) ? databasePath : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static StoreDatabaseAnchor? TryOpenDatabaseAnchor(string databasePath, string validationSql)
+    {
+        SqliteConnection? connection = null;
+        SqliteTransaction? transaction = null;
+        try
+        {
+            connection = SqliteReadOnlyAccess.Open(databasePath);
+            transaction = connection.BeginTransaction(deferred: true);
+            using SqliteCommand command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = validationSql;
+            if (command.ExecuteScalar() is null)
+            {
+                transaction.Dispose();
+                connection.Dispose();
+                return null;
+            }
+
+            return new StoreDatabaseAnchor(connection, transaction);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or SqliteException)
+        {
+            transaction?.Dispose();
+            connection?.Dispose();
+            return null;
+        }
+    }
+
+    private static string? TryResolveServingStoreDatabase(string storeRoot)
+    {
+        try
+        {
+            string canonicalStoreRoot = PathCanonicalizer.CanonicalizeRoot(storeRoot);
+            string currentPath = PathCanonicalizer.CanonicalizeFile(canonicalStoreRoot, "CURRENT");
+            if (!File.Exists(currentPath))
+                return null;
+
+            string generationName = File.ReadAllText(currentPath).Trim();
+            if (!IsPublishedGenerationName(generationName))
+                return null;
+
+            string databasePath = PathCanonicalizer.CanonicalizeFile(
+                canonicalStoreRoot,
+                Path.Combine(generationName, "store.db"));
+            string relative = Path.GetRelativePath(canonicalStoreRoot, databasePath);
+            if (Path.IsPathRooted(relative) ||
+                relative == ".." ||
+                relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+                relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return File.Exists(databasePath) ? databasePath : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private sealed class StoreMutationAnchor : IDisposable
+    {
+        private List<StoreDatabaseAnchor>? _anchors;
+
+        public StoreMutationAnchor(List<StoreDatabaseAnchor> anchors)
+        {
+            _anchors = anchors;
+        }
+
+        public void Dispose()
+        {
+            List<StoreDatabaseAnchor>? anchors = _anchors;
+            _anchors = null;
+            if (anchors is null)
+                return;
+
+            foreach (StoreDatabaseAnchor anchor in anchors)
+                anchor.Dispose();
+        }
+    }
+
+    private sealed class StoreDatabaseAnchor : IDisposable
+    {
+        private SqliteConnection? _connection;
+        private SqliteTransaction? _transaction;
+
+        public StoreDatabaseAnchor(SqliteConnection connection, SqliteTransaction transaction)
+        {
+            _connection = connection;
+            _transaction = transaction;
+        }
+
+        public void Dispose()
+        {
+            _transaction?.Dispose();
+            _transaction = null;
+            _connection?.Dispose();
+            _connection = null;
+        }
     }
 
     internal static ExtractWaitPolicy CreateWaitPolicy(TimeSpan stallTimeout) =>

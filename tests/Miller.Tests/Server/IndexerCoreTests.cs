@@ -54,6 +54,10 @@ public sealed class IndexerCoreTests
         /// <summary>The explicit --jobs cap of every scan dispatched, in order (null = ambient policy).</summary>
         public List<int?> ScanJobs { get; } = new();
 
+        public bool BlockScan { get; set; }
+        public ManualResetEventSlim ScanStarted { get; } = new();
+        public ManualResetEventSlim ReleaseScan { get; } = new();
+
         public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
         {
             bool force = ScanIntentPolicy.RequiresForce(intent);
@@ -61,6 +65,11 @@ public sealed class IndexerCoreTests
             ScanForce.Add(force);
             ScanIntents.Add(intent);
             ScanJobs.Add(jobs);
+            if (BlockScan)
+            {
+                ScanStarted.Set();
+                ReleaseScan.Wait();
+            }
             if (ThrowOnScan is { } failure)
                 throw failure;
             return Stub("scanned");
@@ -150,6 +159,38 @@ public sealed class IndexerCoreTests
 
         Assert.Equal(new[] { "scan" }, ops.Calls);
         Assert.False(core.HasPendingWork);
+    }
+
+    [Fact]
+    public async Task HasPendingWork_ReturnsTrueWhileDrainExecutesBlockingScan()
+    {
+        var ops = new RecordingOps { BlockScan = true };
+        var core = NewCore(ops, _ => true);
+        core.SignalRescan();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        Task drain = Task.Run(() => core.DrainAndProcess(
+            headChanged: false, wholeRepoScanAdmitted: true, out _), cancellationToken);
+        Task<bool>? pendingWork = null;
+
+        try
+        {
+            Assert.True(ops.ScanStarted.Wait(TimeSpan.FromSeconds(5), cancellationToken));
+            Assert.False(drain.IsCompleted);
+
+            pendingWork = Task.Run(() => core.HasPendingWork, cancellationToken);
+
+            await pendingWork.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+            Assert.True(await pendingWork);
+            Assert.False(ops.ReleaseScan.IsSet);
+        }
+        finally
+        {
+            ops.ReleaseScan.Set();
+            await drain.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+            if (pendingWork is not null)
+                await pendingWork.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        }
     }
 
     [Fact]
