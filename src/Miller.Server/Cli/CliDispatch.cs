@@ -2573,21 +2573,22 @@ public static class CliDispatch
                     return 3;
                 using (bridgeScope)
                 {
-                MillerRepositoryIndex fullIndex = bridgeScope.LoadFullIndex();
                 referenceLayerConverging = IndexLevelGuard.IsSymbolsLevel(bridgeScope.Session.Snapshot.IndexLevel);
 
-                var fullResolver = new SmartTargetResolver(fullIndex);
-                string bridgeOutput = TraceTool.Run(
-                    fullIndex, fullResolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
-                    depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json,
-                    referenceKind, includeDefinition,
-                    (symbol, query) => ReferenceEvidenceReader.Read(bridgeScope.Session, symbol.SymbolId, query),
-                    ctx.WorkspaceId ?? "current",
-                    string.Equals(mode, "refs", StringComparison.OrdinalIgnoreCase)
-                        ? ReferenceEvidenceReader.ReadSnapshot(bridgeScope.Session)
-                        : null,
-                    o.Value("continuation"),
-                    out _, out _);
+                BridgeGraph bridgeGraph = SessionBridgeGraphLoader.Load(bridgeScope.Session);
+                var bridgeResolver = new SmartTargetResolver(bridgeScope.SymbolIndex);
+                string bridgeOutput = TraceTool.RunBridge(
+                    bridgeScope.SymbolIndex,
+                    bridgeGraph,
+                    bridgeResolver,
+                    target: o.Query,
+                    scope: o.Value("scope"),
+                    depth: o.Int("depth", 3),
+                    limit: o.Int("limit", 20),
+                    fullFormat: o.Has("full"),
+                    json: json,
+                    out _,
+                    out _);
                 if (referenceLayerConverging)
                     bridgeOutput = ToolDiagnosticRenderer.Attach(
                         "trace", bridgeOutput,
@@ -3800,13 +3801,11 @@ public static class CliDispatch
     {
         public CliReadScope(
             WorkspaceReadHandle session,
-            MillerRepositoryIndex? index,
             ISymbolLookupIndex symbolIndex,
             ISymbolGraphReachability graph,
             IDisposable? graphOwner)
         {
             Session = session;
-            Index = index;
             SymbolIndex = symbolIndex;
             Graph = graph;
             _graphOwner = graphOwner;
@@ -3815,13 +3814,9 @@ public static class CliDispatch
         private readonly IDisposable? _graphOwner;
 
         public WorkspaceReadHandle Session { get; }
-        public MillerRepositoryIndex? Index { get; private set; }
         public ISymbolLookupIndex SymbolIndex { get; }
         public ISymbolGraphReachability Graph { get; }
         public bool IsFamilyStore => Session.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-
-        public MillerRepositoryIndex LoadFullIndex() =>
-            Index ??= RepositoryIndexLoader.LoadSession(Session);
 
         public FtsTextContentSearchIndex OpenContentIndex()
         {
@@ -3900,7 +3895,7 @@ public static class CliDispatch
                     ? sidecar.OpenStoreRequired(storeRoot, session.Snapshot)
                     : SymbolSearchProjectionLoader.LoadSession(session);
                 var graph = new SqliteSymbolGraphIndex(session);
-                scope = new CliReadScope(session, index: null, symbolIndex, graph, graph);
+                scope = new CliReadScope(session, symbolIndex, graph, graph);
             }
             else
             {
@@ -3909,7 +3904,7 @@ public static class CliDispatch
                         ?? SymbolSearchProjectionLoader.LoadSession(session)
                     : SymbolSearchProjectionLoader.LoadSession(session);
                 var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
-                scope = new CliReadScope(session, index: null, symbolIndex, graph, graph);
+                scope = new CliReadScope(session, symbolIndex, graph, graph);
             }
             session = null;
             return true;

@@ -1194,7 +1194,7 @@ public sealed class TraceTool
 
     // ---------- mode: bridge (cross-language scored chain) ----------
 
-    private static string RunBridge(
+    internal static string RunBridge(
         ISymbolLookupIndex index, BridgeGraph bridgeGraph, SmartTargetResolver resolver, string target, string? scope,
         int depth, int limit, bool fullFormat, bool json, out int emitted, out int nodesVisited)
     {

@@ -964,9 +964,11 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
-    public void FamilyStoreBridgeTrace_LazilyLoadsTheFullIndex()
+    public void FamilyStoreBridgeTrace_UsesLeanGraphWithoutLoadingInvalidRelationships()
     {
-        using var fx = MinimalFamilyStoreFixture.Create(includeBridgeTables: true);
+        using var fx = MinimalFamilyStoreFixture.Create(
+            includeBridgeTables: true,
+            includeInvalidRelationship: true);
 
         var (code, output, error) = RunFamilyStore(fx, ["trace", "VisibleType", "--mode", "bridge"]);
 
@@ -5217,7 +5219,9 @@ public sealed class CliDispatchTests : IDisposable
             StoreSidecarKind.Search,
             "view-a");
 
-        public static MinimalFamilyStoreFixture Create(bool includeBridgeTables = false)
+        public static MinimalFamilyStoreFixture Create(
+            bool includeBridgeTables = false,
+            bool includeInvalidRelationship = false)
         {
             string root = Path.Combine(
                 Path.GetTempPath(),
@@ -5232,7 +5236,11 @@ public sealed class CliDispatchTests : IDisposable
 
             string canonicalWorkspace = PathCanonicalizer.CanonicalizeRoot(workspace);
             string canonicalStore = PathCanonicalizer.CanonicalizeRoot(store);
-            CreateStore(Path.Combine(generation, "store.db"), canonicalWorkspace, includeBridgeTables);
+            CreateStore(
+                Path.Combine(generation, "store.db"),
+                canonicalWorkspace,
+                includeBridgeTables,
+                includeInvalidRelationship);
             StoreWorkspacePointer.Write(
                 canonicalWorkspace,
                 new StoreFamilyBinding(
@@ -5270,7 +5278,11 @@ public sealed class CliDispatchTests : IDisposable
             command.ExecuteNonQuery();
         }
 
-        private static void CreateStore(string path, string workspaceRoot, bool includeBridgeTables)
+        private static void CreateStore(
+            string path,
+            string workspaceRoot,
+            bool includeBridgeTables,
+            bool includeInvalidRelationship)
         {
             using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
             {
@@ -5516,6 +5528,21 @@ public sealed class CliDispatchTests : IDisposable
                 """;
             command.Parameters.AddWithValue("$root", workspaceRoot);
             command.ExecuteNonQuery();
+
+            if (includeInvalidRelationship)
+            {
+                command.CommandText =
+                    """
+                    ALTER TABLE relationships RENAME COLUMN from_symbol_id TO from_symbol_id_invalid;
+                    INSERT INTO relationships
+                        (version_id, relationship_id, reference_site_id, from_symbol_id_invalid, to_symbol_id,
+                         path, kind, confidence)
+                    VALUES
+                        (1, 'invalid-relationship', NULL, CAST(X'FF' AS BLOB), 'sym-visible',
+                         'src/Unused.cs', 'calls', 1.0);
+                    """;
+                command.ExecuteNonQuery();
+            }
 
             if (includeBridgeTables)
             {

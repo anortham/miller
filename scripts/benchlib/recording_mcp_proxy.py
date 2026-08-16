@@ -489,7 +489,7 @@ class RecordingProxy:
                 self._process.stdin.write(line)
                 self._process.stdin.flush()
                 self._record_rpc("controller_to_product", message, line, forwarded=True)
-        except (BrokenPipeError, OSError) as error:
+        except (BrokenPipeError, OSError, ValueError) as error:
             if not self._stop.is_set() and self._process.poll() is None:
                 self._fail("controller_relay_error", detail=str(error))
         except Exception as error:
