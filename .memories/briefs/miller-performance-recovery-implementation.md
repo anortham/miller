@@ -3,7 +3,7 @@ id: miller-performance-recovery-implementation
 title: Miller performance recovery implementation
 status: active
 created: 2026-08-14T03:57:03.433Z
-updated: 2026-08-16T11:25:16.124Z
+updated: 2026-08-16T11:57:18.512Z
 tags:
   - performance
   - family-store
@@ -19,14 +19,14 @@ Restore Miller startup, indexing, relationship-query, and family-store performan
 
 ## Current State
 
-The performance-recovery implementation, Linux verification, native Windows acceptance, evidence reconciliation, and final reviews are complete.
+The performance-recovery implementation, Linux verification, native Windows acceptance, PERF-008/009 dogfood, evidence reconciliation, and final reviews are complete.
 
 Remote Windows-acceptance state:
 - Miller `02abf49a` plus evidence follow-up `11233ff1`
 - Julie `37c81e5f`
 
 Verified local state awaiting renewed push approval:
-- Miller recovery code `21b73bcf` plus final evidence/review commit `c0e4fbd4`
+- Miller recovery/evidence commits through `0a23584b`, plus the final PERF-008 documentation commit now being prepared
 - Julie Linux correction `152f51e4`
 
 ## Evidence
@@ -35,6 +35,8 @@ Miller Release build passed with zero warnings/errors; final exact-tree fast was
 
 PERF-009 improved CLI bridge trace from 6.62–6.65 s and about 408–410 MiB RSS to 1.44–1.47 s and about 180 MiB RSS with identical output. MCP bridge calls passed at 1.76–1.79 s and about 187 MiB PSS, so no bridge sidecar is needed.
 
+PERF-008 captured Miller's actual child argv on a 24-core Linux host: the default remained `--jobs 4`, no component selected all-core mode, and process CPU stayed near one core. Cold full indexing remains expensive: about 154.97 s through Miller and 243.39 s direct, with 881,572 KB and 1,663,236 KB maximum RSS respectively. The gate closes workstation-saturation risk, not cold-index latency.
+
 Native Windows evidence remains the accepted 1,800-second semantic soak (26/26 probes) and strict replay (42 records across 14 workloads, zero measured hard-gate failures/nonzero exits). Final producer review had no findings; final Miller findings were corrected and the exact-tree fast gate passed afterward.
 
 ## Constraints
@@ -42,6 +44,7 @@ Native Windows evidence remains the accepted 1,800-second semantic soak (26/26 p
 - Preserve Store Contract v1, MCP/CLI schemas, deterministic output, semantic default-on behavior, relationship features, and Linux/Windows compatibility.
 - Do not mutate the protected live Linux family or its Miller/broker processes.
 - No push of the new local commits, producer adoption/pin bump, tag, publish, or release without the applicable explicit approval.
+- Treat further cold full-index optimization as a separate campaign; do not expand the closed recovery plan.
 
 ## Completion Boundary
 
@@ -52,5 +55,5 @@ Request renewed approval to push both updated feature branches. Producer adoptio
 - `docs/findings/2026-08-13-performance-recovery-verification.md`
 - `docs/plans/2026-08-13-miller-performance-recovery-plan.md`
 - `PERF.md`
-- Miller commits `21b73bcf`, `c0e4fbd4`
+- Miller commits through `0a23584b`
 - Julie commit `152f51e4`

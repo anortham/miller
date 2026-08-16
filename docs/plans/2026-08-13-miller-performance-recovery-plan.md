@@ -1100,6 +1100,7 @@ Close only passing PERF rows; failures remain open with metric, owner, and diagn
 - Task 17 evidence rejected removing both batch hints: no-hint fetches at 288–300 keys can trigger a `14.8–41.9 ms` automatic-index cliff. Filtered composite candidates were neutral/slower, including a `359%` wrong-kind regression. The final bounded slice instead reuses three uncached fixed statements (`~1.21 s` projected), raises the bounded reader statement cache to `32`, and removes only the safe count-query hint so Task 16's composite index can serve counts; the fetch hint remains. One replay decides the gate, after which performance work stops expanding.
 - Task 17 passed and is retained. Full/exact wall improved `61,488 -> 54,814 ms`, resolution `50,177 -> 44,673 ms`, and peak PSS fell to `26,830,848` bytes. The `60,000 ms` gate passes by `5,186 ms`. Performance scope is closed; no further optimization tasks may be added before profiler removal and the Linux/Windows integration gates.
 - The final exact full-resolution replay passed at `54,814 ms` wall, `44,673 ms` resolution, and `26,830,848` bytes peak PSS. A later all-14 rerun could not produce records because the frozen copied-store pointer selected an empty current view while the populated views had stale or mismatched sidecars. Rebuilding that disposable fixture would start another convergence campaign without changing the already-passing consumer or producer trees, so it is recorded as a fixture limitation rather than a new optimization task.
+- PERF-008 is accepted from the disposable integrated dogfood packet at `/home/murphy/.miller/perf-recovery-perf008-0a23584b-2KGQea` (SHA-256 manifest `8ff2451e6d372bf5e02ce058cddbafaafefe1fe69b54935252dc206ec64aaa7c`). On 24 processors, the default `--jobs` policy resolved to `4`; captured Miller child argv contains `--jobs 4` and no `--jobs 0`. The fresh integrated `workspace open` exited `0` in `154.97 s` (`117.10/26.73 s` user/system CPU, `881,572 KB` max RSS, `144,620 ms` scan), and the direct exact Julie scan exited `0` in `243.39 s` (`257.02/1.00 s`, `1,663,236 KB` max RSS; reported phases: `243,142 ms` total, `6,175 ms` spool, `236,833 ms` artifact write, `228,240 ms` resolution, `2,177 ms` index build). Miller no-change `workspace full` was `1.05 s`/`73,940 KB`; no-change `workspace refresh` was `0.93 s`/`74,452 KB`. The exact Miller tree was `0a23584b`; the bundled Julie binary was `2.33.2`, SHA-256 `257ea63c5fd86cec59ad7a1b739105b737ac84490c0f964fef43013e57e7162c`; `protected_family_selected=no`. Cold full indexing remains expensive, but measured extraction stayed near one CPU and did not silently become all-core; this closes the saturation/cap evidence, not a new cold-build latency budget.
 - Overall recovery has native Windows evidence, exact-current source/build/fast/Scale/performance
   traceability, and final evidence reconciliation. No further Linux optimization or fixture tasks may be
   added. The remaining actions are renewed push approval, then separately approval-gated producer adoption,
@@ -1230,7 +1231,9 @@ cargo test -p julie-extract-cli --features test-store-resolution-contract \
 - [x] Disabled operation preserves the current no-output/zero-counter behavior.
 - [x] The identical replay names scope-chain scalar misses as the dominant remaining owner (`83.96%`) and quantifies by-ID displacement.
 - [x] No behavior, public contract, schema, resolver tier, confidence, relationship feature, or default performance path changes.
-- [ ] All temporary attribution is removed before the production recovery commit.
+- [x] All temporary attribution is removed before the production recovery commit. The temporary
+  `JULIE_STORE_RESOLUTION_AGGREGATE_PROFILE` JSONL/runtime profiler was removed; permanent fixed-cardinality
+  test-feature telemetry remains as an intentionally bounded test seam and is not a production runtime profiler.
 
 ### Task 11A: Protect the By-ID Cache Budget
 
@@ -1314,13 +1317,18 @@ cargo test -p julie-extract-cli --features test-store-resolution-contract \
 - Retain only if exact/bounds/parity hold and the replay materially reduces scope-chain scalar pages/end-to-end wall. If repeated-key reuse is insufficient, profile the newly exposed owner rather than widening this cache.
 
 **Acceptance criteria:**
-- [ ] Current code is RED because a second full positive/empty scalar call repeats SQL.
-- [ ] GREEN reuses complete positive, empty, multi-page, and unknown-kind-filtered results with zero second-call SQL.
-- [ ] Early-stop and error paths never cache a partial result; binary order remains unchanged.
-- [ ] Cache lifetime resets with the existing phase window and stays within by-ID `W`, non-by-ID `2W`, total `3W`, page `W` bounds.
-- [ ] Task 9 query-count, Task 10 attribution reconciliation, Task 11A partition, and full/scoped digest tests remain green.
-- [ ] No public interface, schema, resolver tier/confidence, feature, or cache-capacity change.
-- [ ] The identical replay supplies scope caller/page, total child/by-ID SQL, wall/CPU/PSS, and exact-state after numbers.
+- [x] Current code is RED because a second full positive/empty scalar call repeats SQL.
+- [x] GREEN reuses complete positive, empty, multi-page, and unknown-kind-filtered results with zero second-call SQL.
+- [x] Early-stop and error paths never cache a partial result; binary order remains unchanged.
+- [x] Cache lifetime resets with the existing phase window and stays within by-ID `W`, non-by-ID `2W`, total `3W`, page `W` bounds.
+- [x] Task 9 query-count, Task 10 attribution reconciliation, Task 11A partition, and full/scoped digest tests remain green.
+- [x] No public interface, schema, resolver tier/confidence, feature, or cache-capacity change.
+- [x] The identical replay supplies scope caller/page, total child/by-ID SQL, wall/CPU/PSS, and exact-state after numbers.
+
+Task 11B is closed by the current mechanism, performance, scope-equivalence, partition, attribution, and digest
+tests plus the Task 17 exact replay: full/exact wall improved `120,697 -> 114,272 ms`, CPU `107,007 -> 100,477 ms`,
+resolution `110,591 -> 104,148 ms`, child pages `279,272 -> 213,111`, and child time `37,604 -> 31,526 ms`,
+with exit `0`, exact output/state, and peak PSS `27,092,992` bytes.
 
 
 ## External Review Reconciliation

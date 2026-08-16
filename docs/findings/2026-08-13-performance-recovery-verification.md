@@ -112,6 +112,29 @@ is needed by this measured gate.
 - Julie's Windows family-view root identity was corrected; the latest resolution contract passed 30/30
   with zero failures in 109.83 s.
 
+## PERF-008 integrated scan-cap evidence
+
+The later Linux evidence packet used the exact Miller tree at `0a23584b` and its bundled
+`julie-extract 2.33.2` binary (SHA-256
+`257ea63c5fd86cec59ad7a1b739105b737ac84490c0f964fef43013e57e7162c`). Raw evidence is preserved at
+`/home/murphy/.miller/perf-recovery-perf008-0a23584b-2KGQea`; its `SHA256SUMS.txt` hash is
+`8ff2451e6d372bf5e02ce058cddbafaafefe1fe69b54935252dc206ec64aaa7c`, and
+`protected_family_selected=no`.
+
+The host had 24 processors, so the default policy resolved to `--jobs 4`. Process polling captured the actual
+Miller child argv with `--jobs 4` for the integrated paths and no `--jobs 0`/auto fallback. The fresh integrated
+`workspace open` exited `0` in `154.97 s`, with `117.10/26.73 s` user/system CPU, `881,572 KB` maximum RSS,
+and `144,620 ms` scan duration. The direct exact Julie scan exited `0` in `243.39 s`, with `257.02/1.00 s`
+user/system CPU, `1,663,236 KB` maximum RSS, and Julie-reported timing of `243,142 ms` total, `6,175 ms`
+extraction spool, `236,833 ms` artifact write, `228,240 ms` resolution, and `2,177 ms` index build.
+No-change Miller `workspace full` exited `0` in `1.05 s` at `73,940 KB`; no-change `workspace refresh` exited
+`0` in `0.93 s` at `74,452 KB`.
+
+Cold full indexing remains expensive, but the measured extraction stayed near one CPU and did not silently become
+an all-core workload. PERF-008 therefore closes the saturation/job-cap evidence; it does not establish a new
+cold-build latency budget. The earlier source-identity statements for Miller `21b73bcf` and producer `152f51e4`
+remain local and unpushed; this later evidence packet is likewise local and unpushed.
+
 ## Remaining recovery gates
 
 - PERF-009's real bridge trace budget gate is closed by the measured CLI/lean-loader/MCP evidence above;

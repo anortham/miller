@@ -461,11 +461,24 @@ generation identity, I/O counters, broker identity/health when returned by Mille
 
 ### PERF-008 — Miller scan/extraction parallelism can saturate a workstation
 
-- **Status:** Existing guard retained; integrated dogfood required.
+- **Status:** Accepted by the disposable integrated dogfood packet recorded below.
 - **Protection:** Miller always passes `--jobs`; default is `min(4, max(1, ProcessorCount / 2))`. Exit 137 retries at
   one job. This bounds extraction only, not resolver SQLite work or per-host read hydration.
-- **Gate:** During final dogfood, record extractor jobs, Miller host CPU, resolver CPU, and peak RSS. No component
-  may silently opt back into all-core operation.
+- **Evidence:** The 24-processor Linux packet at
+  `/home/murphy/.miller/perf-recovery-perf008-0a23584b-2KGQea` (SHA-256 manifest
+  `8ff2451e6d372bf5e02ce058cddbafaafefe1fe69b54935252dc206ec64aaa7c`) used Miller `0a23584b`, the bundled
+  `julie-extract 2.33.2` binary with SHA-256
+  `257ea63c5fd86cec59ad7a1b739105b737ac84490c0f964fef43013e57e7162c`, and `protected_family_selected=no`.
+  The default resolved to `--jobs 4`; captured Miller child argv contains `--jobs 4` and no `--jobs 0`. Fresh
+  integrated `workspace open` exited `0` in `154.97 s`, with `117.10/26.73 s` user/system CPU, `881,572 KB`
+  maximum RSS, and `144,620 ms` scan duration. The direct exact Julie scan exited `0` in `243.39 s`, with
+  `257.02/1.00 s` user/system CPU, `1,663,236 KB` maximum RSS, and Julie-reported phases of `243,142 ms`
+  total, `6,175 ms` spool, `236,833 ms` artifact write, `228,240 ms` resolution, and `2,177 ms` index build.
+  No-change Miller `workspace full` was `1.05 s`/`73,940 KB`; no-change `workspace refresh` was
+  `0.93 s`/`74,452 KB`.
+- **Gate:** Accepted for saturation/capacity protection: cold full indexing remains expensive, but extraction was
+  bounded to roughly one CPU and no component silently opted back into all-core operation. This gate does not add
+  a new cold-build latency budget.
 
 ## Correctness incidents that caused wasted performance runs
 
