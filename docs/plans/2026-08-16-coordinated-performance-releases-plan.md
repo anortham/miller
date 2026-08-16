@@ -187,7 +187,7 @@
 **Approach:** Do not rebuild during promotion. Keep the dirty primary Miller checkout untouched; all release work runs from the clean recovery worktree and every outstanding worktree is reported at closeout.
 
 **Acceptance criteria:**
-- [ ] Package-only and promotion runs succeed for the exact prep commit.
-- [ ] `v1.19.2` is stable with four archives, four matching `.sha256` sidecars, and the committed release notes body.
-- [ ] Marketplace manifests and download URLs resolve to live assets.
-- [ ] Local HEAD, remote main, tag, and release facts are reconciled; unrelated main-checkout changes remain untouched and reported.
+- [x] Package-only and promotion runs succeed for the exact prep commit.
+- [x] `v1.19.2` is stable with four archives, four matching `.sha256` sidecars, and the committed release notes body.
+- [x] Marketplace manifests and download URLs resolve to live assets.
+- [x] Local HEAD, remote main, tag, and release facts are reconciled; unrelated main-checkout changes remain untouched and reported.

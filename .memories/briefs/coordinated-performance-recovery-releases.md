@@ -1,9 +1,9 @@
 ---
 id: coordinated-performance-recovery-releases
 title: Coordinated performance recovery releases
-status: active
+status: completed
 created: 2026-08-16T12:16:17.621Z
-updated: 2026-08-16T12:16:17.621Z
+updated: 2026-08-16T13:37:55.053Z
 tags:
   - release
   - performance
