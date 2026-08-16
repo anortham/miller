@@ -10,6 +10,7 @@ public sealed class WindowsKillOnCloseJobScaleTests
 {
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ExitTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan CleanupTimeout = TimeSpan.FromSeconds(2);
 
     [Fact]
     public void ClosingJobObject_KillsParentChildAndGrandchildTree()
@@ -63,12 +64,12 @@ public sealed class WindowsKillOnCloseJobScaleTests
             string childPidPath = Path.Combine(work, "child.pid");
             string grandchildPidPath = Path.Combine(work, "grandchild.pid");
             Assert.True(WaitForFile(childPidPath, StartupTimeout), "parent did not start its child");
-            int childPid = ReadPid(childPidPath);
+            int childPid = ReadPid(childPidPath, StartupTimeout);
             child = Process.GetProcessById(childPid);
             Assert.False(child.HasExited, "child exited before job disposal");
 
             Assert.True(WaitForFile(grandchildPidPath, StartupTimeout), "child did not start its grandchild");
-            int grandchildPid = ReadPid(grandchildPidPath);
+            int grandchildPid = ReadPid(grandchildPidPath, StartupTimeout);
             grandchild = Process.GetProcessById(grandchildPid);
             Assert.False(grandchild.HasExited, "grandchild exited before job disposal");
             Thread.Sleep(100);
@@ -92,14 +93,7 @@ public sealed class WindowsKillOnCloseJobScaleTests
             parent?.Dispose();
             child?.Dispose();
             grandchild?.Dispose();
-            try
-            {
-                Directory.Delete(work, recursive: true);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                cleanupFailures.Add($"temp root '{work}' could not be removed: {ex.Message}");
-            }
+            DeleteDirectory(work, cleanupFailures);
 
             Assert.Empty(cleanupFailures);
         }
@@ -118,8 +112,67 @@ public sealed class WindowsKillOnCloseJobScaleTests
         return File.Exists(path);
     }
 
-    private static int ReadPid(string path) =>
-        int.Parse(File.ReadAllText(path), System.Globalization.CultureInfo.InvariantCulture);
+    private static int ReadPid(string path, TimeSpan timeout)
+    {
+        Stopwatch wait = Stopwatch.StartNew();
+        string? lastFailure = null;
+        while (wait.Elapsed < timeout)
+        {
+            try
+            {
+                string content = File.ReadAllText(path);
+                if (int.TryParse(
+                        content,
+                        System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out int pid) &&
+                    pid > 0)
+                {
+                    return pid;
+                }
+
+                lastFailure = "the file did not contain a positive process id";
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                lastFailure = ex.Message;
+            }
+
+            Thread.Sleep(25);
+        }
+
+        throw new TimeoutException(
+            $"PID file '{path}' did not contain a readable positive process id within {timeout}. " +
+            $"Last failure: {lastFailure ?? "the file was incomplete or invalid"}.");
+    }
+
+    private static void DeleteDirectory(string path, ICollection<string> failures)
+    {
+        Stopwatch retry = Stopwatch.StartNew();
+        Exception? lastFailure = null;
+        while (true)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                lastFailure = ex;
+            }
+
+            if (retry.Elapsed >= CleanupTimeout)
+                break;
+            Thread.Sleep(25);
+        }
+
+        failures.Add($"temp root '{path}' could not be removed: {lastFailure?.Message}");
+    }
 
     private static bool WaitForExit(Process process, TimeSpan timeout)
     {

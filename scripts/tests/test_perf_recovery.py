@@ -883,6 +883,46 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual("spool", spool.name)
         self.assertEqual(spool.parent, progress.parent)
 
+    def test_retry_import_uses_staged_root_with_source_view(self) -> None:
+        live_family = self._family_root("live-family")
+        source_root = self.root / "source-root"
+        (source_root / ".miller").mkdir(parents=True)
+        self._write_pointer_at(source_root, live_family, view_id="source-view")
+        request = self._request(source_root=source_root, live_store=live_family)
+        manifest_path = Path(__file__).resolve().parents[1] / "benchmarks" / "perf-recovery-workloads.json"
+        workload = dataclasses.replace(
+            perf_recovery.load_manifest(manifest_path)["producer.retry.identical"],
+            warmups=0,
+            runs=1,
+        )
+        calls: list[tuple[Path, Path, str]] = []
+
+        def copy_family(source: Path, destination: Path, *, live_root: Path | None = None) -> None:
+            shutil.copytree(source, destination)
+
+        def run_process(process_request, argv, _timeout, _environment):
+            root = Path(argv[argv.index("--root") + 1])
+            view = argv[argv.index("--view") + 1]
+            calls.append((process_request.workspace, root, view))
+            family = perf_recovery.resolve_active_store(process_request).family_id
+            return self._result(
+                stdout=json.dumps(
+                    {"family_id": family, "view": view, "manifest": {"generation": 5}}
+                ).encode()
+            )
+
+        with mock.patch.object(
+            perf_recovery,
+            "_snapshot_helper_module",
+            return_value=SimpleNamespace(snapshot_family=copy_family),
+        ), mock.patch.object(perf_recovery, "_run_process", side_effect=run_process):
+            records = perf_recovery.run_workload(request, workload)
+
+        self.assertEqual(1, len(records))
+        self.assertEqual(1, len(calls))
+        self.assertEqual(calls[0][0], calls[0][1])
+        self.assertEqual("source-view", calls[0][2])
+
     def test_retry_uses_one_generated_identity_across_attempts_and_avoids_history_conflict(self) -> None:
         live_family = self._family_root("live-family")
         source_root = self.root / "source-root"
@@ -921,7 +961,11 @@ class PerfRecoveryTests(unittest.TestCase):
                 self._result(stdout=json.dumps(payload).encode()),
                 peak_pss_bytes=1_024,
                 hard_memory_bytes=1_024,
-                hard_memory_metric="linux_pss",
+                hard_memory_metric=(
+                    "windows_private_usage"
+                    if perf_recovery._platform_name().startswith("win")
+                    else "linux_pss"
+                ),
             )
 
         with mock.patch.object(
@@ -1031,7 +1075,7 @@ class PerfRecoveryTests(unittest.TestCase):
         source_miller = source_root / ".miller"
         source_miller.mkdir(parents=True)
         source_file = source_root / "README.md"
-        source_file.write_text("original\n", encoding="utf-8")
+        source_file.write_bytes(b"original\n")
         source_pointer = source_miller / "store.json"
         self._write_pointer_at(source_root, live_family, view_id="source-view")
         source_pointer_before = source_pointer.read_bytes()
@@ -1418,6 +1462,37 @@ class PerfRecoveryTests(unittest.TestCase):
                 label="resolve",
                 require_pointer_view=True,
             )
+
+    @unittest.skipUnless(os.name == "nt", "Windows path identity")
+    def test_resolve_report_accepts_windows_extended_length_root(self) -> None:
+        request = self._request()
+        active = perf_recovery.resolve_active_store(request)
+        payload = {
+            "family_id": str(active.family_id),
+            "view_id": active.view_id,
+            "manifest": {"generation": 5},
+            "root": "\\\\?\\" + str(request.workspace),
+        }
+
+        self.assertEqual(
+            payload,
+            perf_recovery._validate_setup_result(
+                request,
+                self._result(stdout=json.dumps(payload).encode()),
+                expected_view=active.view_id,
+                label="resolve",
+                require_pointer_view=True,
+            ),
+        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows path identity")
+    def test_same_path_normalizes_extended_unc_without_collapsing_distinct_share(self) -> None:
+        ordinary = r"\\server\share\path"
+        extended = r"\\?\UNC\server\share\path"
+        distinct = r"\\server\other-share\path"
+
+        self.assertTrue(perf_recovery._same_path(ordinary, extended))
+        self.assertFalse(perf_recovery._same_path(ordinary, distinct))
 
     def test_nested_manifest_generation_matches_the_selected_view_not_current_directory(self) -> None:
         database = self.store_copy / "gen-001" / "store.db"
@@ -1829,7 +1904,11 @@ class PerfRecoveryTests(unittest.TestCase):
 
         process = FakeProcess()
         with mock.patch.object(perf_recovery.subprocess, "Popen", return_value=process) as popen:
-            with mock.patch.object(perf_recovery, "_monitor_process"):
+            with mock.patch.object(perf_recovery, "_monitor_process"), mock.patch.object(
+                perf_recovery.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0),
+            ):
                 session = perf_recovery._McpSession(self._request(), {})
                 session.close()
         kwargs = popen.call_args.kwargs
@@ -2691,7 +2770,7 @@ class PerfRecoveryTests(unittest.TestCase):
         task_paths = [Path("/proc/100/task/100/children"), Path("/proc/100/task/222/children")]
 
         def read_text(path, *args, **kwargs):
-            if str(path).endswith("/222/children"):
+            if path.as_posix().endswith("/222/children"):
                 raise OSError("transient read failure")
             return "101\n"
 

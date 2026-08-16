@@ -14,17 +14,42 @@ def _write(message: dict) -> None:
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--received", type=Path)
-parser.add_argument("--mode", choices=["normal", "crash", "malformed", "hang"], default="normal")
+parser.add_argument(
+    "--mode",
+    choices=[
+        "normal",
+        "crash",
+        "malformed",
+        "hang",
+        "spawn-and-exit",
+        "spawn-and-ignore-term",
+        "exit-after-one",
+    ],
+    default="normal",
+)
 parser.add_argument("--pid-file", type=Path)
 parser.add_argument("--child-pid-file", type=Path)
 parser.add_argument("--env-file", type=Path)
 args = parser.parse_args()
 
+
+def spawn_descendant() -> None:
+    if args.child_pid_file is None:
+        raise SystemExit("--child-pid-file is required for a descendant")
+    child_code = "import time; time.sleep(60)"
+    if args.mode == "spawn-and-ignore-term":
+        child_code = "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+    child = subprocess.Popen([sys.executable, "-c", child_code])
+    args.child_pid_file.write_text(str(child.pid), encoding="utf-8")
+
+
 if args.pid_file:
     args.pid_file.write_text(str(os.getpid()), encoding="utf-8")
+if args.mode in {"spawn-and-exit", "spawn-and-ignore-term"}:
+    spawn_descendant()
+    raise SystemExit(0)
 if args.child_pid_file:
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    args.child_pid_file.write_text(str(child.pid), encoding="utf-8")
+    spawn_descendant()
 if args.env_file:
     args.env_file.write_text(os.environ.get("JULIE_HOME", "missing"), encoding="utf-8")
 if args.mode == "crash":
@@ -95,6 +120,8 @@ for line in sys.stdin.buffer:
                     },
                 }
             )
+    if args.mode == "exit-after-one":
+        break
 
 if args.mode == "hang":
     time.sleep(60)

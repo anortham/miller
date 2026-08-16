@@ -1,3 +1,4 @@
+import csv
 import hashlib
 import json
 import os
@@ -5,17 +6,21 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
 PROXY = SCRIPTS_ROOT / "benchlib" / "recording_mcp_proxy.py"
 FAKE_SERVER = SCRIPTS_ROOT / "tests" / "fixtures" / "agent-efficiency" / "fake_mcp_server.py"
 sys.path.insert(0, str(SCRIPTS_ROOT))
+sys.path.insert(0, str(SCRIPTS_ROOT / "benchlib"))
 
 from benchlib.agent_contract import count_tool_output_tokens
+from benchlib import recording_mcp_proxy
 
 
 def _json_line(value: dict) -> bytes:
@@ -69,11 +74,30 @@ def _wait_for_file(path: Path, timeout: float = 5) -> None:
 
 
 def _process_exists(pid: int) -> bool:
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as error:
+            raise AssertionError(f"tasklist probe failed: {error}") from error
+        if result.returncode != 0:
+            raise AssertionError(f"tasklist probe exited with status {result.returncode}: {result.stderr}")
+        try:
+            rows = list(csv.reader(result.stdout.splitlines()))
+        except csv.Error as error:
+            raise AssertionError(f"tasklist probe returned malformed CSV: {error}") from error
+        return any(len(row) > 1 and row[1] == str(pid) for row in rows)
     try:
         os.kill(pid, 0)
         return True
     except ProcessLookupError:
         return False
+    except PermissionError:
+        return True
 
 
 def _wait_for_process_exit(pid: int, timeout: float = 5) -> bool:
@@ -366,6 +390,173 @@ class RecordingMcpProxyTests(unittest.TestCase):
         self.assertEqual(23, exit_event["returncode"])
         self.assertIsNone(exit_event["failure_reason"])
 
+    def test_normal_parent_exit_terminates_descendant_process_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            events_path = root / "events.jsonl"
+            child_pid_path = root / "child-pid"
+            started = time.monotonic()
+            completed = subprocess.run(
+                _proxy_command(events_path, root, ["--mode", "spawn-and-exit", "--child-pid-file", str(child_pid_path)]),
+                input=b"",
+                capture_output=True,
+                timeout=10,
+            )
+            child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+            elapsed = time.monotonic() - started
+
+        self.assertEqual(0, completed.returncode, completed.stderr.decode())
+        self.assertLess(elapsed, 4)
+        self.assertTrue(_wait_for_process_exit(child_pid))
+
+    def test_normal_parent_exit_escalates_descendant_ignoring_sigterm(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            events_path = root / "events.jsonl"
+            child_pid_path = root / "child-pid"
+            started = time.monotonic()
+            completed = subprocess.run(
+                _proxy_command(
+                    events_path,
+                    root,
+                    ["--mode", "spawn-and-ignore-term", "--child-pid-file", str(child_pid_path)],
+                ),
+                input=b"",
+                capture_output=True,
+                timeout=10,
+            )
+            child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+            elapsed = time.monotonic() - started
+
+        self.assertEqual(0, completed.returncode, completed.stderr.decode())
+        self.assertLess(elapsed, 4)
+        self.assertTrue(_wait_for_process_exit(child_pid))
+
+    def test_normal_exit_does_not_wait_for_open_controller_and_drains_output(self) -> None:
+        call = {
+            "jsonrpc": "2.0",
+            "id": "complete",
+            "method": "tools/call",
+            "params": {"name": "echo", "arguments": {"text": "complete output"}},
+        }
+        expected_stdout = _json_line(
+            {
+                "jsonrpc": "2.0",
+                "id": "complete",
+                "result": {
+                    "content": [{"type": "text", "text": "result complete output\nline"}],
+                    "isError": False,
+                },
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            events_path = root / "events.jsonl"
+            process = subprocess.Popen(
+                _proxy_command(events_path, root, ["--mode", "exit-after-one"]),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            assert process.stdin is not None
+            assert process.stdout is not None
+            assert process.stderr is not None
+            process.stdin.write(_json_line(call))
+            process.stdin.flush()
+            started = time.monotonic()
+            try:
+                returncode = process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.stdin.close()
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+                raise
+            finally:
+                if not process.stdin.closed:
+                    process.stdin.close()
+            elapsed = time.monotonic() - started
+            stdout = process.stdout.read()
+            stderr = process.stderr.read()
+            process.stdout.close()
+            process.stderr.close()
+            events = _events(events_path)
+
+        self.assertLess(elapsed, 4)
+        self.assertEqual(0, returncode, stderr.decode())
+        self.assertEqual(expected_stdout, stdout)
+        self.assertEqual(b"fake diagnostic\n", stderr)
+        self.assertNotIn("proxy_failure", [event["event"] for event in events])
+        self.assertEqual(
+            ["downstream_started", "tool_call", "rpc", "stderr", "tool_result", "rpc", "downstream_exit"],
+            [event["event"] for event in events],
+        )
+        self.assertEqual(0, next(event for event in events if event["event"] == "downstream_exit")["returncode"])
+        self.assertIsNone(next(event for event in events if event["event"] == "downstream_exit")["failure_reason"])
+        self.assertEqual(
+            len(_json_line(call)) + len(expected_stdout),
+            sum(event["byte_count"] for event in events if event["event"] == "rpc"),
+        )
+
+    def test_controller_cancellation_failure_closes_input_and_joins_reader(self) -> None:
+        class BlockingStream:
+            def __init__(self) -> None:
+                self.released = threading.Event()
+                self.closed = False
+
+            def readline(self) -> bytes:
+                self.released.wait()
+                return b""
+
+            def close(self) -> None:
+                self.closed = True
+                self.released.set()
+
+        class ControllerInput:
+            def __init__(self, stream: BlockingStream) -> None:
+                self.buffer = stream
+
+        class FailingJob:
+            def cancel_thread_io(self, _thread: threading.Thread) -> None:
+                raise OSError("injected cancellation failure")
+
+        with tempfile.TemporaryDirectory() as directory:
+            events_path = Path(directory) / "events.jsonl"
+            events = recording_mcp_proxy.EventWriter(events_path)
+            proxy = recording_mcp_proxy.RecordingProxy(
+                events,
+                [],
+                Path(directory),
+                max_calls=1,
+                max_output_tokens=1,
+            )
+            stream = BlockingStream()
+            controller_input = ControllerInput(stream)
+            controller_thread = threading.Thread(target=stream.readline, daemon=True)
+            product_thread = threading.Thread(target=lambda: None)
+            stderr_thread = threading.Thread(target=lambda: None)
+            controller_thread.start()
+            product_thread.start()
+            stderr_thread.start()
+            proxy._windows_job = FailingJob()
+            try:
+                with mock.patch.object(recording_mcp_proxy.sys, "stdin", controller_input), mock.patch.object(
+                    recording_mcp_proxy.os,
+                    "name",
+                    "nt",
+                ):
+                    proxy._join_threads(
+                        controller_thread=controller_thread,
+                        product_thread=product_thread,
+                        stderr_thread=stderr_thread,
+                    )
+            finally:
+                events.close()
+
+        self.assertTrue(stream.closed)
+        self.assertFalse(controller_thread.is_alive())
+        self.assertEqual("controller_shutdown", proxy._failure_reason)
+
     def test_malformed_product_protocol_fails_closed_and_terminates_product(self) -> None:
         request = _json_line({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
         with tempfile.TemporaryDirectory() as directory:
@@ -459,7 +650,10 @@ class RecordingMcpProxyTests(unittest.TestCase):
             )
             _wait_for_file(child_pid_path)
             child_pid = int(child_pid_path.read_text(encoding="utf-8"))
-            process.send_signal(signal.SIGTERM)
+            if os.name == "nt":
+                process.terminate()
+            else:
+                process.send_signal(signal.SIGTERM)
             returncode = process.wait(timeout=10)
             assert process.stdin is not None
             assert process.stdout is not None
@@ -469,9 +663,12 @@ class RecordingMcpProxyTests(unittest.TestCase):
             process.stderr.close()
             events = _events(events_path)
 
-        self.assertEqual(128 + signal.SIGTERM, returncode)
-        failure = next(event for event in events if event["event"] == "proxy_failure")
-        self.assertEqual({"reason": "signal", "signal": signal.SIGTERM}, {key: failure[key] for key in ["reason", "signal"]})
+        if os.name == "nt":
+            self.assertEqual(1, returncode)
+        else:
+            self.assertEqual(128 + signal.SIGTERM, returncode)
+            failure = next(event for event in events if event["event"] == "proxy_failure")
+            self.assertEqual({"reason": "signal", "signal": signal.SIGTERM}, {key: failure[key] for key in ["reason", "signal"]})
         self.assertTrue(_wait_for_process_exit(child_pid))
 
 

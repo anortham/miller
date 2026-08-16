@@ -14,6 +14,12 @@ from typing import Any
 from agent_contract import count_tool_output_tokens
 
 
+class _WindowsProcessJobSetupError(RuntimeError):
+    def __init__(self, message: str, job: "_WindowsProcessJob") -> None:
+        super().__init__(message)
+        self.job = job
+
+
 class EventWriter:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -38,6 +44,286 @@ class EventWriter:
 
     def close(self) -> None:
         os.close(self._fd)
+
+
+class _WindowsProcessJob:
+    _CREATE_SUSPENDED = 0x00000004
+    _TH32CS_SNAPTHREAD = 0x00000004
+    _THREAD_SUSPEND_RESUME = 0x0002
+    _EXTENDED_LIMIT_INFORMATION = 9
+    _JOB_OBJECT_BASIC_PROCESS_ID_LIST = 3
+    _KILL_ON_JOB_CLOSE = 0x00002000
+    _PROCESS_SET_QUOTA = 0x0100
+    _PROCESS_TERMINATE = 0x0001
+    _THREAD_TERMINATE = 0x0001
+    _ERROR_NO_MORE_FILES = 18
+    _ERROR_MORE_DATA = 234
+    _ERROR_INVALID_PARAMETER = 87
+    _ERROR_NOT_FOUND = 1168
+
+    def __init__(self, process: subprocess.Popen[bytes]) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        class BasicLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_ulonglong),
+                ("WriteOperationCount", ctypes.c_ulonglong),
+                ("OtherOperationCount", ctypes.c_ulonglong),
+                ("ReadTransferCount", ctypes.c_ulonglong),
+                ("WriteTransferCount", ctypes.c_ulonglong),
+                ("OtherTransferCount", ctypes.c_ulonglong),
+            ]
+
+        class ExtendedLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", BasicLimitInformation),
+                ("IoInfo", IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        class ThreadEntry32(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ThreadID", wintypes.DWORD),
+                ("th32OwnerProcessID", wintypes.DWORD),
+                ("tpBasePri", wintypes.LONG),
+                ("tpDeltaPri", wintypes.LONG),
+                ("dwFlags", wintypes.DWORD),
+            ]
+
+        self._ctypes = ctypes
+        self._thread_entry_type = ThreadEntry32
+        self._invalid_handle_value = ctypes.c_void_p(-1).value
+        self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+        self._kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        self._kernel32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        ]
+        self._kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        self._kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        self._kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        self._kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        self._kernel32.TerminateJobObject.restype = wintypes.BOOL
+        self._kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self._kernel32.CloseHandle.restype = wintypes.BOOL
+        self._kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        self._kernel32.OpenProcess.restype = wintypes.HANDLE
+        self._kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        self._kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        self._kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry32)]
+        self._kernel32.Thread32First.restype = wintypes.BOOL
+        self._kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry32)]
+        self._kernel32.Thread32Next.restype = wintypes.BOOL
+        self._kernel32.QueryInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        self._kernel32.QueryInformationJobObject.restype = wintypes.BOOL
+        self._kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        self._kernel32.OpenThread.restype = wintypes.HANDLE
+        self._kernel32.CancelSynchronousIo.argtypes = [wintypes.HANDLE]
+        self._kernel32.CancelSynchronousIo.restype = wintypes.BOOL
+        self._kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
+        self._kernel32.ResumeThread.restype = wintypes.DWORD
+
+        self._handle = self._kernel32.CreateJobObjectW(None, None)
+        if not self._handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        self._terminated = False
+        try:
+            limits = ExtendedLimitInformation()
+            limits.BasicLimitInformation.LimitFlags = self._KILL_ON_JOB_CLOSE
+            if not self._kernel32.SetInformationJobObject(
+                self._handle,
+                self._EXTENDED_LIMIT_INFORMATION,
+                ctypes.byref(limits),
+                ctypes.sizeof(limits),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            process_handle = getattr(process, "_handle", None)
+            owned_process_handle = False
+            if process_handle is None:
+                process_handle = self._kernel32.OpenProcess(
+                    self._PROCESS_SET_QUOTA | self._PROCESS_TERMINATE,
+                    False,
+                    process.pid,
+                )
+                if not process_handle:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                owned_process_handle = True
+            try:
+                if not self._kernel32.AssignProcessToJobObject(self._handle, process_handle):
+                    raise ctypes.WinError(ctypes.get_last_error())
+            finally:
+                if owned_process_handle:
+                    self._close_handle(process_handle)
+        except BaseException as error:
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                raise _WindowsProcessJobSetupError(
+                    f"Windows process job setup failed: {error}; cleanup failed: {cleanup_error}",
+                    self,
+                ) from error
+            raise
+
+    def resume_primary_thread(self, process_id: int) -> None:
+        import ctypes
+
+        snapshot = self._kernel32.CreateToolhelp32Snapshot(self._TH32CS_SNAPTHREAD, 0)
+        if not snapshot or self._handle_value(snapshot) == self._invalid_handle_value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        thread_ids: list[int] = []
+        try:
+            entry = self._thread_entry_type()
+            entry.dwSize = ctypes.sizeof(entry)
+            if not self._kernel32.Thread32First(snapshot, ctypes.byref(entry)):
+                error = ctypes.get_last_error()
+                if error != self._ERROR_NO_MORE_FILES:
+                    raise ctypes.WinError(error)
+            else:
+                while True:
+                    if entry.th32OwnerProcessID == process_id:
+                        thread_ids.append(entry.th32ThreadID)
+                    if self._kernel32.Thread32Next(snapshot, ctypes.byref(entry)):
+                        continue
+                    error = ctypes.get_last_error()
+                    if error != self._ERROR_NO_MORE_FILES:
+                        raise ctypes.WinError(error)
+                    break
+        finally:
+            self._close_handle(snapshot)
+        if len(thread_ids) != 1:
+            raise RuntimeError(f"expected one suspended primary thread, found {len(thread_ids)}")
+        thread = self._kernel32.OpenThread(self._THREAD_SUSPEND_RESUME, False, thread_ids[0])
+        if not thread:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            previous_count = self._kernel32.ResumeThread(thread)
+            if previous_count == 0xFFFFFFFF:
+                raise ctypes.WinError(ctypes.get_last_error())
+            if previous_count != 1:
+                raise RuntimeError(f"unexpected primary thread suspend count: {previous_count}")
+        finally:
+            self._close_handle(thread)
+
+    def process_tree_pids(self, root_pid: int) -> set[int]:
+        import ctypes
+
+        del root_pid
+        pointer_size = ctypes.sizeof(ctypes.c_size_t)
+        capacity = 16
+        while True:
+            buffer_size = 8 + capacity * pointer_size
+            buffer = ctypes.create_string_buffer(buffer_size)
+            returned = ctypes.c_uint32()
+            success = self._kernel32.QueryInformationJobObject(
+                self._handle,
+                self._JOB_OBJECT_BASIC_PROCESS_ID_LIST,
+                buffer,
+                buffer_size,
+                ctypes.byref(returned),
+            )
+            error = ctypes.get_last_error() if not success else 0
+            counts = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_uint32))
+            process_count = int(counts[1])
+            required_size = max(
+                int(returned.value),
+                8 + process_count * pointer_size,
+            )
+            if not success and error != self._ERROR_MORE_DATA:
+                raise ctypes.WinError(error)
+            if process_count > capacity or required_size > buffer_size:
+                capacity = max(
+                    capacity * 2,
+                    process_count,
+                    (required_size - 8 + pointer_size - 1) // pointer_size,
+                )
+                continue
+            process_ids = ctypes.cast(
+                ctypes.byref(buffer, 8),
+                ctypes.POINTER(ctypes.c_size_t),
+            )
+            return {int(process_ids[index]) for index in range(process_count)}
+
+    def wait_for_process_tree_exit(self, root_pid: int, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        while True:
+            if not self.process_tree_pids(root_pid):
+                return
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired("process-tree", timeout)
+            time.sleep(0.02)
+
+    def terminate(self) -> None:
+        if not self._handle:
+            raise RuntimeError("Windows process job is closed")
+        if self._terminated:
+            return
+        if not self._kernel32.TerminateJobObject(self._handle, 1):
+            raise self._ctypes.WinError(self._ctypes.get_last_error())
+        self._terminated = True
+
+    def cancel_thread_io(self, thread: threading.Thread) -> None:
+        import ctypes
+
+        thread_id = thread.native_id
+        if thread_id is None:
+            return
+        handle = self._kernel32.OpenThread(self._THREAD_TERMINATE, False, thread_id)
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == self._ERROR_INVALID_PARAMETER:
+                return
+            raise ctypes.WinError(error)
+        try:
+            if not self._kernel32.CancelSynchronousIo(handle):
+                error = ctypes.get_last_error()
+                if error != self._ERROR_NOT_FOUND:
+                    raise ctypes.WinError(error)
+        finally:
+            self._close_handle(handle)
+
+    def close(self) -> None:
+        if not self._handle:
+            return
+        handle = self._handle
+        if not self._kernel32.CloseHandle(handle):
+            raise self._ctypes.WinError(self._ctypes.get_last_error())
+        self._handle = None
+
+    def _close_handle(self, handle: Any) -> None:
+        if not self._kernel32.CloseHandle(handle):
+            raise self._ctypes.WinError(self._ctypes.get_last_error())
+
+    def _handle_value(self, handle: Any) -> int:
+        value = getattr(handle, "value", handle)
+        return 0 if value is None else int(value)
 
 
 class RecordingProxy:
@@ -69,38 +355,49 @@ class RecordingProxy:
         self._call_budget_closed = False
         self._token_budget_closed = False
         self._process: subprocess.Popen[bytes] | None = None
+        self._windows_job: _WindowsProcessJob | None = None
 
     def run(self) -> int:
         popen_options: dict[str, Any] = {}
+        previous_handlers: dict[int, Any] = {}
+        threads: list[threading.Thread] = []
+        returncode = 70
         if os.name == "nt":
-            popen_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            popen_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | _WindowsProcessJob._CREATE_SUSPENDED
         else:
             popen_options["start_new_session"] = True
-        self._process = subprocess.Popen(
-            self._command,
-            cwd=self._cwd,
-            env={**os.environ, **self._product_environment},
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            **popen_options,
-        )
-        self._events.write("downstream_started", pid=self._process.pid, cwd=str(self._cwd), command=self._command)
-        previous_handlers = self._install_signal_handlers()
-        controller_thread = threading.Thread(
-            target=self._pump_controller, name="mcp-controller", daemon=True)
-        product_thread = threading.Thread(
-            target=self._pump_product, name="mcp-product", daemon=True)
-        stderr_thread = threading.Thread(
-            target=self._pump_stderr, name="mcp-stderr", daemon=True)
-        threads = [controller_thread, product_thread, stderr_thread]
-        for thread in threads:
-            thread.start()
-
-        timeout_seconds = float(os.environ.get("MILLER_RECORDING_PROXY_TIMEOUT_SECONDS", "120"))
-        eof_grace_seconds = float(os.environ.get("MILLER_RECORDING_PROXY_EOF_GRACE_SECONDS", "1"))
-        eof_started_ns: int | None = None
         try:
+            self._process = subprocess.Popen(
+                self._command,
+                cwd=self._cwd,
+                env={**os.environ, **self._product_environment},
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **popen_options,
+            )
+            if os.name == "nt":
+                try:
+                    self._windows_job = _WindowsProcessJob(self._process)
+                except _WindowsProcessJobSetupError as error:
+                    self._windows_job = error.job
+                    raise
+                self._windows_job.resume_primary_thread(self._process.pid)
+            self._events.write("downstream_started", pid=self._process.pid, cwd=str(self._cwd), command=self._command)
+            previous_handlers = self._install_signal_handlers()
+            controller_thread = threading.Thread(
+                target=self._pump_controller, name="mcp-controller", daemon=True)
+            product_thread = threading.Thread(
+                target=self._pump_product, name="mcp-product", daemon=True)
+            stderr_thread = threading.Thread(
+                target=self._pump_stderr, name="mcp-stderr", daemon=True)
+            threads = [controller_thread, product_thread, stderr_thread]
+            for thread in threads:
+                thread.start()
+
+            timeout_seconds = float(os.environ.get("MILLER_RECORDING_PROXY_TIMEOUT_SECONDS", "120"))
+            eof_grace_seconds = float(os.environ.get("MILLER_RECORDING_PROXY_EOF_GRACE_SECONDS", "1"))
+            eof_started_ns: int | None = None
             while self._process.poll() is None:
                 now_ns = time.monotonic_ns()
                 if self._stop.is_set():
@@ -119,20 +416,39 @@ class RecordingProxy:
                     break
                 time.sleep(0.01)
             returncode = self._wait_for_process()
-            product_thread.join()
-            stderr_thread.join()
-            controller_thread.join(timeout=1)
-            self._events.write(
-                "downstream_exit",
-                returncode=returncode,
-                failure_reason=self._failure_reason,
-                signal=self._signal_number,
+            self._terminate_process_group()
+            self._join_threads(
+                controller_thread=controller_thread,
+                product_thread=product_thread,
+                stderr_thread=stderr_thread,
             )
-            if self._failure_reason is not None:
-                return 128 + self._signal_number if self._signal_number is not None else 70
-            return returncode
+        except BaseException as error:
+            if self._failure_reason is None:
+                reason = "process_setup" if not threads else "proxy_error"
+                self._fail(reason, detail=repr(error))
+            returncode = 70
         finally:
+            cleanup_error = self._cleanup_process_tree()
+            if cleanup_error is not None:
+                self._fail("process_cleanup", detail=repr(cleanup_error))
+                returncode = 70
+            if any(thread.is_alive() for thread in threads):
+                self._stop.set()
+                self._close_process_streams()
+                for thread in threads:
+                    thread.join(timeout=2)
+            self._close_process_streams()
+            if self._process is not None:
+                self._events.write(
+                    "downstream_exit",
+                    returncode=returncode,
+                    failure_reason=self._failure_reason,
+                    signal=self._signal_number,
+                )
             self._restore_signal_handlers(previous_handlers)
+        if self._failure_reason is not None:
+            return 128 + self._signal_number if self._signal_number is not None else 70
+        return returncode
 
     def _install_signal_handlers(self) -> dict[int, Any]:
         previous: dict[int, Any] = {}
@@ -419,27 +735,158 @@ class RecordingProxy:
             self._events.write("proxy_failure", reason=reason, **fields)
             self._stop.set()
 
+    def _join_threads(
+        self,
+        *,
+        controller_thread: threading.Thread,
+        product_thread: threading.Thread,
+        stderr_thread: threading.Thread,
+    ) -> None:
+        threads = [controller_thread, product_thread, stderr_thread]
+        if self._failure_reason is None:
+            product_thread.join()
+            stderr_thread.join()
+        else:
+            product_thread.join(timeout=2)
+            stderr_thread.join(timeout=2)
+        controller_thread.join(timeout=1)
+        if controller_thread.is_alive() and os.name == "nt" and self._windows_job is not None:
+            deadline = time.monotonic() + 1
+            while controller_thread.is_alive() and time.monotonic() < deadline:
+                try:
+                    self._windows_job.cancel_thread_io(controller_thread)
+                except BaseException as error:
+                    self._fail("controller_shutdown", detail=repr(error))
+                    break
+                controller_thread.join(timeout=min(0.05, max(0, deadline - time.monotonic())))
+        if controller_thread.is_alive():
+            self._close_controller_stream()
+            controller_thread.join(timeout=1)
+        if controller_thread.is_alive():
+            self._fail("controller_shutdown")
+        if any(thread.is_alive() for thread in threads):
+            self._stop.set()
+            self._close_process_streams()
+            for thread in threads:
+                thread.join(timeout=2)
+
+    def _cleanup_process_tree(self) -> BaseException | None:
+        if self._process is None:
+            return None
+        errors: list[BaseException] = []
+        try:
+            self._terminate_process_group()
+        except BaseException as error:
+            errors.append(error)
+        if self._windows_job is not None:
+            try:
+                self._windows_job.wait_for_process_tree_exit(self._process.pid, 2)
+            except BaseException as error:
+                errors.append(error)
+        if errors:
+            try:
+                self._terminate_windows_fallback()
+            except BaseException as error:
+                errors.append(error)
+            if self._windows_job is not None:
+                try:
+                    self._windows_job.wait_for_process_tree_exit(self._process.pid, 2)
+                except BaseException as error:
+                    errors.append(error)
+        job = self._windows_job
+        if job is not None:
+            closed = False
+            try:
+                job.close()
+                closed = True
+            except BaseException as error:
+                errors.append(error)
+                try:
+                    self._terminate_windows_fallback()
+                except BaseException as fallback_error:
+                    errors.append(fallback_error)
+                try:
+                    job.close()
+                    closed = True
+                except BaseException as retry_error:
+                    errors.append(retry_error)
+            if closed:
+                self._windows_job = None
+        if errors:
+            return RuntimeError("; ".join(str(error) for error in errors))
+        return None
+
     def _terminate_process_group(self) -> None:
-        assert self._process is not None
-        if self._process.poll() is not None:
+        if self._process is None:
+            return
+        if self._windows_job is not None:
+            self._windows_job.terminate()
+            if self._process.poll() is None:
+                try:
+                    self._process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
+                    self._process.wait(timeout=2)
+            self._windows_job.wait_for_process_tree_exit(self._process.pid, 2)
+            return
+        if os.name == "nt":
+            self._terminate_windows_fallback()
             return
         try:
-            if os.name == "nt":
-                subprocess.run(
-                    ["taskkill", "/PID", str(self._process.pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-            else:
-                os.killpg(self._process.pid, signal.SIGTERM)
-            self._process.wait(timeout=1)
-        except (ProcessLookupError, subprocess.TimeoutExpired):
+            os.killpg(self._process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        deadline = time.monotonic() + 1
+        while self._posix_process_group_alive() and time.monotonic() < deadline:
             if self._process.poll() is None:
-                if os.name == "nt":
-                    self._process.kill()
-                else:
-                    os.killpg(self._process.pid, signal.SIGKILL)
+                try:
+                    self._process.wait(timeout=min(0.05, max(0, deadline - time.monotonic())))
+                except subprocess.TimeoutExpired:
+                    pass
+            else:
+                time.sleep(0.01)
+        if self._posix_process_group_alive():
+            try:
+                os.killpg(self._process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+            if self._process.poll() is None:
+                self._process.wait(timeout=1)
+
+    def _posix_process_group_alive(self) -> bool:
+        assert self._process is not None
+        try:
+            os.killpg(self._process.pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def _terminate_windows_fallback(self) -> None:
+        if self._process is None:
+            return
+        result = subprocess.run(
+            ["taskkill", "/PID", str(self._process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=2,
+        )
+        taskkill_error: RuntimeError | None = None
+        if result.returncode != 0:
+            taskkill_error = RuntimeError(f"taskkill exited with status {result.returncode}")
+        try:
+            self._process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=2)
+        if self._process.poll() is None:
+            raise RuntimeError("Windows process remained alive after tree teardown")
+        if self._windows_job is not None:
+            self._windows_job.wait_for_process_tree_exit(self._process.pid, 2)
+        if taskkill_error is not None:
+            raise taskkill_error
 
     def _wait_for_process(self) -> int:
         assert self._process is not None
@@ -448,6 +895,23 @@ class RecordingProxy:
         except subprocess.TimeoutExpired:
             self._terminate_process_group()
             return self._process.wait(timeout=2)
+
+    def _close_process_streams(self) -> None:
+        if self._process is None:
+            return
+        for stream in (self._process.stdin, self._process.stdout, self._process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+
+    def _close_controller_stream(self) -> None:
+        stream = getattr(sys.stdin, "buffer", sys.stdin)
+        try:
+            stream.close()
+        except (OSError, ValueError):
+            pass
 
 
 def parse_args() -> argparse.Namespace:

@@ -177,6 +177,22 @@ record_normal() {
   fi
 }
 
+prepare_verified_model() {
+  local model="$1"
+  local stdout_path="$output_dir/prepare-$model.stdout"
+  local stderr_path="$output_dir/prepare-$model.stderr"
+  set +e
+  "$candidate" prepare --model "$model" >"$stdout_path" 2>"$stderr_path"
+  local exit_code=$?
+  set -e
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Model $model preparation failed with exit code $exit_code. See $stderr_path." >&2
+    return "$exit_code"
+  fi
+}
+
+prepare_verified_model "$default_model"
+prepare_verified_model "$fallback_model"
 gpu_before="$(gpu_memory)"
 broker_tree "$output_dir/process-tree-before.txt"
 

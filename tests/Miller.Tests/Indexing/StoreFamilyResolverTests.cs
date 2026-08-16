@@ -185,9 +185,10 @@ public sealed class StoreFamilyResolverTests : IDisposable
         Guid familyId = Guid.Parse("99999999-9999-4999-8999-999999999999");
         const string viewId = "registered-view";
         string storesRoot = Path.Combine(_directory, "stores");
+        string commonDir = Path.GetFullPath("/repo/.git");
         StoreFamilyRegistryRow family = registry.GetOrCreateStoreFamily(
-            "git|/repo/.git|" + Utc(1).ToString("O"),
-            "/repo/.git",
+            "git|" + commonDir + "|" + Utc(1).ToString("O"),
+            commonDir,
             Utc(1),
             storesRoot,
             () => familyId);

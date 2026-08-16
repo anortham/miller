@@ -475,8 +475,13 @@ These are closed but remain here because reintroducing them makes performance ev
 - Before a real replay, record PID, command, source commit, store/view/request IDs, starting PSS/RSS, and I/O counters.
 - Apply a 60 s hard timeout to the first real development replay. If it expires, retain artifacts/counters and move
   to the newly identified bottleneck instead of repeating it.
-- Final release gate requires Linux dogfood plus the existing Windows release build/capacity-store probe; record
-  constrained Windows-oriented latency and memory separately from archive inspection.
+- Final release gate requires Linux dogfood plus native Windows release-build, capacity/store, producer,
+  semantic, replay, and memory evidence; record constrained Windows-oriented latency and memory separately
+  from archive inspection.
+- Task 8's native Windows packet passed its measured gates, including the latest Julie resolution contract
+  at `30/30` with zero failures. See [`docs/findings/2026-08-13-performance-recovery-verification.md`](docs/findings/2026-08-13-performance-recovery-verification.md).
+  This evidence does not close unrelated PERF rows or authorize adoption, pinning, push, tagging, publishing,
+  or release.
 
 ## Release readiness
 

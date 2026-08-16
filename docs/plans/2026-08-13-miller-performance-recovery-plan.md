@@ -1042,7 +1042,26 @@ Close only passing PERF rows; failures remain open with metric, owner, and diagn
 - `serial-worker-commit`: commit evidence/docs after all gates and record the SHA.
 - Do not pin, push, tag, publish, deploy, or release without explicit approval for the verified clean state.
 
-**Current Task 8 status (2026-08-15):**
+**Current Task 8 status (2026-08-16):**
+
+- Native Windows acceptance used Miller `feature/performance-recovery` base `5d593419` and Julie
+  `feature/miller-performance-recovery-producer` base `65bb7862`, with Windows fixes uncommitted in
+  the current trees. The Release build had zero warnings/errors; Miller fast and Scale results were
+  `6,546/24` and `142/6` passed/skipped; focused .NET TRX was `80/6`; Python replay was `150/3`; and
+  the recording proxy was `17/17`.
+- Julie's Windows coordinator gate passed `65`; maintenance groups passed `22 + 15 + 2 + 1 + 3`, exact
+  process tests passed `2`, and the latest resolution contract passed `30/30` with zero failures in
+  `109.83 s`.
+- The full Windows semantic soak ran `1,800 s` with `26/26` normal probes, zero failures/hangs,
+  `1.249 s` broker recovery, `1.54 s` owner recovery, and stable `87 MiB` one-session/many-session
+  GPU deltas. Strict replay passed with `42` measured records across `14` workloads, zero measured
+  hard-gate failures/nonzero exits, peak `PrivateUsage` `60,510,208` bytes, and idle maximum
+  `35,983,360` bytes. The snapshot SHA-256 is
+  `99aae58e5c0147badeba6b2b192c594a56d9ebfaabf431914a17c4e2fe46217a`.
+- The evidence, defect list, and artifact root are recorded in
+  [`findings/2026-08-13-performance-recovery-verification.md`](../findings/2026-08-13-performance-recovery-verification.md).
+
+**Linux execution record (2026-08-15):**
 
 - Final producer HEAD `65bb7862` contains the retained recovery and test-gate corrections. It passes format, strict all-target/all-feature clippy, the 120-test xtask suite, the 4,318-test default suite, 412 feature-gated contracts, and the three-run official performance gate: full median `29,522 ms`, scoped median `11,002 ms`, all G1-G6 gates and semantic/applied/row diffs green. The exact installed `julie-extract 2.33.2` SHA-256 is `46562b537878f36a13adab629413a99daf490fa4b1b58a7b708b36a6eb373c7d`.
 - Miller HEAD `686dd6e4` passes the Release build with zero warnings/errors, 6,566 fast tests with four skips, and 138 Scale tests with ten skips against that producer. The dedicated 30-minute semantic-broker soak passed all 17 probes with zero failures or hangs, 14,648 queries/batches, one shared Vulkan broker, zero reconnects, and both expected kill/recovery probes green.
@@ -1064,7 +1083,9 @@ Close only passing PERF rows; failures remain open with metric, owner, and diagn
 - Task 17 evidence rejected removing both batch hints: no-hint fetches at 288–300 keys can trigger a `14.8–41.9 ms` automatic-index cliff. Filtered composite candidates were neutral/slower, including a `359%` wrong-kind regression. The final bounded slice instead reuses three uncached fixed statements (`~1.21 s` projected), raises the bounded reader statement cache to `32`, and removes only the safe count-query hint so Task 16's composite index can serve counts; the fetch hint remains. One replay decides the gate, after which performance work stops expanding.
 - Task 17 passed and is retained. Full/exact wall improved `61,488 -> 54,814 ms`, resolution `50,177 -> 44,673 ms`, and peak PSS fell to `26,830,848` bytes. The `60,000 ms` gate passes by `5,186 ms`. Performance scope is closed; no further optimization tasks may be added before profiler removal and the Linux/Windows integration gates.
 - The final exact full-resolution replay passed at `54,814 ms` wall, `44,673 ms` resolution, and `26,830,848` bytes peak PSS. A later all-14 rerun could not produce records because the frozen copied-store pointer selected an empty current view while the populated views had stale or mismatched sidecars. Rebuilding that disposable fixture would start another convergence campaign without changing the already-passing consumer or producer trees, so it is recorded as a fixture limitation rather than a new optimization task.
-- Overall recovery remains open only for native Windows acceptance, final evidence reconciliation, and the approval-gated adoption path. No further Linux optimization or fixture tasks may be added unless Windows exposes a concrete defect.
+- Overall recovery has native Windows evidence and final evidence reconciliation; only the approval-gated
+  adoption path remains. No further Linux optimization or fixture tasks may be added. The
+  current fixes and evidence remain uncommitted, and no pin, push, tag, publish, or release is claimed.
 
 ### Task 9: Batch the Measured Child-Name Reads
 

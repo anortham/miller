@@ -116,4 +116,39 @@ public sealed class ScriptPlatformConventionTests
         int powershellReadyEvent = powershellReady.IndexOf("\"event\":\"ready\"", StringComparison.Ordinal);
         Assert.True(powershellFailed >= 0 && powershellFailed < powershellReadyEvent);
     }
+
+    [Fact]
+    public void SemanticBrokerSoak_PreparesBothPinnedModelsBeforeProbes()
+    {
+        string scriptsDir = Path.Combine(ScaleTestSupport.RepoRoot(), "scripts");
+        string shell = File.ReadAllText(Path.Combine(scriptsDir, "semantic-broker-soak.sh"));
+        string powershell = File.ReadAllText(Path.Combine(scriptsDir, "semantic-broker-soak.ps1"));
+
+        int shellDefault = shell.IndexOf(
+            "prepare_verified_model \"$default_model\"", StringComparison.Ordinal);
+        int shellFallback = shell.IndexOf(
+            "prepare_verified_model \"$fallback_model\"", StringComparison.Ordinal);
+        int shellGpuBaseline = shell.IndexOf("gpu_before=\"$(gpu_memory)\"", StringComparison.Ordinal);
+        int shellProbe = shell.IndexOf("start_probe warm", StringComparison.Ordinal);
+        Assert.True(
+            shellDefault >= 0
+                && shellFallback > shellDefault
+                && shellGpuBaseline > shellFallback
+                && shellProbe > shellGpuBaseline);
+
+        int powershellDefault = powershell.IndexOf(
+            "Prepare-VerifiedModel $defaultModel", StringComparison.Ordinal);
+        int powershellFallback = powershell.IndexOf(
+            "Prepare-VerifiedModel $fallbackModel", StringComparison.Ordinal);
+        int powershellGpuBaseline = powershell.IndexOf("$gpuBefore = Get-GpuMemory", StringComparison.Ordinal);
+        int powershellProbe = powershell.IndexOf("Start-Probe 'warm'", StringComparison.Ordinal);
+        Assert.True(
+            powershellDefault >= 0
+                && powershellFallback > powershellDefault
+                && powershellGpuBaseline > powershellFallback
+                && powershellProbe > powershellGpuBaseline);
+
+        Assert.Contains("prepare --model", shell, StringComparison.Ordinal);
+        Assert.Contains("'prepare', '--model'", powershell, StringComparison.Ordinal);
+    }
 }

@@ -207,6 +207,17 @@ function Wait-Probe(
     return $Process.ExitCode
 }
 
+function Prepare-VerifiedModel([string]$Model) {
+    $stdoutPath = Join-Path $OutputDirectory "prepare-$Model.stdout"
+    $stderrPath = Join-Path $OutputDirectory "prepare-$Model.stderr"
+    $prepare = Start-Process -FilePath $candidate -ArgumentList @('prepare', '--model', $Model) -NoNewWindow -PassThru -Wait `
+        -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    if ($prepare.ExitCode -ne 0) {
+        $detail = if (Test-Path $stderrPath) { (Get-Content $stderrPath -Raw).Trim() } else { '' }
+        throw "Model $Model preparation failed with exit code $($prepare.ExitCode). $detail"
+    }
+}
+
 function Read-Events([string]$Label) {
     $path = Join-Path $OutputDirectory "$Label.jsonl"
     return @(Get-Content $path | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
@@ -227,6 +238,8 @@ function Record-NormalProbe(
 }
 
 Assert-NoForeignBroker 'before starting'
+Prepare-VerifiedModel $defaultModel
+Prepare-VerifiedModel $fallbackModel
 
 $gpuBefore = Get-GpuMemory
 Save-BrokerTree 'process-tree-before.json'

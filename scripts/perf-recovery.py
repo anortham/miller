@@ -320,6 +320,21 @@ def _canonical(path: Path | str) -> Path:
     return Path(path).expanduser().resolve(strict=False)
 
 
+def _path_identity(path: Path | str) -> str:
+    text = str(_canonical(path))
+    if os.name != "nt":
+        return text
+    if text.startswith("\\\\?\\UNC\\"):
+        text = "\\\\" + text[8:]
+    elif text.startswith("\\\\?\\"):
+        text = text[4:]
+    return os.path.normcase(os.path.normpath(text))
+
+
+def _same_path(left: Path | str, right: Path | str) -> bool:
+    return _path_identity(left) == _path_identity(right)
+
+
 def _is_alias(left: Path, right: Path) -> bool:
     try:
         return left == right or left.is_relative_to(right) or right.is_relative_to(left)
@@ -3327,7 +3342,7 @@ def _isolated_request(
             store_copy=isolated_copy,
             miller_home=root / "miller-home",
             source_root=isolated_workspace if source_changing else source_root,
-            change_root=None,
+            change_root=isolated_workspace,
             retry_identity=_new_retry_identity(),
         )
         return validate_request(isolated_request), temporary
@@ -3391,7 +3406,7 @@ def _validate_setup_result(
     reported_root = _find_value(payload, {"root", "root_path", "workspace_root", "source_root"})
     if isinstance(reported_root, str) and not reported_root.strip():
         reported_root = None
-    if reported_root is not None and _canonical(str(reported_root)) != _canonical(request.workspace):
+    if reported_root is not None and not _same_path(str(reported_root), request.workspace):
         raise RuntimeError(f"{label} JSON root does not match the temporary workspace")
     return payload
 
