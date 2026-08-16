@@ -160,7 +160,7 @@
 - [x] Every Miller pin/version/plugin/assertion surface consistently names Julie `2.33.3` and Miller `1.19.2`.
 - [x] Restored Julie binary and all pin hashes match the live release.
 - [x] Release notes distinguish recovered hot/read paths from still-expensive cold full indexing.
-- [ ] Release build, fast/Scale, plugin, restore, doc-sync, and diff gates pass on the exact prep commit.
+- [x] Release build, fast/Scale, plugin, restore, doc-sync, and diff gates pass on the exact prep commit.
 - [x] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
 
 ### Task 4: Integrate and publish Miller 1.19.2
