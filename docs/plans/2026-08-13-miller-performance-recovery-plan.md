@@ -1045,10 +1045,15 @@ Close only passing PERF rows; failures remain open with metric, owner, and diagn
 **Current Task 8 status (2026-08-16):**
 
 - Native Windows acceptance used Miller `feature/performance-recovery` base `5d593419` and Julie
-  `feature/miller-performance-recovery-producer` base `65bb7862`, with Windows fixes uncommitted in
-  the current trees. The Release build had zero warnings/errors; Miller fast and Scale results were
-  `6,546/24` and `142/6` passed/skipped; focused .NET TRX was `80/6`; Python replay was `150/3`; and
-  the recording proxy was `17/17`.
+  `feature/miller-performance-recovery-producer` base `65bb7862`. Exact-current local corrections are
+  Miller `21b73bcf` and producer `152f51e4`; neither commit is pushed. The exact-current Miller Release
+  build had zero warnings/errors, final fast results were `6,567/4` passed/skipped, and Scale results
+  were `138/10` against the exact corrected producer before the CLI-only bridge change; extraction was
+  unchanged, so Scale did not need to rerun. The pinned proxy suites were `17/17`, and the combined gate
+  was `168 total / 2 skipped`.
+- The exact-current producer tree passed format, strict Clippy, manifest `27/27`, import `4/4`, and
+  resolution `30/30`. The focused Windows .NET TRX remained `80/6`, and the Python replay suite remained
+  `150/3`.
 - Julie's Windows coordinator gate passed `65`; maintenance groups passed `22 + 15 + 2 + 1 + 3`, exact
   process tests passed `2`, and the latest resolution contract passed `30/30` with zero failures in
   `109.83 s`.
@@ -1060,6 +1065,18 @@ Close only passing PERF rows; failures remain open with metric, owner, and diagn
   `99aae58e5c0147badeba6b2b192c594a56d9ebfaabf431914a17c4e2fe46217a`.
 - The evidence, defect list, and artifact root are recorded in
   [`findings/2026-08-13-performance-recovery-verification.md`](../findings/2026-08-13-performance-recovery-verification.md).
+- The replay ledger rows backed by both the recorded Linux handoff and the Windows strict replay are marked
+  passed in `PERF.md`. PERF-009 is accepted by the measured CLI/lean-loader/MCP bridge evidence: baseline CLI
+  was `6.62/6.64/6.65 s` at `408,092/410,220/408,356 KB` RSS, the direct lean loader was `1.386–1.393 s`
+  at about `176 MB`, first MCP bridge runs were `1.787/1.779/1.758 s` at about `187 MB` PSS with an
+  identical output hash, and final CLI after `21b73bcf` was `1.45/1.44/1.47 s` at
+  `179,860/180,108/180,036 KB` RSS with output SHA-256
+  `1de73d186bf36926b9e0102364e6e61094a6edfc232802554f165ad11d707a21`; no sidecar is needed.
+- Exact-current Linux source, Release build, fast, Scale, and performance traceability is closed at Miller
+  `21b73bcf` and producer `152f51e4`. The 30-minute Linux semantic soak is carried from `686dd6e4` because
+  `686dd6e4..21b73bcf` changes no semantic production code (only soak scripts), and those scripts passed the
+  exact-current native Windows `1,800 s` gate. This is the same intentional production recovery state, not
+  an identical-SHA claim; post-Linux differences are platform and harness hardening.
 
 **Linux execution record (2026-08-15):**
 
@@ -1083,9 +1100,11 @@ Close only passing PERF rows; failures remain open with metric, owner, and diagn
 - Task 17 evidence rejected removing both batch hints: no-hint fetches at 288–300 keys can trigger a `14.8–41.9 ms` automatic-index cliff. Filtered composite candidates were neutral/slower, including a `359%` wrong-kind regression. The final bounded slice instead reuses three uncached fixed statements (`~1.21 s` projected), raises the bounded reader statement cache to `32`, and removes only the safe count-query hint so Task 16's composite index can serve counts; the fetch hint remains. One replay decides the gate, after which performance work stops expanding.
 - Task 17 passed and is retained. Full/exact wall improved `61,488 -> 54,814 ms`, resolution `50,177 -> 44,673 ms`, and peak PSS fell to `26,830,848` bytes. The `60,000 ms` gate passes by `5,186 ms`. Performance scope is closed; no further optimization tasks may be added before profiler removal and the Linux/Windows integration gates.
 - The final exact full-resolution replay passed at `54,814 ms` wall, `44,673 ms` resolution, and `26,830,848` bytes peak PSS. A later all-14 rerun could not produce records because the frozen copied-store pointer selected an empty current view while the populated views had stale or mismatched sidecars. Rebuilding that disposable fixture would start another convergence campaign without changing the already-passing consumer or producer trees, so it is recorded as a fixture limitation rather than a new optimization task.
-- Overall recovery has native Windows evidence and final evidence reconciliation; only the approval-gated
-  adoption path remains. No further Linux optimization or fixture tasks may be added. The
-  current fixes and evidence remain uncommitted, and no pin, push, tag, publish, or release is claimed.
+- Overall recovery has native Windows evidence, exact-current source/build/fast/Scale/performance
+  traceability, and final evidence reconciliation. No further Linux optimization or fixture tasks may be
+  added. The remaining actions are renewed push approval, then separately approval-gated producer adoption,
+  pinning, tagging, publishing, and release; Miller `21b73bcf` and producer `152f51e4` remain local and
+  unpushed, and no release is claimed.
 
 ### Task 9: Batch the Measured Child-Name Reads
 
@@ -1330,7 +1349,12 @@ Grok 4.6 reviewed the draft read-only on 2026-08-13 and reviewed the in-progress
 - Obsolete resolution history is bounded and bounded reverse reads avoid complete active-base scans.
 - Context batch-off/on output is byte-identical at the same depth; cross-depth pivots/order/truncation semantics are stable; no-fit requests do zero evidence reads; fitting requests batch and pass 2 s/5 s.
 - Impact ranks before selection, bounds graph/SQL work, and reports truncation/displacement truthfully.
-- Linux and Windows build, test, Scale, semantic, resource, timing, and parity gates pass on the same intentional state.
+- The Linux and Windows build, test, Scale, semantic, resource, timing, and parity gates pass on the same
+  intentional production recovery state. The recorded source SHAs differ; post-Linux differences are platform
+  and harness hardening. Exact-current Linux source, build, fast, Scale, and performance traceability is
+  verified at Miller `21b73bcf` and producer `152f51e4`; the 30-minute semantic soak is carried from
+  `686dd6e4` because that range changes no semantic production code (only soak scripts), and those scripts
+  passed the exact-current native Windows `1,800 s` gate.
 - `PERF.md`, the dated evidence, and `docs/README.md` contain measured results.
 
 ## Out of Scope

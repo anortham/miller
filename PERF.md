@@ -33,16 +33,25 @@ and `--runs N` for a positive measured-attempt override; warmups are unchanged.
 
 | Workload | Evidence row | Development / Windows budget | Status |
 |---|---|---:|---|
-| `startup.reader.warm` | Warm reader startup and retained host state | 5 s / 10 s | Harnessed |
-| `startup.leader.no_change` | Leader no-change convergence | 2 s / 5 s | Harnessed |
-| `workspace.open.no_change` | PERF-010 registration/open with no source change; cold family read budget (closes PERF-010 when it passes) | 5 s / 10 s | Gate pending |
-| `producer.retry.identical` | Stranded import recovery and byte-identical retry | 2 s / 5 s | Gate pending |
-| `producer.resolve.one_file` | Resolution/store growth for one-file scope | 5 s / 10 s | Gate pending |
-| `producer.resolve.full` | Resolution/store growth for full scope | 60 s / 120 s | Gate pending |
-| `tool.inspect.warm` | Warm family-store inspect | 500 ms / 2 s | Harnessed |
-| `tool.context.references.depth0` + `tool.context.references.depth1` | Context reference N+1 comparison with output parity | 2 s / 5 s | Gate pending |
-| `tool.impact.bounded` | Impact graph/query work at bounded depth and limit | 2 s / 5 s | Gate pending |
-| `tool.trace.warm` | Warm trace references with deterministic target discovery | 2 s / 5 s | Harnessed |
+| `startup.reader.warm` | Warm reader startup and retained host state | 5 s / 10 s | Passed — Linux handoff; Windows median 704 ms, peak PrivateUsage 25,837,568 B |
+| `startup.leader.no_change` | Leader no-change convergence | 2 s / 5 s | Passed — Linux handoff; Windows median 1,229 ms, peak PrivateUsage 38,879,232 B |
+| `workspace.open.no_change` | PERF-010 registration/open with no source change; cold family read budget | 5 s / 10 s | Passed — PERF-010 accepted; Linux handoff; Windows median 1,086 ms, peak PrivateUsage 25,661,440 B |
+| `producer.retry.identical` | Stranded import recovery and byte-identical retry | 2 s / 5 s | Passed — Linux handoff; Windows median 235 ms, peak PrivateUsage 2,109,440 B |
+| `producer.resolve.one_file` | Resolution/store growth for one-file scope | 5 s / 10 s | Passed — Linux handoff; Windows median 247 ms, peak PrivateUsage 17,383,424 B |
+| `producer.resolve.full` | Resolution/store growth for full scope | 60 s / 120 s | Passed — Linux handoff; Windows median 226 ms, peak PrivateUsage 20,303,872 B |
+| `tool.inspect.warm` | Warm family-store inspect | 500 ms / 2 s | Passed — Linux handoff; Windows median 474 ms, peak PrivateUsage 12,316,672 B |
+| `tool.context.references.depth0` + `tool.context.references.depth1` | Context reference N+1 comparison with output parity | 2 s / 5 s | Passed — Linux handoff; Windows medians 1,940/1,907 ms; batch off/on 1,919/1,919 ms; semantic 1,947 ms |
+| `tool.impact.bounded` | Impact graph/query work at bounded depth and limit | 2 s / 5 s | Passed — Linux median 1,470 ms; Windows median 1,430 ms, peak PrivateUsage 26,714,112 B |
+| `tool.trace.warm` | Warm trace references with deterministic target discovery | 2 s / 5 s | Passed — Linux handoff; Windows median 539 ms, peak PrivateUsage 13,877,248 B |
+
+The rows combine the recorded Linux handoff with the native Windows packet. The Linux handoff used
+Miller `686dd6e4` with Julie `65bb7862`. Exact-current verification used Miller `21b73bcf` and the
+corrected producer `152f51e4`; both commits are local and not pushed. The exact-current Linux
+source, Release build, fast, Scale, and performance traceability is closed. The 30-minute Linux
+semantic soak is carried from `686dd6e4` because `686dd6e4..21b73bcf` changes no semantic
+production code (only soak scripts), and those scripts passed the exact-current native Windows
+`1,800 s` gate. These runs share the same intentional production recovery state; post-Linux
+differences are platform and harness hardening, not an identical source-SHA claim.
 
 The harness records producer import/resolve/bind timings, content/search/metric/vector phase timings, view and
 generation identity, I/O counters, broker identity/health when returned by Miller, and Linux PSS or Windows
@@ -97,20 +106,20 @@ generation identity, I/O counters, broker identity/health when returned by Mille
 
 ### PERF-010 — Registering a Miller worktree can block on its own index lifecycle
 
-- **Status:** Newly observed; root cause not yet isolated.
+- **Status:** Accepted for the bounded no-change workspace-open gate in Task 8.
 - **Observed:** `workspace open` for the active Miller performance worktree did not return within about 44 seconds
   and was terminated once. The canceled tool call left its host PID 1906242 processing extractor PID 1906660;
   after more than 90 seconds the extractor was still about 115% CPU with 1.8 GB RSS and the host about 1 GB RSS.
   Both exact orphaned processes were then terminated and the open was not retried.
 - **Risk:** An agent cannot afford a tens-of-seconds registration tax before code exploration, especially when
   several worktrees are active on a constrained Windows laptop.
-- **Next diagnosis:** After PERF-002 removes per-host eager hydration, run one bounded registration with phase
-  telemetry and verify request cancellation stops the supervised extractor while the MCP host remains responsive.
-  If it remains slow, isolate
-  registry/refresh/extractor/sidecar phases before changing behavior.
-- **Gate:** Warm already-indexed worktree registration/open meets the 5 s cold-read development budget and does
-  not launch an unnecessary full scan or retain a second workspace-sized repository graph; caller cancellation
-  stops the request's extractor and the existing MCP host returns to bounded idle memory.
+- **Acceptance evidence:** The recorded Linux handoff closes the workspace-open path. The Windows strict replay
+  records `workspace.open.no_change` at a 1,086 ms median and 25,661,440 B peak PrivateUsage, within the 5 s/10 s
+  budget; it is one of 42 measured records across 14 workloads with zero measured hard-gate failures or nonzero
+  exits.
+- **Gate:** Closed for this bounded no-change workspace-open replay. The original cancellation/orphan observation
+  remains historical context; exact-current Linux source/build/fast/Scale/performance traceability is recorded
+  above, with the semantic soak carried from `686dd6e4` under the stated no-semantic-production-code condition.
 
 ### PERF-003 — Family-store inspect reloads a workspace-sized symbol projection
 
@@ -401,16 +410,18 @@ generation identity, I/O counters, broker identity/health when returned by Mille
 
 ### PERF-009 — Bridge trace still needs a bounded family-store representation
 
-- **Status:** Bounded lazy bridge representation complete on `1fa03ac9`; real bridge budget gate pending.
+- **Status:** Accepted on Miller `21b73bcf`; the final CLI bridge budget passed without a sidecar.
 - **Finding:** The first lean-context implementation returned `bridge_requires_full_index` for family-store bridge
   mode. That avoids hydration but changes an existing public result and violates output parity.
 - **Immediate fix:** Preserve parity with a lazy bridge-only loader from the pinned session; ordinary lookup/refs/path
   calls must not evaluate it.
-- **Remaining performance risk:** The existing bridge builder consumes whole-corpus symbol details. If a real bridge
-  trace exceeds the 2 s/5 s budgets or retains more than 350 MB, move the bridge graph into a generation-keyed
-  Miller sidecar or redesign the builder around persisted bridge nodes/edges.
-- **Gate:** Ordinary reads invoke the bridge loader zero times; one bridge call invokes it once and matches legacy
-  output; bounded dogfood records wall/PSS and either closes the item or proves the sidecar redesign is required.
+- **Measured evidence:** Baseline CLI runs were `6.62/6.64/6.65 s` with `408,092/410,220/408,356 KB` RSS;
+  `dotnet-trace` showed full `RepositoryIndexLoader`/`SymbolGraphReader` work as dominant. The direct lean
+  loader totaled `1.386–1.393 s` at about `176 MB`; first MCP bridge runs were `1.787/1.779/1.758 s` at about
+  `187 MB` PSS with an identical output hash. After `21b73bcf`, final CLI runs were `1.45/1.44/1.47 s`
+  with `179,860/180,108/180,036 KB` RSS and identical output SHA-256
+  `1de73d186bf36926b9e0102364e6e61094a6edfc232802554f165ad11d707a21`.
+- **Gate:** Closed. The measured bridge path stays within the 2 s/5 s and 350 MB budgets; no sidecar is needed.
 
 ### PERF-005 — Scope selection still permits large full-like resolution work
 
@@ -480,11 +491,17 @@ These are closed but remain here because reintroducing them makes performance ev
   from archive inspection.
 - Task 8's native Windows packet passed its measured gates, including the latest Julie resolution contract
   at `30/30` with zero failures. See [`docs/findings/2026-08-13-performance-recovery-verification.md`](docs/findings/2026-08-13-performance-recovery-verification.md).
-  This evidence does not close unrelated PERF rows or authorize adoption, pinning, push, tagging, publishing,
-  or release.
+  The replay rows above and PERF-009 are closed where the recorded handoff and exact-current acceptance evidence
+  are recorded. Exact-current Linux source/build/fast/Scale/performance traceability is closed; the semantic soak
+  is carried from `686dd6e4` under the no-semantic-production-code condition described above. Miller `21b73bcf`
+  and Julie `152f51e4` are local and not pushed. This evidence does not authorize renewed push approval, producer
+  adoption, pinning, tagging, publishing, or release.
 
 ## Release readiness
 
 Miller and Julie are **not ready to release** while any P0/PERF-001 through PERF-005 acceptance gate is open.
 Preparing local release metadata is allowed only after the fixes are integrated and clean; pushing, tagging,
 publishing, or advertising a marketplace version still requires explicit user approval.
+The Task 8 packet closes PERF-009 and the exact-current Linux source/build/fast/Scale/performance gates. The
+current Miller and producer commits remain local and not pushed; renewed push approval and separately
+approval-gated producer adoption, pinning, tagging, publishing, and release remain outside this evidence.

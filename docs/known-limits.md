@@ -42,9 +42,10 @@
   routes), and `backend-http` (client requests to
   Express/Fastify/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails/NestJS/Laravel/Phoenix/axum/actix/
   Symfony/Ktor route templates). API handlers, server actions, middleware rewrites, redirects, and
-  runtime route rules need extractor facts before bridge can claim them. The mode intentionally uses
-  the full bridge graph for provider-scoped evidence. Normal `search`, `inspect`, graph-only `context`,
-  `impact`, non-bridge `trace`, and workspace status/list stay on projection-specific read paths.
+  runtime route rules need extractor facts before bridge can claim them. The mode intentionally builds a full
+  provider-scoped bridge graph through the session-scoped `SessionBridgeGraphLoader`, without hydrating the
+  repository dependency graph. Normal `search`, `inspect`, graph-only `context`, `impact`, non-bridge `trace`,
+  and workspace status/list stay on projection-specific read paths.
 - Blazor `.razor` component dependencies resolve fully qualified tags exactly and simple tags only
   with namespace evidence from the reference fact, source component, inherited `_Imports.razor`
   `@using`/`@namespace` directives, or a bounded nearest-single-`.csproj` root/folder heuristic.

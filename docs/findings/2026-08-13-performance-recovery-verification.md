@@ -1,7 +1,9 @@
 # Performance-recovery Linux handoff and native Windows verification
 
 **Date:** 2026-08-16
-**Status:** Native Windows evidence is complete for this packet, including Julie's latest 30/30 resolution contract rerun; this is not a release or adoption claim.
+**Status:** Exact-current source, build, fast, Scale, and performance traceability is complete for this packet,
+including Julie's latest 30/30 resolution contract rerun. Miller `21b73bcf` and producer `152f51e4` are local
+and not pushed; this is not a release or adoption claim.
 
 This finding records the Linux handoff and the bounded native Windows acceptance run for Task 8. Raw
 transcripts and large replay files remain external under:
@@ -12,8 +14,8 @@ transcripts and large replay files remain external under:
 
 | Tree | Acceptance source | State |
 |---|---|---|
-| Miller | `feature/performance-recovery` at `5d593419` | Windows acceptance base; current Windows fixes are uncommitted |
-| Julie | `feature/miller-performance-recovery-producer` at `65bb7862` | Producer base; current Windows fixes are uncommitted |
+| Miller | `feature/performance-recovery` base `5d593419`; exact-current `21b73bcf` | Exact-current correction and evidence are local and not pushed |
+| Julie | `feature/miller-performance-recovery-producer` base `65bb7862`; exact-current `152f51e4` | Exact corrected producer tree is local and not pushed |
 
 The prior Linux handoff tested Miller `686dd6e4` against Julie `65bb7862`. Julie's Linux producer gate
 passed format, strict all-target/all-feature Clippy, the 120-test xtask suite, 4,318 default tests,
@@ -28,6 +30,14 @@ four skips, 138 Scale tests with ten skips, and a 30-minute semantic soak with 1
 probes green. The final exact Linux full-resolution replay was `54,814 ms` wall,
 `44,673 ms` resolution, and `26,830,848` bytes peak PSS.
 
+The Linux and Windows rows intentionally do not claim identical source commits. The Linux handoff used
+Miller `686dd6e4` with Julie `65bb7862`; exact-current verification used Miller `21b73bcf` and producer
+`152f51e4`, both local and not pushed. Exact-current Linux source, Release build, fast, Scale, and
+performance traceability is closed. The 30-minute Linux semantic soak is carried from `686dd6e4` because
+`686dd6e4..21b73bcf` changes no semantic production code (only soak scripts), and those scripts passed the
+exact-current native Windows `1,800 s` gate. These are the same intentional production recovery state;
+post-Linux differences are platform and harness hardening, not an identical-SHA claim.
+
 ## Native Windows acceptance
 
 The bounded Windows gates produced the following results:
@@ -35,11 +45,13 @@ The bounded Windows gates produced the following results:
 | Gate | Result |
 |---|---:|
 | Miller Release build | 0 warnings/errors |
-| Miller fast tests | 6,546 passed / 24 skipped |
-| Miller Scale tests | 142 passed / 6 skipped |
+| Miller fast tests (exact-current) | 6,567 passed / 4 skipped |
+| Miller Scale tests | 138 passed / 10 skipped against the exact corrected producer before the CLI-only bridge change; extraction path unchanged, so no rerun was needed |
 | Focused .NET TRX | 80 passed / 6 skipped |
 | Python replay suite | 150 passed / 3 skipped |
 | Recording proxy contracts | 17/17 |
+| Exact-current combined gate | 168 total / 2 skipped |
+| Producer exact-tree gates | format; strict Clippy; manifest 27/27; import 4/4; resolution 30/30 |
 | Julie coordinator contracts | 65 passed |
 | Julie maintenance contracts | 22 + 15 + 2 + 1 + 3 passed |
 | Julie exact process tests | 2 passed |
@@ -78,6 +90,16 @@ The disposable replay snapshot passed `quick_check`; its SHA-256 is
 present at snapshot validation. The protected live family was used only for the safety guard and a
 post-auto-restart read-only maintenance inspection; that inspection was structurally valid.
 
+## PERF-009 bridge budget closure
+
+The baseline CLI runs were `6.62/6.64/6.65 s` at `408,092/410,220/408,356 KB` RSS; `dotnet-trace`
+identified full `RepositoryIndexLoader`/`SymbolGraphReader` work as dominant. The direct lean loader
+completed in `1.386–1.393 s` at about `176 MB`. First MCP bridge runs completed in `1.787/1.779/1.758 s`
+at about `187 MB` PSS with an identical output hash. After Miller `21b73bcf`, final CLI runs completed in
+`1.45/1.44/1.47 s` at `179,860/180,108/180,036 KB` RSS with identical output SHA-256
+`1de73d186bf36926b9e0102364e6e61094a6edfc232802554f165ad11d707a21`. PERF-009 is accepted; no sidecar
+is needed by this measured gate.
+
 ## Windows defects corrected during acceptance
 
 - C# fixture paths and bounded cleanup/read retries were made Windows-safe in the Miller contract and
@@ -90,8 +112,16 @@ post-auto-restart read-only maintenance inspection; that inspection was structur
 - Julie's Windows family-view root identity was corrected; the latest resolution contract passed 30/30
   with zero failures in 109.83 s.
 
+## Remaining recovery gates
+
+- PERF-009's real bridge trace budget gate is closed by the measured CLI/lean-loader/MCP evidence above;
+  no sidecar is needed.
+- Exact-current Linux source, Release build, fast, Scale, and performance traceability is closed. The
+  semantic soak is carried from `686dd6e4` under the no-semantic-production-code condition above, with the
+  soak scripts passing the exact-current native Windows `1,800 s` gate.
+
 ## Adoption boundary
 
-The evidence and all current Windows fixes are uncommitted. No commit or push was made. Pinning,
-adoption, pushing, tagging, publishing, and release remain approval-gated; this finding makes no
-release claim.
+Miller `21b73bcf` and producer `152f51e4` are local commits and are not pushed. After these local
+commits and docs, the remaining actions are renewed push approval, then separately approval-gated
+producer adoption, pinning, tagging, publishing, and release. This finding makes no release claim.

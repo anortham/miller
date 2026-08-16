@@ -964,17 +964,36 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
-    public void FamilyStoreBridgeTrace_UsesLeanGraphWithoutLoadingInvalidRelationships()
+    public void FamilyStoreBridgeTrace_UsesLeanGraphForJsonRouteAndScopedTargets()
     {
         using var fx = MinimalFamilyStoreFixture.Create(
             includeBridgeTables: true,
-            includeInvalidRelationship: true);
+            includeInvalidRelationship: true,
+            includeBridgeEvidence: true);
 
-        var (code, output, error) = RunFamilyStore(fx, ["trace", "VisibleType", "--mode", "bridge"]);
+        var route = RunFamilyStore(
+            fx,
+            ["trace", "/api/visible", "--mode", "bridge", "--json"]);
+        var scoped = RunFamilyStore(
+            fx,
+            ["trace", "FetchVisible", "--scope", "web/api.ts", "--mode", "bridge", "--json"]);
 
-        Assert.Equal(0, code);
-        Assert.Empty(error);
-        Assert.Contains("VisibleType", output);
+        Assert.Equal(0, route.Code);
+        Assert.Empty(route.Err);
+        Assert.Equal(0, scoped.Code);
+        Assert.Empty(scoped.Err);
+
+        using JsonDocument routeJson = JsonDocument.Parse(route.Out);
+        JsonElement routeLink = Assert.Single(routeJson.RootElement.GetProperty("links").EnumerateArray());
+        Assert.Equal("hits", routeLink.GetProperty("kind").GetString());
+        Assert.Equal("/api/visible", routeJson.RootElement.GetProperty("target").GetString());
+        Assert.Equal("FetchVisible", routeJson.RootElement.GetProperty("resolved_target").GetProperty("display").GetString());
+        Assert.Equal("FetchVisible", routeLink.GetProperty("source_display").GetString());
+
+        using JsonDocument scopedJson = JsonDocument.Parse(scoped.Out);
+        JsonElement scopedLink = Assert.Single(scopedJson.RootElement.GetProperty("links").EnumerateArray());
+        Assert.Equal("hits", scopedLink.GetProperty("kind").GetString());
+        Assert.Equal("FetchVisible", scopedLink.GetProperty("source_display").GetString());
     }
 
     [Fact]
@@ -5221,7 +5240,8 @@ public sealed class CliDispatchTests : IDisposable
 
         public static MinimalFamilyStoreFixture Create(
             bool includeBridgeTables = false,
-            bool includeInvalidRelationship = false)
+            bool includeInvalidRelationship = false,
+            bool includeBridgeEvidence = false)
         {
             string root = Path.Combine(
                 Path.GetTempPath(),
@@ -5240,7 +5260,8 @@ public sealed class CliDispatchTests : IDisposable
                 Path.Combine(generation, "store.db"),
                 canonicalWorkspace,
                 includeBridgeTables,
-                includeInvalidRelationship);
+                includeInvalidRelationship,
+                includeBridgeEvidence);
             StoreWorkspacePointer.Write(
                 canonicalWorkspace,
                 new StoreFamilyBinding(
@@ -5282,7 +5303,8 @@ public sealed class CliDispatchTests : IDisposable
             string path,
             string workspaceRoot,
             bool includeBridgeTables,
-            bool includeInvalidRelationship)
+            bool includeInvalidRelationship,
+            bool includeBridgeEvidence)
         {
             using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
             {
@@ -5589,6 +5611,36 @@ public sealed class CliDispatchTests : IDisposable
                       raw_text TEXT,
                       carrier TEXT,
                       metadata_json TEXT);
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            if (includeBridgeEvidence)
+            {
+                command.CommandText =
+                    """
+                    INSERT INTO symbols
+                        (version_id, symbol_id, path, language, name, kind, signature, visibility,
+                         start_line, start_column, end_line, end_column, start_byte, end_byte,
+                         is_test, test_container, test_lifecycle)
+                    VALUES
+                        (1, 'sym-client', 'web/api.ts', 'typescript', 'FetchVisible', 'function',
+                         'function FetchVisible()', 'public', 5, 1, 5, 24, 0, 23, 0, 0, 0),
+                        (1, 'sym-client-other', 'other/api.ts', 'typescript', 'FetchVisible', 'function',
+                         'function FetchVisible()', 'public', 5, 1, 5, 24, 0, 23, 0, 0, 0),
+                        (1, 'sym-handler', 'web/app/api/visible/route.ts', 'typescript', 'GET', 'function',
+                         'function GET()', 'public', 1, 1, 1, 12, 0, 11, 0, 0, 0);
+                    INSERT INTO structural_facts
+                        (structural_fact_id, version_id, path, language, pattern_id, capture_name, node_kind,
+                         containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                         confidence, metadata_json)
+                    VALUES
+                        ('fact-client-visible', 1, 'web/api.ts', 'typescript', 'http.client_request.v1',
+                         'client_request', 'call_expression', 'sym-client', 5, 1, 5, 24, 0, 23, 1.0,
+                         '{"client":"fetch","framework":"fetch","target_path":"/api/visible","url_kind":"path","verb":"GET","verb_source":"default"}'),
+                        ('fact-handler-visible', 1, 'web/app/api/visible/route.ts', 'typescript', 'nextjs.route_handler.v1',
+                         'route_handler', 'export_statement', 'sym-handler', 1, 1, 1, 12, 0, 11, 1.0,
+                         '{"framework":"nextjs","router":"app","route_path":"/api/visible","verb":"GET","verb_source":"attested"}');
                     """;
                 command.ExecuteNonQuery();
             }

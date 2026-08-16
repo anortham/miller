@@ -26,7 +26,8 @@ namespace Miller.Server.Cli;
 /// (each tool's <c>Run(...)</c> + the <see cref="WorkspaceRender"/> renderers), so a shell/CI invocation and a
 /// tool call produce identical output. Read verbs pin one workspace read session and load the store or legacy view it
 /// names: symbol search and inspect use the symbol lookup projection, graph verbs use the same session's immutable
-/// repository graph, and bridge trace still uses the full bridge graph. There is NO
+/// repository graph, and bridge trace builds its bridge graph through the session-scoped
+/// <see cref="SessionBridgeGraphLoader"/> without hydrating the repository dependency graph. There is NO
 /// MCP host, NO background services, NO Serilog file logging. <c>serve</c> and no-args are NOT CLI invocations (see <see cref="IsCliInvocation"/>);
 /// they fall through to the stdio MCP server in <c>Program.cs</c>, which keeps its STDIO-purity contract. The CLI
 /// OWNS stdout here, so it writes results to the injected <c>stdout</c> writer (Console in production, a capture
