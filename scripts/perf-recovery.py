@@ -3249,6 +3249,39 @@ def _snapshot_helper_module() -> Any:
     return module
 
 
+def _rebind_isolated_current_view(store_root: Path, view_id: str, workspace_root: Path) -> None:
+    family_paths = _family_store_paths(store_root)
+    if not family_paths:
+        raise RuntimeError("isolated copied store has no complete current generation")
+    database = family_paths[1]
+    expected_root = str(_canonical(workspace_root))
+    connection = sqlite3.connect(str(database))
+    try:
+        connection.execute("BEGIN")
+        selected = connection.execute(
+            "SELECT root FROM views WHERE view_id = ?",
+            (view_id,),
+        ).fetchall()
+        if len(selected) != 1:
+            raise RuntimeError("isolated copied store must contain exactly one selected view")
+        connection.execute(
+            "UPDATE views SET root = ? WHERE view_id = ?",
+            (expected_root, view_id),
+        )
+        rebound = connection.execute(
+            "SELECT root FROM views WHERE view_id = ?",
+            (view_id,),
+        ).fetchone()
+        if rebound != (expected_root,):
+            raise RuntimeError("isolated copied store selected view did not rebind")
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def _new_retry_identity() -> str:
     return f"perf-recovery-retry-{uuid.uuid4().hex}"
 
@@ -3265,37 +3298,42 @@ def _isolated_request(
     root = Path(temporary.name)
     isolated_workspace = root / "workspace"
     clone_root = source_root if source_changing else workspace_root
-    shutil.copytree(
-        clone_root,
-        isolated_workspace,
-        ignore=shutil.ignore_patterns(".miller", ".git"),
-    )
-    isolated_miller = isolated_workspace / ".miller"
-    isolated_miller.mkdir(parents=True, exist_ok=True)
-    isolated_store = root / "store-family"
-    if active.mode == "family":
-        if source_changing:
-            _source_pointer_binding(request)
-        _snapshot_helper_module().snapshot_family(active.root, isolated_store, live_root=request.live_store)
-        pointer_path = source_root / ".miller" / "store.json" if source_changing else request.workspace / ".miller" / "store.json"
-        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-        pointer["store_root"] = str(isolated_store)
-        pointer["workspace_root"] = str(isolated_workspace)
-        (isolated_miller / "store.json").write_text(json.dumps(pointer), encoding="utf-8")
-        isolated_copy = isolated_store
-    else:
-        isolated_copy = isolated_miller / "symbols.db"
-        shutil.copy2(active.artifact_path or active.root, isolated_copy)
-    isolated_request = dataclasses.replace(
-        request,
-        workspace=isolated_workspace,
-        store_copy=isolated_copy,
-        miller_home=root / "miller-home",
-        source_root=isolated_workspace if source_changing else source_root,
-        change_root=None,
-        retry_identity=_new_retry_identity(),
-    )
-    return validate_request(isolated_request), temporary
+    try:
+        shutil.copytree(
+            clone_root,
+            isolated_workspace,
+            ignore=shutil.ignore_patterns(".miller", ".git"),
+        )
+        isolated_miller = isolated_workspace / ".miller"
+        isolated_miller.mkdir(parents=True, exist_ok=True)
+        isolated_store = root / "store-family"
+        if active.mode == "family":
+            if source_changing:
+                _source_pointer_binding(request)
+            _snapshot_helper_module().snapshot_family(active.root, isolated_store, live_root=request.live_store)
+            pointer_path = source_root / ".miller" / "store.json" if source_changing else request.workspace / ".miller" / "store.json"
+            pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+            _rebind_isolated_current_view(isolated_store, str(pointer["view_id"]), isolated_workspace)
+            pointer["store_root"] = str(isolated_store)
+            pointer["workspace_root"] = str(isolated_workspace)
+            (isolated_miller / "store.json").write_text(json.dumps(pointer), encoding="utf-8")
+            isolated_copy = isolated_store
+        else:
+            isolated_copy = isolated_miller / "symbols.db"
+            shutil.copy2(active.artifact_path or active.root, isolated_copy)
+        isolated_request = dataclasses.replace(
+            request,
+            workspace=isolated_workspace,
+            store_copy=isolated_copy,
+            miller_home=root / "miller-home",
+            source_root=isolated_workspace if source_changing else source_root,
+            change_root=None,
+            retry_identity=_new_retry_identity(),
+        )
+        return validate_request(isolated_request), temporary
+    except BaseException:
+        temporary.cleanup()
+        raise
 
 
 def _one_file_path(request: ReplayRequest, workload: Workload, *, root: Path | None = None) -> Path:

@@ -64,15 +64,82 @@ class PerfRecoveryTests(unittest.TestCase):
         generation = family / "gen-001"
         generation.mkdir(parents=True)
         (family / "CURRENT").write_text("gen-001\n", encoding="utf-8")
-        (generation / "store.db").write_bytes(b"family store")
-        (family / "coord.db").write_bytes(b"coordinator")
+        connection = sqlite3.connect(generation / "store.db")
+        try:
+            connection.execute("CREATE TABLE views (view_id TEXT PRIMARY KEY, root TEXT NOT NULL)")
+            connection.executemany(
+                "INSERT INTO views(view_id, root) VALUES (?, ?)",
+                [("view-1", str(self.workspace)), ("source-view", str(self.workspace))],
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        connection = sqlite3.connect(family / "coord.db")
+        try:
+            connection.execute("CREATE TABLE sentinel (value TEXT NOT NULL)")
+            connection.execute("INSERT INTO sentinel(value) VALUES (?)", ("coordinator",))
+            connection.commit()
+        finally:
+            connection.close()
         return family
+
+    def _two_generation_sqlite_family(self, name: str) -> tuple[Path, dict[Path, bytes]]:
+        family = self.root / name
+        family.mkdir()
+        (family / "CURRENT").write_text("gen-002\n", encoding="utf-8")
+        original_root = self.root / "original-root"
+        historical_root = self.root / "historical-root"
+        for generation, root, marker in (
+            ("gen-001", historical_root, "historical"),
+            ("gen-002", original_root, "current"),
+        ):
+            generation_root = family / generation
+            generation_root.mkdir()
+            connection = sqlite3.connect(generation_root / "store.db")
+            try:
+                connection.execute(
+                    "CREATE TABLE views (view_id TEXT PRIMARY KEY, root TEXT NOT NULL, marker TEXT NOT NULL)"
+                )
+                connection.executemany(
+                    "INSERT INTO views(view_id, root, marker) VALUES (?, ?, ?)",
+                    [
+                        ("selected-view", str(root), marker),
+                        ("unrelated-view", str(root), "unrelated"),
+                    ],
+                )
+                connection.commit()
+            finally:
+                connection.close()
+        connection = sqlite3.connect(family / "coord.db")
+        try:
+            connection.execute("CREATE TABLE sentinel (value TEXT NOT NULL)")
+            connection.execute("INSERT INTO sentinel(value) VALUES (?)", ("coord-original",))
+            connection.commit()
+        finally:
+            connection.close()
+        files = {
+            path: path.read_bytes()
+            for path in (
+                family / "CURRENT",
+                family / "gen-001" / "store.db",
+                family / "gen-002" / "store.db",
+                family / "coord.db",
+            )
+        }
+        return family, files
 
     def _write_pointer(self, store_root: Path) -> None:
         self._write_pointer_at(self.workspace, store_root, view_id="view-1")
 
     @staticmethod
-    def _write_pointer_at(workspace: Path, store_root: Path, *, view_id: str, family_id: str = "11111111-1111-1111-1111-111111111111") -> None:
+    def _write_pointer_at(
+        workspace: Path,
+        store_root: Path,
+        *,
+        view_id: str,
+        family_id: str = "11111111-1111-1111-1111-111111111111",
+        bind_view: bool = True,
+    ) -> None:
         pointer = workspace / ".miller" / "store.json"
         pointer.write_text(
             json.dumps(
@@ -86,6 +153,28 @@ class PerfRecoveryTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        if not bind_view:
+            return
+        generation = (store_root / "CURRENT").read_text(encoding="utf-8").strip()
+        connection = sqlite3.connect(store_root / generation / "store.db")
+        try:
+            existing = connection.execute(
+                "SELECT 1 FROM views WHERE view_id = ?",
+                (view_id,),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    "INSERT INTO views(view_id, root) VALUES (?, ?)",
+                    (view_id, str(workspace)),
+                )
+            else:
+                connection.execute(
+                    "UPDATE views SET root = ? WHERE view_id = ?",
+                    (str(workspace), view_id),
+                )
+            connection.commit()
+        finally:
+            connection.close()
 
     @staticmethod
     def _result(*, stdout: bytes = b"{}", exit_code: int = 0) -> perf_recovery.CommandResult:
@@ -998,6 +1087,64 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual(source_pointer_before, source_pointer.read_bytes())
         self.assertEqual(source_file_before, source_file.read_bytes())
 
+    def test_isolated_request_rebinds_only_current_selected_view_and_cleans_up(self) -> None:
+        family, family_files_before = self._two_generation_sqlite_family("two-generation-family")
+        live_root = self.root / "live-root"
+        live_root.mkdir()
+        self._write_pointer_at(self.workspace, family, view_id="selected-view", bind_view=False)
+        pointer_before = (self.workspace / ".miller" / "store.json").read_bytes()
+        request = self._request(store_copy=family, live_store=live_root)
+
+        isolated, temporary = perf_recovery._isolated_request(request, source_changing=False)
+        isolated_root = Path(temporary.name)
+        try:
+            connection = sqlite3.connect(isolated.store_copy / "gen-002" / "store.db")
+            try:
+                current_rows = {
+                    row[0]: row[1:]
+                    for row in connection.execute("SELECT view_id, root, marker FROM views")
+                }
+            finally:
+                connection.close()
+            connection = sqlite3.connect(isolated.store_copy / "gen-001" / "store.db")
+            try:
+                historical_rows = {
+                    row[0]: row[1:]
+                    for row in connection.execute("SELECT view_id, root, marker FROM views")
+                }
+            finally:
+                connection.close()
+            connection = sqlite3.connect(isolated.store_copy / "coord.db")
+            try:
+                coord_value = connection.execute("SELECT value FROM sentinel").fetchone()[0]
+            finally:
+                connection.close()
+            pointer = json.loads((isolated.workspace / ".miller" / "store.json").read_text(encoding="utf-8"))
+            isolated_workspace = str(isolated.workspace.resolve())
+            self.assertEqual((isolated_workspace, "current"), current_rows["selected-view"])
+            self.assertEqual((str(self.root / "original-root"), "unrelated"), current_rows["unrelated-view"])
+            self.assertEqual((str(self.root / "historical-root"), "historical"), historical_rows["selected-view"])
+            self.assertEqual((str(self.root / "historical-root"), "unrelated"), historical_rows["unrelated-view"])
+            self.assertEqual("coord-original", coord_value)
+            self.assertEqual(str(isolated.store_copy), pointer["store_root"])
+            self.assertEqual(isolated_workspace, pointer["workspace_root"])
+            self.assertEqual("selected-view", pointer["view_id"])
+            self.assertEqual(pointer_before, (self.workspace / ".miller" / "store.json").read_bytes())
+            self.assertEqual(family_files_before, {path: path.read_bytes() for path in family_files_before})
+        finally:
+            temporary.cleanup()
+        self.assertFalse(isolated_root.exists())
+
+    def test_isolated_request_rejects_missing_selected_view(self) -> None:
+        family, _ = self._two_generation_sqlite_family("missing-view-family")
+        live_root = self.root / "missing-view-live-root"
+        live_root.mkdir()
+        self._write_pointer_at(self.workspace, family, view_id="missing-view", bind_view=False)
+        request = self._request(store_copy=family, live_store=live_root)
+
+        with self.assertRaisesRegex(RuntimeError, "exactly one selected view"):
+            perf_recovery._isolated_request(request, source_changing=False)
+
     def test_resolve_setup_uses_manifest_timeout_and_observer_grace(self) -> None:
         live_family = self._family_root("live-family")
         source_root = self.root / "source-root"
@@ -1101,6 +1248,15 @@ class PerfRecoveryTests(unittest.TestCase):
         try:
             self.assertNotEqual(source_root, isolated.workspace)
             self.assertEqual(isolated.workspace, isolated.source_root)
+            connection = sqlite3.connect(isolated.store_copy / "gen-001" / "store.db")
+            try:
+                rebound_root = connection.execute(
+                    "SELECT root FROM views WHERE view_id = ?",
+                    ("source-view",),
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            self.assertEqual(str(isolated.workspace.resolve()), rebound_root)
             self.assertEqual("original\n", source_file.read_text(encoding="utf-8"))
             self.assertEqual(source_pointer_before, source_pointer.read_bytes())
             changed = isolated.workspace / "README.md"

@@ -126,6 +126,10 @@ Each slice builds and tests independently. Producer optimizations retain the ful
 | Task 7A: Rebase, collect, and rotate | None - serial | Julie maintenance/rebase and tests; Miller family read-session and base-rotation tests | Yes | Requires Task 6, a pre-maintenance snapshot, and a three-way reconciliation of the existing consumer branch against current `main`. |
 | Task 7B: Optimize measured bounded reads | None - serial | Julie resolution-base schema/statistics only if proved; Miller `FamilyStoreReadSession`, family evidence reader, graph/resolution query-plan tests | Yes | Runs only after 7A so lifecycle compaction and read-path tuning have separate evidence and rollback commits. |
 | Task 8: Close Linux and Windows gates | None - serial | Miller `PERF.md`, `docs/README.md`, `docs/findings/2026-08-13-performance-recovery-verification.md`, parity scripts only if defective; approval-gated pin inputs | Yes | Integrates all prior slices. |
+| Task 9: Batch measured child-name reads | None - serial | Julie `crates/julie-extract-cli/src/store/resolution_session.rs`, `tests/store_resolution_performance.rs`, `tests/store_resolution_mechanism.rs`, `tests/store_resolution_scope_equivalence.rs` | Yes | The exact full-resolution profile names this query family; the temporary profiler overlaps the production file, so one worker owns the TDD slice and no other producer edit runs concurrently. |
+| Task 10: Attribute remaining resolver cache misses | None - serial | Julie temporary aggregate-profiler paths in `resolution.rs`, `store/resolution_session.rs`, `store/resolve.rs`, plus focused existing-module tests | Yes | Task 9 is materially faster but still fails the full gate; the next production change requires caller/cache-state and by-ID admission evidence from one identical replay. |
+| Task 11A: Partition the candidate-window budget | None - serial | Julie `store/resolution_session.rs`, Task 9/10 performance and mechanism tests | Yes | Task 10 proves exact/name promotion overfills and displaces by-ID caching. Correct this measured regression before adding scope-key reuse, then replay. |
+| Task 11B: Reuse complete scalar child reads | None - serial | Julie `store/resolution_session.rs`, child-query mechanism/performance tests, existing scope digest test | Yes | Task 11A leaves 84.26% of scalar child pages in scope-chain callers. Reuse only complete ordered results inside the existing phase window, then replay. |
 
 ### Task 1: Lock Replay Safety and Ledger
 
@@ -1037,6 +1041,247 @@ Close only passing PERF rows; failures remain open with metric, owner, and diagn
 
 - `serial-worker-commit`: commit evidence/docs after all gates and record the SHA.
 - Do not pin, push, tag, publish, deploy, or release without explicit approval for the verified clean state.
+
+**Current Task 8 status (2026-08-15):**
+
+- Final producer HEAD `65bb7862` contains the retained recovery and test-gate corrections. It passes format, strict all-target/all-feature clippy, the 120-test xtask suite, the 4,318-test default suite, 412 feature-gated contracts, and the three-run official performance gate: full median `29,522 ms`, scoped median `11,002 ms`, all G1-G6 gates and semantic/applied/row diffs green. The exact installed `julie-extract 2.33.2` SHA-256 is `46562b537878f36a13adab629413a99daf490fa4b1b58a7b708b36a6eb373c7d`.
+- Miller HEAD `686dd6e4` passes the Release build with zero warnings/errors, 6,566 fast tests with four skips, and 138 Scale tests with ten skips against that producer. The dedicated 30-minute semantic-broker soak passed all 17 probes with zero failures or hangs, 14,648 queries/batches, one shared Vulkan broker, zero reconnects, and both expected kill/recovery probes green.
+- The earlier strict Linux replay closes startup, workspace-open, retry, one-file resolution, inspect, context, trace, batching, depth, memory, and output-invariant gates. A same-snapshot impact replay with the shipped `idx_read_symbols_symbol(symbol_id, version_id)` index preserved the original digest and passed at `1,470 ms` median versus the `2,000 ms` gate.
+- First-attempt full resolution is the only remaining Linux timing failure: the timing-refined replay took `148,431 ms` versus `60,000 ms`, with `148,034 ms` CPU and `26,867,712` bytes peak PSS. The temporary default-off profiler closed `148,391 ms` of its `148,405 ms` internal wall, leaving `14 ms` (`0.0094%`) residual. Resolution owns `139,497 ms`; identifier resolution owns `111,058 ms` for `402,195` items, pending resolution owns `28,083 ms` for `97,868` items, and relationship propagation owns `346 ms`. Exact finalization is `4,920 ms`; all other top-level work remains secondary.
+- Candidate-query timing now accounts for `130,009 ms`, or `93.2%` of resolution. `children_named` is the dominant family at `79,508 ms` across `715,409` executions returning only `234,672` rows (`57.0%` of resolution, `53.6%` of total wall). `prime_window` is next at `16,339 ms`; every remaining family is below `11,303 ms`. The measured cause is a database N+1 in child-name resolution. The next production slice is one bounded internal batch/reuse change with a deterministic query-count guard and exact full/scoped digest parity; the full resolver remains the oracle.
+- Task 9's identical production-volume after replay is materially better but remains over budget: full wall fell from `148,431 ms` to `128,397 ms` (`13.5%`), CPU fell from `148,034 ms` to `114,673 ms` (`22.5%`), and the resolution phase fell from `139,497 ms` to `118,402 ms` (`15.1%`). `children_named` fell from `79,508 ms` to `40,838 ms` (`48.6%`) and from `715,409` to `305,632` executions (`57.3%`). The request remained full/exact with `exact_at_matches=true`, exit `0`, no timeout, and `27,015,168` bytes peak PSS. The `60,000 ms` hard gate still fails; `children_named` remains the largest measured family, while `symbol_by_id` regressed from `224,645`/`3,399 ms` to `466,860`/`6,465 ms`. The next slice must explain those remaining calls and cache displacement before changing production code.
+- Task 10's attribution replay reproduced Task 9 within noise at `129,402 ms` wall/`119,376 ms` resolution and reconciled all `305,632` child-family statements as `302,415` scalar pages plus `1,668` batch-count and `1,549` batch-fetch statements. Tier-3 receiver scope walks own `143,614` scalar pages and tier-1 terminal scope walks own `110,300`; together they are `83.96%` of remaining child SQL. By-ID attribution proves shared-cache displacement: `466,860` SQL misses, `438,374` rejections at the by-ID cap, `289,068` overlapping aggregate-cap rejections, `378` maximum by-ID entries versus the configured `300`, and average phase-reset occupancy of `288.77` by-ID / `792.98` aggregate entries out of `900`. The next production slice must preserve the measured Task 9 win while removing scope-chain repetition and restoring a protected by-ID budget.
+- Task 11A's exact replay validates the partition: full wall fell from `129,402 ms` to `120,697 ms`, CPU from `115,513 ms` to `107,007 ms`, and resolution from `119,376 ms` to `110,591 ms`. `symbol_by_id` fell from `466,860`/`6,462 ms` to `91,259`/`1,648 ms`; cache hits rose to `668,817`, by-ID and aggregate rejection counts both fell to zero, maximum by-ID entries fell from `378` to `144`, maximum non-by-ID entries stayed at its `600` bound, and total peaked at `742` of `900`. The cheaper exact-key admission also reduced child statements from `305,632` to `282,489` and child time from `40,846 ms` to `37,604 ms`. The run remained full/exact, exit `0`, no timeout, and `27,121,664` bytes peak PSS. Scope chains still own `235,307`/`279,272` scalar pages (`84.26%`), so Task 11B targets completed scalar-key reuse without changing capacity.
+- Task 11B's recovered RED proved the complete-result reuse is behavioral rather than incidental: removing only scalar admission produced `rows_read` failures of `7 != 4` and `6 != 3`; the reviewed implementation was restored byte-for-byte and both focused tests passed. Grok 4.6 and lead review closed with zero findings. The exact replay improved wall from `120,697 ms` to `114,272 ms`, CPU from `107,007 ms` to `100,477 ms`, resolution from `110,591 ms` to `104,148 ms`, child pages from `279,272` to `213,111`, and child time from `37,604 ms` to `31,526 ms`, while remaining full/exact with exit `0`, no timeout, and `27,092,992` bytes peak PSS. Retain the slice, but do not declare recovery: candidate queries still own `81,193 ms`, led by children (`31,526 ms`), prime-window (`16,736 ms`), top-level-name (`11,707 ms`), type-facts (`9,207 ms`), and filtered-name (`7,997 ms`). The next slice must attribute this multi-family amplification and change one measured owner at a time.
+- Task 12's read-only Luna/Grok diagnosis rejects another speculative cache. Prime-window runs exactly once per `300`-item identifier/pending chunk (`1,668` executions), returns `490,865` rows, and can omit receiver/resolved-type names or truncate fat-name groups at its global `300`-row cutoff. Top-level, type-fact, and filtered-name queries return only `0.229`, `0.307`, and `0.247` rows per execution, so empty/trailing pages and repeated logical keys dominate their execution counts. The child cache has no individual eviction: all entries are discarded at `1,732` phase resets, while tier-1/tier-3 scope walks still own `175,764` pages. Before behavior changes, add default-off fixed-cardinality attribution for prime coverage/cutoff, per-caller SQL page shape, and capped same-window key repetition. Then select exactly one measured owner; do not combine exact batching, pagination changes, indexes, or cache-lifetime changes in one slice.
+- Task 12's exact attribution replay remained full/exact at `111,727 ms` wall, `101,591 ms` resolution, and `27,056,128` bytes peak PSS. Prime is saturated: `1,565/1,668` windows hit the row cap and `124,556/190,697` wanted names were skipped at the cutoff, with zero capacity rejects. More immediately, every positive page was short and no family produced a full page. The resolver therefore paid `115,972` provably redundant terminal-empty SQL executions: children `39,478`, top-level `12,123`, filtered-name `28,542`, and type-facts `35,829`. Task 13 owns only short-page terminal completion; preserve exact ordering/callback behavior and do not combine it with prime, index, or cache-lifetime work.
+- Task 13 removed those `115,972` probes exactly. The full/exact replay improved wall from `111,727 ms` to `104,063 ms`, resolution from `101,591 ms` to `94,001 ms`, and held peak PSS at `26,960,896` bytes. All four trailing-empty counters are zero and Grok/lead review found no cursor, ordering, callback, or completeness defect. Candidate SQL still owns `71,540 ms`. Read-only `EXPLAIN` on the disposable store shows type-facts lookup can use only `(version_id,type_fact_id)` and must filter `symbol_id`; Task 14 owns only an idempotent `(version_id,symbol_id,type_fact_id)` index plus new/existing-store query-plan proof.
+- Task 14 added and repaired `idx_read_type_facts_symbol(version_id,symbol_id,type_fact_id)`. The old copied store's direct read-only resolve did not run schema repair, so its first replay was unchanged. A byte-faithful disposable clone with only the serving index added proved steady-state value: wall `103,692 -> 98,667 ms`, resolution `93,633 -> 88,576 ms`, and type-facts `6,901 -> 2,459 ms`, with unchanged queries/output and `27,105,280` bytes peak PSS. One-time index construction took about `28 s`; keep that upgrade cost separate and explicit. Children (`27,661 ms`) plus prime (`16,517 ms`) now dominate. Task 15 must evaluate exact batching of unique ancestor child keys; do not hide the gap with cache growth.
+- Task 15 evidence found that ancestor keys added on top of broad-name priming cannot close the gate: the broad query still costs `16,517 ms`, saturates in `1,565 / 1,668` windows, skips `124,556 / 190,697` names, and fills the shared `2W` cache before exact-key admission. The selected TDD slice replaces broad-name priming only for scope-bearing phases with bounded nearest-ancestor exact-key batches, retaining scalar fallback and all `W/2W/3W` limits. Ancestor-shaped misses account for `161,446 / 176,850` child executions. One identical indexed-store replay will decide retention; displaced top-level/filtered SQL is the principal risk.
+- Task 15's first bounded identifier slice is retained. Lead review removed an invalid free-empty cache before replay; complete empty keys consume the real `2W` budget and ancestor planning stops at `3W`. The full/exact indexed-store replay improved wall `98,667 -> 85,800 ms` and resolution `88,576 -> 74,750 ms`, with PSS `27,199,488`. Prime fell `16,517 -> 660 ms` and children `27,661 -> 20,228 ms`; displaced work raised top-level `10,994 -> 18,056 ms` and filtered-name `4,628 -> 6,171 ms`. The gate remains `25,800 ms` away. Task 16 must target the measured top-level/child interaction and pending phase rather than simply repeat ancestor expansion.
+- Task 16 read-only EXPLAIN found a shared DB defect: scalar child and top-level keyset queries use only `(version_id,symbol_id)` and filter parent/name while walking a version. The selected schema-only slice adds `idx_read_symbols_parent_name(version_id,parent_symbol_id,name,symbol_id)` under schema v2 repair. It changes no SQL/cache/public contract and should serve both `20,228 ms` children and `18,056 ms` top-level families. Grok estimated `14–18 MB`, `40–70 s` one-time build, and `18–20 s` steady-state savings; those are hypotheses until exact clone build and replay evidence.
+- Task 16 exceeded its estimate and is retained. On the disposable clone the index built in `0.29 s`, occupies `25,112,576` B-tree bytes, reused free DB pages, and passed exact plans/quick-check. Full/exact wall improved `85,800 -> 61,488 ms`, resolution `74,750 -> 50,177 ms`, and PSS stayed `27,114,496`. Children fell `20,228 -> 8,941 ms` and top-level `18,056 -> 4,766 ms` with unchanged executions. The gate is now only `1,488 ms` red. Task 17 must prove whether the remaining child batch SQL's forced old parent index is the smallest safe final recovery; do not add a broad filtered index speculatively.
+- Task 17 evidence rejected removing both batch hints: no-hint fetches at 288–300 keys can trigger a `14.8–41.9 ms` automatic-index cliff. Filtered composite candidates were neutral/slower, including a `359%` wrong-kind regression. The final bounded slice instead reuses three uncached fixed statements (`~1.21 s` projected), raises the bounded reader statement cache to `32`, and removes only the safe count-query hint so Task 16's composite index can serve counts; the fetch hint remains. One replay decides the gate, after which performance work stops expanding.
+- Task 17 passed and is retained. Full/exact wall improved `61,488 -> 54,814 ms`, resolution `50,177 -> 44,673 ms`, and peak PSS fell to `26,830,848` bytes. The `60,000 ms` gate passes by `5,186 ms`. Performance scope is closed; no further optimization tasks may be added before profiler removal and the Linux/Windows integration gates.
+- The final exact full-resolution replay passed at `54,814 ms` wall, `44,673 ms` resolution, and `26,830,848` bytes peak PSS. A later all-14 rerun could not produce records because the frozen copied-store pointer selected an empty current view while the populated views had stale or mismatched sidecars. Rebuilding that disposable fixture would start another convergence campaign without changing the already-passing consumer or producer trees, so it is recorded as a fixture limitation rather than a new optimization task.
+- Overall recovery remains open only for native Windows acceptance, final evidence reconciliation, and the approval-gated adoption path. No further Linux optimization or fixture tasks may be added unless Windows exposes a concrete defect.
+
+### Task 9: Batch the Measured Child-Name Reads
+
+**Files:**
+- Modify: Julie `crates/julie-extract-cli/src/store/resolution_session.rs`
+- Modify: Julie `crates/julie-extract-cli/tests/store_resolution_performance.rs`
+- Modify: Julie `crates/julie-extract-cli/tests/store_resolution_mechanism.rs`
+- Modify: Julie `crates/julie-extract-cli/tests/store_resolution_scope_equivalence.rs`
+
+**Interfaces:**
+- Consumes: the existing `ResolutionPhaseChunk`, `CandidateWindow`, `CandidateLookup::visit_children_named`, `idx_read_symbols_parent`, candidate-query telemetry, and the configured store window.
+- Produces: a private per-window exact `(version_id, parent_symbol_id, name)` cache filled by bounded set-based reads; the public resolver/session interfaces and Store Contract remain unchanged.
+
+**Contract inputs:** The measured baseline is `148,431 ms` wall and `715,409` `children_named` executions. Preserve visible-manifest filtering, `symbol_id COLLATE BINARY` ordering, raw-row completeness when a kind is unknown, visitor early stop, exact full/scoped output, and reset at every phase chunk. The full resolver remains the correctness oracle.
+
+**File ownership:** Only the four Julie files above. The temporary profiler in `resolution_session.rs` is pre-existing task state: preserve it byte-for-byte during this slice and do not touch `resolution.rs` or `store/resolve.rs`.
+
+**Serialization required:** Yes
+
+**Dependency reason:** The query-family profile is the prerequisite and the changed store session is also temporarily instrumented. No concurrent producer edit may overlap it.
+
+## Architecture Quality
+
+**Affected modules:** Julie store-backed resolution session and its caller-facing contract tests.
+
+**Caller-facing interface:** Keep `CandidateLookup::visit_children_named` and every public/session/CLI schema unchanged. The batching seam is private to `StoreScratchResolutionSession`.
+
+**Depth/locality check:** Key derivation, SQL batching, completeness proof, cache replay, and bounds stay in the store adapter that owns the current scalar query. The generic resolver remains storage-agnostic.
+
+**Test surface:** Exercise the real `run_resolution_session` path, the existing `CandidateLookup` port, and full-versus-scoped exported semantic digests. Do not test a private SQL helper in isolation.
+
+**Seams/adapters:** Extend the existing per-phase `CandidateWindow`; add no public batch method, schema, index, feature switch, or alternate resolver.
+
+**Rejected shortcuts:** unbounded/session-wide memoization, caching partial fallback pages, removing relationship features, changing tiers/confidence, a timing-only test, a new schema/index before the batch is measured, or treating unknown kinds as proof that a key is incomplete.
+
+**Architecture risk:** Medium. The change is local, but ordering, visibility, completeness, early-stop, cache lifetime, and memory bounds are correctness-critical.
+
+**Step 1: Write and verify RED through the caller-facing session**
+
+- Add `children_named_query_executions_scale_with_resolution_windows` using `N = 4 * WINDOW_SIZE + 1`, distinct parent scopes, one exact same-named child per scope, and more than `WINDOW_SIZE` extra same-named candidates so the old name-only prime cannot hide the N+1.
+- Assert exact identifier count/targets, `max_store_read_page() <= WINDOW_SIZE`, `max_candidate_cache_entries() <= WINDOW_SIZE * 3`, and `ChildrenNamed.executions <= 2 * chunks + 2`, where `chunks = N.div_ceil(WINDOW_SIZE)`.
+- Run the exact test before production edits and record the expected old-code failure caused by identifier-proportional query executions.
+
+**Step 2: Implement one bounded internal batch/reuse change**
+
+- Derive, deduplicate, and sort at most `window_size` direct exact child keys from each Pending/Identifiers phase chunk: terminal name under the caller/containing scope and receiver name under that same scope when present.
+- Extend `CandidateWindow` with complete exact-key results. Reset them with the existing window. Replay a cached key in binary symbol order and stop immediately when the visitor returns false; absent keys retain the current scalar paged fallback.
+- Use two bounded set-based statements per chunk when exact keys need priming: first count raw visible rows per key, then fetch only deterministically selected positive keys whose complete raw result fits the remaining page/cache budget. Cache selected zero-row keys too. Count raw rows before `candidate_hit` filtering so unknown kinds cannot create a false completeness proof.
+- Keep each VALUES row to three binds plus a literal ordinal. Cap keys at `window_size` so the 300-item default uses at most 902 variables including view/generation, remaining portable to a 999-variable SQLite build.
+- Use the existing `idx_read_symbols_parent` for the exact-key batch. Do not add or change schema. Order fetched rows by key ordinal then `symbol_id COLLATE BINARY`.
+- Keep total fetched raw symbol rows at or below `window_size` and total candidate-window entries at or below `window_size * 3`. Include exact-key keys/results in `entry_count`; later symbol/module cache insertions must respect the same global cap instead of hiding new memory.
+- Record both batch statements as `CandidateQueryFamily::ChildrenNamed`. Preserve the existing fallback telemetry and all temporary elapsed profiling without modification.
+
+**Step 3: Add semantic guards and verify GREEN**
+
+- Add `store_children_named_preserve_binary_order_and_early_stop` through `CandidateLookup::visit_children_named`: insert `z-child`, `a-child`, `b-child`, use a two-item window, stop after two, and assert only `a-child`, `b-child` are delivered with no extra page.
+- Add `children_named_scoped_resolution_matches_forced_full_digest` using the existing TypeScript receiver/high-fanout fixture style and `resolve_and_compare("scoped", None)`. Assert the scoped arm remains scoped and its semantic digest equals the forced-full oracle.
+- Run only these three exact focused tests during the worker cycle. The lead owns broader producer gates and the real copied-store replay.
+
+```bash
+cargo test -p julie-extract-cli --features test-store-resolution-contract \
+  --test store_resolution_performance children_named_query_executions_scale_with_resolution_windows \
+  -- --exact --nocapture --test-threads=1
+
+cargo test -p julie-extract-cli --features test-store-resolution-contract \
+  --test store_resolution_mechanism store_children_named_preserve_binary_order_and_early_stop \
+  -- --exact --nocapture --test-threads=1
+
+cargo test -p julie-extract-cli --features test-store-resolution-contract \
+  --test store_resolution_scope_equivalence children_named_scoped_resolution_matches_forced_full_digest \
+  -- --exact --nocapture --test-threads=1
+```
+
+**Acceptance criteria:**
+- [x] The deterministic query-count test is observed RED on old code for identifier-proportional `children_named` executions (`2,402` executions versus the bound of `12`).
+- [x] The same test is GREEN with a fixed `2 * chunks + 2` execution bound and unchanged exact targets.
+- [x] Binary ordering, visitor early stop, raw-row completeness, visibility, window reset, page size, and candidate-cache bounds are preserved by focused mechanism and performance tests.
+- [x] Scoped and forced-full semantic digests match and the scoped arm remains scoped, including a fixture with more than one resolution window of same-named distractors.
+- [x] No public contract, schema, resolver tier, confidence, or relationship feature changes.
+- [x] Lead inline spec, architecture, and code-quality review is clean before any production commit; affected format, check, and strict clippy gates pass.
+- [x] The identical production-volume copied-store replay supplies the after number and proves a material reduction. Task 9 is retained; the remaining resolver cost is a separate measured slice.
+
+### Task 10: Attribute the Remaining Resolver Cache Misses
+
+**Files:**
+- Modify temporarily: Julie `crates/julie-extract-cli/src/resolution.rs`
+- Modify temporarily: Julie `crates/julie-extract-cli/src/store/resolution_session.rs`
+- Modify temporarily: Julie `crates/julie-extract-cli/src/store/resolve.rs`
+- Modify: the narrow existing-module tests that cover the aggregate profiler and candidate-window telemetry
+
+**Interfaces:**
+- Consumes: the existing default-off `JULIE_STORE_RESOLUTION_AGGREGATE_PROFILE` lifecycle, `CandidateQueryFamily` counters, the five resolver child-name call sites, and the per-phase `CandidateWindow`.
+- Produces temporarily: fixed-cardinality counters for child-name caller reason × cache state and by-ID cache admission/occupancy. No identifier names, symbol IDs, paths, timers, per-call records, or additional files.
+
+**Contract inputs:** Task 9 reduced full wall to `128,397 ms`, but `children_named` still owns `40,838 ms`/`305,632` family executions and `symbol_by_id` regressed to `6,465 ms`/`466,860` executions. Static evidence identifies unprimed resolved-item phases, ancestor walks, type-member reads, and shared-cache displacement, but cannot allocate the measured cost among them.
+
+**File ownership:** One Luna worker owns the three already-instrumented producer files and focused profiler tests. No other producer edit or replay runs concurrently. The instrumentation remains temporary and must be removed before the production commit.
+
+**Step 1: Add focused RED coverage**
+
+- Extend the existing aggregate-profiler tests to require fixed buckets for the five child lookup reasons (`static_member`, `static_receiver_shadow_check`, `tier1_scope_terminal`, `tier3_typed_member`, `tier3_receiver_scope`) and three cache states (`exact_cache_hit`, `name_cache_hit`, `scalar_miss`).
+- Require `calls` for every bucket and `sql_pages` for scalar misses; the sum of scalar SQL pages must reconcile with the existing `ChildrenNamed` family counter after subtracting the bounded batch count/fetch statements explicitly recorded by the session.
+- Require by-ID counters for cache hit, SQL miss, accepted insertion, rejected-by-ID-cap insertion, rejected-by-aggregate-cap insertion, and maximum `by_id`/aggregate entries at phase reset.
+- Prove that the profiler-disabled path returns zero/default counters and performs no JSONL output or profile-only allocation.
+
+**Step 2: Implement aggregate-only temporary attribution**
+
+- Add a crate-private child lookup reason enum and a default reason-aware `CandidateLookup` method that delegates to the existing method. Keep the existing trait method and both resolver implementations behaviorally unchanged.
+- Route only the five known resolver call sites through the reason-aware method. Override it only in `StoreScratchResolutionSession`, sharing one private implementation with the existing method.
+- Record fixed numeric counters at exact-cache, name-cache, and scalar branches. Count scalar pages without another clock read; keep existing query-family timing authoritative.
+- Record by-ID admission and occupancy counters at the current lookup/admission/reset seams. Do not record high-cardinality keys or add a second profiler lifecycle.
+- Serialize the counters into the existing single aggregate JSON object with pass attribution. When the environment variable is absent/blank, preserve the current zero-work behavior.
+
+**Step 3: Verify and replay once**
+
+- Run only the focused aggregate-profiler and candidate-cache tests plus format/check/strict clippy for the affected crate.
+- Rebuild the pinned local producer and run exactly one fresh identical copied-store `producer.resolve.full` replay with profiling enabled.
+- Reconcile caller/cache-state totals, scalar pages, batch statements, by-ID occupancy, and admission rejection counts. The next production TDD slice must target the largest measured removable owner; do not infer it from static call counts.
+
+**Acceptance criteria:**
+- [x] Focused tests observed incorrect attribution RED before the merge correction and passed afterward.
+- [x] Enabled counters are fixed-cardinality, pass-attributed, and reconcile exactly with existing family SQL-page totals (`302,415 + 1,668 + 1,549 = 305,632`).
+- [x] Disabled operation preserves the current no-output/zero-counter behavior.
+- [x] The identical replay names scope-chain scalar misses as the dominant remaining owner (`83.96%`) and quantifies by-ID displacement.
+- [x] No behavior, public contract, schema, resolver tier, confidence, relationship feature, or default performance path changes.
+- [ ] All temporary attribution is removed before the production recovery commit.
+
+### Task 11A: Protect the By-ID Cache Budget
+
+**Files:**
+- Modify: Julie `crates/julie-extract-cli/src/store/resolution_session.rs`
+- Modify: Julie `crates/julie-extract-cli/tests/store_resolution_performance.rs`
+- Modify only if required for a caller-facing bound: Julie `crates/julie-extract-cli/tests/store_resolution_mechanism.rs`
+
+**Interfaces:**
+- Consumes: `CandidateWindow`, `cache_complete_name`, `cache_exact_children`, `prime_exact_children`, `symbol_by_id`, `select_module_version`, and Task 10's temporary occupancy counters.
+- Produces: two private logical cache partitions with `by_id <= window_size`, non-by-ID entries `<= 2 * window_size`, and total entries `<= 3 * window_size`. Public resolver/session/store interfaces remain unchanged.
+
+**Measured input:** Task 10 records `466,860` by-ID SQL misses, `438,374` by-ID-cap rejections, `289,068` overlapping aggregate-cap rejections, average phase-reset occupancy `288.77` by-ID / `792.98` total, and maximum by-ID occupancy `378` for a configured `300`. Exact/name bulk admission currently promotes every positive hit into `by_id`, consuming the budget needed by explicit `symbol_by_id` calls.
+
+**Architecture decision:** Keep cloned `CandidateHit` values for this slice. Shared `Rc`/`Arc` handles are rejected because PSS is only `27 MB`, no allocation hotspot is measured, and the broader storage refactor would obscure the cache-policy A/B. Count existing logical entries, preserve the current `primed_names` bound separately, and do not increase total capacity.
+
+**Step 1: Prove RED through the real session**
+
+- Add a focused production-shaped test using the existing high-fanout child fixture, candidate timing/occupancy accessor, and `run_resolution_session`.
+- Require `max by_id entries <= window_size`, non-by-ID entries `<= 2 * window_size`, total entries `<= 3 * window_size`, and `max_store_read_page <= window_size`.
+- The current Task 9 implementation must fail because name/exact-child bulk promotion can drive by-ID occupancy above `window_size`; record the actual RED value.
+- Preserve the existing overlapping-rejection assertion and Task 9 query-count/output assertions.
+
+**Step 2: Implement the private partition**
+
+- Add explicit `by_id_entry_count`, `non_by_id_entry_count`, and `entry_count` helpers. Preserve the existing logical accounting for by-name hit rows, exact-child keys/hit rows, and module entries; keep `primed_names` independently bounded by its current window-sized key derivation.
+- Make direct `symbol_by_id` the only path that creates a new `by_id` key. Admit positive and negative results only while `by_id < window_size` and total `< 3 * window_size`; record by-ID and aggregate rejection predicates independently.
+- Stop `cache_complete_name` and `cache_exact_children` from automatically adding new by-ID keys. Cache complete name/child results only while non-by-ID additions fit `2 * window_size`; preserve cached empty results, exact-key presence, binary replay order, visitor early stop, scalar fallback, and raw-row completeness.
+- In `prime_exact_children`, select against remaining non-by-ID capacity. The conservative per-key cost becomes `1 + raw_count` instead of `1 + 2 * raw_count`; retain the independent `window_size` raw-row cap, existing count/fetch statements, visibility filter, parent index, and ordinal order.
+- Treat `module_versions` as non-by-ID storage and enforce both its existing local limit and the shared `2 * window_size` non-by-ID limit.
+- Do not evict entries, raise capacity, add a schema/index/switch, or change resolver tiers/confidence.
+
+**Step 3: Verify and replay**
+
+- Run the exact RED/GREEN partition test, existing Task 9 query-count test, binary-order/early-stop test, full/scoped semantic-digest equivalence test, and Task 10 attribution reconciliation test.
+- Run format, affected check, and strict clippy once on the final tree.
+- Lead-review the diff, rebuild the pinned producer, then run one identical copied-store `producer.resolve.full` replay.
+- Accept the slice only if bounds/parity hold and the real replay improves or preserves Task 9's full wall/child-query result while materially reducing by-ID SQL/rejections. If scope-chain pages remain dominant, proceed to a separately measured Task 11B complete scalar-key reuse slice.
+
+**Acceptance criteria:**
+- [x] The caller-facing bound test was RED on current Task 9 code at `max_by_id=301` with `window_size=300`.
+- [x] GREEN proves `by_id <= W`, non-by-ID `<= 2W`, total `<= 3W`, and read page `<= W` across phase windows.
+- [x] Exact/name caches do not create by-ID keys; explicit by-ID lookups retain bounded caching within their partition.
+- [x] Task 9 query-count, order/early-stop, full/scoped digest, and Task 10 reconciliation tests remain green.
+- [x] No public interface, schema, resolver tier/confidence, relationship feature, or aggregate capacity change.
+- [x] The identical replay quantifies child SQL, by-ID SQL/rejections/occupancy, wall/CPU/PSS, and exact state and proves a material net improvement.
+
+### Task 11B: Reuse Complete Scalar Child Reads
+
+**Files:**
+- Modify: Julie `crates/julie-extract-cli/src/store/resolution_session.rs`
+- Modify: Julie `crates/julie-extract-cli/tests/store_resolution_mechanism.rs`
+- Modify: Julie `crates/julie-extract-cli/tests/store_resolution_performance.rs`
+- Reuse unchanged: Julie `crates/julie-extract-cli/tests/store_resolution_scope_equivalence.rs`
+
+**Interfaces:**
+- Consumes: `visit_children_named_inner`, `candidate_page`'s raw-row cursor, `CandidateWindow.children_named`, Task 11A's non-by-ID partition, and existing query/attribution telemetry.
+- Produces: private per-phase reuse of a scalar key only after the entire raw ordered result has been consumed. No public/session/schema/resolver interface changes.
+
+**Measured input:** After Task 11A, `children_named` still costs `37,604 ms` across `282,489` statements. Scalar pages are `279,272`; tier-3 receiver scope owns `136,015` and tier-1 terminal scope owns `99,292`, together `84.26%`. These dynamic ancestor keys cannot be completely derived before the phase chunk, but repeated exact `(version,parent,name)` reads share the existing cache key and phase lifetime.
+
+**Step 1: Prove RED through `CandidateLookup`**
+
+- Add a complete scalar reuse test for a positive and an empty unprimed key. Snapshot `ChildrenNamed.executions`; current code must add SQL again on the second full call. GREEN requires zero second-call delta and identical ordered hits.
+- Extend the binary-order/early-stop fixture: an early-stopped first call must not cache its prefix; the next consuming call must execute SQL and return all ordered rows; only a third consuming call may add zero SQL.
+- Add an unknown-kind/multi-page fixture with a raw unknown row before a later known row. The first consuming call must traverse raw pages and return the known ordered rows; the second must replay exactly with zero SQL. This prevents filtered-hit count from masquerading as completeness.
+
+**Step 2: Implement bounded cache-on-complete**
+
+- On the scalar branch, calculate current non-by-ID headroom once. Reserve one logical slot for the exact key; bound the temporary known-hit buffer to the remaining headroom and at most `window_size`. If there is no key slot, skip all buffering.
+- Clone ordered delivered hits into the temporary buffer before invoking the visitor. If the buffer would overflow, clear it and mark the result non-cacheable, but continue the existing scalar scan/delivery unchanged.
+- Any visitor `false`, callback error, SQL error, or non-terminal return leaves the key uncached. Only the existing terminal raw cursor (`next == None` after all raw pages, including unknown kinds) proves completeness.
+- After terminal completion, admit the exact key and ordered known-hit vector through Task 11A's `cache_exact_children`; this must cache empty results, preserve non-by-ID `2W` and total `3W` bounds, and never populate by-ID.
+- Keep the existing page size, manifest filter, parent index, binary ordering, scalar fallback, phase reset, query-family telemetry, and reason/cache-state attribution. Do not reserve new global capacity, evict, add a session-wide cache, or change the terminal-empty-page protocol.
+
+**Step 3: Verify and replay**
+
+- Run exact RED/GREEN reuse, early-stop, unknown-kind, Task 9 query-count, Task 10 reconciliation, Task 11A partition, and full/scoped digest tests.
+- Run format, affected check, and strict clippy once on the final tree.
+- Lead-review, rebuild the pinned producer, and run one identical copied-store full replay.
+- Retain only if exact/bounds/parity hold and the replay materially reduces scope-chain scalar pages/end-to-end wall. If repeated-key reuse is insufficient, profile the newly exposed owner rather than widening this cache.
+
+**Acceptance criteria:**
+- [ ] Current code is RED because a second full positive/empty scalar call repeats SQL.
+- [ ] GREEN reuses complete positive, empty, multi-page, and unknown-kind-filtered results with zero second-call SQL.
+- [ ] Early-stop and error paths never cache a partial result; binary order remains unchanged.
+- [ ] Cache lifetime resets with the existing phase window and stays within by-ID `W`, non-by-ID `2W`, total `3W`, page `W` bounds.
+- [ ] Task 9 query-count, Task 10 attribution reconciliation, Task 11A partition, and full/scoped digest tests remain green.
+- [ ] No public interface, schema, resolver tier/confidence, feature, or cache-capacity change.
+- [ ] The identical replay supplies scope caller/page, total child/by-ID SQL, wall/CPU/PSS, and exact-state after numbers.
+
 
 ## External Review Reconciliation
 
