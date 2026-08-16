@@ -116,10 +116,10 @@
 **Approach:** Use workflow dispatch/tag behavior documented in `docs/release.md`; never clobber. Re-run the release-state tripwire and reconcile local/remote/tag identities after publication.
 
 **Acceptance criteria:**
-- [ ] `v2.33.3` is stable, non-draft, and targets the verified prep commit.
-- [ ] Four platform archives exist and their calculated SHA-256 values are recorded.
-- [ ] GitHub release body matches the committed notes.
-- [ ] `origin/main`, publication docs, and release-state checks are reconciled.
+- [x] `v2.33.3` is stable, non-draft, and targets the verified prep commit.
+- [x] Four platform archives exist and their calculated SHA-256 values are recorded.
+- [x] GitHub release body matches the committed notes.
+- [x] `origin/main`, publication docs, and release-state checks are reconciled.
 
 ### Task 3: Pin Julie and prepare Miller 1.19.2
 
@@ -157,11 +157,11 @@
 **Approach:** Keep all schema and semantic constants unchanged. Run the complete Miller branch gate on the exact prep tree with the published Julie binary restored.
 
 **Acceptance criteria:**
-- [ ] Every Miller pin/version/plugin/assertion surface consistently names Julie `2.33.3` and Miller `1.19.2`.
-- [ ] Restored Julie binary and all pin hashes match the live release.
-- [ ] Release notes distinguish recovered hot/read paths from still-expensive cold full indexing.
+- [x] Every Miller pin/version/plugin/assertion surface consistently names Julie `2.33.3` and Miller `1.19.2`.
+- [x] Restored Julie binary and all pin hashes match the live release.
+- [x] Release notes distinguish recovered hot/read paths from still-expensive cold full indexing.
 - [ ] Release build, fast/Scale, plugin, restore, doc-sync, and diff gates pass on the exact prep commit.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
 
 ### Task 4: Integrate and publish Miller 1.19.2
 
