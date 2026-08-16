@@ -21,7 +21,7 @@ public sealed class MillerVersionTests
     [Fact]
     public void Current_StartsWithTheBaseVersion()
     {
-        Assert.StartsWith("1.19.1", MillerVersion.Current);
+        Assert.StartsWith("1.19.2", MillerVersion.Current);
     }
 
     [Fact]

@@ -25,4 +25,3 @@ An isolated or restored Miller home can recover authoritative registry membershi
 ## Future Agents
 
 Do not add an environment variable or direct registry edit that bypasses pointer validation. Keep pointer adoption fail-closed and reuse the same family-read invariants as normal serving.
-
