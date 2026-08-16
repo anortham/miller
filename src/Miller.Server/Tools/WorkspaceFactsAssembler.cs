@@ -563,8 +563,10 @@ internal static class WorkspaceFactsAssembler
         string warning = UsesMcpWarning(profile)
             ? $"Workspace index DB not found: {row.IndexDbPath}"
             : $"index DB not found: {row.IndexDbPath}";
+        bool pendingRefresh = row.State == WorkspaceRegistryState.Refreshing
+            && Directory.Exists(row.CanonicalRoot);
 
-        if (MutatesMissingRegistry(profile))
+        if (MutatesMissingRegistry(profile) && !pendingRefresh && row.State != WorkspaceRegistryState.Error)
             registry.MarkMissing(row.WorkspaceId, warning);
 
         return new WorkspaceFacts(
@@ -578,7 +580,7 @@ internal static class WorkspaceFactsAssembler
             LatestObservedRevision: revision,
             IndexFresh: MissingIndexFresh(profile),
             QueueEmpty: true,
-            FreshnessStatus: MissingFreshnessStatus(row, profile),
+            FreshnessStatus: MissingFreshnessStatus(row, profile, pendingRefresh),
             WarningText: warning,
             DisplayId: row.DisplayId,
             ServerVersion: MillerVersion.Current,
@@ -723,15 +725,20 @@ internal static class WorkspaceFactsAssembler
             _ => null,
         };
 
-    private static string MissingFreshnessStatus(WorkspaceRegistryRow row, WorkspaceRegisteredFactsProfile profile) =>
-        profile switch
-        {
-            WorkspaceRegisteredFactsProfile.CliStatus => row.StateText,
-            WorkspaceRegisteredFactsProfile.McpStatus => "missing_index",
-            WorkspaceRegisteredFactsProfile.CliHealth => "missing_index",
-            WorkspaceRegisteredFactsProfile.McpHealth => "missing_index",
-            _ => row.StateText,
-        };
+    private static string MissingFreshnessStatus(
+        WorkspaceRegistryRow row,
+        WorkspaceRegisteredFactsProfile profile,
+        bool pendingRefresh) =>
+        pendingRefresh && UsesMcpFreshness(profile)
+            ? row.StateText
+            : profile switch
+            {
+                WorkspaceRegisteredFactsProfile.CliStatus => row.StateText,
+                WorkspaceRegisteredFactsProfile.McpStatus => "missing_index",
+                WorkspaceRegisteredFactsProfile.CliHealth => "missing_index",
+                WorkspaceRegisteredFactsProfile.McpHealth => "missing_index",
+                _ => row.StateText,
+            };
 
     private static bool IsIndexReadException(Exception exception) =>
         exception is SqliteException or InvalidOperationException or IOException

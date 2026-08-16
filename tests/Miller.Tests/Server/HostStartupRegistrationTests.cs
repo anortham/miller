@@ -2,10 +2,14 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
 using Miller.Server;
 using Miller.Server.Hosting;
+using Miller.Server.Telemetry;
+using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -58,6 +62,7 @@ public sealed class HostStartupRegistrationTests : IDisposable
         Assert.Contains(hosted, h => h is Miller.Server.IndexBootstrapService);
         Assert.Contains(hosted, h => h is FreshnessService);
         Assert.Contains(hosted, h => h is IndexerService);
+        Assert.Contains(hosted, h => h is WorkspaceOpenPrimeService);
     }
 
     [Fact]
@@ -271,6 +276,48 @@ public sealed class HostStartupRegistrationTests : IDisposable
         Assert.Equal("synthetic bootstrap failure", error.Message);
         Assert.Equal(PathCanonicalizer.CanonicalizeRoot(rootA), bootstrap.Workspace.CanonicalRoot);
         Assert.Same(firstHolder, bootstrap.Holder);
+    }
+
+    [Fact]
+    public void WorkspaceTool_ResolvesAndOpensWithoutLocatingJulieExtract()
+    {
+        string root = CreateTempRoot();
+        string target = CreateTempRoot();
+        string toolsBase = CreateTempRoot();
+        string tempHome = CreateTempRoot();
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+        Directory.CreateDirectory(Path.Combine(tempHome, ".miller"));
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices(semanticMode: SemanticMode.Off, startIndexer: false);
+        services.AddTransient<WorkspaceTool>();
+        services.AddSingleton(
+            TelemetryLedger.Open(
+                Path.Combine(tempHome, ".miller", "telemetry.db"),
+                workspaceId));
+
+        using var provider = services.BuildServiceProvider();
+        var bootstrap = provider.GetRequiredService<IndexBootstrapService>();
+        bootstrap.TestHomeDirectoryOverride = tempHome;
+        WorkspaceContext workspace = WorkspaceContext.Create(root, toolsBase, tempHome) with
+        {
+            WorkspaceId = workspaceId,
+            CanonicalRoot = PathCanonicalizer.CanonicalizeRoot(root),
+            CanonicalExtractDbPath = Path.Combine(root, ".miller", "symbols.db"),
+        };
+        bootstrap.SeedForTest(
+            workspace,
+            new IndexHolder(
+                MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>()),
+                builtRevision: 1));
+
+        WorkspaceTool tool = provider.GetRequiredService<WorkspaceTool>();
+        using JsonDocument document = JsonDocument.Parse(
+            tool.Workspace(operation: "open", path: target, format: "json"));
+
+        Assert.Equal("open", document.RootElement.GetProperty("operation").GetString());
+        Assert.Equal("refreshing", document.RootElement.GetProperty("status").GetString());
+        Assert.False(document.RootElement.GetProperty("scanned").GetBoolean());
     }
 
     [Fact]

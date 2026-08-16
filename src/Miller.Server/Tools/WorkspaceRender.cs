@@ -261,15 +261,14 @@ public enum WorkspaceHealthFormat
 }
 
 /// <summary>
-/// The result of a <c>refresh</c>/<c>full</c> action (M7 decision-3): whether the leader ran a scan, whether the
-/// freshness poll swapped a newer index in, the revision the index now reflects, and an optional HONEST note (set
-/// when a non-leader could not force a scan, or the leader's scan failed) — never a faked success.
+/// The result of an <c>open</c>/<c>refresh</c>/<c>full</c> action (M7 decision-3): whether a scan ran, whether the
+/// freshness poll swapped a newer index in, the revision the index now reflects, and an optional HONEST note.
 /// </summary>
-/// <param name="Operation">The operation name (<c>refresh</c> or <c>full</c>).</param>
-/// <param name="Scanned">True iff THIS instance (the leader) ran an <c>extract scan</c>.</param>
+/// <param name="Operation">The operation name (<c>open</c>, <c>refresh</c>, or <c>full</c>).</param>
+/// <param name="Scanned">Whether this action ran an <c>extract scan</c>.</param>
 /// <param name="Swapped">True iff the on-demand freshness poll rebuilt + swapped a newer index.</param>
 /// <param name="Revision">The revision the held index reflects after the action.</param>
-/// <param name="Note">An honesty note (non-leader cannot force a rescan / a scan failure), or null.</param>
+/// <param name="Note">An honesty note, or null.</param>
 /// <param name="ScanDurationMs">Wall ms of the julie-extract scan attempt (set even for a failed/killed scan);
 /// null when no scan ran or the path does not measure it.</param>
 /// <param name="DurationMs">Wall ms of the whole refresh attempt, when measured.</param>
@@ -2495,7 +2494,7 @@ public static class WorkspaceRender
 
     // ---------- refresh / full ----------
 
-    /// <summary>Render a <c>refresh</c>/<c>full</c> action result (scanned? swapped? new revision? honesty note).</summary>
+    /// <summary>Render an <c>open</c>/<c>refresh</c>/<c>full</c> action result.</summary>
     public static string Action(WorkspaceActionResult result, bool json) =>
         json ? ActionJson(result) : ActionCompact(result);
 

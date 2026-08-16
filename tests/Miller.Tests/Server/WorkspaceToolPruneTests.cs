@@ -96,10 +96,6 @@ public sealed class WorkspaceToolPruneTests : IDisposable
         var ledger = TelemetryLedger.Open(Path.Combine(NewTempDir("ledger"), "telemetry.db"), CurrentWs);
         _disposables.Add(ledger);
 
-        string stubBinary = Path.Combine(NewTempDir("stub"),
-            OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract");
-        File.WriteAllText(stubBinary, "#!/bin/sh\n");
-        var runner = new JulieExtractRunner(stubBinary);
         var crossRefresh = new CrossWorkspaceRefreshService(
             registry,
             (_, _, _, _, _) => throw new InvalidOperationException("scan not expected"),
@@ -112,11 +108,11 @@ public sealed class WorkspaceToolPruneTests : IDisposable
             sidecar: SymbolSearchSidecar.Disabled);
 
         var tool = new WorkspaceTool(
-            holder, workspace, indexer, freshness, probe, bootstrap, ledger, runner, registry, crossRefresh,
+            holder, workspace, indexer, freshness, probe, bootstrap, ledger, registry, () => crossRefresh,
             SymbolSearchSidecar.Disabled,
             VectorSidecar.Disabled,
-            (_, _, _, _, _) => throw new InvalidOperationException("open scan not expected"),
             _ => SingleWriterLock.TryAcquire(_),
+            _ => WorkspaceOpenPrimeEnqueueResult.Stopping,
             new RecordingDashboardLauncher(new DashboardLaunchResult(
                 DashboardLaunchOutcome.AlreadyRunning,
                 new Uri("http://127.0.0.1:4977/"),

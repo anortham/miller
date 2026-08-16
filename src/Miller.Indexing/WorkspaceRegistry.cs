@@ -212,6 +212,76 @@ public sealed class WorkspaceRegistry : IDisposable
         }
     }
 
+    /// <summary>
+    /// Register a workspace for background refresh, preserving the durable scan facts of an existing row.
+    /// </summary>
+    /// <returns>The resulting row and whether this call inserted it.</returns>
+    public (WorkspaceRegistryRow Row, bool Created) RegisterRefreshing(
+        string workspaceId,
+        string displayId,
+        string canonicalRoot,
+        string indexDbPath,
+        DateTimeOffset? seenAtUtc = null,
+        WorkspaceLineage? lineage = null)
+    {
+        ThrowIfDisposed();
+        ValidateRequired(workspaceId, nameof(workspaceId));
+        ValidateRequired(displayId, nameof(displayId));
+        ValidateRequired(canonicalRoot, nameof(canonicalRoot));
+        ValidateRequired(indexDbPath, nameof(indexDbPath));
+        if (lineage is not null)
+            ValidateRequired(lineage.GitCommonDir, nameof(lineage));
+
+        DateTimeOffset seen = NormalizeUtc(seenAtUtc ?? DateTimeOffset.UtcNow);
+        lock (_gate)
+        {
+            using var tx = _connection.BeginTransaction();
+            using var insert = _connection.CreateCommand();
+            insert.Transaction = tx;
+            insert.CommandText = """
+                INSERT INTO workspaces
+                    (workspace_id, display_id, canonical_root, index_db_path, last_seen_at, state, last_error,
+                     git_common_dir, git_is_linked, git_dir, git_dir_created_at)
+                VALUES
+                    ($workspace_id, $display_id, $canonical_root, $index_db_path, $last_seen_at, 'refreshing', NULL,
+                     $git_common_dir, $git_is_linked, $git_dir, $git_dir_created_at)
+                ON CONFLICT(workspace_id) DO NOTHING;
+                """;
+            AddRefreshingParameters(insert, workspaceId, displayId, canonicalRoot, indexDbPath, seen, lineage);
+            bool created = insert.ExecuteNonQuery() == 1;
+
+            if (!created)
+            {
+                using var update = _connection.CreateCommand();
+                update.Transaction = tx;
+                update.CommandText = """
+                    UPDATE workspaces
+                    SET display_id = $display_id,
+                        canonical_root = $canonical_root,
+                        index_db_path = $index_db_path,
+                        last_seen_at = $last_seen_at,
+                        git_common_dir = CASE WHEN $has_lineage = 1
+                            THEN $git_common_dir ELSE git_common_dir END,
+                        git_is_linked = CASE WHEN $has_lineage = 1
+                            THEN $git_is_linked ELSE git_is_linked END,
+                        git_dir = CASE WHEN $has_lineage = 1
+                            THEN $git_dir ELSE git_dir END,
+                        git_dir_created_at = CASE WHEN $has_lineage = 1
+                            THEN $git_dir_created_at ELSE git_dir_created_at END
+                    WHERE workspace_id = $workspace_id;
+                    """;
+                AddRefreshingParameters(update, workspaceId, displayId, canonicalRoot, indexDbPath, seen, lineage);
+                update.Parameters.AddWithValue("$has_lineage", lineage is null ? 0 : 1);
+                update.ExecuteNonQuery();
+            }
+
+            PruneDuplicatePathRowsUnderLock(tx, workspaceId, canonicalRoot, indexDbPath);
+            tx.Commit();
+
+            return (GetRequiredUnderLock(workspaceId), created);
+        }
+    }
+
     public WorkspaceRegistryRow MarkScanned(
         string workspaceId,
         long revision,
@@ -274,6 +344,37 @@ public sealed class WorkspaceRegistry : IDisposable
         }
     }
 
+    public (WorkspaceRegistryRow Row, bool Marked) MarkLoadedExistingIfRefreshing(
+        string workspaceId,
+        long revision,
+        DateTimeOffset? seenAtUtc = null)
+    {
+        ThrowIfDisposed();
+        ValidateRequired(workspaceId, nameof(workspaceId));
+        if (revision < 0)
+            throw new ArgumentOutOfRangeException(nameof(revision), revision, "Revision must be non-negative.");
+
+        DateTimeOffset seen = NormalizeUtc(seenAtUtc ?? DateTimeOffset.UtcNow);
+        lock (_gate)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE workspaces
+                SET last_seen_at = $last_seen_at,
+                    last_revision = $last_revision,
+                    state = 'loaded_existing',
+                    last_error = NULL
+                WHERE workspace_id = $workspace_id
+                  AND state = 'refreshing';
+                """;
+            cmd.Parameters.AddWithValue("$workspace_id", workspaceId);
+            cmd.Parameters.AddWithValue("$last_seen_at", FormatTimestamp(seen));
+            cmd.Parameters.AddWithValue("$last_revision", revision);
+            bool marked = cmd.ExecuteNonQuery() == 1;
+            return (GetRequiredUnderLock(workspaceId), marked);
+        }
+    }
+
     public WorkspaceRegistryRow MarkMissing(
         string workspaceId,
         string? error = null,
@@ -326,6 +427,35 @@ public sealed class WorkspaceRegistry : IDisposable
             cmd.Parameters.AddWithValue("$last_error", error);
             ExecuteExistingRowUpdate(cmd, workspaceId);
             return GetRequiredUnderLock(workspaceId);
+        }
+    }
+
+    public (WorkspaceRegistryRow Row, bool Marked) MarkErrorIfRefreshing(
+        string workspaceId,
+        string error,
+        DateTimeOffset? seenAtUtc = null)
+    {
+        ThrowIfDisposed();
+        ValidateRequired(workspaceId, nameof(workspaceId));
+        ValidateRequired(error, nameof(error));
+
+        DateTimeOffset seen = NormalizeUtc(seenAtUtc ?? DateTimeOffset.UtcNow);
+        lock (_gate)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE workspaces
+                SET last_seen_at = $last_seen_at,
+                    state = 'error',
+                    last_error = $last_error
+                WHERE workspace_id = $workspace_id
+                  AND state = 'refreshing';
+                """;
+            cmd.Parameters.AddWithValue("$workspace_id", workspaceId);
+            cmd.Parameters.AddWithValue("$last_seen_at", FormatTimestamp(seen));
+            cmd.Parameters.AddWithValue("$last_error", error);
+            bool marked = cmd.ExecuteNonQuery() == 1;
+            return (GetRequiredUnderLock(workspaceId), marked);
         }
     }
 
@@ -956,6 +1086,32 @@ public sealed class WorkspaceRegistry : IDisposable
         cmd.Parameters.AddWithValue("$canonical_root", canonicalRoot);
         cmd.Parameters.AddWithValue("$index_db_path", indexDbPath);
         cmd.ExecuteNonQuery();
+    }
+
+    private static void AddRefreshingParameters(
+        SqliteCommand command,
+        string workspaceId,
+        string displayId,
+        string canonicalRoot,
+        string indexDbPath,
+        DateTimeOffset seen,
+        WorkspaceLineage? lineage)
+    {
+        command.Parameters.AddWithValue("$workspace_id", workspaceId);
+        command.Parameters.AddWithValue("$display_id", displayId);
+        command.Parameters.AddWithValue("$canonical_root", canonicalRoot);
+        command.Parameters.AddWithValue("$index_db_path", indexDbPath);
+        command.Parameters.AddWithValue("$last_seen_at", FormatTimestamp(seen));
+        command.Parameters.AddWithValue(
+            "$git_common_dir",
+            lineage is null
+                ? DBNull.Value
+                : WorkspaceLineage.CanonicalizeCommonDir(lineage.GitCommonDir));
+        command.Parameters.AddWithValue("$git_is_linked", lineage is null ? DBNull.Value : lineage.IsLinkedWorktree ? 1 : 0);
+        command.Parameters.AddWithValue("$git_dir", (object?)lineage?.GitDir ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$git_dir_created_at",
+            lineage?.GitDirCreatedAtUtc is { } created ? FormatTimestamp(created) : DBNull.Value);
     }
 
     private static WorkspaceRegistryRow ReadRow(SqliteDataReader reader) =>

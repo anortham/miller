@@ -155,6 +155,33 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
     }
 
     [Fact]
+    public void RegisteredStatusFacts_McpProfilePreservesPendingRefreshWhenRootExists()
+    {
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(_temp, "pending-workspaces.db"));
+        string root = Path.Combine(_temp, "pending-workspace");
+        Directory.CreateDirectory(root);
+        string missingDb = Path.Combine(root, ".miller", "symbols.db");
+        WorkspaceRegistryRow row = registry.UpsertSeen(
+            "ws-mcp-pending",
+            "pending",
+            root,
+            missingDb,
+            WorkspaceRegistryState.Refreshing);
+
+        WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+            registry,
+            row,
+            WorkspaceRegisteredFactsProfile.McpStatus,
+            new SymbolSearchSidecar(enabled: true),
+            new ContentCorpusSidecar());
+
+        Assert.Equal("refreshing", facts.FreshnessStatus);
+        Assert.False(facts.IndexFresh);
+        Assert.Equal("Workspace index DB not found: " + missingDb, facts.WarningText);
+        Assert.Equal(WorkspaceRegistryState.Refreshing, registry.Get("ws-mcp-pending")!.State);
+    }
+
+    [Fact]
     public void RegisteredHealthFacts_CliProfileReportsMissingIndexWithoutMarkingRegistry()
     {
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(_temp, "workspaces.db"));
@@ -202,6 +229,39 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
         Assert.False(facts.IndexFresh);
         Assert.Equal("Workspace index DB not found: " + missingDb, facts.WarningText);
         Assert.Equal(WorkspaceRegistryState.Missing, registry.Get("ws-mcp-health")!.State);
+    }
+
+    [Theory]
+    [InlineData("McpStatus")]
+    [InlineData("McpHealth")]
+    public void RegisteredMissingIndexFacts_McpProfilesPreserveExistingError(string profileName)
+    {
+        WorkspaceRegisteredFactsProfile profile = Enum.Parse<WorkspaceRegisteredFactsProfile>(profileName);
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(_temp, "error-workspaces.db"));
+        string root = Path.Combine(_temp, "error-workspace");
+        Directory.CreateDirectory(root);
+        string missingDb = Path.Combine(root, ".miller", "symbols.db");
+        WorkspaceRegistryRow row = registry.UpsertSeen(
+            "ws-error-missing",
+            "error-missing",
+            root,
+            missingDb,
+            WorkspaceRegistryState.Ready);
+        registry.MarkError(row.WorkspaceId, "prime failed");
+
+        WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+            registry,
+            registry.Get(row.WorkspaceId)!,
+            profile,
+            new SymbolSearchSidecar(enabled: true),
+            new ContentCorpusSidecar());
+
+        Assert.Equal("missing_index", facts.FreshnessStatus);
+        Assert.False(facts.IndexFresh);
+        Assert.Equal("Workspace index DB not found: " + missingDb, facts.WarningText);
+        WorkspaceRegistryRow persisted = registry.Get(row.WorkspaceId)!;
+        Assert.Equal(WorkspaceRegistryState.Error, persisted.State);
+        Assert.Equal("prime failed", persisted.LastError);
     }
 
     [Fact]

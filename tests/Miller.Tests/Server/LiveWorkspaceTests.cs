@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
 using Miller.Server;
@@ -18,7 +19,7 @@ namespace Miller.Tests.Server;
 /// <list type="bullet">
 /// <item><c>status</c> renders the index facts + a telemetry tool-breakdown after some recorded calls;</item>
 /// <item><c>full</c> as the indexer leader force-scans and the in-memory index swaps (the revision advances);</item>
-/// <item><c>open(path)</c> primes a SECOND temp repo's <c>.miller/symbols.db</c>;</item>
+/// <item><c>open(path)</c> queues a background prime for a SECOND temp repo;</item>
 /// <item><c>remove(path)</c> deletes a non-live <c>.miller</c> dir and REFUSES the live one.</item>
 /// </list>
 /// </summary>
@@ -54,7 +55,8 @@ public sealed class LiveWorkspaceTests : IDisposable
     // first scan. The indexer starts non-leader (no ops published); a test that needs the leader path publishes
     // real extract ops bound to the sandbox.
     private (WorkspaceTool tool, IndexerService indexer, IndexHolder holder, TelemetryLedger ledger,
-             string root, string dbPath, JulieExtractRunner runner, WorkspaceRegistry registry)
+             string root, string dbPath, JulieExtractRunner runner, WorkspaceRegistry registry,
+             OpenPrimeLifetime openPrime)
         BuildLiveTool(string binary)
     {
         string root = NewTempDir("root");
@@ -108,7 +110,6 @@ public sealed class LiveWorkspaceTests : IDisposable
         var ledger = TelemetryLedger.Open(Path.Combine(NewTempDir("ledger"), "telemetry.db"), workspaceId);
         _disposables.Add(ledger);
         var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
-        _disposables.Add(registry);
         if (workspaceId is not null)
         {
             registry.UpsertSeen(
@@ -120,15 +121,58 @@ public sealed class LiveWorkspaceTests : IDisposable
             registry.MarkScanned(workspaceId, scan.Revision ?? 0);
         }
         var crossRefresh = new CrossWorkspaceRefreshService(
-            registry, runner, SymbolSearchSidecar.Disabled, ScanGovernor.Disabled());
+            registry,
+            runner,
+            SymbolSearchSidecar.Disabled,
+            ScanGovernor.Disabled(),
+            storeEnabled: static () => false);
+        var openPrime = new OpenPrimeLifetime(bootstrap, registry, crossRefresh);
+        _disposables.Add(openPrime);
+        _disposables.Add(registry);
 
         var tool = new WorkspaceTool(
-            holder, workspace, indexer, freshness, probe, bootstrap, ledger, runner, registry, crossRefresh,
+            holder, workspace, indexer, freshness, probe, bootstrap, ledger, registry, () => crossRefresh,
             SymbolSearchSidecar.Disabled,
             VectorSidecar.Disabled,
             ScanGovernor.Disabled(),
-            NullLogger<WorkspaceTool>.Instance);
-        return (tool, indexer, holder, ledger, root, dbPath, runner, registry);
+            NullLogger<WorkspaceTool>.Instance,
+            openPrime.Service);
+        return (tool, indexer, holder, ledger, root, dbPath, runner, registry, openPrime);
+    }
+
+    private sealed class OpenPrimeLifetime : IDisposable
+    {
+        private readonly ServiceProvider _provider;
+
+        public OpenPrimeLifetime(
+            IndexBootstrapService bootstrap,
+            WorkspaceRegistry registry,
+            CrossWorkspaceRefreshService refresh)
+        {
+            _provider = new ServiceCollection()
+                .AddSingleton(registry)
+                .AddSingleton(refresh)
+                .BuildServiceProvider();
+            Service = new WorkspaceOpenPrimeService(
+                bootstrap,
+                _provider,
+                NullLogger<WorkspaceOpenPrimeService>.Instance);
+        }
+
+        public WorkspaceOpenPrimeService Service { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                Service.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                Service.Dispose();
+                _provider.Dispose();
+            }
+        }
     }
 
     [Fact]
@@ -136,7 +180,7 @@ public sealed class LiveWorkspaceTests : IDisposable
     {
         string binary = ScaleTestSupport.RequireJulieServer();
 
-        var (tool, _, holder, ledger, root, _, _, _) = BuildLiveTool(binary!);
+        var (tool, _, holder, ledger, root, _, _, _, _) = BuildLiveTool(binary!);
         Assert.True(holder.Current.DocumentCount > 0); // the real scan extracted symbols
 
         // Record a few real telemetry rows so the breakdown is non-empty.
@@ -158,7 +202,7 @@ public sealed class LiveWorkspaceTests : IDisposable
     {
         string binary = ScaleTestSupport.RequireJulieServer();
 
-        var (tool, indexer, holder, _, root, dbPath, runner, _) = BuildLiveTool(binary!);
+        var (tool, indexer, holder, _, root, dbPath, runner, _, _) = BuildLiveTool(binary!);
 
         // Become the indexer leader with REAL extract ops bound to this sandbox (mirrors production's publish once
         // leadership is won), so `full` runs an actual `extract scan --force` through the subprocess.
@@ -181,24 +225,41 @@ public sealed class LiveWorkspaceTests : IDisposable
     }
 
     [Fact]
-    public void Open_OnASecondRepo_PrimesItsMillerSymbolsDb()
+    public async Task Open_OnASecondRepo_PrimesItsMillerSymbolsDb()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
 
-        var (tool, _, _, _, _, _, _, _) = BuildLiveTool(binary!);
+        var (tool, _, _, _, _, _, _, registry, openPrime) = BuildLiveTool(binary!);
 
-        // A SECOND, independent repo with no .miller yet.
-        string other = NewTempDir("prime-target");
-        Directory.CreateDirectory(Path.Combine(other, "lib"));
-        File.WriteAllText(Path.Combine(other, "lib", "Widget.cs"),
-            "namespace Lib;\npublic class Widget { public string Name() => \"w\"; }\n");
+        try
+        {
+            await openPrime.Service.StartAsync(CancellationToken.None);
+            string other = NewTempDir("prime-target");
+            Directory.CreateDirectory(Path.Combine(other, "lib"));
+            File.WriteAllText(Path.Combine(other, "lib", "Widget.cs"),
+                "namespace Lib;\npublic class Widget { public string Name() => \"w\"; }\n");
 
-        string output = tool.Workspace(operation: "open", path: other);
+            string output = tool.Workspace(operation: "open", path: other);
 
-        string primedDb = Path.Combine(PathCanonicalizer.CanonicalizeRoot(other), ".miller", "symbols.db");
-        Assert.True(File.Exists(primedDb), $"expected a primed extract DB at {primedDb}");
-        Assert.Contains("symbols_extracted:", output, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("not a live switch", output, StringComparison.OrdinalIgnoreCase); // honest: a prime, not a switch
+            string canonicalOther = PathCanonicalizer.CanonicalizeRoot(other);
+            string workspaceId = WorkspaceId.FromCanonicalRoot(canonicalOther);
+            string primedDb = Path.Combine(canonicalOther, ".miller", "symbols.db");
+            Assert.Contains("# workspace open", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("scanned: no", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("status: refreshing", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("queued", output, StringComparison.OrdinalIgnoreCase);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => File.Exists(primedDb) &&
+                        registry.Get(workspaceId)?.State == WorkspaceRegistryState.Ready,
+                    TimeSpan.FromSeconds(30)),
+                $"expected background prime to publish {primedDb} and mark {workspaceId} ready");
+            Assert.NotNull(registry.Get(workspaceId)?.LastRevision);
+        }
+        finally
+        {
+            await openPrime.Service.StopAsync(CancellationToken.None);
+        }
     }
 
     [Fact]
@@ -206,7 +267,7 @@ public sealed class LiveWorkspaceTests : IDisposable
     {
         string binary = ScaleTestSupport.RequireJulieServer();
 
-        var (tool, _, _, _, root, _, _, registry) = BuildLiveTool(binary!);
+        var (tool, _, _, _, root, _, _, registry, _) = BuildLiveTool(binary!);
 
         // --- the live workspace is refused (its .miller is in use) ---
         string liveMiller = Path.Combine(PathCanonicalizer.CanonicalizeRoot(root), ".miller");

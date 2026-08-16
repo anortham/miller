@@ -173,11 +173,8 @@ public static class MillerServiceRegistration
         services.AddSingleton(SoftBudgets.Default);
 
         // M7 workspace tool (decision-1): the admin/index-lifecycle tool. Explicitly registered in Program.cs for
-        // Native AOT; it resolves the current holder/workspace/indexer/freshness/probe/ledger services above plus a
-        // JulieExtractRunner for the open(path) prime scan. The runner is located
-        // under the SAME tools root the bootstrap + indexer use (the pinned julie-extract ships there, NOT the repo
-        // cwd), so a missing binary fails loudly via JulieExtractRunner.Locate's restore-script message rather than
-        // silently degrading.
+        // Native AOT; the runner is resolved only by the lazy cross-workspace refresh factory or the background
+        // prime worker, never while constructing WorkspaceTool for an open/status call.
         services.AddTransient(sp =>
         {
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(JulieExtractRunner));
@@ -204,6 +201,10 @@ public static class MillerServiceRegistration
         services.AddSingleton<IGitDiffReader, ProcessGitDiffReader>();
         services.AddSingleton<IGitHistoryReader, ProcessGitHistoryReader>();
         services.AddSingleton<CrossWorkspaceRefreshService>();
+        services.AddTransient<Func<CrossWorkspaceRefreshService>>(sp =>
+            () => sp.GetRequiredService<CrossWorkspaceRefreshService>());
+        services.AddSingleton<WorkspaceOpenPrimeService>();
+        services.AddHostedService(sp => sp.GetRequiredService<WorkspaceOpenPrimeService>());
         services.AddTransient<WorkspaceIndexProvider>();
         services.AddTransient<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceArtifactProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());

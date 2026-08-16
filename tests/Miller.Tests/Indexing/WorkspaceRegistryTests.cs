@@ -97,6 +97,122 @@ public sealed class WorkspaceRegistryTests : IDisposable
     }
 
     [Fact]
+    public void RegisterRefreshing_InsertsAsRefreshingAndReportsCreated()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+
+        (WorkspaceRegistryRow row, bool created) = registry.RegisterRefreshing(
+            "ws-refreshing",
+            "refreshing-11111111",
+            "/work/refreshing",
+            "/work/refreshing/.miller/symbols.db",
+            Utc(1));
+
+        Assert.True(created);
+        Assert.Equal(WorkspaceRegistryState.Refreshing, row.State);
+        Assert.Equal(Utc(1), row.LastSeenAt);
+        Assert.Null(row.LastRevision);
+        Assert.Null(row.LastError);
+    }
+
+    [Fact]
+    public void RegisterRefreshing_OnConflictPreservesTerminalStateErrorAndRevision()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+
+        registry.UpsertSeen(
+            "ws-refreshing",
+            "before-11111111",
+            "/work/before",
+            "/work/before/.miller/symbols.db",
+            WorkspaceRegistryState.Ready,
+            Utc(1));
+        registry.MarkScanned("ws-refreshing", revision: 7, scannedAtUtc: Utc(2));
+        registry.MarkError("ws-refreshing", "prior failure", seenAtUtc: Utc(3));
+
+        (WorkspaceRegistryRow row, bool created) = registry.RegisterRefreshing(
+            "ws-refreshing",
+            "after-11111111",
+            "/work/after",
+            "/work/after/.miller/symbols.db",
+            Utc(4));
+
+        Assert.False(created);
+        Assert.Equal("after-11111111", row.DisplayId);
+        Assert.Equal("/work/after", row.CanonicalRoot);
+        Assert.Equal("/work/after/.miller/symbols.db", row.IndexDbPath);
+        Assert.Equal(Utc(4), row.LastSeenAt);
+        Assert.Equal(Utc(2), row.LastScanAt);
+        Assert.Equal(7, row.LastRevision);
+        Assert.Equal(WorkspaceRegistryState.Error, row.State);
+        Assert.Equal("prior failure", row.LastError);
+    }
+
+    [Fact]
+    public void MarkErrorIfRefreshing_MarksRefreshingRowAndReportsMutation()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+
+        registry.RegisterRefreshing(
+            "ws-refreshing",
+            "refreshing-11111111",
+            "/work/refreshing",
+            "/work/refreshing/.miller/symbols.db",
+            Utc(1));
+
+        (WorkspaceRegistryRow row, bool marked) = registry.MarkErrorIfRefreshing(
+            "ws-refreshing",
+            "queue full",
+            Utc(2));
+
+        Assert.True(marked);
+        Assert.Equal(WorkspaceRegistryState.Error, row.State);
+        Assert.Equal("queue full", row.LastError);
+        Assert.Equal(Utc(2), row.LastSeenAt);
+    }
+
+    [Theory]
+    [InlineData(WorkspaceRegistryState.Ready)]
+    [InlineData(WorkspaceRegistryState.Error)]
+    [InlineData(WorkspaceRegistryState.Missing)]
+    public void MarkErrorIfRefreshing_PreservesRowsThatAdvancedFromRefreshing(WorkspaceRegistryState state)
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+
+        registry.RegisterRefreshing(
+            "ws-refreshing",
+            "refreshing-11111111",
+            "/work/refreshing",
+            "/work/refreshing/.miller/symbols.db",
+            Utc(1));
+        switch (state)
+        {
+            case WorkspaceRegistryState.Ready:
+                registry.MarkScanned("ws-refreshing", revision: 17, scannedAtUtc: Utc(2));
+                break;
+            case WorkspaceRegistryState.Error:
+                registry.MarkError("ws-refreshing", "prior failure", Utc(2));
+                break;
+            case WorkspaceRegistryState.Missing:
+                registry.MarkMissing("ws-refreshing", "root disappeared", Utc(2));
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(state), state, null);
+        }
+
+        (WorkspaceRegistryRow row, bool marked) = registry.MarkErrorIfRefreshing(
+            "ws-refreshing",
+            "queue full",
+            Utc(3));
+
+        Assert.False(marked);
+        Assert.Equal(state, row.State);
+        Assert.Equal(Utc(2), row.LastSeenAt);
+        Assert.Equal(state == WorkspaceRegistryState.Ready ? 17 : null, row.LastRevision);
+        Assert.Equal(state == WorkspaceRegistryState.Error ? "prior failure" : state == WorkspaceRegistryState.Missing ? "root disappeared" : null, row.LastError);
+    }
+
+    [Fact]
     public void UpsertSeen_UsesOnlyWorkspaceIdAsTheDurableKey()
     {
         using var registry = WorkspaceRegistry.Open(_dbPath);

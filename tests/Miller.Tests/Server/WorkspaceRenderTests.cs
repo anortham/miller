@@ -1892,6 +1892,31 @@ public sealed class WorkspaceRenderTests
         Assert.DoesNotContain("duration_ms", WorkspaceRender.Action(unmeasured, json: false));
     }
 
+    [Fact]
+    public void Action_Open_ReportsQueuedWorkspaceState()
+    {
+        var result = new WorkspaceActionResult(
+            Operation: "open",
+            Scanned: false,
+            Swapped: false,
+            Revision: 0,
+            Note: "workspace registered and queued for background indexing",
+            WorkspaceId: "ws-open",
+            Root: "/other/repo",
+            Status: "refreshing");
+
+        string compact = WorkspaceRender.Action(result, json: false);
+        Assert.Contains("# workspace open", compact);
+        Assert.Contains("status: refreshing", compact);
+        Assert.Contains("scanned: no", compact);
+        Assert.Contains("swapped: no", compact);
+
+        using var document = JsonDocument.Parse(WorkspaceRender.Action(result, json: true));
+        Assert.Equal("open", document.RootElement.GetProperty("operation").GetString());
+        Assert.False(document.RootElement.GetProperty("scanned").GetBoolean());
+        Assert.Equal("refreshing", document.RootElement.GetProperty("status").GetString());
+    }
+
     // ---- open (prime) ----
 
     [Fact]

@@ -31,21 +31,16 @@ public sealed class WorkspaceTool
     private readonly IndexBootstrapService _bootstrap;
     private readonly TelemetryLedger _ledger;
     private readonly WorkspaceRegistry _registry;
-    private readonly CrossWorkspaceRefreshService _crossWorkspaceRefresh;
+    private readonly Func<CrossWorkspaceRefreshService> _crossWorkspaceRefresh;
     private readonly SymbolSearchSidecar _sidecar;
     private readonly ContentCorpusSidecar _contentSidecar = new();
     private readonly VectorSidecar _vectors;
     private readonly SemanticEmbeddingSessionBroker? _semanticBroker;
-    private readonly Func<string, string, bool, int?, ExtractIndexLevel, ExtractReport> _scanForOpen;
+    private readonly Func<string, WorkspaceOpenPrimeEnqueueResult> _enqueueOpenPrime;
     private readonly Func<string, IDisposable?> _acquireWriterLock;
     private readonly IDashboardLauncher _dashboardLauncher;
     private readonly ILogger<WorkspaceTool> _logger;
     private readonly ScanGovernor _governor;
-    private readonly TimeSpan _openPrimeGovernorWait;
-
-    // Priming a cold workspace is a convenience, not a correctness path: a short admission budget so an
-    // interactive MCP call degrades to the existing refusal shape instead of queueing behind a long scan.
-    internal static readonly TimeSpan DefaultOpenPrimeGovernorWait = TimeSpan.FromSeconds(5);
 
     /// <summary>Construct over the live admin singletons (production).</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
@@ -57,13 +52,13 @@ public sealed class WorkspaceTool
         IndexFreshProbe freshProbe,
         IndexBootstrapService bootstrap,
         TelemetryLedger ledger,
-        JulieExtractRunner runner,
         WorkspaceRegistry registry,
-        CrossWorkspaceRefreshService crossWorkspaceRefresh,
+        Func<CrossWorkspaceRefreshService> crossWorkspaceRefresh,
         SymbolSearchSidecar sidecar,
         VectorSidecar vectors,
         ScanGovernor governor,
         ILogger<WorkspaceTool> logger,
+        WorkspaceOpenPrimeService openPrimeService,
         SemanticEmbeddingSessionBroker? semanticBroker = null)
         : this(
             holder,
@@ -73,18 +68,24 @@ public sealed class WorkspaceTool
             freshProbe,
             bootstrap,
             ledger,
-            runner,
             registry,
             crossWorkspaceRefresh,
             sidecar,
             vectors,
-            (root, db, force, jobs, level) => runner.Scan(root, db, force, jobs, level),
-            millerDir => SingleWriterLock.TryAcquire(millerDir),
-            new DashboardCliLauncher(),
-            logger,
-            semanticBroker,
-            governor)
+            acquireWriterLock: millerDir => SingleWriterLock.TryAcquire(millerDir),
+            enqueueOpenPrime: OpenPrimeEnqueue(openPrimeService),
+            dashboardLauncher: new DashboardCliLauncher(),
+            logger: logger,
+            semanticBroker: semanticBroker,
+            governor: governor)
     {
+    }
+
+    private static Func<string, WorkspaceOpenPrimeEnqueueResult> OpenPrimeEnqueue(
+        WorkspaceOpenPrimeService service)
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        return service.TryEnqueue;
     }
 
     internal WorkspaceTool(
@@ -95,18 +96,16 @@ public sealed class WorkspaceTool
         IndexFreshProbe freshProbe,
         IndexBootstrapService bootstrap,
         TelemetryLedger ledger,
-        JulieExtractRunner runner,
         WorkspaceRegistry registry,
-        CrossWorkspaceRefreshService crossWorkspaceRefresh,
+        Func<CrossWorkspaceRefreshService> crossWorkspaceRefresh,
         SymbolSearchSidecar sidecar,
         VectorSidecar vectors,
-        Func<string, string, bool, int?, ExtractIndexLevel, ExtractReport> scanForOpen,
         Func<string, IDisposable?> acquireWriterLock,
+        Func<string, WorkspaceOpenPrimeEnqueueResult> enqueueOpenPrime,
         IDashboardLauncher dashboardLauncher,
         ILogger<WorkspaceTool> logger,
         SemanticEmbeddingSessionBroker? semanticBroker = null,
-        ScanGovernor? governor = null,
-        TimeSpan? openPrimeGovernorWait = null)
+        ScanGovernor? governor = null)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(workspace);
@@ -115,12 +114,11 @@ public sealed class WorkspaceTool
         ArgumentNullException.ThrowIfNull(freshProbe);
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(ledger);
-        ArgumentNullException.ThrowIfNull(runner);
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(crossWorkspaceRefresh);
         ArgumentNullException.ThrowIfNull(sidecar);
         ArgumentNullException.ThrowIfNull(vectors);
-        ArgumentNullException.ThrowIfNull(scanForOpen);
+        ArgumentNullException.ThrowIfNull(enqueueOpenPrime);
         ArgumentNullException.ThrowIfNull(acquireWriterLock);
         ArgumentNullException.ThrowIfNull(dashboardLauncher);
         ArgumentNullException.ThrowIfNull(logger);
@@ -136,13 +134,11 @@ public sealed class WorkspaceTool
         _sidecar = sidecar;
         _vectors = vectors;
         _semanticBroker = semanticBroker;
-        _scanForOpen = scanForOpen;
+        _enqueueOpenPrime = enqueueOpenPrime;
         _acquireWriterLock = acquireWriterLock;
         _dashboardLauncher = dashboardLauncher;
         _logger = logger;
-        // Default = OFF, so no fast test ever opens a lease under the real user-global ~/.miller.
         _governor = governor ?? ScanGovernor.Disabled();
-        _openPrimeGovernorWait = openPrimeGovernorWait ?? DefaultOpenPrimeGovernorWait;
     }
 
     [McpServerTool(Name = "workspace")]
@@ -1090,7 +1086,7 @@ public sealed class WorkspaceTool
 
         // A live MCP call gets the SHORT scan-admission budget, not the operator one: subagents share the lead's
         // Miller connection, so one call stuck behind another workspace's scan would jam the whole fleet.
-        WorkspaceRefreshResult refresh = _crossWorkspaceRefresh.Refresh(
+        WorkspaceRefreshResult refresh = _crossWorkspaceRefresh().Refresh(
             target.WorkspaceId,
             force,
             ScanAdmissionBudget.Of(IndexerService.DefaultScanAdmissionWait),
@@ -1177,12 +1173,6 @@ public sealed class WorkspaceTool
         };
     }
 
-    // ---------- open (prime) ----------
-
-    // Prime a path's index (decision-1): run an extract scan AT `path` so a future Miller launched there starts
-    // warm. NOT a live switch — the served index/watcher/telemetry stay bound to this process's CWD. The scan
-    // writes under `<path>/.miller/symbols.db`, the M2 convention. The path's root is canonicalized so julie's
-    // inside-root check passes (verified-fact 4), exactly as the bootstrap does.
     private WorkspaceOperationResult Open(string? path, bool json)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -1196,12 +1186,10 @@ public sealed class WorkspaceTool
                     "workspace open requires a project path."));
         }
 
-        // A non-null but non-existent target is a clean not-found, not a tool failure. Guard here so
-        // PathCanonicalizer.CanonicalizeRoot's DirectoryNotFoundException cannot become a hard diagnostic.
         if (!Directory.Exists(path))
         {
-            string note = $"cannot prime: no directory at '{path}'.";
-            string output = json ? ServerJson.Note(note) : note;
+            string missingNote = $"cannot prime: no directory at '{path}'.";
+            string output = json ? ServerJson.Note(missingNote) : missingNote;
             return new WorkspaceOperationResult(
                 output,
                 0,
@@ -1211,20 +1199,14 @@ public sealed class WorkspaceTool
                     "The requested workspace path does not exist."));
         }
 
-        // Canonicalize (symlink-resolved) BEFORE the safety checks so a symlink whose target is a sensitive root
-        // cannot slip past the lexical guard. WorkspaceRootSafety/Normalize expect an already-canonical root (see
-        // their doc); the CLI prime path canonicalizes first for the same reason.
         string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(path);
 
-        // SAFETY: refuse to prime a sensitive system root (home, a filesystem/drive root, a system dir) — the
-        // same guard the bootstrap applies to its cwd, here for an agent-supplied path. Return an honest note
-        // (symmetric with the live-workspace / already-served guards below) rather than scanning the home tree.
         if (WorkspaceRootSafety.IsSensitiveRoot(canonicalRoot, WorkspaceRootSafety.SensitiveRootCandidates()))
         {
-            string note =
+            string sensitiveNote =
                 $"refusing to prime sensitive system path '{canonicalRoot}': choose a project " +
                 "directory or pass a narrower path.";
-            string output = json ? ServerJson.Note(note) : note;
+            string output = json ? ServerJson.Note(sensitiveNote) : sensitiveNote;
             return new WorkspaceOperationResult(
                 output,
                 0,
@@ -1234,20 +1216,13 @@ public sealed class WorkspaceTool
                     "The requested path is a sensitive system root."));
         }
 
-        // SAFETY (decision-2/3/8): refuse to prime the LIVE workspace. open() runs a direct `extract scan`
-        // outside the leader's _opsGate serialization (it is meant to prime a DIFFERENT, cold path so a Miller
-        // launched there later starts warm). Spawning that scan against the in-use `.miller/symbols.db` would be
-        // a second writer against the DB this process's indexer leader already owns — the exact M3 single-writer
-        // hazard refresh/full route through the leader to avoid. Mirror the remove-live guard: return an honest
-        // note pointing at refresh/full (which DO route through the leader) rather than scanning the live DB.
-        // The check uses the pure WorkspaceSafety predicate (canonical, symlink-resolved) before canonicalizing.
         if (WorkspaceSafety.IsLiveWorkspace(path, _workspace.WorkspaceRoot))
         {
-            string note =
+            string liveNote =
                 "that path IS the live workspace this process is serving; open does not prime the in-use " +
                 "index. Use workspace(operation=\"refresh\") (or \"full\" to force a rebuild) — they reconcile " +
                 "it through the indexer leader, keeping every write on the single-writer path.";
-            string output = json ? ServerJson.Note(note) : note;
+            string output = json ? ServerJson.Note(liveNote) : liveNote;
             return new WorkspaceOperationResult(
                 output,
                 0,
@@ -1257,106 +1232,65 @@ public sealed class WorkspaceTool
                     "The requested path is already served by this Miller process."));
         }
 
-        string millerDir = Path.Combine(canonicalRoot, ".miller");
-        string dbPath = Path.Combine(millerDir, "symbols.db");
+        string dbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db");
         string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
         string displayId = WorkspaceId.Display(canonicalRoot, stableWorkspaceId);
 
-        // SAFETY (decision-3, the M3 single-writer guard): another live Miller may ALREADY be the leader of this
-        // (cold-to-us) target path, keeping its index fresh. Best-effort try-acquire the target's cross-process
-        // SingleWriterLock before priming so we never run a second `extract scan` against a DB another leader
-        // owns. If we cannot acquire it, that path is already served — report it HONESTLY (no faked prime) and do
-        // NOT scan; the existing leader's watcher keeps it warm. We hold the lease only for the duration of the
-        // prime scan, then release it so a Miller launched there later can take leadership.
-        using IDisposable? lease = _acquireWriterLock(millerDir);
-        if (lease is null)
+        (WorkspaceRegistryRow row, bool created) = _registry.RegisterRefreshing(
+            stableWorkspaceId,
+            displayId,
+            canonicalRoot,
+            dbPath);
+        WorkspaceOpenPrimeEnqueueResult enqueue = _enqueueOpenPrime(stableWorkspaceId);
+
+        string note;
+        ToolDiagnostic? diagnostic = null;
+        int resultCount = 1;
+        TelemetryOutcome outcome = TelemetryOutcome.Ok;
+        if (enqueue is WorkspaceOpenPrimeEnqueueResult.Full or WorkspaceOpenPrimeEnqueueResult.Stopping)
         {
-            string note =
-                $"a Miller instance is already serving '{canonicalRoot}' (it holds the writer lock and keeps " +
-                "that index fresh) — not priming it. A Miller launched there will use the live index directly.";
-            string served = json ? ServerJson.Note(note) : note;
-            return new WorkspaceOperationResult(
-                served,
-                0,
-                TelemetryOutcome.Empty,
-                ToolDiagnostic.Refusal(
-                    "workspace_open_refused",
-                    "Another Miller writer is already serving the requested path."));
+            string reason = enqueue == WorkspaceOpenPrimeEnqueueResult.Full
+                ? "The background workspace-open queue is full."
+                : "The background workspace-open service is stopping.";
+            bool markedError = false;
+            if (created)
+                (row, markedError) = _registry.MarkErrorIfRefreshing(stableWorkspaceId, reason);
+            note = reason + (created && markedError
+                ? " The new workspace was recorded as error."
+                : " The existing workspace state was preserved.");
+            diagnostic = ToolDiagnostic.Unavailable(
+                enqueue == WorkspaceOpenPrimeEnqueueResult.Full
+                    ? "workspace_open_queue_full"
+                    : "workspace_open_stopping",
+                reason,
+                [new ToolDiagnosticAction(
+                    $"workspace(operation=\"status\", workspace_id=\"{stableWorkspaceId}\")",
+                    "inspect the registered workspace state")]);
+            resultCount = 0;
+            outcome = TelemetryOutcome.Error;
+        }
+        else
+        {
+            note = enqueue == WorkspaceOpenPrimeEnqueueResult.AlreadyQueued
+                ? "background indexing is already queued for this workspace; use workspace status or list to follow it."
+                : "workspace registered and queued for background indexing; use workspace status or list to follow it.";
         }
 
-        // Under the writer lease, so no sibling build can be mid-write here; reap before the prime scan is admitted
-        // so a cold workspace reclaims its orphans even when the governor refuses and no build ever runs.
-        ReapStagingOrphans(millerDir);
+        var result = new WorkspaceActionResult(
+            Operation: "open",
+            Scanned: false,
+            Swapped: false,
+            Revision: row.LastRevision ?? 0,
+            Note: note,
+            WorkspaceId: row.WorkspaceId,
+            Root: row.CanonicalRoot,
+            Status: row.StateText);
+        return new WorkspaceOperationResult(
+            WorkspaceRender.Action(result, json),
+            resultCount,
+            outcome,
+            diagnostic);
 
-        // SingleWriterLock -> ScanGovernor: machine-wide admission is taken inside the writer lease above and
-        // held through MarkScanned below.
-        using ScanGovernorAdmission? admission = ScanGovernorAdmission.TryAcquire(
-            _governor,
-            ScanGovernorState.Shared,
-            new ScanGovernorRequest(canonicalRoot, "workspace-open-prime", ExtractJobsPolicy.FromEnvironment()),
-            _openPrimeGovernorWait,
-            CancellationToken.None);
-        if (admission is null)
-        {
-            string busy =
-                $"another scan on this machine holds the scan governor, so '{canonicalRoot}' was not primed. " +
-                _governor.DescribeHolder();
-            string busyOutput = json ? ServerJson.Note(busy) : busy;
-            return new WorkspaceOperationResult(
-                busyOutput,
-                0,
-                TelemetryOutcome.Empty,
-                ToolDiagnostic.Refusal(
-                    "workspace_open_refused",
-                    "Machine-wide scan admission was busy."));
-        }
-
-        // force:false — a prime is a from-current scan (julie creates the DB on the first scan of a fresh root,
-        // or delta-reconciles an existing one); --force is reserved for the live workspace's `full` rebuild.
-        // The attempt rides the target workspace's persisted scan-failure record: an explicit open bypasses the
-        // retry timer but still records, so a SIGKILLed prime throttles the resident leader's automatic retries
-        // there and clamps their --jobs.
-        IScanFailurePolicy failurePolicy = PersistedScanFailurePolicy.For(dbPath, canonicalRoot);
-        ScanAttemptDecision attempt =
-            failurePolicy.Evaluate(ScanIntent.IncrementalReconcile, bypassBackoff: true);
-        // A prime that CREATES the artifact (no DB yet) carries the policy's first-build level; a delta prime
-        // of an existing artifact emits no flag and inherits its recorded level.
-        ExtractIndexLevel primeLevel = IndexLevels.LevelForScan(
-            attempt.EffectiveIntent, !File.Exists(dbPath),
-            IndexLevels.Resolve(_registry.Get(stableWorkspaceId)?.LevelPolicy));
-        ExtractReport report;
-        try
-        {
-            report = _scanForOpen(canonicalRoot, dbPath, false, attempt.Jobs, primeLevel);
-            failurePolicy.RecordSuccess(attempt.EffectiveIntent);
-        }
-        catch (Exception ex)
-        {
-            failurePolicy.RecordFailure(
-                ScanIntent.IncrementalReconcile,
-                JulieExtractException.ExitCodeOf(ex),
-                attempt.Jobs ?? ExtractJobsPolicy.FromEnvironment());
-            throw;
-        }
-
-        // v1 has no echoed workspace_id to cross-check: julie-extract self-rejects a DB built for a different
-        // root (exit 3 RootMismatch, design §4.1), so a wrong-DB prime fails the scan above and surfaces through
-        // the outer catch. The id we register is Miller's own stable id for canonicalRoot.
-        long revision = report.Revision
-            ?? IndexBootstrapService.ReadLatestRevisionOrZero(dbPath, stableWorkspaceId);
-        _registry.UpsertSeen(stableWorkspaceId, displayId, canonicalRoot, dbPath, WorkspaceRegistryState.Ready);
-        _registry.MarkScanned(stableWorkspaceId, revision);
-
-        var result = new WorkspaceOpenResult(
-            Path: canonicalRoot, DbPath: dbPath,
-            // SymbolsExtracted is julie's unsigned count; Revision is null when the scan produced no cursor bump
-            // (an unchanged delta) — report 0 honestly rather than fabricate a revision.
-            SymbolsExtracted: (long)report.SymbolsExtracted,
-            Revision: revision,
-            WorkspaceId: stableWorkspaceId,
-            DisplayId: displayId,
-            WarningText: ExtractReportLog.DescribeWarning(report));
-        return (WorkspaceRender.Open(result, json), 1, TelemetryOutcome.Ok);
     }
 
     // ---------- dashboard ----------
@@ -1658,7 +1592,7 @@ public sealed class WorkspaceTool
         string message = operation switch
         {
             "open" => "workspace open requires a path: workspace(operation=\"open\", path=\"/repo\"). " +
-                      "It primes that path's index (an extract scan) — not a live switch.",
+                      "It registers and queues background indexing — not a live switch.",
             "remove" => "workspace remove requires a path: workspace(operation=\"remove\", path=\"/repo\"). " +
                         "It deletes that path's .miller index dir (the live workspace is refused).",
             _ => $"unknown workspace operation '{operation}'. " +

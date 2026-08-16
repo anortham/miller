@@ -27,7 +27,7 @@ namespace Miller.Tests.Server;
 /// rows produces the status tool-breakdown. Covers: status assembles + renders both formats; list shows the
 /// current workspace; open/remove arg guards (missing path → usage); the remove-live refusal and remove not-found;
 /// and the non-leader refresh/full path (poll only, with the honest cannot-force note). The live extract path
-/// (open's prime scan, full's force-scan + swap on a real repo) is the Scale suite (<see cref="LiveWorkspaceTests"/>).
+/// (full's force-scan + swap on a real repo) is the Scale suite (<see cref="LiveWorkspaceTests"/>).
 /// </summary>
 [Collection(SemanticActivationEnvironmentCollection.Name)]
 public sealed class WorkspaceToolTests : IDisposable
@@ -75,13 +75,13 @@ public sealed class WorkspaceToolTests : IDisposable
         long builtRevision,
         string? workspaceId,
         Func<string, string, bool, int?, ExtractIndexLevel, ExtractReport>? crossWorkspaceScan = null,
-        Func<string, string, bool, int?, ExtractIndexLevel, ExtractReport>? openScan = null,
         Func<string, IDisposable?>? acquireLock = null,
         Func<string, long>? readLatestRevision = null,
         IDashboardLauncher? dashboardLauncher = null,
         VectorSidecar? vectors = null,
         SemanticEmbeddingSessionBroker? semanticBroker = null,
         ScanGovernor? scanGovernor = null,
+        Func<string, WorkspaceOpenPrimeEnqueueResult>? enqueueOpenPrime = null,
         IndexHolder? holderOverride = null)
     {
         // The served workspace root is the fixture dir's parent of .miller; point ExtractDbPath at the fixture DB.
@@ -140,14 +140,6 @@ public sealed class WorkspaceToolTests : IDisposable
             registry.MarkScanned(workspaceId, builtRevision);
         }
 
-        // The runner is needed only by open()'s prime scan (a Scale path). The default-suite tests never invoke
-        // the spawning path, so construct it against a STUB file (JulieExtractRunner only File.Exists-validates at
-        // construction) — keeping this suite pure + binary-independent (no pinned julie-extract required to run it).
-        string stubBinary = Path.Combine(NewTempDir("toolstub"),
-            OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract");
-        File.WriteAllText(stubBinary, "#!/bin/sh\n");
-        var runner = new JulieExtractRunner(stubBinary);
-
         var crossRefresh = new CrossWorkspaceRefreshService(
             registry,
             crossWorkspaceScan ?? ((_, _, _, _, _) => throw new InvalidOperationException("cross-workspace scan was not expected")),
@@ -159,11 +151,11 @@ public sealed class WorkspaceToolTests : IDisposable
             utcNow: () => DateTimeOffset.UtcNow,
             sidecar: SymbolSearchSidecar.Disabled);
         var tool = new WorkspaceTool(
-            holder, workspace, indexer, freshness, probe, bootstrap, ledger, runner, registry, crossRefresh,
+            holder, workspace, indexer, freshness, probe, bootstrap, ledger, registry, () => crossRefresh,
             SymbolSearchSidecar.Disabled,
             vectors ?? VectorSidecar.Disabled,
-            openScan ?? ((scanRoot, scanDb, force, jobs, level) => runner.Scan(scanRoot, scanDb, force, jobs, level)),
             acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
+            enqueueOpenPrime ?? (_ => WorkspaceOpenPrimeEnqueueResult.Stopping),
             dashboardLauncher ?? new RecordingDashboardLauncher(new DashboardLaunchResult(
                 DashboardLaunchOutcome.AlreadyRunning,
                 new Uri("http://127.0.0.1:4977/workspace?workspace_id=ws-tool-001"),
@@ -171,8 +163,7 @@ public sealed class WorkspaceToolTests : IDisposable
                 Message: "already running")),
             NullLogger<WorkspaceTool>.Instance,
             semanticBroker,
-            scanGovernor,
-            openPrimeGovernorWait: TimeSpan.Zero);
+            scanGovernor);
         return new WorkspaceToolHarness(tool, indexer, ledger, root, workspace, registry, bootstrap);
     }
 
@@ -1340,10 +1331,7 @@ public sealed class WorkspaceToolTests : IDisposable
     [Fact]
     public void Open_LiveWorkspace_IsRefused_DoesNotScan()
     {
-        // D2: open's scan MUST respect the single-writer discipline. open on the live workspace MUST refuse (an
-        // honest note) and point to refresh/full, rather than spawn a second `extract scan` against the in-use DB
-        // outside the leader's _opsGate serialization. Mirrors the remove-live guard. The runner here is bound to a
-        // non-executable stub, so if open DID scan it would surface a failure — the guard must short-circuit first.
+        // A live workspace remains owned by this process; refresh/full are the supported lifecycle operations.
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         var (tool, _, _, root) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
 
@@ -1371,17 +1359,13 @@ public sealed class WorkspaceToolTests : IDisposable
     [Fact]
     public void Open_SymlinkToSensitiveRoot_IsRefused_NotPrimed()
     {
-        // The sensitive-root guard must run on the CANONICAL (symlink-resolved) root, not the raw argument —
-        // otherwise a symlink whose own path looks innocuous but whose TARGET is the home dir slips past the
-        // lexical check and primes a sensitive tree. The scan/lock are stubbed so a regression cannot touch home:
-        // the scan throws if reached, proving the guard short-circuits first.
+        // The sensitive-root guard must inspect the canonical symlink target before registration or queue admission.
         Assert.SkipWhen(OperatingSystem.IsWindows(), "directory symlink creation needs privilege on Windows.");
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         WorkspaceToolHarness harness = BuildHarness(
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            openScan: (_, _, _, _, _) => throw new InvalidOperationException("prime scan must not run here"),
             acquireLock: _ => new NoopLease());
 
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -1414,41 +1398,177 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
-    public void Open_PathAlreadyServedByAnotherLeader_IsNotPrimed_HonestNote()
-    {
-        // A prime scan must not run a second `extract scan` against a DB another Miller leader already owns (the
-        // M3 single-writer guard). Stand in for that leader by holding the target .miller's cross-process
-        // SingleWriterLock, then call open on that path: it must NOT scan (no faked "primed") and report an honest
-        // "already serving" note instead. (No --force/julie spawn occurs — the lock guard short-circuits.)
-        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
-        var (tool, _, _, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
-        string target = NewTempDir("open-served");
-        string targetMillerDir = Path.Combine(target, ".miller");
-        using SingleWriterLock? heldLease = SingleWriterLock.TryAcquire(targetMillerDir); // the other leader
-        Assert.NotNull(heldLease);
-
-        string output = tool.Workspace(operation: "open", path: target);
-
-        Assert.DoesNotContain("primed", output, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("already serving", output, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void Open_PrimesAndRegistersTheStableWorkspaceId()
+    public void Open_DoesNotAcquireTheTargetWriterLock()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         WorkspaceToolHarness harness = BuildHarness(
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            openScan: (root, db, force, _, _) =>
+            acquireLock: _ => throw new InvalidOperationException("writer lock must not be requested"),
+            enqueueOpenPrime: _ => WorkspaceOpenPrimeEnqueueResult.Queued);
+        string target = NewTempDir("open-served");
+
+        string output = harness.Tool.Workspace(operation: "open", path: target);
+
+        Assert.Contains("queued", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(
+            WorkspaceRegistryState.Refreshing,
+            harness.Registry.Get(WorkspaceId.FromCanonicalRoot(target))?.State);
+    }
+
+    [Fact]
+    public async Task Open_ReturnsWhileBackgroundPrimeIsGated()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        using var release = new ManualResetEventSlim();
+        var backgroundStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? backgroundPrime = null;
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            acquireLock: _ => new NoopLease(),
+            enqueueOpenPrime: _ =>
             {
-                Assert.False(force);
-                Directory.CreateDirectory(Path.GetDirectoryName(db)!);
-                File.WriteAllText(db, "created by fake scan");
-                return Report(root, db, WorkspaceId.FromCanonicalRoot(root), revision: 13);
-            },
-            acquireLock: _ => new NoopLease());
+                backgroundPrime = Task.Run(() =>
+                {
+                    backgroundStarted.TrySetResult();
+                    release.Wait();
+                });
+                return WorkspaceOpenPrimeEnqueueResult.Queued;
+            });
+        string target = NewTempDir("open-nonblocking");
+
+        Task<string> open = Task.Run(() => harness.Tool.Workspace(
+            operation: "open",
+            path: target,
+            format: "json"));
+        try
+        {
+            await backgroundStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Task completed = await Task.WhenAny(
+                open,
+                Task.Delay(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken));
+            Assert.Same(open, completed);
+            Assert.NotNull(backgroundPrime);
+            Assert.False(backgroundPrime.IsCompleted);
+            using var document = JsonDocument.Parse(await open);
+            Assert.Equal("open", document.RootElement.GetProperty("operation").GetString());
+            Assert.False(document.RootElement.GetProperty("scanned").GetBoolean());
+            Assert.Equal("refreshing", document.RootElement.GetProperty("status").GetString());
+            Assert.Contains("status", document.RootElement.GetProperty("note").GetString(), StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            release.Set();
+            await open;
+            if (backgroundPrime is not null)
+                await backgroundPrime;
+        }
+    }
+
+    [Theory]
+    [InlineData("full", "workspace_open_queue_full")]
+    [InlineData("stopping", "workspace_open_stopping")]
+    public void Open_QueueRefusalMarksOnlyNewRowsError(
+        string enqueueName,
+        string diagnosticCode)
+    {
+        WorkspaceOpenPrimeEnqueueResult enqueueResult = enqueueName == "full"
+            ? WorkspaceOpenPrimeEnqueueResult.Full
+            : WorkspaceOpenPrimeEnqueueResult.Stopping;
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            enqueueOpenPrime: _ => enqueueResult);
+        string freshTarget = NewTempDir("open-queue-refused");
+        string freshId = WorkspaceId.FromCanonicalRoot(freshTarget);
+
+        using (JsonDocument document = JsonDocument.Parse(
+                   harness.Tool.Workspace(operation: "open", path: freshTarget, format: "json")))
+        {
+            Assert.Equal(diagnosticCode, document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+        }
+
+        WorkspaceRegistryRow? freshRow = harness.Registry.Get(freshId);
+        Assert.NotNull(freshRow);
+        Assert.Equal(WorkspaceRegistryState.Error, freshRow.State);
+
+        string existingTarget = NewTempDir("open-queue-existing");
+        string existingId = WorkspaceId.FromCanonicalRoot(existingTarget);
+        string existingDb = Path.Combine(existingTarget, ".miller", "symbols.db");
+        harness.Registry.UpsertSeen(
+            existingId,
+            WorkspaceId.Display(existingTarget, existingId),
+            existingTarget,
+            existingDb,
+            WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(existingId, revision: 23);
+
+        using (JsonDocument document = JsonDocument.Parse(
+                   harness.Tool.Workspace(operation: "open", path: existingTarget, format: "json")))
+        {
+            Assert.Equal(diagnosticCode, document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+            Assert.Equal("ready", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(23, document.RootElement.GetProperty("revision").GetInt64());
+        }
+
+        WorkspaceRegistryRow? existingRow = harness.Registry.Get(existingId);
+        Assert.NotNull(existingRow);
+        Assert.Equal(WorkspaceRegistryState.Ready, existingRow.State);
+        Assert.Equal(23, existingRow.LastRevision);
+        Assert.Null(existingRow.LastError);
+    }
+
+    [Theory]
+    [InlineData("full", "workspace_open_queue_full")]
+    [InlineData("stopping", "workspace_open_stopping")]
+    public void Open_QueueRefusalPreservesRowAdvancedDuringEnqueue(
+        string enqueueName,
+        string diagnosticCode)
+    {
+        WorkspaceOpenPrimeEnqueueResult enqueueResult = enqueueName == "full"
+            ? WorkspaceOpenPrimeEnqueueResult.Full
+            : WorkspaceOpenPrimeEnqueueResult.Stopping;
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        string target = NewTempDir("open-queue-race");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(target);
+        WorkspaceToolHarness harness = null!;
+        harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            enqueueOpenPrime: _ =>
+            {
+                harness.Registry.MarkScanned(workspaceId, revision: 41, scannedAtUtc: new DateTimeOffset(2026, 6, 1, 12, 0, 0, TimeSpan.Zero));
+                return enqueueResult;
+            });
+
+        using JsonDocument document = JsonDocument.Parse(
+            harness.Tool.Workspace(operation: "open", path: target, format: "json"));
+
+        Assert.Equal(diagnosticCode, document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+        Assert.Equal("ready", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal(41, document.RootElement.GetProperty("revision").GetInt64());
+        WorkspaceRegistryRow? row = harness.Registry.Get(workspaceId);
+        Assert.NotNull(row);
+        Assert.Equal(WorkspaceRegistryState.Ready, row.State);
+        Assert.Equal(41, row.LastRevision);
+        Assert.Null(row.LastError);
+    }
+
+    [Fact]
+    public void Open_RegistersAndQueuesTheStableWorkspaceId()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            enqueueOpenPrime: _ => WorkspaceOpenPrimeEnqueueResult.Queued);
         string target = NewTempDir("open-registers");
         string canonicalTarget = PathCanonicalizer.CanonicalizeRoot(target);
         string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalTarget);
@@ -1460,56 +1580,88 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.NotNull(row);
         Assert.Equal(canonicalTarget, row.CanonicalRoot);
         Assert.Equal(Path.Combine(canonicalTarget, ".miller", "symbols.db"), row.IndexDbPath);
-        Assert.Equal(13, row.LastRevision);
-        Assert.Equal(WorkspaceRegistryState.Ready, row.State);
+        Assert.Null(row.LastRevision);
+        Assert.Equal(WorkspaceRegistryState.Refreshing, row.State);
+        Assert.False(doc.RootElement.GetProperty("scanned").GetBoolean());
+        Assert.Equal("refreshing", doc.RootElement.GetProperty("status").GetString());
     }
 
     [Fact]
-    public void Open_PartialPrimeScanSurfacesWarningInOutput()
+    public void Open_DoesNotRunThePrimeScanDelegate()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         WorkspaceToolHarness harness = BuildHarness(
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            openScan: (root, db, _, _, _) =>
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(db)!);
-                File.WriteAllText(db, "created by fake scan");
-                return PartialReport(root, db, WorkspaceId.FromCanonicalRoot(root), revision: 13);
-            },
-            acquireLock: _ => new NoopLease());
+            enqueueOpenPrime: _ => WorkspaceOpenPrimeEnqueueResult.Queued);
         string target = NewTempDir("open-partial");
 
         string output = harness.Tool.Workspace(operation: "open", path: target);
 
-        Assert.Contains("PARTIAL artifact", output, StringComparison.Ordinal);
-        Assert.Contains("Controllers/Broken.cs", output, StringComparison.Ordinal);
-        Assert.Contains("primed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("scanned: no", output, StringComparison.Ordinal);
+        Assert.Contains("status: refreshing", output, StringComparison.Ordinal);
+        Assert.Contains("queued", output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void Open_NoChangeSlowFileWarningSurfacesWarningInOutput()
+    public void Open_PreservesExistingReadyStateWhenQueuedAgain()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        int enqueueCalls = 0;
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            enqueueOpenPrime: _ => Interlocked.Increment(ref enqueueCalls) == 1
+                ? WorkspaceOpenPrimeEnqueueResult.Queued
+                : WorkspaceOpenPrimeEnqueueResult.AlreadyQueued);
+        string target = NewTempDir("open-ready");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(target);
+        string dbPath = Path.Combine(target, ".miller", "symbols.db");
+
+        harness.Tool.Workspace(operation: "open", path: target);
+        harness.Registry.MarkScanned(workspaceId, revision: 13);
+        string output = harness.Tool.Workspace(operation: "open", path: target);
+
+        WorkspaceRegistryRow? row = harness.Registry.Get(workspaceId);
+        Assert.NotNull(row);
+        Assert.Equal(dbPath, row.IndexDbPath);
+        Assert.Equal(13, row.LastRevision);
+        Assert.Equal(WorkspaceRegistryState.Ready, row.State);
+        Assert.Contains("status: ready", output, StringComparison.Ordinal);
+        Assert.Equal(2, enqueueCalls);
+    }
+
+    [Fact]
+    public void Open_PreservesExistingErrorStateWhenQueuedAgain()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         WorkspaceToolHarness harness = BuildHarness(
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            openScan: (root, db, _, _, _) =>
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(db)!);
-                File.WriteAllText(db, "created by fake scan");
-                return SlowWarningReport(root, db, WorkspaceId.FromCanonicalRoot(root), revision: 13);
-            },
-            acquireLock: _ => new NoopLease());
-        string target = NewTempDir("open-slow-warning");
+            enqueueOpenPrime: _ => WorkspaceOpenPrimeEnqueueResult.AlreadyQueued);
+        string target = NewTempDir("open-error");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(target);
+        string dbPath = Path.Combine(target, ".miller", "symbols.db");
+        harness.Registry.UpsertSeen(
+            workspaceId,
+            WorkspaceId.Display(target, workspaceId),
+            target,
+            dbPath,
+            WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(workspaceId, revision: 17);
+        harness.Registry.MarkError(workspaceId, "prior failure");
 
         string output = harness.Tool.Workspace(operation: "open", path: target);
 
-        Assert.Contains("slow_file_skipped", output, StringComparison.Ordinal);
-        Assert.Contains("Generated/Slow.kt", output, StringComparison.Ordinal);
-        Assert.Contains("primed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("status: error", output, StringComparison.Ordinal);
+        WorkspaceRegistryRow? row = harness.Registry.Get(workspaceId);
+        Assert.NotNull(row);
+        Assert.Equal(WorkspaceRegistryState.Error, row.State);
+        Assert.Equal("prior failure", row.LastError);
+        Assert.Equal(17, row.LastRevision);
     }
 
     // ---- telemetry op sub-axis (decision-7) ----
@@ -2103,24 +2255,18 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.NotEqual("error", diagnostic.GetProperty("outcome").GetString());
     }
 
-    // ---- W3 G9: workspace open's prime scan is governed too ----
+    // ---- workspace open queue admission ----
 
     [Fact]
-    public void Open_WhenTheScanGovernorIsBusy_DoesNotPrime_AndSaysWhy()
+    public void Open_DoesNotWaitForTheScanGovernor()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         string governorHome = NewTempDir("governor-open-home");
-        bool scanned = false;
         WorkspaceToolHarness harness = BuildHarness(
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            openScan: (root, db, force, _, _) =>
-            {
-                scanned = true;
-                return Report(root, db, WorkspaceId.FromCanonicalRoot(root), revision: 13);
-            },
-            acquireLock: _ => new NoopLease(),
+            enqueueOpenPrime: _ => WorkspaceOpenPrimeEnqueueResult.Queued,
             scanGovernor: ScanGovernor.ForMillerHome(governorHome));
         string target = NewTempDir("open-governor-busy");
 
@@ -2128,10 +2274,11 @@ public sealed class WorkspaceToolTests : IDisposable
         using (ScanGovernorLease held = HoldScanAdmission(governorHome))
             output = harness.Tool.Workspace(operation: "open", path: target);
 
-        Assert.False(scanned);
-        Assert.Contains("was not primed", output, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("holds the scan governor", output, StringComparison.OrdinalIgnoreCase);
-        Assert.Null(harness.Registry.Get(WorkspaceId.FromCanonicalRoot(PathCanonicalizer.CanonicalizeRoot(target))));
+        Assert.Contains("status: refreshing", output, StringComparison.Ordinal);
+        Assert.Contains("queued", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(
+            WorkspaceRegistryState.Refreshing,
+            harness.Registry.Get(WorkspaceId.FromCanonicalRoot(PathCanonicalizer.CanonicalizeRoot(target)))?.State);
     }
 
     [Fact]

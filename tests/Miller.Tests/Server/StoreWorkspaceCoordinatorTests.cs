@@ -248,6 +248,148 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void FailedSeedImportRetriesWithFreshRequestAndCompletesTheScan()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-seed-retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        using var artifact = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>());
+        try
+        {
+            var client = new RecordingStoreClient(
+                StoreOperation.Import,
+                failureClass: "store_incompatible",
+                stateOverrides: new Queue<StoreRequestState>(
+                [
+                    StoreRequestState.Failed,
+                    StoreRequestState.Committed,
+                ]));
+            var snapshots = new Queue<StoreWorkspaceState?>(
+            [
+                null,
+                new StoreWorkspaceState(1, "l1"),
+            ]);
+            int minted = 0;
+            var coordinator = new StoreWorkspaceCoordinator(
+                Binding with
+                {
+                    WorkspaceRoot = Path.GetFullPath(root),
+                    StoreRoot = Path.Combine(root, "store"),
+                    State = StoreBindingState.Planned,
+                },
+                client,
+                () => IndexLevelPolicy.Progressive,
+                _ => snapshots.Dequeue(),
+                () => $"request-{++minted}",
+                artifact.DbPath);
+
+            ExtractReport report = coordinator.Scan(jobs: 1);
+
+            StoreImportRequest[] imports = client.Requests.OfType<StoreImportRequest>().ToArray();
+            Assert.Equal(2, imports.Length);
+            Assert.Equal(artifact.DbPath, imports[0].FromArtifact);
+            Assert.Null(imports[1].FromArtifact);
+            Assert.Equal("request-1", imports[0].Request.RequestId);
+            Assert.Equal("request-2", imports[1].Request.RequestId);
+            Assert.NotEqual(imports[0].Request.IdempotencyKey, imports[1].Request.IdempotencyKey);
+            Assert.Equal("completed", report.Status);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FailedSeedImportDoesNotRetryForUnrelatedFailure()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-seed-no-retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        using var artifact = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>());
+        try
+        {
+            var client = new RecordingStoreClient(
+                StoreOperation.Import,
+                failureClass: "view_root_mismatch",
+                stateOverrides: new Queue<StoreRequestState>([StoreRequestState.Failed]));
+            var coordinator = new StoreWorkspaceCoordinator(
+                Binding with
+                {
+                    WorkspaceRoot = Path.GetFullPath(root),
+                    StoreRoot = Path.Combine(root, "store"),
+                    State = StoreBindingState.Planned,
+                },
+                client,
+                () => IndexLevelPolicy.Progressive,
+                _ => null,
+                fromArtifact: artifact.DbPath);
+
+            StoreWorkspaceOperationException failure = Assert.Throws<StoreWorkspaceOperationException>(
+                () => coordinator.Scan(jobs: 1));
+
+            Assert.Equal("view_root_mismatch", failure.FailureClass.Code);
+            StoreImportRequest request = Assert.Single(client.Requests.OfType<StoreImportRequest>());
+            Assert.Equal(artifact.DbPath, request.FromArtifact);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FailedSeedImportPropagatesSecondFailureWithoutAnotherRetry()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-seed-second-failure-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        using var artifact = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>());
+        try
+        {
+            var client = new RecordingStoreClient(
+                StoreOperation.Import,
+                failureClass: "store_incompatible",
+                stateOverrides: new Queue<StoreRequestState>(
+                [
+                    StoreRequestState.Failed,
+                    StoreRequestState.Failed,
+                ]));
+            var coordinator = new StoreWorkspaceCoordinator(
+                Binding with
+                {
+                    WorkspaceRoot = Path.GetFullPath(root),
+                    StoreRoot = Path.Combine(root, "store"),
+                    State = StoreBindingState.Planned,
+                },
+                client,
+                () => IndexLevelPolicy.Progressive,
+                _ => null,
+                fromArtifact: artifact.DbPath);
+
+            StoreWorkspaceOperationException failure = Assert.Throws<StoreWorkspaceOperationException>(
+                () => coordinator.Scan(jobs: 1));
+
+            Assert.Equal("store_incompatible", failure.FailureClass.Code);
+            StoreImportRequest[] imports = client.Requests.OfType<StoreImportRequest>().ToArray();
+            Assert.Equal(2, imports.Length);
+            Assert.Equal(artifact.DbPath, imports[0].FromArtifact);
+            Assert.Null(imports[1].FromArtifact);
+            Assert.Empty(Directory.GetFiles(Path.Combine(root, ".miller", "store-requests"), "*.json"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void AReusedExactFullImportDoesNotSubmitResolve()
     {
         var phases = new RecordingPhaseSink();
@@ -724,6 +866,66 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void FailedReplayedSeedImportRetriesOnceWithoutTheSeedUsingTheFreshFingerprint()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-request-replay-failed-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        using var artifact = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>());
+        try
+        {
+            string fromArtifact = artifact.DbPath;
+            string seedFingerprint = $"import|{Binding.FamilyId:D}|{Binding.ViewId}|L1|{fromArtifact}";
+            string freshFingerprint = $"import|{Binding.FamilyId:D}|{Binding.ViewId}|L1|";
+            var journal = new StoreRequestJournal(root);
+            Assert.Equal("orphan-request", journal.GetOrCreate(seedFingerprint, () => "orphan-request"));
+            Assert.Equal("fresh-request", journal.GetOrCreate(freshFingerprint, () => "fresh-request"));
+
+            var client = new RecordingStoreClient(
+                StoreOperation.Import,
+                failureClass: "store_incompatible",
+                stateOverrides: new Queue<StoreRequestState>(
+                [
+                    StoreRequestState.Failed,
+                    StoreRequestState.Committed,
+                ]));
+            var snapshots = new Queue<StoreWorkspaceState?>(
+            [
+                null,
+                new StoreWorkspaceState(2, "l1"),
+            ]);
+            var coordinator = new StoreWorkspaceCoordinator(
+                Binding with
+                {
+                    WorkspaceRoot = Path.GetFullPath(root),
+                    StoreRoot = Path.Combine(root, "store"),
+                    State = StoreBindingState.Planned,
+                },
+                client,
+                () => IndexLevelPolicy.Progressive,
+                _ => snapshots.Dequeue(),
+                fromArtifact: fromArtifact);
+
+            ExtractReport report = coordinator.Scan(jobs: 1);
+
+            StoreImportRequest[] imports = client.Requests.OfType<StoreImportRequest>().ToArray();
+            Assert.Equal(2, imports.Length);
+            Assert.Equal("orphan-request", imports[0].Request.RequestId);
+            Assert.Equal(fromArtifact, imports[0].FromArtifact);
+            Assert.Equal("fresh-request", imports[1].Request.RequestId);
+            Assert.Null(imports[1].FromArtifact);
+            Assert.Equal("completed", report.Status);
+            Assert.Empty(Directory.GetFiles(Path.Combine(root, ".miller", "store-requests"), "*.json"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ExistingStateScanBypassesLegacySeedSelection()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-store-existing-state-seed-" + Guid.NewGuid().ToString("N"));
@@ -856,7 +1058,8 @@ public sealed class StoreWorkspaceCoordinatorTests
         string failureClass = "none",
         StoreRequestState? stateOverride = null,
         StoreResolutionState importResolutionState = StoreResolutionState.Unbound,
-        bool importExactAtMatches = false) : IJulieStoreClient
+        bool importExactAtMatches = false,
+        Queue<StoreRequestState>? stateOverrides = null) : IJulieStoreClient
     {
         private readonly List<StoreRequest> _requests = [];
 
@@ -879,7 +1082,9 @@ public sealed class StoreWorkspaceCoordinatorTests
                 _ => StoreLevel.NotApplicable,
             };
             StoreRequestState state = stateOverride
-                ?? (exitCode == 0 ? StoreRequestState.Committed : StoreRequestState.Failed);
+                ?? (stateOverrides?.Count > 0
+                    ? stateOverrides.Dequeue()
+                    : exitCode == 0 ? StoreRequestState.Committed : StoreRequestState.Failed);
             bool durable = state is StoreRequestState.Committed or StoreRequestState.Acknowledged;
             return new StoreRequestResult(
                 JulieStoreContract.ReportSchemaVersion,

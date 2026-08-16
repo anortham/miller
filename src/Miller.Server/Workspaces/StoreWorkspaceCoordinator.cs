@@ -418,7 +418,28 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     private StoreRequestResult SubmitRequest(StoreRequest request, bool replayedImport)
     {
         StoreRequestResult result = _client.Submit(request);
-        RequireCommittedAndCompleteJournal(request, result);
+        try
+        {
+            RequireCommittedAndCompleteJournal(request, result);
+        }
+        catch (StoreWorkspaceOperationException) when (
+            request is StoreImportRequest { FromArtifact: not null } seededImport &&
+            result.State is StoreRequestState.Failed &&
+            string.Equals(result.Failure.Class.Code, "store_incompatible", StringComparison.Ordinal))
+        {
+            StoreRequestControls controls = Controls(
+                ImportFingerprint(seededImport.Level, fromArtifact: null),
+                StoreOperation.Import);
+            StoreImportRequest freshImport = seededImport with
+            {
+                Request = controls,
+                FromArtifact = null,
+            };
+            result = _client.Submit(freshImport);
+            RequireCommittedAndCompleteJournal(freshImport, result);
+            return result;
+        }
+
         if (replayedImport && request is StoreImportRequest replayedRequest)
         {
             StoreRequestControls controls = Controls(
