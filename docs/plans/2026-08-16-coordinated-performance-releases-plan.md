@@ -86,10 +86,10 @@
 **Approach:** Follow recent patch-release format. Keep current-published pointers truthful until `v2.33.3` is live, while making the candidate discoverable. Run the full Julie branch gate once on the exact prep tree.
 
 **Acceptance criteria:**
-- [ ] All crate/lockfile versions and release-note paths consistently name `2.33.3`.
-- [ ] v2.33.2 docs no longer claim the already-live release is pending.
-- [ ] All Julie branch/release gates pass on the exact prep commit.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] All crate/lockfile versions and release-note paths consistently name `2.33.3`.
+- [x] v2.33.2 docs no longer claim the already-live release is pending.
+- [x] All Julie branch/release gates pass on the exact prep commit.
+- [x] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
 
 ### Task 2: Integrate and publish Julie 2.33.3
 
@@ -191,4 +191,3 @@
 - [ ] `v1.19.2` is stable with four archives, four matching `.sha256` sidecars, and the committed release notes body.
 - [ ] Marketplace manifests and download URLs resolve to live assets.
 - [ ] Local HEAD, remote main, tag, and release facts are reconciled; unrelated main-checkout changes remain untouched and reported.
-
