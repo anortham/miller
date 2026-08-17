@@ -486,6 +486,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         int? jobs)
     {
         using var totalPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.CoordinatorTotal);
+        InvalidateFreshnessStamp();
         int jobsValue = jobs ?? ExtractJobsPolicy.FromEnvironment();
         StoreScanControls scan = ScanControls(jobsValue, prepareForScan: false);
         long changedFiles = 0;
@@ -580,6 +581,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         }
 
         StoreWorkspaceState after = ReadRequiredState();
+        PublishFreshnessStamp();
         bool changed = anyCreated || !string.Equals(before.IndexLevel, after.IndexLevel, StringComparison.Ordinal);
         totalPhase.Complete(after.StoreLogSequence, changed);
         if (last is null)
@@ -620,6 +622,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             state.StoreLogSequence,
             false);
         totalPhase.Skip(state.StoreLogSequence);
+        PublishFreshnessStampIfMissing();
         return NoChangeReport(state);
     }
 
@@ -684,6 +687,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         bool resolveAfter)
     {
         using var totalPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.CoordinatorTotal);
+        InvalidateFreshnessStamp();
         bool replayedImport = request is StoreImportRequest import
             && _replayedImportRequestIds.Remove(import.Request.RequestId);
         StoreRequestResult result = SubmitPhase(
@@ -723,6 +727,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         }
 
         StoreWorkspaceState after = ReadRequiredState();
+        PublishFreshnessStamp();
         bool changed = result.Manifest.Disposition == StoreManifestDisposition.Created
             || before is null
             || !string.Equals(before.IndexLevel, after.IndexLevel, StringComparison.Ordinal);
@@ -1053,6 +1058,48 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         StoreResolveRequest resolve => resolve.Request,
         _ => throw new InvalidOperationException($"Store operation '{request.Operation}' has no request controls."),
     };
+
+    private void InvalidateFreshnessStamp()
+    {
+        try
+        {
+            StoreFreshnessStamp.Invalidate(_binding.StoreRoot, _binding.ViewId);
+        }
+        catch (Exception)
+        {
+            // Invalidate is best-effort. A leftover stamp is healed by the next successful publish
+            // or by a missing-file fallback on the next poll.
+        }
+    }
+
+    private void PublishFreshnessStampIfMissing()
+    {
+        if (StoreFreshnessStamp.TryRead(_binding.StoreRoot, _binding.ViewId) is not null)
+            return;
+        PublishFreshnessStamp();
+    }
+
+    private void PublishFreshnessStamp()
+    {
+        try
+        {
+            WorkspaceFreshnessProbe probe = FamilyStoreReadSession.Probe(_binding);
+            StoreFreshnessStampDocument stamp = StoreFreshnessStamp.FromProbe(_binding, probe);
+            if (string.IsNullOrWhiteSpace(stamp.ManifestHash) ||
+                string.IsNullOrWhiteSpace(stamp.StoreInstanceId) ||
+                string.IsNullOrWhiteSpace(stamp.BinaryVersion))
+            {
+                return;
+            }
+
+            StoreFreshnessStamp.Write(stamp);
+        }
+        catch (Exception)
+        {
+            // Stamp publish is best-effort. The next committed write retries. A missing stamp
+            // only falls back to opening store.db; it must not fail the scan.
+        }
+    }
 
     private StoreWorkspaceState ReadRequiredState() =>
         _readState(_binding) ?? throw new StoreWorkspaceOperationException(

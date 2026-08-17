@@ -79,6 +79,7 @@ public sealed class IndexerService : BackgroundService
     // M4 log throttle: the first request that cannot be claimed warns (something is pinning a request file);
     // repeats on later ticks drop to Debug so a wedged file cannot spam a warning every 250ms.
     private bool _requestClaimSkipWarned;
+    private bool _walCheckpointOwed;
     private readonly TimeSpan _leaderRetryInterval;
     private readonly bool _attachFileWatchers;
 
@@ -687,9 +688,9 @@ public sealed class IndexerService : BackgroundService
         if (!TryEnterOpsGateHoldingAdmission("the debounce drain", relatchIntent: null))
             return true;
 
+        bool processed = false;
         try
         {
-            bool processed;
             bool usedWholeRepoScan;
             try
             {
@@ -707,7 +708,15 @@ public sealed class IndexerService : BackgroundService
             }
 
             if (processed)
+            {
                 TryConvergeSidecarToLatest(workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
+                _walCheckpointOwed = true;
+            }
+            else
+            {
+                TryIdleFreshnessStampCatchUp(workspace);
+            }
+
             if (usedWholeRepoScan)
                 RequestLevelUpgradeIfOwed(workspace);
         }
@@ -715,6 +724,10 @@ public sealed class IndexerService : BackgroundService
         {
             Monitor.Exit(_opsGate);
         }
+
+        // A 4 GB TRUNCATE can take real time. Never run it while holding _opsGate.
+        if (_walCheckpointOwed && !processed)
+            TryIdleWalCheckpoint(workspace);
 
         return true;
     }
@@ -1387,6 +1400,54 @@ public sealed class IndexerService : BackgroundService
         string? workspaceId = _bootstrap.Workspace.WorkspaceId;
         _sidecarConverger.Converge(symbolsDbPath, workspaceRoot, workspaceId, revision, fullRebuild);
         _registryPublisher.TryMarkScanned(_bootstrap.Workspace, workspaceId, revision);
+    }
+
+    private void TryIdleFreshnessStampCatchUp(WorkspaceContext workspace)
+    {
+        if (!WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+            return;
+
+        string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+        StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(workspaceRoot);
+        if (pointer is null)
+            return;
+        if (StoreFreshnessStamp.TryRead(pointer.StoreRoot, pointer.ViewId) is not null)
+            return;
+
+        try
+        {
+            var binding = new StoreFamilyBinding(
+                pointer.FamilyId,
+                pointer.StoreRoot,
+                pointer.ViewId,
+                pointer.WorkspaceRoot,
+                StoreBindingState.Ready);
+            WorkspaceFreshnessProbe probe = FamilyStoreReadSession.Probe(binding);
+            StoreFreshnessStamp.Write(StoreFreshnessStamp.FromProbe(binding, probe));
+        }
+        catch (Exception ex) when (
+            ex is FamilyStoreReadException or IOException or UnauthorizedAccessException)
+        {
+            _logger.LogDebug(ex, "Idle freshness stamp catch-up failed; will retry on the next empty tick.");
+        }
+    }
+
+    private void TryIdleWalCheckpoint(WorkspaceContext workspace)
+    {
+        if (!WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+            return;
+
+        string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+        StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(workspaceRoot);
+        if (pointer is null)
+        {
+            _walCheckpointOwed = false;
+            return;
+        }
+
+        StoreWalCheckpointStatus status = StoreWalCheckpoint.TryTruncateFamily(pointer.StoreRoot);
+        if (status != StoreWalCheckpointStatus.Busy)
+            _walCheckpointOwed = false;
     }
 
     private void TryConvergeStoreSidecars()

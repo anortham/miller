@@ -5,6 +5,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [`plans/2026-08-17-idle-quiet-after-index-design.md`](plans/2026-08-17-idle-quiet-after-index-design.md) - after the index is current, stop opening the multi-GB family store on the 500 ms poll and checkpoint the leftover WAL.
 - [`plans/2026-08-17-windows-dogfood-read-availability-plan.md`](plans/2026-08-17-windows-dogfood-read-availability-plan.md) - keep search and named inspect serving while store resolution runs in the background, and fix the v1.19.4 native-Windows dogfood defects.
 - [`findings/2026-08-17-windows-dogfood-1.19.4.md`](findings/2026-08-17-windows-dogfood-1.19.4.md) - native Windows MCP/CLI dogfood of published 1.19.4: quantum miss, search blocked on resolve, bind-log flood, live-log import lock, 278 s empty `references candidates`.
 - [`findings/2026-08-17-julie-extractors-windows-lock.md`](findings/2026-08-17-julie-extractors-windows-lock.md) - native Windows diagnosis of the julie-extractors `locking protocol` stall: no live lock holder, stranded claimed import, operator refresh not a Miller code fix.

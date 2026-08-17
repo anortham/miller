@@ -77,6 +77,12 @@ public static class WorkspaceReadSessionFactory
             ?? throw new FamilyStoreReadException(
                 FamilyStoreReadFailure.BindingNotReady,
                 $"Store mode is enabled but workspace '{workspaceRoot}' has no .miller/store.json pointer.");
+        if (StoreFreshnessStamp.TryRead(pointer.StoreRoot, pointer.ViewId) is { } stamp
+            && StoreFreshnessStamp.MatchesPointer(stamp, pointer))
+        {
+            return StoreFreshnessStamp.ToProbe(stamp);
+        }
+
         var binding = new StoreFamilyBinding(
             pointer.FamilyId,
             pointer.StoreRoot,
