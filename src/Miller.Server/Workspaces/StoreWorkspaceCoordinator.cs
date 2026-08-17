@@ -1063,7 +1063,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     {
         try
         {
-            StoreFreshnessStamp.Invalidate(_binding.StoreRoot, _binding.ViewId);
+            StoreFreshnessStamp.InvalidateAll(_binding.StoreRoot);
         }
         catch (Exception)
         {
@@ -1093,6 +1093,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             }
 
             StoreFreshnessStamp.Write(stamp);
+            StoreWalCheckpoint.MarkOwed(_binding.StoreRoot);
         }
         catch (Exception)
         {

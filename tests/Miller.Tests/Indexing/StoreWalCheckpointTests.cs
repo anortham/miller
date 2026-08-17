@@ -51,6 +51,17 @@ public sealed class StoreWalCheckpointTests
     }
 
     [Fact]
+    public void OwedFlagRoundTripsOnTheStoreRoot()
+    {
+        using var dir = new TempDir();
+        Assert.False(StoreWalCheckpoint.IsOwed(dir.Root));
+        StoreWalCheckpoint.MarkOwed(dir.Root);
+        Assert.True(StoreWalCheckpoint.IsOwed(dir.Root));
+        StoreWalCheckpoint.ClearOwed(dir.Root);
+        Assert.False(StoreWalCheckpoint.IsOwed(dir.Root));
+    }
+
+    [Fact]
     public void MissingDatabaseIsSkipped()
     {
         Assert.Equal(

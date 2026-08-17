@@ -11,6 +11,44 @@ public enum StoreWalCheckpointStatus
 
 public static class StoreWalCheckpoint
 {
+    public const string OwedFileName = "wal-checkpoint-owed";
+
+    public static string OwedPath(string storeRoot) =>
+        Path.Combine(Path.GetFullPath(storeRoot), OwedFileName);
+
+    public static void MarkOwed(string storeRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(storeRoot);
+        string path = OwedPath(storeRoot);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, []);
+    }
+
+    public static bool IsOwed(string storeRoot)
+    {
+        try
+        {
+            return File.Exists(OwedPath(storeRoot));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    public static void ClearOwed(string storeRoot)
+    {
+        try
+        {
+            string path = OwedPath(storeRoot);
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
     public static StoreWalCheckpointStatus TryTruncateFamily(string storeRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storeRoot);
@@ -71,9 +109,13 @@ public static class StoreWalCheckpoint
                 ? StoreWalCheckpointStatus.Ok
                 : StoreWalCheckpointStatus.Busy;
         }
-        catch (SqliteException)
+        catch (SqliteException ex) when (ex.SqliteErrorCode is 5 or 6)
         {
             return StoreWalCheckpointStatus.Busy;
+        }
+        catch (SqliteException)
+        {
+            return StoreWalCheckpointStatus.Skipped;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

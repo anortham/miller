@@ -1411,8 +1411,11 @@ public sealed class IndexerService : BackgroundService
         StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(workspaceRoot);
         if (pointer is null)
             return;
-        if (StoreFreshnessStamp.TryRead(pointer.StoreRoot, pointer.ViewId) is not null)
+        if (StoreFreshnessStamp.TryRead(pointer.StoreRoot, pointer.ViewId) is { } existing
+            && StoreFreshnessStamp.MatchesPointer(existing, pointer))
+        {
             return;
+        }
 
         try
         {
@@ -1445,9 +1448,16 @@ public sealed class IndexerService : BackgroundService
             return;
         }
 
+        bool owed = _walCheckpointOwed || StoreWalCheckpoint.IsOwed(pointer.StoreRoot);
+        if (!owed)
+            return;
+
         StoreWalCheckpointStatus status = StoreWalCheckpoint.TryTruncateFamily(pointer.StoreRoot);
-        if (status != StoreWalCheckpointStatus.Busy)
-            _walCheckpointOwed = false;
+        if (status == StoreWalCheckpointStatus.Busy)
+            return;
+
+        _walCheckpointOwed = false;
+        StoreWalCheckpoint.ClearOwed(pointer.StoreRoot);
     }
 
     private void TryConvergeStoreSidecars()

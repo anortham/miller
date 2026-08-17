@@ -62,6 +62,31 @@ public sealed class StoreFreshnessStampTests
     }
 
     [Fact]
+    public void InvalidateAllDirtiesEveryViewStampInTheStoreRoot()
+    {
+        using var dir = new TempDir();
+        foreach (string view in new[] { "view-a", "view-b" })
+        {
+            StoreFreshnessStamp.Write(new StoreFreshnessStampDocument(
+                StoreFreshnessStamp.SchemaVersion,
+                Guid.Parse("11111111-1111-4111-8111-111111111111"),
+                dir.StoreRoot,
+                view,
+                dir.WorkspaceRoot,
+                1,
+                1,
+                "hash-a",
+                "id",
+                "2.33.6"));
+        }
+
+        StoreFreshnessStamp.InvalidateAll(dir.StoreRoot);
+
+        Assert.Null(StoreFreshnessStamp.TryRead(dir.StoreRoot, "view-a"));
+        Assert.Null(StoreFreshnessStamp.TryRead(dir.StoreRoot, "view-b"));
+    }
+
+    [Fact]
     public void MissingOrMismatchedStampIsIgnored()
     {
         using var dir = new TempDir();

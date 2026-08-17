@@ -85,7 +85,7 @@ Fields (snake_case, schema 1):
 
 Publish rules:
 
-- Invalidate (delete) the stamp **before** import, update, delete, or resolve starts. A crash after SQLite commit then leaves no stamp, so readers fall back to `store.db`.
+- Invalidate **every** `freshness-stamp-*.json` in the store root **before** import, update, delete, or resolve starts. Overwrite with an unreadable schema first, then delete. A leftover trusted stamp is the failure mode. Shared-version events can advance sibling views, so one-view delete is not enough.
 - Write only after `StoreWorkspaceCoordinator` re-reads the committed state (`ReadRequiredState` / the `after` snapshot). Do not publish from the import result alone.
 - Republish after **every** committed store-log advance: import, update, delete, and resolve. An incremental one-file save must not leave a stale stamp.
 - Bind the stamp to the pointer identity (family, store root, view, workspace root). A mismatch is invalid.

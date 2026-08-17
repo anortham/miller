@@ -55,19 +55,58 @@ public static class StoreFreshnessStamp
 
             return document;
         }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return null;
-        }
-        catch (Exception ex) when (ex is JsonException or ArgumentException or FormatException or IOException)
+        catch (Exception ex) when (
+            ex is FileNotFoundException
+                or DirectoryNotFoundException
+                or UnauthorizedAccessException
+                or JsonException
+                or ArgumentException
+                or FormatException
+                or IOException)
         {
             return null;
         }
     }
 
+    public static void InvalidateAll(string storeRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(storeRoot);
+        string root = Path.GetFullPath(storeRoot);
+        if (!Directory.Exists(root))
+            return;
+
+        foreach (string path in Directory.GetFiles(root, "freshness-stamp-*.json"))
+            InvalidatePath(path);
+    }
+
     public static void Invalidate(string storeRoot, string viewId)
     {
-        string path = FilePath(storeRoot, viewId);
+        InvalidatePath(FilePath(storeRoot, viewId));
+    }
+
+    private static void InvalidatePath(string path)
+    {
+        // Overwrite first so a failed delete cannot leave a trusted matching stamp.
+        string? directory = Path.GetDirectoryName(path);
+        if (directory is null)
+            return;
+        Directory.CreateDirectory(directory);
+        string temporary = Path.Combine(directory, ".freshness-stamp." + Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            File.WriteAllBytes(temporary, "{}"u8.ToArray());
+            File.Move(temporary, path, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Fall through to delete. A leftover trusted stamp is the failure mode we are avoiding.
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+                File.Delete(temporary);
+        }
+
         try
         {
             if (File.Exists(path))
@@ -75,8 +114,7 @@ public static class StoreFreshnessStamp
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // A leftover stamp is worse than a missing one: readers would skip the store.
-            // Best-effort delete; the writer still republishes after commit.
+            // "{}" is not a valid schema-1 stamp, so TryRead already returns null.
         }
     }
 
