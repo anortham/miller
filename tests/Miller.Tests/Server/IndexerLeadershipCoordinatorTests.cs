@@ -53,6 +53,7 @@ public sealed class IndexerLeadershipCoordinatorTests
         Assert.True(result.Claimed);
         Assert.Same(lease, result.Lease);
         Assert.True(result.Verdict.ArtifactOlderThanOwn);
+        Assert.Contains("2.0.0", result.Verdict.Reason, StringComparison.Ordinal);
     }
 
     [Fact]

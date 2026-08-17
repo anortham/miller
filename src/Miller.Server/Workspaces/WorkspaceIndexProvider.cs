@@ -535,7 +535,7 @@ public sealed class WorkspaceIndexProvider
             storeRoot,
             StoreSidecarKind.Search,
             readSession.Snapshot.ViewId);
-        if (!StoreSidecarCatalog.IsCurrent(searchDbPath, expected))
+        if (StoreSidecarCatalog.TryResolveReadable(searchDbPath, expected, readSession.Snapshot) is null)
             return null;
 
         return MeasureFamilyLookup(_openStoreSymbolSearch(readSession));

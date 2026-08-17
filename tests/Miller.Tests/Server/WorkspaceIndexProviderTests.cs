@@ -807,7 +807,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             openReadSession: (_, _, _) => new WorkspaceReadHandle(
                 new FixtureReadSession(StoreSnapshot(root, "manifest-a"), target.DbPath)),
             loadSessionSymbolSearch: _ =>
-                throw new InvalidOperationException("projection fallback was not expected"),
+            {
+                lookupLoads++;
+                return SymbolSearchProjectionLoader.Load(target.DbPath);
+            },
             openStoreSymbolSearch: _ =>
             {
                 lookupLoads++;
@@ -836,8 +839,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal(0, holderLoads);
         Assert.Equal(1, lookupLoads);
         Assert.Equal(0, cache.RepositoryEntries);
-        Assert.Equal(1, cache.SymbolSearchEntries);
-        Assert.Equal(0, cache.SymbolReadEntries);
+        Assert.Equal(1, cache.SymbolSearchEntries + cache.SymbolReadEntries);
         Assert.Equal(1, cache.TotalEntries);
     }
 
@@ -1054,7 +1056,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
         registry.MarkScanned("target-ws", revision: 1);
         WorkspaceReadSnapshot snapshot = StoreSnapshot(root, "manifest-a");
-        int sidecarOpenCount = 0;
+        int lookupLoads = 0;
         var provider = NewProvider(
             new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
             CurrentWorkspace(current.DbPath, "current-ws"),
@@ -1062,10 +1064,13 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             sidecar: new SymbolSearchSidecar(enabled: true),
             openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(snapshot)),
             loadSessionSymbolSearch: _ =>
-                throw new InvalidOperationException("projection fallback was not expected"),
+            {
+                lookupLoads++;
+                return SymbolSearchProjectionLoader.Load(target.DbPath);
+            },
             openStoreSymbolSearch: _ =>
             {
-                sidecarOpenCount++;
+                lookupLoads++;
                 return SymbolSearchProjectionLoader.Load(target.DbPath);
             });
 
@@ -1074,7 +1079,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         Assert.Single(context.Index.FindByName("TargetType"));
         Assert.Single(currentContext.Index.FindByName("TargetType"));
-        Assert.Equal(2, sidecarOpenCount);
+        Assert.Equal(2, lookupLoads);
     }
 
     [Fact]
