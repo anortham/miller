@@ -249,9 +249,9 @@ Completion follows `parallel-lead-commit` for Batch A and `serial-worker-commit`
 **Approach:** Change `OpenRead` from `FileShare.Read` to `FileShare.ReadWrite` (add `Delete` if tests show the writer also deletes/renames). Keep sequential scan and the 16 KiB buffer. Add a test that opens a file with `FileShare.ReadWrite`, writes to it, and imports through the production open path.
 
 **Acceptance criteria:**
-- [ ] Opening a file that another handle holds with write share succeeds
-- [ ] Missing-file and directory errors stay the same
-- [ ] Worker-scope verification passes and the change is handed to the lead (`parallel-lead-commit`)
+- [x] Opening a file that another handle holds with write share succeeds
+- [x] Missing-file and directory errors stay the same
+- [x] Worker-scope verification passes and the change is handed to the lead (`parallel-lead-commit`)
 
 ---
 
@@ -280,10 +280,10 @@ Completion follows `parallel-lead-commit` for Batch A and `serial-worker-commit`
 **Approach:** Trace `EditTool.Edit` into `TelemetryCallToolFilter` / `ToolDiagnosticContext`. If the filter sets `IsError` because no `ToolDiagnostic` is attached, attach `expected_empty` / `no_change`. Do not change the compact sentence. Keep apply=false.
 
 **Acceptance criteria:**
-- [ ] Same-text preview `Outcome` is `empty` and MCP `IsError` is false
-- [ ] A real preview remains `ok` and still writes nothing
-- [ ] A genuine edit failure remains `error`
-- [ ] Worker-scope verification passes and the change is handed to the lead (`parallel-lead-commit`)
+- [x] Same-text preview `Outcome` is `empty` and MCP `IsError` is false
+- [x] A real preview remains `ok` and still writes nothing
+- [x] A genuine edit failure remains `error`
+- [x] Worker-scope verification passes and the change is handed to the lead (`parallel-lead-commit`)
 
 ---
 
@@ -313,10 +313,10 @@ Completion follows `parallel-lead-commit` for Batch A and `serial-worker-commit`
 **Approach:** Make `ReadLeaderFacts` and the leadership coordinator read the same store/legacy function (`TryReadOrFallback` vs `ReadForLeadership`). Add a render test that equal versions produce the matches reason and that the JSON field equals the reason's artifact token.
 
 **Acceptance criteria:**
-- [ ] When own and artifact extractor versions are `2.33.5`, reason contains `matches` and does not contain `newer`
-- [ ] `artifact_extractor_version` JSON equals the version string `Evaluate` rendered
-- [ ] A truly older artifact still reports `newer` and still schedules upgrade
-- [ ] Worker-scope verification passes and the change is handed to the lead (`parallel-lead-commit`)
+- [x] When own and artifact extractor versions are `2.33.5`, reason contains `matches` and does not contain `newer`
+- [x] `artifact_extractor_version` JSON equals the version string `Evaluate` rendered
+- [x] A truly older artifact still reports `newer` and still schedules upgrade
+- [x] Worker-scope verification passes and the change is handed to the lead (`parallel-lead-commit`)
 
 ---
 
@@ -405,10 +405,10 @@ Completion follows `parallel-lead-commit` for Batch A and `serial-worker-commit`
 **Approach:** Short-circuit when required resolution tables are empty or `ReferenceResolutionStatus` is not ready. If a literal scan remains necessary, bound files scanned by the same limit or stream the first page before finishing the scan. Never return a blank body after success. Keep Core (`DeadCodeCandidates`) pure.
 
 **Acceptance criteria:**
-- [ ] A symbols-level / unresolved fixture returns a named unavailable/empty report without a full-tree literal scan
-- [ ] `--limit 5` never produces zero bytes on success
-- [ ] The existing suppression/evidence rules stay in `Miller.Core.DeadCode`
-- [ ] Worker-scope verification passes and the change is handed to the lead (`parallel-lead-commit`)
+- [x] A symbols-level / unresolved fixture returns a named unavailable/empty report without a full-tree literal scan
+- [x] `--limit 5` never produces zero bytes on success
+- [x] The existing suppression/evidence rules stay in `Miller.Core.DeadCode`
+- [x] Worker-scope verification passes and the change is handed to the lead (`parallel-lead-commit`)
 
 ---
 
@@ -435,9 +435,9 @@ Completion follows `parallel-lead-commit` for Batch A and `serial-worker-commit`
 **Approach:** Point those tests at an isolated `MILLER_HOME` or explicit registry path already used by other tests. Add a guard test that the helper's registry path is under `Path.GetTempPath()` (or the test directory), not `~\.miller`.
 
 **Acceptance criteria:**
-- [ ] The helper's registry path is under the test temp directory
-- [ ] Production `workspace prune` is unchanged
-- [ ] Worker-scope verification passes and the change is handed to the lead (`parallel-lead-commit`)
+- [x] The helper's registry path is under the test temp directory
+- [x] Production `workspace prune` is unchanged
+- [x] Worker-scope verification passes and the change is handed to the lead (`parallel-lead-commit`)
 
 ---
 
