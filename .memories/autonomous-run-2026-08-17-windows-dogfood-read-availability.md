@@ -3,7 +3,7 @@
 **Status:** Complete
 **Plan:** docs/plans/2026-08-17-windows-dogfood-read-availability-plan.md
 **Branch:** fix/windows-dogfood-read-availability
-**PR:** pending — filled in after PR creation
+**PR:** https://github.com/anortham/miller/pull/10
 **Duration:** ~2h 40m
 **Phases:** 3/3 complete
 **Tasks:** 12/12 complete
@@ -82,6 +82,6 @@ campaign_closed: yes
 - **Worktrees left in place:** `C:\source\miller\.worktrees\fix-windows-dogfood-read-availability` on `fix/windows-dogfood-read-availability` — kept, PR open.
 
 ## Next steps
-- Review PR: pending — filled in after PR creation
+- Review PR: https://github.com/anortham/miller/pull/10
 - Optional operator refresh for julie-extractors after reading `docs/findings/2026-08-17-julie-extractors-windows-lock.md` (do not `workspace full` without approval).
 - Resolution wall time remains on `docs/plans/2026-08-13-miller-performance-recovery-plan.md`.
