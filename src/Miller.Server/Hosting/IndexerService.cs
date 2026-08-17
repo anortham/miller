@@ -80,6 +80,7 @@ public sealed class IndexerService : BackgroundService
     // repeats on later ticks drop to Debug so a wedged file cannot spam a warning every 250ms.
     private bool _requestClaimSkipWarned;
     private bool _walCheckpointOwed;
+    private DateTime _nextWalCheckpointUtc;
     private readonly TimeSpan _leaderRetryInterval;
     private readonly bool _attachFileWatchers;
 
@@ -725,8 +726,9 @@ public sealed class IndexerService : BackgroundService
             Monitor.Exit(_opsGate);
         }
 
-        // A 4 GB TRUNCATE can take real time. Never run it while holding _opsGate.
-        if (_walCheckpointOwed && !processed)
+        // Startup writes the owed file without setting the in-memory flag. An empty tick must
+        // still see that file. A 4 GB TRUNCATE can take real time; never hold _opsGate.
+        if (!processed)
             TryIdleWalCheckpoint(workspace);
 
         return true;
@@ -951,6 +953,7 @@ public sealed class IndexerService : BackgroundService
             _core?.NoteWholeRepoScanCompleted(ScanIntent.IncrementalReconcile, armingGeneration);
             _registryPublisher.MarkScanned(workspace, stableWorkspaceId, report.Revision);
             phase.Complete(report.Revision, report.CreatedRevision is not null);
+            _walCheckpointOwed = true;
             _logger.LogInformation(
                 "Startup delta scan complete: revision {Revision}, {Updated} files updated, {Deleted} files deleted.",
                 report.Revision, report.FilesUpdated, report.FilesDeleted);
@@ -1451,13 +1454,21 @@ public sealed class IndexerService : BackgroundService
         bool owed = _walCheckpointOwed || StoreWalCheckpoint.IsOwed(pointer.StoreRoot);
         if (!owed)
             return;
+        if (DateTime.UtcNow < _nextWalCheckpointUtc)
+            return;
 
         StoreWalCheckpointStatus status = StoreWalCheckpoint.TryTruncateFamily(pointer.StoreRoot);
         if (status == StoreWalCheckpointStatus.Busy)
+        {
+            _nextWalCheckpointUtc = DateTime.UtcNow.AddSeconds(30);
+            _logger.LogDebug("Family store WAL checkpoint busy for {StoreRoot}; retrying later.", pointer.StoreRoot);
             return;
+        }
 
         _walCheckpointOwed = false;
         StoreWalCheckpoint.ClearOwed(pointer.StoreRoot);
+        if (status == StoreWalCheckpointStatus.Ok)
+            _logger.LogInformation("Family store WAL checkpoint truncated {StoreRoot}.", pointer.StoreRoot);
     }
 
     private void TryConvergeStoreSidecars()

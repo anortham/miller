@@ -112,6 +112,7 @@ on `store.db` and `coord.db`.
 - `Ok` (busy flag 0): done.
 - `Busy` (busy flag 1): request one retry on the next **empty** debounce tick.
 - Never run TRUNCATE inline on the scan path. A 4 GB checkpoint can take real time. Schedule it after the coordinator returns, on an empty debounce tick, **after** `_opsGate` is released.
+- An empty tick must honor the owed file, not only the in-memory flag. Startup writes the file and never sets the flag, so a flag-only check never truncated.
 - `JulieStoreClient` holds read transactions on `store.db` and `coord.db` for the whole producer process. TRUNCATE reports BUSY until those anchors release. That is the safety rail, not a bug.
 - Do not use PASSIVE as a substitute for “done.” PASSIVE can leave a large WAL in place.
 - Reuse the same busy measurement as `JulieStoreClientTests.WalCheckpointBusy`.

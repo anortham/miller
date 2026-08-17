@@ -75,8 +75,8 @@ public static class StoreWalCheckpoint
 
         string storeDb = Path.Combine(storeRoot, generationName, "store.db");
         string coordDb = Path.Combine(storeRoot, "coord.db");
-        StoreWalCheckpointStatus store = TryTruncate(storeDb);
-        StoreWalCheckpointStatus coord = TryTruncate(coordDb);
+        StoreWalCheckpointStatus store = TryTruncate(storeDb, timeoutSeconds: 300);
+        StoreWalCheckpointStatus coord = TryTruncate(coordDb, timeoutSeconds: 300);
         if (store == StoreWalCheckpointStatus.Busy || coord == StoreWalCheckpointStatus.Busy)
             return StoreWalCheckpointStatus.Busy;
         if (store == StoreWalCheckpointStatus.Ok || coord == StoreWalCheckpointStatus.Ok)
@@ -84,7 +84,7 @@ public static class StoreWalCheckpoint
         return StoreWalCheckpointStatus.Skipped;
     }
 
-    public static StoreWalCheckpointStatus TryTruncate(string databasePath)
+    public static StoreWalCheckpointStatus TryTruncate(string databasePath, int timeoutSeconds = 1)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         if (!File.Exists(databasePath))
@@ -97,7 +97,7 @@ public static class StoreWalCheckpoint
                 DataSource = databasePath,
                 Mode = SqliteOpenMode.ReadWrite,
                 Pooling = false,
-                DefaultTimeout = 1,
+                DefaultTimeout = timeoutSeconds,
             }.ToString());
             connection.Open();
             using var command = connection.CreateCommand();
