@@ -99,7 +99,7 @@ Read rules (`WorkspaceReadSessionFactory.Probe` when store mode is on):
 3. If the stamp is missing, unreadable, schema-wrong, or identity-mismatched, fall through to `FamilyStoreReadSession.Probe` (opens `store.db`).
 4. First poll after bind may use a valid stamp. If none exists, open the store once and do not invent a stamp from a reader.
 
-`FreshnessService` keeps the 500 ms tick and the promote/inode rule. The cheap poll just stops opening the multi-GB database when nothing changed.
+`FreshnessService` keeps the 500 ms tick and the promote/inode rule. After the first successful store poll, an unchanged stamp file (same path and write time) returns immediately. It does not parse the stamp again, does not open `store.db`, and does not open a full read session while the observed revision is not ahead of the held index.
 
 ### 2. WAL checkpoint (shrink the leftover 4 GB log)
 

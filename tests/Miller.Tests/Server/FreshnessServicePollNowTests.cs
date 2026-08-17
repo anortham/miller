@@ -4,6 +4,7 @@ using System.Threading;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Hosting;
 using Miller.Tests.Indexing;
@@ -67,8 +68,113 @@ public sealed class FreshnessServicePollNowTests : IDisposable
         return new FreshnessService(bootstrap, NullLogger<FreshnessService>.Instance);
     }
 
+    private static FreshnessService NewStoreIdleService(
+        string dbPath,
+        string workspaceId,
+        IndexHolder holder,
+        Func<WorkspaceFreshnessProbe> probe,
+        Action open)
+    {
+        string tempHome = CreateTempHome();
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = tempHome;
+        var workspace = WorkspaceContext.Create(Path.GetDirectoryName(dbPath)!, AppContext.BaseDirectory, tempHome) with
+        {
+            ExtractDbPath = dbPath,
+            WorkspaceId = workspaceId,
+        };
+        bootstrap.SeedForTest(workspace, holder);
+        return new FreshnessService(
+            bootstrap,
+            NullLogger<FreshnessService>.Instance,
+            storeEnabled: static () => true,
+            probe: (_, _, _, _) => probe(),
+            openReadSession: (_, _, _, _) =>
+            {
+                open();
+                throw new InvalidOperationException("idle poll must not open a store session");
+            });
+    }
+
     private static IndexHolder HolderAt(JulieDbFixture fx, long builtRevision) =>
         new(MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath)), builtRevision);
+
+    [Fact]
+    public void PollNow_WhenStoreRevisionHasNotAdvanced_DoesNotOpenAReadSession()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: Ws,
+            revisions: new[] { new JulieDbFixture.RevisionRow(10) });
+        var holder = HolderAt(fx, builtRevision: 10);
+        int opens = 0;
+        var service = NewStoreIdleService(
+            fx.DbPath,
+            Ws,
+            holder,
+            probe: () => new WorkspaceFreshnessProbe(
+                10, "inst", "view-a", 1, "hash", "store-root", "2.33.6"),
+            open: () => Interlocked.Increment(ref opens));
+
+        PollResult first = service.PollNow();
+        PollResult second = service.PollNow();
+
+        Assert.False(first.Swapped);
+        Assert.False(second.Swapped);
+        Assert.Equal(10, first.Revision);
+        Assert.Equal(0, opens);
+    }
+
+    [Fact]
+    public void PollNow_WhenStampFileIsUnchanged_DoesNotProbeAgain()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: Ws,
+            revisions: new[] { new JulieDbFixture.RevisionRow(10) });
+        var holder = HolderAt(fx, builtRevision: 10);
+        string workspaceRoot = Path.GetDirectoryName(fx.DbPath)!;
+        var binding = new StoreFamilyBinding(
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Path.Combine(workspaceRoot, "store"),
+            "view-a",
+            PathCanonicalizer.CanonicalizeRoot(workspaceRoot),
+            StoreBindingState.Ready);
+        Directory.CreateDirectory(binding.StoreRoot);
+        StoreWorkspacePointer.Write(binding.WorkspaceRoot, binding);
+        StoreFreshnessStamp.Write(new StoreFreshnessStampDocument(
+            StoreFreshnessStamp.SchemaVersion,
+            binding.FamilyId,
+            binding.StoreRoot,
+            binding.ViewId,
+            binding.WorkspaceRoot,
+            10,
+            1,
+            "hash",
+            "11111111-1111-4111-8111-111111111111:gen-001",
+            "2.33.6"));
+
+        int probes = 0;
+        var service = NewStoreIdleService(
+            fx.DbPath,
+            Ws,
+            holder,
+            probe: () =>
+            {
+                Interlocked.Increment(ref probes);
+                return new WorkspaceFreshnessProbe(
+                    10,
+                    "11111111-1111-4111-8111-111111111111:gen-001",
+                    "view-a",
+                    1,
+                    "hash",
+                    binding.StoreRoot,
+                    "2.33.6");
+            },
+            open: () => throw new InvalidOperationException("idle stamp poll must not open a store session"));
+
+        Assert.False(service.PollNow().Swapped);
+        Assert.False(service.PollNow().Swapped);
+        Assert.Equal(1, probes);
+    }
 
     [Fact]
     public void PollNow_NewerRevisionPersisted_SwapsAndReportsTheNewRevision()

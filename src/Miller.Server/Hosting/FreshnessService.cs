@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 
 // IndexBootstrapService lives in the Miller.Server namespace (M2).
 using Miller.Server;
@@ -54,6 +55,8 @@ public sealed class FreshnessService : BackgroundService
     // probe does not run its own SQLite query on the hot path; refreshed every poll tick. -1 = not yet polled.
     private long _lastObservedRevision = -1;
     private string? _lastObservedStoreIdentity;
+    private string? _idleStampPath;
+    private DateTime _idleStampWriteTimeUtc;
 
     // Memo for the expensive half of the swap's facts read (see ReadFactsReusingExtensions).
     private string? _factsManifestHash;
@@ -105,6 +108,7 @@ public sealed class FreshnessService : BackgroundService
 
                 Interlocked.Exchange(ref _lastObservedRevision, -1);
                 _lastObservedStoreIdentity = null;
+                _idleStampPath = null;
 
                 while (!stoppingToken.IsCancellationRequested && generation == _bootstrap.BindingGeneration)
                 {
@@ -205,6 +209,9 @@ public sealed class FreshnessService : BackgroundService
         WorkspaceContext workspace = _bootstrap.Workspace;
         string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
         bool storeEnabled = _storeEnabled();
+        if (storeEnabled && TryIdleStorePoll(workspaceRoot, holder) is { } idle)
+            return idle;
+
         WorkspaceFreshnessProbe probe = _probe(
             dbPath,
             workspaceRoot,
@@ -215,6 +222,14 @@ public sealed class FreshnessService : BackgroundService
         string? storeIdentity = probe.StoreInstanceId is { } instanceId
             ? string.Join('\0', instanceId, probe.ViewId)
             : null;
+        if (storeEnabled && latest <= built)
+        {
+            RememberIdleStamp(workspaceRoot);
+            _lastObservedStoreIdentity = storeIdentity;
+            Interlocked.Exchange(ref _lastObservedRevision, latest);
+            return new PollResult(Swapped: false, latest);
+        }
+
         if (!storeEnabled || !string.Equals(storeIdentity, _lastObservedStoreIdentity, StringComparison.Ordinal))
         {
             using WorkspaceReadHandle reader = _openReadSession(
@@ -278,6 +293,65 @@ public sealed class FreshnessService : BackgroundService
         else if (swapped)
             _logger.LogDebug("Freshness: swapped index view to revision {Revision}.", latest);
         return new PollResult(swapped, latest);
+    }
+
+    private PollResult? TryIdleStorePoll(string workspaceRoot, IndexHolder holder)
+    {
+        try
+        {
+            StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(workspaceRoot);
+            if (pointer is null)
+                return null;
+
+            string path = StoreFreshnessStamp.FilePath(pointer.StoreRoot, pointer.ViewId);
+            if (!File.Exists(path))
+                return null;
+
+            DateTime writeTime = File.GetLastWriteTimeUtc(path);
+            long last = Interlocked.Read(ref _lastObservedRevision);
+            if (last >= 0
+                && last <= holder.BuiltRevision
+                && string.Equals(path, _idleStampPath, StringComparison.Ordinal)
+                && writeTime == _idleStampWriteTimeUtc)
+            {
+                return new PollResult(Swapped: false, last);
+            }
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or StorePointerFormatException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    private void RememberIdleStamp(string workspaceRoot)
+    {
+        try
+        {
+            StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(workspaceRoot);
+            if (pointer is null)
+            {
+                _idleStampPath = null;
+                return;
+            }
+
+            string path = StoreFreshnessStamp.FilePath(pointer.StoreRoot, pointer.ViewId);
+            if (!File.Exists(path))
+            {
+                _idleStampPath = null;
+                return;
+            }
+
+            _idleStampPath = path;
+            _idleStampWriteTimeUtc = File.GetLastWriteTimeUtc(path);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or StorePointerFormatException)
+        {
+            _idleStampPath = null;
+        }
     }
 
     /// <summary>
