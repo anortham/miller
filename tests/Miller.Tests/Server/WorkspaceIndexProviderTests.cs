@@ -1097,8 +1097,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             ResolutionState = "exact",
         };
         string searchPath = StoreSidecarCatalog.PathFor(root, StoreSidecarKind.Search, lastGood.ViewId);
-        Directory.CreateDirectory(Path.GetDirectoryName(searchPath)!);
-        SearchIndexWriter.Write(searchPath, SqliteSymbolReader.Read(target.DbPath), revision: 17);
+        WriteEmptySqlite(searchPath);
         StoreSidecarCatalog.Stamp(
             searchPath,
             StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGood));
@@ -2981,6 +2980,20 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
     // Passing symbolsDbPath is what makes this faithful: the production writer stamps the artifact id from it,
     // and the read gates reject a sidecar that carries no stamp when the live artifact has one.
+    private static void WriteEmptySqlite(string databasePath)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES ('ready');";
+        command.ExecuteNonQuery();
+    }
+
     private static void WriteSearchDbFor(JulieDbFixture fixture, long revision) =>
         SearchIndexWriter.Write(
             SymbolSearchSidecar.SearchDbPathFor(fixture.DbPath),
