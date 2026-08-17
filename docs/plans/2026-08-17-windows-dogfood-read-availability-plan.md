@@ -152,11 +152,11 @@ Completion follows `parallel-lead-commit` for Batch A and `serial-worker-commit`
 **Approach:** Add a stamp helper that finds the newest sidecar file for that view whose stamp matches an earlier sequence, then open it read-only. `WorkspaceIndexProvider` must route named inspect through the generation/symbols reader when the live search sidecar is not current, matching `Inspect_Summary_RegisteredWorkspace_UsesSymbolsWhenSearchSidecarCannotServe`. Do not fall back to an in-memory BM25 index (that path is the explicit `MILLER_SEARCH_SIDECAR=0` opt-out only).
 
 **Acceptance criteria:**
-- [ ] A fixture with an exact sidecar at sequence N and a live snapshot at sequence N+k with `resolution=converging` serves search hits from the N sidecar
-- [ ] The same fixture's named inspect of a known symbol succeeds without opening a current search sidecar
-- [ ] A family/view with no sidecar at all still throws the current missing-sidecar message
-- [ ] `workspace status` still reports the live sidecar as stale/unready
-- [ ] Worker-scope verification passes and the change is committed by the worker (`serial-worker-commit`)
+- [x] A fixture with an exact sidecar at sequence N and a live snapshot at sequence N+k with `resolution=converging` serves search hits from the N sidecar
+- [x] The same fixture's named inspect of a known symbol succeeds without opening a current search sidecar
+- [x] A family/view with no sidecar at all still throws the current missing-sidecar message
+- [x] `workspace status` still reports the live sidecar as stale/unready
+- [x] Worker-scope verification passes and the change is committed by the worker (`serial-worker-commit`)
 
 ---
 

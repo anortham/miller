@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -762,6 +763,152 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         var sidecar = new SymbolSearchSidecar(enabled: true);
         Assert.Null(sidecar.TryOpen(_symbolsDbPath, expectedRevision: 7));
     }
+
+    [Fact]
+    public void OpenStoreRequired_ConvergingSnapshot_ServesLastGoodSidecarHits()
+    {
+        string storeRoot = Path.Combine(
+            Path.GetTempPath(),
+            "miller-search-last-good-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storeRoot);
+        try
+        {
+            WorkspaceReadSnapshot lastGood = StoreSnapshot(storeRoot, sequence: 17);
+            WorkspaceReadSnapshot live = StoreSnapshot(storeRoot, sequence: 21, resolutionState: "converging");
+            string searchPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, lastGood.ViewId);
+            SearchIndexWriter.Write(searchPath, Corpus(), revision: 17);
+            StoreSidecarCatalog.Stamp(
+                searchPath,
+                StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGood));
+
+            var sidecar = new SymbolSearchSidecar(enabled: true);
+            FtsSymbolSearchIndex index = sidecar.OpenStoreRequired(storeRoot, live);
+
+            Assert.Equal(17L, index.Revision);
+            var hit = Assert.Single(index.Search("Alpha", limit: 10));
+            Assert.Equal("Alpha", index.Resolve(hit.Document.DocId).Name);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(storeRoot))
+                Directory.Delete(storeRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void OpenStoreRequired_ExactSnapshotWithEarlierSidecar_StillThrows()
+    {
+        string storeRoot = Path.Combine(
+            Path.GetTempPath(),
+            "miller-search-exact-stale-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storeRoot);
+        try
+        {
+            WorkspaceReadSnapshot lastGood = StoreSnapshot(storeRoot, sequence: 17);
+            WorkspaceReadSnapshot live = StoreSnapshot(storeRoot, sequence: 21, resolutionState: "exact");
+            string searchPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, lastGood.ViewId);
+            SearchIndexWriter.Write(searchPath, Corpus(), revision: 17);
+            StoreSidecarCatalog.Stamp(
+                searchPath,
+                StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGood));
+
+            var sidecar = new SymbolSearchSidecar(enabled: true);
+            InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+                () => sidecar.OpenStoreRequired(storeRoot, live));
+
+            Assert.Contains("Search sidecar for view 'view-a' is missing or stale", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(storeRoot))
+                Directory.Delete(storeRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void OpenStoreRequired_MissingSidecar_StillThrowsCurrentMessage()
+    {
+        string storeRoot = Path.Combine(
+            Path.GetTempPath(),
+            "miller-search-missing-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storeRoot);
+        try
+        {
+            WorkspaceReadSnapshot live = StoreSnapshot(storeRoot, sequence: 21, resolutionState: "converging");
+            var sidecar = new SymbolSearchSidecar(enabled: true);
+
+            InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+                () => sidecar.OpenStoreRequired(storeRoot, live));
+
+            Assert.Contains("Search sidecar for view 'view-a' is missing or stale", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(storeRoot))
+                Directory.Delete(storeRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void InspectStore_ConvergingLastGood_StillReportsStale()
+    {
+        string storeRoot = Path.Combine(
+            Path.GetTempPath(),
+            "miller-search-stale-status-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storeRoot);
+        try
+        {
+            WorkspaceReadSnapshot lastGood = StoreSnapshot(storeRoot, sequence: 17);
+            WorkspaceReadSnapshot live = StoreSnapshot(storeRoot, sequence: 21, resolutionState: "converging");
+            string searchPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, lastGood.ViewId);
+            SearchIndexWriter.Write(searchPath, Corpus(), revision: 17);
+            StoreSidecarCatalog.Stamp(
+                searchPath,
+                StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGood));
+
+            SearchSidecarFacts facts = new SymbolSearchSidecar(enabled: true).InspectStore(storeRoot, live);
+
+            Assert.Equal("stale", facts.State);
+            Assert.Equal(21, facts.ExpectedRevision);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(storeRoot))
+                Directory.Delete(storeRoot, recursive: true);
+        }
+    }
+
+    private static WorkspaceReadSnapshot StoreSnapshot(
+        string storeRoot,
+        long sequence,
+        string? resolutionState = null) =>
+        new(
+            storeRoot,
+            "workspace-a",
+            "family-a",
+            "view-a",
+            new WorkspaceFreshnessToken(
+                "family-a",
+                3,
+                "manifest-a",
+                sequence,
+                "resolution-a",
+                StoreInstanceId: "family-a:gen-001",
+                ViewId: "view-a",
+                GenerationName: "gen-001",
+                ManifestGeneration: 3,
+                IndexLevel: IndexLevels.FullMetadataValue,
+                LevelStampL1: "l1-a",
+                LevelStampL2: "l2-a",
+                LevelStampL3: "l3-a"),
+            IndexLevels.FullMetadataValue,
+            WorkspaceReadMode.FamilyStore,
+            GenerationName: "gen-001",
+            ManifestGeneration: 3,
+            ResolutionState: resolutionState);
 
     [Fact]
     public void TryOpen_EnabledButFtsTablesDamaged_ReturnsNullWithoutThrowing()

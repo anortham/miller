@@ -288,19 +288,17 @@ public sealed class SymbolSearchSidecar
             throw new InvalidOperationException("Search sidecar is disabled.");
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, snapshot);
         string searchDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, snapshot.ViewId);
-        if (!StoreSidecarCatalog.IsCurrent(searchDbPath, expected))
-        {
-            throw new InvalidOperationException(
+        StoreSidecarStamp serve = StoreSidecarCatalog.TryResolveReadable(searchDbPath, expected, snapshot)
+            ?? throw new InvalidOperationException(
                 $"Search sidecar for view '{snapshot.ViewId}' is missing or stale. " +
                 "Run `miller workspace refresh` to converge it.");
-        }
 
         FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(searchDbPath);
-        if (index.Revision != expected.StoreLogSequence)
+        if (index.Revision != serve.StoreLogSequence)
         {
             throw new InvalidOperationException(
                 $"Search sidecar for view '{snapshot.ViewId}' has store sequence {index.Revision}, " +
-                $"expected {expected.StoreLogSequence}.");
+                $"expected {serve.StoreLogSequence}.");
         }
         return index;
     }

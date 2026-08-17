@@ -347,13 +347,11 @@ public sealed class ContentCorpusSidecar
     {
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, snapshot);
         string contentDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Content, snapshot.ViewId);
-        if (!StoreSidecarCatalog.IsCurrent(contentDbPath, expected))
-        {
-            throw new InvalidOperationException(
+        StoreSidecarStamp serve = StoreSidecarCatalog.TryResolveReadable(contentDbPath, expected, snapshot)
+            ?? throw new InvalidOperationException(
                 $"Content sidecar for view '{snapshot.ViewId}' is missing or stale. " +
                 "Run `miller workspace refresh` to converge it.");
-        }
-        return FtsTextContentSearchIndex.Open(contentDbPath, expected.StoreLogSequence);
+        return FtsTextContentSearchIndex.Open(contentDbPath, serve.StoreLogSequence);
     }
 
     /// <summary>

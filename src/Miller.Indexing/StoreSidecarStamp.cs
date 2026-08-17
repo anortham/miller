@@ -251,6 +251,49 @@ public static class StoreSidecarCatalog
     public static bool IsCurrent(string databasePath, StoreSidecarStamp expected) =>
         TryRead(databasePath) == expected;
 
+    /// <summary>
+    /// The newest stamp on <paramref name="databasePath"/> that matches <paramref name="live"/> family, view,
+    /// and kind at an earlier store sequence. A different family or view is never last-good.
+    /// </summary>
+    public static StoreSidecarStamp? TryLastGood(string databasePath, StoreSidecarStamp live)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
+        ArgumentNullException.ThrowIfNull(live);
+        StoreSidecarStamp? stamp = TryRead(databasePath);
+        if (stamp is null)
+            return null;
+        if (stamp.Kind != live.Kind)
+            return null;
+        if (!string.Equals(stamp.FamilyId, live.FamilyId, StringComparison.Ordinal))
+            return null;
+        if (!string.Equals(stamp.ViewId, live.ViewId, StringComparison.Ordinal))
+            return null;
+        if (stamp.StoreLogSequence >= live.StoreLogSequence)
+            return null;
+        return stamp;
+    }
+
+    internal static bool AllowsLastGoodServe(WorkspaceReadSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return string.Equals(snapshot.ResolutionState, "converging", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(snapshot.ResolutionState, "unbound", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static StoreSidecarStamp? TryResolveReadable(
+        string databasePath,
+        StoreSidecarStamp expected,
+        WorkspaceReadSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (IsCurrent(databasePath, expected))
+            return expected;
+        if (!AllowsLastGoodServe(snapshot))
+            return null;
+        return TryLastGood(databasePath, expected);
+    }
+
     internal static bool TryFastForwardEmptyDelta(
         string databasePath,
         StoreSidecarStamp expected,

@@ -127,6 +127,67 @@ public sealed class StoreSidecarStampTests : IDisposable
 
         Assert.Null(StoreSidecarCatalog.TryRead(databasePath));
         Assert.False(StoreSidecarCatalog.IsCurrent(databasePath, expected));
+        Assert.Null(StoreSidecarCatalog.TryLastGood(databasePath, expected));
+    }
+
+    [Fact]
+    public void TryLastGood_SameFamilyAndViewAtAnEarlierSequence_ReturnsThatStamp()
+    {
+        Directory.CreateDirectory(_root);
+        string databasePath = StoreSidecarCatalog.PathFor(_root, StoreSidecarKind.Search, "view-a");
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES ('ready');";
+            command.ExecuteNonQuery();
+        }
+
+        StoreSidecarStamp earlier = StoreSidecarStamp.FromSnapshot(
+            StoreSidecarKind.Search,
+            Snapshot("manifest-a", sequence: 17));
+        StoreSidecarCatalog.Stamp(databasePath, earlier);
+        StoreSidecarStamp live = StoreSidecarStamp.FromSnapshot(
+            StoreSidecarKind.Search,
+            Snapshot("manifest-b", sequence: 21));
+
+        Assert.False(StoreSidecarCatalog.IsCurrent(databasePath, live));
+        Assert.Equal(earlier, StoreSidecarCatalog.TryLastGood(databasePath, live));
+    }
+
+    [Fact]
+    public void TryLastGood_DifferentFamilyOrView_IsNeverLastGood()
+    {
+        Directory.CreateDirectory(_root);
+        string databasePath = StoreSidecarCatalog.PathFor(_root, StoreSidecarKind.Search, "view-a");
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+        }
+
+        StoreSidecarCatalog.Stamp(
+            databasePath,
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, Snapshot("manifest-a", sequence: 17)));
+
+        StoreSidecarStamp otherFamily = StoreSidecarStamp.FromSnapshot(
+            StoreSidecarKind.Search,
+            Snapshot("manifest-a", sequence: 21, familyId: "family-b"));
+        StoreSidecarStamp otherView = StoreSidecarStamp.FromSnapshot(
+            StoreSidecarKind.Search,
+            Snapshot("manifest-a", sequence: 21, viewId: "view-b"));
+
+        Assert.Null(StoreSidecarCatalog.TryLastGood(databasePath, otherFamily));
+        Assert.Null(StoreSidecarCatalog.TryLastGood(databasePath, otherView));
     }
 
     [Fact]
@@ -216,20 +277,25 @@ public sealed class StoreSidecarStampTests : IDisposable
             Directory.Delete(_root, recursive: true);
     }
 
-    private WorkspaceReadSnapshot Snapshot(string manifestHash, long sequence) =>
+    private WorkspaceReadSnapshot Snapshot(
+        string manifestHash,
+        long sequence,
+        string familyId = "family-a",
+        string viewId = "view-a",
+        string? resolutionState = null) =>
         new(
             _root,
             "workspace-a",
-            "family-a",
-            "view-a",
+            familyId,
+            viewId,
             new WorkspaceFreshnessToken(
-                "family-a",
+                familyId,
                 3,
                 manifestHash,
                 sequence,
                 "resolution-a",
-                StoreInstanceId: "family-a:gen-001",
-                ViewId: "view-a",
+                StoreInstanceId: $"{familyId}:gen-001",
+                ViewId: viewId,
                 GenerationName: "gen-001",
                 ManifestGeneration: 3,
                 IndexLevel: IndexLevels.FullMetadataValue,
@@ -239,7 +305,8 @@ public sealed class StoreSidecarStampTests : IDisposable
             IndexLevels.FullMetadataValue,
             WorkspaceReadMode.FamilyStore,
             GenerationName: "gen-001",
-            ManifestGeneration: 3);
+            ManifestGeneration: 3,
+            ResolutionState: resolutionState);
 
     private static string ScopeToken(StoreSidecarStamp stamp) => stamp.ScopeToken;
 }

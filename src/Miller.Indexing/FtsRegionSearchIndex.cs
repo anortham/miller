@@ -49,13 +49,11 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
     {
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, snapshot);
         string searchDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, snapshot.ViewId);
-        if (!StoreSidecarCatalog.IsCurrent(searchDbPath, expected))
-        {
-            throw new InvalidOperationException(
+        StoreSidecarStamp serve = StoreSidecarCatalog.TryResolveReadable(searchDbPath, expected, snapshot)
+            ?? throw new InvalidOperationException(
                 $"Search sidecar for view '{snapshot.ViewId}' is missing or stale. " +
                 "Run `miller workspace refresh` to converge it.");
-        }
-        return Open(searchDbPath, expected.StoreLogSequence, _ => true);
+        return Open(searchDbPath, serve.StoreLogSequence, _ => true);
     }
 
     private static FtsRegionSearchIndex Open(

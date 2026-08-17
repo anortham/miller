@@ -510,18 +510,35 @@ public sealed class WorkspaceIndexProvider
         WorkspaceReadHandle readSession)
     {
         CacheKey key = KeyFor(workspaceId, readSession.Snapshot);
-        if (_sidecar.Enabled)
+        if (_sidecar.Enabled && TryCurrentStoreSearch(readSession) is { } current)
         {
             return GetOrAddSymbolSearchCache(
                 key,
-                () => new CachedSymbolSearch(
-                    MeasureFamilyLookup(_openStoreSymbolSearch(readSession)),
-                    IsSidecar: true)).Index;
+                () => new CachedSymbolSearch(current, IsSidecar: true)).Index;
         }
 
         return GetOrAddSymbolReadCache(
             key,
             () => new CachedSymbolRead(MeasureFamilyLookup(_loadSessionSymbolSearch(readSession)))).Index;
+    }
+
+    private ISymbolLookupIndex? TryCurrentStoreSearch(WorkspaceReadHandle readSession)
+    {
+        string? storeRoot = readSession.FamilyStoreRoot;
+        if (storeRoot is null)
+            return null;
+
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(
+            StoreSidecarKind.Search,
+            readSession.Snapshot);
+        string searchDbPath = StoreSidecarCatalog.PathFor(
+            storeRoot,
+            StoreSidecarKind.Search,
+            readSession.Snapshot.ViewId);
+        if (!StoreSidecarCatalog.IsCurrent(searchDbPath, expected))
+            return null;
+
+        return MeasureFamilyLookup(_openStoreSymbolSearch(readSession));
     }
 
     private ISymbolGraphReachability ResolveFamilyStoreGraph(
