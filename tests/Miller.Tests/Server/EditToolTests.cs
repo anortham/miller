@@ -962,8 +962,71 @@ public sealed class EditToolTests : IDisposable
 
         Assert.False(result.Applied);
         Assert.Null(result.FailureReason);
-        Assert.Contains("No change", result.Output);
+        Assert.Equal("empty", result.Outcome);
+        Assert.NotNull(result.Diagnostic);
+        Assert.Equal("no_change", result.Diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.ExpectedEmpty, result.Diagnostic.Class);
+        Assert.Equal(ToolDiagnosticOutcome.Empty, result.Diagnostic.Outcome);
+        Assert.Contains("No change — the edit is a no-op.", result.Output, StringComparison.Ordinal);
         Assert.Contains("match: exact ×2 @ L2-2 (disk verified, index not_used)", result.Output);
+        Assert.Contains("diagnostic_code=no_change", result.Output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_class=expected_empty", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("internal_failure", result.Output, StringComparison.Ordinal);
+        Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_JsonNoChangePreview_IsExpectedEmpty()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, wt) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "Total",
+            NewText = "Total",
+            Format = "json",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Null(result.FailureReason);
+        Assert.Equal("empty", result.Outcome);
+        Assert.NotNull(result.Diagnostic);
+        Assert.Equal("no_change", result.Diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.ExpectedEmpty, result.Diagnostic.Class);
+        using JsonDocument doc = JsonDocument.Parse(result.Output);
+        Assert.False(doc.RootElement.GetProperty("applied").GetBoolean());
+        Assert.Equal("", doc.RootElement.GetProperty("diff").GetString());
+        Assert.Equal("no change", doc.RootElement.GetProperty("note").GetString());
+        JsonElement diagnostic = doc.RootElement.GetProperty("diagnostic");
+        Assert.Equal("no_change", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("expected_empty", diagnostic.GetProperty("class").GetString());
+        Assert.Equal("empty", diagnostic.GetProperty("outcome").GetString());
+        Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
+        Assert.Empty(wt.Converged);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_RealPreview_RemainsOkAndWritesNothing()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, wt) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "Total",
+            NewText = "Sum",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("ok", result.Outcome);
+        Assert.Null(result.FailureReason);
+        Assert.Null(result.Diagnostic);
+        Assert.Contains("Preview — pass apply=true to commit.", result.Output, StringComparison.Ordinal);
+        Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
+        Assert.Empty(wt.Converged);
     }
 
     [Fact]
@@ -2967,6 +3030,34 @@ public sealed class EditToolTests : IDisposable
         Assert.Contains("Preview", output, StringComparison.Ordinal);
         using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
         Assert.False(metadata.RootElement.TryGetProperty("edit_failure_reason", out _));
+    }
+
+    [Fact]
+    public void Edit_SameTextPreview_IsExpectedEmptyNotInternalFailure()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        string output = tool.Edit(
+            "replace_text",
+            "orders/OrderService.cs",
+            old_text: "Total",
+            new_text: "Total");
+
+        Assert.Contains("No change — the edit is a no-op.", output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_code=no_change", output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_class=expected_empty", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("diagnostic_class=internal_failure", output, StringComparison.Ordinal);
+        Assert.Equal(TelemetryOutcome.Empty, telemetry.Outcome);
+        Assert.False(telemetry.UseMcpErrorChannel);
+        using JsonDocument metadata = JsonDocument.Parse(telemetry.MetadataJson);
+        Assert.False(metadata.RootElement.TryGetProperty("edit_failure_reason", out _));
+        Assert.Equal("no_change", metadata.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Equal("expected_empty", metadata.RootElement.GetProperty("diagnostic_class").GetString());
+        Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
     }
 
     // ---- failure-reason completeness (design §7.1) ----
