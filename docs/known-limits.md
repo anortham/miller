@@ -4,10 +4,12 @@
   and rollback path. Until the Ph4/Ph5 A7 durable reader-pin
   protocol lands, producer GC must not run concurrently with live Miller family-store readers; an unpinned
   non-current generation may be reclaimed during a long read. The explicit standalone path is unaffected.
-- Family-store search/content sidecars still use the open A8 full-view rebuild path. Convergence is serialized by
-  the family sidecar lease, so concurrent workspaces can leave a sidecar stale until a later converge succeeds;
-  store reads report that stale state rather than silently falling back to a legacy artifact. Cursor-incremental
-  convergence and its local reproducible cost gate remain Ph5 work.
+- Search and content family-store sidecars apply store file changes in place when the sidecar stamp and a complete
+  revision delta match (A8, shipped in v1.19.4). A failed or ineligible delta still falls back to a full
+  WriteStoreView with no log. There is no local reproducible cost gate, so A8 is implemented, not proven closed.
+  Convergence is serialized by the family sidecar lease, so concurrent workspaces can leave a sidecar stale until
+  a later converge succeeds; store reads report that stale state rather than silently falling back to a legacy
+  artifact.
 - Local semantic/vector retrieval is owned by Miller and **on by default**. Set `MILLER_SEMANTIC=off`
   for the permanent zero-work path: no broker path derivation, model access, process, accelerator
   probe, vector read/write, or semantic telemetry. `MILLER_SEMANTIC=shadow` builds and measures
