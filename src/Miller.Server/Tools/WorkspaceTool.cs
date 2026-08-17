@@ -485,24 +485,53 @@ public sealed class WorkspaceTool
         return OnboardingResult(onboarding, json);
     }
 
-    // Leader facts enriched with the version-aware-leadership view (D6): the recorded identity + liveness, this
-    // process's probed extractor version, and the artifact's recorded binary_version. The IndexerService verdict
-    // applies only to OUR workspace's artifact, so for a cross-workspace target it stays null (this process is
-    // not a writer candidate there — its eligibility says nothing about that workspace's convergence).
+    // Leader facts: identity + liveness, this process's extractor, and the same artifact version Evaluate uses.
+    // Re-evaluate own-workspace eligibility from that displayed string so the reason cannot name a stale token.
+    // Cross-workspace targets leave OwnVerdict null (this process is not a writer candidate there).
     // Best-effort status of the workspace's append-only metric history sidecar (sibling of symbols.db). Never
     // throws — a missing/unreadable history.db degrades to an absent-present status the health surface renders.
     private static MetricHistoryStatus ReadHistoryStatus(string indexDbPath) =>
         MetricHistoryStore.ReadStatus(MetricSnapshotAggregates.HistoryDbPathFor(indexDbPath));
 
-    private LeaderHealthFacts ReadLeaderFacts(string indexDbPath, bool ownWorkspace) =>
-        LeaderHealthFacts.Read(Path.GetDirectoryName(indexDbPath)!) with
+    private LeaderHealthFacts ReadLeaderFacts(string indexDbPath, bool ownWorkspace)
+    {
+        string? ownVersion = _indexer.OwnExtractorVersion;
+        string? artifactVersion;
+        LeadershipVerdict? verdict = null;
+        try
         {
-            OwnExtractorVersion = _indexer.OwnExtractorVersion,
-            ArtifactExtractorVersion = WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
-                ? StoreArtifactVersionReader.TryReadOrFallback(indexDbPath, ExtractBinaryVersionReader.TryRead)
-                : ExtractBinaryVersionReader.TryRead(indexDbPath),
-            OwnVerdict = ownWorkspace ? _indexer.EligibilityVerdict : null,
+            artifactVersion = ReadArtifactExtractorVersion(indexDbPath);
+            if (ownWorkspace && ownVersion is not null)
+            {
+                verdict = LeadershipEligibility.Evaluate(
+                    ownVersion,
+                    artifactVersion,
+                    allowDowngrade: Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1");
+            }
+            else if (ownWorkspace)
+            {
+                verdict = _indexer.EligibilityVerdict;
+            }
+        }
+        catch (StoreArtifactVersionReadException ex)
+        {
+            artifactVersion = null;
+            if (ownWorkspace)
+                verdict = new LeadershipVerdict(false, false, ex.Message);
+        }
+
+        return LeaderHealthFacts.Read(Path.GetDirectoryName(indexDbPath)!) with
+        {
+            OwnExtractorVersion = ownVersion,
+            ArtifactExtractorVersion = artifactVersion,
+            OwnVerdict = verdict,
         };
+    }
+
+    private static string? ReadArtifactExtractorVersion(string indexDbPath) =>
+        WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
+            ? StoreArtifactVersionReader.ReadForEligibility(indexDbPath, ExtractBinaryVersionReader.TryRead)
+            : ExtractBinaryVersionReader.TryRead(indexDbPath);
 
     // The sidecar writers reap their own staging orphans only as a build STARTS, so a workspace whose scans never
     // reach them keeps every `.search-build-*.db` forever (1.18 GB observed in the field on a workspace stuck in a

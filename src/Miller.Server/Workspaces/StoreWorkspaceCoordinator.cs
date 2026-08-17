@@ -72,8 +72,25 @@ public sealed class StoreWorkspaceOperationException(
     StoreFailureClass failureClass,
     string message) : IOException(message)
 {
+    public const string CoordinatorQuantumFailureCode = "coordinator_quantum";
+
     public StoreOperation Operation { get; } = operation;
     public StoreFailureClass FailureClass { get; } = failureClass;
+
+    public bool IsRetryable => IsRetryableFailure(FailureClass, Message);
+
+    public static bool IsRetryableProducerFailure(Exception? error) =>
+        error is StoreWorkspaceOperationException ex && ex.IsRetryable;
+
+    internal static bool IsCoordinatorQuantumTimeout(string? message) =>
+        !string.IsNullOrEmpty(message)
+        && message.Contains("coordinator quantum took", StringComparison.Ordinal)
+        && message.Contains("maximum is", StringComparison.Ordinal);
+
+    internal static bool IsRetryableFailure(StoreFailureClass failureClass, string? message) =>
+        string.Equals(failureClass.Code, CoordinatorQuantumFailureCode, StringComparison.Ordinal)
+        || string.Equals(failureClass.Code, "request_not_terminal", StringComparison.Ordinal)
+        || IsCoordinatorQuantumTimeout(message);
 }
 
 public sealed class StoreWorkspaceCoordinator : IExtractOps
@@ -820,11 +837,12 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
 
         if (result.State is StoreRequestState.Failed || result.ExitCode != 0)
         {
-            throw new StoreWorkspaceOperationException(
-                request.Operation,
-                result.Failure.Class,
-                result.Failure.Message ??
-                $"julie-extract store {request.Operation.ToString().ToLowerInvariant()} failed as {result.Failure.Class.Code}.");
+            string message = result.Failure.Message ??
+                $"julie-extract store {request.Operation.ToString().ToLowerInvariant()} failed as {result.Failure.Class.Code}.";
+            StoreFailureClass failureClass = StoreWorkspaceOperationException.IsCoordinatorQuantumTimeout(message)
+                ? new StoreFailureClass(StoreWorkspaceOperationException.CoordinatorQuantumFailureCode)
+                : result.Failure.Class;
+            throw new StoreWorkspaceOperationException(request.Operation, failureClass, message);
         }
 
         // Queued/Claimed with a clean exit: the request is still owned by a live executor and its work may

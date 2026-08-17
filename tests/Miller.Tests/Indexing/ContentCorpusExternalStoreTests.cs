@@ -386,6 +386,93 @@ public sealed class ContentCorpusExternalStoreTests : IDisposable
             static h => h.ContentKind == TextContentKind.Web);
     }
 
+    [Fact]
+    public void Import_WhileWriterHoldsReadWriteShare_SucceedsThroughProductionOpen()
+    {
+        string logPath = Path.Combine(_dir, "live.log");
+        using var writer = OpenLiveWriter(logPath, "LiveImportMarker from a write-shared handle.\n");
+        var store = new ContentCorpusExternalStore();
+
+        ExternalContentImportResult imported = store.Import(_contentDbPath, logPath);
+
+        Assert.True(imported.SourceBytes > 0);
+        TextContentSearchHit hit = Assert.Single(store.Search(_contentDbPath, "LiveImportMarker", limit: 5));
+        Assert.Equal(imported.SourceId, hit.SourceId);
+        Assert.Contains("LiveImportMarker", hit.Snippet);
+    }
+
+    [Fact]
+    public void Import_StreamingWhileWriterHoldsReadWriteShare_SucceedsThroughProductionOpen()
+    {
+        string logPath = Path.Combine(_dir, "live-streamed.log");
+        string content = string.Join(
+            '\n',
+            Enumerable.Range(1, 80).Select(static line => $"live line {line:D3} LiveStreamMarker"));
+        using var writer = OpenLiveWriter(logPath, content);
+        var store = new ContentCorpusExternalStore(defaultMaxImportBytes: 64);
+
+        ExternalContentImportResult imported = store.Import(
+            _contentDbPath,
+            logPath,
+            maxBytes: new FileInfo(logPath).Length);
+
+        Assert.True(imported.SourceBytes > 64);
+        TextContentSearchHit hit = Assert.Single(store.Search(_contentDbPath, "LiveStreamMarker", limit: 5));
+        Assert.Equal(imported.SourceId, hit.SourceId);
+        Assert.Contains("LiveStreamMarker", hit.Snippet);
+    }
+
+    [Fact]
+    public void Import_MissingFile_ThrowsFileNotFound()
+    {
+        string missing = Path.Combine(_dir, "missing.log");
+        var store = new ContentCorpusExternalStore();
+
+        var ex = Assert.Throws<FileNotFoundException>(() => store.Import(_contentDbPath, missing));
+
+        Assert.Equal(missing, ex.FileName);
+        Assert.Contains(missing, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("not found", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(_contentDbPath));
+    }
+
+    [Fact]
+    public void Import_Directory_ThrowsFileNotFound()
+    {
+        string directory = Path.Combine(_dir, "not-a-file");
+        Directory.CreateDirectory(directory);
+        var store = new ContentCorpusExternalStore();
+
+        var ex = Assert.Throws<FileNotFoundException>(() => store.Import(_contentDbPath, directory));
+
+        Assert.Equal(directory, ex.FileName);
+        Assert.Contains(directory, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("not found", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(_contentDbPath));
+    }
+
+    // Serilog shared:true + size/daily roll opens the live log with write and delete share.
+    private static FileStream OpenLiveWriter(string path, string content)
+    {
+        var writer = new FileStream(
+            path,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete);
+        try
+        {
+            using var text = new StreamWriter(writer, leaveOpen: true);
+            text.Write(content);
+            text.Flush();
+            return writer;
+        }
+        catch
+        {
+            writer.Dispose();
+            throw;
+        }
+    }
+
     private sealed class ThrowAfterPositionStream(byte[] bytes, long limit) : MemoryStream(bytes, writable: false)
     {
         public override int Read(byte[] buffer, int offset, int count)

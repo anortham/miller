@@ -389,4 +389,160 @@ public sealed class DeadCodeCandidateReaderTests
         Assert.Equal("unknown", report.Artifact.ReferenceResolutionStatus);
         Assert.Null(report.Artifact.ReferenceResolutionVersion);
     }
+
+    // ---- availability short-circuit (no full-tree literal scan) -------------------------------------------
+
+    private static JulieDbFixture.SourceRegionRow LiteralRegion(string id, string path, int endByte) =>
+        new(id, "file:" + path, path, "csharp", "string_literal", null, 1, 1, 1, 12, 0, endByte, null);
+
+    private static void SetMetadata(string dbPath, string key, string value)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        { DataSource = dbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false, ForeignKeys = false }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO artifact_metadata (key, value) VALUES ($k, $v)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+            """;
+        command.Parameters.AddWithValue("$k", key);
+        command.Parameters.AddWithValue("$v", value);
+        command.ExecuteNonQuery();
+    }
+
+    [Fact]
+    public void Read_SymbolsLevelIndex_ReturnsUnavailableWithoutLiteralScan()
+    {
+        const string labels = "UnusedHelper is a label\n";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
+            new[] { Method("sym-cand", "UnusedHelper", "src/Helper.cs") },
+            identifiers: new[] { Ident("id-benign", "SomethingElse", "src/Other.cs", null) },
+            fileContent: new Dictionary<string, string> { ["src/labels.cs"] = labels },
+            sourceRegions: new[] { LiteralRegion("reg-1", "src/labels.cs", 12) });
+        SetMetadata(fx.DbPath, "index_level", IndexLevels.SymbolsMetadataValue);
+
+        var report = DeadCodeCandidateReader.Read(fx.DbPath, fx.WorkspaceRoot);
+
+        Assert.Equal(DeadCodeCandidateReader.UnavailableSymbolsLevel, report.UnavailableReason);
+        Assert.Empty(report.Result.Candidates);
+        Assert.Equal(0, report.Result.Examined);
+        Assert.Equal(0, report.LiteralScan.FilesScanned);
+        Assert.Equal(0, report.LiteralScan.FilesSkippedStale);
+        Assert.Equal(DeadCodeCandidateReader.UnavailableSymbolsLevel, report.LiteralScan.SkipReason);
+    }
+
+    [Theory]
+    [InlineData("unresolved")]
+    [InlineData("unbound")]
+    [InlineData("converging")]
+    public void Read_ResolutionStatusNotReady_ReturnsUnavailableWithoutLiteralScan(string status)
+    {
+        const string labels = "UnusedHelper is a label\n";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
+            new[] { Method("sym-cand", "UnusedHelper", "src/Helper.cs") },
+            identifiers: new[] { Ident("id-benign", "SomethingElse", "src/Other.cs", null) },
+            fileContent: new Dictionary<string, string> { ["src/labels.cs"] = labels },
+            sourceRegions: new[] { LiteralRegion("reg-1", "src/labels.cs", 12) },
+            referenceResolutionStatus: status);
+
+        var report = DeadCodeCandidateReader.Read(fx.DbPath, fx.WorkspaceRoot);
+
+        Assert.Equal(DeadCodeCandidateReader.UnavailableResolutionNotReady, report.UnavailableReason);
+        Assert.Empty(report.Result.Candidates);
+        Assert.Equal(0, report.Result.Examined);
+        Assert.Equal(0, report.LiteralScan.FilesScanned);
+        Assert.Equal(0, report.LiteralScan.FilesSkippedStale);
+        Assert.Equal(DeadCodeCandidateReader.UnavailableResolutionNotReady, report.LiteralScan.SkipReason);
+    }
+
+    [Fact]
+    public void Read_EmptyIdentifiersAndResolutionTables_ReturnsUnavailableWithoutLiteralScan()
+    {
+        const string labels = "UnusedHelper is a label\n";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
+            new[] { Method("sym-cand", "UnusedHelper", "src/Helper.cs") },
+            fileContent: new Dictionary<string, string> { ["src/labels.cs"] = labels },
+            sourceRegions: new[] { LiteralRegion("reg-1", "src/labels.cs", 12) });
+
+        var report = DeadCodeCandidateReader.Read(fx.DbPath, fx.WorkspaceRoot);
+
+        Assert.Equal(DeadCodeCandidateReader.UnavailableResolutionEmpty, report.UnavailableReason);
+        Assert.Empty(report.Result.Candidates);
+        Assert.Equal(0, report.Result.Examined);
+        Assert.Equal(0, report.LiteralScan.FilesScanned);
+        Assert.Equal(0, report.LiteralScan.FilesSkippedStale);
+        Assert.NotNull(report.UnavailableReason);
+    }
+
+    [Fact]
+    public void Read_WithoutFileLimit_CompletesLiteralScanAndSuppressesLaterFileMatch()
+    {
+        const string miss = "no candidate name here\n";
+        const string hit = "UnusedHelper is a label\n";
+        using var fx = TwoLiteralFiles(miss, hit);
+
+        var report = DeadCodeCandidateReader.Read(fx.DbPath, fx.WorkspaceRoot);
+
+        Assert.Null(report.UnavailableReason);
+        Assert.Null(Candidate(report, "UnusedHelper"));
+        Assert.True(report.Result.Suppressions["string_literal_match"] >= 1);
+        Assert.Equal(2, report.LiteralScan.FilesScanned);
+        Assert.Equal(0, report.LiteralScan.FilesSkippedStale);
+        Assert.Null(report.LiteralScan.SkipReason);
+    }
+
+    [Fact]
+    public void Read_LiteralScanFileLimit_DoesNotPromoteProvisionalRows()
+    {
+        const string miss = "no candidate name here\n";
+        const string hit = "UnusedHelper is a label\n";
+        using var fx = TwoLiteralFiles(miss, hit);
+
+        var report = DeadCodeCandidateReader.Read(fx.DbPath, fx.WorkspaceRoot, literalScanFileLimit: 1);
+
+        Assert.Equal(DeadCodeCandidateReader.UnavailableLiteralScanIncomplete, report.UnavailableReason);
+        Assert.Empty(report.Result.Candidates);
+        Assert.Null(Candidate(report, "UnusedHelper"));
+        Assert.Equal(1, report.Result.Examined);
+        Assert.Equal(1, report.LiteralScan.FilesScanned);
+        Assert.Equal(0, report.LiteralScan.FilesSkippedStale);
+        Assert.Equal("limit_bound", report.LiteralScan.SkipReason);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Read_LiteralScanFileLimitNonPositive_DoesNotPromoteProvisionalRows(int fileLimit)
+    {
+        const string miss = "no candidate name here\n";
+        const string hit = "UnusedHelper is a label\n";
+        using var fx = TwoLiteralFiles(miss, hit);
+
+        var report = DeadCodeCandidateReader.Read(fx.DbPath, fx.WorkspaceRoot, literalScanFileLimit: fileLimit);
+
+        Assert.Equal(DeadCodeCandidateReader.UnavailableLiteralScanIncomplete, report.UnavailableReason);
+        Assert.Empty(report.Result.Candidates);
+        Assert.Null(Candidate(report, "UnusedHelper"));
+        Assert.Equal(0, report.LiteralScan.FilesScanned);
+        Assert.Equal("limit_bound", report.LiteralScan.SkipReason);
+    }
+
+    private static JulieDbFixture TwoLiteralFiles(string firstFileText, string secondFileText) =>
+        JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
+            new[] { Method("sym-cand", "UnusedHelper", "src/Helper.cs") },
+            identifiers: new[] { Ident("id-benign", "SomethingElse", "src/Other.cs", null) },
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/a-labels.cs"] = firstFileText,
+                ["src/z-labels.cs"] = secondFileText,
+            },
+            sourceRegions: new[]
+            {
+                LiteralRegion("reg-a", "src/a-labels.cs", firstFileText.Length),
+                LiteralRegion("reg-z", "src/z-labels.cs", secondFileText.Length),
+            });
 }

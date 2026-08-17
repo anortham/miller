@@ -7,8 +7,9 @@ using Miller.Indexing.Reads;
 namespace Miller.Indexing;
 
 /// <summary>Literal-scan accounting for the two-phase dead-code pass: how many literal-bearing files were read
-/// under the freshness guard, and how many were skipped because their on-disk bytes no longer match the artifact.</summary>
-public sealed record DeadCodeLiteralScan(int FilesScanned, int FilesSkippedStale);
+/// under the freshness guard, how many were skipped because their on-disk bytes no longer match the artifact,
+/// and an optional skip token when the scan did not run to completion.</summary>
+public sealed record DeadCodeLiteralScan(int FilesScanned, int FilesSkippedStale, string? SkipReason = null);
 
 /// <summary>Artifact-identity block for a dead-code report: the artifact id, the max extraction revision, and the
 /// reference-resolution status/version metadata (status falls back to <c>"unknown"</c> and version to <c>null</c>
@@ -21,12 +22,14 @@ public sealed record DeadCodeArtifact(
 
 /// <summary>The final dead-code report the CLI renders: the evaluated <see cref="DeadCodeResult"/> (two-phase
 /// literal scan already applied), the per-language coverage rows, the literal-scan accounting, and the artifact
-/// block. Produced by <see cref="DeadCodeCandidateReader.Read"/> — the reader owns all query-time computation.</summary>
+/// block. <see cref="UnavailableReason"/> is set when the reader short-circuits instead of scanning.
+/// Produced by <see cref="DeadCodeCandidateReader.Read"/> — the reader owns all query-time computation.</summary>
 public sealed record DeadCodeCandidateReport(
     DeadCodeResult Result,
     IReadOnlyList<LanguageCoverageRow> LanguageCoverage,
     DeadCodeLiteralScan LiteralScan,
-    DeadCodeArtifact Artifact);
+    DeadCodeArtifact Artifact,
+    string? UnavailableReason = null);
 
 /// <summary>
 /// Reads a julie-extract v4 artifact and produces the FINAL <see cref="DeadCodeCandidateReport"/> for
@@ -42,31 +45,63 @@ public static class DeadCodeCandidateReader
     private static readonly string[] RequiredResolutionTables =
         ["identifier_resolutions", "pending_resolutions", "pending_relationships"];
 
+    /// <summary>Named reason: the artifact is symbols-level, so inbound identifier evidence does not exist.</summary>
+    public const string UnavailableSymbolsLevel = "symbols_level";
+
+    /// <summary>Named reason: identifier and resolution tables have no rows, so every symbol would look unused.</summary>
+    public const string UnavailableResolutionEmpty = "resolution_empty";
+
+    /// <summary>Named reason: <c>reference_resolution_status</c> or the store view is not ready to judge usage.</summary>
+    public const string UnavailableResolutionNotReady = "resolution_not_ready";
+
+    /// <summary>Named reason: the literal scan stopped before every file, so provisional rows are not candidates.</summary>
+    public const string UnavailableLiteralScanIncomplete = "literal_scan_incomplete";
+
     /// <summary>
     /// Open <paramref name="symbolsDbPath"/> read-only, gate + validate it, gather the candidate rows and coverage,
     /// evaluate, run the literal scan over the survivors (re-reading source under <paramref name="workspaceRoot"/>
-    /// with a blake3 freshness guard), and return the finished report.
+    /// with a blake3 freshness guard), and return the finished report. Returns a named empty report and skips the
+    /// per-symbol walk and literal scan when resolution evidence is missing or not ready.
+    /// <paramref name="literalScanFileLimit"/> is a test/safety cap on distinct files the literal scan may open;
+    /// null means no cap. Hitting the cap does not finish the scan: provisional rows stay off the candidate list
+    /// and the report is <see cref="UnavailableLiteralScanIncomplete"/>. Display <c>--limit</c> must not be passed
+    /// here — that flag bounds only the shown list (references-candidates-v1).
     /// </summary>
-    public static DeadCodeCandidateReport Read(string symbolsDbPath, string workspaceRoot)
+    public static DeadCodeCandidateReport Read(
+        string symbolsDbPath, string workspaceRoot, int? literalScanFileLimit = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
         using var session = new WorkspaceReadHandle(LegacyArtifactReadSession.Open(symbolsDbPath));
-        return Read(session, workspaceRoot);
+        return Read(session, workspaceRoot, literalScanFileLimit);
     }
 
-    public static DeadCodeCandidateReport Read(IWorkspaceReadSession session, string workspaceRoot)
+    public static DeadCodeCandidateReport Read(
+        IWorkspaceReadSession session, string workspaceRoot, int? literalScanFileLimit = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
-        return session.Read(connection => Read(connection, workspaceRoot));
+        return session.Read(connection => Read(connection, workspaceRoot, literalScanFileLimit, session.Snapshot));
     }
 
-    private static DeadCodeCandidateReport Read(SqliteConnection connection, string workspaceRoot)
+    private static DeadCodeCandidateReport Read(
+        SqliteConnection connection,
+        string workspaceRoot,
+        int? literalScanFileLimit,
+        WorkspaceReadSnapshot? snapshot)
     {
         JulieSchemaGate.Verify(connection);
         RequireResolutionTables(connection);
+
+        var artifact = ReadArtifact(connection);
+        if (IndexLevels.IsSymbolsLevel(ReadMetadataValue(connection, "index_level")))
+            return Unavailable(connection, artifact, UnavailableSymbolsLevel);
+        if (ResolutionStatusNotReady(artifact.ReferenceResolutionStatus)
+            || SnapshotResolutionNotReady(snapshot))
+            return Unavailable(connection, artifact, UnavailableResolutionNotReady);
+        if (TableEmpty(connection, "identifiers"))
+            return Unavailable(connection, artifact, UnavailableResolutionEmpty);
 
         // Closure inputs over ALL symbols (small): the parent map + the is_test / structural-fact / annotation sets.
         var parent = new Dictionary<string, string?>(StringComparer.Ordinal);
@@ -81,10 +116,42 @@ public static class DeadCodeCandidateReader
         var coverage = LoadCoverage(connection);
 
         var result = DeadCodeCandidates.Evaluate(rows, coverage);
-        var (finalResult, literalScan) = RunLiteralScan(connection, workspaceRoot, result);
-        var artifact = ReadArtifact(connection);
+        var (finalResult, literalScan) = RunLiteralScan(connection, workspaceRoot, result, literalScanFileLimit);
+        string? unavailable = literalScan.SkipReason == "limit_bound"
+            ? UnavailableLiteralScanIncomplete
+            : null;
 
-        return new DeadCodeCandidateReport(finalResult, coverage, literalScan, artifact);
+        return new DeadCodeCandidateReport(finalResult, coverage, literalScan, artifact, unavailable);
+    }
+
+    private static DeadCodeCandidateReport Unavailable(
+        SqliteConnection connection, DeadCodeArtifact artifact, string reason)
+    {
+        var coverage = LoadCoverage(connection);
+        DeadCodeResult result = DeadCodeCandidates.Evaluate([], coverage);
+        return new DeadCodeCandidateReport(
+            result, coverage, new DeadCodeLiteralScan(0, 0, reason), artifact, reason);
+    }
+
+    private static bool ResolutionStatusNotReady(string status) =>
+        status.Trim().ToLowerInvariant() switch
+        {
+            "partial" or "complete" or "exact" or "unknown" => false,
+            _ => true,
+        };
+
+    private static bool SnapshotResolutionNotReady(WorkspaceReadSnapshot? snapshot) =>
+        snapshot is { Mode: WorkspaceReadMode.FamilyStore }
+        && (!string.Equals(snapshot.ResolutionState, "exact", StringComparison.OrdinalIgnoreCase)
+            || snapshot.ResolutionExactAt != snapshot.ManifestGeneration
+            || snapshot.ResolutionBaseId is null
+            || snapshot.ResolutionDeltaGeneration is null);
+
+    private static bool TableEmpty(SqliteConnection connection, string table)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM " + table + " LIMIT 1;";
+        return cmd.ExecuteScalar() is null;
     }
 
     // ---- required-table validation ---------------------------------------------------------------------------
@@ -355,11 +422,17 @@ public static class DeadCodeCandidateReader
         string Path, int StartByte, int EndByte, string ContentHash, long ContentBytes);
 
     private static (DeadCodeResult Result, DeadCodeLiteralScan Scan) RunLiteralScan(
-        SqliteConnection connection, string workspaceRoot, DeadCodeResult result)
+        SqliteConnection connection, string workspaceRoot, DeadCodeResult result, int? fileLimit)
     {
         // Only runs when provisional candidates survive; skip the disk reads entirely otherwise.
         if (result.NeedsLiteralScan.Count == 0)
             return (result, new DeadCodeLiteralScan(0, 0));
+
+        if (fileLimit is <= 0)
+        {
+            return (WithholdProvisionalCandidates(result),
+                new DeadCodeLiteralScan(0, 0, "limit_bound"));
+        }
 
         var nameToSymbolIds = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var row in result.NeedsLiteralScan)
@@ -373,6 +446,7 @@ public static class DeadCodeCandidateReader
         var matched = new HashSet<string>(StringComparer.Ordinal);
         int filesScanned = 0;
         int filesSkippedStale = 0;
+        bool hitFileLimit = false;
         // path → verified raw bytes (read + hashed ONCE per file). Regions slice these bytes directly: the
         // artifact's span offsets are byte offsets into exactly the bytes the hash covered, so slicing raw bytes
         // avoids the per-region full-file UTF-8 re-encode the old text-based slice paid (regions × file-size CPU;
@@ -383,6 +457,12 @@ public static class DeadCodeCandidateReader
         {
             if (!fileBytes.TryGetValue(region.Path, out byte[]? bytes))
             {
+                if (fileLimit is int cap && filesScanned + filesSkippedStale >= cap)
+                {
+                    hitFileLimit = true;
+                    break;
+                }
+
                 bytes = ReadVerifiedFileBytes(workspaceRoot, region);
                 fileBytes[region.Path] = bytes;
                 if (bytes is null)
@@ -408,9 +488,18 @@ public static class DeadCodeCandidateReader
                         matched.Add(id);
         }
 
+        if (hitFileLimit)
+        {
+            return (WithholdProvisionalCandidates(result),
+                new DeadCodeLiteralScan(filesScanned, filesSkippedStale, "limit_bound"));
+        }
+
         return (DeadCodeCandidates.ApplyLiteralScan(result, matched),
             new DeadCodeLiteralScan(filesScanned, filesSkippedStale));
     }
+
+    private static DeadCodeResult WithholdProvisionalCandidates(DeadCodeResult result) =>
+        new([], result.Suppressions, result.Examined, result.NeedsLiteralScan);
 
     private static List<LiteralRegion> ReadStringLiteralRegions(SqliteConnection connection)
     {

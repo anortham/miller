@@ -127,7 +127,7 @@ public sealed class ContentCorpusExternalStore
                 info.Length);
         }
 
-        byte[] bytes = File.ReadAllBytes(absFile);
+        byte[] bytes = ReadAllBytes(absFile);
         if (bytes.LongLength > effectiveMaxBytes)
         {
             throw new InvalidOperationException(
@@ -279,14 +279,31 @@ public sealed class ContentCorpusExternalStore
         }
     }
 
+    // Serilog shared:true holds live Miller logs with write and delete share (daily + size roll).
+    // FileShare.Read fails on Windows while that writer is open.
     private static Stream OpenRead(string path) =>
         new FileStream(
             path,
             FileMode.Open,
             FileAccess.Read,
-            FileShare.Read,
+            FileShare.ReadWrite | FileShare.Delete,
             bufferSize: 16 * 1024,
             FileOptions.SequentialScan);
+
+    private byte[] ReadAllBytes(string path)
+    {
+        using Stream stream = _openRead(path);
+        if (stream.CanSeek)
+        {
+            byte[] buffer = new byte[checked((int)stream.Length)];
+            stream.ReadExactly(buffer);
+            return buffer;
+        }
+
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        return copy.ToArray();
+    }
 
     public IReadOnlyList<TextContentSearchHit> Search(
         string contentDbPath,

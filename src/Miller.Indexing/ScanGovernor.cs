@@ -30,6 +30,7 @@ public sealed record ScanGovernorOwner(
 public sealed class ScanGovernorLease : IDisposable
 {
     private readonly ScanGovernor? _governor;
+    private readonly long _generation;
     private FileStream? _stream;
     private bool _disposed;
 
@@ -37,10 +38,11 @@ public sealed class ScanGovernorLease : IDisposable
     {
     }
 
-    internal ScanGovernorLease(ScanGovernor governor, FileStream stream)
+    internal ScanGovernorLease(ScanGovernor governor, FileStream stream, long generation)
     {
         _governor = governor;
         _stream = stream;
+        _generation = generation;
     }
 
     /// <summary>The admission a disabled governor hands out: holds nothing and releases nothing.</summary>
@@ -57,7 +59,15 @@ public sealed class ScanGovernorLease : IDisposable
         FileStream? stream = _stream;
         _stream = null;
         stream?.Dispose();
-        _governor?.LeaveThread();
+        try
+        {
+            _governor?.AfterOsLockReleasedForTest?.Invoke();
+        }
+        finally
+        {
+            _governor?.ClearHeldWorkspace(_generation);
+            _governor?.LeaveThread();
+        }
     }
 }
 
@@ -120,6 +130,10 @@ public sealed partial class ScanGovernor
 
     private readonly Random _jitter = new();
     private readonly object _jitterGate = new();
+    private readonly object _heldGate = new();
+    private string? _heldWorkspaceRoot;
+    private long _heldGeneration;
+    private long _nextLeaseGeneration;
 
     private ScanGovernor(string? directoryPath)
     {
@@ -237,8 +251,8 @@ public sealed partial class ScanGovernor
                 {
                     var stream = new FileStream(
                         LockFilePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-                    var lease = new ScanGovernorLease(this, stream);
                     TryWriteOwnerFile(request);
+                    var lease = new ScanGovernorLease(this, stream, RecordHeldWorkspace(request.WorkspaceRoot));
                     return lease;
                 }
                 catch (IOException ex) when (SingleWriterLock.IsLockContention(ex, OperatingSystem.IsWindows()))
@@ -309,11 +323,55 @@ public sealed partial class ScanGovernor
             "). That record is advisory — the OS lease handle is the authority.";
     }
 
+    /// <summary>
+    /// True when THIS governor instance currently holds the OS lease for <paramref name="workspaceRoot"/>.
+    /// Distinct from <see cref="TryReadOwner"/>: that record is advisory and can name a live pid that holds
+    /// nothing, so it must never prevent an acquire.
+    /// </summary>
+    public bool HoldsAdmissionFor(string workspaceRoot)
+    {
+        if (!Enabled || string.IsNullOrWhiteSpace(workspaceRoot))
+            return false;
+
+        lock (_heldGate)
+            return string.Equals(_heldWorkspaceRoot, workspaceRoot, StringComparison.Ordinal);
+    }
+
     private bool ThreadHoldsAdmission() => _threadHeld is { } held && held.Contains(this);
 
     private void EnterThread() => (_threadHeld ??= new List<ScanGovernor>(1)).Add(this);
 
     internal void LeaveThread() => _threadHeld?.Remove(this);
+
+    /// <summary>
+    /// Test seam: invoked after the OS lock handle is closed and before the held-workspace marker is cleared.
+    /// A test can acquire the successor lease in that gap and prove dispose must not wipe the new hold.
+    /// Not used in production.
+    /// </summary>
+    internal Action? AfterOsLockReleasedForTest { get; set; }
+
+    private long RecordHeldWorkspace(string workspaceRoot)
+    {
+        lock (_heldGate)
+        {
+            long generation = ++_nextLeaseGeneration;
+            _heldGeneration = generation;
+            _heldWorkspaceRoot = workspaceRoot;
+            return generation;
+        }
+    }
+
+    // Dispose closes the OS lock first. A successor can record a new hold in that gap, so
+    // clear only when this generation still owns the marker.
+    internal void ClearHeldWorkspace(long generation)
+    {
+        lock (_heldGate)
+        {
+            if (_heldGeneration != generation)
+                return;
+            _heldWorkspaceRoot = null;
+        }
+    }
 
     internal void TryDeleteOwnerFile()
     {

@@ -60,6 +60,9 @@ public sealed class EditService
     /// <summary>The bucket for a known failure path that produced no more specific classification.</summary>
     internal const string FailureUnknown = "unknown";
 
+    /// <summary>Diagnostic code for a same-text preview that produced no diff.</summary>
+    private const string EmptyNoChange = "no_change";
+
     /// <summary>Wait-reason enum stamped when an edit spends budget waiting for a single-file converge.</summary>
     internal const string StaleConvergeWaitReason = "edit_stale_converge";
 
@@ -206,20 +209,25 @@ public sealed class EditService
         if (string.Equals(result.Outcome, "ok", StringComparison.Ordinal))
             return result;
 
-        ToolDiagnostic diagnostic = result.FailureReason switch
-        {
-            FailureNoMatch or FailureTargetNotFound =>
-                ToolDiagnostic.ExpectedEmpty(result.FailureReason, DiagnosticMessage(result.Output)),
-            FailureAmbiguousMatch =>
-                ToolDiagnostic.Ambiguity(result.FailureReason, DiagnosticMessage(result.Output)),
-            FailureInvalidRequest or FailureStaleTarget or FailureReferenceLayerConverging or FailureResolutionConverging =>
-                ToolDiagnostic.Refusal(result.FailureReason, DiagnosticMessage(result.Output)),
-            FailureApplyFailed or FailurePartialApply =>
-                ToolDiagnostic.Unavailable(result.FailureReason, DiagnosticMessage(result.Output)),
-            _ => ToolDiagnostic.InternalFailure(
-                result.FailureReason ?? FailureUnknown,
-                DiagnosticMessage(result.Output)),
-        };
+        // Same-text preview is Outcome=empty with no failure bucket. That is an expected empty
+        // success, not the InternalFailure fallback (which would set the MCP error channel).
+        ToolDiagnostic diagnostic =
+            string.Equals(result.Outcome, "empty", StringComparison.Ordinal) && result.FailureReason is null
+                ? ToolDiagnostic.ExpectedEmpty(EmptyNoChange, DiagnosticMessage(result.Output))
+                : result.FailureReason switch
+                {
+                    FailureNoMatch or FailureTargetNotFound =>
+                        ToolDiagnostic.ExpectedEmpty(result.FailureReason, DiagnosticMessage(result.Output)),
+                    FailureAmbiguousMatch =>
+                        ToolDiagnostic.Ambiguity(result.FailureReason, DiagnosticMessage(result.Output)),
+                    FailureInvalidRequest or FailureStaleTarget or FailureReferenceLayerConverging or FailureResolutionConverging =>
+                        ToolDiagnostic.Refusal(result.FailureReason, DiagnosticMessage(result.Output)),
+                    FailureApplyFailed or FailurePartialApply =>
+                        ToolDiagnostic.Unavailable(result.FailureReason, DiagnosticMessage(result.Output)),
+                    _ => ToolDiagnostic.InternalFailure(
+                        result.FailureReason ?? FailureUnknown,
+                        DiagnosticMessage(result.Output)),
+                };
         return result with
         {
             Output = ToolDiagnosticRenderer.Attach("edit", result.Output, diagnostic, json, telemetry: null),

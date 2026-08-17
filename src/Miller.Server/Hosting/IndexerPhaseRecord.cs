@@ -130,7 +130,14 @@ internal sealed class LoggingIndexerPhaseSink(ILogger logger) : IIndexerPhaseSin
     public void Record(IndexerPhaseRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
-        _logger.LogInformation(
+        // Completed no-work bind is the idle heartbeat: Debug. Failed and did-work binds stay Information.
+        LogLevel level = record.Phase == IndexerPhaseNames.Bind &&
+                         record.Outcome == IndexerPhaseOutcomes.Completed &&
+                         !record.DidWork
+            ? LogLevel.Debug
+            : LogLevel.Information;
+        _logger.Log(
+            level,
             "indexer_phase_record {Phase} {ElapsedMilliseconds} {Outcome} {StoreSequence} {DidWork}",
             record.Phase,
             record.ElapsedMilliseconds,

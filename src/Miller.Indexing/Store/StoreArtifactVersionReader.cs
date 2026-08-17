@@ -23,6 +23,16 @@ public static class StoreArtifactVersionReader
         return pointerPresent ? storeVersion : legacyVersionReader(legacyDatabasePath);
     }
 
+    /// <summary>
+    /// Artifact extractor version for both status display and leadership Evaluate.
+    /// The same string must feed <c>artifact_extractor_version</c> and
+    /// <see cref="Miller.Indexing.LeadershipEligibility.Evaluate"/> so the reason names the displayed token.
+    /// </summary>
+    public static string? ReadForEligibility(
+        string? legacyDatabasePath,
+        Func<string?, string?> legacyVersionReader) =>
+        ReadForLeadership(legacyDatabasePath, legacyVersionReader);
+
     public static string? ReadForLeadership(
         string? legacyDatabasePath,
         Func<string?, string?> legacyVersionReader)

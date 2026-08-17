@@ -1,4 +1,6 @@
+using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -156,6 +158,122 @@ public sealed class ContentCorpusSidecarTests : IDisposable
     }
 
     [Fact]
+    public void Inspect_CurrentArtifact_ReportsCurrent()
+    {
+        using var fx = SourceFixture();
+        var sidecar = new ContentCorpusSidecar();
+        Assert.True(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7));
+
+        ContentCorpusFacts facts = sidecar.Inspect(fx.DbPath, expectedRevision: 7);
+
+        Assert.Equal("current", facts.State);
+        Assert.Null(facts.Error);
+        Assert.Equal(7, facts.WorkspaceRevision);
+    }
+
+    [Fact]
+    public void Inspect_MissingArtifact_ReportsMissing()
+    {
+        using var fx = SourceFixture();
+
+        ContentCorpusFacts facts = new ContentCorpusSidecar().Inspect(fx.DbPath, expectedRevision: 7);
+
+        Assert.Equal("missing", facts.State);
+        Assert.Null(facts.Error);
+        Assert.Equal(ContentCorpusSidecar.ContentDbPathFor(fx.DbPath), facts.Path);
+    }
+
+    [Fact]
+    public void Inspect_CorruptArtifact_ReportsUnreadableNotDatabaseLocked()
+    {
+        using var fx = SourceFixture();
+        string contentDb = ContentCorpusSidecar.ContentDbPathFor(fx.DbPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(contentDb)!);
+        File.WriteAllText(contentDb, "this is not a sqlite database");
+
+        ContentCorpusFacts facts = new ContentCorpusSidecar().Inspect(fx.DbPath, expectedRevision: 7);
+
+        Assert.Equal("unreadable", facts.State);
+        Assert.False(string.IsNullOrWhiteSpace(facts.Error));
+        Assert.NotEqual("database_locked", facts.Error);
+        Assert.DoesNotContain("database is locked", facts.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Inspect_WriterLock_DoesNotThrow_AndReportsConvergingDatabaseLocked()
+    {
+        using var fx = SourceFixture();
+        var sidecar = new ContentCorpusSidecar();
+        Assert.True(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7));
+        string contentDb = ContentCorpusSidecar.ContentDbPathFor(fx.DbPath);
+        SqliteConnection.ClearAllPools();
+
+        using var blocker = HoldExclusiveWriteLock(contentDb);
+        try
+        {
+            ContentCorpusFacts facts = sidecar.Inspect(fx.DbPath, expectedRevision: 7);
+
+            Assert.Equal("converging", facts.State);
+            Assert.Equal("database_locked", facts.Error);
+            Assert.Equal(Path.GetFullPath(contentDb), facts.Path);
+            Assert.DoesNotContain("SQLite Error 5", facts.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Rollback(blocker);
+        }
+    }
+
+    [Fact]
+    public void InspectStore_WriterLock_DoesNotThrow_AndReportsConvergingDatabaseLocked()
+    {
+        using var fx = SourceFixture();
+        var sidecar = new ContentCorpusSidecar();
+        Assert.True(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7));
+        string legacyContent = ContentCorpusSidecar.ContentDbPathFor(fx.DbPath);
+
+        string storeRoot = Path.Combine(_dir, "family-store");
+        Directory.CreateDirectory(storeRoot);
+        WorkspaceReadSnapshot snapshot = StoreSnapshot(storeRoot, sequence: 7);
+        string storePath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Content, snapshot.ViewId);
+        Directory.CreateDirectory(Path.GetDirectoryName(storePath)!);
+        File.Copy(legacyContent, storePath);
+        StoreSidecarCatalog.Stamp(
+            storePath,
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, snapshot));
+        SqliteConnection.ClearAllPools();
+
+        using var blocker = HoldExclusiveWriteLock(storePath);
+        try
+        {
+            ContentCorpusFacts facts = sidecar.InspectStore(storeRoot, snapshot);
+
+            Assert.Equal("converging", facts.State);
+            Assert.Equal("database_locked", facts.Error);
+            Assert.Equal(storePath, facts.Path);
+            Assert.DoesNotContain("SQLite Error 5", facts.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Rollback(blocker);
+        }
+    }
+
+    [Fact]
+    public void InspectStore_MissingArtifact_ReportsMissing()
+    {
+        string storeRoot = Path.Combine(_dir, "empty-store");
+        Directory.CreateDirectory(storeRoot);
+        WorkspaceReadSnapshot snapshot = StoreSnapshot(storeRoot, sequence: 4);
+
+        ContentCorpusFacts facts = new ContentCorpusSidecar().InspectStore(storeRoot, snapshot);
+
+        Assert.Equal("missing", facts.State);
+        Assert.Null(facts.Error);
+        Assert.Equal(4, facts.WorkspaceRevision);
+    }
+
+    [Fact]
     public void OpenRequired_MissingArtifact_FailsVisibly()
     {
         using var fx = SourceFixture();
@@ -181,6 +299,61 @@ public sealed class ContentCorpusSidecarTests : IDisposable
         Assert.Contains("stale", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("expected 7", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
+
+    private static SqliteConnection HoldExclusiveWriteLock(string dbPath)
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using (var busy = connection.CreateCommand())
+        {
+            busy.CommandText = "PRAGMA busy_timeout=0;";
+            busy.ExecuteNonQuery();
+        }
+        using (var begin = connection.CreateCommand())
+        {
+            begin.CommandText = "BEGIN EXCLUSIVE;";
+            begin.ExecuteNonQuery();
+        }
+
+        return connection;
+    }
+
+    private static void Rollback(SqliteConnection connection)
+    {
+        using var rollback = connection.CreateCommand();
+        rollback.CommandText = "ROLLBACK;";
+        rollback.ExecuteNonQuery();
+    }
+
+    private static WorkspaceReadSnapshot StoreSnapshot(string workspaceRoot, long sequence) =>
+        new(
+            workspaceRoot,
+            "workspace-a",
+            "family-a",
+            "view-a",
+            new WorkspaceFreshnessToken(
+                "family-a",
+                3,
+                "manifest-a",
+                sequence,
+                "resolution-a",
+                StoreInstanceId: "family-a:gen-001",
+                ViewId: "view-a",
+                GenerationName: "gen-001",
+                ManifestGeneration: 3,
+                IndexLevel: IndexLevels.FullMetadataValue,
+                LevelStampL1: "l1-a",
+                LevelStampL2: "l2-a",
+                LevelStampL3: "l3-a"),
+            IndexLevels.FullMetadataValue,
+            WorkspaceReadMode.FamilyStore,
+            GenerationName: "gen-001",
+            ManifestGeneration: 3);
 
     private static JulieDbFixture SourceFixture()
     {

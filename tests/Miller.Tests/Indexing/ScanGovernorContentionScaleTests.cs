@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Server;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -144,6 +145,26 @@ public sealed class ScanGovernorContentionScaleTests
         Assert.False(File.Exists(Path.Combine(fx.WorktreeA, ".miller", "symbols.db")));
     }
 
+    [Fact]
+    public void IsolatedHome_RegistryPath_IsUnderTemp_AndNotTheUserMillerDirectory()
+    {
+        using var fx = Fixture.CreateIsolatedHome();
+
+        string registry = Path.GetFullPath(fx.RegistryDbPath);
+        string tempRoot = Path.GetFullPath(Path.GetTempPath());
+        string userMiller = Path.GetFullPath(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".miller"));
+
+        Assert.StartsWith(tempRoot, registry, StringComparison.OrdinalIgnoreCase);
+        Assert.False(
+            registry.StartsWith(userMiller + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(registry, userMiller, StringComparison.OrdinalIgnoreCase),
+            $"fixture registry '{registry}' must not live under the user Miller directory '{userMiller}'.");
+
+        using WorkspaceRegistry opened = WorkspaceRegistry.Open(registry);
+        Assert.Equal(registry, Path.GetFullPath(opened.DatabasePath));
+    }
+
     // The same refusal against a root that ALREADY has a readable index is lock_busy/exit 0: that index is
     // genuinely being served, and a forced request is queued for whatever leader starts there next.
     [Fact]
@@ -181,6 +202,7 @@ public sealed class ScanGovernorContentionScaleTests
             WorktreeA = worktreeA;
             WorktreeB = worktreeB;
             Governor = ScanGovernor.ForMillerHome(Path.Combine(home, ".miller"));
+            RegistryDbPath = WorkspaceContext.Create(worktreeA, AppContext.BaseDirectory, home).RegistryDbPath;
         }
 
         public string WorktreeA { get; }
@@ -189,16 +211,44 @@ public sealed class ScanGovernorContentionScaleTests
 
         public ScanGovernor Governor { get; }
 
+        /// <summary>
+        /// The registry the spawned children will open: <c>&lt;isolated home&gt;/.miller/workspaces.db</c>,
+        /// composed the same way <see cref="WorkspaceContext.Create"/> does in the real CLI.
+        /// </summary>
+        public string RegistryDbPath { get; }
+
         public static Fixture Create()
         {
             ScaleTestSupport.RequireJulieServer();
-            string binary = RequireMillerBinary();
+            return CreateIsolatedHome(RequireMillerBinary());
+        }
 
+        /// <summary>
+        /// Isolated temp home + worktrees without the julie/miller binaries. The registry-path guard uses
+        /// this so it can run when restore has not.
+        /// </summary>
+        public static Fixture CreateIsolatedHome(string? binary = null)
+        {
             string work = Path.Combine(Path.GetTempPath(), "miller-scan-governor-" + Guid.NewGuid().ToString("N"));
             string home = Path.Combine(work, "home");
             Directory.CreateDirectory(Path.Combine(home, ".miller"));
 
-            return new Fixture(work, home, binary, SeedWorktree(work, "wt-a"), SeedWorktree(work, "wt-b"));
+            string worktreeA;
+            string worktreeB;
+            if (binary is null)
+            {
+                worktreeA = PathCanonicalizer.CanonicalizeRoot(
+                    Directory.CreateDirectory(Path.Combine(work, "wt-a")).FullName);
+                worktreeB = PathCanonicalizer.CanonicalizeRoot(
+                    Directory.CreateDirectory(Path.Combine(work, "wt-b")).FullName);
+            }
+            else
+            {
+                worktreeA = SeedWorktree(work, "wt-a");
+                worktreeB = SeedWorktree(work, "wt-b");
+            }
+
+            return new Fixture(work, home, binary ?? string.Empty, worktreeA, worktreeB);
         }
 
         // The CLI resolves .tools relative to its own AppContext.BaseDirectory, so the binary must be the one

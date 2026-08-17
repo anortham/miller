@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
@@ -2925,6 +2926,128 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Inspect_Summary_FamilyStore_UsesSymbolsWhenSearchSidecarIsNotCurrent()
+    {
+        using var current = EmptyFixture("current-ws");
+        using var target = JulieDbFixture.CreateForInspect();
+        string dir = Path.Combine(Path.GetTempPath(), "miller-inspect-family-" + Guid.NewGuid().ToString("N"));
+        string currentRoot = Path.Combine(dir, "current");
+        string registryDb = Path.Combine(dir, "workspaces.db");
+        Directory.CreateDirectory(currentRoot);
+
+        try
+        {
+            using var registry = WorkspaceRegistry.Open(registryDb);
+            registry.UpsertSeen("target-ws", "target-111111111111", target.WorkspaceRoot, target.DbPath);
+            registry.MarkScanned("target-ws", revision: 1);
+
+            int fullLoadCount = 0;
+            int symbolLoadCount = 0;
+            int storeSearchOpenCount = 0;
+            var lastGoodSnapshot = new WorkspaceReadSnapshot(
+                target.WorkspaceRoot,
+                "target-ws",
+                "family-a",
+                "view-a",
+                new WorkspaceFreshnessToken(
+                    "family-a",
+                    3,
+                    "manifest-a",
+                    17,
+                    "resolution-a",
+                    StoreInstanceId: "family-a:gen-001",
+                    ViewId: "view-a",
+                    GenerationName: "gen-001",
+                    ManifestGeneration: 3,
+                    IndexLevel: IndexLevels.FullMetadataValue,
+                    LevelStampL1: "l1-a",
+                    LevelStampL2: "l2-a",
+                    LevelStampL3: "l3-a"),
+                IndexLevels.FullMetadataValue,
+                WorkspaceReadMode.FamilyStore,
+                GenerationName: "gen-001",
+                ManifestGeneration: 3,
+                ResolutionState: "exact");
+            var snapshot = lastGoodSnapshot with
+            {
+                Freshness = lastGoodSnapshot.Freshness with { StoreLogSequence = 21, ManifestHash = "manifest-b" },
+                ResolutionState = "exact",
+            };
+            string searchPath = StoreSidecarCatalog.PathFor(
+                target.WorkspaceRoot,
+                StoreSidecarKind.Search,
+                lastGoodSnapshot.ViewId);
+            Directory.CreateDirectory(Path.GetDirectoryName(searchPath)!);
+            SearchIndexWriter.Write(searchPath, SqliteSymbolReader.Read(target.DbPath), revision: 17);
+            StoreSidecarCatalog.Stamp(
+                searchPath,
+                StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGoodSnapshot));
+            var workspace = new WorkspaceContext(
+                currentRoot,
+                current.DbPath,
+                Path.Combine(dir, "telemetry.db"),
+                registryDb,
+                AppContext.BaseDirectory,
+                "current-ws",
+                currentRoot,
+                current.DbPath);
+            var provider = new WorkspaceIndexProvider(
+                new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+                workspace,
+                registry,
+                refresh: _ => throw new InvalidOperationException("refresh was not expected"),
+                loadIndex: _ =>
+                {
+                    fullLoadCount++;
+                    throw new InvalidOperationException("full loader was not expected");
+                },
+                loadSymbolSearch: _ => throw new InvalidOperationException("legacy symbol loader was not expected"),
+                loadContentSearch: (_, _) =>
+                    throw new InvalidOperationException("content loader was not expected"),
+                loadTextContentSearch: (_, _) =>
+                    throw new InvalidOperationException("text content loader was not expected"),
+                loadRegionSearch: (_, _) =>
+                    throw new InvalidOperationException("region loader was not expected"),
+                currentIndexFresh: _ => true,
+                sidecar: new SymbolSearchSidecar(enabled: true),
+                openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                    new SnapshotOverrideSession(
+                        LegacyArtifactReadSession.Open(target.DbPath),
+                        snapshot)),
+                loadSessionSymbolSearch: _ =>
+                {
+                    symbolLoadCount++;
+                    return SymbolSearchProjectionLoader.Load(target.DbPath);
+                },
+                openStoreSymbolSearch: _ =>
+                {
+                    storeSearchOpenCount++;
+                    throw new InvalidOperationException(
+                        "Search sidecar for view 'view-a' is missing or stale. " +
+                        "Run `miller workspace refresh` to converge it.");
+                });
+            var tool = new InspectTool(provider);
+
+            string output = tool.Inspect(
+                "GetUser",
+                depth: "summary",
+                workspace_id: "target-ws",
+                ensure_fresh: false);
+
+            Assert.DoesNotContain("inspect failed", output);
+            Assert.Contains("Gets a user by id.", output);
+            Assert.Equal(0, fullLoadCount);
+            Assert.Equal(0, storeSearchOpenCount);
+            Assert.Equal(1, symbolLoadCount);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public void Inspect_Full_RegisteredWorkspace_UsesSymbolProjectionWithoutFullLoad()
     {
         using var current = EmptyFixture("current-ws");
@@ -3186,5 +3309,22 @@ public sealed class InspectToolTests
             _onSearchResolve();
             return ReadToolRoutingTestSupport.SymbolReadContextFor(workspaceId is null ? _current : _target);
         }
+    }
+
+    private sealed class SnapshotOverrideSession : IWorkspaceReadSession
+    {
+        private readonly IWorkspaceReadSession _inner;
+
+        public SnapshotOverrideSession(IWorkspaceReadSession inner, WorkspaceReadSnapshot snapshot)
+        {
+            _inner = inner;
+            Snapshot = snapshot;
+        }
+
+        public WorkspaceReadSnapshot Snapshot { get; }
+
+        public TResult Read<TResult>(Func<SqliteConnection, TResult> query) => _inner.Read(query);
+
+        public void Dispose() => _inner.Dispose();
     }
 }

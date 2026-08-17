@@ -429,6 +429,8 @@ public sealed class IndexerService : BackgroundService
         // Pass the CANONICAL db (verified-fact 4): the single-file update/delete ops require an
         // already-canonical --db (the runner no longer GetFullPath-mangles it).
         IExtractOps ops = _createOps(workspace, canonicalRoot, canonicalDbPath);
+        // Session start (and a later rebind, which starts a new session) is the only pointer check.
+        // A quiet debounce tick must not re-read the store pointer or write an Information bind line.
         if (ops is StoreWorkspaceCoordinator storeCoordinator)
             storeCoordinator.EnsureBindingPointer();
         _failurePolicy = PersistedScanFailurePolicy.For(canonicalDbPath, canonicalRoot);
@@ -526,10 +528,6 @@ public sealed class IndexerService : BackgroundService
                 await RelinquishForReplacedRootAsync(millerDir, canonicalRoot, stoppingToken).ConfigureAwait(false);
                 return true; // re-enter the claim loop; the re-bootstrap has rebound the workspace
             }
-
-            if (yieldDecision is null && handoffDecision is null &&
-                ops is StoreWorkspaceCoordinator leaderStoreCoordinator)
-                leaderStoreCoordinator.EnsureBindingPointer();
 
             if (yieldDecision is { } decision)
             {
@@ -953,6 +951,16 @@ public sealed class IndexerService : BackgroundService
             // re-arm a failed startup delta drops the reconcile for every edit made while Miller was down.
             RecordScanFailure(ScanIntent.IncrementalReconcile, decision, ex);
             _core?.RequestWholeRepoScan(ScanIntent.IncrementalReconcile);
+            if (StoreWorkspaceOperationException.IsRetryableProducerFailure(ex))
+            {
+                // A coordinator quantum miss or a still-owned request is retryable. Keep the prior view and
+                // last-good serve; do not mark the registry as broken.
+                _logger.LogWarning(
+                    ex,
+                    "Startup delta scan hit a retryable producer miss; keeping the loaded index until a later scan converges.");
+                return;
+            }
+
             _logger.LogWarning(ex, "Startup delta scan failed; keeping the loaded index until a later scan converges.");
             try
             {
@@ -1127,6 +1135,19 @@ public sealed class IndexerService : BackgroundService
         string? workspaceRoot = ScanGovernorKey.For(workspace) ?? _currentScanGovernorKey;
         var request = new ScanGovernorRequest(
             workspaceRoot ?? UnknownWorkspaceRootLabel, reason, ExtractJobsPolicy.FromEnvironment());
+
+        // This process already holds the one OS lease for this root (the debounce drain's
+        // leader-drain-rescan). Waiting the 5 s budget then refusing would log a same-pid
+        // leader-ondemand warning and delay the caller; a second acquire would also be a
+        // same-thread double-wrap if both sites share the drain thread. Queue instead.
+        if (workspaceRoot is not null && _governor.HoldsAdmissionFor(workspaceRoot))
+        {
+            _logger.LogDebug(
+                "This process already holds machine-wide scan admission for {Root}; queueing {Reason} " +
+                "on the existing drain instead of waiting. {Holder}",
+                workspaceRoot, reason, _governor.DescribeHolder());
+            return null;
+        }
 
         ScanGovernorAdmission? admission;
         try
