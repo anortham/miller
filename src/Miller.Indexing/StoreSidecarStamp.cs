@@ -251,6 +251,8 @@ public static class StoreSidecarCatalog
     public static bool IsCurrent(string databasePath, StoreSidecarStamp expected) =>
         TryRead(databasePath) == expected;
 
+    internal const int ReadableOpenAttempts = 4;
+
     /// <summary>
     /// The newest stamp on <paramref name="databasePath"/> that matches <paramref name="live"/> family, view,
     /// and kind at an earlier store sequence. A different family or view is never last-good.
@@ -273,11 +275,15 @@ public static class StoreSidecarCatalog
         return stamp;
     }
 
+    /// <summary>
+    /// Last-good is allowed whenever the live snapshot is a readable family-store cursor, including
+    /// <c>exact</c>. Sidecar rebuild can lag after resolution becomes exact.
+    /// </summary>
     internal static bool AllowsLastGoodServe(WorkspaceReadSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        return string.Equals(snapshot.ResolutionState, "converging", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(snapshot.ResolutionState, "unbound", StringComparison.OrdinalIgnoreCase);
+        return snapshot.Mode == WorkspaceReadMode.FamilyStore
+            && snapshot.Freshness.StoreLogSequence is not null;
     }
 
     internal static StoreSidecarStamp? TryResolveReadable(

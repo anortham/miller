@@ -1083,6 +1083,100 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void ResolveSymbolRead_FamilyStoreLastGood_UsesGenerationProjection()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-store-inspect-last-good");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-a", storeLogSequence: 21) with
+        {
+            ResolutionState = "exact",
+        };
+        string searchPath = StoreSidecarCatalog.PathFor(root, StoreSidecarKind.Search, lastGood.ViewId);
+        Directory.CreateDirectory(Path.GetDirectoryName(searchPath)!);
+        SearchIndexWriter.Write(searchPath, SqliteSymbolReader.Read(target.DbPath), revision: 17);
+        StoreSidecarCatalog.Stamp(
+            searchPath,
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGood));
+
+        int storeOpens = 0;
+        int generationLoads = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: new SymbolSearchSidecar(enabled: true),
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            loadSessionSymbolSearch: _ =>
+            {
+                generationLoads++;
+                return SymbolSearchProjectionLoader.Load(target.DbPath);
+            },
+            openStoreSymbolSearch: _ =>
+            {
+                storeOpens++;
+                throw new InvalidOperationException("named inspect must not open last-good search");
+            });
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+
+        Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.Equal(0, storeOpens);
+        Assert.Equal(1, generationLoads);
+    }
+
+    [Fact]
+    public void ResolveSymbolSearch_FamilyStoreLastGood_ReopensWhenSidecarStampCatchesUp()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-store-search-catchup");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-a", storeLogSequence: 21) with
+        {
+            ResolutionState = "exact",
+        };
+        string searchPath = StoreSidecarCatalog.PathFor(root, StoreSidecarKind.Search, lastGood.ViewId);
+        Directory.CreateDirectory(Path.GetDirectoryName(searchPath)!);
+        SearchIndexWriter.Write(searchPath, SqliteSymbolReader.Read(target.DbPath), revision: 17);
+        StoreSidecarCatalog.Stamp(
+            searchPath,
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGood));
+
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: sidecar,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
+
+        using WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        Assert.Single(first.Index.FindByName("TargetType"));
+        Assert.Empty(first.Index.FindByName("FreshType"));
+
+        using var fresh = DbWithSymbol("target-ws", revision: 1, "FreshType");
+        SearchIndexWriter.Write(searchPath, SqliteSymbolReader.Read(fresh.DbPath), revision: 21);
+        StoreSidecarCatalog.Stamp(
+            searchPath,
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, live));
+
+        using WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+
+        Assert.NotSame(first.Index, second.Index);
+        Assert.Empty(second.Index.FindByName("TargetType"));
+        Assert.Single(second.Index.FindByName("FreshType"));
+    }
+
+    [Fact]
     public void Resolve_RegisteredWorkspace_ReloadsAfterARefreshedScanThatDidNotAdvanceTheRevision()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");

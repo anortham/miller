@@ -36,6 +36,8 @@ public sealed class SymbolSearchSidecar
     /// <summary>Whether the source-region tables should be populated when the sidecar is built.</summary>
     public RegionIndexOptions RegionOptions { get; }
 
+    internal Action<string, int>? AfterStoreStampReadForTests { get; set; }
+
     /// <summary>The on-disk <c>search.db</c> path for a julie <c>symbols.db</c> — its sibling in the same dir.</summary>
     public static string SearchDbPathFor(string symbolsDbPath)
     {
@@ -288,19 +290,25 @@ public sealed class SymbolSearchSidecar
             throw new InvalidOperationException("Search sidecar is disabled.");
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, snapshot);
         string searchDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, snapshot.ViewId);
-        StoreSidecarStamp serve = StoreSidecarCatalog.TryResolveReadable(searchDbPath, expected, snapshot)
-            ?? throw new InvalidOperationException(
-                $"Search sidecar for view '{snapshot.ViewId}' is missing or stale. " +
-                "Run `miller workspace refresh` to converge it.");
-
-        FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(searchDbPath);
-        if (index.Revision != serve.StoreLogSequence)
+        InvalidOperationException? lastMismatch = null;
+        for (int attempt = 0; attempt < StoreSidecarCatalog.ReadableOpenAttempts; attempt++)
         {
-            throw new InvalidOperationException(
+            StoreSidecarStamp serve = StoreSidecarCatalog.TryResolveReadable(searchDbPath, expected, snapshot)
+                ?? throw new InvalidOperationException(
+                    $"Search sidecar for view '{snapshot.ViewId}' is missing or stale. " +
+                    "Run `miller workspace refresh` to converge it.");
+            AfterStoreStampReadForTests?.Invoke(searchDbPath, attempt);
+
+            FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(searchDbPath);
+            if (index.Revision == serve.StoreLogSequence)
+                return index;
+
+            lastMismatch = new InvalidOperationException(
                 $"Search sidecar for view '{snapshot.ViewId}' has store sequence {index.Revision}, " +
                 $"expected {serve.StoreLogSequence}.");
         }
-        return index;
+
+        throw lastMismatch!;
     }
 
     public bool EnsureStoreCurrent(string storeRoot, IWorkspaceReadSession session)

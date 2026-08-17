@@ -118,7 +118,7 @@ public sealed class WorkspaceIndexProvider
         _loadSessionSymbolSearch = loadSessionSymbolSearch ?? SymbolSearchProjectionLoader.LoadSession;
         _openStoreSymbolSearch = openStoreSymbolSearch ?? (readSession =>
         {
-            string storeRoot = readSession.FamilyStoreRoot
+            string storeRoot = StoreSearchRoot(readSession)
                 ?? throw new InvalidOperationException("The family-store read session has no store root.");
             return _sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot);
         });
@@ -410,15 +410,14 @@ public sealed class WorkspaceIndexProvider
     {
         if (readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore)
         {
-            CacheKey storeKey = KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot);
+            StoreSidecarStamp? served = TryServedSearchStamp(readSession);
+            CacheKey storeKey = KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot, served);
             if (_sidecar.Enabled)
             {
-                string storeRoot = readSession.FamilyStoreRoot
-                    ?? throw new InvalidOperationException("The family-store read session has no store root.");
                 return GetOrAddSymbolSearchCache(
                     storeKey,
                     () => new CachedSymbolSearch(
-                        MeasureFamilyLookup(_sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot)),
+                        MeasureFamilyLookup(_openStoreSymbolSearch(readSession)),
                         IsSidecar: true)).Index;
             }
             return GetOrAddSymbolSearchCache(
@@ -509,36 +508,67 @@ public sealed class WorkspaceIndexProvider
         string? workspaceId,
         WorkspaceReadHandle readSession)
     {
-        CacheKey key = KeyFor(workspaceId, readSession.Snapshot);
-        if (_sidecar.Enabled && TryCurrentStoreSearch(readSession) is { } current)
+        StoreSidecarStamp? currentStamp = TryCurrentSearchStamp(readSession);
+        if (_sidecar.Enabled && currentStamp is not null)
         {
+            CacheKey currentKey = KeyFor(workspaceId, readSession.Snapshot, currentStamp);
             return GetOrAddSymbolSearchCache(
-                key,
-                () => new CachedSymbolSearch(current, IsSidecar: true)).Index;
+                currentKey,
+                () => new CachedSymbolSearch(
+                    MeasureFamilyLookup(_openStoreSymbolSearch(readSession)),
+                    IsSidecar: true)).Index;
         }
 
+        CacheKey key = KeyFor(workspaceId, readSession.Snapshot);
         return GetOrAddSymbolReadCache(
             key,
             () => new CachedSymbolRead(MeasureFamilyLookup(_loadSessionSymbolSearch(readSession)))).Index;
     }
 
-    private ISymbolLookupIndex? TryCurrentStoreSearch(WorkspaceReadHandle readSession)
+    private static StoreSidecarStamp? TryCurrentSearchStamp(WorkspaceReadHandle readSession)
     {
-        string? storeRoot = readSession.FamilyStoreRoot;
-        if (storeRoot is null)
+        StoreSidecarStamp? served = TryServedSearchStamp(readSession);
+        if (served is null)
             return null;
 
         StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(
             StoreSidecarKind.Search,
             readSession.Snapshot);
-        string searchDbPath = StoreSidecarCatalog.PathFor(
-            storeRoot,
-            StoreSidecarKind.Search,
-            readSession.Snapshot.ViewId);
-        if (StoreSidecarCatalog.TryResolveReadable(searchDbPath, expected, readSession.Snapshot) is null)
+        return served == expected ? served : null;
+    }
+
+    private static StoreSidecarStamp? TryServedSearchStamp(WorkspaceReadHandle readSession)
+    {
+        string? storeRoot = StoreSearchRoot(readSession);
+        if (storeRoot is null)
             return null;
 
-        return MeasureFamilyLookup(_openStoreSymbolSearch(readSession));
+        try
+        {
+            StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(
+                StoreSidecarKind.Search,
+                readSession.Snapshot);
+            string searchDbPath = StoreSidecarCatalog.PathFor(
+                storeRoot,
+                StoreSidecarKind.Search,
+                readSession.Snapshot.ViewId);
+            return StoreSidecarCatalog.TryResolveReadable(searchDbPath, expected, readSession.Snapshot);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static string? StoreSearchRoot(WorkspaceReadHandle readSession)
+    {
+        if (readSession.Snapshot.Mode != WorkspaceReadMode.FamilyStore)
+            return null;
+        if (!string.IsNullOrWhiteSpace(readSession.FamilyStoreRoot))
+            return readSession.FamilyStoreRoot;
+        return string.IsNullOrWhiteSpace(readSession.Snapshot.WorkspaceRoot)
+            ? null
+            : readSession.Snapshot.WorkspaceRoot;
     }
 
     private ISymbolGraphReachability ResolveFamilyStoreGraph(
@@ -568,18 +598,17 @@ public sealed class WorkspaceIndexProvider
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
             long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
+            StoreSidecarStamp? served = familyStore ? TryServedSearchStamp(readSession) : null;
             CacheKey key = familyStore
-                ? KeyFor(row.WorkspaceId, readSession.Snapshot)
+                ? KeyFor(row.WorkspaceId, readSession.Snapshot, served)
                 : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
             CachedSymbolSearch cached;
             if (familyStore && _sidecar.Enabled)
             {
-                string storeRoot = readSession.FamilyStoreRoot
-                    ?? throw new InvalidOperationException("The family-store read session has no store root.");
                 cached = GetOrAddSymbolSearchCache(
                     key,
                     () => new CachedSymbolSearch(
-                        MeasureFamilyLookup(_sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot)),
+                        MeasureFamilyLookup(_openStoreSymbolSearch(readSession)),
                         IsSidecar: true));
             }
             else if (familyStore)
@@ -833,8 +862,9 @@ public sealed class WorkspaceIndexProvider
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
             long revision = ContextRevision(readSession.Snapshot, holderRevision);
+            StoreSidecarStamp? served = familyStore ? TryServedSearchStamp(readSession) : null;
             CacheKey key = familyStore
-                ? KeyFor(workspaceKey, readSession.Snapshot)
+                ? KeyFor(workspaceKey, readSession.Snapshot, served)
                 : KeyFor(workspaceKey, dbPath, revision);
             CachedRegionSearch cached = familyStore
                 ? GetOrLoadRegionSearch(
@@ -871,8 +901,9 @@ public sealed class WorkspaceIndexProvider
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
             long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
+            StoreSidecarStamp? served = familyStore ? TryServedSearchStamp(readSession) : null;
             CacheKey key = familyStore
-                ? KeyFor(row.WorkspaceId, readSession.Snapshot)
+                ? KeyFor(row.WorkspaceId, readSession.Snapshot, served)
                 : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
             CachedRegionSearch cached = familyStore
                 ? GetOrLoadRegionSearch(
@@ -1464,7 +1495,10 @@ public sealed class WorkspaceIndexProvider
             : new CacheKey(workspaceId, dbPath, revision, 0, 0, identity.ArtifactId, identity.StampState);
     }
 
-    private static CacheKey KeyFor(string? workspaceId, WorkspaceReadSnapshot snapshot)
+    private static CacheKey KeyFor(
+        string? workspaceId,
+        WorkspaceReadSnapshot snapshot,
+        StoreSidecarStamp? servedSidecar = null)
     {
         WorkspaceFreshnessToken freshness = snapshot.Freshness;
         string resolvedWorkspaceId = string.IsNullOrWhiteSpace(workspaceId)
@@ -1473,11 +1507,17 @@ public sealed class WorkspaceIndexProvider
         string sourceIdentity = snapshot.Mode == WorkspaceReadMode.FamilyStore
             ? $"store:{freshness.StoreInstanceId ?? snapshot.ArtifactOrStoreId}:{freshness.ViewId ?? snapshot.ViewId}:{freshness.GenerationName ?? snapshot.GenerationName}:{freshness.ManifestGeneration ?? snapshot.ManifestGeneration}:{freshness.ManifestHash}:{freshness.StoreLogSequence}:{freshness.IndexLevel ?? snapshot.IndexLevel}:{freshness.LevelStampL1}:{freshness.LevelStampL2}:{freshness.LevelStampL3}:{freshness.ResolutionStamp}:{freshness.SearchStamp}:{freshness.ContentStamp}:{freshness.VectorStamp}"
             : snapshot.ArtifactOrStoreId;
+        if (servedSidecar is not null)
+        {
+            sourceIdentity +=
+                $":serve:{servedSidecar.StoreLogSequence}:{servedSidecar.ScopeToken}";
+        }
+
         return new CacheKey(
             resolvedWorkspaceId,
             sourceIdentity,
             freshness.Revision,
-            freshness.StoreLogSequence ?? 0,
+            servedSidecar?.StoreLogSequence ?? freshness.StoreLogSequence ?? 0,
             0,
             freshness.StoreInstanceId ?? freshness.ArtifactOrStoreId,
             ArtifactStampState.Present);

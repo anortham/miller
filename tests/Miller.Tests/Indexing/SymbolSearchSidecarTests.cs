@@ -797,7 +797,7 @@ public sealed class SymbolSearchSidecarTests : IDisposable
     }
 
     [Fact]
-    public void OpenStoreRequired_ExactSnapshotWithEarlierSidecar_StillThrows()
+    public void OpenStoreRequired_ExactSnapshotWithEarlierSidecar_ServesLastGoodHits()
     {
         string storeRoot = Path.Combine(
             Path.GetTempPath(),
@@ -814,10 +814,57 @@ public sealed class SymbolSearchSidecarTests : IDisposable
                 StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGood));
 
             var sidecar = new SymbolSearchSidecar(enabled: true);
-            InvalidOperationException error = Assert.Throws<InvalidOperationException>(
-                () => sidecar.OpenStoreRequired(storeRoot, live));
+            FtsSymbolSearchIndex index = sidecar.OpenStoreRequired(storeRoot, live);
 
-            Assert.Contains("Search sidecar for view 'view-a' is missing or stale", error.Message, StringComparison.Ordinal);
+            Assert.Equal(17L, index.Revision);
+            var hit = Assert.Single(index.Search("Alpha", limit: 10));
+            Assert.Equal("Alpha", index.Resolve(hit.Document.DocId).Name);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(storeRoot))
+                Directory.Delete(storeRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void OpenStoreRequired_StampOpenRace_RetriesAndServesPromotedSidecar()
+    {
+        string storeRoot = Path.Combine(
+            Path.GetTempPath(),
+            "miller-search-stamp-race-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storeRoot);
+        try
+        {
+            WorkspaceReadSnapshot lastGood = StoreSnapshot(storeRoot, sequence: 17);
+            WorkspaceReadSnapshot live = StoreSnapshot(storeRoot, sequence: 21, resolutionState: "exact");
+            string searchPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, lastGood.ViewId);
+            SearchIndexWriter.Write(searchPath, Corpus(), revision: 17);
+            StoreSidecarCatalog.Stamp(
+                searchPath,
+                StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGood));
+
+            int stampReads = 0;
+            var sidecar = new SymbolSearchSidecar(enabled: true)
+            {
+                AfterStoreStampReadForTests = (path, attempt) =>
+                {
+                    stampReads++;
+                    if (attempt != 0)
+                        return;
+                    SearchIndexWriter.Write(path, Corpus(), revision: 21);
+                    StoreSidecarCatalog.Stamp(
+                        path,
+                        StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, live));
+                },
+            };
+            FtsSymbolSearchIndex index = sidecar.OpenStoreRequired(storeRoot, live);
+
+            Assert.Equal(21L, index.Revision);
+            Assert.True(stampReads >= 2);
+            var hit = Assert.Single(index.Search("Alpha", limit: 10));
+            Assert.Equal("Alpha", index.Resolve(hit.Document.DocId).Name);
         }
         finally
         {
@@ -862,6 +909,36 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         {
             WorkspaceReadSnapshot lastGood = StoreSnapshot(storeRoot, sequence: 17);
             WorkspaceReadSnapshot live = StoreSnapshot(storeRoot, sequence: 21, resolutionState: "converging");
+            string searchPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, lastGood.ViewId);
+            SearchIndexWriter.Write(searchPath, Corpus(), revision: 17);
+            StoreSidecarCatalog.Stamp(
+                searchPath,
+                StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGood));
+
+            SearchSidecarFacts facts = new SymbolSearchSidecar(enabled: true).InspectStore(storeRoot, live);
+
+            Assert.Equal("stale", facts.State);
+            Assert.Equal(21, facts.ExpectedRevision);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(storeRoot))
+                Directory.Delete(storeRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void InspectStore_ExactLastGood_StillReportsStale()
+    {
+        string storeRoot = Path.Combine(
+            Path.GetTempPath(),
+            "miller-search-exact-stale-status-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storeRoot);
+        try
+        {
+            WorkspaceReadSnapshot lastGood = StoreSnapshot(storeRoot, sequence: 17);
+            WorkspaceReadSnapshot live = StoreSnapshot(storeRoot, sequence: 21, resolutionState: "exact");
             string searchPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, lastGood.ViewId);
             SearchIndexWriter.Write(searchPath, Corpus(), revision: 17);
             StoreSidecarCatalog.Stamp(

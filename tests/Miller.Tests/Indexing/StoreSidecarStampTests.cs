@@ -191,6 +191,79 @@ public sealed class StoreSidecarStampTests : IDisposable
     }
 
     [Fact]
+    public void AllowsLastGoodServe_FamilyStoreSnapshot_IsTrueWhenResolutionIsExact()
+    {
+        WorkspaceReadSnapshot exact = Snapshot("manifest-a", sequence: 21, resolutionState: "exact");
+        WorkspaceReadSnapshot converging = Snapshot("manifest-a", sequence: 21, resolutionState: "converging");
+        WorkspaceReadSnapshot unbound = Snapshot("manifest-a", sequence: 21, resolutionState: "unbound");
+
+        Assert.True(StoreSidecarCatalog.AllowsLastGoodServe(exact));
+        Assert.True(StoreSidecarCatalog.AllowsLastGoodServe(converging));
+        Assert.True(StoreSidecarCatalog.AllowsLastGoodServe(unbound));
+    }
+
+    [Fact]
+    public void AllowsLastGoodServe_LegacySnapshot_IsFalse()
+    {
+        var snapshot = new WorkspaceReadSnapshot(
+            _root,
+            "workspace-a",
+            "artifact-a",
+            "view-a",
+            new WorkspaceFreshnessToken("artifact-a", 4),
+            IndexLevels.FullMetadataValue,
+            WorkspaceReadMode.LegacyArtifact);
+
+        Assert.False(StoreSidecarCatalog.AllowsLastGoodServe(snapshot));
+    }
+
+    [Fact]
+    public void TryResolveReadable_ExactSnapshotWithEarlierSidecar_ReturnsLastGood()
+    {
+        Directory.CreateDirectory(_root);
+        string databasePath = StoreSidecarCatalog.PathFor(_root, StoreSidecarKind.Search, "view-a");
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+        }
+
+        WorkspaceReadSnapshot earlierSnapshot = Snapshot("manifest-a", sequence: 17);
+        StoreSidecarStamp earlier = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, earlierSnapshot);
+        StoreSidecarCatalog.Stamp(databasePath, earlier);
+        WorkspaceReadSnapshot live = Snapshot("manifest-b", sequence: 21, resolutionState: "exact");
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, live);
+
+        Assert.Equal(earlier, StoreSidecarCatalog.TryResolveReadable(databasePath, expected, live));
+    }
+
+    [Fact]
+    public void TryResolveReadable_ExactCurrentSidecar_ReturnsExpected()
+    {
+        Directory.CreateDirectory(_root);
+        string databasePath = StoreSidecarCatalog.PathFor(_root, StoreSidecarKind.Search, "view-a");
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+        }
+
+        WorkspaceReadSnapshot live = Snapshot("manifest-a", sequence: 21, resolutionState: "exact");
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, live);
+        StoreSidecarCatalog.Stamp(databasePath, expected);
+
+        Assert.Equal(expected, StoreSidecarCatalog.TryResolveReadable(databasePath, expected, live));
+    }
+
+    [Fact]
     public void UnknownSidecarKindIsTreatedAsAnUnstampedArtifact()
     {
         Directory.CreateDirectory(_root);

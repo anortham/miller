@@ -2944,7 +2944,7 @@ public sealed class InspectToolTests
             int fullLoadCount = 0;
             int symbolLoadCount = 0;
             int storeSearchOpenCount = 0;
-            var snapshot = new WorkspaceReadSnapshot(
+            var lastGoodSnapshot = new WorkspaceReadSnapshot(
                 target.WorkspaceRoot,
                 "target-ws",
                 "family-a",
@@ -2953,7 +2953,7 @@ public sealed class InspectToolTests
                     "family-a",
                     3,
                     "manifest-a",
-                    21,
+                    17,
                     "resolution-a",
                     StoreInstanceId: "family-a:gen-001",
                     ViewId: "view-a",
@@ -2967,7 +2967,21 @@ public sealed class InspectToolTests
                 WorkspaceReadMode.FamilyStore,
                 GenerationName: "gen-001",
                 ManifestGeneration: 3,
-                ResolutionState: "converging");
+                ResolutionState: "exact");
+            var snapshot = lastGoodSnapshot with
+            {
+                Freshness = lastGoodSnapshot.Freshness with { StoreLogSequence = 21, ManifestHash = "manifest-b" },
+                ResolutionState = "exact",
+            };
+            string searchPath = StoreSidecarCatalog.PathFor(
+                target.WorkspaceRoot,
+                StoreSidecarKind.Search,
+                lastGoodSnapshot.ViewId);
+            Directory.CreateDirectory(Path.GetDirectoryName(searchPath)!);
+            SearchIndexWriter.Write(searchPath, SqliteSymbolReader.Read(target.DbPath), revision: 17);
+            StoreSidecarCatalog.Stamp(
+                searchPath,
+                StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGoodSnapshot));
             var workspace = new WorkspaceContext(
                 currentRoot,
                 current.DbPath,
