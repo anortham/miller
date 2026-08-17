@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Threading;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Core.Freshness;
 using Miller.Indexing;
@@ -53,6 +55,87 @@ public sealed class IndexerSidecarAdmissionTests : IDisposable
         service.RunDrainTickForTest(Path.Combine(home, "requests"));
 
         AssertScanHeldAdmissionAndConvergenceDidNot(probe);
+    }
+
+    [Fact]
+    public void OnDemandScan_WhenThisProcessAlreadyHoldsAdmissionForTheSameRoot_QueuesWithoutWaitingOrRefuseWarning()
+    {
+        using var julie = SeededJulieDb();
+        string home = NewMillerHome();
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        var logger = new CapturingLogger();
+        IndexerService service = NewGovernedService(
+            home, workspace, logger: logger, scanGovernorWait: IndexerService.DefaultScanAdmissionWait);
+        var ops = new FakeScanOps();
+        service.PublishOpsForTest(ops);
+        service.RequestWholeRepoScanForTest(ScanIntent.UserFullRebuild);
+
+        ScanOutcome? onDemand = null;
+        TimeSpan waited = TimeSpan.Zero;
+        bool leaseStillHeldDuringOnDemand = false;
+        service.BetweenScanPeekAndDrainForTest = () =>
+        {
+            var contender = new Thread(() =>
+            {
+                var clock = Stopwatch.StartNew();
+                onDemand = service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
+                clock.Stop();
+                waited = clock.Elapsed;
+            })
+            { IsBackground = true };
+            contender.Start();
+            Assert.True(contender.Join(TimeSpan.FromSeconds(2)));
+            leaseStillHeldDuringOnDemand = !MachineAdmissionIsFree(home);
+        };
+
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.NotNull(onDemand);
+        Assert.Equal(ScanOutcome.Kind.Queued, onDemand!.Result);
+        Assert.Contains("leader-drain-rescan", onDemand.HolderDescription, StringComparison.Ordinal);
+        Assert.True(waited < TimeSpan.FromSeconds(1), $"same-pid on-demand waited {waited}");
+        Assert.True(leaseStillHeldDuringOnDemand, "the drain released the OS lease while on-demand ran");
+        Assert.True(ops.ScanObserved, "the drain never ran the already-admitted scan");
+        Assert.DoesNotContain(
+            logger.Entries,
+            entry => entry.Level == LogLevel.Warning &&
+                entry.Message.Contains("Refused machine-wide scan admission", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void OnDemandScan_WhenAnotherHolderOwnsTheSameRoot_WaitsAndIsRefused()
+    {
+        using var julie = SeededJulieDb();
+        string home = NewMillerHome();
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        var logger = new CapturingLogger();
+        TimeSpan wait = TimeSpan.FromMilliseconds(150);
+        IndexerService service = NewGovernedService(
+            home, workspace, logger: logger, scanGovernorWait: wait);
+        var ops = new FakeScanOps();
+        service.PublishOpsForTest(ops);
+
+        ScanOutcome outcome;
+        var clock = Stopwatch.StartNew();
+        using (ScanGovernorLease held = ScanGovernor.ForMillerHome(home).TryAcquire(
+            new ScanGovernorRequest(workspace.CanonicalRoot!, "other-process", 4),
+            TimeSpan.Zero,
+            CancellationToken.None)
+            ?? throw new InvalidOperationException("A fresh temp miller home must have a free scan lease."))
+        {
+            outcome = service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
+            Assert.False(MachineAdmissionIsFree(home), "on-demand took a second OS lease");
+        }
+
+        clock.Stop();
+
+        Assert.Equal(ScanOutcome.Kind.Queued, outcome.Result);
+        Assert.False(ops.ScanObserved);
+        Assert.True(clock.Elapsed >= wait, $"foreign holder returned after {clock.Elapsed} for a {wait} budget");
+        Assert.Contains(
+            logger.Entries,
+            entry => entry.Level == LogLevel.Warning &&
+                entry.Message.Contains("Refused machine-wide scan admission", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -211,14 +294,36 @@ public sealed class IndexerSidecarAdmissionTests : IDisposable
 
     // ---- fakes and fixtures ----
 
+    private sealed class CapturingLogger : ILogger<IndexerService>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add((logLevel, formatter(state, exception)));
+        }
+    }
+
     private sealed class FakeScanOps : IExtractOps
     {
         private const long ScannedRevision = 7;
 
         public Action? WhileScanning { get; init; }
 
+        public bool ScanObserved { get; private set; }
+
         public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
         {
+            ScanObserved = true;
             WhileScanning?.Invoke();
             return Report();
         }
@@ -281,7 +386,9 @@ public sealed class IndexerSidecarAdmissionTests : IDisposable
         string millerHome,
         WorkspaceContext workspace,
         Func<string, FullScanDrainResult>? drainFullScanRequests = null,
-        Func<string?>? ownExtractorVersion = null)
+        Func<string?>? ownExtractorVersion = null,
+        ILogger<IndexerService>? logger = null,
+        TimeSpan? scanGovernorWait = null)
     {
         string bootstrapHome = Path.GetDirectoryName(Path.GetDirectoryName(workspace.RegistryDbPath))!;
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance)
@@ -294,7 +401,7 @@ public sealed class IndexerSidecarAdmissionTests : IDisposable
 
         return new IndexerService(
             bootstrap,
-            NullLogger<IndexerService>.Instance,
+            logger ?? NullLogger<IndexerService>.Instance,
             NullLoggerFactory.Instance,
             tryAcquireLeadership: _ => null,
             createOps: static (_, _, _) => throw new InvalidOperationException("not used by this test seam"),
@@ -305,6 +412,6 @@ public sealed class IndexerSidecarAdmissionTests : IDisposable
             drainFileConvergeRequests: _ => FileConvergeDrainResult.Empty,
             ownExtractorVersion: ownExtractorVersion,
             scanGovernor: ScanGovernor.ForMillerHome(millerHome),
-            scanGovernorWait: TimeSpan.Zero);
+            scanGovernorWait: scanGovernorWait ?? TimeSpan.Zero);
     }
 }

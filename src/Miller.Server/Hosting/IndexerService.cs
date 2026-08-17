@@ -1138,6 +1138,19 @@ public sealed class IndexerService : BackgroundService
         var request = new ScanGovernorRequest(
             workspaceRoot ?? UnknownWorkspaceRootLabel, reason, ExtractJobsPolicy.FromEnvironment());
 
+        // This process already holds the one OS lease for this root (the debounce drain's
+        // leader-drain-rescan). Waiting the 5 s budget then refusing would log a same-pid
+        // leader-ondemand warning and delay the caller; a second acquire would also be a
+        // same-thread double-wrap if both sites share the drain thread. Queue instead.
+        if (workspaceRoot is not null && _governor.HoldsAdmissionFor(workspaceRoot))
+        {
+            _logger.LogDebug(
+                "This process already holds machine-wide scan admission for {Root}; queueing {Reason} " +
+                "on the existing drain instead of waiting. {Holder}",
+                workspaceRoot, reason, _governor.DescribeHolder());
+            return null;
+        }
+
         ScanGovernorAdmission? admission;
         try
         {

@@ -57,6 +57,7 @@ public sealed class ScanGovernorLease : IDisposable
         FileStream? stream = _stream;
         _stream = null;
         stream?.Dispose();
+        _governor?.ClearHeldWorkspace();
         _governor?.LeaveThread();
     }
 }
@@ -120,6 +121,8 @@ public sealed partial class ScanGovernor
 
     private readonly Random _jitter = new();
     private readonly object _jitterGate = new();
+    private readonly object _heldGate = new();
+    private string? _heldWorkspaceRoot;
 
     private ScanGovernor(string? directoryPath)
     {
@@ -239,6 +242,7 @@ public sealed partial class ScanGovernor
                         LockFilePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
                     var lease = new ScanGovernorLease(this, stream);
                     TryWriteOwnerFile(request);
+                    RecordHeldWorkspace(request.WorkspaceRoot);
                     return lease;
                 }
                 catch (IOException ex) when (SingleWriterLock.IsLockContention(ex, OperatingSystem.IsWindows()))
@@ -309,11 +313,37 @@ public sealed partial class ScanGovernor
             "). That record is advisory — the OS lease handle is the authority.";
     }
 
+    /// <summary>
+    /// True when THIS governor instance currently holds the OS lease for <paramref name="workspaceRoot"/>.
+    /// Distinct from <see cref="TryReadOwner"/>: that record is advisory and can name a live pid that holds
+    /// nothing, so it must never prevent an acquire.
+    /// </summary>
+    public bool HoldsAdmissionFor(string workspaceRoot)
+    {
+        if (!Enabled || string.IsNullOrWhiteSpace(workspaceRoot))
+            return false;
+
+        lock (_heldGate)
+            return string.Equals(_heldWorkspaceRoot, workspaceRoot, StringComparison.Ordinal);
+    }
+
     private bool ThreadHoldsAdmission() => _threadHeld is { } held && held.Contains(this);
 
     private void EnterThread() => (_threadHeld ??= new List<ScanGovernor>(1)).Add(this);
 
     internal void LeaveThread() => _threadHeld?.Remove(this);
+
+    private void RecordHeldWorkspace(string workspaceRoot)
+    {
+        lock (_heldGate)
+            _heldWorkspaceRoot = workspaceRoot;
+    }
+
+    internal void ClearHeldWorkspace()
+    {
+        lock (_heldGate)
+            _heldWorkspaceRoot = null;
+    }
 
     internal void TryDeleteOwnerFile()
     {
