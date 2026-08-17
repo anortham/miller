@@ -280,6 +280,70 @@ public static class SearchIndexWriter
         tx.Commit();
     }
 
+    public static void ApplyStoreFileChanges(
+        string searchDbPath,
+        IWorkspaceReadSession session,
+        IReadOnlyCollection<string> paths,
+        StoreSidecarStamp storeStamp,
+        RegionIndexOptions regionOptions)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(searchDbPath);
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(storeStamp);
+        ArgumentNullException.ThrowIfNull(regionOptions);
+
+        var distinctPaths = paths
+            .Where(static p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = searchDbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var tx = connection.BeginTransaction();
+
+        IReadOnlyList<OldSymbolIdentity> oldSymbols = distinctPaths.Length == 0
+            ? Array.Empty<OldSymbolIdentity>()
+            : ReadOldSymbolsForPaths(connection, distinctPaths);
+
+        if (distinctPaths.Length > 0)
+        {
+            DeleteSymbolsForPaths(connection, distinctPaths);
+            if (regionOptions.Enabled)
+                DeleteRegionsForPaths(connection, distinctPaths);
+
+            IReadOnlyList<IndexedSymbol> currentSymbols = SqliteSymbolReader.ReadForPaths(session, distinctPaths);
+            IReadOnlyList<IndexedSymbol> stableSymbols = AssignStableDocIds(connection, currentSymbols, oldSymbols);
+            Dictionary<string, IndexedSymbol> symbolsById =
+                BuildQualificationSymbolMap(connection, stableSymbols);
+            InsertSymbols(connection, stableSymbols, symbolsById);
+
+            if (regionOptions.Enabled)
+            {
+                IReadOnlyList<SourceRegionRow> regions = SqliteSourceRegionReader.ReadIndexedRegions(session);
+                var changedPathSet = distinctPaths.ToHashSet(StringComparer.Ordinal);
+                InsertRegions(
+                    connection,
+                    stableSymbols,
+                    symbolsDbPath: null,
+                    session.Snapshot.WorkspaceRoot,
+                    regionOptions,
+                    changedPathSet,
+                    regions);
+            }
+        }
+
+        RewriteMeta(connection, storeStamp.StoreLogSequence, regionOptions, artifactId: null);
+        StoreSidecarCatalog.Stamp(connection, tx, storeStamp);
+        tx.Commit();
+    }
+
     private static void BuildInto(
         string tempPath,
         IReadOnlyList<IndexedSymbol> symbols,

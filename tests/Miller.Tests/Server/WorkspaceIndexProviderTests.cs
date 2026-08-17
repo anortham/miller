@@ -153,6 +153,99 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_CurrentFamilyStoreLoadsSupplementalEdgesOncePerSnapshotOnFirstGraphUse()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("current-store-supplemental-cache");
+        var holder = new IndexHolder(
+            () => throw new InvalidOperationException("holder repository was not expected"),
+            builtRevision: 12,
+            documentCount: 1,
+            knownExtensionsCount: 1);
+        WorkspaceReadSnapshot snapshot = StoreSnapshot(root, "manifest-a");
+        int loadCount = 0;
+        var provider = NewProvider(
+            holder,
+            CurrentWorkspaceAt(root, current.DbPath, "current-ws"),
+            registry,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(snapshot, target.DbPath)),
+            loadSessionSymbolSearch: session => SymbolSearchProjectionLoader.LoadSession(session),
+            loadSupplementalEdges: _ =>
+            {
+                loadCount++;
+                return [];
+            });
+
+        using (WorkspaceReadContext unusedGraph = provider.Resolve(workspaceId: null, ensureFresh: false))
+            Assert.Equal(0, loadCount);
+
+        using (WorkspaceReadContext first = provider.Resolve(workspaceId: null, ensureFresh: false))
+        {
+            IndexedSymbol targetSymbol = Assert.Single(first.Index.FindByName("TargetType"));
+            Assert.Empty(first.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
+        }
+
+        Assert.Equal(1, loadCount);
+
+        using (WorkspaceReadContext second = provider.Resolve(workspaceId: null, ensureFresh: false))
+        {
+            IndexedSymbol targetSymbol = Assert.Single(second.Index.FindByName("TargetType"));
+            Assert.Empty(second.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
+        }
+
+        Assert.Equal(1, loadCount);
+
+        snapshot = StoreSnapshot(root, "manifest-b");
+        using (WorkspaceReadContext afterManifestChange = provider.Resolve(workspaceId: null, ensureFresh: false))
+        {
+            IndexedSymbol targetSymbol = Assert.Single(afterManifestChange.Index.FindByName("TargetType"));
+            Assert.Empty(afterManifestChange.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
+        }
+
+        Assert.Equal(2, loadCount);
+    }
+
+    [Fact]
+    public void Resolve_CurrentFamilyStoreDefaultSupplementalLoadReusesOneCacheEntry()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("current-store-supplemental-default");
+        var holder = new IndexHolder(
+            () => throw new InvalidOperationException("holder repository was not expected"),
+            builtRevision: 12,
+            documentCount: 1,
+            knownExtensionsCount: 1);
+        var provider = NewProvider(
+            holder,
+            CurrentWorkspaceAt(root, current.DbPath, "current-ws"),
+            registry,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(StoreSnapshot(root, "manifest-a"), target.DbPath)),
+            loadSessionSymbolSearch: session => SymbolSearchProjectionLoader.LoadSession(session));
+
+        using (WorkspaceReadContext first = provider.Resolve(workspaceId: null, ensureFresh: false))
+        {
+            IndexedSymbol targetSymbol = Assert.Single(first.Index.FindByName("TargetType"));
+            Assert.Empty(first.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
+        }
+
+        using (WorkspaceReadContext second = provider.Resolve(workspaceId: null, ensureFresh: false))
+        {
+            IndexedSymbol targetSymbol = Assert.Single(second.Index.FindByName("TargetType"));
+            Assert.Empty(second.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
+        }
+
+        WorkspaceIndexProviderCacheSnapshot cache = provider.CacheSnapshot();
+        Assert.Equal(1, cache.SupplementalEdgeEntries);
+        Assert.Equal(2, cache.TotalEntries);
+    }
+
+    [Fact]
     public void LookupPhaseTelemetryUsesFixedFamiliesAndIndependentBaselines()
     {
         using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
@@ -2570,7 +2663,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Func<WorkspaceReadHandle, ISymbolLookupIndex>? openStoreSymbolSearch = null,
         Func<IWorkspaceReadSession, BridgeGraph>? loadSessionBridgeGraph = null,
         Action<GraphStatementObservation>? graphStatementObserver = null,
-        Func<WorkspaceReadHandle, ITextContentSearchIndex>? openStoreTextContentSearch = null) =>
+        Func<WorkspaceReadHandle, ITextContentSearchIndex>? openStoreTextContentSearch = null,
+        Func<WorkspaceReadHandle, IReadOnlyList<GraphEdge>>? loadSupplementalEdges = null) =>
         new(
             holder,
             workspace,
@@ -2591,7 +2685,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             openStoreSymbolSearch,
             loadSessionBridgeGraph,
             graphStatementObserver,
-            openStoreTextContentSearch);
+            openStoreTextContentSearch,
+            loadSupplementalEdges);
 
     private static WorkspaceReadSnapshot StoreSnapshot(
         string root,

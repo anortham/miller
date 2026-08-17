@@ -328,8 +328,64 @@ public sealed class SymbolSearchSidecar
             return true;
         }
 
+        if (TryApplyStoreDelta(searchDbPath, expected, session))
+            return true;
+
         SearchIndexWriter.WriteStoreView(searchDbPath, session, RegionOptions);
         return true;
+    }
+
+    private bool TryApplyStoreDelta(
+        string searchDbPath,
+        StoreSidecarStamp expected,
+        IWorkspaceReadSession session)
+    {
+        StoreSidecarStamp? previous = StoreSidecarCatalog.TryRead(searchDbPath);
+        if (previous is null ||
+            previous.StoreLogSequence >= expected.StoreLogSequence ||
+            previous with
+            {
+                StoreLogSequence = expected.StoreLogSequence,
+                ResolutionStamp = expected.ResolutionStamp,
+            } != expected)
+        {
+            return false;
+        }
+
+        RevisionDeltaResult delta = RevisionDeltaReader.Read(
+            session,
+            previous.StoreLogSequence,
+            previous.FamilyId);
+        if (delta.Status != RevisionDeltaStatus.Complete ||
+            delta.ToRevision != expected.StoreLogSequence)
+        {
+            return false;
+        }
+
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string path in delta.ChangedPaths)
+            paths.Add(path);
+        if (delta.DeletedPaths is not null)
+        {
+            foreach (string path in delta.DeletedPaths)
+                paths.Add(path);
+        }
+
+        try
+        {
+            SearchIndexWriter.ApplyStoreFileChanges(
+                searchDbPath,
+                session,
+                paths,
+                expected,
+                RegionOptions);
+            return StoreSidecarCatalog.IsCurrent(searchDbPath, expected);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

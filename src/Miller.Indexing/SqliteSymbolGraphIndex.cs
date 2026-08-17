@@ -29,6 +29,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     private readonly Dictionary<string, bool> _symbolExistsCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string?> _symbolNameCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<string>> _nameResolutionCache = new(StringComparer.Ordinal);
+    private readonly Func<IReadOnlyList<GraphEdge>>? _loadSupplementalEdges;
     private IReadOnlyList<GraphEdge>? _supplementalEdges;
     private Microsoft.Data.Sqlite.SqliteConnection? _connection;
     private Microsoft.Data.Sqlite.SqliteConnection? _activeSessionConnection;
@@ -46,11 +47,14 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         _dbPath = dbPath;
     }
 
-    public SqliteSymbolGraphIndex(IWorkspaceReadSession readSession)
+    public SqliteSymbolGraphIndex(
+        IWorkspaceReadSession readSession,
+        Func<IReadOnlyList<GraphEdge>>? loadSupplementalEdges = null)
     {
         ArgumentNullException.ThrowIfNull(readSession);
 
         _readSession = readSession;
+        _loadSupplementalEdges = loadSupplementalEdges;
         _familyGraphResolutionReader = readSession is WorkspaceReadHandle handle
             ? handle.FamilyGraphResolutionReader
             : readSession as IFamilyGraphResolutionReader;
@@ -713,23 +717,35 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             return _supplementalEdges;
 
         long started = Stopwatch.GetTimestamp();
-        _supplementalEdges = LoadSupplementalEdges();
+        _supplementalEdges = _loadSupplementalEdges is not null
+            ? _loadSupplementalEdges()
+            : LoadSupplementalEdges();
         _queryTelemetry.SupplementalEdges.Add(_supplementalEdges.Count, Stopwatch.GetElapsedTime(started));
         return _supplementalEdges;
     }
 
-    private IReadOnlyList<GraphEdge> LoadSupplementalEdges()
+    internal IReadOnlyList<GraphEdge> ReadCurrentSupplementalEdges() => LoadSupplementalEdges();
+
+    internal static IReadOnlyList<GraphEdge> ReadSupplementalEdges(
+        Microsoft.Data.Sqlite.SqliteConnection connection,
+        IWorkspaceReadSession? session,
+        string? dbPath)
     {
+        ArgumentNullException.ThrowIfNull(connection);
+
         IReadOnlyList<StructuralFactRecord> facts = SqliteBridgeReader.ReadStructuralFacts(
-            Connection,
+            connection,
             [BridgeStructuralPatterns.BlazorComponentReference]);
-        IReadOnlyList<GraphEdge> componentEdges = _readSession is null
-            ? BlazorComponentGraphReader.Read(_dbPath!, facts)
+        IReadOnlyList<GraphEdge> componentEdges = session is null
+            ? BlazorComponentGraphReader.Read(dbPath!, facts)
             : BlazorComponentGraphReader.ReadSession(
-                new BorrowedReadSession(_readSession.Snapshot, Connection),
+                new BorrowedReadSession(session.Snapshot, connection),
                 facts);
-        return [.. TestLinkageReader.Read(Connection), .. componentEdges];
+        return [.. TestLinkageReader.Read(connection), .. componentEdges];
     }
+
+    private IReadOnlyList<GraphEdge> LoadSupplementalEdges() =>
+        ReadSupplementalEdges(Connection, _readSession, _dbPath);
 
     private IReadOnlyList<string> LoadDependencies(string id)
     {

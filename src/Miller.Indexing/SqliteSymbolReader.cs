@@ -92,11 +92,28 @@ public static class SqliteSymbolReader
     /// global deterministic row ordinal from the full reader's order, but callers that maintain their own stable
     /// sidecar identities may rewrite it before indexing.
     /// </summary>
+    public static IReadOnlyList<IndexedSymbol> ReadForPaths(
+        IWorkspaceReadSession session,
+        IReadOnlyCollection<string> paths)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(paths);
+        return session.Read(connection => ReadForPaths(connection, paths));
+    }
+
     public static IReadOnlyList<IndexedSymbol> ReadForPaths(string dbPath, IReadOnlyCollection<string> paths)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentNullException.ThrowIfNull(paths);
 
+        using var connection = SqliteReadOnlyAccess.Open(dbPath);
+        return ReadForPaths(connection, paths);
+    }
+
+    private static IReadOnlyList<IndexedSymbol> ReadForPaths(
+        SqliteConnection connection,
+        IReadOnlyCollection<string> paths)
+    {
         var distinctPaths = paths
             .Where(static p => !string.IsNullOrWhiteSpace(p))
             .Distinct(StringComparer.Ordinal)
@@ -105,7 +122,6 @@ public static class SqliteSymbolReader
         if (distinctPaths.Length == 0)
             return Array.Empty<IndexedSymbol>();
 
-        using var connection = SqliteReadOnlyAccess.Open(dbPath);
         JulieSchemaGate.Verify(connection);
 
         EvidenceProjection evidence = EvidenceProjection.From(connection);

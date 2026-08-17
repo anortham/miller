@@ -344,7 +344,7 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
-    public void SearchSidecarRebuildsWhenTheStoreDeltaContainsChanges()
+    public void SearchSidecarAppliesChangedStoreDeltaInPlace()
     {
         using StoreFixture fixture = StoreFixture.Create();
         var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
@@ -361,7 +361,7 @@ public sealed class FamilyStoreReadSessionTests
 
         Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, session));
 
-        Assert.False(TableExists(databasePath, "fast_forward_sentinel"));
+        Assert.True(TableExists(databasePath, "fast_forward_sentinel"));
         Assert.Equal(current, StoreSidecarCatalog.TryRead(databasePath));
     }
 

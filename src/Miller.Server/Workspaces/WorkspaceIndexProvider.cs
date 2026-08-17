@@ -27,6 +27,7 @@ public sealed class WorkspaceIndexProvider
     private readonly Func<WorkspaceReadHandle, ISymbolLookupIndex> _openStoreSymbolSearch;
     private readonly Func<WorkspaceReadHandle, ITextContentSearchIndex> _openStoreTextContentSearch;
     private readonly Func<IWorkspaceReadSession, BridgeGraph> _loadSessionBridgeGraph;
+    private readonly Func<WorkspaceReadHandle, IReadOnlyList<GraphEdge>>? _loadSupplementalEdges;
     private readonly Action<GraphStatementObservation> _graphStatementObserver;
     private readonly SymbolSearchSidecar _sidecar;
     private readonly object _cacheGate = new();
@@ -36,6 +37,7 @@ public sealed class WorkspaceIndexProvider
     private readonly Dictionary<CacheKey, Lazy<CachedContentSearch>> _contentSearchCache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedTextContentSearch>> _textContentSearchCache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedRegionSearch>> _regionSearchCache = new();
+    private readonly Dictionary<CacheKey, Lazy<CachedSupplementalEdges>> _supplementalEdgesCache = new();
 
     public WorkspaceIndexProvider(
         IndexHolder holder,
@@ -82,7 +84,8 @@ public sealed class WorkspaceIndexProvider
         Func<WorkspaceReadHandle, ISymbolLookupIndex>? openStoreSymbolSearch = null,
         Func<IWorkspaceReadSession, BridgeGraph>? loadSessionBridgeGraph = null,
         Action<GraphStatementObservation>? graphStatementObserver = null,
-        Func<WorkspaceReadHandle, ITextContentSearchIndex>? openStoreTextContentSearch = null)
+        Func<WorkspaceReadHandle, ITextContentSearchIndex>? openStoreTextContentSearch = null,
+        Func<WorkspaceReadHandle, IReadOnlyList<GraphEdge>>? loadSupplementalEdges = null)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(currentWorkspace);
@@ -122,6 +125,7 @@ public sealed class WorkspaceIndexProvider
                     ?? throw new InvalidOperationException("The family-store read session has no store root."),
                 readSession.Snapshot));
         _loadSessionBridgeGraph = loadSessionBridgeGraph ?? (session => SessionBridgeGraphLoader.Load(session));
+        _loadSupplementalEdges = loadSupplementalEdges;
         _graphStatementObserver = graphStatementObserver ?? ObserveGraphStatement;
     }
 
@@ -239,7 +243,7 @@ public sealed class WorkspaceIndexProvider
                 ? ResolveFamilyStoreLookup(_currentWorkspace.WorkspaceId, readSession)
                 : holderIndex!;
             ISymbolGraphReachability innerGraph = familyStore
-                ? new SqliteSymbolGraphIndex(readSession)
+                ? ResolveFamilyStoreGraph(_currentWorkspace.WorkspaceId, readSession)
                 : holderIndex!.Graph;
             var measuredGraph = familyStore
                 ? new MeasuredSymbolGraphReachability(innerGraph, _graphStatementObserver)
@@ -451,7 +455,7 @@ public sealed class WorkspaceIndexProvider
                 ? ResolveFamilyStoreLookup(row.WorkspaceId, readSession)
                 : cached!.Index;
             ISymbolGraphReachability innerGraph = familyStore
-                ? new SqliteSymbolGraphIndex(readSession)
+                ? ResolveFamilyStoreGraph(row.WorkspaceId, readSession)
                 : cached!.Index.Graph;
             var measuredGraph = familyStore
                 ? new MeasuredSymbolGraphReachability(innerGraph, _graphStatementObserver)
@@ -514,6 +518,22 @@ public sealed class WorkspaceIndexProvider
         return GetOrAddSymbolReadCache(
             key,
             () => new CachedSymbolRead(MeasureFamilyLookup(_loadSessionSymbolSearch(readSession)))).Index;
+    }
+
+    private ISymbolGraphReachability ResolveFamilyStoreGraph(
+        string? workspaceId,
+        WorkspaceReadHandle readSession)
+    {
+        CacheKey key = KeyFor(workspaceId, readSession.Snapshot);
+        SqliteSymbolGraphIndex? graph = null;
+        graph = new SqliteSymbolGraphIndex(
+            readSession,
+            () => GetOrAddSupplementalEdges(
+                key,
+                () => _loadSupplementalEdges is not null
+                    ? _loadSupplementalEdges(readSession)
+                    : graph!.ReadCurrentSupplementalEdges()).Edges);
+        return graph;
     }
 
     private WorkspaceSymbolSearchContext ResolveRegisteredSymbolSearch(string workspaceId, bool ensureFresh)
@@ -1256,6 +1276,41 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
+    private CachedSupplementalEdges GetOrAddSupplementalEdges(
+        CacheKey key,
+        Func<IReadOnlyList<GraphEdge>> load)
+    {
+        Lazy<CachedSupplementalEdges> lazy;
+        lock (_cacheGate)
+        {
+            if (!_supplementalEdgesCache.TryGetValue(key, out lazy!))
+            {
+                lazy = new Lazy<CachedSupplementalEdges>(
+                    () => new CachedSupplementalEdges(load()),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+                _supplementalEdgesCache[key] = lazy;
+                EvictOtherEntriesForWorkspaceUnderLock(_supplementalEdgesCache, key);
+            }
+        }
+
+        try
+        {
+            if (!lazy.IsValueCreated)
+                TelemetryContext.Current?.SetWaitReason("index_load");
+            return lazy.Value;
+        }
+        catch
+        {
+            lock (_cacheGate)
+            {
+                if (_supplementalEdgesCache.TryGetValue(key, out Lazy<CachedSupplementalEdges>? cachedLazy) &&
+                    ReferenceEquals(cachedLazy, lazy))
+                    _supplementalEdgesCache.Remove(key);
+            }
+            throw;
+        }
+    }
+
     private static void EvictOtherEntriesForWorkspaceUnderLock<T>(
         Dictionary<CacheKey, Lazy<T>> cache, CacheKey keep)
     {
@@ -1453,7 +1508,8 @@ public sealed class WorkspaceIndexProvider
                 _symbolReadCache.Count,
                 _contentSearchCache.Count,
                 _textContentSearchCache.Count,
-                _regionSearchCache.Count);
+                _regionSearchCache.Count,
+                _supplementalEdgesCache.Count);
         }
     }
 
@@ -1514,6 +1570,8 @@ public sealed class WorkspaceIndexProvider
     private sealed record CachedTextContentSearch(ITextContentSearchIndex Index);
 
     private sealed record CachedRegionSearch(IRegionSearchIndex Index);
+
+    private sealed record CachedSupplementalEdges(IReadOnlyList<GraphEdge> Edges);
 }
 
 internal readonly record struct WorkspaceIndexProviderCacheSnapshot(
@@ -1522,7 +1580,8 @@ internal readonly record struct WorkspaceIndexProviderCacheSnapshot(
     int SymbolReadEntries,
     int ContentSearchEntries,
     int TextContentSearchEntries,
-    int RegionSearchEntries)
+    int RegionSearchEntries,
+    int SupplementalEdgeEntries)
 {
     public int TotalEntries =>
         RepositoryEntries +
@@ -1530,5 +1589,6 @@ internal readonly record struct WorkspaceIndexProviderCacheSnapshot(
         SymbolReadEntries +
         ContentSearchEntries +
         TextContentSearchEntries +
-        RegionSearchEntries;
+        RegionSearchEntries +
+        SupplementalEdgeEntries;
 }
