@@ -37,14 +37,15 @@ public sealed class WorkspaceIndexProvider
     private readonly Dictionary<CacheKey, Lazy<CachedContentSearch>> _contentSearchCache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedTextContentSearch>> _textContentSearchCache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedRegionSearch>> _regionSearchCache = new();
-    private readonly Dictionary<CacheKey, Lazy<CachedSupplementalEdges>> _supplementalEdgesCache = new();
+    private readonly SupplementalEdgeCache _supplementalEdgesCache;
 
     public WorkspaceIndexProvider(
         IndexHolder holder,
         WorkspaceContext currentWorkspace,
         WorkspaceRegistry registry,
         CrossWorkspaceRefreshService refreshService,
-        SymbolSearchSidecar sidecar)
+        SymbolSearchSidecar sidecar,
+        SupplementalEdgeCache supplementalEdgesCache)
         : this(
             holder,
             currentWorkspace,
@@ -62,7 +63,8 @@ public sealed class WorkspaceIndexProvider
             currentIndexFresh: _ => null,
             sidecar,
             openReadSession: (databasePath, root, workspaceId) =>
-                WorkspaceReadSessionFactory.Open(databasePath, root, workspaceId))
+                WorkspaceReadSessionFactory.Open(databasePath, root, workspaceId),
+            supplementalEdgesCache: supplementalEdgesCache)
     {
     }
 
@@ -85,7 +87,8 @@ public sealed class WorkspaceIndexProvider
         Func<IWorkspaceReadSession, BridgeGraph>? loadSessionBridgeGraph = null,
         Action<GraphStatementObservation>? graphStatementObserver = null,
         Func<WorkspaceReadHandle, ITextContentSearchIndex>? openStoreTextContentSearch = null,
-        Func<WorkspaceReadHandle, IReadOnlyList<GraphEdge>>? loadSupplementalEdges = null)
+        Func<WorkspaceReadHandle, IReadOnlyList<GraphEdge>>? loadSupplementalEdges = null,
+        SupplementalEdgeCache? supplementalEdgesCache = null)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(currentWorkspace);
@@ -126,6 +129,7 @@ public sealed class WorkspaceIndexProvider
                 readSession.Snapshot));
         _loadSessionBridgeGraph = loadSessionBridgeGraph ?? (session => SessionBridgeGraphLoader.Load(session));
         _loadSupplementalEdges = loadSupplementalEdges;
+        _supplementalEdgesCache = supplementalEdgesCache ?? new SupplementalEdgeCache();
         _graphStatementObserver = graphStatementObserver ?? ObserveGraphStatement;
     }
 
@@ -532,7 +536,7 @@ public sealed class WorkspaceIndexProvider
                 key,
                 () => _loadSupplementalEdges is not null
                     ? _loadSupplementalEdges(readSession)
-                    : graph!.ReadCurrentSupplementalEdges()).Edges);
+                    : graph!.ReadCurrentSupplementalEdges()));
         return graph;
     }
 
@@ -1276,40 +1280,10 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
-    private CachedSupplementalEdges GetOrAddSupplementalEdges(
+    private IReadOnlyList<GraphEdge> GetOrAddSupplementalEdges(
         CacheKey key,
-        Func<IReadOnlyList<GraphEdge>> load)
-    {
-        Lazy<CachedSupplementalEdges> lazy;
-        lock (_cacheGate)
-        {
-            if (!_supplementalEdgesCache.TryGetValue(key, out lazy!))
-            {
-                lazy = new Lazy<CachedSupplementalEdges>(
-                    () => new CachedSupplementalEdges(load()),
-                    LazyThreadSafetyMode.ExecutionAndPublication);
-                _supplementalEdgesCache[key] = lazy;
-                EvictOtherEntriesForWorkspaceUnderLock(_supplementalEdgesCache, key);
-            }
-        }
-
-        try
-        {
-            if (!lazy.IsValueCreated)
-                TelemetryContext.Current?.SetWaitReason("index_load");
-            return lazy.Value;
-        }
-        catch
-        {
-            lock (_cacheGate)
-            {
-                if (_supplementalEdgesCache.TryGetValue(key, out Lazy<CachedSupplementalEdges>? cachedLazy) &&
-                    ReferenceEquals(cachedLazy, lazy))
-                    _supplementalEdgesCache.Remove(key);
-            }
-            throw;
-        }
-    }
+        Func<IReadOnlyList<GraphEdge>> load) =>
+        _supplementalEdgesCache.GetOrAdd(key.WorkspaceId, key.ToString(), load);
 
     private static void EvictOtherEntriesForWorkspaceUnderLock<T>(
         Dictionary<CacheKey, Lazy<T>> cache, CacheKey keep)
@@ -1571,7 +1545,63 @@ public sealed class WorkspaceIndexProvider
 
     private sealed record CachedRegionSearch(IRegionSearchIndex Index);
 
-    private sealed record CachedSupplementalEdges(IReadOnlyList<GraphEdge> Edges);
+}
+
+public sealed class SupplementalEdgeCache
+{
+    private readonly object _gate = new();
+    private readonly Dictionary<ShareKey, Lazy<IReadOnlyList<GraphEdge>>> _cache = new();
+
+    internal int Count
+    {
+        get
+        {
+            lock (_gate)
+                return _cache.Count;
+        }
+    }
+
+    internal IReadOnlyList<GraphEdge> GetOrAdd(
+        string workspaceId,
+        string identity,
+        Func<IReadOnlyList<GraphEdge>> load)
+    {
+        var key = new ShareKey(workspaceId, identity);
+        Lazy<IReadOnlyList<GraphEdge>> lazy;
+        lock (_gate)
+        {
+            if (!_cache.TryGetValue(key, out lazy!))
+            {
+                lazy = new Lazy<IReadOnlyList<GraphEdge>>(load, LazyThreadSafetyMode.ExecutionAndPublication);
+                _cache[key] = lazy;
+                foreach (ShareKey existing in _cache.Keys
+                             .Where(candidate =>
+                                 string.Equals(candidate.WorkspaceId, key.WorkspaceId, StringComparison.Ordinal) &&
+                                 !candidate.Equals(key))
+                             .ToArray())
+                    _cache.Remove(existing);
+            }
+        }
+
+        try
+        {
+            if (!lazy.IsValueCreated)
+                TelemetryContext.Current?.SetWaitReason("index_load");
+            return lazy.Value;
+        }
+        catch
+        {
+            lock (_gate)
+            {
+                if (_cache.TryGetValue(key, out Lazy<IReadOnlyList<GraphEdge>>? cachedLazy) &&
+                    ReferenceEquals(cachedLazy, lazy))
+                    _cache.Remove(key);
+            }
+            throw;
+        }
+    }
+
+    private readonly record struct ShareKey(string WorkspaceId, string Identity);
 }
 
 internal readonly record struct WorkspaceIndexProviderCacheSnapshot(

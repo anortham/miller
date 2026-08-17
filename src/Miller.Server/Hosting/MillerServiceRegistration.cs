@@ -205,6 +205,7 @@ public static class MillerServiceRegistration
             () => sp.GetRequiredService<CrossWorkspaceRefreshService>());
         services.AddSingleton<WorkspaceOpenPrimeService>();
         services.AddHostedService(sp => sp.GetRequiredService<WorkspaceOpenPrimeService>());
+        services.AddSingleton<SupplementalEdgeCache>();
         services.AddTransient<WorkspaceIndexProvider>();
         services.AddTransient<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceArtifactProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());

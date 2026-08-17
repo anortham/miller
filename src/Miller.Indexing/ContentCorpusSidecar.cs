@@ -55,8 +55,60 @@ public sealed class ContentCorpusSidecar
             return true;
         }
 
+        if (TryApplyStoreDelta(contentDbPath, expected, session))
+            return true;
+
         ContentCorpusWriter.WriteStoreView(contentDbPath, session);
         return true;
+    }
+
+    private static bool TryApplyStoreDelta(
+        string contentDbPath,
+        StoreSidecarStamp expected,
+        IWorkspaceReadSession session)
+    {
+        StoreSidecarStamp? previous = StoreSidecarCatalog.TryRead(contentDbPath);
+        if (previous is null ||
+            previous.StoreLogSequence >= expected.StoreLogSequence ||
+            previous.Kind != expected.Kind ||
+            !string.Equals(previous.FamilyId, expected.FamilyId, StringComparison.Ordinal) ||
+            !string.Equals(previous.ViewId, expected.ViewId, StringComparison.Ordinal) ||
+            !string.Equals(previous.StoreInstanceId, expected.StoreInstanceId, StringComparison.Ordinal) ||
+            !string.Equals(previous.GenerationName, expected.GenerationName, StringComparison.Ordinal) ||
+            !string.Equals(previous.IndexLevel, expected.IndexLevel, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        RevisionDeltaResult delta = RevisionDeltaReader.Read(
+            session,
+            previous.StoreLogSequence,
+            previous.FamilyId);
+        if (delta.Status != RevisionDeltaStatus.Complete ||
+            delta.ToRevision != expected.StoreLogSequence)
+        {
+            return false;
+        }
+
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string path in delta.ChangedPaths)
+            paths.Add(path);
+        if (delta.DeletedPaths is not null)
+        {
+            foreach (string path in delta.DeletedPaths)
+                paths.Add(path);
+        }
+
+        try
+        {
+            ContentCorpusWriter.ApplyStoreFileChanges(contentDbPath, session, paths, expected);
+            return StoreSidecarCatalog.IsCurrent(contentDbPath, expected);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

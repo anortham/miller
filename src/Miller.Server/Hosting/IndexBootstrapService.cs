@@ -1049,6 +1049,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     () => IndexLevels.ResolveForWorkspace(workspace.RegistryDbPath, stableWorkspaceId),
                     rootReplaced,
                     _phaseSink);
+                coordinator.SetSupportedExtensions(
+                    SupportedExtensionCatalog.ForToolsRoot(workspace.ToolsRoot));
                 TestScanObserver?.Invoke();
                 ExtractReport report = RunRecordedScan(
                     failurePolicy,

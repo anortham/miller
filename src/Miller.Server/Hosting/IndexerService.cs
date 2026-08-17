@@ -442,6 +442,8 @@ public sealed class IndexerService : BackgroundService
         // Resolve julie's claimed extension set BEFORE the watchers attach so every event handler sees the
         // final value. Null (probe failed / binary missing) gates nothing — the historical behavior.
         _supportedExtensions = _fetchSupportedExtensions(workspace);
+        if (_ops is StoreWorkspaceCoordinator storeOps)
+            storeOps.SetSupportedExtensions(_supportedExtensions);
         if (_supportedExtensions is { Count: > 0 } gate)
             _logger.LogInformation(
                 "Watcher extension gate active: {Count} extensions claimed by julie-extract.", gate.Count);
@@ -921,7 +923,10 @@ public sealed class IndexerService : BackgroundService
                 // Converge search.db under _opsGate — the same lock that serializes extract subprocesses — so the
                 // symbols.db read never races a concurrent extract that could replace the file. Revision-gated
                 // inside the sidecar; a no-op when the feature is off.
-                TryConvergeSidecar(workspace.CanonicalExtractDbPath, report, fullRebuild: true);
+                TryConvergeSidecar(
+                    workspace.CanonicalExtractDbPath,
+                    report,
+                    fullRebuild: SidecarNeedsFullRebuild(report));
             }
             finally
             {
@@ -1269,7 +1274,7 @@ public sealed class IndexerService : BackgroundService
         // scan's try/catch so sidecar issues can never be misreported as scan failures. Some pure unit seams
         // publish fake ops without seeding bootstrap workspace state; those still test scan dispatch only.
         if (TryGetWorkspaceForSidecarConvergence() is { CanonicalExtractDbPath: { } symbolsDbPath })
-            TryConvergeSidecar(symbolsDbPath, report, fullRebuild: true);
+            TryConvergeSidecar(symbolsDbPath, report, fullRebuild: SidecarNeedsFullRebuild(report));
 
         if (!attempt.Downgraded)
             return ScanOutcome.Scanned(report);
@@ -1333,6 +1338,10 @@ public sealed class IndexerService : BackgroundService
                 "Search sidecar freshness check failed; the sidecar will remain unavailable or stale until the next successful convergence.");
         }
     }
+
+    private static bool SidecarNeedsFullRebuild(ExtractReport report) =>
+        report.CreatedRevision is not null &&
+        string.Equals(report.Operation, "import", StringComparison.Ordinal);
 
     private void TryConvergeSidecar(string? symbolsDbPath, ExtractReport report, bool fullRebuild)
     {

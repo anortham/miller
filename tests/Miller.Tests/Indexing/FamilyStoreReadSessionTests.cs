@@ -344,6 +344,57 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void SearchSidecarAppliesANewManifestFileDeltaInPlace()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, initial));
+
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Search,
+            fixture.Binding.ViewId);
+        AddSentinel(databasePath);
+        AppendAddedFileManifest(fixture);
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, updated));
+
+        Assert.True(TableExists(databasePath, "fast_forward_sentinel"));
+        Assert.Equal(
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, updated.Snapshot),
+            StoreSidecarCatalog.TryRead(databasePath));
+        Assert.Equal(1, ReadInt64(
+            databasePath,
+            "SELECT COUNT(*) FROM search_symbols WHERE name='Added';"));
+    }
+
+    [Fact]
+    public void ContentSidecarAppliesANewManifestFileDeltaInPlace()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var sidecar = new ContentCorpusSidecar();
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, initial));
+
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Content,
+            fixture.Binding.ViewId);
+        AddSentinel(databasePath);
+        AppendAddedFileManifest(fixture);
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, updated));
+
+        Assert.True(TableExists(databasePath, "fast_forward_sentinel"));
+        Assert.Equal(
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, updated.Snapshot),
+            StoreSidecarCatalog.TryRead(databasePath));
+    }
+
+    [Fact]
     public void SearchSidecarAppliesChangedStoreDeltaInPlace()
     {
         using StoreFixture fixture = StoreFixture.Create();
@@ -1447,6 +1498,37 @@ public sealed class FamilyStoreReadSessionTests
         command.Parameters.AddWithValue("$request", $"request-{sequence}");
         command.Parameters.AddWithValue("$kind", eventKind);
         command.Parameters.AddWithValue("$terminal", terminal);
+        command.ExecuteNonQuery();
+    }
+
+    private static void AppendAddedFileManifest(StoreFixture fixture)
+    {
+        string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO file_versions VALUES
+              (3,'added.cs','blake3:added',1,'csharp',12,1,NULL,1,2,3);
+            INSERT INTO manifests VALUES
+              ('view-a',3,'manifest-added','request-added','2026-08-09T00:00:02Z');
+            INSERT INTO manifest_entries VALUES
+              ('view-a',3,'same.cs','csharp',2,'indexed','blake3:visible','2026-08-09T00:00:02Z',NULL,NULL),
+              ('view-a',3,'added.cs','csharp',3,'indexed','blake3:added','2026-08-09T00:00:02Z',NULL,NULL);
+            INSERT INTO symbols VALUES
+              (3,'added-symbol','added.cs','csharp','Added','class',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+            UPDATE views
+            SET current_generation=3,
+                updated_at='2026-08-09T00:00:02Z'
+            WHERE view_id='view-a';
+            INSERT INTO store_log VALUES
+              (3,'request-added','manifest_flipped','view-a',3,NULL,NULL,1,'{}','2026-08-09T00:00:02Z');
+            """;
         command.ExecuteNonQuery();
     }
 

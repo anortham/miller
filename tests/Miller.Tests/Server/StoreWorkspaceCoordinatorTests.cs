@@ -390,6 +390,174 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void Scan_IncrementalReconcile_WhenCurrentTreeMatchesStore_SkipsImportAndResolve()
+    {
+        var phases = new RecordingPhaseSink();
+        var client = new RecordingStoreClient(StoreOperation.Import);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => new StoreWorkspaceState(41, "full"),
+            () => "request-import",
+            null,
+            phases,
+            inspectTree: static () => StoreTreeDelta.Empty);
+
+        ExtractReport report = coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+
+        Assert.Empty(client.Requests);
+        Assert.Equal("no_change", report.Status);
+        Assert.Null(report.CreatedRevision);
+        Assert.Equal(41, report.Revision);
+        Assert.Equal(["import", "resolve", "coordinator_total"], phases.Records.Select(static phase => phase.Phase));
+        Assert.All(phases.Records, static phase => Assert.False(phase.DidWork));
+        Assert.All(phases.Records, static phase => Assert.Equal("skipped", phase.Outcome));
+    }
+
+    [Fact]
+    public void Scan_IncrementalReconcile_WhenSomeHashesDiffer_UpdatesAndDeletesThoseFilesOnly()
+    {
+        var phases = new RecordingPhaseSink();
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            allowedOperations: [StoreOperation.Update, StoreOperation.Delete, StoreOperation.Resolve]);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(41, "full"),
+            new(44, "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => snapshots.Dequeue(),
+            () => "request-delta",
+            null,
+            phases,
+            inspectTree: static () => new StoreTreeDelta(["src/a.cs", "src/b.cs"], ["gone.cs"]));
+
+        ExtractReport report = coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+
+        Assert.DoesNotContain(client.Requests, static request => request is StoreImportRequest);
+        StoreUpdateRequest[] updates = client.Requests.OfType<StoreUpdateRequest>().ToArray();
+        Assert.Equal(["src/a.cs", "src/b.cs"], updates.Select(static request => request.FilePath.Replace('\\', '/')));
+        Assert.Equal(["gone.cs"], Assert.Single(client.Requests.OfType<StoreDeleteRequest>()).FilePaths);
+        Assert.Single(client.Requests.OfType<StoreResolveRequest>());
+        Assert.Equal("completed", report.Status);
+        Assert.Equal((ulong)2, report.FilesUpdated);
+        Assert.Equal((ulong)1, report.FilesDeleted);
+        Assert.Equal(44, report.Revision);
+        Assert.Equal(44, report.CreatedRevision);
+        Assert.NotEqual("import", report.Operation);
+    }
+
+    [Fact]
+    public void Scan_UserFullRebuild_StillImportsWhenTheStoreIsAlreadyFull()
+    {
+        var client = new RecordingStoreClient(StoreOperation.Import);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(41, "full"),
+            new(42, "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => snapshots.Dequeue(),
+            () => "request-full",
+            fromArtifact: null,
+            inspectTree: static () => new StoreTreeDelta(["src/a.cs"], []));
+
+        ExtractReport report = coordinator.Scan(ScanIntent.UserFullRebuild, jobs: 1);
+
+        Assert.IsType<StoreImportRequest>(client.Requests[0]);
+        Assert.Equal("completed", report.Status);
+        Assert.Equal("import", report.Operation);
+    }
+
+    [Fact]
+    public void Scan_IncrementalReconcile_SkipsResolveWhenTheLastUpdateIsAlreadyExact()
+    {
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            importResolutionState: StoreResolutionState.Exact,
+            importExactAtMatches: true,
+            allowedOperations: [StoreOperation.Update, StoreOperation.Resolve]);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(41, "full"),
+            new(42, "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => snapshots.Dequeue(),
+            () => "request-exact",
+            fromArtifact: null,
+            inspectTree: static () => new StoreTreeDelta(["src/a.cs"], []));
+
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+
+        Assert.IsType<StoreUpdateRequest>(Assert.Single(client.Requests));
+    }
+
+    [Fact]
+    public void Diff_DoesNotAddWatcherNoiseOrUnknownExtensions()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-tree-delta-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "src", "App.cs"), "class App;");
+            File.WriteAllText(Path.Combine(root, "LICENSE"), "MIT");
+            File.WriteAllBytes(Path.Combine(root, "icon.png"), [1, 2, 3, 4]);
+            File.WriteAllText(Path.Combine(root, "src", "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(root, "src", "Changed.cs"), "class Changed;");
+            var stored = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["src/Changed.cs"] = "deadbeef",
+            };
+
+            StoreTreeDelta delta = StoreTreeDelta.Diff(
+                stored,
+                root,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs" });
+
+            Assert.Equal(["src/App.cs", "src/Changed.cs"], delta.ChangedOrAdded);
+            Assert.Empty(delta.Deleted);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Diff_WithoutCatalogStillAddsSourceFiles()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-tree-delta-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "src", "App.cs"), "class App;");
+            File.WriteAllText(Path.Combine(root, "LICENSE"), "MIT");
+            var stored = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            StoreTreeDelta delta = StoreTreeDelta.Diff(stored, root, supportedExtensions: null);
+
+            Assert.Contains("src/App.cs", delta.ChangedOrAdded);
+            Assert.Contains("LICENSE", delta.ChangedOrAdded);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void AReusedExactFullImportDoesNotSubmitResolve()
     {
         var phases = new RecordingPhaseSink();
@@ -977,7 +1145,7 @@ public sealed class StoreWorkspaceCoordinatorTests
         Directory.CreateDirectory(root);
         try
         {
-            string fingerprint = $"resolve|{Binding.FamilyId:D}|{Binding.ViewId}";
+            string fingerprint = $"resolve|{Binding.FamilyId:D}|{Binding.ViewId}|src/a.cs";
             var journal = new StoreRequestJournal(root);
             Assert.Equal("orphan-resolve", journal.GetOrCreate(fingerprint, () => "orphan-resolve"));
 
@@ -1059,7 +1227,8 @@ public sealed class StoreWorkspaceCoordinatorTests
         StoreRequestState? stateOverride = null,
         StoreResolutionState importResolutionState = StoreResolutionState.Unbound,
         bool importExactAtMatches = false,
-        Queue<StoreRequestState>? stateOverrides = null) : IJulieStoreClient
+        Queue<StoreRequestState>? stateOverrides = null,
+        StoreOperation[]? allowedOperations = null) : IJulieStoreClient
     {
         private readonly List<StoreRequest> _requests = [];
 
@@ -1071,9 +1240,16 @@ public sealed class StoreWorkspaceCoordinatorTests
         public StoreRequestResult Submit(StoreRequest request, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Assert.True(
-                request.Operation == expectedOperation || request.Operation == StoreOperation.Resolve,
-                $"Expected {expectedOperation} or Resolve, got {request.Operation}.");
+            if (allowedOperations is { Length: > 0 })
+            {
+                Assert.Contains(request.Operation, allowedOperations);
+            }
+            else
+            {
+                Assert.True(
+                    request.Operation == expectedOperation || request.Operation == StoreOperation.Resolve,
+                    $"Expected {expectedOperation} or Resolve, got {request.Operation}.");
+            }
             _requests.Add(request);
             StoreLevel level = request switch
             {

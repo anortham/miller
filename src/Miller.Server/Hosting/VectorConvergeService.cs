@@ -319,6 +319,10 @@ public sealed class VectorConvergeService : BackgroundService
         if (!_sidecar.Enabled)
             return;
 
+        // Start the broker as soon as the host is up. Do not wait for the first index stamp: that stamp
+        // arrives after the startup scan, and a long resolve left workspace status at not_started.
+        _ = WarmBrokerAsync(stoppingToken);
+
         try
         {
             while (!stoppingToken.IsCancellationRequested)
@@ -356,6 +360,32 @@ public sealed class VectorConvergeService : BackgroundService
         {
             CancelPendingRetry();
             await DisposeSessionAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task WarmBrokerAsync(CancellationToken cancellationToken)
+    {
+        if (_broker is null)
+            return;
+
+        try
+        {
+            // Bootstrap StartAsync returns before it binds. Wait for the workspace; do not treat
+            // that gap as a permanent warmup failure.
+            while (TryGetWorkspace() is null)
+            {
+                await _delay(TimeSpan.FromMilliseconds(50), cancellationToken).ConfigureAwait(false);
+            }
+
+            await _broker.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex) when (IsConvergeException(ex))
+        {
+            _logger.LogWarning(ex,
+                "Semantic broker warmup failed; the first embed retries.");
         }
     }
 

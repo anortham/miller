@@ -81,6 +81,29 @@ public static class WatchPathFilter
     /// consults FIRST, so policy-change rescans still fire.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="root"/> or <paramref name="absolutePath"/> is null.</exception>
+    /// <summary>
+    /// True when a file not already in the store should be added by an incremental hash delta.
+    /// Unlike <see cref="ShouldProcess(string,string,IReadOnlySet{string}?)"/>, a missing extension catalog
+    /// or an extensionless path is a hard no — discovery must not enqueue LICENSE, fonts, or images.
+    /// </summary>
+    public static bool IsExtractableSource(
+        string root,
+        string absolutePath,
+        IReadOnlySet<string>? supportedExtensions)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(absolutePath);
+        if (supportedExtensions is null || supportedExtensions.Count == 0)
+            return false;
+        string name = LastPathSegment(absolutePath);
+        int dot = name.LastIndexOf('.');
+        if (dot <= 0 || dot == name.Length - 1)
+            return false;
+        if (!supportedExtensions.Contains(name[(dot + 1)..].ToLowerInvariant()))
+            return false;
+        return ShouldProcess(root, absolutePath, supportedExtensions);
+    }
+
     public static bool ShouldProcess(string root, string absolutePath, IReadOnlySet<string>? supportedExtensions)
     {
         ArgumentNullException.ThrowIfNull(root);

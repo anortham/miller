@@ -343,11 +343,12 @@ public sealed class SymbolSearchSidecar
         StoreSidecarStamp? previous = StoreSidecarCatalog.TryRead(searchDbPath);
         if (previous is null ||
             previous.StoreLogSequence >= expected.StoreLogSequence ||
-            previous with
-            {
-                StoreLogSequence = expected.StoreLogSequence,
-                ResolutionStamp = expected.ResolutionStamp,
-            } != expected)
+            previous.Kind != expected.Kind ||
+            !string.Equals(previous.FamilyId, expected.FamilyId, StringComparison.Ordinal) ||
+            !string.Equals(previous.ViewId, expected.ViewId, StringComparison.Ordinal) ||
+            !string.Equals(previous.StoreInstanceId, expected.StoreInstanceId, StringComparison.Ordinal) ||
+            !string.Equals(previous.GenerationName, expected.GenerationName, StringComparison.Ordinal) ||
+            !string.Equals(previous.IndexLevel, expected.IndexLevel, StringComparison.Ordinal))
         {
             return false;
         }

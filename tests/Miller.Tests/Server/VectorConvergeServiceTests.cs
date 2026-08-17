@@ -1150,6 +1150,87 @@ public sealed class VectorConvergeServiceTests
     }
 
     [Fact]
+    public async Task Start_WarmsTheBrokerBeforeAnyIndexStamp()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-warm-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            IndexBootstrapService bootstrap = IsolatedBootstrap();
+            bootstrap.SeedForTest(
+                WorkspaceAt(root, symbols), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+            await using var session = new SemanticEmbeddingSession(
+                FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            var snapshot = new SemanticBrokerSnapshot(
+                "ready", "endpoint", IsOwner: true, OwnershipDegraded: false,
+                OwnershipDegradedReason: null, ReconnectCount: 0, SpawnAttempts: 1, OwnerProcessId: 42);
+            var broker = new SemanticEmbeddingSessionBroker(
+                enabled: true,
+                () => session,
+                () => snapshot);
+            var service = new VectorConvergeService(
+                bootstrap,
+                new VectorSidecar(SemanticMode.On),
+                new VectorConvergeSignal(enabled: true),
+                broker,
+                NullLogger<VectorConvergeService>.Instance);
+
+            await service.StartAsync(CancellationToken.None);
+            await WaitUntil(() => broker.BrokerSnapshot is not null && session.Handshake is not null);
+
+            Assert.NotNull(broker.BrokerSnapshot);
+            Assert.NotEqual(SemanticSessionState.NotStarted, session.State);
+
+            await service.StopAsync(CancellationToken.None);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Start_WaitsForBootstrapThenWarmsTheBroker()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-warm-wait-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            IndexBootstrapService bootstrap = IsolatedBootstrap();
+            await using var session = new SemanticEmbeddingSession(
+                FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            var snapshot = new SemanticBrokerSnapshot(
+                "ready", "endpoint", IsOwner: true, OwnershipDegraded: false,
+                OwnershipDegradedReason: null, ReconnectCount: 0, SpawnAttempts: 1, OwnerProcessId: 42);
+            var broker = new SemanticEmbeddingSessionBroker(
+                enabled: true,
+                () => session,
+                () => snapshot);
+            var service = new VectorConvergeService(
+                bootstrap,
+                new VectorSidecar(SemanticMode.On),
+                new VectorConvergeSignal(enabled: true),
+                broker,
+                NullLogger<VectorConvergeService>.Instance);
+
+            await service.StartAsync(TestContext.Current.CancellationToken);
+            await Task.Delay(80, TestContext.Current.CancellationToken);
+            Assert.Null(broker.BrokerSnapshot);
+
+            bootstrap.SeedForTest(
+                WorkspaceAt(root, symbols), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+            await WaitUntil(() => broker.BrokerSnapshot is not null && session.Handshake is not null);
+
+            Assert.NotNull(broker.BrokerSnapshot);
+            await service.StopAsync(CancellationToken.None);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Drain_OnALeaderWake_RunsGcWithActiveReadinessFromThePortAndTheLiveReaderTags()
     {
         string root = Directory.CreateTempSubdirectory("miller-vec-gc-").FullName;

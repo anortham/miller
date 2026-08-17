@@ -1233,7 +1233,7 @@ public sealed class IndexerServiceScanTests : IDisposable
     }
 
     [Fact]
-    public void TryScanAsLeader_WhenEnabledLeader_RebuildsStaleSearchSidecarAfterScan()
+    public void TryScanAsLeader_WhenEnabledLeader_AppliesSearchSidecarFileDeltaAfterIncrementalScan()
     {
         using var julie = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema,
@@ -1271,7 +1271,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
         Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
-        Assert.False(TableExists(searchDb, "incremental_sentinel"));
+        Assert.True(TableExists(searchDb, "incremental_sentinel"));
         FtsSymbolSearchIndex index = Assert.IsType<FtsSymbolSearchIndex>(
             sidecar.TryOpen(julie.DbPath, expectedRevision: 2));
         Assert.Empty(index.Search("LegacyWidget", limit: 10));

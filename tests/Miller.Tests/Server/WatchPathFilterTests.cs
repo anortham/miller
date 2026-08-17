@@ -95,6 +95,18 @@ public sealed class WatchPathFilterTests
     }
 
     [Fact]
+    public void IsExtractableSource_RejectsExtensionlessAndUnknownFiles()
+    {
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs", "md" };
+        Assert.False(WatchPathFilter.IsExtractableSource(Root, "/repo/LICENSE", extensions));
+        Assert.False(WatchPathFilter.IsExtractableSource(Root, "/repo/docs/chart.png", extensions));
+        Assert.False(WatchPathFilter.IsExtractableSource(Root, "/repo/font.woff2", extensions));
+        Assert.False(WatchPathFilter.IsExtractableSource(Root, "/repo/src/App.csproj", extensions));
+        Assert.False(WatchPathFilter.IsExtractableSource(Root, "/repo/src/App.cs", supportedExtensions: null));
+        Assert.True(WatchPathFilter.IsExtractableSource(Root, "/repo/src/App.cs", extensions));
+    }
+
+    [Fact]
     public void Skips_TheWorkspaceRootItself_EvenWithTheExtensionGateActive()
     {
         Assert.False(WatchPathFilter.ShouldProcess(Root, Root, new HashSet<string> { "cs" }));

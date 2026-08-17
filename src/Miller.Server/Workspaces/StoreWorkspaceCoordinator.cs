@@ -13,6 +13,60 @@ namespace Miller.Server.Workspaces;
 
 public sealed record StoreWorkspaceState(long StoreLogSequence, string IndexLevel);
 
+internal readonly record struct StoreTreeDelta(
+    IReadOnlyList<string> ChangedOrAdded,
+    IReadOnlyList<string> Deleted)
+{
+    public static StoreTreeDelta Empty { get; } = new([], []);
+
+    public bool IsEmpty => ChangedOrAdded.Count == 0 && Deleted.Count == 0;
+
+    public static StoreTreeDelta Diff(
+        IReadOnlyDictionary<string, string> stored,
+        string root,
+        IReadOnlySet<string>? supportedExtensions)
+    {
+        ArgumentNullException.ThrowIfNull(stored);
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        var changedOrAdded = new List<string>();
+        var deleted = new List<string>();
+
+        foreach ((string relativePath, string storedHash) in stored)
+        {
+            string absolutePath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(absolutePath))
+            {
+                deleted.Add(relativePath);
+                continue;
+            }
+
+            if (!string.Equals(
+                    ContentHasher.NormalizeHash(storedHash),
+                    ContentHasher.Blake3FileHex(absolutePath),
+                    StringComparison.Ordinal))
+            {
+                changedOrAdded.Add(relativePath);
+            }
+        }
+
+        foreach (string absolutePath in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            bool accept = supportedExtensions is { Count: > 0 }
+                ? WatchPathFilter.IsExtractableSource(root, absolutePath, supportedExtensions)
+                : WatchPathFilter.ShouldProcess(root, absolutePath);
+            if (!accept)
+                continue;
+            string relativePath = Path.GetRelativePath(root, absolutePath).Replace(Path.DirectorySeparatorChar, '/');
+            if (!stored.ContainsKey(relativePath))
+                changedOrAdded.Add(relativePath);
+        }
+
+        changedOrAdded.Sort(StringComparer.Ordinal);
+        deleted.Sort(StringComparer.Ordinal);
+        return new StoreTreeDelta(changedOrAdded, deleted);
+    }
+}
+
 public sealed class StoreWorkspaceOperationException(
     StoreOperation operation,
     StoreFailureClass failureClass,
@@ -38,6 +92,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     private readonly HashSet<string> _replayedResolveRequestIds = new(StringComparer.Ordinal);
     private readonly string? _fromArtifact;
     private readonly IIndexerPhaseSink _phaseSink;
+    private readonly Func<StoreTreeDelta>? _inspectTree;
+    private IReadOnlySet<string>? _supportedExtensions;
 
     public StoreWorkspaceCoordinator(
         StoreFamilyBinding binding,
@@ -64,7 +120,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         Func<StoreFamilyBinding, StoreWorkspaceState?> readState,
         Func<string>? mintRequestId,
         string? fromArtifact,
-        IIndexerPhaseSink phaseSink)
+        IIndexerPhaseSink? phaseSink = null,
+        Func<StoreTreeDelta>? inspectTree = null)
     {
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(client);
@@ -79,8 +136,12 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             ? new StoreRequestJournal(binding.WorkspaceRoot)
             : null;
         _fromArtifact = fromArtifact;
-        _phaseSink = phaseSink;
+        _phaseSink = phaseSink ?? NullIndexerPhaseSink.Instance;
+        _inspectTree = inspectTree;
     }
+
+    internal void SetSupportedExtensions(IReadOnlySet<string>? extensions) =>
+        _supportedExtensions = extensions;
 
     private static string? SelectCompatibleSeedArtifact(string? candidate)
     {
@@ -337,6 +398,17 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     {
         StoreWorkspaceState? before = _readState(_binding);
         StoreLevel level = LevelFor(intent, before);
+        if (intent == ScanIntent.IncrementalReconcile &&
+            before is not null &&
+            level == StoreLevel.Full &&
+            string.Equals(before.IndexLevel, "full", StringComparison.Ordinal))
+        {
+            StoreTreeDelta delta = InspectCurrentTree();
+            if (delta.IsEmpty)
+                return SkipUnchangedIncremental(before);
+            return ApplyIncrementalFileDelta(before, level, delta, jobs);
+        }
+
         string? fromArtifact = before is null
             ? SelectCompatibleSeedArtifact(_fromArtifact)
             : null;
@@ -358,6 +430,235 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             resolveAfter: level == StoreLevel.Full);
     }
 
+    private StoreTreeDelta InspectCurrentTree()
+    {
+        if (_inspectTree is not null)
+            return _inspectTree();
+
+        try
+        {
+            return DiffCurrentTree();
+        }
+        catch (Exception ex) when (
+            ex is IOException
+                or UnauthorizedAccessException
+                or ArgumentException
+                or InvalidOperationException
+                or FamilyStoreReadException
+                or Microsoft.Data.Sqlite.SqliteException)
+        {
+            throw new StoreWorkspaceOperationException(
+                StoreOperation.Update,
+                new StoreFailureClass("tree_hash_unavailable"),
+                "Could not compare workspace file hashes to the store; refusing a whole-repo import. " +
+                ex.Message);
+        }
+    }
+
+    private StoreTreeDelta DiffCurrentTree()
+    {
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(_binding);
+        Dictionary<string, string> stored = session.Read(ReadStoredFileHashes);
+        return StoreTreeDelta.Diff(stored, _binding.WorkspaceRoot, _supportedExtensions);
+    }
+
+    private ExtractReport ApplyIncrementalFileDelta(
+        StoreWorkspaceState before,
+        StoreLevel level,
+        StoreTreeDelta delta,
+        int? jobs)
+    {
+        using var totalPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.CoordinatorTotal);
+        int jobsValue = jobs ?? ExtractJobsPolicy.FromEnvironment();
+        StoreScanControls scan = ScanControls(jobsValue, prepareForScan: false);
+        long changedFiles = 0;
+        long deletedFiles = 0;
+        StoreRequestResult? last = null;
+        bool anyCreated = false;
+
+        using (var importPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.Import))
+        {
+            bool importDidWork = false;
+            try
+            {
+                foreach (string relativePath in delta.ChangedOrAdded)
+                {
+                    StoreRequestControls controls = Controls(
+                        $"update|{_binding.FamilyId:D}|{_binding.ViewId}|{relativePath}|{level}|{CurrentContentFingerprint(relativePath)}",
+                        StoreOperation.Update);
+                    var request = new StoreUpdateRequest(
+                        _binding.StoreRoot,
+                        _binding.FamilyId.ToString("D"),
+                        _binding.ViewId,
+                        _binding.WorkspaceRoot,
+                        relativePath,
+                        level,
+                        controls,
+                        scan);
+                    StoreRequestResult result = SubmitRequest(request, replayedImport: false);
+                    last = result;
+                    if (result.Manifest.Disposition == StoreManifestDisposition.Created)
+                    {
+                        changedFiles++;
+                        anyCreated = true;
+                        importDidWork = true;
+                    }
+                }
+
+                if (delta.Deleted.Count > 0)
+                {
+                    StoreRequestControls controls = Controls(
+                        $"delete|{_binding.FamilyId:D}|{_binding.ViewId}|{string.Join(',', delta.Deleted)}",
+                        StoreOperation.Delete);
+                    var request = new StoreDeleteRequest(
+                        _binding.StoreRoot,
+                        _binding.FamilyId.ToString("D"),
+                        _binding.ViewId,
+                        _binding.WorkspaceRoot,
+                        delta.Deleted,
+                        controls);
+                    StoreRequestResult result = SubmitRequest(request, replayedImport: false);
+                    last = result;
+                    if (result.Manifest.Disposition == StoreManifestDisposition.Created)
+                    {
+                        deletedFiles = delta.Deleted.Count;
+                        anyCreated = true;
+                        importDidWork = true;
+                    }
+                }
+
+                importPhase.Complete(storeSequence: null, importDidWork);
+            }
+            catch
+            {
+                importPhase.Fail();
+                throw;
+            }
+        }
+
+        if (level == StoreLevel.Full && anyCreated && !ResolutionAlreadyExact(last))
+        {
+            string resolveFingerprint = ResolveFingerprint(delta);
+            StoreRequestControls resolveControls = Controls(resolveFingerprint, StoreOperation.Resolve);
+            var resolve = new StoreResolveRequest(
+                _binding.StoreRoot,
+                _binding.FamilyId.ToString("D"),
+                _binding.ViewId,
+                resolveControls);
+            bool replayedResolve = _replayedResolveRequestIds.Remove(resolveControls.RequestId);
+            _ = SubmitPhase(
+                true,
+                IndexerPhaseNames.Resolve,
+                () => SubmitResolveRequest(resolve, resolveFingerprint, replayedResolve),
+                resolveResult => resolveResult.State is StoreRequestState.Committed or StoreRequestState.Acknowledged);
+        }
+        else
+        {
+            _phaseSink.RecordSafely(
+                IndexerPhaseNames.Resolve,
+                TimeSpan.Zero,
+                IndexerPhaseOutcomes.Skipped,
+                storeSequence: null,
+                didWork: false);
+        }
+
+        StoreWorkspaceState after = ReadRequiredState();
+        bool changed = anyCreated || !string.Equals(before.IndexLevel, after.IndexLevel, StringComparison.Ordinal);
+        totalPhase.Complete(after.StoreLogSequence, changed);
+        if (last is null)
+            return NoChangeReport(after);
+        return Report(last, after, changed, changedFiles, deletedFiles);
+    }
+
+    private static Dictionary<string, string> ReadStoredFileHashes(Microsoft.Data.Sqlite.SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT path, content_hash FROM files ORDER BY path;";
+        using var reader = command.ExecuteReader();
+        var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            string path = reader.GetString(0);
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+            hashes[path] = reader.IsDBNull(1) ? "" : reader.GetString(1);
+        }
+
+        return hashes;
+    }
+
+    private ExtractReport SkipUnchangedIncremental(StoreWorkspaceState state)
+    {
+        using var totalPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.CoordinatorTotal);
+        _phaseSink.RecordSafely(
+            IndexerPhaseNames.Import,
+            TimeSpan.Zero,
+            IndexerPhaseOutcomes.Skipped,
+            state.StoreLogSequence,
+            false);
+        _phaseSink.RecordSafely(
+            IndexerPhaseNames.Resolve,
+            TimeSpan.Zero,
+            IndexerPhaseOutcomes.Skipped,
+            state.StoreLogSequence,
+            false);
+        totalPhase.Skip(state.StoreLogSequence);
+        return NoChangeReport(state);
+    }
+
+    private ExtractReport NoChangeReport(StoreWorkspaceState state)
+    {
+        var emptyRows = new ExtractRowCounts(
+            Files: 0,
+            Symbols: null,
+            SymbolAnnotations: null,
+            Identifiers: null,
+            Relationships: null,
+            TypeArguments: null,
+            TypeArgumentUsages: null,
+            Literals: null,
+            ExtractionRevisions: null,
+            RevisionFileChanges: null);
+        return new ExtractReport(
+            ReportSchemaVersion: JulieStoreContract.ReportSchemaVersion,
+            Status: "no_change",
+            Operation: "import",
+            Mode: "store",
+            Input: new ExtractReportInput(
+                DbPath: Path.Combine(_binding.StoreRoot, "store.db"),
+                RootPath: _binding.WorkspaceRoot,
+                FilePath: null,
+                RootRelativePath: null,
+                Format: null,
+                OutputPath: null),
+            Artifact: new ExtractArtifact(
+                DbPath: Path.Combine(_binding.StoreRoot, "store.db"),
+                RootPath: _binding.WorkspaceRoot,
+                ArtifactId: _binding.FamilyId.ToString("D"),
+                SchemaVersion: JulieStoreContract.SqliteSchemaVersion,
+                ExtractContractVersion: JulieStoreContract.StoreContractVersion,
+                SqliteSchemaVersion: JulieStoreContract.SqliteSchemaVersion,
+                JsonlSchemaVersion: null,
+                HashAlgorithm: "blake3",
+                ParserInventoryFingerprint: null,
+                CapabilitySnapshotFingerprint: null),
+            Tool: null,
+            RevisionBlock: new ExtractRevision(
+                LatestRevisionId: state.StoreLogSequence,
+                CreatedRevisionId: null),
+            Counts: new ExtractCounts(
+                FilesScanned: 0,
+                FilesChanged: 0,
+                FilesUnchanged: 1,
+                FilesUnsupported: 0,
+                FilesDeleted: 0,
+                FilesFailed: 0,
+                RowsWritten: emptyRows,
+                Totals: emptyRows),
+            Errors: [],
+            Warnings: []);
+    }
+
     private ExtractReport Submit(
         StoreRequest request,
         StoreWorkspaceState? before,
@@ -377,13 +678,10 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
                 || request is StoreImportRequest { Level: StoreLevel.Full }
                     && !string.Equals(before?.IndexLevel, "full", StringComparison.Ordinal));
         bool resolveSubmitted = false;
-        if (resolveAfter &&
-            !(request is StoreImportRequest { Level: StoreLevel.Full } &&
-                result.Resolution.State == StoreResolutionState.Exact &&
-                result.Resolution.ExactAtMatches))
+        if (resolveAfter && !ResolutionAlreadyExact(result))
         {
             resolveSubmitted = true;
-            string resolveFingerprint = ResolveFingerprint();
+            string resolveFingerprint = ResolveFingerprint(ResolveToken(request));
             StoreRequestControls controls = Controls(resolveFingerprint, StoreOperation.Resolve);
             var resolve = new StoreResolveRequest(
                 _binding.StoreRoot,
@@ -682,8 +980,22 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     private string ImportFingerprint(StoreLevel level, string? fromArtifact) =>
         $"import|{_binding.FamilyId:D}|{_binding.ViewId}|{level}|{fromArtifact ?? string.Empty}";
 
-    private string ResolveFingerprint() =>
-        $"resolve|{_binding.FamilyId:D}|{_binding.ViewId}";
+    private string ResolveFingerprint(string token) =>
+        $"resolve|{_binding.FamilyId:D}|{_binding.ViewId}|{token}";
+
+    private string ResolveFingerprint(StoreTreeDelta delta) =>
+        ResolveFingerprint($"{string.Join(',', delta.ChangedOrAdded)}|{string.Join(',', delta.Deleted)}");
+
+    private static string ResolveToken(StoreRequest request) => request switch
+    {
+        StoreUpdateRequest update => update.FilePath,
+        StoreDeleteRequest delete => string.Join(',', delete.FilePaths),
+        StoreImportRequest => "import",
+        _ => "resolve",
+    };
+
+    private static bool ResolutionAlreadyExact(StoreRequestResult? result) =>
+        result is { Resolution.State: StoreResolutionState.Exact, Resolution.ExactAtMatches: true };
 
     private static TimeSpan RequestTimeout(StoreOperation operation)
     {

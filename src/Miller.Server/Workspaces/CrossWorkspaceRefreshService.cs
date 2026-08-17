@@ -699,6 +699,8 @@ public sealed class CrossWorkspaceRefreshService
             () => IndexLevels.Resolve(row.LevelPolicy),
             File.Exists(row.IndexDbPath) ? row.IndexDbPath : null,
             _phaseSink);
+        coordinator.SetSupportedExtensions(
+            SupportedExtensionCatalog.ForToolsRoot(Path.Combine(AppContext.BaseDirectory, ".tools")));
         return coordinator.Scan(attempt.EffectiveIntent, attempt.Jobs);
     }
 

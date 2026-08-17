@@ -129,6 +129,76 @@ public static partial class ContentCorpusWriter
         return facts with { Path = fullPath };
     }
 
+    public static void ApplyStoreFileChanges(
+        string contentDbPath,
+        IWorkspaceReadSession session,
+        IReadOnlyCollection<string> paths,
+        StoreSidecarStamp storeStamp)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(storeStamp);
+
+        var distinctPaths = paths
+            .Where(static p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var pathSet = distinctPaths.ToHashSet(StringComparer.Ordinal);
+
+        IReadOnlyList<SourceRow> sourceRows = session.Read(connection =>
+            ReadSourceRows(connection).Where(row => pathSet.Contains(row.Path)).ToArray());
+        IReadOnlyDictionary<string, IReadOnlyList<ContentCorpusSymbolSpan>> symbolsByPath =
+            session.Read(connection => FilterSymbolSpans(ReadSymbolSpans(connection), pathSet));
+
+        List<SourceBuildInput> accepted = CollectAccepted(
+            sourceRows,
+            symbolsByPath,
+            session.Snapshot.WorkspaceRoot,
+            session.Snapshot.WorkspaceId,
+            out _,
+            out _,
+            out _,
+            out _,
+            out _,
+            out _,
+            out _);
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.GetFullPath(contentDbPath),
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var tx = connection.BeginTransaction();
+        if (distinctPaths.Length > 0)
+            DeleteWorkspaceSourcesForPaths(connection, distinctPaths);
+        InsertSourcesAndChunks(connection, accepted, session.Snapshot.WorkspaceId, storeStamp.StoreLogSequence);
+        UpdateMetaCounts(connection);
+        using (var meta = connection.CreateCommand())
+        {
+            meta.Transaction = tx;
+            meta.CommandText = """
+                UPDATE content_meta
+                SET workspace_revision=$revision,
+                    updated_at_utc=$updated
+                WHERE schema_version=$schema_version
+                  AND chunker_version=$chunker_version;
+                """;
+            meta.Parameters.AddWithValue("$revision", storeStamp.StoreLogSequence);
+            meta.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
+            meta.Parameters.AddWithValue("$schema_version", ContentCorpusSchema.SchemaVersion);
+            meta.Parameters.AddWithValue("$chunker_version", ContentCorpusSchema.ChunkerVersion);
+            if (meta.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("content.db content_meta could not be stamped after a file delta.");
+        }
+
+        StoreSidecarCatalog.Stamp(connection, tx, storeStamp);
+        tx.Commit();
+    }
+
     internal static bool TryFastForwardStoreMetadata(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -471,103 +541,21 @@ public static partial class ContentCorpusWriter
         sourceRows ??= ReadSourceRows(symbolsDbPath
             ?? throw new ArgumentException("A legacy content build requires the source artifact path."));
         symbolsByPath ??= ReadSymbolSpans(symbolsDbPath!);
-        var accepted = new List<SourceBuildInput>();
-        int skippedStatus = 0;
-        int skippedScope = 0;
-        int skippedLarge = 0;
-        int skippedMissing = 0;
-        int skippedHash = 0;
-        int skippedUtf8 = 0;
-        int skippedIo = 0;
-        long indexedSourceBytes = 0;
-        long storedRawBytes = 0;
-
-        foreach (SourceRow row in sourceRows)
-        {
-            if (!string.Equals(row.Status, "indexed", StringComparison.Ordinal))
-            {
-                skippedStatus++;
-                continue;
-            }
-
-            string contentKind = ContentFileClassifier.WorkspaceContentKind(row.Path, row.Language);
-
-            if (row.ContentBytes > MaxWorkspaceFileBytes)
-            {
-                skippedLarge++;
-                continue;
-            }
-
-            string? abs = WorkspaceRelativePath.ResolveUnderRoot(workspaceRoot, row.Path);
-            if (abs is null || !File.Exists(abs))
-            {
-                skippedMissing++;
-                continue;
-            }
-
-            byte[] bytes;
-            try
-            {
-                if (new FileInfo(abs).Length > MaxWorkspaceFileBytes)
-                {
-                    skippedLarge++;
-                    continue;
-                }
-
-                bytes = File.ReadAllBytes(abs);
-            }
-            catch (IOException)
-            {
-                skippedIo++;
-                continue;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                skippedIo++;
-                continue;
-            }
-
-            if (bytes.LongLength > MaxWorkspaceFileBytes)
-            {
-                skippedLarge++;
-                continue;
-            }
-
-            if (!StringComparer.OrdinalIgnoreCase.Equals(
-                    ContentHasher.Blake3Hex(bytes),
-                    ContentHasher.NormalizeHash(row.ContentHash)))
-            {
-                skippedHash++;
-                continue;
-            }
-
-            if (!SourceTextDecoder.TryDecode(bytes, out string text))
-            {
-                skippedUtf8++;
-                continue;
-            }
-
-            string sourceId = SourceId(workspaceId, row.Path, contentKind);
-            IReadOnlyList<ContentCorpusSymbolSpan> spans = string.Equals(contentKind, TextContentKind.WorkspaceSource, StringComparison.Ordinal)
-                && symbolsByPath.TryGetValue(row.Path, out var pathSpans)
-                ? pathSpans
-                : Array.Empty<ContentCorpusSymbolSpan>();
-            IReadOnlyList<TextContentDocument> chunks = ContentCorpusChunker.Chunk(
-                sourceId,
-                contentKind,
-                row.Path,
-                url: null,
-                row.Path,
-                row.Language,
-                text,
-                bytes.LongLength,
-                IsTestPath(row.Path, spans),
-                containingSymbols: spans);
-
-            indexedSourceBytes += bytes.LongLength;
-            storedRawBytes += chunks.Sum(static c => Encoding.UTF8.GetByteCount(c.Text));
-            accepted.Add(new SourceBuildInput(row, sourceId, contentKind, text, bytes.LongLength, spans, chunks));
-        }
+        List<SourceBuildInput> accepted = CollectAccepted(
+            sourceRows,
+            symbolsByPath,
+            workspaceRoot,
+            workspaceId,
+            out int skippedStatus,
+            out int skippedScope,
+            out int skippedLarge,
+            out int skippedMissing,
+            out int skippedHash,
+            out int skippedUtf8,
+            out int skippedIo);
+        long indexedSourceBytes = accepted.Sum(static source => source.SourceBytes);
+        long storedRawBytes = accepted.Sum(static source =>
+            source.Chunks.Sum(static chunk => Encoding.UTF8.GetByteCount(chunk.Text)));
 
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -765,6 +753,204 @@ public static partial class ContentCorpusWriter
                 spanCmd.ExecuteNonQuery();
             }
         }
+    }
+
+    private static List<SourceBuildInput> CollectAccepted(
+        IReadOnlyList<SourceRow> sourceRows,
+        IReadOnlyDictionary<string, IReadOnlyList<ContentCorpusSymbolSpan>> symbolsByPath,
+        string workspaceRoot,
+        string? workspaceId,
+        out int skippedStatus,
+        out int skippedScope,
+        out int skippedLarge,
+        out int skippedMissing,
+        out int skippedHash,
+        out int skippedUtf8,
+        out int skippedIo)
+    {
+        var accepted = new List<SourceBuildInput>();
+        skippedStatus = 0;
+        skippedScope = 0;
+        skippedLarge = 0;
+        skippedMissing = 0;
+        skippedHash = 0;
+        skippedUtf8 = 0;
+        skippedIo = 0;
+
+        foreach (SourceRow row in sourceRows)
+        {
+            if (!string.Equals(row.Status, "indexed", StringComparison.Ordinal))
+            {
+                skippedStatus++;
+                continue;
+            }
+
+            string contentKind = ContentFileClassifier.WorkspaceContentKind(row.Path, row.Language);
+
+            if (row.ContentBytes > MaxWorkspaceFileBytes)
+            {
+                skippedLarge++;
+                continue;
+            }
+
+            string? abs = WorkspaceRelativePath.ResolveUnderRoot(workspaceRoot, row.Path);
+            if (abs is null || !File.Exists(abs))
+            {
+                skippedMissing++;
+                continue;
+            }
+
+            byte[] bytes;
+            try
+            {
+                if (new FileInfo(abs).Length > MaxWorkspaceFileBytes)
+                {
+                    skippedLarge++;
+                    continue;
+                }
+
+                bytes = File.ReadAllBytes(abs);
+            }
+            catch (IOException)
+            {
+                skippedIo++;
+                continue;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                skippedIo++;
+                continue;
+            }
+
+            if (bytes.LongLength > MaxWorkspaceFileBytes)
+            {
+                skippedLarge++;
+                continue;
+            }
+
+            if (!StringComparer.OrdinalIgnoreCase.Equals(
+                    ContentHasher.Blake3Hex(bytes),
+                    ContentHasher.NormalizeHash(row.ContentHash)))
+            {
+                skippedHash++;
+                continue;
+            }
+
+            if (!SourceTextDecoder.TryDecode(bytes, out string text))
+            {
+                skippedUtf8++;
+                continue;
+            }
+
+            string sourceId = SourceId(workspaceId, row.Path, contentKind);
+            IReadOnlyList<ContentCorpusSymbolSpan> spans = string.Equals(contentKind, TextContentKind.WorkspaceSource, StringComparison.Ordinal)
+                && symbolsByPath.TryGetValue(row.Path, out var pathSpans)
+                ? pathSpans
+                : Array.Empty<ContentCorpusSymbolSpan>();
+            IReadOnlyList<TextContentDocument> chunks = ContentCorpusChunker.Chunk(
+                sourceId,
+                contentKind,
+                row.Path,
+                url: null,
+                row.Path,
+                row.Language,
+                text,
+                bytes.LongLength,
+                IsTestPath(row.Path, spans),
+                containingSymbols: spans);
+
+            accepted.Add(new SourceBuildInput(row, sourceId, contentKind, text, bytes.LongLength, spans, chunks));
+        }
+
+        return accepted;
+    }
+
+    private static void DeleteWorkspaceSourcesForPaths(SqliteConnection connection, IReadOnlyList<string> paths)
+    {
+        const int chunkSize = 500;
+        for (int offset = 0; offset < paths.Count; offset += chunkSize)
+        {
+            int count = Math.Min(chunkSize, paths.Count - offset);
+            using var fts = connection.CreateCommand();
+            string placeholders = AddPathParameters(fts, paths, offset, count);
+            fts.CommandText = $"""
+                DELETE FROM content_fts
+                WHERE chunk_id IN (
+                    SELECT chunk_id
+                    FROM content_chunks
+                    WHERE path IN ({placeholders})
+                      AND content_kind IN ($source, $docs, $config)
+                );
+                """;
+            AddWorkspaceKindParameters(fts);
+            fts.ExecuteNonQuery();
+
+            using var spans = connection.CreateCommand();
+            placeholders = AddPathParameters(spans, paths, offset, count);
+            spans.CommandText = $"""
+                DELETE FROM content_symbol_spans
+                WHERE path IN ({placeholders});
+                """;
+            spans.ExecuteNonQuery();
+
+            using var chunks = connection.CreateCommand();
+            placeholders = AddPathParameters(chunks, paths, offset, count);
+            chunks.CommandText = $"""
+                DELETE FROM content_chunks
+                WHERE path IN ({placeholders})
+                  AND content_kind IN ($source, $docs, $config);
+                """;
+            AddWorkspaceKindParameters(chunks);
+            chunks.ExecuteNonQuery();
+
+            using var sources = connection.CreateCommand();
+            placeholders = AddPathParameters(sources, paths, offset, count);
+            sources.CommandText = $"""
+                DELETE FROM content_sources
+                WHERE path IN ({placeholders})
+                  AND content_kind IN ($source, $docs, $config);
+                """;
+            AddWorkspaceKindParameters(sources);
+            sources.ExecuteNonQuery();
+        }
+    }
+
+    private static string AddPathParameters(
+        SqliteCommand command,
+        IReadOnlyList<string> paths,
+        int offset,
+        int count)
+    {
+        var names = new string[count];
+        for (int i = 0; i < count; i++)
+        {
+            string name = "$p" + i;
+            names[i] = name;
+            command.Parameters.AddWithValue(name, paths[offset + i]);
+        }
+
+        return string.Join(",", names);
+    }
+
+    private static void AddWorkspaceKindParameters(SqliteCommand command)
+    {
+        command.Parameters.AddWithValue("$source", TextContentKind.WorkspaceSource);
+        command.Parameters.AddWithValue("$docs", TextContentKind.WorkspaceDocs);
+        command.Parameters.AddWithValue("$config", TextContentKind.WorkspaceConfig);
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<ContentCorpusSymbolSpan>> FilterSymbolSpans(
+        IReadOnlyDictionary<string, IReadOnlyList<ContentCorpusSymbolSpan>> symbolsByPath,
+        HashSet<string> paths)
+    {
+        var filtered = new Dictionary<string, IReadOnlyList<ContentCorpusSymbolSpan>>(StringComparer.Ordinal);
+        foreach (string path in paths)
+        {
+            if (symbolsByPath.TryGetValue(path, out IReadOnlyList<ContentCorpusSymbolSpan>? spans))
+                filtered[path] = spans;
+        }
+
+        return filtered;
     }
 
     private static IReadOnlyList<SourceRow> ReadSourceRows(string symbolsDbPath)
