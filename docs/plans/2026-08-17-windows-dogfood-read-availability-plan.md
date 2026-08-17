@@ -374,10 +374,10 @@ Completion follows `parallel-lead-commit` for Batch A and `serial-worker-commit`
 **Approach:** Set a small busy timeout on the inspect connection, retry once, then map locked to the existing unreadable/converging envelope. Keep `error` non-null and stable (`database_locked`), not the raw SQLite sentence if a code already exists.
 
 **Acceptance criteria:**
-- [ ] Inspect against a locked content db does not throw
-- [ ] Status still returns and names the corpus as not current
-- [ ] A truly missing/corrupt corpus still reports missing/corrupt
-- [ ] Worker-scope verification passes and the change is handed to the lead (`parallel-lead-commit`)
+- [x] Inspect against a locked content db does not throw
+- [x] Status still returns and names the corpus as not current
+- [x] A truly missing/corrupt corpus still reports missing/corrupt
+- [x] Worker-scope verification passes and the change is handed to the lead (`parallel-lead-commit`)
 
 ---
 

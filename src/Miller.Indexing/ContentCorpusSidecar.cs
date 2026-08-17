@@ -9,6 +9,13 @@ namespace Miller.Indexing;
 /// </summary>
 public sealed class ContentCorpusSidecar
 {
+    // Microsoft.Data.Sqlite reapplies sqlite3_busy_timeout(DefaultTimeout) on every command.
+    // DefaultTimeout is whole seconds and 0 means infinite, so 1 s is the short-retry floor.
+    private const int InspectBusyTimeoutSeconds = 1;
+    private const int SqliteBusy = 5;
+    private const int SqliteLocked = 6;
+    private const string DatabaseLockedError = "database_locked";
+
     /// <summary>The on-disk <c>content.db</c> path for a Miller <c>symbols.db</c> sibling.</summary>
     public static string ContentDbPathFor(string symbolsDbPath)
     {
@@ -212,7 +219,7 @@ public sealed class ContentCorpusSidecar
         {
             try
             {
-                return ReadFacts(
+                return ReadFactsWithBusyRetry(
                     contentDbPath,
                     expectedRevision,
                     () => ReadGateArtifactAgrees(contentDbPath, symbolsDbPath));
@@ -237,7 +244,7 @@ public sealed class ContentCorpusSidecar
 
         try
         {
-            return ReadFacts(
+            return ReadFactsWithBusyRetry(
                 contentDbPath,
                 expectedRevision,
                 () => ReadGateArtifactAgrees(contentDbPath, symbolsDbPath));
@@ -246,16 +253,7 @@ public sealed class ContentCorpusSidecar
             ex is SqliteException or InvalidOperationException or IOException
                 or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return new ContentCorpusFacts(
-                "unreadable",
-                contentDbPath,
-                SchemaVersion: null,
-                WorkspaceRevision: null,
-                SourceCount: 0,
-                ChunkCount: 0,
-                IndexedSourceBytes: 0,
-                StoredRawBytes: 0,
-                Error: ex.Message);
+            return InspectFailureFacts(contentDbPath, expectedRevision: null, ex);
         }
     }
 
@@ -272,7 +270,7 @@ public sealed class ContentCorpusSidecar
 
         try
         {
-            return ReadFacts(
+            return ReadFactsWithBusyRetry(
                 path,
                 expected.StoreLogSequence,
                 () => StoreSidecarCatalog.IsCurrent(path, expected));
@@ -281,8 +279,7 @@ public sealed class ContentCorpusSidecar
             ex is SqliteException or InvalidOperationException or IOException
                 or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return new ContentCorpusFacts(
-                "unreadable", path, null, expected.StoreLogSequence, 0, 0, 0, 0, Error: ex.Message);
+            return InspectFailureFacts(path, expected.StoreLogSequence, ex);
         }
     }
 
@@ -467,6 +464,51 @@ public sealed class ContentCorpusSidecar
         }
     }
 
+    private static ContentCorpusFacts ReadFactsWithBusyRetry(
+        string contentDbPath,
+        long expectedRevision,
+        Func<bool> currentGate)
+    {
+        try
+        {
+            return ReadFacts(contentDbPath, expectedRevision, currentGate);
+        }
+        catch (Exception ex) when (IsBusy(ex))
+        {
+            return ReadFacts(contentDbPath, expectedRevision, currentGate);
+        }
+    }
+
+    // Locked inspect is converging, not a dead corpus. Do not leak the raw SQLite Error 5 sentence.
+    private static ContentCorpusFacts InspectFailureFacts(
+        string contentDbPath,
+        long? expectedRevision,
+        Exception ex) =>
+        IsBusy(ex)
+            ? new ContentCorpusFacts(
+                "converging",
+                contentDbPath,
+                SchemaVersion: null,
+                WorkspaceRevision: expectedRevision,
+                SourceCount: 0,
+                ChunkCount: 0,
+                IndexedSourceBytes: 0,
+                StoredRawBytes: 0,
+                Error: DatabaseLockedError)
+            : new ContentCorpusFacts(
+                "unreadable",
+                contentDbPath,
+                SchemaVersion: null,
+                WorkspaceRevision: expectedRevision,
+                SourceCount: 0,
+                ChunkCount: 0,
+                IndexedSourceBytes: 0,
+                StoredRawBytes: 0,
+                Error: ex.Message);
+
+    private static bool IsBusy(Exception ex) =>
+        ex is SqliteException sqlite && sqlite.SqliteErrorCode is SqliteBusy or SqliteLocked;
+
     private static ContentCorpusFacts ReadFacts(
         string contentDbPath,
         long expectedRevision,
@@ -478,6 +520,7 @@ public sealed class ContentCorpusSidecar
             Mode = SqliteOpenMode.ReadOnly,
             Pooling = false,
         }.ToString());
+        connection.DefaultTimeout = InspectBusyTimeoutSeconds;
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = """
