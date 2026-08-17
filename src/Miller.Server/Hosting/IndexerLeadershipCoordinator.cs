@@ -125,9 +125,12 @@ internal sealed class IndexerLeadershipCoordinator
         LeadershipVerdict verdict;
         try
         {
+            string? artifactBinaryVersion = StoreArtifactVersionReader.ReadForEligibility(
+                extractDbPath,
+                _readArtifactExtractorVersion);
             verdict = LeadershipEligibility.Evaluate(
                 _ownExtractorVersion.Value,
-                _readArtifactExtractorVersion(extractDbPath),
+                artifactBinaryVersion,
                 _allowExtractorDowngrade);
         }
         catch (StoreArtifactVersionReadException ex)

@@ -1125,6 +1125,61 @@ public sealed class WorkspaceRenderTests
     }
 
     [Fact]
+    public void Status_Json_EqualExtractorVersions_ArtifactFieldEqualsReasonToken()
+    {
+        const string version = "2.33.5";
+        LeadershipVerdict verdict = LeadershipEligibility.Evaluate(version, version, allowDowngrade: false);
+        var leader = new LeaderHealthFacts(
+            Identity: null,
+            Alive: null,
+            OwnExtractorVersion: version,
+            ArtifactExtractorVersion: version,
+            OwnVerdict: verdict);
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Status(
+            Facts(),
+            TelemetrySummary.Empty,
+            json: true,
+            leader));
+        JsonElement leaderJson = doc.RootElement.GetProperty("indexer_leader");
+        string? artifactField = leaderJson.GetProperty("artifact_extractor_version").GetString();
+        string? reason = leaderJson.GetProperty("own_eligibility").GetProperty("reason").GetString();
+
+        Assert.Equal(version, artifactField);
+        Assert.Contains("matches", reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("newer", reason, StringComparison.Ordinal);
+        Assert.Contains($"index artifact {artifactField}", reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Json_OlderArtifact_ReasonNamesTheDisplayedVersionAndSchedulesUpgrade()
+    {
+        const string own = "2.33.5";
+        const string artifact = "2.33.2";
+        LeadershipVerdict verdict = LeadershipEligibility.Evaluate(own, artifact, allowDowngrade: false);
+        var leader = new LeaderHealthFacts(
+            Identity: null,
+            Alive: null,
+            OwnExtractorVersion: own,
+            ArtifactExtractorVersion: artifact,
+            OwnVerdict: verdict);
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Status(
+            Facts(),
+            TelemetrySummary.Empty,
+            json: true,
+            leader));
+        JsonElement leaderJson = doc.RootElement.GetProperty("indexer_leader");
+        string? artifactField = leaderJson.GetProperty("artifact_extractor_version").GetString();
+        string? reason = leaderJson.GetProperty("own_eligibility").GetProperty("reason").GetString();
+
+        Assert.Equal(artifact, artifactField);
+        Assert.Contains("newer", reason, StringComparison.Ordinal);
+        Assert.Contains($"index artifact {artifactField}", reason, StringComparison.Ordinal);
+        Assert.True(verdict.ArtifactOlderThanOwn);
+    }
+
+    [Fact]
     public void Status_Json_NullWorkspaceIdAndUnknownFreshness_AreJsonNull()
     {
         var facts = Facts() with { WorkspaceId = null, IndexFresh = null };

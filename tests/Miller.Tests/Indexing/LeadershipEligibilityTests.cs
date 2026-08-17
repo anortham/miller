@@ -35,6 +35,29 @@ public sealed class LeadershipEligibilityTests
     }
 
     [Fact]
+    public void Evaluate_EqualCurrentExtractorVersions_MatchesAndDoesNotSayNewer()
+    {
+        var verdict = LeadershipEligibility.Evaluate("2.33.5", "2.33.5", allowDowngrade: false);
+
+        Assert.True(verdict.Eligible);
+        Assert.False(verdict.ArtifactOlderThanOwn);
+        Assert.Contains("matches", verdict.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("newer", verdict.Reason, StringComparison.Ordinal);
+        Assert.Equal("extractor 2.33.5 matches the index artifact 2.33.5", verdict.Reason);
+    }
+
+    [Fact]
+    public void Evaluate_OlderArtifact_ReportsNewerAndSchedulesUpgrade()
+    {
+        var verdict = LeadershipEligibility.Evaluate("2.33.5", "2.33.2", allowDowngrade: false);
+
+        Assert.True(verdict.Eligible);
+        Assert.True(verdict.ArtifactOlderThanOwn);
+        Assert.Contains("newer", verdict.Reason, StringComparison.Ordinal);
+        Assert.Equal("extractor 2.33.5 is newer than the index artifact 2.33.2", verdict.Reason);
+    }
+
+    [Fact]
     public void Evaluate_OwnOlderThanArtifact_Ineligible()
     {
         var verdict = LeadershipEligibility.Evaluate("2.1.3", "2.3.0", allowDowngrade: false);
