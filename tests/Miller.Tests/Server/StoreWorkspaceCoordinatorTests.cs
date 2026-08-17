@@ -540,6 +540,85 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void Scan_IncrementalReconcile_SkipsResolveWhenTheJournalHasNoResolveKeys()
+    {
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            allowedOperations: [StoreOperation.Update, StoreOperation.Resolve]);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(41, "full"),
+            new(42, "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => snapshots.Dequeue(),
+            () => "request-docs",
+            fromArtifact: null,
+            inspectTree: static () => new StoreTreeDelta(["README.md"], []),
+            tryCarryExact: static _ => true);
+
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+
+        Assert.IsType<StoreUpdateRequest>(Assert.Single(client.Requests));
+    }
+
+    [Fact]
+    public void Update_SkipsResolveWhenTheJournalHasNoResolveKeys()
+    {
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            allowedOperations: [StoreOperation.Update, StoreOperation.Resolve]);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(41, "full"),
+            new(42, "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => snapshots.Dequeue(),
+            () => "request-docs",
+            fromArtifact: null,
+            tryCarryExact: static _ => true);
+
+        ExtractReport report = coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "docs", "README.md"));
+
+        Assert.IsType<StoreUpdateRequest>(Assert.Single(client.Requests));
+        Assert.Equal("completed", report.Status);
+    }
+
+    [Fact]
+    public void Update_StillResolvesWhenCarryCannotRestoreTheExactFence()
+    {
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            allowedOperations: [StoreOperation.Update, StoreOperation.Resolve]);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(41, "full"),
+            new(42, "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => snapshots.Dequeue(),
+            () => "request-code",
+            fromArtifact: null,
+            tryCarryExact: static _ => false);
+
+        coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs"));
+
+        Assert.Equal(2, client.Requests.Count);
+        Assert.IsType<StoreUpdateRequest>(client.Requests[0]);
+        Assert.IsType<StoreResolveRequest>(client.Requests[1]);
+    }
+
+    [Fact]
     public void Diff_DoesNotAddWatcherNoiseOrUnknownExtensions()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-tree-delta-" + Guid.NewGuid().ToString("N"));

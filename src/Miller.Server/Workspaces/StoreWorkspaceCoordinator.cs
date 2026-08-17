@@ -110,6 +110,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     private readonly string? _fromArtifact;
     private readonly IIndexerPhaseSink _phaseSink;
     private readonly Func<StoreTreeDelta>? _inspectTree;
+    private readonly Func<StoreFamilyBinding, bool> _tryCarryExact;
     private IReadOnlySet<string>? _supportedExtensions;
 
     public StoreWorkspaceCoordinator(
@@ -138,7 +139,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         Func<string>? mintRequestId,
         string? fromArtifact,
         IIndexerPhaseSink? phaseSink = null,
-        Func<StoreTreeDelta>? inspectTree = null)
+        Func<StoreTreeDelta>? inspectTree = null,
+        Func<StoreFamilyBinding, bool>? tryCarryExact = null)
     {
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(client);
@@ -155,6 +157,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         _fromArtifact = fromArtifact;
         _phaseSink = phaseSink ?? NullIndexerPhaseSink.Instance;
         _inspectTree = inspectTree;
+        _tryCarryExact = tryCarryExact ?? (static candidate =>
+            StoreResolutionCarry.TryCarryExactWhenNoResolveKeys(candidate.StoreRoot, candidate.ViewId));
     }
 
     internal void SetSupportedExtensions(IReadOnlySet<string>? extensions) =>
@@ -554,7 +558,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             }
         }
 
-        if (level == StoreLevel.Full && anyCreated && !ResolutionAlreadyExact(last))
+        if (ShouldSubmitResolve(level == StoreLevel.Full && anyCreated, last))
         {
             string resolveFingerprint = ResolveFingerprint(delta);
             StoreRequestControls resolveControls = Controls(resolveFingerprint, StoreOperation.Resolve);
@@ -699,7 +703,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
                 || request is StoreImportRequest { Level: StoreLevel.Full }
                     && !string.Equals(before?.IndexLevel, "full", StringComparison.Ordinal));
         bool resolveSubmitted = false;
-        if (resolveAfter && !ResolutionAlreadyExact(result))
+        if (ShouldSubmitResolve(resolveAfter, result))
         {
             resolveSubmitted = true;
             string resolveFingerprint = ResolveFingerprint(ResolveToken(request));
@@ -1019,6 +1023,9 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
 
     private static bool ResolutionAlreadyExact(StoreRequestResult? result) =>
         result is { Resolution.State: StoreResolutionState.Exact, Resolution.ExactAtMatches: true };
+
+    private bool ShouldSubmitResolve(bool resolveAfter, StoreRequestResult? last) =>
+        resolveAfter && !ResolutionAlreadyExact(last) && !_tryCarryExact(_binding);
 
     private static TimeSpan RequestTimeout(StoreOperation operation)
     {
