@@ -54,12 +54,18 @@ public static class DeadCodeCandidateReader
     /// <summary>Named reason: <c>reference_resolution_status</c> or the store view is not ready to judge usage.</summary>
     public const string UnavailableResolutionNotReady = "resolution_not_ready";
 
+    /// <summary>Named reason: the literal scan stopped before every file, so provisional rows are not candidates.</summary>
+    public const string UnavailableLiteralScanIncomplete = "literal_scan_incomplete";
+
     /// <summary>
     /// Open <paramref name="symbolsDbPath"/> read-only, gate + validate it, gather the candidate rows and coverage,
     /// evaluate, run the literal scan over the survivors (re-reading source under <paramref name="workspaceRoot"/>
     /// with a blake3 freshness guard), and return the finished report. Returns a named empty report and skips the
     /// per-symbol walk and literal scan when resolution evidence is missing or not ready.
-    /// <paramref name="literalScanFileLimit"/> caps distinct files the literal scan may open; null means no cap.
+    /// <paramref name="literalScanFileLimit"/> is a test/safety cap on distinct files the literal scan may open;
+    /// null means no cap. Hitting the cap does not finish the scan: provisional rows stay off the candidate list
+    /// and the report is <see cref="UnavailableLiteralScanIncomplete"/>. Display <c>--limit</c> must not be passed
+    /// here — that flag bounds only the shown list (references-candidates-v1).
     /// </summary>
     public static DeadCodeCandidateReport Read(
         string symbolsDbPath, string workspaceRoot, int? literalScanFileLimit = null)
@@ -111,8 +117,11 @@ public static class DeadCodeCandidateReader
 
         var result = DeadCodeCandidates.Evaluate(rows, coverage);
         var (finalResult, literalScan) = RunLiteralScan(connection, workspaceRoot, result, literalScanFileLimit);
+        string? unavailable = literalScan.SkipReason == "limit_bound"
+            ? UnavailableLiteralScanIncomplete
+            : null;
 
-        return new DeadCodeCandidateReport(finalResult, coverage, literalScan, artifact);
+        return new DeadCodeCandidateReport(finalResult, coverage, literalScan, artifact, unavailable);
     }
 
     private static DeadCodeCandidateReport Unavailable(
@@ -421,7 +430,7 @@ public static class DeadCodeCandidateReader
 
         if (fileLimit is <= 0)
         {
-            return (DeadCodeCandidates.ApplyLiteralScan(result, new HashSet<string>(StringComparer.Ordinal)),
+            return (WithholdProvisionalCandidates(result),
                 new DeadCodeLiteralScan(0, 0, "limit_bound"));
         }
 
@@ -479,9 +488,18 @@ public static class DeadCodeCandidateReader
                         matched.Add(id);
         }
 
+        if (hitFileLimit)
+        {
+            return (WithholdProvisionalCandidates(result),
+                new DeadCodeLiteralScan(filesScanned, filesSkippedStale, "limit_bound"));
+        }
+
         return (DeadCodeCandidates.ApplyLiteralScan(result, matched),
-            new DeadCodeLiteralScan(filesScanned, filesSkippedStale, hitFileLimit ? "limit_bound" : null));
+            new DeadCodeLiteralScan(filesScanned, filesSkippedStale));
     }
+
+    private static DeadCodeResult WithholdProvisionalCandidates(DeadCodeResult result) =>
+        new([], result.Suppressions, result.Examined, result.NeedsLiteralScan);
 
     private static List<LiteralRegion> ReadStringLiteralRegions(SqliteConnection connection)
     {

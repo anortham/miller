@@ -478,31 +478,71 @@ public sealed class DeadCodeCandidateReaderTests
     }
 
     [Fact]
-    public void Read_LiteralScanFileLimit_StopsAfterTheBoundAndLeavesUnscannedMatches()
+    public void Read_WithoutFileLimit_CompletesLiteralScanAndSuppressesLaterFileMatch()
     {
         const string miss = "no candidate name here\n";
         const string hit = "UnusedHelper is a label\n";
-        using var fx = JulieDbFixture.Create(
+        using var fx = TwoLiteralFiles(miss, hit);
+
+        var report = DeadCodeCandidateReader.Read(fx.DbPath, fx.WorkspaceRoot);
+
+        Assert.Null(report.UnavailableReason);
+        Assert.Null(Candidate(report, "UnusedHelper"));
+        Assert.True(report.Result.Suppressions["string_literal_match"] >= 1);
+        Assert.Equal(2, report.LiteralScan.FilesScanned);
+        Assert.Equal(0, report.LiteralScan.FilesSkippedStale);
+        Assert.Null(report.LiteralScan.SkipReason);
+    }
+
+    [Fact]
+    public void Read_LiteralScanFileLimit_DoesNotPromoteProvisionalRows()
+    {
+        const string miss = "no candidate name here\n";
+        const string hit = "UnusedHelper is a label\n";
+        using var fx = TwoLiteralFiles(miss, hit);
+
+        var report = DeadCodeCandidateReader.Read(fx.DbPath, fx.WorkspaceRoot, literalScanFileLimit: 1);
+
+        Assert.Equal(DeadCodeCandidateReader.UnavailableLiteralScanIncomplete, report.UnavailableReason);
+        Assert.Empty(report.Result.Candidates);
+        Assert.Null(Candidate(report, "UnusedHelper"));
+        Assert.Equal(1, report.Result.Examined);
+        Assert.Equal(1, report.LiteralScan.FilesScanned);
+        Assert.Equal(0, report.LiteralScan.FilesSkippedStale);
+        Assert.Equal("limit_bound", report.LiteralScan.SkipReason);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Read_LiteralScanFileLimitNonPositive_DoesNotPromoteProvisionalRows(int fileLimit)
+    {
+        const string miss = "no candidate name here\n";
+        const string hit = "UnusedHelper is a label\n";
+        using var fx = TwoLiteralFiles(miss, hit);
+
+        var report = DeadCodeCandidateReader.Read(fx.DbPath, fx.WorkspaceRoot, literalScanFileLimit: fileLimit);
+
+        Assert.Equal(DeadCodeCandidateReader.UnavailableLiteralScanIncomplete, report.UnavailableReason);
+        Assert.Empty(report.Result.Candidates);
+        Assert.Null(Candidate(report, "UnusedHelper"));
+        Assert.Equal(0, report.LiteralScan.FilesScanned);
+        Assert.Equal("limit_bound", report.LiteralScan.SkipReason);
+    }
+
+    private static JulieDbFixture TwoLiteralFiles(string firstFileText, string secondFileText) =>
+        JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
             new[] { Method("sym-cand", "UnusedHelper", "src/Helper.cs") },
             identifiers: new[] { Ident("id-benign", "SomethingElse", "src/Other.cs", null) },
             fileContent: new Dictionary<string, string>
             {
-                ["src/a-labels.cs"] = miss,
-                ["src/z-labels.cs"] = hit,
+                ["src/a-labels.cs"] = firstFileText,
+                ["src/z-labels.cs"] = secondFileText,
             },
             sourceRegions: new[]
             {
-                LiteralRegion("reg-a", "src/a-labels.cs", miss.Length),
-                LiteralRegion("reg-z", "src/z-labels.cs", hit.Length),
+                LiteralRegion("reg-a", "src/a-labels.cs", firstFileText.Length),
+                LiteralRegion("reg-z", "src/z-labels.cs", secondFileText.Length),
             });
-
-        var report = DeadCodeCandidateReader.Read(fx.DbPath, fx.WorkspaceRoot, literalScanFileLimit: 1);
-
-        Assert.Null(report.UnavailableReason);
-        Assert.NotNull(Candidate(report, "UnusedHelper"));
-        Assert.Equal(1, report.LiteralScan.FilesScanned);
-        Assert.Equal(0, report.LiteralScan.FilesSkippedStale);
-        Assert.Equal("limit_bound", report.LiteralScan.SkipReason);
-    }
 }

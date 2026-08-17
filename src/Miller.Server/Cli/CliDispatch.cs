@@ -1788,17 +1788,14 @@ public static class CliDispatch
 
             int limit = o.Int("limit", DeadCodeCandidatesDefaultLimit);
 
-            // --limit bounds the displayed list. A default-limit run is canonical and still scans fully for
-            // recorded totals. An explicit --limit also caps the literal-scan file walk so --limit 5 cannot
-            // start an unbounded workspace-wide source re-read.
+            // --limit bounds ONLY the shown list (references-candidates-v1). The literal scan always
+            // runs to completion so examined / suppressions / literal_scan totals stay complete.
             bool canonical = !o.Has("limit");
-            int? literalScanFileLimit = canonical ? null : Math.Max(0, limit);
             HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
 
             DeadCodeCandidateReport report = DeadCodeCandidateReader.Read(
                 readScope.Session,
-                ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
-                literalScanFileLimit);
+                ctx.CanonicalRoot ?? ctx.WorkspaceRoot);
             outw.WriteLine(o.Has("json")
                 ? RenderCandidatesJson(report, limit)
                 : RenderCandidatesCompact(report, limit));
