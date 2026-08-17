@@ -953,6 +953,16 @@ public sealed class IndexerService : BackgroundService
             // re-arm a failed startup delta drops the reconcile for every edit made while Miller was down.
             RecordScanFailure(ScanIntent.IncrementalReconcile, decision, ex);
             _core?.RequestWholeRepoScan(ScanIntent.IncrementalReconcile);
+            if (StoreWorkspaceOperationException.IsRetryableProducerFailure(ex))
+            {
+                // A coordinator quantum miss or a still-owned request is retryable. Keep the prior view and
+                // last-good serve; do not mark the registry as broken.
+                _logger.LogWarning(
+                    ex,
+                    "Startup delta scan hit a retryable producer miss; keeping the loaded index until a later scan converges.");
+                return;
+            }
+
             _logger.LogWarning(ex, "Startup delta scan failed; keeping the loaded index until a later scan converges.");
             try
             {

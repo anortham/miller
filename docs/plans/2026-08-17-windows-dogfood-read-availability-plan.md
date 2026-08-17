@@ -185,10 +185,10 @@ Completion follows `parallel-lead-commit` for Batch A and `serial-worker-commit`
 **Approach:** Classify the producer failure class/message for quantum timeout as retryable in the startup-delta path. `RecordFailure` may still record IncrementalReconcile, but Task 1 last-good serve must remain the user-visible path. Do not change julie-extract. Add a findings sentence in the Task 2 commit message that a producer quantum follow-up belongs in julie-extractors if Windows incrementals keep losing by a few hundred milliseconds.
 
 **Acceptance criteria:**
-- [ ] A coordinator result whose message matches the quantum-timeout shape does not throw out of startup in a way that disables last-good search
-- [ ] The prior store generation remains the served generation
-- [ ] A genuine `StoreRequestState.Failed` that is not a quantum timeout is still a hard failure
-- [ ] Worker-scope verification passes and the change is committed by the worker (`serial-worker-commit`)
+- [x] A coordinator result whose message matches the quantum-timeout shape does not throw out of startup in a way that disables last-good search
+- [x] The prior store generation remains the served generation
+- [x] A genuine `StoreRequestState.Failed` that is not a quantum timeout is still a hard failure
+- [x] Worker-scope verification passes and the change is committed by the worker (`serial-worker-commit`)
 
 ---
 

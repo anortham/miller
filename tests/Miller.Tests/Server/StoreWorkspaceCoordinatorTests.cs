@@ -115,6 +115,40 @@ public sealed class StoreWorkspaceCoordinatorTests
             () => coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs")));
 
         Assert.Equal("resolution_failed", failure.FailureClass.Code);
+        Assert.False(failure.IsRetryable);
+    }
+
+    [Fact]
+    public void AQuantumTimeoutFailedRequestIsRetryableAndKeepsThePriorView()
+    {
+        const string quantum = "coordinator quantum took 4359 ms; maximum is 4000 ms";
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            exitCode: 1,
+            failureClass: "producer_timeout",
+            failureMessage: quantum,
+            stateOverride: StoreRequestState.Failed);
+        int reads = 0;
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ =>
+            {
+                reads++;
+                return new StoreWorkspaceState(41, "full");
+            },
+            () => "request-quantum",
+            fromArtifact: null,
+            inspectTree: static () => new StoreTreeDelta(["src/a.cs"], []));
+
+        StoreWorkspaceOperationException failure = Assert.Throws<StoreWorkspaceOperationException>(
+            () => coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1));
+
+        Assert.True(failure.IsRetryable);
+        Assert.Equal(StoreWorkspaceOperationException.CoordinatorQuantumFailureCode, failure.FailureClass.Code);
+        Assert.Equal(quantum, failure.Message);
+        Assert.Equal(1, reads);
     }
 
     [Fact]
@@ -179,6 +213,7 @@ public sealed class StoreWorkspaceCoordinatorTests
             () => coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs")));
 
         Assert.Equal("request_not_terminal", failure.FailureClass.Code);
+        Assert.True(failure.IsRetryable);
     }
 
     [Fact]
@@ -1228,7 +1263,8 @@ public sealed class StoreWorkspaceCoordinatorTests
         StoreResolutionState importResolutionState = StoreResolutionState.Unbound,
         bool importExactAtMatches = false,
         Queue<StoreRequestState>? stateOverrides = null,
-        StoreOperation[]? allowedOperations = null) : IJulieStoreClient
+        StoreOperation[]? allowedOperations = null,
+        string? failureMessage = null) : IJulieStoreClient
     {
         private readonly List<StoreRequest> _requests = [];
 
@@ -1295,7 +1331,9 @@ public sealed class StoreWorkspaceCoordinatorTests
                         null),
                 null,
                 durable ? StoreCoordinatorDisposition.Committed : StoreCoordinatorDisposition.Failed,
-                new StoreFailure(new StoreFailureClass(failureClass), exitCode == 0 ? null : "failed"),
+                new StoreFailure(
+                    new StoreFailureClass(failureClass),
+                    failureMessage ?? (exitCode == 0 ? null : "failed")),
                 exitCode);
         }
     }

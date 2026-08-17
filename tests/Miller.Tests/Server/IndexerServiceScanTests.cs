@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Hosting;
 using Miller.Server.Workspaces;
@@ -1789,6 +1790,121 @@ public sealed class IndexerServiceScanTests : IDisposable
         IndexerPhaseRecord phase = Assert.Single(phases.Records, static item => item.Phase == "startup_total");
         Assert.Equal("failed", phase.Outcome);
         Assert.False(phase.DidWork);
+    }
+
+    [Fact]
+    public void RunStartupDeltaScan_WhenCoordinatorQuantumTimesOut_KeepsTheLoadedIndexAndDoesNotMarkRegistryError()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        string workspaceId = workspace.WorkspaceId!;
+        IndexBootstrapService.RegisterBootstrapWorkspace(
+            workspace, workspaceId, WorkspaceRegistryState.LoadedExisting, revision: 7);
+        var phases = new RecordingPhaseSink();
+        var service = NewGovernedDrainService(home, julie.DbPath, phases);
+        DateTimeOffset now = new(2026, 8, 17, 12, 7, 14, TimeSpan.Zero);
+        var policy = new InMemoryScanFailurePolicy(utcNow: () => now, jitter: static () => 0);
+        service.PublishFailurePolicyForTest(policy);
+        const string quantum = "coordinator quantum took 4359 ms; maximum is 4000 ms";
+        var ops = new RecordingScanOps
+        {
+            Revision = 7,
+            ThrowOnScan = new StoreWorkspaceOperationException(
+                StoreOperation.Import,
+                new StoreFailureClass(StoreWorkspaceOperationException.CoordinatorQuantumFailureCode),
+                quantum),
+        };
+        service.PublishOpsForTest(ops);
+
+        service.RunStartupDeltaScanForTest(workspace);
+
+        Assert.Equal(new[] { false }, ops.ScanForce);
+        Assert.False(service.QueueEmpty);
+        ScanFailureRecord record = Assert.IsType<ScanFailureRecord>(policy.Read());
+        Assert.Equal(ScanIntent.IncrementalReconcile, record.Intent);
+        using (var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath))
+        {
+            WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get(workspaceId));
+            Assert.Equal(WorkspaceRegistryState.LoadedExisting, row.State);
+            Assert.Equal(7, row.LastRevision);
+            Assert.Null(row.LastError);
+        }
+
+        IndexerPhaseRecord phase = Assert.Single(phases.Records, static item => item.Phase == "startup_total");
+        Assert.Equal("failed", phase.Outcome);
+        Assert.False(phase.DidWork);
+
+        ops.ThrowOnScan = null;
+        now += ScanFailurePolicy.FirstBackoff;
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { false, false }, ops.ScanForce);
+        Assert.True(service.QueueEmpty);
+    }
+
+    [Fact]
+    public void RunStartupDeltaScan_WhenRequestIsNotTerminal_KeepsTheLoadedIndexAndDoesNotMarkRegistryError()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        string workspaceId = workspace.WorkspaceId!;
+        IndexBootstrapService.RegisterBootstrapWorkspace(
+            workspace, workspaceId, WorkspaceRegistryState.LoadedExisting, revision: 7);
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        var policy = new InMemoryScanFailurePolicy(
+            utcNow: static () => new DateTimeOffset(2026, 8, 17, 12, 7, 14, TimeSpan.Zero),
+            jitter: static () => 0);
+        service.PublishFailurePolicyForTest(policy);
+        var ops = new RecordingScanOps
+        {
+            Revision = 7,
+            ThrowOnScan = new StoreWorkspaceOperationException(
+                StoreOperation.Import,
+                new StoreFailureClass("request_not_terminal"),
+                "julie-extract store request 'request-a' returned non-terminal state 'Claimed'."),
+        };
+        service.PublishOpsForTest(ops);
+
+        service.RunStartupDeltaScanForTest(workspace);
+
+        Assert.False(service.QueueEmpty);
+        Assert.Equal(ScanIntent.IncrementalReconcile, Assert.IsType<ScanFailureRecord>(policy.Read()).Intent);
+        using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+        WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get(workspaceId));
+        Assert.Equal(WorkspaceRegistryState.LoadedExisting, row.State);
+        Assert.Equal(7, row.LastRevision);
+        Assert.Null(row.LastError);
+    }
+
+    [Fact]
+    public void RunStartupDeltaScan_WhenAHardStoreFailureOccurs_StillMarksRegistryError()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        string workspaceId = workspace.WorkspaceId!;
+        IndexBootstrapService.RegisterBootstrapWorkspace(
+            workspace, workspaceId, WorkspaceRegistryState.LoadedExisting, revision: 7);
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        service.PublishOpsForTest(new RecordingScanOps
+        {
+            ThrowOnScan = new StoreWorkspaceOperationException(
+                StoreOperation.Import,
+                new StoreFailureClass("resolution_failed"),
+                "resolution failed"),
+        });
+
+        service.RunStartupDeltaScanForTest(workspace);
+
+        using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+        WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get(workspaceId));
+        Assert.Equal(WorkspaceRegistryState.Error, row.State);
+        Assert.Equal("resolution failed", row.LastError);
     }
 
     [Fact]
