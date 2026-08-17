@@ -22,7 +22,9 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
     public WorkspaceIndexProviderTests()
     {
-        _dir = Path.Combine(Path.GetTempPath(), "miller-workspace-index-provider-" + Guid.NewGuid().ToString("N"));
+        // Keep this prefix short: PathFor adds sidecars/search-{64-hex}.db, and Windows
+        // SQLITE_CANTOPEN (14) when the -journal sibling exceeds MAX_PATH.
+        _dir = Path.Combine(Path.GetTempPath(), "m-wip-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
         _registryDbPath = Path.Combine(_dir, "workspaces.db");
     }
@@ -1088,7 +1090,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
         using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
-        string root = NewRoot("target-store-inspect-last-good");
+        string root = NewRoot("inspect-lg");
         registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
         registry.MarkScanned("target-ws", revision: 1);
         WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
@@ -1134,7 +1136,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
         using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
-        string root = NewRoot("target-store-search-catchup");
+        string root = NewRoot("search-cu");
         registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
         registry.MarkScanned("target-ws", revision: 1);
         WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);

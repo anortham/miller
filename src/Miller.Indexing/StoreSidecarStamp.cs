@@ -144,29 +144,12 @@ public static class StoreSidecarCatalog
             Mode = SqliteOpenMode.ReadWrite,
             Pooling = false,
         }.ToString();
-        // WriteAtomic File.Move can leave the destination briefly unjournalable on Windows
-        // (AV / handle recycle). Open succeeds; the first schema write then raises CANTOPEN.
-        for (int attempt = 1; ; attempt++)
-        {
-            try
-            {
-                using var connection = new SqliteConnection(connectionString);
-                connection.Open();
-                using SqliteTransaction transaction = connection.BeginTransaction();
-                Stamp(connection, transaction, stamp);
-                transaction.Commit();
-                return;
-            }
-            catch (Exception ex) when (IsRetryableStampOpen(ex) && attempt < ReadableOpenAttempts)
-            {
-                Thread.Sleep(20 * attempt);
-            }
-        }
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        Stamp(connection, transaction, stamp);
+        transaction.Commit();
     }
-
-    private static bool IsRetryableStampOpen(Exception ex) =>
-        ex is IOException or UnauthorizedAccessException
-        || ex is SqliteException sqlite && sqlite.SqliteErrorCode == 14;
 
     internal static void Stamp(
         SqliteConnection connection,
