@@ -1760,8 +1760,13 @@ public static class CliDispatch
         {
             // A symbols-level artifact has no inbound identifier evidence, so EVERY symbol would read as
             // unreferenced — an authoritative-looking list of false dead-code candidates. Refuse instead.
+            // Always write the named unavailable report to stdout so the body is never blank.
             if (IndexLevelGuard.IsSymbolsLevel(readScope.Session.Snapshot.IndexLevel))
             {
+                outw.WriteLine(RenderCandidatesUnavailable(
+                    o.Has("json"),
+                    DeadCodeCandidateReader.UnavailableSymbolsLevel,
+                    "symbols-level index has no identifier evidence; every symbol would read as unreferenced"));
                 err.WriteLine(
                     "references candidates is unavailable while this workspace serves a symbols-level index: " +
                     "identifier extraction has not run yet, so every symbol would read as unreferenced. Re-run " +
@@ -1771,6 +1776,10 @@ public static class CliDispatch
 
             if (IndexLevelGuard.ResolutionLayerConverging(readScope.Session.Snapshot))
             {
+                outw.WriteLine(RenderCandidatesUnavailable(
+                    o.Has("json"),
+                    DeadCodeCandidateReader.UnavailableResolutionNotReady,
+                    "identifier resolution is not ready; retry after the resolve operation completes"));
                 err.WriteLine(
                     "references candidates is unavailable while this family-store view's identifier resolution " +
                     "is not exact; retry after the resolve operation completes.");
@@ -1779,14 +1788,17 @@ public static class CliDispatch
 
             int limit = o.Int("limit", DeadCodeCandidatesDefaultLimit);
 
-            // --limit bounds only the displayed list; the recorded counts are full totals. A default-limit run is
-            // canonical; capture identity BEFORE the reader computes so a mid-command rebuild is caught at append time.
+            // --limit bounds the displayed list. A default-limit run is canonical and still scans fully for
+            // recorded totals. An explicit --limit also caps the literal-scan file walk so --limit 5 cannot
+            // start an unbounded workspace-wide source re-read.
             bool canonical = !o.Has("limit");
+            int? literalScanFileLimit = canonical ? null : Math.Max(0, limit);
             HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
 
             DeadCodeCandidateReport report = DeadCodeCandidateReader.Read(
                 readScope.Session,
-                ctx.CanonicalRoot ?? ctx.WorkspaceRoot);
+                ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
+                literalScanFileLimit);
             outw.WriteLine(o.Has("json")
                 ? RenderCandidatesJson(report, limit)
                 : RenderCandidatesCompact(report, limit));
@@ -1797,6 +1809,26 @@ public static class CliDispatch
     }
 
     private const int DeadCodeCandidatesDefaultLimit = 50;
+
+    private static string RenderCandidatesUnavailable(bool json, string reason, string detail)
+    {
+        if (!json)
+            return "candidates: unavailable — " + detail;
+
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = new Utf8JsonWriter(buffer,
+            new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            w.WriteStartObject();
+            w.WriteNumber("schema_version", DeadCodeCandidatesSchemaVersion);
+            w.WriteStartArray("candidates");
+            w.WriteEndArray();
+            w.WriteString("unavailable", reason);
+            w.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
 
     // Sort the surviving candidates by (path, start_line) and take the first `limit` — the ONLY block `--limit`
     // bounds. A stable OrderBy preserves the reader's symbol_id tiebreak within an equal (path, start_line).
@@ -1813,9 +1845,16 @@ public static class CliDispatch
         List<DeadCodeCandidate> shown = ShownCandidates(result, limit);
 
         var sb = new StringBuilder();
-        sb.Append("candidates: ").Append(result.Candidates.Count).Append(" of ").Append(result.Examined)
-            .Append(" symbols examined · resolver: ").Append(report.Artifact.ReferenceResolutionStatus)
-            .Append(" — candidates are facts to check, not deletions to make.");
+        if (report.UnavailableReason is not null)
+        {
+            sb.Append("candidates: unavailable — ").Append(report.UnavailableReason);
+        }
+        else
+        {
+            sb.Append("candidates: ").Append(result.Candidates.Count).Append(" of ").Append(result.Examined)
+                .Append(" symbols examined · resolver: ").Append(report.Artifact.ReferenceResolutionStatus)
+                .Append(" — candidates are facts to check, not deletions to make.");
+        }
 
         foreach (DeadCodeCandidate c in shown)
         {
@@ -1839,6 +1878,10 @@ public static class CliDispatch
 
         sb.Append('\n').Append("literal_scan: files_scanned=").Append(report.LiteralScan.FilesScanned)
             .Append(" files_skipped_stale=").Append(report.LiteralScan.FilesSkippedStale);
+        if (report.LiteralScan.SkipReason is not null)
+            sb.Append(" skipped=").Append(report.LiteralScan.SkipReason);
+        if (report.UnavailableReason is not null)
+            sb.Append('\n').Append("unavailable: ").Append(report.UnavailableReason);
 
         sb.Append('\n').Append("coverage:");
         bool first = true;
@@ -1900,7 +1943,12 @@ public static class CliDispatch
             w.WriteStartObject();
             w.WriteNumber("files_scanned", report.LiteralScan.FilesScanned);
             w.WriteNumber("files_skipped_stale", report.LiteralScan.FilesSkippedStale);
+            if (report.LiteralScan.SkipReason is not null)
+                w.WriteString("skip_reason", report.LiteralScan.SkipReason);
             w.WriteEndObject();
+
+            if (report.UnavailableReason is not null)
+                w.WriteString("unavailable", report.UnavailableReason);
 
             w.WritePropertyName("language_coverage");
             w.WriteStartArray();
