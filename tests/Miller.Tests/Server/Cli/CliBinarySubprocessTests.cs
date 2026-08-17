@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Miller.Indexing;
+using Miller.Server;
 using Xunit;
 
 namespace Miller.Tests.Server.Cli;
@@ -32,10 +33,35 @@ public sealed class CliBinarySubprocessTests : IDisposable
         Directory.CreateDirectory(_home);
     }
 
+    /// <summary>
+    /// The registry the spawned binary will open: <c>&lt;isolated home&gt;/.miller/workspaces.db</c>,
+    /// composed the same way <see cref="WorkspaceContext.Create"/> does in the real CLI.
+    /// </summary>
+    private string RegistryDbPath =>
+        WorkspaceContext.Create(_root, AppContext.BaseDirectory, _home).RegistryDbPath;
+
     public void Dispose()
     {
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
         try { Directory.Delete(_home, recursive: true); } catch { /* best effort */ }
+    }
+
+    [Fact]
+    public void IsolatedHome_RegistryPath_IsUnderTemp_AndNotTheUserMillerDirectory()
+    {
+        string registry = Path.GetFullPath(RegistryDbPath);
+        string tempRoot = Path.GetFullPath(Path.GetTempPath());
+        string userMiller = Path.GetFullPath(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".miller"));
+
+        Assert.StartsWith(tempRoot, registry, StringComparison.OrdinalIgnoreCase);
+        Assert.False(
+            registry.StartsWith(userMiller + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(registry, userMiller, StringComparison.OrdinalIgnoreCase),
+            $"fixture registry '{registry}' must not live under the user Miller directory '{userMiller}'.");
+
+        using WorkspaceRegistry opened = WorkspaceRegistry.Open(registry);
+        Assert.Equal(registry, Path.GetFullPath(opened.DatabasePath));
     }
 
     [Fact]
