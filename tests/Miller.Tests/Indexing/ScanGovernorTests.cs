@@ -233,6 +233,63 @@ public sealed class ScanGovernorTests
     }
 
     [Fact]
+    public void Dispose_WhenASuccessorAcquiresInTheUnlockGap_LeavesTheSuccessorHoldRecorded()
+    {
+        using var dir = new TempMillerDir();
+        ScanGovernor governor = ScanGovernor.ForMillerHome(dir.Path);
+
+        ScanGovernorLease? first = governor.TryAcquire(
+            Request("/repo/first"), ShortBudget, CancellationToken.None);
+        Assert.NotNull(first);
+
+        ScanGovernorLease? successor = null;
+        Exception? failure = null;
+        var successorStarted = new ManualResetEventSlim(false);
+        var successorAcquired = new ManualResetEventSlim(false);
+        var contender = new Thread(() =>
+        {
+            successorStarted.Set();
+            try
+            {
+                successor = governor.TryAcquire(
+                    Request("/repo/successor"), TimeSpan.FromSeconds(10), CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+            finally
+            {
+                successorAcquired.Set();
+            }
+        });
+
+        governor.AfterOsLockReleasedForTest = () =>
+            Assert.True(successorAcquired.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+
+        contender.Start();
+        try
+        {
+            Assert.True(successorStarted.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+            first!.Dispose();
+            Assert.True(contender.Join(TimeSpan.FromSeconds(15)));
+
+            Assert.Null(failure);
+            Assert.NotNull(successor);
+            Assert.False(governor.HoldsAdmissionFor("/repo/first"));
+            Assert.True(governor.HoldsAdmissionFor("/repo/successor"));
+        }
+        finally
+        {
+            governor.AfterOsLockReleasedForTest = null;
+            if (!contender.Join(TimeSpan.FromSeconds(15)))
+                throw new TimeoutException("The successor acquire thread did not finish.");
+            successor?.Dispose();
+            first?.Dispose();
+        }
+    }
+
+    [Fact]
     public void HoldsAdmissionFor_OnASecondInstanceOverTheSameHome_ReturnsFalse()
     {
         using var dir = new TempMillerDir();
