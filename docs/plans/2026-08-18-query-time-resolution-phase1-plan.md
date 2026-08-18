@@ -302,11 +302,11 @@ Second loader, same cache: `RevisionFactCache.LoadFromArtifact(SqliteConnection 
 **Approach:** Follow the compiler after deleting `SubmitResolveRequest` and the `resolveAfter` parameter — the caller list above is the complete fan-in per a full-tree sweep. In status JSON, REMOVE resolution fields rather than emitting nulls (contract doc updated in the same change). Verify with a live smoke: `workspace status --json` on this worktree shows no resolution keys and freshness reaches `fresh` after a touch-save.
 
 **Acceptance criteria:**
-- [ ] Tree-wide search for `Resolve` in the coordinator/indexer namespaces finds no request construction; no subprocess argv contains `resolve`
-- [ ] `workspace status --json` / `health --json` emit no resolution-layer fields; `workspace-status-v1.md` matches
-- [ ] Existing-workspace sidecar stamps do NOT trigger a rebuild — read-normalization tested with a pre-change stamp at an unchanged store sequence, for search/content/vector sidecars
-- [ ] Store-client report parsing tolerates both a present (2.33.7) and an absent (Plan B) resolution report object
-- [ ] Worker-scope verification passes; worker commits owned files (serial-worker-commit)
+- [x] Tree-wide search for `Resolve` in the coordinator/indexer namespaces finds no request construction; no subprocess argv contains `resolve`
+- [x] `workspace status --json` / `health --json` emit no resolution-layer fields; `workspace-status-v1.md` matches
+- [x] Existing-workspace sidecar stamps do NOT trigger a rebuild — read-normalization tested with a pre-change stamp at an unchanged store sequence, for search/content/vector sidecars
+- [x] Store-client report parsing tolerates both a present (2.33.7) and an absent (Plan B) resolution report object
+- [x] Worker-scope verification passes; worker commits owned files (serial-worker-commit)
 
 ### Task 6: Gates, scale parity, and doc sync
 
