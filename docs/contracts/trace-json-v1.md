@@ -109,9 +109,9 @@ Mode-specific top-level fields:
 - `reference_coverage`: observed, available, returned, and truncated counts for each tier plus
   `same_name_definition_count` and `fallback_status`. `exact_observed` counts raw artifact evidence rows;
   `exact_available` counts logical references, one per occurrence, and is the count to compare against call
-  sites. The two differ by design: julie-extract emits several rows for one occurrence — the same reference
-  site reached through `identifiers`, `identifier_resolutions`, and `relationships`, plus a spanless
-  `pending_resolutions` row carrying its own `reference_site_spanless-` identity. A spanless row that no
+  sites. The two differ by design: one occurrence yields several assertions — the same reference site
+  reached through `identifiers` (resolved at query time by resolution policy v6) and `relationships`, plus a
+  spanless pending row carrying its own `reference_site_spanless-` identity. A spanless row that no
   spanned row covers at the same file, containing symbol, target, and kind is that occurrence's only evidence,
   so it stays counted and is rendered with `is_exact=false`.
 - `continuation`: opaque artifact-bound token for the next exact/fallback page, or `null`.
@@ -129,8 +129,10 @@ Reference row fields:
 - `containing_symbol_name`: resolved enclosing symbol name when available, otherwise `null`.
 - `resolution_status`: `exact` or `fallback`.
 - `source`: evidence provenance such as `identifier_resolution`, `relationship`, or `pending_name`.
-  Identifier targets come only from `identifier_resolutions`; the former `identifier_direct` value named the
-  denormalized `identifiers.target_symbol_id` column that julie-extract schema 6 drops, and is no longer emitted.
+  Identifier targets are computed at query time by Miller's resolution policy v6 (julie-extract schema 7
+  ships no materialized resolution tables) and still report `identifier_resolution`; the former
+  `identifier_direct` value named the denormalized `identifiers.target_symbol_id` column that julie-extract
+  schema 6 dropped, and is no longer emitted.
 - `resolution_tier`: extractor resolution tier when available.
 - `confidence`: numeric evidence confidence.
 - `reference_site_id`: producer-owned canonical reference-site identity (julie-extract schema 5 and later).
