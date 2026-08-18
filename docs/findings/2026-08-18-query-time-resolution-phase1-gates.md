@@ -71,11 +71,14 @@ dotnet test --filter "FullyQualifiedName~RevisionFactCacheMemoryTests"
 
 ## Concerns
 
-Legacy-artifact query-time still keys versions with `CAST(file_id AS INTEGER)`. Julie
-`file_id` is text (`file-<hash>`), so the cast is 0 and multi-file artifacts overwrite
-one slice. The store path is the product default and is what these gates measure.
-Do not treat `ReferenceEvidenceReader.Read(dbPath)` on a multi-file `symbols.db` as
-authoritative until that loader uses a stable version key.
+RESOLVED 2026-08-18 (post-gate review fixes): the legacy-artifact arm now keys versions
+by `files.rowid` instead of `CAST(file_id AS INTEGER)`, so text `file-<hash>` ids no
+longer collapse multi-file artifacts into one slice. The same review pass restored
+`reference_sites` as the source for `site_provenance`, `is_exact`, span columns, and
+the containing symbol on the evidence and export surfaces (both arms), removed the
+fabricated pending span constants, and dropped export relationship rows whose target
+symbol row is absent — matching the retired SQL. `QueryTimeResolutionParity.SerializeExport`
+now serializes the full documented column set, so export column shape is gated.
 
 ## Verdict
 

@@ -238,7 +238,8 @@ internal sealed class QueryTimeResolutionReader
 
             foreach (ResolvedIdentifier identifier in scratch.IdentifiersNamed(candidate.Name))
             {
-                if (identifier.Outcome.Kind != ResolutionOutcomeKind.Resolved
+                if (!identifier.Details.HasSiteRow
+                    || identifier.Outcome.Kind != ResolutionOutcomeKind.Resolved
                     || !string.Equals(identifier.Outcome.Target!.Value.SymbolId, candidateId, StringComparison.Ordinal))
                 {
                     continue;
@@ -255,7 +256,8 @@ internal sealed class QueryTimeResolutionReader
 
             foreach (ResolvedPending pending in scratch.PendingsNamed(candidate.Name))
             {
-                if (pending.Outcome.Kind != ResolutionOutcomeKind.Resolved
+                if (!pending.HasSiteRow
+                    || pending.Outcome.Kind != ResolutionOutcomeKind.Resolved
                     || !string.Equals(pending.Outcome.Target!.Value.SymbolId, candidateId, StringComparison.Ordinal))
                 {
                     continue;
@@ -298,7 +300,7 @@ internal sealed class QueryTimeResolutionReader
 
             foreach (ResolvedIdentifier identifier in scratch.IdentifiersNamed(candidate.Name))
             {
-                if (identifier.Outcome.Kind == ResolutionOutcomeKind.Resolved)
+                if (!identifier.Details.HasSiteRow || identifier.Outcome.Kind == ResolutionOutcomeKind.Resolved)
                     continue;
                 rows[candidateId].Add(ToInbound(
                     identifier,
@@ -323,7 +325,7 @@ internal sealed class QueryTimeResolutionReader
         {
             foreach (ResolvedIdentifier identifier in scratch.IdentifiersByContainer(candidateId))
             {
-                if (identifier.Outcome.Kind != ResolutionOutcomeKind.Resolved)
+                if (!identifier.Details.HasSiteRow || identifier.Outcome.Kind != ResolutionOutcomeKind.Resolved)
                     continue;
                 string target = identifier.Outcome.Target!.Value.SymbolId;
                 rows[candidateId].Add(ToOutgoing(
@@ -339,7 +341,7 @@ internal sealed class QueryTimeResolutionReader
 
             foreach (ResolvedPending pending in scratch.PendingsByEvidenceContainer(candidateId))
             {
-                if (pending.Outcome.Kind != ResolutionOutcomeKind.Resolved)
+                if (!pending.HasSiteRow || pending.Outcome.Kind != ResolutionOutcomeKind.Resolved)
                     continue;
                 string target = pending.Outcome.Target!.Value.SymbolId;
                 rows[candidateId].Add(ToOutgoing(
@@ -380,7 +382,7 @@ internal sealed class QueryTimeResolutionReader
         {
             foreach (ResolvedIdentifier identifier in scratch.IdentifiersByContainer(candidateId))
             {
-                if (identifier.Outcome.Kind == ResolutionOutcomeKind.Resolved)
+                if (!identifier.Details.HasSiteRow || identifier.Outcome.Kind == ResolutionOutcomeKind.Resolved)
                     continue;
                 rows[candidateId].Add(ToOutgoing(
                     identifier,
@@ -395,7 +397,7 @@ internal sealed class QueryTimeResolutionReader
 
             foreach (ResolvedPending pending in scratch.PendingsByEvidenceContainer(candidateId))
             {
-                if (pending.Outcome.Kind == ResolutionOutcomeKind.Resolved)
+                if (!pending.HasSiteRow || pending.Outcome.Kind == ResolutionOutcomeKind.Resolved)
                     continue;
                 rows[candidateId].Add(ToOutgoing(
                     pending,
@@ -419,6 +421,8 @@ internal sealed class QueryTimeResolutionReader
         var rows = new List<QueryTimeExportEvidence>();
         foreach (ResolvedIdentifier identifier in scratch.AllIdentifiers)
         {
+            if (!identifier.Details.HasSiteRow)
+                continue;
             if (identifier.Outcome.Kind == ResolutionOutcomeKind.Resolved)
             {
                 string target = identifier.Outcome.Target!.Value.SymbolId;
@@ -454,6 +458,8 @@ internal sealed class QueryTimeResolutionReader
 
         foreach (ResolvedPending pending in scratch.AllPendings)
         {
+            if (!pending.HasSiteRow)
+                continue;
             if (pending.Outcome.Kind == ResolutionOutcomeKind.Resolved)
             {
                 string target = pending.Outcome.Target!.Value.SymbolId;
@@ -491,19 +497,21 @@ internal sealed class QueryTimeResolutionReader
         {
             ExportSymbolFacts? symbol = ReadExportSymbol(connection, relationship.ToSymbolId);
             FactSymbol? cachedTarget = scratch.Symbol(relationship.ToSymbolId);
-            ExportSymbolFacts? source = relationship.FromSymbolId is null
+            if (symbol is null && cachedTarget is null)
+                continue;
+            ExportSymbolFacts? source = relationship.SiteContainingSymbolId is null
                 ? null
-                : ReadExportSymbol(connection, relationship.FromSymbolId);
-            FactSymbol? cachedSource = relationship.FromSymbolId is null
+                : ReadExportSymbol(connection, relationship.SiteContainingSymbolId);
+            FactSymbol? cachedSource = relationship.SiteContainingSymbolId is null
                 ? null
-                : scratch.Symbol(relationship.FromSymbolId);
+                : scratch.Symbol(relationship.SiteContainingSymbolId);
             rows.Add(new QueryTimeExportEvidence(
                 relationship.ReferenceSiteId,
                 relationship.IsExact,
                 relationship.SiteProvenance,
                 relationship.Path,
                 relationship.Language,
-                relationship.FromSymbolId,
+                relationship.SiteContainingSymbolId,
                 relationship.StartLine,
                 relationship.StartColumn,
                 relationship.EndLine,
@@ -512,7 +520,7 @@ internal sealed class QueryTimeResolutionReader
                 relationship.EndByte,
                 CanonicalKind(relationship.Kind),
                 relationship.ToSymbolId,
-                symbol?.Name ?? cachedTarget?.Name ?? relationship.ToSymbolId,
+                symbol?.Name ?? cachedTarget!.Name,
                 symbol?.Kind ?? (cachedTarget is null ? null : KindString(cachedTarget.Kind)),
                 symbol?.IsTest ?? cachedTarget?.IsTest(),
                 ResolutionTier: null,
@@ -675,11 +683,13 @@ internal sealed class QueryTimeResolutionReader
             using SqliteCommand command = connection.CreateCommand();
             command.CommandText = _visibility is null
                 ? $"""
-                    SELECT CAST(p.file_id AS INTEGER),p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
+                    SELECT f.rowid,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                            p.kind,p.target_terminal_name,p.target_display_name,p.target_receiver,p.target_namespace_json,
-                           p.confidence,p.start_byte,p.end_byte,p.start_line,p.reference_site_id,p.path,f.language
+                           p.confidence,p.reference_site_id,COALESCE(s.path,p.path),COALESCE(s.language,f.language),
+                           s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
                     FROM pending_relationships AS p
                     JOIN files AS f ON f.file_id=p.file_id
+                    LEFT JOIN reference_sites AS s ON s.reference_site_id=p.reference_site_id
                     WHERE p.from_symbol_id IN ({Placeholders(chunk.Length)})
                        OR COALESCE(p.caller_scope_symbol_id,p.from_symbol_id) IN ({Placeholders(chunk.Length)})
                     ORDER BY 1,p.pending_relationship_id
@@ -687,9 +697,12 @@ internal sealed class QueryTimeResolutionReader
                 : $"""
                     SELECT p.version_id,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                            p.kind,p.target_terminal_name,p.target_display_name,p.target_receiver,p.target_namespace_json,
-                           p.confidence,p.start_byte,p.end_byte,p.start_line,p.reference_site_id,p.path,e.language
+                           p.confidence,p.reference_site_id,COALESCE(s.path,p.path),COALESCE(s.language,e.language),
+                           s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
                     FROM main.pending_relationships AS p
                     JOIN main.manifest_entries AS e ON e.version_id=p.version_id
+                    LEFT JOIN main.reference_sites AS s
+                      ON s.version_id=p.version_id AND s.reference_site_id=p.reference_site_id
                     WHERE e.view_id=$view_id AND e.generation=$generation
                       AND (p.from_symbol_id IN ({Placeholders(chunk.Length)})
                            OR COALESCE(p.caller_scope_symbol_id,p.from_symbol_id) IN ({Placeholders(chunk.Length)}))
@@ -707,20 +720,25 @@ internal sealed class QueryTimeResolutionReader
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = _visibility is null
             ? """
-                SELECT CAST(p.file_id AS INTEGER),p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
+                SELECT f.rowid,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                        p.kind,p.target_terminal_name,p.target_display_name,p.target_receiver,p.target_namespace_json,
-                       p.confidence,p.start_byte,p.end_byte,p.start_line,p.reference_site_id,p.path,f.language
+                       p.confidence,p.reference_site_id,COALESCE(s.path,p.path),COALESCE(s.language,f.language),
+                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
                 FROM pending_relationships AS p
                 JOIN files AS f ON f.file_id=p.file_id
+                LEFT JOIN reference_sites AS s ON s.reference_site_id=p.reference_site_id
                 WHERE p.target_terminal_name=$name
                 ORDER BY 1,p.pending_relationship_id
                 """
             : """
                 SELECT p.version_id,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                        p.kind,p.target_terminal_name,p.target_display_name,p.target_receiver,p.target_namespace_json,
-                       p.confidence,p.start_byte,p.end_byte,p.start_line,p.reference_site_id,p.path,e.language
+                       p.confidence,p.reference_site_id,COALESCE(s.path,p.path),COALESCE(s.language,e.language),
+                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
                 FROM main.pending_relationships AS p
                 JOIN main.manifest_entries AS e ON e.version_id=p.version_id
+                LEFT JOIN main.reference_sites AS s
+                  ON s.version_id=p.version_id AND s.reference_site_id=p.reference_site_id
                 WHERE e.view_id=$view_id AND e.generation=$generation AND p.target_terminal_name=$name
                 ORDER BY p.version_id,p.pending_relationship_id
                 """;
@@ -735,19 +753,24 @@ internal sealed class QueryTimeResolutionReader
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = _visibility is null
             ? """
-                SELECT CAST(p.file_id AS INTEGER),p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
+                SELECT f.rowid,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                        p.kind,p.target_terminal_name,p.target_display_name,p.target_receiver,p.target_namespace_json,
-                       p.confidence,p.start_byte,p.end_byte,p.start_line,p.reference_site_id,p.path,f.language
+                       p.confidence,p.reference_site_id,COALESCE(s.path,p.path),COALESCE(s.language,f.language),
+                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
                 FROM pending_relationships AS p
                 JOIN files AS f ON f.file_id=p.file_id
+                LEFT JOIN reference_sites AS s ON s.reference_site_id=p.reference_site_id
                 ORDER BY 1,p.pending_relationship_id
                 """
             : """
                 SELECT p.version_id,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                        p.kind,p.target_terminal_name,p.target_display_name,p.target_receiver,p.target_namespace_json,
-                       p.confidence,p.start_byte,p.end_byte,p.start_line,p.reference_site_id,p.path,e.language
+                       p.confidence,p.reference_site_id,COALESCE(s.path,p.path),COALESCE(s.language,e.language),
+                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
                 FROM main.pending_relationships AS p
                 JOIN main.manifest_entries AS e ON e.version_id=p.version_id
+                LEFT JOIN main.reference_sites AS s
+                  ON s.version_id=p.version_id AND s.reference_site_id=p.reference_site_id
                 WHERE e.view_id=$view_id AND e.generation=$generation
                 ORDER BY p.version_id,p.pending_relationship_id
                 """;
@@ -760,22 +783,21 @@ internal sealed class QueryTimeResolutionReader
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = _visibility is null
             ? """
-                SELECT CAST(r.file_id AS INTEGER),r.relationship_id,r.from_symbol_id,r.to_symbol_id,r.kind,r.confidence,
-                       r.reference_site_id,r.path,COALESCE(NULLIF(f.language,''),'csharp'),r.start_line,r.start_column,r.end_line,r.end_column,
-                       r.start_byte,r.end_byte,
-                       CASE WHEN r.start_byte IS NOT NULL AND r.end_byte IS NOT NULL THEN 1 ELSE 0 END,
-                       'target_token'
+                SELECT COALESCE(f.rowid,-1),r.relationship_id,r.from_symbol_id,r.to_symbol_id,r.kind,r.confidence,
+                       s.reference_site_id,s.path,COALESCE(NULLIF(s.language,''),'csharp'),s.start_line,s.start_column,s.end_line,s.end_column,
+                       s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
                 FROM relationships AS r
                 LEFT JOIN files AS f ON f.file_id=r.file_id
+                JOIN reference_sites AS s ON s.reference_site_id=r.reference_site_id
                 """
             : """
                 SELECT r.version_id,r.relationship_id,r.from_symbol_id,r.to_symbol_id,r.kind,r.confidence,
-                       r.reference_site_id,r.path,e.language,r.start_line,r.start_column,r.end_line,r.end_column,
-                       r.start_byte,r.end_byte,
-                       CASE WHEN r.start_byte IS NOT NULL AND r.end_byte IS NOT NULL THEN 1 ELSE 0 END,
-                       'target_token'
+                       s.reference_site_id,s.path,s.language,s.start_line,s.start_column,s.end_line,s.end_column,
+                       s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
                 FROM main.relationships AS r
                 JOIN main.manifest_entries AS e ON e.version_id=r.version_id
+                JOIN main.reference_sites AS s
+                  ON s.version_id=r.version_id AND s.reference_site_id=r.reference_site_id
                 WHERE e.view_id=$view_id AND e.generation=$generation
                 """;
         BindVisibility(command);
@@ -804,7 +826,8 @@ internal sealed class QueryTimeResolutionReader
                 ReadNullableInt64(reader, 13),
                 ReadNullableInt64(reader, 14),
                 reader.GetInt64(15) == 1,
-                reader.GetString(16)));
+                reader.GetString(16),
+                reader.IsDBNull(17) ? null : reader.GetString(17)));
         }
 
         return rows;
@@ -824,24 +847,23 @@ internal sealed class QueryTimeResolutionReader
             using SqliteCommand command = connection.CreateCommand();
             command.CommandText = _visibility is null
                 ? $"""
-                    SELECT CAST(r.file_id AS INTEGER),r.relationship_id,r.from_symbol_id,r.to_symbol_id,r.kind,r.confidence,
-                           r.reference_site_id,r.path,COALESCE(NULLIF(f.language,''),'csharp'),r.start_line,r.start_column,r.end_line,r.end_column,
-                           r.start_byte,r.end_byte,
-                           CASE WHEN r.start_byte IS NOT NULL AND r.end_byte IS NOT NULL THEN 1 ELSE 0 END,
-                           'target_token'
+                    SELECT COALESCE(f.rowid,-1),r.relationship_id,r.from_symbol_id,r.to_symbol_id,r.kind,r.confidence,
+                           s.reference_site_id,s.path,COALESCE(NULLIF(s.language,''),'csharp'),s.start_line,s.start_column,s.end_line,s.end_column,
+                           s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
                     FROM relationships AS r
                     LEFT JOIN files AS f ON f.file_id=r.file_id
+                    JOIN reference_sites AS s ON s.reference_site_id=r.reference_site_id
                     WHERE r.from_symbol_id IN ({Placeholders(chunk.Length)})
                        OR r.to_symbol_id IN ({Placeholders(chunk.Length)})
                     """
                 : $"""
                     SELECT r.version_id,r.relationship_id,r.from_symbol_id,r.to_symbol_id,r.kind,r.confidence,
-                           r.reference_site_id,r.path,e.language,r.start_line,r.start_column,r.end_line,r.end_column,
-                           r.start_byte,r.end_byte,
-                           CASE WHEN r.start_byte IS NOT NULL AND r.end_byte IS NOT NULL THEN 1 ELSE 0 END,
-                           'target_token'
+                           s.reference_site_id,s.path,s.language,s.start_line,s.start_column,s.end_line,s.end_column,
+                           s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
                     FROM main.relationships AS r
                     JOIN main.manifest_entries AS e ON e.version_id=r.version_id
+                    JOIN main.reference_sites AS s
+                      ON s.version_id=r.version_id AND s.reference_site_id=r.reference_site_id
                     WHERE e.view_id=$view_id AND e.generation=$generation
                       AND (r.from_symbol_id IN ({Placeholders(chunk.Length)})
                            OR r.to_symbol_id IN ({Placeholders(chunk.Length)}))
@@ -861,7 +883,7 @@ internal sealed class QueryTimeResolutionReader
                     reader.GetString(3),
                     reader.GetString(4),
                     reader.GetDouble(5),
-                    reader.IsDBNull(6) ? key.Item2 : reader.GetString(6),
+                    reader.GetString(6),
                     reader.GetString(7),
                     reader.GetString(8),
                     ReadNullableInt64(reader, 9),
@@ -871,7 +893,8 @@ internal sealed class QueryTimeResolutionReader
                     ReadNullableInt64(reader, 13),
                     ReadNullableInt64(reader, 14),
                     reader.GetInt64(15) == 1,
-                    reader.GetString(16)));
+                    reader.GetString(16),
+                    reader.IsDBNull(17) ? null : reader.GetString(17)));
             }
         }
 
@@ -891,8 +914,9 @@ internal sealed class QueryTimeResolutionReader
             using SqliteCommand command = connection.CreateCommand();
             command.CommandText = _visibility is null
                 ? $"""
-                    SELECT s.symbol_id,CAST(s.file_id AS INTEGER),s.name
+                    SELECT s.symbol_id,f.rowid,s.name
                     FROM symbols AS s
+                    JOIN files AS f ON f.file_id=s.file_id
                     WHERE s.symbol_id IN ({Placeholders(chunk.Length)})
                     """
                 : $"""
@@ -939,17 +963,20 @@ internal sealed class QueryTimeResolutionReader
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = _visibility is null
             ? """
-                SELECT i.path,i.language,i.reference_site_id,i.start_column,i.end_line,i.end_column,
-                       CASE WHEN i.start_byte IS NOT NULL AND i.end_byte IS NOT NULL THEN 1 ELSE 0 END,
-                       'target_token'
+                SELECT COALESCE(s.path,i.path),COALESCE(s.language,i.language),i.reference_site_id,
+                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,
+                       s.is_exact,s.provenance,s.containing_symbol_id
                 FROM identifiers AS i
+                LEFT JOIN reference_sites AS s ON s.reference_site_id=i.reference_site_id
                 WHERE i.rowid=$rowid
                 """
             : """
-                SELECT i.path,i.language,i.reference_site_id,i.start_column,i.end_line,i.end_column,
-                       CASE WHEN i.start_byte IS NOT NULL AND i.end_byte IS NOT NULL THEN 1 ELSE 0 END,
-                       'target_token'
+                SELECT COALESCE(s.path,i.path),COALESCE(s.language,i.language),i.reference_site_id,
+                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,
+                       s.is_exact,s.provenance,s.containing_symbol_id
                 FROM main.identifiers AS i
+                LEFT JOIN main.reference_sites AS s
+                  ON s.version_id=i.version_id AND s.reference_site_id=i.reference_site_id
                 WHERE i.version_id=$version AND i.rowid=$rowid
                 """;
         if (_visibility is { } visibility)
@@ -962,25 +989,36 @@ internal sealed class QueryTimeResolutionReader
         if (!reader.Read())
         {
             return new SiteDetails(
+                HasSiteRow: false,
                 string.Empty,
                 _cache.Slice(site.VersionId)?.Language ?? string.Empty,
                 site.IdentifierId,
-                StartColumn: 1,
-                EndLine: site.StartLine,
-                EndColumn: 1,
-                IsExact: true,
-                "target_token");
+                StartLine: null,
+                StartColumn: null,
+                EndLine: null,
+                EndColumn: null,
+                StartByte: null,
+                EndByte: null,
+                IsExact: false,
+                string.Empty,
+                SiteContainingSymbolId: null);
         }
 
+        bool hasSite = !reader.IsDBNull(10);
         return new SiteDetails(
+            hasSite,
             reader.GetString(0),
             reader.GetString(1),
             reader.IsDBNull(2) ? site.IdentifierId : reader.GetString(2),
             ReadNullableInt64(reader, 3),
             ReadNullableInt64(reader, 4),
             ReadNullableInt64(reader, 5),
-            reader.GetInt64(6) == 1,
-            reader.GetString(7));
+            ReadNullableInt64(reader, 6),
+            ReadNullableInt64(reader, 7),
+            ReadNullableInt64(reader, 8),
+            hasSite && reader.GetInt64(9) == 1,
+            hasSite ? reader.GetString(10) : string.Empty,
+            reader.IsDBNull(11) ? null : reader.GetString(11));
     }
 
     private void BindVisibility(SqliteCommand command)
@@ -1042,12 +1080,12 @@ internal sealed class QueryTimeResolutionReader
             targetSymbolId,
             identifier.ContainingSymbolId,
             identifier.Details.Path,
-            (int?)identifier.StartLine,
+            (int?)identifier.Details.StartLine,
             (int?)identifier.Details.StartColumn,
             (int?)identifier.Details.EndLine,
             (int?)identifier.Details.EndColumn,
-            identifier.StartByte,
-            identifier.EndByte,
+            identifier.Details.StartByte,
+            identifier.Details.EndByte,
             ReferenceEvidenceReader.NormalizeKind(identifier.Kind),
             identifier.Kind,
             source,
@@ -1068,7 +1106,7 @@ internal sealed class QueryTimeResolutionReader
         ReferenceResolutionStatus status) =>
         new(
             targetSymbolId,
-            pending.EvidenceContainerId,
+            pending.SiteContainingSymbolId,
             pending.Path,
             (int?)pending.StartLine,
             (int?)pending.StartColumn,
@@ -1096,7 +1134,7 @@ internal sealed class QueryTimeResolutionReader
         ReferenceResolutionStatus status) =>
         new(
             targetSymbolId,
-            relationship.FromSymbolId,
+            relationship.SiteContainingSymbolId,
             relationship.Path,
             (int?)relationship.StartLine,
             (int?)relationship.StartColumn,
@@ -1129,12 +1167,12 @@ internal sealed class QueryTimeResolutionReader
             targetSymbolId,
             targetName,
             identifier.Details.Path,
-            (int?)identifier.StartLine,
+            (int?)identifier.Details.StartLine,
             (int?)identifier.Details.StartColumn,
             (int?)identifier.Details.EndLine,
             (int?)identifier.Details.EndColumn,
-            identifier.StartByte,
-            identifier.EndByte,
+            identifier.Details.StartByte,
+            identifier.Details.EndByte,
             ReferenceEvidenceReader.NormalizeKind(identifier.Kind),
             identifier.Kind,
             source,
@@ -1220,25 +1258,26 @@ internal sealed class QueryTimeResolutionReader
         double confidence,
         string source)
     {
-        ExportSymbolFacts? sourceFacts = identifier.ContainingSymbolId is null
+        string? siteContaining = identifier.Details.SiteContainingSymbolId;
+        ExportSymbolFacts? sourceFacts = siteContaining is null
             ? null
-            : ReadExportSymbol(connection, identifier.ContainingSymbolId);
-        FactSymbol? sourceSymbol = identifier.ContainingSymbolId is null
+            : ReadExportSymbol(connection, siteContaining);
+        FactSymbol? sourceSymbol = siteContaining is null
             ? null
-            : scratch.Symbol(identifier.ContainingSymbolId);
+            : scratch.Symbol(siteContaining);
         return new QueryTimeExportEvidence(
             identifier.Details.ReferenceSiteId,
             identifier.Details.IsExact,
             identifier.Details.SiteProvenance,
             identifier.Details.Path,
             identifier.Details.Language,
-            identifier.ContainingSymbolId,
-            identifier.StartLine,
+            siteContaining,
+            identifier.Details.StartLine,
             identifier.Details.StartColumn,
             identifier.Details.EndLine,
             identifier.Details.EndColumn,
-            identifier.StartByte,
-            identifier.EndByte,
+            identifier.Details.StartByte,
+            identifier.Details.EndByte,
             CanonicalKind(identifier.Kind),
             targetSymbolId,
             targetName,
@@ -1264,15 +1303,20 @@ internal sealed class QueryTimeResolutionReader
         double confidence,
         string source)
     {
-        ExportSymbolFacts? sourceFacts = ReadExportSymbol(connection, pending.FromSymbolId);
-        FactSymbol? sourceSymbol = scratch.Symbol(pending.FromSymbolId);
+        string? siteContaining = pending.SiteContainingSymbolId;
+        ExportSymbolFacts? sourceFacts = siteContaining is null
+            ? null
+            : ReadExportSymbol(connection, siteContaining);
+        FactSymbol? sourceSymbol = siteContaining is null
+            ? null
+            : scratch.Symbol(siteContaining);
         return new QueryTimeExportEvidence(
             pending.ReferenceSiteId,
             pending.IsExact,
             pending.SiteProvenance,
             pending.Path,
             pending.Language,
-            pending.FromSymbolId,
+            siteContaining,
             pending.StartLine,
             pending.StartColumn,
             pending.EndLine,
@@ -1365,6 +1409,7 @@ internal sealed class QueryTimeResolutionReader
         var rows = new List<PendingSite>();
         while (reader.Read())
         {
+            bool hasSite = !reader.IsDBNull(20);
             rows.Add(new PendingSite(
                 reader.GetInt64(0),
                 reader.GetString(1),
@@ -1376,17 +1421,19 @@ internal sealed class QueryTimeResolutionReader
                 reader.IsDBNull(7) ? null : reader.GetString(7),
                 QualifierFromNamespaceJson(reader.IsDBNull(8) ? null : reader.GetString(8)),
                 reader.GetDouble(9),
-                ReadNullableInt64(reader, 10),
-                ReadNullableInt64(reader, 11),
-                reader.GetInt64(12),
-                reader.IsDBNull(13) ? reader.GetString(1) : reader.GetString(13),
-                reader.GetString(14),
-                reader.GetString(15),
-                StartColumn: 1,
-                EndLine: reader.GetInt64(12),
-                EndColumn: 4,
-                IsExact: !reader.IsDBNull(10) && !reader.IsDBNull(11),
-                "target_token"));
+                reader.IsDBNull(10) ? reader.GetString(1) : reader.GetString(10),
+                hasSite,
+                reader.GetString(11),
+                reader.GetString(12),
+                ReadNullableInt64(reader, 13),
+                ReadNullableInt64(reader, 14),
+                ReadNullableInt64(reader, 15),
+                ReadNullableInt64(reader, 16),
+                ReadNullableInt64(reader, 17),
+                ReadNullableInt64(reader, 18),
+                hasSite && reader.GetInt64(19) == 1,
+                hasSite ? reader.GetString(20) : string.Empty,
+                reader.IsDBNull(21) ? null : reader.GetString(21)));
         }
 
         return rows;
@@ -1451,14 +1498,19 @@ internal sealed class QueryTimeResolutionReader
     private readonly record struct CandidateRecord(string Id, long VersionId, string Name);
 
     private readonly record struct SiteDetails(
+        bool HasSiteRow,
         string Path,
         string Language,
         string ReferenceSiteId,
+        long? StartLine,
         long? StartColumn,
         long? EndLine,
         long? EndColumn,
+        long? StartByte,
+        long? EndByte,
         bool IsExact,
-        string SiteProvenance);
+        string SiteProvenance,
+        string? SiteContainingSymbolId);
 
     private sealed record PendingSite(
         long VersionId,
@@ -1471,17 +1523,19 @@ internal sealed class QueryTimeResolutionReader
         string? Receiver,
         string? ReceiverQualifier,
         double Confidence,
-        long? StartByte,
-        long? EndByte,
-        long StartLine,
         string ReferenceSiteId,
+        bool HasSiteRow,
         string Path,
         string Language,
+        long? StartLine,
         long? StartColumn,
         long? EndLine,
         long? EndColumn,
+        long? StartByte,
+        long? EndByte,
         bool IsExact,
-        string SiteProvenance)
+        string SiteProvenance,
+        string? SiteContainingSymbolId)
     {
         internal string EvidenceContainerId => CallerScopeSymbolId ?? FromSymbolId;
     }
@@ -1503,7 +1557,8 @@ internal sealed class QueryTimeResolutionReader
         long? StartByte,
         long? EndByte,
         bool IsExact,
-        string SiteProvenance);
+        string SiteProvenance,
+        string? SiteContainingSymbolId);
 
     private sealed record ResolvedIdentifier(
         ResolutionIdentifierSite Site,
@@ -1553,11 +1608,13 @@ internal sealed class QueryTimeResolutionReader
 
         internal string ReferenceSiteId => Site.ReferenceSiteId;
 
+        internal bool HasSiteRow => Site.HasSiteRow;
+
         internal long? StartByte => Site.StartByte;
 
         internal long? EndByte => Site.EndByte;
 
-        internal long StartLine => Site.StartLine;
+        internal long? StartLine => Site.StartLine;
 
         internal long? StartColumn => Site.StartColumn;
 
@@ -1568,6 +1625,8 @@ internal sealed class QueryTimeResolutionReader
         internal bool IsExact => Site.IsExact;
 
         internal string SiteProvenance => Site.SiteProvenance;
+
+        internal string? SiteContainingSymbolId => Site.SiteContainingSymbolId;
     }
 
     private sealed class QueryScratch

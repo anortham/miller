@@ -67,10 +67,10 @@ public sealed class IdentifierSiteReaderTests
     public void ArtifactSitesNamed_JoinsCurrentFiles()
     {
         using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
-        fixture.AddFile("1", "a.cs");
-        fixture.AddSymbol("1", "from", "From", "method", "a.cs");
-        fixture.AddIdentifier("1", "id1", "Foo", "a.cs", containingSymbolId: "from", startByte: 4, endByte: 7);
-        fixture.AddIdentifier("9", "ghost", "Foo", "gone.cs");
+        fixture.AddFile("file-9e7a11", "a.cs");
+        fixture.AddSymbol("file-9e7a11", "from", "From", "method", "a.cs");
+        fixture.AddIdentifier("file-9e7a11", "id1", "Foo", "a.cs", containingSymbolId: "from", startByte: 4, endByte: 7);
+        fixture.AddIdentifier("file-gone99", "ghost", "Foo", "gone.cs");
 
         using var connection = fixture.OpenRead();
         IdentifierSite[] named = [.. IdentifierSiteReader.SitesNamed(connection, "Foo")];

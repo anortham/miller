@@ -563,16 +563,34 @@ internal static class QueryTimeResolutionParity
             rows.Add(string.Join(
                 '|',
                 row.ReferenceSiteId,
+                row.IsExact ? "1" : "0",
+                row.SiteProvenance,
+                row.Path,
+                row.Language,
+                row.ContainingSymbolId ?? string.Empty,
+                FmtNullable(row.StartLine),
+                FmtNullable(row.StartColumn),
+                FmtNullable(row.EndLine),
+                FmtNullable(row.EndColumn),
+                FmtNullable(row.StartByte),
+                FmtNullable(row.EndByte),
                 row.CanonicalKind,
                 row.TargetSymbolId ?? string.Empty,
+                row.TargetName,
+                row.TargetKind ?? string.Empty,
                 row.EvidenceSource,
                 Fmt(row.Confidence),
-                row.ResolutionTier?.ToString(CultureInfo.InvariantCulture) ?? string.Empty));
+                row.ResolutionTier?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                row.SourceName ?? string.Empty,
+                row.SourceKind ?? string.Empty));
         }
 
         rows.Sort(StringComparer.Ordinal);
         return [.. rows];
     }
+
+    private static string FmtNullable(long? value) =>
+        value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
 
     internal static string[] ReconstructGraphFromStore(
         SqliteConnection store,

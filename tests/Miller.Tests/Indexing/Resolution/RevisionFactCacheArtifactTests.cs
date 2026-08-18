@@ -11,14 +11,14 @@ public sealed class RevisionFactCacheArtifactTests
     public void LoadFromArtifact_MatchesDirectSqlOnCurrentFiles()
     {
         using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
-        fixture.AddFile("1", "a.cs");
-        fixture.AddFile("2", "b.cs");
-        fixture.AddSymbol("1", "widget", "Widget", "class", "a.cs");
-        fixture.AddSymbol("1", "run", "Run", "method", "a.cs", parentId: "widget");
-        fixture.AddSymbol("2", "other", "Other", "function", "b.cs");
+        fixture.AddFile("file-9e7a11", "a.cs");
+        fixture.AddFile("file-c04d22", "b.cs");
+        fixture.AddSymbol("file-9e7a11", "widget", "Widget", "class", "a.cs");
+        fixture.AddSymbol("file-9e7a11", "run", "Run", "method", "a.cs", parentId: "widget");
+        fixture.AddSymbol("file-c04d22", "other", "Other", "function", "b.cs");
         fixture.AddTypeFact("tf1", "run", "int");
         fixture.AddSymbol(
-            "1",
+            "file-9e7a11",
             "imp",
             "Lib",
             "import",
@@ -29,26 +29,31 @@ public sealed class RevisionFactCacheArtifactTests
         using var connection = fixture.OpenRead();
         IResolutionFacts facts = RevisionFactCache.LoadFromArtifact(connection);
 
-        Assert.Equal("Widget", facts.Symbol(new FactSymbolKey(1, "widget"))!.Name);
-        Assert.Equal(["run"], facts.ChildrenOf(new FactSymbolKey(1, "widget")).Select(s => s.Key.SymbolId));
-        Assert.Equal(["imp", "widget"], facts.TopLevelOf(1).Select(s => s.Key.SymbolId).OrderBy(s => s));
-        Assert.Equal("int", Assert.Single(facts.TypeFactsOf(new FactSymbolKey(1, "run"))).ResolvedType);
+        long widgetVersion = Assert.Single(facts.SymbolsNamed("Widget")).Key.VersionId;
+        long otherVersion = Assert.Single(facts.SymbolsNamed("Other")).Key.VersionId;
+        Assert.NotEqual(widgetVersion, otherVersion);
+        Assert.Equal("Widget", facts.Symbol(new FactSymbolKey(widgetVersion, "widget"))!.Name);
+        Assert.Equal(["run"], facts.ChildrenOf(new FactSymbolKey(widgetVersion, "widget")).Select(s => s.Key.SymbolId));
+        Assert.Equal(["imp", "widget"], facts.TopLevelOf(widgetVersion).Select(s => s.Key.SymbolId).OrderBy(s => s));
+        Assert.Equal(["other"], facts.TopLevelOf(otherVersion).Select(s => s.Key.SymbolId));
+        Assert.Equal("int", Assert.Single(facts.TypeFactsOf(new FactSymbolKey(widgetVersion, "run"))).ResolvedType);
         Assert.Equal(ReadArtifactNames(connection, "Widget"), facts.SymbolsNamed("Widget").Select(s => s.Name).ToArray());
-        Assert.Null(Assert.Single(facts.ImportsOf(1)).ModuleVersionId);
+        Assert.Null(Assert.Single(facts.ImportsOf(widgetVersion)).ModuleVersionId);
     }
 
     [Fact]
     public void LoadFromArtifact_IgnoresSymbolsWithoutFilesRow()
     {
         using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
-        fixture.AddFile("1", "a.cs");
-        fixture.AddSymbol("1", "keep", "Keep", "class", "a.cs");
-        fixture.AddSymbol("9", "ghost", "Ghost", "class", "gone.cs");
+        fixture.AddFile("file-9e7a11", "a.cs");
+        fixture.AddSymbol("file-9e7a11", "keep", "Keep", "class", "a.cs");
+        fixture.AddSymbol("file-gone99", "ghost", "Ghost", "class", "gone.cs");
 
         using var connection = fixture.OpenRead();
         IResolutionFacts facts = RevisionFactCache.LoadFromArtifact(connection);
 
-        Assert.NotNull(facts.Symbol(new FactSymbolKey(1, "keep")));
+        long keepVersion = Assert.Single(facts.SymbolsNamed("Keep")).Key.VersionId;
+        Assert.NotNull(facts.Symbol(new FactSymbolKey(keepVersion, "keep")));
         Assert.Empty(facts.SymbolsNamed("Ghost"));
     }
 
@@ -56,8 +61,8 @@ public sealed class RevisionFactCacheArtifactTests
     public void LoadFromArtifact_DoesNotAdvance()
     {
         using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
-        fixture.AddFile("1", "a.cs");
-        fixture.AddSymbol("1", "keep", "Keep", "class", "a.cs");
+        fixture.AddFile("file-9e7a11", "a.cs");
+        fixture.AddSymbol("file-9e7a11", "keep", "Keep", "class", "a.cs");
 
         using var connection = fixture.OpenRead();
         RevisionFactCache cache = RevisionFactCache.LoadFromArtifact(connection);

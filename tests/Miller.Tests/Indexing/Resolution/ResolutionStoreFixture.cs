@@ -175,7 +175,12 @@ internal sealed class ResolutionStoreFixture : IDisposable
         long startLine = 1,
         string? metadataJson = null,
         string language = "csharp",
-        double confidence = 1.0)
+        double confidence = 1.0,
+        string siteProvenance = "target_token",
+        bool siteExact = true,
+        bool siteSpanless = false,
+        long? siteStartColumn = null,
+        long? siteEndColumn = null)
     {
         string containing = containingSymbolId is null ? "NULL" : $"'{Escape(containingSymbolId)}'";
         string meta = metadataJson is null ? "NULL" : $"'{Escape(metadataJson)}'";
@@ -192,7 +197,7 @@ internal sealed class ResolutionStoreFixture : IDisposable
               start_line,start_column,end_line,end_column,start_byte,end_byte,is_exact,provenance)
             VALUES (
               {versionId},'site-{Escape(identifierId)}','{Escape(path)}','{Escape(language)}',{containing},
-              {startLine},1,{startLine},4,{startByte},{endByte},1,'target_token');
+              {SiteSpan(startLine, startByte, endByte, siteSpanless, siteStartColumn, siteEndColumn)},{(siteExact ? 1 : 0)},'{Escape(siteProvenance)}');
             """);
     }
 
@@ -206,7 +211,12 @@ internal sealed class ResolutionStoreFixture : IDisposable
         long? startByte = 0,
         long? endByte = 3,
         long startLine = 1,
-        string language = "csharp")
+        string language = "csharp",
+        string siteProvenance = "target_token",
+        bool siteExact = true,
+        bool siteSpanless = false,
+        long? siteStartColumn = null,
+        long? siteEndColumn = null)
     {
         string start = startByte is { } sb ? sb.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
         string end = endByte is { } eb ? eb.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
@@ -224,7 +234,7 @@ internal sealed class ResolutionStoreFixture : IDisposable
               start_line,start_column,end_line,end_column,start_byte,end_byte,is_exact,provenance)
             VALUES (
               {versionId},'site-{Escape(pendingId)}','{Escape(path)}','{Escape(language)}','{Escape(fromSymbolId)}',
-              {startLine},1,{startLine},4,{start},{end},1,'target_token');
+              {SiteSpan(startLine, startByte, endByte, siteSpanless, siteStartColumn, siteEndColumn)},{(siteExact ? 1 : 0)},'{Escape(siteProvenance)}');
             """);
         _ = language;
     }
@@ -300,6 +310,30 @@ internal sealed class ResolutionStoreFixture : IDisposable
         }.ToString());
         connection.Open();
         return connection;
+    }
+
+    public void RemoveReferenceSite(string ownerId)
+    {
+        ExecuteWrite($"DELETE FROM reference_sites WHERE reference_site_id='site-{Escape(ownerId)}';");
+    }
+
+    private static string SiteSpan(
+        long startLine,
+        long? startByte,
+        long? endByte,
+        bool spanless,
+        long? startColumn,
+        long? endColumn)
+    {
+        if (spanless)
+            return "NULL,NULL,NULL,NULL,NULL,NULL";
+        string start = startByte is { } sb ? sb.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
+        string end = endByte is { } eb ? eb.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
+        long sc = startColumn ?? 1;
+        long ec = endColumn ?? 4;
+        return string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"{startLine},{sc},{startLine},{ec},{start},{end}");
     }
 
     private static string Escape(string value) => value.Replace("'", "''", StringComparison.Ordinal);

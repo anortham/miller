@@ -37,7 +37,7 @@ internal static class RevisionFactCacheLoader
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT CAST(f.file_id AS INTEGER),f.path,f.language
+            SELECT f.rowid,f.path,f.language
             FROM files AS f
             ORDER BY f.path
             """;
@@ -140,7 +140,7 @@ internal static class RevisionFactCacheLoader
         command.CommandTimeout = 0;
         command.CommandText =
             """
-            SELECT CAST(s.file_id AS INTEGER),s.symbol_id,s.name,s.kind,s.language,s.parent_symbol_id,s.signature,s.visibility,s.metadata_json
+            SELECT f.rowid,s.symbol_id,s.name,s.kind,s.language,s.parent_symbol_id,s.signature,s.visibility,s.metadata_json
             FROM symbols AS s
             JOIN files AS f ON f.file_id=s.file_id
             ORDER BY 1,s.symbol_id
@@ -250,7 +250,7 @@ internal static class RevisionFactCacheLoader
         command.CommandTimeout = 0;
         command.CommandText =
             """
-            SELECT CAST(s.file_id AS INTEGER),t.symbol_id,t.resolved_type,t.is_inferred
+            SELECT f.rowid,t.symbol_id,t.resolved_type,t.is_inferred
             FROM type_facts AS t
             JOIN symbols AS s ON s.symbol_id=t.symbol_id
             JOIN files AS f ON f.file_id=s.file_id
@@ -327,7 +327,7 @@ internal static class RevisionFactCacheLoader
         command.CommandTimeout = 0;
         command.CommandText =
             """
-            SELECT CAST(i.file_id AS INTEGER),i.rowid,i.name,i.start_byte,i.end_byte,i.start_line
+            SELECT f.rowid,i.rowid,i.name,i.start_byte,i.end_byte,i.start_line
             FROM identifiers AS i
             JOIN files AS f ON f.file_id=i.file_id
             ORDER BY 1
@@ -445,7 +445,7 @@ internal static class RevisionFactCacheLoader
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT CAST(p.file_id AS INTEGER),p.pending_relationship_id,p.target_terminal_name,p.start_byte,p.end_byte,p.start_line
+            SELECT f.rowid,p.pending_relationship_id,p.target_terminal_name,p.start_byte,p.end_byte,p.start_line
             FROM pending_relationships AS p
             JOIN files AS f ON f.file_id=p.file_id
             """;
@@ -503,7 +503,7 @@ internal static class RevisionFactCacheLoader
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT CAST(r.file_id AS INTEGER),r.relationship_id,t.name,r.start_byte,r.end_byte,r.start_line
+            SELECT f.rowid,r.relationship_id,t.name,r.start_byte,r.end_byte,r.start_line
             FROM relationships AS r
             JOIN files AS f ON f.file_id=r.file_id
             JOIN symbols AS t ON t.symbol_id=r.to_symbol_id
@@ -661,7 +661,7 @@ internal static class RevisionFactCacheLoader
             SELECT s.symbol_id,s.name,s.kind,s.language,s.parent_symbol_id,s.signature,s.visibility,s.metadata_json
             FROM symbols AS s
             JOIN files AS f ON f.file_id=s.file_id
-            WHERE CAST(s.file_id AS INTEGER)=$version
+            WHERE f.rowid=$version
             ORDER BY s.symbol_id
             """;
         command.Parameters.AddWithValue("$version", file.VersionId);
@@ -741,7 +741,7 @@ internal static class RevisionFactCacheLoader
             FROM type_facts AS t
             JOIN symbols AS s ON s.symbol_id=t.symbol_id
             JOIN files AS f ON f.file_id=s.file_id
-            WHERE CAST(s.file_id AS INTEGER)=$version
+            WHERE f.rowid=$version
             ORDER BY t.symbol_id,t.type_fact_id
             """;
         command.Parameters.AddWithValue("$version", versionId);
@@ -800,7 +800,7 @@ internal static class RevisionFactCacheLoader
             SELECT i.rowid,i.name,i.start_byte,i.end_byte,i.start_line
             FROM identifiers AS i
             JOIN files AS f ON f.file_id=i.file_id
-            WHERE CAST(i.file_id AS INTEGER)=$version
+            WHERE f.rowid=$version
             """;
         command.Parameters.AddWithValue("$version", versionId);
         return Locate(command, pending, relationships);
@@ -887,7 +887,7 @@ internal static class RevisionFactCacheLoader
             SELECT p.pending_relationship_id,p.target_terminal_name,p.start_byte,p.end_byte,p.start_line
             FROM pending_relationships AS p
             JOIN files AS f ON f.file_id=p.file_id
-            WHERE CAST(p.file_id AS INTEGER)=$version
+            WHERE f.rowid=$version
             """;
         command.Parameters.AddWithValue("$version", versionId);
         return ReadPendings(command);
@@ -942,7 +942,7 @@ internal static class RevisionFactCacheLoader
             FROM relationships AS r
             JOIN files AS f ON f.file_id=r.file_id
             JOIN symbols AS t ON t.symbol_id=r.to_symbol_id
-            WHERE CAST(r.file_id AS INTEGER)=$version
+            WHERE f.rowid=$version
               AND r.kind IN ('calls','instantiates','uses','extends','implements')
             """;
         command.Parameters.AddWithValue("$version", versionId);

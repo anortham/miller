@@ -107,7 +107,7 @@ internal static class IdentifierSiteReader
         using SqliteCommand command = artifactRead.CreateCommand();
         command.CommandText =
             """
-            SELECT CAST(i.file_id AS INTEGER),i.rowid,i.identifier_id,i.name,i.kind,i.containing_symbol_id,
+            SELECT f.rowid,i.rowid,i.identifier_id,i.name,i.kind,i.containing_symbol_id,
                    i.confidence,i.start_byte,i.end_byte,i.start_line,i.metadata_json
             FROM identifiers AS i
             JOIN files AS f ON f.file_id=i.file_id
@@ -124,7 +124,7 @@ internal static class IdentifierSiteReader
         using SqliteCommand command = artifactRead.CreateCommand();
         command.CommandText =
             """
-            SELECT CAST(i.file_id AS INTEGER),i.rowid,i.identifier_id,i.name,i.kind,i.containing_symbol_id,
+            SELECT f.rowid,i.rowid,i.identifier_id,i.name,i.kind,i.containing_symbol_id,
                    i.confidence,i.start_byte,i.end_byte,i.start_line,i.metadata_json
             FROM identifiers AS i
             JOIN files AS f ON f.file_id=i.file_id
@@ -148,7 +148,7 @@ internal static class IdentifierSiteReader
             using SqliteCommand command = artifactRead.CreateCommand();
             command.CommandText =
                 $"""
-                SELECT CAST(i.file_id AS INTEGER),i.rowid,i.identifier_id,i.name,i.kind,i.containing_symbol_id,
+                SELECT f.rowid,i.rowid,i.identifier_id,i.name,i.kind,i.containing_symbol_id,
                        i.confidence,i.start_byte,i.end_byte,i.start_line,i.metadata_json
                 FROM identifiers AS i
                 JOIN files AS f ON f.file_id=i.file_id

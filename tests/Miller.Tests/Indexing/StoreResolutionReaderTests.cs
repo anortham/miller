@@ -83,13 +83,14 @@ public sealed class StoreResolutionReaderTests
 
     private static ResolutionArtifactFixture PopulateArtifact()
     {
+        const string AppFile = "file-9e7a11";
         ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
-        fixture.AddFile("1", "src/App.cs");
-        fixture.AddSymbol("1", Run, "Run", "method", "src/App.cs");
-        fixture.AddSymbol("1", Helper, "Helper", "function", "src/App.cs");
-        fixture.AddIdentifier("1", "id-help", "Helper", "src/App.cs", kind: "call", containingSymbolId: Run, startByte: 10, endByte: 16);
-        fixture.AddPending("1", "pend-help", Run, "Helper", "src/App.cs", startByte: 20, endByte: 26);
-        fixture.AddRelationship("1", "rel-help", Run, Helper, "src/App.cs", startByte: 80, endByte: 86);
+        fixture.AddFile(AppFile, "src/App.cs");
+        fixture.AddSymbol(AppFile, Run, "Run", "method", "src/App.cs");
+        fixture.AddSymbol(AppFile, Helper, "Helper", "function", "src/App.cs");
+        fixture.AddIdentifier(AppFile, "id-help", "Helper", "src/App.cs", kind: "call", containingSymbolId: Run, startByte: 10, endByte: 16);
+        fixture.AddPending(AppFile, "pend-help", Run, "Helper", "src/App.cs", startByte: 20, endByte: 26);
+        fixture.AddRelationship(AppFile, "rel-help", Run, Helper, "src/App.cs", startByte: 80, endByte: 86);
         return fixture;
     }
 

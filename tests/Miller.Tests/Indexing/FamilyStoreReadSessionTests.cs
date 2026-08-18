@@ -1068,15 +1068,23 @@ public sealed class FamilyStoreReadSessionTests
               target_namespace_json TEXT,target_import_context TEXT,start_line INTEGER,start_column INTEGER,
               end_line INTEGER,end_column INTEGER,start_byte INTEGER,end_byte INTEGER,confidence REAL,metadata_json TEXT,
               PRIMARY KEY(version_id,pending_relationship_id)) STRICT;
+            CREATE TABLE IF NOT EXISTS reference_sites (
+              version_id INTEGER NOT NULL,reference_site_id TEXT NOT NULL,path TEXT NOT NULL,language TEXT NOT NULL,
+              containing_symbol_id TEXT,start_line INTEGER,start_column INTEGER,end_line INTEGER,end_column INTEGER,
+              start_byte INTEGER,end_byte INTEGER,is_exact INTEGER NOT NULL,provenance TEXT NOT NULL,
+              PRIMARY KEY(version_id,reference_site_id)) STRICT;
             INSERT INTO symbols VALUES
               (2,$target,'same.cs','csharp','Target','function',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
               (2,$identifierCaller,'same.cs','csharp','IdentifierCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
               (2,$pendingCaller,'same.cs','csharp','PendingCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
             INSERT INTO identifiers VALUES
-              (2,'identifier',NULL,'same.cs','csharp','Target','call',$identifierCaller,1,1,1,2,0,3,1.0,NULL,NULL);
+              (2,'identifier','identifier-site','same.cs','csharp','Target','call',$identifierCaller,1,1,1,2,0,3,1.0,NULL,NULL);
             INSERT INTO pending_relationships VALUES
-              (2,'pending',NULL,$pendingCaller,$pendingCaller,'same.cs','calls','Target','Target',NULL,'[]',NULL,
+              (2,'pending','pending-site',$pendingCaller,$pendingCaller,'same.cs','calls','Target','Target',NULL,'[]',NULL,
                2,1,2,4,10,13,1.0,NULL);
+            INSERT OR IGNORE INTO reference_sites VALUES
+              (2,'identifier-site','same.cs','csharp',$identifierCaller,1,1,1,2,0,3,1,'target_token'),
+              (2,'pending-site','same.cs','csharp',$pendingCaller,2,1,2,4,10,13,1,'target_token');
             """;
         command.Parameters.AddWithValue("$target", targetId);
         command.Parameters.AddWithValue("$identifierCaller", identifierCallerId);
@@ -1096,12 +1104,12 @@ public sealed class FamilyStoreReadSessionTests
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
             """
-            CREATE TABLE reference_sites (
+            CREATE TABLE IF NOT EXISTS reference_sites (
               version_id INTEGER NOT NULL,reference_site_id TEXT NOT NULL,path TEXT NOT NULL,language TEXT NOT NULL,
               containing_symbol_id TEXT,start_line INTEGER,start_column INTEGER,end_line INTEGER,end_column INTEGER,
               start_byte INTEGER,end_byte INTEGER,is_exact INTEGER NOT NULL,provenance TEXT NOT NULL,
               PRIMARY KEY(version_id,reference_site_id)) STRICT;
-            INSERT INTO reference_sites VALUES
+            INSERT OR REPLACE INTO reference_sites VALUES
               (2,'identifier-site','same.cs','csharp',$caller,1,1,1,2,0,1,1,'target_token');
             UPDATE identifiers
             SET reference_site_id='identifier-site'
@@ -1805,6 +1813,11 @@ public sealed class FamilyStoreReadSessionTests
                   to_symbol_id TEXT NOT NULL,path TEXT NOT NULL,kind TEXT NOT NULL,start_line INTEGER,start_column INTEGER,
                   end_line INTEGER,end_column INTEGER,start_byte INTEGER,end_byte INTEGER,confidence REAL,metadata_json TEXT,
                   PRIMARY KEY(version_id,relationship_id)) STRICT;
+                CREATE TABLE reference_sites (
+                  version_id INTEGER NOT NULL,reference_site_id TEXT NOT NULL,path TEXT NOT NULL,language TEXT NOT NULL,
+                  containing_symbol_id TEXT,start_line INTEGER,start_column INTEGER,end_line INTEGER,end_column INTEGER,
+                  start_byte INTEGER,end_byte INTEGER,is_exact INTEGER NOT NULL,provenance TEXT NOT NULL,
+                  PRIMARY KEY(version_id,reference_site_id)) STRICT;
                 CREATE TABLE parse_diagnostics (
                   diagnostic_id TEXT PRIMARY KEY,
                   version_id INTEGER NOT NULL,
