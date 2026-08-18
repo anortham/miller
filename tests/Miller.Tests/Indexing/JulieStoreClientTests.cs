@@ -376,8 +376,6 @@ public sealed class JulieStoreClientTests
         Assert.Equal(new StoreLevelCompletion(true, false, false), result.Completion);
         Assert.Equal(new StoreManifestResult(4, "abc123", StoreManifestDisposition.Created), result.Manifest);
         Assert.Equal(new StoreRowCounts(2, 30, 0, 0), result.RowCounts);
-        Assert.Equal(StoreResolutionState.Unbound, result.Resolution?.State);
-        Assert.False(result.Resolution?.ExactAtMatches);
         Assert.Equal(StoreCoordinatorDisposition.Committed, result.Coordinator);
         Assert.Equal(StoreFailureClass.None, result.Failure.Class);
         Assert.Null(result.Failure.Message);
@@ -396,7 +394,6 @@ public sealed class JulieStoreClientTests
 
         StoreRequestResult result = JulieStoreClient.ParseReport(json, StoreOperation.Import, 0);
 
-        Assert.Null(result.Resolution);
         Assert.Equal(StoreRequestState.Committed, result.State);
         Assert.Equal(new StoreRowCounts(2, 30, 0, 0), result.RowCounts);
     }

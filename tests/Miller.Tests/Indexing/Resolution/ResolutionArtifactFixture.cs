@@ -119,7 +119,7 @@ internal sealed class ResolutionArtifactFixture : IDisposable
             CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             INSERT INTO artifact_metadata VALUES
               ('artifact_id','art-1'),
-              ('sqlite_schema_version','6'),
+              ('sqlite_schema_version','7'),
               ('extract_contract_version','4'),
               ('hash_algorithm','blake3'),
               ('index_level','full');

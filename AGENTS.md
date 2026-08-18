@@ -37,8 +37,8 @@ must never fall back to a stale legacy artifact.
 Miller answers references at query time. `QueryTimeResolver` applies resolution policy v6 to the visible
 fact tables. `RevisionFactCache` keeps packed symbols, type facts, imports, and the propagation index
 for the pinned generation. Identifiers stay on disk and stream per query. Miller does not submit
-`store resolve`. It ignores julie resolution bases, deltas, and `identifier_resolutions` until Phase 2/3
-removes those artifacts.
+`store resolve`; julie-extract 2.34.0 removed the verb and materialized resolution (artifact schema 7,
+JSONL 5). The `views` table keeps its `resolution_state` column, permanently `unbound`.
 (2026-07-06 consensus, Eros not shipping: Miller absorbed the deterministic signals/hotspot workflows —
 see `docs/plans/2026-07-06-miller-standalone-bolstering-assessment.md`. Dead-code candidates were
 REMOVED on 2026-08-18 (user decision; retired contract `docs/contracts/references-candidates-v1.md`).

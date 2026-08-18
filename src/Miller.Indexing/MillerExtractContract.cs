@@ -10,12 +10,12 @@ namespace Miller.Indexing;
 /// </summary>
 internal static class MillerExtractContract
 {
-    public const long ExpectedSchemaVersion = 6;
-    public const long ExpectedSqliteSchemaVersion = 6;
+    public const long ExpectedSchemaVersion = 7;
+    public const long ExpectedSqliteSchemaVersion = 7;
     public const long ExpectedExtractContractVersion = 4;
     public const long ExpectedReportSchemaVersion = 3;
-    public const long ExpectedJsonlSchemaVersion = 4;
+    public const long ExpectedJsonlSchemaVersion = 5;
     public const string ExpectedHashAlgorithm = "blake3";
 
-    public const string PinnedJulieExtractVersion = "2.33.7";
+    public const string PinnedJulieExtractVersion = "2.34.0";
 }

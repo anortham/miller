@@ -33,7 +33,7 @@ internal sealed class ResolutionStoreFixture : IDisposable
             CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             INSERT INTO artifact_metadata VALUES
               ('artifact_id','11111111-1111-4111-8111-111111111111'),
-              ('sqlite_schema_version','6'),
+              ('sqlite_schema_version','7'),
               ('extract_contract_version','4'),
               ('hash_algorithm','blake3');
             CREATE TABLE extraction_revisions (revision_id INTEGER);

@@ -18,27 +18,6 @@ public enum StoreManifestDisposition
     NotPublished,
 }
 
-// razorback: parse-only compatibility DTO for julie-extract 2.33.7 reports. Phase 3 removes this enum.
-public enum StoreResolutionState
-{
-    Unbound,
-
-    /// <summary>
-    /// A resolution pass is in flight: bases are published and deltas are accumulating, but the view has not
-    /// yet reached an exact binding.
-    /// </summary>
-    /// <remarks>
-    /// julie-extract has emitted this since the resolution-binding contract landed
-    /// (<c>ViewResolutionState::Converging</c>, <c>store/model.rs:130-143</c>), but Miller's parser knew only
-    /// <c>unbound</c> and <c>exact</c> and threw <c>Unknown resolution state 'converging'</c> on the whole
-    /// report. It stayed hidden while whole-repo resolves were being killed at the quantum cap and never got
-    /// far enough to report it; the first scan that ran to completion surfaced it immediately.
-    /// </remarks>
-    Converging,
-
-    Exact,
-}
-
 public enum StoreCoordinatorDisposition
 {
     NotStarted,
@@ -67,17 +46,6 @@ public sealed record StoreManifestResult(
 
 public sealed record StoreRowCounts(long FileVersions, long L1, long L2, long L3);
 
-// razorback: parse-only compatibility DTO for julie-extract 2.33.7 reports. Phase 3 removes this type.
-public sealed record StoreResolutionResult(
-    StoreResolutionState State,
-    bool ExactAtMatches,
-    string? BaseId,
-    long? DeltaGeneration,
-    long? ExactAtGeneration,
-    long? GapLowerBound,
-    long? ExactGapRows,
-    long? ExactGapFiles);
-
 public sealed record StoreExportResult(string Output, string Disposition);
 
 public sealed record StoreFailure(StoreFailureClass Class, string? Message);
@@ -94,7 +62,6 @@ public sealed record StoreRequestResult(
     StoreLevelCompletion Completion,
     StoreManifestResult Manifest,
     StoreRowCounts RowCounts,
-    StoreResolutionResult? Resolution,
     StoreExportResult? Export,
     StoreCoordinatorDisposition Coordinator,
     StoreFailure Failure,
@@ -113,7 +80,6 @@ internal sealed class StoreReportDto
     public StoreLevelCompletionDto? Completion { get; init; }
     public StoreManifestResultDto? Manifest { get; init; }
     public StoreRowCountsDto? RowCounts { get; init; }
-    public StoreResolutionResultDto? Resolution { get; init; }
     public StoreExportResultDto? Export { get; init; }
     public string? Coordinator { get; init; }
     public string? FailureClass { get; init; }
@@ -146,18 +112,6 @@ internal sealed class StoreRowCountsDto
     public long L1 { get; init; }
     public long L2 { get; init; }
     public long L3 { get; init; }
-}
-
-internal sealed class StoreResolutionResultDto
-{
-    public string? State { get; init; }
-    public bool ExactAtMatches { get; init; }
-    public string? BaseId { get; init; }
-    public long? DeltaGeneration { get; init; }
-    public long? ExactAtGeneration { get; init; }
-    public long? GapLowerBound { get; init; }
-    public long? ExactGapRows { get; init; }
-    public long? ExactGapFiles { get; init; }
 }
 
 internal sealed class StoreExportResultDto

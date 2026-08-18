@@ -36,34 +36,32 @@ public sealed class LiveReferenceResolutionScaleTests(ITestOutputHelper output)
             ExtractReport report = runner.Scan(repo, db, force: true);
             Assert.NotEqual("failed", report.Status);
 
-            IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.Read(db);
-            string cSharpParameterTargetId = Assert.Single(
+            using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(db);
+            IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.ReadSession(session);
+            AssertResolvedCall(
+                session,
                 symbols,
-                symbol => symbol.Name == "ExecuteTypedReceiver" && symbol.Language == "csharp").SymbolId;
-            string cSharpLocalTargetId = Assert.Single(
+                targetName: "ExecuteTypedReceiver",
+                callerPath: "TypedReceiver.cs",
+                language: "csharp");
+            AssertResolvedCall(
+                session,
                 symbols,
-                symbol => symbol.Name == "ExecuteTypedLocal" && symbol.Language == "csharp").SymbolId;
-            string typeScriptTargetId = Assert.Single(
+                targetName: "ExecuteTypedLocal",
+                callerPath: "TypedReceiver.cs",
+                language: "csharp");
+            AssertResolvedCall(
+                session,
                 symbols,
-                symbol => symbol.Name == "executeTypeScriptStatic" && symbol.Language == "typescript").SymbolId;
-            string javaScriptTargetId = Assert.Single(
+                targetName: "executeTypeScriptStatic",
+                callerPath: "StaticReceiver.ts",
+                language: "typescript");
+            AssertResolvedCall(
+                session,
                 symbols,
-                symbol => symbol.Name == "executeJavaScriptStatic" && symbol.Language == "javascript").SymbolId;
-            AssertResolutionMethod(db, cSharpParameterTargetId, "tier3_receiver");
-            AssertResolutionMethod(db, cSharpLocalTargetId, "tier3_receiver");
-            AssertResolutionMethod(db, typeScriptTargetId, "tier3_static_type");
-            AssertResolutionMethod(db, javaScriptTargetId, "tier3_static_type");
-
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            {
-                DataSource = db,
-                Mode = SqliteOpenMode.ReadOnly,
-                Pooling = false,
-            }.ToString());
-            connection.Open();
-            using var command = connection.CreateCommand();
-            command.CommandText = "SELECT value FROM artifact_metadata WHERE key = 'reference_resolution_version';";
-            Assert.Equal("6", Convert.ToString(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
+                targetName: "executeJavaScriptStatic",
+                callerPath: "StaticReceiver.js",
+                language: "javascript");
         }
         finally
         {
@@ -292,25 +290,5 @@ public sealed class LiveReferenceResolutionScaleTests(ITestOutputHelper output)
         Assert.NotNull(call.ResolutionTier);
         Assert.Equal("target_token", call.SiteProvenance);
         return target.SymbolId;
-    }
-
-    private static void AssertResolutionMethod(string db, string targetSymbolId, string expectedMethod)
-    {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = db,
-            Mode = SqliteOpenMode.ReadOnly,
-            Pooling = false,
-        }.ToString());
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT method
-            FROM identifier_resolutions
-            WHERE target_symbol_id = $target
-              AND outcome = 'resolved';
-            """;
-        command.Parameters.AddWithValue("$target", targetSymbolId);
-        Assert.Equal(expectedMethod, command.ExecuteScalar()?.ToString());
     }
 }

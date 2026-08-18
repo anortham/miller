@@ -597,17 +597,6 @@ public sealed class JulieStoreClient : IJulieStoreClient
         StoreLevelCompletionDto completion = dto.Completion ?? throw ContractFailure("Store report omitted completion.");
         StoreManifestResultDto manifest = dto.Manifest ?? throw ContractFailure("Store report omitted manifest.");
         StoreRowCountsDto rowCounts = dto.RowCounts ?? throw ContractFailure("Store report omitted row_counts.");
-        StoreResolutionResult? resolution = dto.Resolution is null
-            ? null
-            : new StoreResolutionResult(
-                ParseResolutionState(dto.Resolution.State),
-                dto.Resolution.ExactAtMatches,
-                dto.Resolution.BaseId,
-                dto.Resolution.DeltaGeneration,
-                dto.Resolution.ExactAtGeneration,
-                dto.Resolution.GapLowerBound,
-                dto.Resolution.ExactGapRows,
-                dto.Resolution.ExactGapFiles);
 
         return new StoreRequestResult(
             dto.ReportSchemaVersion.Value,
@@ -624,7 +613,6 @@ public sealed class JulieStoreClient : IJulieStoreClient
                 manifest.Hash,
                 ParseManifestDisposition(manifest.Disposition)),
             new StoreRowCounts(rowCounts.FileVersions, rowCounts.L1, rowCounts.L2, rowCounts.L3),
-            resolution,
             dto.Export is null
                 ? null
                 : new StoreExportResult(
@@ -786,14 +774,6 @@ public sealed class JulieStoreClient : IJulieStoreClient
         "reused" => StoreManifestDisposition.Reused,
         "not_published" => StoreManifestDisposition.NotPublished,
         _ => throw ContractFailure($"Unknown manifest disposition '{value ?? "null"}'."),
-    };
-
-    private static StoreResolutionState ParseResolutionState(string? value) => value switch
-    {
-        "unbound" => StoreResolutionState.Unbound,
-        "converging" => StoreResolutionState.Converging,
-        "exact" => StoreResolutionState.Exact,
-        _ => throw ContractFailure($"Unknown resolution state '{value ?? "null"}'."),
     };
 
     private static StoreCoordinatorDisposition ParseCoordinator(string? value) => value switch

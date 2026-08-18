@@ -53,8 +53,9 @@ Miller pending under-resolutions: two `Scan` rows at versions 2152 and 2153, que
 Multi-workspace eviction (`RevisionFactCacheStore` at 100 MB): Miller cache 29.9 MB, then
 aspnetcore load evicted it. Scope count 1. Resident 134.7 MB.
 
-Pinned `julie-extract store --help` still lists `resolve`. The Scale parity test skips with
-that reason when a later pin drops the verb.
+These measurements ran against the 2.33.7 pin, whose `store --help` still listed `resolve`.
+The Phase 3 pin bump to 2.34.0 removed the verb, so the Scale parity test now skips with
+that reason; this recorded ground truth stands as the parity evidence.
 
 ## Commands
 

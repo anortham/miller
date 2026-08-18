@@ -569,8 +569,6 @@ public sealed class StoreWorkspaceCoordinatorTests
     {
         var client = new RecordingStoreClient(
             StoreOperation.Update,
-            importResolutionState: StoreResolutionState.Exact,
-            importExactAtMatches: true,
             allowedOperations: [StoreOperation.Update, StoreOperation.Resolve]);
         var snapshots = new Queue<StoreWorkspaceState>(
         [
@@ -727,9 +725,7 @@ public sealed class StoreWorkspaceCoordinatorTests
         var phases = new RecordingPhaseSink();
         var client = new RecordingStoreClient(
             StoreOperation.Import,
-            manifestDisposition: StoreManifestDisposition.Reused,
-            importResolutionState: StoreResolutionState.Exact,
-            importExactAtMatches: true);
+            manifestDisposition: StoreManifestDisposition.Reused);
         var snapshots = new Queue<StoreWorkspaceState>(
         [
             new(41, "l1"),
@@ -817,9 +813,7 @@ public sealed class StoreWorkspaceCoordinatorTests
     {
         var client = new RecordingStoreClient(
             StoreOperation.Import,
-            manifestDisposition: StoreManifestDisposition.Reused,
-            importResolutionState: StoreResolutionState.Exact,
-            importExactAtMatches: false);
+            manifestDisposition: StoreManifestDisposition.Reused);
         var snapshots = new Queue<StoreWorkspaceState>(
         [
             new(41, "l1"),
@@ -1337,8 +1331,6 @@ public sealed class StoreWorkspaceCoordinatorTests
         int exitCode = 0,
         string failureClass = "none",
         StoreRequestState? stateOverride = null,
-        StoreResolutionState importResolutionState = StoreResolutionState.Unbound,
-        bool importExactAtMatches = false,
         Queue<StoreRequestState>? stateOverrides = null,
         StoreOperation[]? allowedOperations = null,
         string? failureMessage = null) : IJulieStoreClient
@@ -1391,17 +1383,6 @@ public sealed class StoreWorkspaceCoordinatorTests
                 new StoreLevelCompletion(true, level == StoreLevel.Full, level == StoreLevel.Full),
                 new StoreManifestResult(1, "manifest-hash", manifestDisposition),
                 new StoreRowCounts(1, 1, level == StoreLevel.Full ? 1 : 0, level == StoreLevel.Full ? 1 : 0),
-                request.Operation == StoreOperation.Resolve
-                    ? new StoreResolutionResult(StoreResolutionState.Exact, true, "base", 1, 1, 0, 0, 0)
-                    : new StoreResolutionResult(
-                        importResolutionState,
-                        importExactAtMatches,
-                        importResolutionState == StoreResolutionState.Exact ? "base" : null,
-                        importResolutionState == StoreResolutionState.Exact ? 1 : null,
-                        importResolutionState == StoreResolutionState.Exact ? 1 : null,
-                        null,
-                        null,
-                        null),
                 null,
                 durable ? StoreCoordinatorDisposition.Committed : StoreCoordinatorDisposition.Failed,
                 new StoreFailure(

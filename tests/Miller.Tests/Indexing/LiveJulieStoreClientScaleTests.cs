@@ -13,7 +13,7 @@ public sealed class LiveJulieStoreClientScaleTests : IDisposable
         "miller-store-client-" + Guid.NewGuid().ToString("N"));
 
     [Fact]
-    public void ImportUpdateResolveExportDeleteAndIdempotentRetryRoundTrip()
+    public void ImportUpdateExportDeleteAndIdempotentRetryRoundTrip()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
         string root = Path.Combine(_directory, "root");
@@ -65,9 +65,6 @@ public sealed class LiveJulieStoreClientScaleTests : IDisposable
             Controls("update-a", "update-key"),
             scan), cancellationToken);
         string exportPath = Path.Combine(_directory, "view-a.db");
-        ScaleTestSupport.RunJulie(
-            binary,
-            "store", "resolve", "--store", store, "--view", "view-a", "--json");
         StoreRequestResult exported = client.Submit(new StoreExportRequest(
             store,
             family,
