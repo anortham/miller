@@ -68,8 +68,9 @@ failures, and the served view went stale.
   Verified end-to-end against a copy of the wedged production store: the released
   2.34.0 binary conflicts, the fixed binary commits and reaps the rows.
 - **Release implication: Miller must NOT release with the 2.34.0 pin.** Any
-  existing user workspace store would wedge exactly this way on upgrade. Wait for
-  a julie-extract release carrying the reap fix (2.34.1) and re-pin first.
+  existing user workspace store would wedge exactly this way on upgrade.
+  RESOLVED 2026-08-18: julie-extract v2.34.1 shipped the reap fix and Miller
+  re-pinned to it (`2026-08-18-julie-extract-2.34.1-adoption.md`).
 
 ## Verification
 
