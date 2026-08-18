@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Indexing.Resolution;
 using Miller.Indexing.Semantic;
 using Miller.Server.Git;
 using Miller.Server.Tools;
@@ -206,6 +207,7 @@ public static class MillerServiceRegistration
         services.AddSingleton<WorkspaceOpenPrimeService>();
         services.AddHostedService(sp => sp.GetRequiredService<WorkspaceOpenPrimeService>());
         services.AddSingleton<SupplementalEdgeCache>();
+        services.AddSingleton<RevisionFactCacheStore>();
         services.AddTransient<WorkspaceIndexProvider>();
         services.AddTransient<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceArtifactProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
