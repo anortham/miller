@@ -160,6 +160,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the `patterns` MCP/CLI surface.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
 - [`release-notes/v1.20.0.md`](release-notes/v1.20.0.md) - latest stable release notes: query-time reference resolution, an 8.9% smaller artifact, in-place store migration, dead-code candidates removed, and the `julie-extract 2.34.1` producer pin.
+- [`findings/2026-08-18-v1.20.0-release-verification.md`](findings/2026-08-18-v1.20.0-release-verification.md) - live `v1.20.0` release verification: four-platform package validation, promotion, archive checksums, and smoke evidence.
 - [`release-notes/v1.19.6.md`](release-notes/v1.19.6.md) - previous stable: skip startup delta on extractor upgrade, retryable resolution-target misses, and the `julie-extract 2.33.7` producer pin.
 - [`findings/2026-08-18-v1.19.6-release-verification.md`](findings/2026-08-18-v1.19.6-release-verification.md) - live `v1.19.6` release verification: four-platform package validation, promotion, archive checksums, and smoke evidence.
 - [`release-notes/v1.19.5.md`](release-notes/v1.19.5.md) - previous stable: idle-quiet after index, skip resolve for docs saves, WAL truncate, and the `julie-extract 2.33.6` producer pin.
