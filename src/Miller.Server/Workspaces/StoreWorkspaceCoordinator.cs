@@ -87,10 +87,17 @@ public sealed class StoreWorkspaceOperationException(
         && message.Contains("coordinator quantum took", StringComparison.Ordinal)
         && message.Contains("maximum is", StringComparison.Ordinal);
 
+    internal static bool IsResolutionTargetNotVisible(string? message) =>
+        !string.IsNullOrEmpty(message)
+        && message.Contains("resolution target", StringComparison.Ordinal)
+        && message.Contains("is not visible", StringComparison.Ordinal);
+
     internal static bool IsRetryableFailure(StoreFailureClass failureClass, string? message) =>
         string.Equals(failureClass.Code, CoordinatorQuantumFailureCode, StringComparison.Ordinal)
         || string.Equals(failureClass.Code, "request_not_terminal", StringComparison.Ordinal)
-        || IsCoordinatorQuantumTimeout(message);
+        || IsCoordinatorQuantumTimeout(message)
+        || (string.Equals(failureClass.Code, "resolution_failed", StringComparison.Ordinal)
+            && IsResolutionTargetNotVisible(message));
 }
 
 public sealed class StoreWorkspaceCoordinator : IExtractOps

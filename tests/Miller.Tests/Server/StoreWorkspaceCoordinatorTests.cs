@@ -119,6 +119,58 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void AResolutionTargetNotVisibleFailedRequestIsRetryable()
+    {
+        const string missing =
+            "resolution_failed: resolution artifact error: resolution target (854, 02212562fcd58c23875c7998783016be) is not visible";
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            exitCode: 1,
+            failureClass: "resolution_failed",
+            failureMessage: missing,
+            stateOverride: StoreRequestState.Failed);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => new StoreWorkspaceState(41, "full"),
+            () => "request-a");
+
+        StoreWorkspaceOperationException failure = Assert.Throws<StoreWorkspaceOperationException>(
+            () => coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs")));
+
+        Assert.Equal("resolution_failed", failure.FailureClass.Code);
+        Assert.True(failure.IsRetryable);
+        Assert.True(StoreWorkspaceOperationException.IsRetryableProducerFailure(failure));
+    }
+
+    [Fact]
+    public void AResolutionTargetNotVisibleMessageOnADifferentFailureClassIsNotRetryable()
+    {
+        const string missing =
+            "resolution_failed: resolution artifact error: resolution target (854, 02212562fcd58c23875c7998783016be) is not visible";
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            exitCode: 1,
+            failureClass: "producer_timeout",
+            failureMessage: missing,
+            stateOverride: StoreRequestState.Failed);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => new StoreWorkspaceState(41, "full"),
+            () => "request-a");
+
+        StoreWorkspaceOperationException failure = Assert.Throws<StoreWorkspaceOperationException>(
+            () => coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs")));
+
+        Assert.Equal("producer_timeout", failure.FailureClass.Code);
+        Assert.False(failure.IsRetryable);
+        Assert.False(StoreWorkspaceOperationException.IsRetryableProducerFailure(failure));
+    }
+
+    [Fact]
     public void AQuantumTimeoutFailedRequestIsRetryableAndKeepsThePriorView()
     {
         const string quantum = "coordinator quantum took 4359 ms; maximum is 4000 ms";

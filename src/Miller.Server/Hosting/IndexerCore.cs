@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server.Logging;
+using Miller.Server.Workspaces;
 
 namespace Miller.Server.Hosting;
 
@@ -441,6 +442,16 @@ public sealed class IndexerCore
             // branch ALSO fires for non-julie exceptions (a JSON parse error), whose stderr tail is empty — only
             // attach the "julie stderr:" label when there is actually a tail, so a non-julie failure does not log
             // a dangling label asserting a julie context that is false.
+            if (StoreWorkspaceOperationException.IsRetryableProducerFailure(ex))
+            {
+                _logger?.LogInformation(
+                    ex,
+                    "extract op {Op} hit a retryable producer miss; keeping the prior index and " +
+                    "retrying on the next scan.",
+                    Describe(op));
+                return (false, ex);
+            }
+
             var described = ExtractErrorLog.Describe(ex);
             if (described.StderrTail.Length == 0)
             {

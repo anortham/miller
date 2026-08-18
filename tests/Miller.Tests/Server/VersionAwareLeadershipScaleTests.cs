@@ -30,8 +30,8 @@ public sealed class VersionAwareLeadershipScaleTests
 
     /// <summary>
     /// Real <see cref="JulieExtractOps"/> wrapped with scan recording: captures each scan's force flag (the
-    /// D3 proof is the <c>[delta:false, upgrade:true]</c> sequence) and signals once N scans completed so the
-    /// test can wait on the background service deterministically.
+    /// D3 proof is the upgrade-only scan when the artifact predates the bundled extractor) and signals once
+    /// N scans completed so the test can wait on the background service deterministically.
     /// </summary>
     private sealed class RecordingRealOps : IExtractOps
     {
@@ -152,7 +152,7 @@ public sealed class VersionAwareLeadershipScaleTests
             bBootstrap.SeedForTest(
                 workspace,
                 new IndexHolder(MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()), builtRevision: 0));
-            var bOps = new RecordingRealOps(JulieExtractOps.Create(canonicalRoot, db, runner)) { SignalAtScanCount = 2 };
+            var bOps = new RecordingRealOps(JulieExtractOps.Create(canonicalRoot, db, runner));
             int bAcquireWins = 0;
             var instanceB = new IndexerService(
                 bBootstrap,
@@ -207,17 +207,17 @@ public sealed class VersionAwareLeadershipScaleTests
                 observed.Add(ExtractBinaryVersionReader.TryRead(db));
 
                 // --- 6. B claims through the production path: StartAsync's claim loop wins the real lock,
-                // records its identity, runs the startup delta scan, and — because the artifact predates its
-                // extractor — exactly ONE forced upgrade rescan with the real binary.
+                // records its identity, and — because the artifact predates its extractor — skips the
+                // startup delta and runs exactly ONE forced upgrade rescan with the real binary.
                 await instanceB.StartAsync(CancellationToken.None);
                 try
                 {
                     Assert.True(
                         bOps.ScansReached.Wait(120_000, CancellationToken.None),
-                        "instance B should run the startup delta scan plus the forced upgrade rescan");
+                        "instance B should run only the forced upgrade rescan");
                     Assert.True(instanceB.IsLeader);
                     Assert.Equal(1, bAcquireWins);
-                    Assert.Equal(new[] { false, true }, bOps.ScanForce);
+                    Assert.Equal(new[] { true }, bOps.ScanForce);
 
                     LeaderIdentity? identity = LeaderIdentityFile.TryRead(millerDir);
                     Assert.NotNull(identity);
