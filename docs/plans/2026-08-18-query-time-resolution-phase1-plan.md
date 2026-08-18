@@ -237,13 +237,13 @@ Second loader, same cache: `RevisionFactCache.LoadFromArtifact(SqliteConnection 
 **Approach:** `Advance` diffs old vs new visible manifest by path → version_id; unchanged versions keep their interned rows. IMPORTANT exception to file-local invalidation: an import's `module_version` depends on MANIFEST MEMBERSHIP, not just the importing file — adding or deleting `foo.ts` changes an unchanged importer's binding (contract §imports, candidate-path rules). So the cache holds a resident path→version index, and `Advance` rebuilds that index and recomputes `module_version` for EVERY import binding whenever manifest membership changed (imports are a small resident set; this is cheap and correct), while symbols/type facts/propagation stay file-local. Cover with add/remove-file and extension-precedence tests. Propagation index stores only located (identifier ← pending/relationship row) links; Task 4 resolves pendings on demand. Test invalidation with a fixture that advances one file and asserts other versions' array segments are reused (reference-equal or counter-based proof).
 
 **Acceptance criteria:**
-- [ ] Cache answers match direct SQL on a fixture store for every `IResolutionFacts` member
-- [ ] Artifact-schema loader answers match direct SQL on a legacy-artifact fixture
-- [ ] Advancing one file reloads only that version's facts and propagation entries; adding/removing a file recomputes import `module_version` bindings corpus-wide
-- [ ] `GetOrAdvance` keeps exactly one current revision per scope and enforces the process byte budget (eviction tested)
-- [ ] Identifier rows are provably not resident (no identifier collection field on the cache)
-- [ ] EARLY MEMORY CHECKPOINT (hard gate before Task 4 starts): load the aspnetcore-scale snapshot (`/tmp/qtr-aspnet-snapshot/`, 553k symbols) through the real loader and record TOTAL process memory after load + a query pass — the budget is whole-host idle ≤350 MB / peak ≤600 MB (`docs/plans/2026-08-13-miller-performance-recovery-plan.md`), not cache-only. A miss is a stop-and-report, not a note
-- [ ] Worker-scope verification passes; worker commits owned files (serial-worker-commit)
+- [x] Cache answers match direct SQL on a fixture store for every `IResolutionFacts` member
+- [x] Artifact-schema loader answers match direct SQL on a legacy-artifact fixture
+- [x] Advancing one file reloads only that version's facts and propagation entries; adding/removing a file recomputes import `module_version` bindings corpus-wide
+- [x] `GetOrAdvance` keeps exactly one current revision per scope and enforces the process byte budget (eviction tested)
+- [x] Identifier rows are provably not resident (no identifier collection field on the cache)
+- [x] EARLY MEMORY CHECKPOINT (hard gate before Task 4 starts): load the aspnetcore-scale snapshot (`/tmp/qtr-aspnet-snapshot/`, 553k symbols) through the real loader and record TOTAL process memory after load + a query pass — the budget is whole-host idle ≤350 MB / peak ≤600 MB (`docs/plans/2026-08-13-miller-performance-recovery-plan.md`), not cache-only. A miss is a stop-and-report, not a note
+- [x] Worker-scope verification passes; worker commits owned files (serial-worker-commit)
 
 ### Task 4: Swap the read seams to the resolver; delete resolution-state gating
 
