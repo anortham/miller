@@ -65,6 +65,9 @@ public sealed class LiveJulieStoreClientScaleTests : IDisposable
             Controls("update-a", "update-key"),
             scan), cancellationToken);
         string exportPath = Path.Combine(_directory, "view-a.db");
+        ScaleTestSupport.RunJulie(
+            binary,
+            "store", "resolve", "--store", store, "--view", "view-a", "--json");
         StoreRequestResult exported = client.Submit(new StoreExportRequest(
             store,
             family,

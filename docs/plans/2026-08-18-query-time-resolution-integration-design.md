@@ -1,7 +1,6 @@
 # Query-time resolution integration design
 
-Date: 2026-08-18. Status: DRAFT — user approved the direction ("this is going to have to change");
-implementation waits on the aspnetcore-scale spike gates. Evidence:
+Date: 2026-08-18. Status: phase 1 executed. Evidence:
 [whole-stack assessment](../findings/2026-08-18-whole-stack-architecture-assessment.md),
 [spike results](../findings/2026-08-18-query-time-resolution-spike.md)
 (branch `prototype/query-time-resolution`), active goldfish brief.

@@ -26,13 +26,19 @@ orchestration.
 
 The versioned family store is a shared contract between `julie-extract` and Miller, but **both repos have the
 same owner and neither side is off-limits**. In normal operation `julie-extract` writes `store.db`, `coord.db`,
-manifests, resolution bases, and generation files while Miller reads a pinned view and writes its own derived
+manifests, and generation files while Miller reads a pinned view and writes its own derived
 sidecars — keep that split because it keeps the design clean, not because the files are sacred. When the store
 or coordinator is wedged (a stranded `claimed` row, a stale lease, a corrupt generation), **repair it directly
 and fix the root cause in whichever repo owns it.** Do not stall a diagnosis or leave a broken index in place
 out of deference to the boundary. Store mode is default-on when `MILLER_INDEX_STORE` is unset or blank.
 `MILLER_INDEX_STORE=off` exports the current view to the legacy standalone artifact before serving it; Miller
 must never fall back to a stale legacy artifact.
+
+Miller answers references at query time. `QueryTimeResolver` applies resolution policy v6 to the visible
+fact tables. `RevisionFactCache` keeps packed symbols, type facts, imports, and the propagation index
+for the pinned generation. Identifiers stay on disk and stream per query. Miller does not submit
+`store resolve`. It ignores julie resolution bases, deltas, and `identifier_resolutions` until Phase 2/3
+removes those artifacts.
 (2026-07-06 consensus, Eros not shipping: Miller absorbed the deterministic signals/hotspot workflows —
 see `docs/plans/2026-07-06-miller-standalone-bolstering-assessment.md`. Dead-code candidates were
 REMOVED on 2026-08-18 (user decision; retired contract `docs/contracts/references-candidates-v1.md`).

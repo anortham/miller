@@ -5,6 +5,10 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [`findings/2026-08-18-query-time-resolution-phase1-gates.md`](findings/2026-08-18-query-time-resolution-phase1-gates.md) - Phase 1 hard-gate numbers: fixture and snapshot parity, aspnetcore warm p95, whole-host memory, and save-to-answer.
+- [`contracts/resolution-policy-v6.md`](contracts/resolution-policy-v6.md) - query-time resolution policy v6: tier chains, confidence, and span locate rules.
+- [`plans/2026-08-18-query-time-resolution-integration-design.md`](plans/2026-08-18-query-time-resolution-integration-design.md) - query-time resolution design; Phase 1 executed.
+- [`findings/2026-08-18-query-time-resolution-spike.md`](findings/2026-08-18-query-time-resolution-spike.md) - prototype parity and latency that justified Phase 1.
 - [`findings/2026-08-17-skip-resolve-no-keys.md`](findings/2026-08-17-skip-resolve-no-keys.md) - a save with empty journal names restores the exact fence and skips family-store resolve.
 - [`plans/2026-08-17-idle-quiet-after-index-design.md`](plans/2026-08-17-idle-quiet-after-index-design.md) - after the index is current, stop opening the multi-GB family store on the 500 ms poll and checkpoint the leftover WAL.
 - [`plans/2026-08-17-windows-dogfood-read-availability-plan.md`](plans/2026-08-17-windows-dogfood-read-availability-plan.md) - keep search and named inspect serving while store resolution runs in the background, and fix the v1.19.4 native-Windows dogfood defects.

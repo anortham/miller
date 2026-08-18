@@ -4,11 +4,13 @@ using Microsoft.Data.Sqlite;
 using Miller.Core.Resolution;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Resolution;
+using Miller.Tests.Indexing;
 using Xunit;
 
 namespace Miller.Tests.Indexing.Resolution;
 
 [Trait("Category", "Scale")]
+[Collection(QueryTimeResolutionSnapshotCollection.Name)]
 public sealed class RevisionFactCacheMemoryTests(ITestOutputHelper output)
 {
     public const string SnapshotDirectory = "/tmp/qtr-aspnet-snapshot";
@@ -78,6 +80,13 @@ public sealed class RevisionFactCacheMemoryTests(ITestOutputHelper output)
             peakPss,
             idleManaged,
             cache.ResidentBytes);
+
+        Assert.True(cache.ResidentBytes < IdleBudgetBytes, $"Cache resident {cache.ResidentBytes} exceeded {IdleBudgetBytes}.");
+        if (baselinePss > 80L * 1024 * 1024)
+        {
+            output.WriteLine("absolute PSS not asserted; testhost baseline already {0}", baselinePss);
+            return;
+        }
 
         Assert.True(
             idlePss <= IdleBudgetBytes,

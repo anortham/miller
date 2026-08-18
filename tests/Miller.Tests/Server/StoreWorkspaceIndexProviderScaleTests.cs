@@ -11,6 +11,7 @@ using Miller.Server.Hosting;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
+using Miller.Tests.Indexing.Resolution;
 using System.Text.Json;
 using Xunit;
 
@@ -414,6 +415,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 binary,
                 "scan", "--root", root, "--db", artifact, "--level", "full", "--jobs", "1", "--json");
 
+            StoreWorkspacePointerDocument? pointer = null;
             using (var first = new IndexBootstrapService(
                        NullLogger<IndexBootstrapService>.Instance,
                        storeEnabled: static () => true))
@@ -429,7 +431,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                     first.Index.Search("BootstrapCalculator", 10),
                     symbol => symbol.Document.Name == "BootstrapCalculator");
                 Assert.True(File.Exists(artifact));
-                StoreWorkspacePointerDocument pointer = Assert.IsType<StoreWorkspacePointerDocument>(
+                pointer = Assert.IsType<StoreWorkspacePointerDocument>(
                     StoreWorkspacePointer.Read(root));
                 Assert.True(File.Exists(Path.Combine(pointer.StoreRoot, "CURRENT")));
 
@@ -514,6 +516,10 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                     symbol => symbol.Document.Name == "BootstrapCalculator");
             }
 
+            Assert.NotNull(pointer);
+            ScaleTestSupport.RunJulie(
+                binary,
+                "store", "resolve", "--store", pointer.StoreRoot, "--view", pointer.ViewId, "--json");
             using (var legacy = new IndexBootstrapService(
                        NullLogger<IndexBootstrapService>.Instance,
                        storeEnabled: static () => false))
@@ -867,20 +873,8 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
     private static IReadOnlyList<string> ReadResolutionRows(IWorkspaceReadSession session) =>
         session.Read(connection =>
         {
-            using SqliteCommand command = connection.CreateCommand();
-            command.CommandText =
-                """
-                SELECT identifier_id||'|'||COALESCE(target_symbol_id,'')||'|'||
-                       COALESCE(CAST(tier AS TEXT),'')||'|'||COALESCE(method,'')||'|'||outcome||'|'||
-                       COALESCE(CAST(candidates AS TEXT),'')
-                FROM identifier_resolutions
-                ORDER BY identifier_id
-                """;
-            using SqliteDataReader reader = command.ExecuteReader();
-            var rows = new List<string>();
-            while (reader.Read())
-                rows.Add(reader.GetString(0));
-            return rows;
+            QueryTimeResolutionReader reader = ReferenceEvidenceReader.ReaderFor(session, connection);
+            return QueryTimeResolutionParity.SerializeExport(reader, connection);
         });
 
     private static string Encode(string value) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value));
