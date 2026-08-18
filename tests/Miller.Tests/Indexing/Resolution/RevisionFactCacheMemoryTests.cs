@@ -8,6 +8,7 @@ using Xunit;
 
 namespace Miller.Tests.Indexing.Resolution;
 
+[Trait("Category", "Scale")]
 public sealed class RevisionFactCacheMemoryTests(ITestOutputHelper output)
 {
     public const string SnapshotDirectory = "/tmp/qtr-aspnet-snapshot";
