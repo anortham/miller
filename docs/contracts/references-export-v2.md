@@ -24,8 +24,8 @@ Each JSON object has these fields in this order:
 | `target_symbol_kind` | string or null | Resolved target symbol kind. |
 | `target_symbol_is_test` | boolean or null | Typed producer test evidence for the target symbol. |
 | `resolution_status` | string enum | Exactly `resolved` when `target_symbol_id` is non-null; otherwise `unresolved`. |
-| `resolution_tier` | integer or null | Minimum non-null producer resolution tier among evidence for the assertion. |
-| `confidence` | number | Maximum producer confidence among evidence for the assertion. |
+| `resolution_tier` | integer or null | Minimum non-null resolution tier among evidence for the assertion, computed at query time by resolution policy v6. |
+| `confidence` | number | Maximum confidence among evidence for the assertion, computed at query time by resolution policy v6. |
 | `provenance` | array of strings | Distinct evidence sources in precedence order: `identifier_resolution`, `relationship`, `pending_resolution`, `name_fallback`. `identifier_direct` is retired — see below. |
 | `artifact_id` | string or null | Producer artifact identity from `artifact_metadata`. |
 | `workspace_revision` | integer or null | Maximum extraction revision when present. |
@@ -35,8 +35,8 @@ Each JSON object has these fields in this order:
 adds a field without moving, renaming, or reshaping any field above it, so every documented field keeps its
 documented position and line-by-line parsers are unaffected.
 
-It exists because this export degrades PARTIALLY. Its query unions `identifiers`, `identifier_resolutions`,
-`relationships`, and `pending_relationships`; a symbols-level scan leaves the first two EMPTY while the rest
+It exists because this export degrades PARTIALLY. Its rows derive from `identifiers`, `relationships`, and
+`pending_relationships`, resolved at query time; a symbols-level scan leaves `identifiers` EMPTY while the rest
 stay populated. The feed therefore keeps emitting plausible rows while silently omitting every
 identifier-derived assertion: the `provenance` value `identifier_resolution` cannot appear at all. A consumer reading stdout alone has no other way to tell that stream from a complete one, since
 the absence of a provenance value is not evidence that the underlying references do not exist. Treat
@@ -46,8 +46,8 @@ the absence of a provenance value is not evidence that the underlying references
 ### `identifier_direct` is retired
 
 `identifier_direct` marked an assertion read from the denormalized `identifiers.target_symbol_id` column.
-julie-extract schema 6 drops that column, so resolution outcomes live only in `identifier_resolutions` and
-Miller reads them only from there. Every identifier-derived resolved assertion now reports
+julie-extract schema 6 drops that column, and Miller now computes identifier resolution outcomes at query
+time (resolution policy v6) rather than reading materialized resolution tables. Every identifier-derived resolved assertion now reports
 `identifier_resolution`; an identifier with no resolution target reports `name_fallback`, matching how an
 unresolved `pending_relationships` row is already reported.
 
@@ -56,7 +56,7 @@ the label, not which references are reported. It also FIXES `resolution_tier` fo
 retired `identifier_direct` evidence carried a null tier and outranked the resolution evidence in precedence,
 which masked the producer's real tier on every resolved identifier.
 
-Rows from identifiers, relationships, and resolution overlays are assertions about the same canonical site.
+Rows from identifiers, relationships, and pendings are assertions about the same canonical site.
 Miller groups them by `reference_site_id`, target, and canonical kind; it does not deduplicate by overlapping
 consumer spans or fabricate site identity.
 

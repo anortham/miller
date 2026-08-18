@@ -328,8 +328,8 @@ unaffected; a consumer that wants the degradation signal reads stderr or gates o
 are never warned.
 
 `miller references export` warns on stderr the same way, with its own wording, because it degrades differently:
-its query unions `identifiers`, `identifier_resolutions`, `relationships`, and `pending_relationships`, and a
-symbols-level scan empties the first two while leaving the rest populated. The feed therefore stays NON-EMPTY
+its rows derive from `identifiers`, `relationships`, and `pending_relationships`, resolved at query time, and a
+symbols-level scan empties `identifiers` while leaving the rest populated. The feed therefore stays NON-EMPTY
 and silently omits every identifier-derived reference — a partial answer that looks complete, which stderr
 alone cannot fix for a consumer streaming stdout. So this feed ALSO carries the signal in-band: every emitted
 row has an `index_level` field (`symbols` or `full`). Exit code stays `0`, stdout stays a pure JSONL stream, and

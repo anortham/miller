@@ -740,7 +740,6 @@ public sealed class JulieStoreClient : IJulieStoreClient
         StoreOperation.Import => "import",
         StoreOperation.Update => "update",
         StoreOperation.Delete => "delete",
-        StoreOperation.Resolve => "resolve",
         StoreOperation.Export => "export",
         _ => throw new ArgumentOutOfRangeException(nameof(operation)),
     };

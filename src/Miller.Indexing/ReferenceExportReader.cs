@@ -213,33 +213,14 @@ public static class ReferenceExportReader
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    private static string CanonicalKind(string kind) => kind switch
-    {
-        "calls" => "call",
-        "imports" => "import",
-        "references" => "reference",
-        "uses" => "usage",
-        _ => kind,
-    };
-
     private static int EvidencePrecedence(string source) => source switch
     {
-        "identifier_direct" => 0,
-        "identifier_resolution" => 1,
-        "relationship" => 2,
-        "pending_resolution" => 3,
-        "name_fallback" => 4,
-        _ => 5,
+        "identifier_resolution" => 0,
+        "relationship" => 1,
+        "pending_resolution" => 2,
+        "name_fallback" => 3,
+        _ => 4,
     };
-
-    private static string? ReadString(SqliteDataReader reader, int ordinal) =>
-        reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
-
-    private static long? ReadInt64(SqliteDataReader reader, int ordinal) =>
-        reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
-
-    private static bool? ReadBool(SqliteDataReader reader, int ordinal) =>
-        reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal) != 0;
 
     private static void WriteNullableString(Utf8JsonWriter writer, string name, string? value)
     {
