@@ -44,6 +44,33 @@ Miller-side adoption in the same change:
 | `x86_64-pc-windows-msvc` | `julie-extract-v2.34.0-x86_64-pc-windows-msvc.zip` | `b724f51fc044e531e4261b27dc99d53fa91b112628c6646ce2e18070f778a7e5` |
 | `x86_64-unknown-linux-gnu` | `julie-extract-v2.34.0-x86_64-unknown-linux-gnu.tar.gz` | `07804d3e82497a31a2aa874a04e5dc6dde0659a5b9cb83c74c0e514f41f251df` |
 
+## Dogfood incident: capability snapshot conflict on existing stores (RELEASE-BLOCKING)
+
+Dogfooding the pin on this machine's real family store wedged immediately: every
+import failed with `store_import_write_l1: capability snapshot conflict for
+extraction epoch 1`, Miller recorded 3 consecutive `IncrementalReconcile`
+failures, and the served view went stale.
+
+- Root cause (julie-extractors): 2.34.0 stopped declaring the 109
+  `reference_resolution.*` capability gap rows but kept
+  `EXTRACTION_IDENTITY_EPOCH = 1`. The writer's capability snapshot count check
+  (`sync_capability_snapshot`) then conflicts forever on any store written by an
+  earlier binary (old epoch-1 rows: 128 gaps; new snapshot: 19). Exports already
+  filter these rows; the import-side check did not.
+- Why no test caught it: every Miller Scale test and the off-mode smoke create
+  FRESH stores, which never carry the old rows. Only a store with pre-2.34.0
+  history conflicts.
+- Local repair (this machine, 2026-08-18): deleted the epoch-1 rows from the four
+  capability tables in the wedged `store.db`; the next import committed and the
+  workspace converged (fresh, vectors ready).
+- Root-cause fix (julie-extractors, commit `18bb7dbd`, unpushed): writer open now
+  reaps retired `reference_resolution.%` gap rows, mirroring the export filter.
+  Verified end-to-end against a copy of the wedged production store: the released
+  2.34.0 binary conflicts, the fixed binary commits and reaps the rows.
+- **Release implication: Miller must NOT release with the 2.34.0 pin.** Any
+  existing user workspace store would wedge exactly this way on upgrade. Wait for
+  a julie-extract release carrying the reap fix (2.34.1) and re-pin first.
+
 ## Verification
 
 - GitHub release facts, tag provenance, asset names, and four supplied SHA-256 values were checked before pinning.
