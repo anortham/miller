@@ -577,5 +577,8 @@ public sealed class MetricHistoryStoreTests : IDisposable
         Assert.Equal("{\"range\":\"default\"}", Convert.ToString(
             Scalar(c, "SELECT detail_json FROM snapshot_metrics WHERE metric='dead_code_candidate_count';"),
             CultureInfo.InvariantCulture));
+        Assert.Equal(5L, Convert.ToInt64(
+            Scalar(c, "SELECT value FROM snapshot_metrics WHERE metric='dead_code_candidate_count';"),
+            CultureInfo.InvariantCulture));
     }
 }

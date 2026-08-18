@@ -104,7 +104,6 @@ internal static class CliCapabilities
         "telemetry export --jsonl",
         "symbols export --jsonl",
         "references export --jsonl",
-        "references candidates --json",
         "complexity export --jsonl",
         "workspace status --json",
         "workspace health --json",
@@ -148,7 +147,6 @@ internal static class CliCapabilities
             "docs/contracts/impact-test-role-evidence-v1.md"),
         ("impact_mcp_output_page", "impact --json", 1,
             "docs/contracts/impact-mcp-output-page-v1.md"),
-        ("references_candidates", "references candidates --json", 1, "docs/contracts/references-candidates-v1.md"),
     ];
 
     /// <summary>
@@ -190,7 +188,6 @@ internal static class CliCapabilities
         sb.AppendLine($"symbol_search_sidecar: {(sidecar.Enabled ? "enabled" : "disabled")}");
         sb.AppendLine($"source_region_index: {(sidecar.RegionOptions.Enabled ? "enabled" : "disabled")}");
         sb.AppendLine("reference_aware_context: enabled");
-        sb.AppendLine("references_candidates: enabled");
         sb.AppendLine("features:");
         foreach (string feature in NegotiatedFeatures(
                      ImpactIndexRevisionDeltaActive,
@@ -260,7 +257,6 @@ internal static class CliCapabilities
             w.WriteNumber("source_region_max_bytes", sidecar.RegionOptions.MaxRegionBytes);
             w.WriteBoolean("content_corpus", true);
             w.WriteBoolean("reference_aware_context", true);
-            w.WriteBoolean("references_candidates", true);
             w.WriteBoolean("dashboard", true);
             w.WriteEndObject();
 

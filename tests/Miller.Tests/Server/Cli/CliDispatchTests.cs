@@ -4578,226 +4578,8 @@ public sealed class CliDispatchTests : IDisposable
         +  public User GetUser(int id) {
         """;
 
-    // ---------- references candidates (dead-code candidates surface, Task 3) ----------
-
-    private static JulieDbFixture.SymbolRow DeadMethod(
-        string id, string name, string path, string? visibility = "private", string? parentId = null,
-        string kind = "method", string language = "csharp", int startLine = 1)
-        => new(id, name, kind, language, path, $"sig {name}", startLine, parentId)
-        { Visibility = visibility, StartByte = 0, EndByte = 40 };
-
-    private static JulieDbFixture.IdentifierRow DeadIdent(
-        string id, string name, string path, string? containingSymbolId,
-        string language = "csharp", int startByte = 100, int endByte = 110)
-        => new(id, name, "call", language, path, 1, containingSymbolId) { StartByte = startByte, EndByte = endByte };
-
-    private static void DropTable(string dbPath, string table)
-    {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        { DataSource = dbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false, ForeignKeys = false }.ToString());
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = $"DROP TABLE {table};";
-        command.ExecuteNonQuery();
-    }
-
     [Fact]
-    public void ReferencesCandidates_Compact_ListsDeadPrivateSymbol_WithVerbatimResolverHeader()
-    {
-        using var fx = JulieDbFixture.Create(
-            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
-            new[] { DeadMethod("sym-cand", "UnusedHelper", "src/Helper.cs") },
-            // A benign csharp identifier so csharp coverage has IdentifierCount > 0 (else low_evidence_language fires).
-            identifiers: new[] { DeadIdent("id-benign", "SomethingElse", "src/Other.cs", null) });
-
-        var (code, outText, errText) = Run(
-            new[] { "references", "candidates" },
-            Context(fx.DbPath, fx.WorkspaceRoot));
-
-        Assert.Equal(0, code);
-        Assert.Empty(errText);
-        // The resolver clause is VERBATIM (Global Constraints), incl. the trailing period.
-        Assert.Contains(
-            "resolver: partial — candidates are facts to check, not deletions to make.",
-            outText);
-        Assert.Contains("candidates: 1 of 1 symbols examined", outText);
-        // One line per candidate.
-        Assert.Contains("UnusedHelper method csharp src/Helper.cs:1 private evidence=name", outText);
-        Assert.Contains("name_matches=0 resolved_in=0 pending_in=0 calls_in=0", outText);
-        // Footer: all nine suppression ids are named (each with a count).
-        foreach (var id in Miller.Core.DeadCode.DeadCodeCandidates.SuppressionRuleIds)
-            Assert.Contains(id + "=", outText);
-        Assert.Contains("literal_scan: files_scanned=", outText);
-        // Per-language coverage: csharp has 1 identifier, 0 resolved -> 0.0% (< 10%) -> name-evidence only.
-        Assert.Contains("csharp: 0.0%", outText);
-        Assert.Contains("name-evidence only", outText);
-    }
-
-    [Fact]
-    public void ReferencesCandidates_Json_EmitsEveryContractField()
-    {
-        using var fx = JulieDbFixture.Create(
-            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
-            new[] { DeadMethod("sym-cand", "UnusedHelper", "src/Helper.cs") },
-            identifiers: new[] { DeadIdent("id-benign", "SomethingElse", "src/Other.cs", null) },
-            revisions: new[] { new JulieDbFixture.RevisionRow(1), new JulieDbFixture.RevisionRow(2) });
-
-        var (code, outText, errText) = Run(
-            new[] { "references", "candidates", "--json" },
-            Context(fx.DbPath, fx.WorkspaceRoot));
-
-        Assert.Equal(0, code);
-        Assert.Empty(errText);
-        using JsonDocument doc = JsonDocument.Parse(outText);
-        JsonElement root = doc.RootElement;
-
-        Assert.Equal(1, root.GetProperty("schema_version").GetInt32());
-
-        JsonElement cand = Assert.Single(root.GetProperty("candidates").EnumerateArray());
-        Assert.Equal("sym-cand", cand.GetProperty("symbol_id").GetString());
-        Assert.Equal("UnusedHelper", cand.GetProperty("name").GetString());
-        Assert.Equal("method", cand.GetProperty("kind").GetString());
-        Assert.Equal("csharp", cand.GetProperty("language").GetString());
-        Assert.Equal("src/Helper.cs", cand.GetProperty("path").GetString());
-        Assert.Equal(1, cand.GetProperty("start_line").GetInt32());
-        Assert.Equal("private", cand.GetProperty("visibility").GetString());
-        Assert.Equal("name", cand.GetProperty("evidence_label").GetString());
-        JsonElement ev = cand.GetProperty("evidence");
-        Assert.Equal(0, ev.GetProperty("name_matches").GetInt32());
-        Assert.Equal(0, ev.GetProperty("resolved_inbound").GetInt32());
-        Assert.Equal(0, ev.GetProperty("pending_resolved_inbound").GetInt32());
-        Assert.Equal(0, ev.GetProperty("calls_inbound").GetInt32());
-
-        JsonElement supp = root.GetProperty("suppressions");
-        foreach (var id in Miller.Core.DeadCode.DeadCodeCandidates.SuppressionRuleIds)
-            Assert.True(supp.TryGetProperty(id, out _), $"missing suppression key {id}");
-
-        JsonElement scan = root.GetProperty("literal_scan");
-        Assert.True(scan.TryGetProperty("files_scanned", out _));
-        Assert.True(scan.TryGetProperty("files_skipped_stale", out _));
-
-        JsonElement cov = Assert.Single(
-            root.GetProperty("language_coverage").EnumerateArray(),
-            c => c.GetProperty("language").GetString() == "csharp");
-        Assert.Equal(1, cov.GetProperty("identifiers").GetInt32());
-        Assert.True(cov.TryGetProperty("resolved_pct", out _));
-
-        Assert.Equal(1, root.GetProperty("examined").GetInt32());
-
-        JsonElement art = root.GetProperty("artifact");
-        Assert.StartsWith("artifact-", art.GetProperty("artifact_id").GetString());
-        Assert.Equal(2, art.GetProperty("revision").GetInt64());
-        Assert.Equal("partial", art.GetProperty("reference_resolution_status").GetString());
-        Assert.Equal("6", art.GetProperty("reference_resolution_version").GetString());
-    }
-
-    [Fact]
-    public void ReferencesCandidates_Json_ResolvedPctIsZeroToHundredScaleOneDecimal()
-    {
-        // A language with exactly 10 identifiers, one of which resolves -> 1/10 -> 10.0% (NOT 0.1).
-        var identifiers = Enumerable.Range(0, 10)
-            .Select(n => DeadIdent($"id-py-{n}", $"pyref{n}", "app/x.py", null, language: "python",
-                startByte: 100 + (n * 10), endByte: 105 + (n * 10)))
-            .ToArray();
-
-        using var fx = JulieDbFixture.Create(
-            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
-            new[] { DeadMethod("sym-py", "PyHelper", "app/x.py", language: "python") },
-            identifiers: identifiers);
-        fx.AddIdentifierResolution("id-py-0", targetSymbolId: "sym-py", outcome: "resolved");
-
-        var (code, outText, errText) = Run(
-            new[] { "references", "candidates", "--json" },
-            Context(fx.DbPath, fx.WorkspaceRoot));
-
-        Assert.Equal(0, code);
-        Assert.Empty(errText);
-        using JsonDocument doc = JsonDocument.Parse(outText);
-        JsonElement python = Assert.Single(
-            doc.RootElement.GetProperty("language_coverage").EnumerateArray(),
-            c => c.GetProperty("language").GetString() == "python");
-        Assert.Equal(10, python.GetProperty("identifiers").GetInt32());
-        Assert.Equal(10.0, python.GetProperty("resolved_pct").GetDouble());
-    }
-
-    [Fact]
-    public void ReferencesCandidates_Limit_TruncatesCandidateListButNotTotals()
-    {
-        JulieDbFixture Build() => JulieDbFixture.Create(
-            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
-            new[]
-            {
-                DeadMethod("sym-a", "AlphaHelper", "src/A.cs"),
-                DeadMethod("sym-b", "BetaHelper", "src/B.cs"),
-                DeadMethod("sym-c", "GammaHelper", "src/C.cs"),
-            },
-            identifiers: new[] { DeadIdent("id-benign", "SomethingElse", "src/Other.cs", null) });
-
-        using (var fx = Build())
-        {
-            var (code, outText, errText) = Run(
-                new[] { "references", "candidates", "--limit", "1", "--json" },
-                Context(fx.DbPath, fx.WorkspaceRoot));
-
-            Assert.Equal(0, code);
-            Assert.Empty(errText);
-            using JsonDocument doc = JsonDocument.Parse(outText);
-            JsonElement root = doc.RootElement;
-            // The candidate list honours --limit (sorted by path, so src/A.cs is first).
-            JsonElement only = Assert.Single(root.GetProperty("candidates").EnumerateArray());
-            Assert.Equal("AlphaHelper", only.GetProperty("name").GetString());
-            // examined is a FULL total (never limited) — all three private methods were examined.
-            Assert.Equal(3, root.GetProperty("examined").GetInt32());
-        }
-
-        using (var fx = Build())
-        {
-            var (code, outText, _) = Run(
-                new[] { "references", "candidates", "--limit", "1" },
-                Context(fx.DbPath, fx.WorkspaceRoot));
-            Assert.Equal(0, code);
-            Assert.Contains("showing top 1 of 3 by path", outText);
-        }
-    }
-
-    [Fact]
-    public void ReferencesCandidates_IncompatibleExtractSchema_IsOperationalExitThree()
-    {
-        using var fx = JulieDbFixture.Create(
-            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
-            new[] { DeadMethod("sym-cand", "UnusedHelper", "src/Helper.cs") },
-            identifiers: new[] { DeadIdent("id-benign", "SomethingElse", "src/Other.cs", null) });
-        DowngradeArtifactSchema(fx.DbPath);
-
-        var (code, _, errText) = Run(
-            new[] { "references", "candidates" },
-            Context(fx.DbPath, fx.WorkspaceRoot));
-
-        // cli-eros-v1: an unusable index (schema mismatch) is an OPERATIONAL failure (exit 3), answered by a rebuild.
-        Assert.Equal(3, code);
-        Assert.Contains("references failed", errText);
-    }
-
-    [Fact]
-    public void ReferencesCandidates_V4MissingResolutionTable_IsOperationalExitThree()
-    {
-        using var fx = JulieDbFixture.Create(
-            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
-            new[] { DeadMethod("sym-cand", "UnusedHelper", "src/Helper.cs") },
-            identifiers: new[] { DeadIdent("id-benign", "SomethingElse", "src/Other.cs", null) });
-        // A v4-stamped artifact missing a hard-required resolution table (Task 2 reader validation) -> exit 3.
-        DropTable(fx.DbPath, "identifier_resolutions");
-
-        var (code, _, errText) = Run(
-            new[] { "references", "candidates" },
-            Context(fx.DbPath, fx.WorkspaceRoot));
-
-        Assert.Equal(3, code);
-        Assert.Contains("references failed", errText);
-    }
-
-    [Fact]
-    public void ReferencesExport_StillRoutesToJsonlExport_WhenOpIsNotCandidates()
+    public void ReferencesExport_StillRoutesToJsonlExport()
     {
         using var fx = JulieDbFixture.CreateForEdit();
 
@@ -4807,13 +4589,12 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Equal(0, code);
         Assert.Empty(errText);
-        // The export path emits one JSONL row per identifier (schema_version present, no candidates envelope).
         Assert.Contains("\"reference_site_id\":", outText);
         Assert.DoesNotContain("\"candidates\":", outText);
     }
 
     [Fact]
-    public void Capabilities_AdvertisesReferencesCandidatesSurface()
+    public void Capabilities_DoesNotAdvertiseReferencesCandidatesSurface()
     {
         var (jsonCode, jsonOut, _) = Run(
             new[] { "capabilities", "--json" }, Context(Path.Combine(_dir, "symbols.db")));
@@ -4821,23 +4602,20 @@ public sealed class CliDispatchTests : IDisposable
         using JsonDocument doc = JsonDocument.Parse(jsonOut);
         JsonElement root = doc.RootElement;
 
-        Assert.True(root.GetProperty("optional_features").GetProperty("references_candidates").GetBoolean());
-        Assert.Contains(
+        Assert.False(root.GetProperty("optional_features").TryGetProperty("references_candidates", out _));
+        Assert.DoesNotContain(
             "references candidates --json",
             root.GetProperty("json_commands").EnumerateArray().Select(x => x.GetString()));
-        JsonElement contract = Assert.Single(
+        Assert.DoesNotContain(
             root.GetProperty("json_contracts").EnumerateArray(),
             item => item.GetProperty("name").GetString() == "references_candidates");
-        Assert.Equal("references candidates --json", contract.GetProperty("command").GetString());
-        Assert.Equal(1, contract.GetProperty("schema_version").GetInt32());
-        Assert.Equal("docs/contracts/references-candidates-v1.md", contract.GetProperty("doc").GetString());
 
         var (compactCode, compactOut, _) = Run(
             new[] { "capabilities" }, Context(Path.Combine(_dir, "symbols.db")));
         Assert.Equal(0, compactCode);
-        Assert.Contains("references_candidates: enabled", compactOut);
-        Assert.Contains("references candidates --json", compactOut);
-        Assert.Contains("references-candidates-v1.md", compactOut);
+        Assert.DoesNotContain("references_candidates", compactOut);
+        Assert.DoesNotContain("references candidates --json", compactOut);
+        Assert.DoesNotContain("references-candidates-v1.md", compactOut);
     }
 
     [Fact]

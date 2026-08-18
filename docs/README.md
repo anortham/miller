@@ -129,7 +129,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`contracts/content-mcp-v3.md`](contracts/content-mcp-v3.md) - active 12 KiB MCP contract, revision-safe search/read, and CLI-only streaming export boundary.
 - [`contracts/references-export-v2.md`](contracts/references-export-v2.md) - active references/usage JSONL export contract (schema 2; requires julie-extract schema 5 / extract contract 4).
 - [`contracts/references-export-v1.md`](contracts/references-export-v1.md) - superseded schema-1 export contract, retained as a historical record.
-- [`contracts/references-candidates-v1.md`](contracts/references-candidates-v1.md) - experimental, evidence-gated dead-code candidate listing CLI contract (`references candidates`).
+- [`contracts/references-candidates-v1.md`](contracts/references-candidates-v1.md) - retired 2026-08-18. Historical `references candidates` contract; recorded `dead_code_*` history rows remain readable.
 - [`contracts/patterns-json-v1.md`](contracts/patterns-json-v1.md) - active compact and JSON contract for exact pattern coverage, query fan-out, grouping, ordering, budgets, and diagnostics.
 - [`contracts/metrics-json-v1.md`](contracts/metrics-json-v1.md) - active metrics JSON contract for churn, clone groups, and complexity ranking.
 - [`contracts/metrics-history-v1.md`](contracts/metrics-history-v1.md) - active metric-history JSON contract for `miller metrics history` trend reads over the append-only `history.db` sidecar.

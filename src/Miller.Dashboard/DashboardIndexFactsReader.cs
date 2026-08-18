@@ -11,11 +11,6 @@ public static class DashboardIndexFactsReader
 {
     private static readonly ContentCorpusSidecar ContentSidecar = new();
 
-    // The heavy-arm metric recorded by the dead-code-candidates command. That producer is a sibling task; there is
-    // no shared const in Miller.Indexing yet, so the literal string is pinned here next to the other metric names.
-    // Keep in step with the candidates arm's metric name when the shared const lands.
-    internal const string DeadCodeCandidateCountMetric = "dead_code_candidate_count";
-
     // The heavy-arm metric recorded by `metrics clones --near-duplicates` / `report --near-duplicates`. Count-level
     // only per ADR-0002: the dashboard plots how many Type-2 groups exist over time and never the groups themselves.
     internal const string NearDuplicateGroupCountMetric = "near_duplicate_group_count";
@@ -28,7 +23,6 @@ public static class DashboardIndexFactsReader
         (MetricSnapshotAggregates.ComplexityP90, "Complexity p90"),
         (MetricSnapshotAggregates.CloneGroupCount, "Clone groups"),
         (MetricSnapshotAggregates.MarkerTotal, "Markers"),
-        (DeadCodeCandidateCountMetric, "Dead-code candidates"),
         (NearDuplicateGroupCountMetric, "Near-duplicate groups"),
     };
 

@@ -34,15 +34,12 @@ out of deference to the boundary. Store mode is default-on when `MILLER_INDEX_ST
 `MILLER_INDEX_STORE=off` exports the current view to the legacy standalone artifact before serving it; Miller
 must never fall back to a stale legacy artifact.
 (2026-07-06 consensus, Eros not shipping: Miller absorbed the deterministic signals/hotspot workflows —
-see `docs/plans/2026-07-06-miller-standalone-bolstering-assessment.md`. Dead-code candidates SHIPPED as an
-evidence-gated CLI surface (`miller references candidates`, `docs/contracts/references-candidates-v1.md`); the
-gate PASSED 2026-07-07 with julie-extract 2.10.0 `variable_ref` emission (392 → 5 candidates, zero
-confirmed-live — `docs/findings/2026-07-07-dead-code-candidates-dogfood.md`); count-level report/dashboard
-surfacing of candidates (trend counts `dead_code_candidate_count` and suppressed totals) was APPROVED by the
-user 2026-07-07, while per-symbol candidate detail stays CLI-only and any new MCP tool still requires explicit
-approval per the MCP-stinginess rule. Metric history/trends SHIPPED as the P4 slice: an append-only `history.db`
-sidecar (hybrid converge/heavy-arm snapshots), the `miller metrics history` CLI verb
-(`docs/contracts/metrics-history-v1.md`), dashboard trend sparklines, and `workspace health` history status.)
+see `docs/plans/2026-07-06-miller-standalone-bolstering-assessment.md`. Dead-code candidates were
+REMOVED on 2026-08-18 (user decision; retired contract `docs/contracts/references-candidates-v1.md`).
+Recorded `dead_code_*` history rows stay readable via explicit `--metric`. Metric history/trends SHIPPED
+as the P4 slice: an append-only `history.db` sidecar (hybrid converge/heavy-arm snapshots), the
+`miller metrics history` CLI verb (`docs/contracts/metrics-history-v1.md`), dashboard trend sparklines,
+and `workspace health` history status.)
 Local semantic retrieval is PERMITTED in Miller per
 [`docs/adr/ADR-0003-semantic-retrieval-ownership.md`](docs/adr/ADR-0003-semantic-retrieval-ownership.md) and
 [`docs/plans/2026-07-19-miller-semantic-integration-design.md`](docs/plans/2026-07-19-miller-semantic-integration-design.md):

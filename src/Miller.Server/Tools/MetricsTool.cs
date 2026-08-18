@@ -13,8 +13,8 @@ namespace Miller.Server.Tools;
 
 /// <summary>
 /// The heavy-arm metric-history vocabulary shared across the commands that record snapshots
-/// (<c>miller report</c>, <c>metrics churn|risk</c>, <c>metrics clones --near-duplicates</c>,
-/// <c>references candidates</c>): the <c>snapshots.source</c>
+/// (<c>miller report</c>, <c>metrics churn|risk</c>, <c>metrics clones --near-duplicates</c>):
+/// the <c>snapshots.source</c>
 /// values and the heavy-only metric names, plus the tiny <c>detail_json</c> params builder those producers stamp.
 /// The cheap-arm names (<c>symbol_count</c>, <c>clone_group_count</c>, …) stay single-sourced on
 /// <see cref="MetricSnapshotAggregates"/>; only names the cheap arm does NOT emit live here so producer and the
@@ -26,15 +26,12 @@ internal static class MetricHistoryHeavyArm
     public const string ReportSource = "report";
     public const string ChurnSource = "churn";
     public const string RiskSource = "risk";
-    public const string CandidatesSource = "candidates";
     public const string ClonesSource = "clones";
 
     // Heavy-only metric names (the cheap arm never emits these; the Task 4/6 read surfaces key off them).
     public const string ChurnFilesChanged = "churn_files_changed";
     public const string RiskTopScore = "risk_top_score";
     public const string RiskRows = "risk_rows";
-    public const string DeadCodeCandidateCount = "dead_code_candidate_count";
-    public const string DeadCodeSuppressedTotal = "dead_code_suppressed_total";
     public const string NearDuplicateGroupCount = "near_duplicate_group_count";
 
     /// <summary>The canonical params stamped in <c>detail_json</c> so a churn/risk trend point is self-describing.</summary>
@@ -86,8 +83,9 @@ public static class MetricsTool
 
     /// <summary>
     /// The default metric set for <c>metrics history</c> when <c>--metric</c> is omitted: one cheap-arm rollup per
-    /// signal family (symbols, complexity, clones, markers) plus the dead-code heavy-arm count. Names are the
+    /// signal family (symbols, complexity, clones, markers). Names are the
     /// canonical producer consts so the read surface can never drift from what the write arms emit.
+    /// Historical <c>dead_code_*</c> rows remain readable via an explicit <c>--metric</c>.
     /// </summary>
     public static readonly IReadOnlyList<string> DefaultHistoryMetrics =
     [
@@ -95,7 +93,6 @@ public static class MetricsTool
         MetricSnapshotAggregates.ComplexityP90,
         MetricSnapshotAggregates.CloneGroupCount,
         MetricSnapshotAggregates.MarkerTotal,
-        MetricHistoryHeavyArm.DeadCodeCandidateCount,
     ];
 
     internal static MetricsToolResult Run(

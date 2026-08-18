@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
-using Miller.Core.DeadCode;
 using Miller.Core.Graph;
 using Miller.Core.References;
 using Miller.Core.Search;
@@ -128,10 +127,6 @@ public static class CliDispatch
                         "miller symbols export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
                         SymbolExportReader.WriteJsonLines);
                 case "references":
-                    // `references candidates` is the deterministic dead-code candidate listing (Miller-owned,
-                    // named suppressions); every other op (i.e. `export`) keeps the bulk JSONL fact feed unchanged.
-                    if (rest.Count > 0 && rest[0].Equals("candidates", StringComparison.OrdinalIgnoreCase))
-                        return ReferencesCandidates(rest.Skip(1).ToList(), context, stdout, stderr);
                     return ArtifactExport(rest, context, stdout, stderr,
                         "miller references export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
                         ReferenceExportReader.WriteJsonLines,
@@ -1729,267 +1724,9 @@ public static class CliDispatch
                 ? ToolDiagnosticRenderer.Render("references", IndexLevelGuard.ResolutionConverging(), json: false)
                 : null;
 
-    // The deterministic dead-code candidate listing (`references candidates`; dead-code candidates design rev 2):
-    // a fact list with NAMED suppressions, not a verdict. The Indexing reader owns all query-time work (the schema
-    // gate, the required-table validation, the four inbound-evidence counts, coverage, and the two-phase literal
-    // scan); an incompatible/partial artifact surfaces through the shared IncompatibleExtractException → exit-3
-    // mapping in Run. `--limit` bounds ONLY the candidate list; examined / suppressions / literal_scan /
-    // language_coverage stay full totals.
-    private static int ReferencesCandidates(
-        IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
-    {
-        const string usage =
-            "miller references candidates [--json] [--limit N] [--workspace-id SELECTOR] [--workspace DIR]";
-        if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
-            return Usage(err, usage);
-
-        CliOptions o = CliOptions.Parse(args, "json");
-        if (o.Positionals.Count > 0)
-            return Usage(err, usage);
-        if (!TryResolveReadContext(ctx, o, err, out ctx))
-            return 2;
-        if (!TryOpenCliReadScope(
-                ctx,
-                err,
-                out CliReadScope readScope,
-                "references failed",
-                requireSearchSidecar: false))
-            return 3;
-
-        using (readScope)
-        {
-            // A symbols-level artifact has no inbound identifier evidence, so EVERY symbol would read as
-            // unreferenced — an authoritative-looking list of false dead-code candidates. Refuse instead.
-            // Always write the named unavailable report to stdout so the body is never blank.
-            if (IndexLevelGuard.IsSymbolsLevel(readScope.Session.Snapshot.IndexLevel))
-            {
-                outw.WriteLine(RenderCandidatesUnavailable(
-                    o.Has("json"),
-                    DeadCodeCandidateReader.UnavailableSymbolsLevel,
-                    "symbols-level index has no identifier evidence; every symbol would read as unreferenced"));
-                err.WriteLine(
-                    "references candidates is unavailable while this workspace serves a symbols-level index: " +
-                    "identifier extraction has not run yet, so every symbol would read as unreferenced. Re-run " +
-                    "after setting this workspace's level policy to full and rebuilding it.");
-                return 3;
-            }
-
-            if (IndexLevelGuard.ResolutionLayerConverging(readScope.Session.Snapshot))
-            {
-                outw.WriteLine(RenderCandidatesUnavailable(
-                    o.Has("json"),
-                    DeadCodeCandidateReader.UnavailableResolutionNotReady,
-                    "identifier resolution is not ready; retry after the resolve operation completes"));
-                err.WriteLine(
-                    "references candidates is unavailable while this family-store view's identifier resolution " +
-                    "is not exact; retry after the resolve operation completes.");
-                return 3;
-            }
-
-            int limit = o.Int("limit", DeadCodeCandidatesDefaultLimit);
-
-            // --limit bounds ONLY the shown list (references-candidates-v1). The literal scan always
-            // runs to completion so examined / suppressions / literal_scan totals stay complete.
-            bool canonical = !o.Has("limit");
-            HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
-
-            DeadCodeCandidateReport report = DeadCodeCandidateReader.Read(
-                readScope.Session,
-                ctx.CanonicalRoot ?? ctx.WorkspaceRoot);
-            outw.WriteLine(o.Has("json")
-                ? RenderCandidatesJson(report, limit)
-                : RenderCandidatesCompact(report, limit));
-            RecordHeavyArmSnapshot(
-                ctx, identity, MetricHistoryHeavyArm.CandidatesSource, CandidateSnapshotMetrics(report), canonical, err);
-            return 0;
-        }
-    }
-
-    private const int DeadCodeCandidatesDefaultLimit = 50;
-
-    private static string RenderCandidatesUnavailable(bool json, string reason, string detail)
-    {
-        if (!json)
-            return "candidates: unavailable — " + detail;
-
-        var buffer = new ArrayBufferWriter<byte>();
-        using (var w = new Utf8JsonWriter(buffer,
-            new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
-        {
-            w.WriteStartObject();
-            w.WriteNumber("schema_version", DeadCodeCandidatesSchemaVersion);
-            w.WriteStartArray("candidates");
-            w.WriteEndArray();
-            w.WriteString("unavailable", reason);
-            w.WriteEndObject();
-        }
-
-        return Encoding.UTF8.GetString(buffer.WrittenSpan);
-    }
-
-    // Sort the surviving candidates by (path, start_line) and take the first `limit` — the ONLY block `--limit`
-    // bounds. A stable OrderBy preserves the reader's symbol_id tiebreak within an equal (path, start_line).
-    private static List<DeadCodeCandidate> ShownCandidates(DeadCodeResult result, int limit) =>
-        result.Candidates
-            .OrderBy(c => c.Path, StringComparer.Ordinal)
-            .ThenBy(c => c.StartLine)
-            .Take(limit < 0 ? 0 : limit)
-            .ToList();
-
-    private static string RenderCandidatesCompact(DeadCodeCandidateReport report, int limit)
-    {
-        DeadCodeResult result = report.Result;
-        List<DeadCodeCandidate> shown = ShownCandidates(result, limit);
-
-        var sb = new StringBuilder();
-        if (report.UnavailableReason is not null)
-        {
-            sb.Append("candidates: unavailable — ").Append(report.UnavailableReason);
-        }
-        else
-        {
-            sb.Append("candidates: ").Append(result.Candidates.Count).Append(" of ").Append(result.Examined)
-                .Append(" symbols examined · resolver: ").Append(report.Artifact.ReferenceResolutionStatus)
-                .Append(" — candidates are facts to check, not deletions to make.");
-        }
-
-        foreach (DeadCodeCandidate c in shown)
-        {
-            sb.Append('\n')
-                .Append(c.Name).Append(' ').Append(c.Kind).Append(' ').Append(c.Language).Append(' ')
-                .Append(c.Path).Append(':').Append(c.StartLine).Append(' ')
-                .Append(c.Visibility ?? "unknown").Append(" evidence=").Append(c.EvidenceLabel)
-                .Append(" [name_matches=").Append(c.NameMatches)
-                .Append(" resolved_in=").Append(c.ResolvedInbound)
-                .Append(" pending_in=").Append(c.PendingResolvedInbound)
-                .Append(" calls_in=").Append(c.CallsInbound).Append(']');
-        }
-
-        if (result.Candidates.Count > shown.Count)
-            sb.Append('\n').Append("showing top ").Append(shown.Count).Append(" of ")
-                .Append(result.Candidates.Count).Append(" by path");
-
-        sb.Append('\n').Append("suppressed:");
-        foreach (string id in DeadCodeCandidates.SuppressionRuleIds)
-            sb.Append(' ').Append(id).Append('=').Append(result.Suppressions[id]);
-
-        sb.Append('\n').Append("literal_scan: files_scanned=").Append(report.LiteralScan.FilesScanned)
-            .Append(" files_skipped_stale=").Append(report.LiteralScan.FilesSkippedStale);
-        if (report.LiteralScan.SkipReason is not null)
-            sb.Append(" skipped=").Append(report.LiteralScan.SkipReason);
-        if (report.UnavailableReason is not null)
-            sb.Append('\n').Append("unavailable: ").Append(report.UnavailableReason);
-
-        sb.Append('\n').Append("coverage:");
-        bool first = true;
-        foreach (LanguageCoverageRow cov in report.LanguageCoverage)
-        {
-            double pct = DeadCodeCandidates.ResolvedPercent(cov.IdentifierCount, cov.ResolvedCount);
-            sb.Append(first ? " " : "; ");
-            first = false;
-            sb.Append(cov.Language).Append(": ").Append(pct.ToString("0.0", CultureInfo.InvariantCulture)).Append('%')
-                .Append(pct >= 10.0 ? " resolved" : " — name-evidence only");
-        }
-
-        return sb.ToString();
-    }
-
-    private static string RenderCandidatesJson(DeadCodeCandidateReport report, int limit)
-    {
-        DeadCodeResult result = report.Result;
-        List<DeadCodeCandidate> shown = ShownCandidates(result, limit);
-
-        var buffer = new ArrayBufferWriter<byte>();
-        using (var w = new Utf8JsonWriter(buffer,
-            new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
-        {
-            w.WriteStartObject();
-            w.WriteNumber("schema_version", DeadCodeCandidatesSchemaVersion);
-
-            w.WritePropertyName("candidates");
-            w.WriteStartArray();
-            foreach (DeadCodeCandidate c in shown)
-            {
-                w.WriteStartObject();
-                w.WriteString("symbol_id", c.SymbolId);
-                w.WriteString("name", c.Name);
-                w.WriteString("kind", c.Kind);
-                w.WriteString("language", c.Language);
-                w.WriteString("path", c.Path);
-                w.WriteNumber("start_line", c.StartLine);
-                if (c.Visibility is null) w.WriteNull("visibility"); else w.WriteString("visibility", c.Visibility);
-                w.WriteString("evidence_label", c.EvidenceLabel);
-                w.WritePropertyName("evidence");
-                w.WriteStartObject();
-                w.WriteNumber("name_matches", c.NameMatches);
-                w.WriteNumber("resolved_inbound", c.ResolvedInbound);
-                w.WriteNumber("pending_resolved_inbound", c.PendingResolvedInbound);
-                w.WriteNumber("calls_inbound", c.CallsInbound);
-                w.WriteEndObject();
-                w.WriteEndObject();
-            }
-            w.WriteEndArray();
-
-            w.WritePropertyName("suppressions");
-            w.WriteStartObject();
-            foreach (string id in DeadCodeCandidates.SuppressionRuleIds)
-                w.WriteNumber(id, result.Suppressions[id]);
-            w.WriteEndObject();
-
-            w.WritePropertyName("literal_scan");
-            w.WriteStartObject();
-            w.WriteNumber("files_scanned", report.LiteralScan.FilesScanned);
-            w.WriteNumber("files_skipped_stale", report.LiteralScan.FilesSkippedStale);
-            if (report.LiteralScan.SkipReason is not null)
-                w.WriteString("skip_reason", report.LiteralScan.SkipReason);
-            w.WriteEndObject();
-
-            if (report.UnavailableReason is not null)
-                w.WriteString("unavailable", report.UnavailableReason);
-
-            w.WritePropertyName("language_coverage");
-            w.WriteStartArray();
-            foreach (LanguageCoverageRow cov in report.LanguageCoverage)
-            {
-                w.WriteStartObject();
-                w.WriteString("language", cov.Language);
-                w.WriteNumber("identifiers", cov.IdentifierCount);
-                w.WriteNumber("resolved_pct", DeadCodeCandidates.ResolvedPercent(cov.IdentifierCount, cov.ResolvedCount));
-                w.WriteEndObject();
-            }
-            w.WriteEndArray();
-
-            w.WriteNumber("examined", result.Examined);
-
-            w.WritePropertyName("artifact");
-            w.WriteStartObject();
-            if (report.Artifact.ArtifactId is null)
-                w.WriteNull("artifact_id");
-            else
-                w.WriteString("artifact_id", report.Artifact.ArtifactId);
-            if (report.Artifact.Revision is null)
-                w.WriteNull("revision");
-            else
-                w.WriteNumber("revision", report.Artifact.Revision.Value);
-            w.WriteString("reference_resolution_status", report.Artifact.ReferenceResolutionStatus);
-            if (report.Artifact.ReferenceResolutionVersion is null)
-                w.WriteNull("reference_resolution_version");
-            else
-                w.WriteString("reference_resolution_version", report.Artifact.ReferenceResolutionVersion);
-            w.WriteEndObject();
-
-            w.WriteEndObject();
-        }
-
-        return Encoding.UTF8.GetString(buffer.WrittenSpan);
-    }
-
-    // The references-candidates-v1 JSON envelope version (docs/contracts/references-candidates-v1.md).
-    private const int DeadCodeCandidatesSchemaVersion = 1;
-
-    // ---------- heavy-arm metric-history recording (report / metrics churn|risk / references candidates) ----------
+    // ---------- heavy-arm metric-history recording (report / metrics churn|risk) ----------
     //
-    // The single CLI-side hook the three heavy commands share. Each command captures the artifact identity BEFORE it
+    // The single CLI-side hook the heavy commands share. Each command captures the artifact identity BEFORE it
     // computes (below), renders normally, then hands the already-composed metric points here. Recording is
     // best-effort telemetry: a failed history write warns on stderr and NEVER changes the command's output or exit
     // code. Only CANONICAL (default-params) runs record — a non-default run renders as usual and skips, because a
@@ -2141,39 +1878,6 @@ public static class CliDispatch
     private static bool StoreReadExpected(WorkspaceContext ctx) =>
         WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
         || StoreWorkspacePointer.Read(ctx.CanonicalRoot ?? ctx.WorkspaceRoot) is not null;
-
-    // The heavy-arm `source='candidates'` snapshot: the full dead-code candidate count and suppressed total (both
-    // are full totals — `--limit` bounds only the displayed list, never these), with the per-rule suppressed
-    // breakdown in detail_json (the count-level surfacing approved 2026-07-07; per-symbol detail stays CLI-only).
-    private static IReadOnlyList<MetricHistoryPoint> CandidateSnapshotMetrics(DeadCodeCandidateReport report)
-    {
-        int suppressedTotal = 0;
-        foreach (int count in report.Result.Suppressions.Values)
-            suppressedTotal += count;
-
-        return
-        [
-            new MetricHistoryPoint(MetricHistoryHeavyArm.DeadCodeCandidateCount, report.Result.Candidates.Count, null),
-            new MetricHistoryPoint(
-                MetricHistoryHeavyArm.DeadCodeSuppressedTotal,
-                suppressedTotal,
-                SuppressionDetailJson(report.Result.Suppressions)),
-        ];
-    }
-
-    private static string SuppressionDetailJson(IReadOnlyDictionary<string, int> suppressions)
-    {
-        var buffer = new ArrayBufferWriter<byte>();
-        using (var w = new Utf8JsonWriter(
-            buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
-        {
-            w.WriteStartObject();
-            foreach (string id in DeadCodeCandidates.SuppressionRuleIds)
-                w.WriteNumber(id, suppressions.TryGetValue(id, out int count) ? count : 0);
-            w.WriteEndObject();
-        }
-        return Encoding.UTF8.GetString(buffer.WrittenSpan);
-    }
 
     private static int Refresh(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
@@ -4285,9 +3989,8 @@ public static class CliDispatch
                              canary combine <export.json>... [--json]               # privacy-safe v3 multi-source aggregate
           symbols <op>       Bulk-export every symbol row for fleet rollups.   # JSONL
                              export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
-          references <op>    Bulk-export identifier/reference usage facts, or list dead-code candidates.
+          references <op>    Bulk-export identifier/reference usage facts.
                              export     [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]   # JSONL fact feed
-                             candidates [--json] [--limit N] [--workspace-id SELECTOR] [--workspace DIR]
           complexity <op>    Bulk-export per-symbol/per-file complexity metrics.   # JSONL
                              export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
           refresh            Refresh a registered workspace index and return after convergence attempt.

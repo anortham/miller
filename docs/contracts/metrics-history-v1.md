@@ -34,7 +34,7 @@ A selector flag supplied without a value is a usage error (exit `2`).
 
 ### Default metric set
 
-When `--metric` is omitted, the default set is one rollup per signal family plus the dead-code count:
+When `--metric` is omitted, the default set is one rollup per signal family:
 
 | Metric | Recording arm (`source`) | Meaning |
 |---|---|---|
@@ -42,11 +42,11 @@ When `--metric` is omitted, the default set is one rollup per signal family plus
 | `complexity_p90` | `converge` | 90th-percentile `decision_count` over `complexity_metrics`. |
 | `clone_group_count` | `converge` | Body-hash groups with ≥ 2 members. |
 | `marker_total` | `converge` | Distinct comment regions containing a TODO/FIXME/HACK/XXX marker. |
-| `dead_code_candidate_count` | `candidates` | Dead-code candidates from `references candidates`. |
 
 Any metric name recorded by any write arm may be requested via `--metric`, including heavy-arm names not
-in the default set (`churn_files_changed`, `risk_top_score`, `risk_rows`, `dead_code_suppressed_total`,
-`near_duplicate_group_count`).
+in the default set (`churn_files_changed`, `risk_top_score`, `risk_rows`,
+`near_duplicate_group_count`). Historical `dead_code_candidate_count` and
+`dead_code_suppressed_total` rows remain readable via `--metric`; new snapshots do not record them.
 Canonical names are single-sourced on `MetricSnapshotAggregates` (cheap arm) and `MetricHistoryHeavyArm`
 (heavy arm) so producer and this reader never drift.
 
@@ -110,7 +110,7 @@ A single JSON object.
 | `metrics[].points[].recorded_at_utc` | string | ISO-8601 UTC writer-clock timestamp (display metadata; not the sort axis). |
 | `metrics[].points[].artifact_id` | string | The artifact identity the snapshot was recorded against. |
 | `metrics[].points[].revision` | number | Workspace revision for that artifact. |
-| `metrics[].points[].source` | string | The recording arm: `converge`, `report`, `churn`, `risk`, `candidates`, or `clones`. |
+| `metrics[].points[].source` | string | The recording arm: `converge`, `report`, `churn`, `risk`, or `clones`. Historical rows may also carry `candidates`. |
 | `metrics[].points[].value` | number | The recorded metric value. |
 
 ### Example
@@ -128,9 +128,9 @@ A single JSON object.
       ]
     },
     {
-      "metric": "dead_code_candidate_count",
+      "metric": "near_duplicate_group_count",
       "points": [
-        { "recorded_at_utc": "2026-07-02T10:05:00.0000000Z", "artifact_id": "artifact-a", "revision": 41, "source": "candidates", "value": 5 }
+        { "recorded_at_utc": "2026-07-02T10:05:00.0000000Z", "artifact_id": "artifact-a", "revision": 41, "source": "clones", "value": 5 }
       ]
     }
   ]
@@ -152,10 +152,11 @@ An empty/missing history:
   `(artifact_id, revision)` — `symbol_count`, `file_count`, `language_count`, `complexity_p50/p90/max`,
   `clone_group_count`, and (when the region index is available) `marker_total`. First writer wins
   (`INSERT OR IGNORE`); non-blocking and skip-on-busy so it never stalls indexing.
-- **Heavy arms (`source='report'|'churn'|'risk'|'candidates'|'clones'`).** The CLI commands `miller report`,
-  `miller metrics churn|risk`, `miller references candidates`, and `miller metrics clones --near-duplicates`
+- **Heavy arms (`source='report'|'churn'|'risk'|'clones'`).** The CLI commands `miller report`,
+  `miller metrics churn|risk`, and `miller metrics clones --near-duplicates`
   record a per-source upsert (a re-run at
-  the same revision replaces only its own snapshot). **Only canonical (default-params) runs record** — a
+  the same revision replaces only its own snapshot). Historical `source='candidates'` rows remain
+  readable. **Only canonical (default-params) runs record** — a
   run with a custom `--range`/`--limit`/test filter renders normally but does not record, because a trend
   that mixes parameters is incomparable. Recording is best-effort telemetry: a failed write warns on
   stderr and never changes the command's output or exit code.

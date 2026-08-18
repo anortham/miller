@@ -1,5 +1,7 @@
 # Windows Dogfood Read Availability Implementation Plan
 
+> **Superseded (dead-code parts, 2026-08-18):** `miller references candidates` and `DeadCodeCandidateReader` were removed. Task 9 and every other dead-code bound in this plan are historical. See the retired contract `docs/contracts/references-candidates-v1.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
 **Goal:** Keep Miller search and named inspect serving on Windows while store resolution and sidecar converge run in the background, and fix the v1.19.4 Windows dogfood defects that made a fresh session unusable for several minutes.

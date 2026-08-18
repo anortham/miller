@@ -167,10 +167,10 @@ public sealed class QueryTimeResolver(IResolutionFacts facts)
 **Approach:** Delete whole files first, then chase compile errors — the inventory above is complete per a full-tree sweep, but trust the compiler over the line numbers. Docs: retired-contract header states the removal date, the user decision, and that recorded history rows remain readable.
 
 **Acceptance criteria:**
-- [ ] `search`/grep for `DeadCode`, `dead_code`, `references_candidates`, `candidates` (CLI verb) finds no live code references — only the retired contract, release-note history, and historical findings docs
-- [ ] `references export` still routes and its test passes
-- [ ] Fast suite green; `cmp -s CLAUDE.md AGENTS.md` passes
-- [ ] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit)
+- [x] `search`/grep for `DeadCode`, `dead_code`, `references_candidates`, `candidates` (CLI verb) finds no live code references — only the retired contract, release-note history, and historical findings docs
+- [x] `references export` still routes and its test passes
+- [x] Fast suite green; `cmp -s CLAUDE.md AGENTS.md` passes
+- [x] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit)
 
 ### Task 3: RevisionFactCache in Miller.Indexing
 

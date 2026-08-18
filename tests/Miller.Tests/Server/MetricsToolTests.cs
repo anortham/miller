@@ -729,9 +729,28 @@ public sealed class MetricsToolTests
             .Select(m => m.GetProperty("metric").GetString()!).ToArray();
         Assert.Contains("symbol_count", metricNames);
         Assert.Contains("marker_total", metricNames);
-        Assert.Contains("dead_code_candidate_count", metricNames);
-        // complexity_p90 / clone_group_count are in the default set but were never recorded ⟹ omitted, not empty.
+        Assert.DoesNotContain("dead_code_candidate_count", metricNames);
         Assert.DoesNotContain("complexity_p90", metricNames);
+    }
+
+    [Fact]
+    public void RunHistory_ExplicitMetric_ReadsHistoricalDeadCodeRows()
+    {
+        using var fx = HistoryFixture();
+        string historyDb = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
+        SeedHistorySnapshot(historyDb, "art-1", revision: 2, source: "candidates",
+            recordedAt: DateTime.Parse("2026-07-02T00:00:00Z").ToUniversalTime(),
+            ("dead_code_candidate_count", 5));
+
+        MetricsToolResult result = MetricsTool.RunHistory(
+            historyDb, "ws-test", new[] { "dead_code_candidate_count" }, limit: 20, json: true);
+
+        using var doc = JsonDocument.Parse(result.Output);
+        JsonElement series = Assert.Single(doc.RootElement.GetProperty("metrics").EnumerateArray());
+        Assert.Equal("dead_code_candidate_count", series.GetProperty("metric").GetString());
+        JsonElement point = Assert.Single(series.GetProperty("points").EnumerateArray());
+        Assert.Equal(5, point.GetProperty("value").GetDouble());
+        Assert.Equal("candidates", point.GetProperty("source").GetString());
     }
 
     [Fact]

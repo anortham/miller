@@ -69,8 +69,7 @@ Current `json_commands` include:
 | `content remove --json` | Remove imported external/web content. |
 | `telemetry export --jsonl` | Export raw Miller telemetry rows for Eros dashboard/history ingestion. |
 | `symbols export --jsonl` | Bulk-export one row per symbol for fleet rollups (counts, kinds, doc coverage, clones). |
-| `references export --jsonl` | Bulk-export one row per identifier/reference usage fact for dead-code candidate workflows. |
-| `references candidates --json` | Deterministic dead-code candidate listing with named suppressions (experimental, evidence-gated; CLI-only). See [`references-candidates-v1.md`](references-candidates-v1.md). |
+| `references export --jsonl` | Bulk-export one row per identifier/reference usage fact. |
 | `complexity export --jsonl` | Bulk-export per-symbol/per-file complexity metric rows for fleet hotspot ranking. |
 | `patterns export --jsonl` | Bulk-export structural fact rows for fleet code-shape inventory. |
 | `dashboard --json` | Start/reuse the local dashboard helper and return its URL. |
@@ -288,7 +287,7 @@ While the object is present, symbol definitions, search, structure, relationship
 surfaces are complete. `inspect depth=overview|full` returns those definitions plus relationship-derived refs,
 callers, and callees, with `usage_evidence: "unavailable"` in JSON (or
 `usage_evidence=unavailable` in compact output) to state that complete per-usage identifier coverage is absent.
-Other identifier-level reference results (`trace refs`, impact, `references candidates`), source-region search,
+Other identifier-level reference results (`trace refs`, impact), source-region search,
 and `patterns` facts return a `reference_layer_converging` diagnostic instead of silently-empty results — see
 [`diagnostic` on read-command JSON](#diagnostic-on-read-command-json-additive-conditional). Under an explicit
 `progressive` policy they may still be converging; under `symbols-only` they remain unavailable until the policy
@@ -318,8 +317,7 @@ Compact (non-`--json`) output carries the same facts as trailing `diagnostic_cod
 At symbols level the emitting commands are `search --mode markers`, `search --regions`, `todos`, `inspect`
 (`--depth overview|full` only; `summary` is complete), `context`, `impact`, `trace`, and `patterns`. Exit code stays
 `0` and the payload stays ingestable — `diagnostic.code = reference_layer_converging` means "this result is
-empty or undercounted because the layer is still converging", NOT "this workspace has no such facts". The one
-levels surface that refuses instead is `references candidates`, which exits `3` with a stderr message.
+empty or undercounted because the layer is still converging", NOT "this workspace has no such facts".
 
 `miller patterns export` is a JSONL feed, so it signals the same degradation on **stderr** rather than in the
 stream: stdout stays a pure sequence of `structural_facts` rows (empty at symbols level), the exit code stays
@@ -543,8 +541,10 @@ result such as `workspace remove` returning `not_found` with exit code `0`.
 Miller should add new CLI JSON/export surfaces when Eros needs stable code facts or operations. Do not add a
 private Eros-to-Miller protocol until documented JSON, JSONL, and local artifacts are proven insufficient.
 
-The references export is intentionally narrow: Miller exports deterministic usage facts. Per the 2026-07-06
-consensus, Miller also owns the deterministic dead-code **candidate** listing with named suppressions
-(`references candidates`; [`references-candidates-v1.md`](references-candidates-v1.md), experimental and
-CLI-only). Ranking beyond the deterministic rule, suppression **persistence**, candidate history, cleanup
-tasks, confidence views, and multi-workspace reporting stay out of Miller.
+The references export is intentionally narrow: Miller exports deterministic usage facts.
+
+Compatibility: `capabilities --json` no longer lists `optional_features.references_candidates`,
+`json_commands` no longer includes `references candidates --json`, and `json_contracts` no longer
+names `references_candidates`. The 2026-08-18 user decision removed that surface; recorded
+`dead_code_*` history rows stay readable via `metrics history --metric`. See the retired
+[`references-candidates-v1.md`](references-candidates-v1.md).

@@ -108,7 +108,7 @@ miller metrics complexity --min-severity moderate --exclude-tests
 ```
 
 `miller metrics history` reads a per-workspace record of how those signals move over time (symbol
-count, complexity p90, clone groups, markers, and dead-code candidate counts), recorded automatically
+count, complexity p90, clone groups, and markers), recorded automatically
 after each index converge and when the heavy commands run. It only reads the recorded trend
 (append-only `.miller/history.db`); the same trends render as sparklines on the dashboard workspace
 detail view, and `workspace health` reports the history sidecar's status and size. The `--json`
@@ -116,7 +116,7 @@ envelope is a stable contract ([`contracts/metrics-history-v1.md`](contracts/met
 
 ```bash
 miller metrics history
-miller metrics history --metric complexity_p90,dead_code_candidate_count --limit 30 --json
+miller metrics history --metric complexity_p90,near_duplicate_group_count --limit 30 --json
 ```
 
 ## Dogfooding the server
@@ -151,7 +151,7 @@ Open the printed URL to view registered workspaces and scoped per-tool telemetry
 `MILLER_REGISTRY_DB`, `MILLER_TELEMETRY_DB`, or `MILLER_DASHBOARD_WEBROOT` only when testing
 non-default paths. The selected-workspace detail view also surfaces local complexity hotspots and
 body-hash clone groups from the artifact, plus metric-history trend sparklines (symbol count,
-complexity p90, clone groups, markers, dead-code candidate count) read from the workspace's
+complexity p90, clone groups, markers) read from the workspace's
 `.miller/history.db`. Git churn stays in the CLI-only `miller metrics churn` path because it reads a
 revision range from git.
 
@@ -253,11 +253,6 @@ Text output is a compact human-facing contract and JSON output is the integratio
 - `symbols export --jsonl`, `references export --jsonl`, and `complexity export --jsonl` write
   deterministic artifact fact feeds for fleet rollups and Eros workflows. `references export` is a
   usage-fact feed, not a dead-code ranking tool.
-- `references candidates [--json]` is the dead-code candidate surface: an evidence-gated,
-  deterministic listing with named suppression counts and per-language resolution coverage
-  (experimental, CLI-only; contract in
-  [`contracts/references-candidates-v1.md`](contracts/references-candidates-v1.md)). Candidates are
-  facts to check, not deletions to make.
 - Eros-facing CLI contracts live in [`contracts/cli-eros-v1.md`](contracts/cli-eros-v1.md); workspace
   onboarding JSON fields in [`contracts/workspace-onboarding-v1.md`](contracts/workspace-onboarding-v1.md);
   trace JSON fields in [`contracts/trace-json-v1.md`](contracts/trace-json-v1.md); content export

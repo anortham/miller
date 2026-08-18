@@ -36,18 +36,6 @@ public sealed class StoreResolutionReaderTests
     }
 
     [Fact]
-    public void DeadCodeCandidateReaderAcceptsFamilyStoreResolutionViews()
-    {
-        using var fixture = Fixture();
-        DropResolutionTables(fixture.DbPath);
-        using var session = new TempViewReadSession(fixture.DbPath, fixture.WorkspaceRoot);
-
-        DeadCodeCandidateReport report = DeadCodeCandidateReader.Read(session, fixture.WorkspaceRoot);
-
-        Assert.NotNull(report);
-    }
-
-    [Fact]
     public void ReferenceEvidenceReaderScopesCollidingLocalIdsByVersion()
     {
         using var session = new CollisionStoreReadSession();

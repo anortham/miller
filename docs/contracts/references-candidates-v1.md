@@ -1,12 +1,16 @@
 # References Candidates Contract v1
 
-Status: experimental, evidence-gated. The evidence gate **PASSED 2026-07-07** (Miller repo: 392 → 5
+**RETIRED 2026-08-18.** User decision (query-time resolution design §5): this feature is
+REMOVED, not maintained. Miller no longer ships `references candidates`, does not persist
+suppressions, and does not expose an MCP tool for it. Recorded `history.db` rows for
+`dead_code_candidate_count` and `dead_code_suppressed_total` stay readable via
+`miller metrics history --metric`. This file is kept as the historical contract.
+
+Status before retirement: experimental, evidence-gated. The evidence gate **PASSED 2026-07-07** (Miller repo: 392 → 5
 candidates, zero confirmed-live after julie-extract 2.10.0 `variable_ref` emission and the eleven
 suppression rules; see
 [`findings/2026-07-07-dead-code-candidates-dogfood.md`](../findings/2026-07-07-dead-code-candidates-dogfood.md),
-FINAL VERDICT). The surface is a **CLI-only prototype**: it is cleared to ship as
-`miller references candidates`, but it is **not** in `miller report`, the dashboard, or any MCP tool.
-Adding it to those surfaces requires explicit user approval (MCP-stinginess rule).
+FINAL VERDICT). The surface was a **CLI-only prototype**.
 
 `miller references candidates [--json] [--limit N] [--workspace-id SELECTOR] [--workspace DIR]` lists
 deterministic dead-code *candidates* from one workspace's schema-v4 artifact: definition symbols that

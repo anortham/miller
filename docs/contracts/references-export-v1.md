@@ -6,11 +6,9 @@ retained only as a historical record. `miller references export --jsonl` now emi
 active contract.
 
 `miller references export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits deterministic usage facts
-from one workspace's `identifiers` table. The export is a raw fact feed, not a dead-code verdict. Per the
-2026-07-06 standalone-bolstering consensus, Miller owns the deterministic dead-code **candidate** listing with
-named suppressions — the CLI surface `miller references candidates` (see
-[`references-candidates-v1.md`](references-candidates-v1.md)). Ranking beyond the deterministic rule,
-suppression **persistence**, history, tasks, dashboards, and cross-workspace workflow state stay out of Miller.
+from one workspace's `identifiers` table. The export is a raw fact feed, not a ranking tool. The former
+`references candidates` surface was removed on 2026-08-18 (user decision; see the retired
+[`references-candidates-v1.md`](references-candidates-v1.md)).
 
 ## Ordering And Selectors
 

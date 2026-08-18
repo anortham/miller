@@ -2445,8 +2445,6 @@ public sealed class DashboardRegistryReadTests : IDisposable
     public void ReadTrends_BuildsSparklineSeriesForAvailableMetricsInCanonicalOrder()
     {
         DashboardWorkspaceRow workspace = WorkspaceRowWithMiller(out string historyDbPath);
-        // symbol_count + complexity_p90 get >=2 points (sparkline); marker_total gets 1 point (<2 => hint);
-        // clone_group_count + dead_code_candidate_count stay absent (no row).
         RecordSnapshot(historyDbPath, 1, ("symbol_count", 100), ("complexity_p90", 8));
         RecordSnapshot(historyDbPath, 2, ("symbol_count", 110), ("complexity_p90", 9));
         RecordSnapshot(historyDbPath, 3, ("symbol_count", 120), ("complexity_p90", 9), ("marker_total", 4));
@@ -2455,7 +2453,6 @@ public sealed class DashboardRegistryReadTests : IDisposable
 
         Assert.True(panel.HasData);
         Assert.Equal("ws-a", panel.WorkspaceId);
-        // Canonical order: symbol_count, complexity_p90, marker_total (clone/dead-code absent).
         Assert.Equal(
             new[] { "symbol_count", "complexity_p90", "marker_total" },
             panel.Series.Select(s => s.Metric).ToArray());
@@ -2472,18 +2469,18 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
-    public void ReadTrends_PlotsNearDuplicateGroupCountAsACountOnlySeriesAfterTheDeadCodeRow()
+    public void ReadTrends_PlotsNearDuplicateGroupCountAsACountOnlySeries()
     {
         DashboardWorkspaceRow workspace = WorkspaceRowWithMiller(out string historyDbPath);
-        RecordSnapshot(historyDbPath, 1, ("dead_code_candidate_count", 5), ("near_duplicate_group_count", 12));
-        RecordSnapshot(historyDbPath, 2, ("dead_code_candidate_count", 4), ("near_duplicate_group_count", 9));
+        RecordSnapshot(historyDbPath, 1, ("near_duplicate_group_count", 12));
+        RecordSnapshot(historyDbPath, 2, ("near_duplicate_group_count", 9));
 
         DashboardWorkspaceTrendsPanel panel = DashboardIndexFactsReader.ReadTrends(workspace);
 
         Assert.Equal(
-            new[] { "dead_code_candidate_count", "near_duplicate_group_count" },
+            new[] { "near_duplicate_group_count" },
             panel.Series.Select(s => s.Metric).ToArray());
-        DashboardTrendSeries nearDuplicates = panel.Series[1];
+        DashboardTrendSeries nearDuplicates = panel.Series[0];
         Assert.Equal("Near-duplicate groups", nearDuplicates.Label);
         Assert.Equal(new[] { 12d, 9d }, nearDuplicates.Points.ToArray());
         Assert.True(nearDuplicates.HasTrend);

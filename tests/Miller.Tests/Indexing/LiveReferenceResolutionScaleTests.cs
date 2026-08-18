@@ -107,8 +107,16 @@ public sealed class LiveReferenceResolutionScaleTests
             AssertResolutionMethod(db, typeScriptTargetId, "tier3_static_type");
             AssertResolutionMethod(db, javaScriptTargetId, "tier3_static_type");
 
-            DeadCodeCandidateReport candidateReport = DeadCodeCandidateReader.Read(db, repo);
-            Assert.Equal("6", candidateReport.Artifact.ReferenceResolutionVersion);
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = db,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT value FROM artifact_metadata WHERE key = 'reference_resolution_version';";
+            Assert.Equal("6", Convert.ToString(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
         }
         finally
         {
