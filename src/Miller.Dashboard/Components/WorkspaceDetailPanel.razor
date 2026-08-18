@@ -128,7 +128,7 @@
                         @if (store.State == "ready")
                         {
                             <span>@store.FamilyId / @store.ViewId</span>
-                            <span class="muted">Generation @store.ManifestGeneration · @store.IndexLevel · @store.ResolutionState</span>
+                            <span class="muted">Generation @store.ManifestGeneration · @store.IndexLevel</span>
                             @if (!string.IsNullOrWhiteSpace(store.StoreRoot))
                             {
                                 <span class="muted">@store.StoreRoot</span>

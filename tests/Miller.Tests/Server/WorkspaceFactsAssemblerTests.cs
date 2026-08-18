@@ -50,7 +50,6 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
 
         Assert.Equal("GEN-00000000000000000007", facts.GenerationName);
         Assert.Equal(7, facts.ManifestGeneration);
-        Assert.Equal("exact", facts.ResolutionState);
         Assert.Equal("legacy_preserved", facts.MigrationState);
         Assert.Equal("available", facts.RollbackState);
     }
@@ -739,15 +738,20 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
         Assert.Contains("5 consecutive scan failure", warning);
     }
 
-    [Fact]
-    public void StoreFreshness_AConvergingView_IsNotFresh()
+    [Theory]
+    [InlineData("converging")]
+    [InlineData("unbound")]
+    [InlineData("exact")]
+    [InlineData(null)]
+    public void StoreFreshness_IgnoresResolutionState(string? resolution)
     {
         var (fresh, status, warning) =
-            WorkspaceFactsAssembler.StoreFreshness(null, StoreSnapshot("converging"), Search("current"), Content("current"));
+            WorkspaceFactsAssembler.StoreFreshness(null, StoreSnapshot(resolution), Search("current"), Content("current"));
 
-        Assert.False(fresh);
-        Assert.Equal("resolving", status);
-        Assert.Contains("converging", warning);
+        Assert.True(fresh);
+        Assert.Equal("current", status);
+        Assert.Null(warning);
+        Assert.NotEqual("resolving", status);
     }
 
     [Theory]
@@ -781,7 +785,7 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
     [InlineData(6L, "base-1", 3L)]
     [InlineData(7L, null, 3L)]
     [InlineData(7L, "base-1", null)]
-    public void StoreFreshness_AnExactViewWithoutTheCurrentResolutionFence_IsNotFresh(
+    public void StoreFreshness_AnIncompleteResolutionFence_IsFresh(
         long exactAt,
         string? baseId,
         long? deltaGeneration)
@@ -792,29 +796,20 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
             Search("current"),
             Content("current"));
 
-        Assert.False(fresh);
-        Assert.Equal("resolving", status);
-        Assert.Contains("current manifest", warning);
-    }
-
-    [Fact]
-    public void StoreFreshness_AnUnknownResolutionState_ReportsNotMeasured()
-    {
-        var (fresh, status, warning) =
-            WorkspaceFactsAssembler.StoreFreshness(null, StoreSnapshot(null), Search("current"), Content("current"));
-
-        Assert.Null(fresh);
-        Assert.Equal("unknown", status);
+        Assert.True(fresh);
+        Assert.Equal("current", status);
         Assert.Null(warning);
+        Assert.NotEqual("resolving", status);
     }
 
     [Fact]
-    public void StoreFreshness_ScanFailureOutranksResolution()
+    public void StoreFreshness_ScanFailureOutranksSidecarState()
     {
         var (fresh, status, _) =
             WorkspaceFactsAssembler.StoreFreshness(Failing(2), StoreSnapshot("converging"), Search("stale"), Content("stale"));
 
         Assert.False(fresh);
         Assert.Equal("scan_failing", status);
+        Assert.NotEqual("resolving", status);
     }
 }

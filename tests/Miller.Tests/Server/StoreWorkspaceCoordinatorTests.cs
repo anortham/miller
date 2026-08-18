@@ -52,7 +52,7 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.Equal("completed", report.Status);
         Assert.Equal((ulong)1, report.FilesUpdated);
         Assert.Equal(Binding.FamilyId.ToString("D"), report.Artifact?.ArtifactId);
-        Assert.IsType<StoreResolveRequest>(client.Requests[1]);
+        Assert.DoesNotContain(client.Requests, static request => request.Operation == StoreOperation.Resolve);
     }
 
     [Fact]
@@ -331,7 +331,7 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.Equal(2, request.Scan.Jobs);
         Assert.Equal(artifact.DbPath, request.FromArtifact);
         Assert.Equal("request-import", report.Input?.Format);
-        Assert.Equal(expected == StoreLevel.Full, client.Requests.Any(request => request.Operation == StoreOperation.Resolve));
+        Assert.DoesNotContain(client.Requests, static request => request.Operation == StoreOperation.Resolve);
     }
 
     [Fact]
@@ -477,7 +477,7 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
-    public void Scan_IncrementalReconcile_WhenCurrentTreeMatchesStore_SkipsImportAndResolve()
+    public void Scan_IncrementalReconcile_WhenCurrentTreeMatchesStore_SkipsImport()
     {
         var phases = new RecordingPhaseSink();
         var client = new RecordingStoreClient(StoreOperation.Import);
@@ -497,7 +497,7 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.Equal("no_change", report.Status);
         Assert.Null(report.CreatedRevision);
         Assert.Equal(41, report.Revision);
-        Assert.Equal(["import", "resolve", "coordinator_total"], phases.Records.Select(static phase => phase.Phase));
+        Assert.Equal(["import", "coordinator_total"], phases.Records.Select(static phase => phase.Phase));
         Assert.All(phases.Records, static phase => Assert.False(phase.DidWork));
         Assert.All(phases.Records, static phase => Assert.Equal("skipped", phase.Outcome));
     }
@@ -530,7 +530,7 @@ public sealed class StoreWorkspaceCoordinatorTests
         StoreUpdateRequest[] updates = client.Requests.OfType<StoreUpdateRequest>().ToArray();
         Assert.Equal(["src/a.cs", "src/b.cs"], updates.Select(static request => request.FilePath.Replace('\\', '/')));
         Assert.Equal(["gone.cs"], Assert.Single(client.Requests.OfType<StoreDeleteRequest>()).FilePaths);
-        Assert.Single(client.Requests.OfType<StoreResolveRequest>());
+        Assert.DoesNotContain(client.Requests, static request => request.Operation == StoreOperation.Resolve);
         Assert.Equal("completed", report.Status);
         Assert.Equal((ulong)2, report.FilesUpdated);
         Assert.Equal((ulong)1, report.FilesDeleted);
@@ -609,12 +609,12 @@ public sealed class StoreWorkspaceCoordinatorTests
             _ => snapshots.Dequeue(),
             () => "request-docs",
             fromArtifact: null,
-            inspectTree: static () => new StoreTreeDelta(["README.md"], []),
-            tryCarryExact: static _ => true);
+            inspectTree: static () => new StoreTreeDelta(["README.md"], []));
 
         coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
 
         Assert.IsType<StoreUpdateRequest>(Assert.Single(client.Requests));
+        Assert.DoesNotContain(client.Requests, static request => request.Operation == StoreOperation.Resolve);
     }
 
     [Fact]
@@ -634,21 +634,21 @@ public sealed class StoreWorkspaceCoordinatorTests
             () => IndexLevelPolicy.Full,
             _ => snapshots.Dequeue(),
             () => "request-docs",
-            fromArtifact: null,
-            tryCarryExact: static _ => true);
+            fromArtifact: null);
 
         ExtractReport report = coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "docs", "README.md"));
 
         Assert.IsType<StoreUpdateRequest>(Assert.Single(client.Requests));
+        Assert.DoesNotContain(client.Requests, static request => request.Operation == StoreOperation.Resolve);
         Assert.Equal("completed", report.Status);
     }
 
     [Fact]
-    public void Update_StillResolvesWhenCarryCannotRestoreTheExactFence()
+    public void Update_DoesNotSubmitResolveAfterAFullLevelSave()
     {
         var client = new RecordingStoreClient(
             StoreOperation.Update,
-            allowedOperations: [StoreOperation.Update, StoreOperation.Resolve]);
+            allowedOperations: [StoreOperation.Update]);
         var snapshots = new Queue<StoreWorkspaceState>(
         [
             new(41, "full"),
@@ -660,14 +660,12 @@ public sealed class StoreWorkspaceCoordinatorTests
             () => IndexLevelPolicy.Full,
             _ => snapshots.Dequeue(),
             () => "request-code",
-            fromArtifact: null,
-            tryCarryExact: static _ => false);
+            fromArtifact: null);
 
         coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs"));
 
-        Assert.Equal(2, client.Requests.Count);
-        Assert.IsType<StoreUpdateRequest>(client.Requests[0]);
-        Assert.IsType<StoreResolveRequest>(client.Requests[1]);
+        Assert.IsType<StoreUpdateRequest>(Assert.Single(client.Requests));
+        Assert.DoesNotContain(client.Requests, static request => request.Operation == StoreOperation.Resolve);
     }
 
     [Fact]
@@ -750,10 +748,10 @@ public sealed class StoreWorkspaceCoordinatorTests
 
         Assert.Single(client.Requests);
         Assert.IsType<StoreImportRequest>(client.SingleRequest);
-        Assert.Equal(["import", "resolve", "coordinator_total"], phases.Records.Select(static phase => phase.Phase));
+        Assert.Equal(["import", "coordinator_total"], phases.Records.Select(static phase => phase.Phase));
         Assert.True(phases.Records.Single(static phase => phase.Phase == "import").DidWork);
-        Assert.False(phases.Records.Single(static phase => phase.Phase == "resolve").DidWork);
         Assert.True(phases.Records.Single(static phase => phase.Phase == "coordinator_total").DidWork);
+        Assert.DoesNotContain(client.Requests, static request => request.Operation == StoreOperation.Resolve);
     }
 
     [Fact]
@@ -786,7 +784,7 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
-    public void Scan_RecordsImportResolveAndCoordinatorTotal()
+    public void Scan_RecordsImportAndCoordinatorTotal()
     {
         var phases = new RecordingPhaseSink();
         var client = new RecordingStoreClient(StoreOperation.Import);
@@ -807,7 +805,7 @@ public sealed class StoreWorkspaceCoordinatorTests
         ExtractReport report = coordinator.Scan(jobs: 1);
 
         Assert.Equal("completed", report.Status);
-        Assert.Equal(["import", "resolve", "coordinator_total"], phases.Records.Select(static phase => phase.Phase));
+        Assert.Equal(["import", "coordinator_total"], phases.Records.Select(static phase => phase.Phase));
         Assert.All(phases.Records, static phase => Assert.True(phase.ElapsedMilliseconds >= 0));
         Assert.Equal(42, phases.Records.Single(static phase => phase.Phase == "coordinator_total").StoreSequence);
         Assert.All(phases.Records, static phase => Assert.True(phase.DidWork));
@@ -815,7 +813,7 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
-    public void AReusedExactImportWithAMismatchedFenceSubmitsResolve()
+    public void AReusedExactImportWithAMismatchedFenceDoesNotSubmitResolve()
     {
         var client = new RecordingStoreClient(
             StoreOperation.Import,
@@ -836,13 +834,12 @@ public sealed class StoreWorkspaceCoordinatorTests
 
         coordinator.Scan(jobs: 1);
 
-        Assert.Equal(2, client.Requests.Count);
-        Assert.IsType<StoreImportRequest>(client.Requests[0]);
-        Assert.IsType<StoreResolveRequest>(client.Requests[1]);
+        Assert.IsType<StoreImportRequest>(Assert.Single(client.Requests));
+        Assert.DoesNotContain(client.Requests, static request => request.Operation == StoreOperation.Resolve);
     }
 
     [Fact]
-    public void AFullImportWithoutExactResolutionStillSubmitsResolve()
+    public void AFullImportDoesNotSubmitResolve()
     {
         var client = new RecordingStoreClient(StoreOperation.Import);
         var snapshots = new Queue<StoreWorkspaceState>(
@@ -859,9 +856,8 @@ public sealed class StoreWorkspaceCoordinatorTests
 
         coordinator.Scan(jobs: 1);
 
-        Assert.Equal(2, client.Requests.Count);
-        Assert.IsType<StoreImportRequest>(client.Requests[0]);
-        Assert.IsType<StoreResolveRequest>(client.Requests[1]);
+        Assert.IsType<StoreImportRequest>(Assert.Single(client.Requests));
+        Assert.DoesNotContain(client.Requests, static request => request.Operation == StoreOperation.Resolve);
     }
 
     [Fact]
@@ -968,9 +964,6 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.Equal(
             TimeSpan.FromSeconds(30),
             StoreWorkspaceCoordinator.RequestTimeout(StoreOperation.Import, "30"));
-        Assert.Equal(
-            TimeSpan.FromSeconds(30),
-            StoreWorkspaceCoordinator.RequestTimeout(StoreOperation.Resolve, "00:00:30"));
         Assert.Equal(
             TimeSpan.FromMinutes(5),
             StoreWorkspaceCoordinator.RequestTimeout(StoreOperation.Update, "30"));
@@ -1304,53 +1297,6 @@ public sealed class StoreWorkspaceCoordinatorTests
         }
     }
 
-    [Fact]
-    public void InterruptedResolveIsReplayedThenSubmittedWithAFreshRequest()
-    {
-        string root = Path.Combine(Path.GetTempPath(), "miller-store-resolve-replay-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        try
-        {
-            string fingerprint = $"resolve|{Binding.FamilyId:D}|{Binding.ViewId}|src/a.cs";
-            var journal = new StoreRequestJournal(root);
-            Assert.Equal("orphan-resolve", journal.GetOrCreate(fingerprint, () => "orphan-resolve"));
-
-            var client = new RecordingStoreClient(StoreOperation.Update);
-            var snapshots = new Queue<StoreWorkspaceState>(
-            [
-                new StoreWorkspaceState(1, "full"),
-                new StoreWorkspaceState(2, "full"),
-            ]);
-            string source = Path.Combine(root, "src", "a.cs");
-            Directory.CreateDirectory(Path.GetDirectoryName(source)!);
-            File.WriteAllText(source, "class A {}");
-            var coordinator = new StoreWorkspaceCoordinator(
-                Binding with
-                {
-                    WorkspaceRoot = PathCanonicalizer.CanonicalizeRoot(root),
-                    StoreRoot = Path.Combine(root, "store"),
-                },
-                client,
-                () => IndexLevelPolicy.Full,
-                _ => snapshots.Dequeue());
-
-            coordinator.Update(source);
-
-            StoreRequest[] resolves = client.Requests
-                .Where(request => request.Operation == StoreOperation.Resolve)
-                .ToArray();
-            Assert.Equal(2, resolves.Length);
-            Assert.Equal("orphan-resolve", Assert.IsType<StoreResolveRequest>(resolves[0]).Request.RequestId);
-            Assert.NotEqual(
-                Assert.IsType<StoreResolveRequest>(resolves[0]).Request.RequestId,
-                Assert.IsType<StoreResolveRequest>(resolves[1]).Request.RequestId);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
     private static StoreImportRequest RunNewFamilyImport(string fromArtifact)
     {
         var client = new RecordingStoreClient(StoreOperation.Import);
@@ -1400,9 +1346,7 @@ public sealed class StoreWorkspaceCoordinatorTests
         private readonly List<StoreRequest> _requests = [];
 
         public IReadOnlyList<StoreRequest> Requests => _requests;
-        public StoreRequest SingleRequest => Assert.Single(
-            _requests,
-            request => request.Operation != StoreOperation.Resolve);
+        public StoreRequest SingleRequest => Assert.Single(_requests);
 
         public StoreRequestResult Submit(StoreRequest request, CancellationToken cancellationToken = default)
         {
@@ -1413,9 +1357,7 @@ public sealed class StoreWorkspaceCoordinatorTests
             }
             else
             {
-                Assert.True(
-                    request.Operation == expectedOperation || request.Operation == StoreOperation.Resolve,
-                    $"Expected {expectedOperation} or Resolve, got {request.Operation}.");
+                Assert.Equal(expectedOperation, request.Operation);
             }
             _requests.Add(request);
             StoreLevel level = request switch

@@ -5,7 +5,6 @@ namespace Miller.Server.Hosting;
 internal static class IndexerPhaseNames
 {
     public const string Import = "import";
-    public const string Resolve = "resolve";
     public const string Bind = "bind";
     public const string CoordinatorTotal = "coordinator_total";
     public const string Content = "content";

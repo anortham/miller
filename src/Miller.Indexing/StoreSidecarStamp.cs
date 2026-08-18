@@ -18,6 +18,7 @@ public sealed record StoreSidecarStamp(
     string ViewId,
     string ManifestHash,
     long StoreLogSequence,
+    // razorback: resolution_stamp can drop in a future stamp-schema bump; read-normalization keeps pre-change stamps current.
     string? ResolutionStamp,
     string StoreInstanceId,
     string GenerationName,
@@ -27,6 +28,14 @@ public sealed record StoreSidecarStamp(
     string LevelStampL2,
     string LevelStampL3)
 {
+    internal const string RetiredResolutionStamp = "retired";
+
+    internal static string NormalizeResolutionStamp(string? persisted)
+    {
+        _ = persisted;
+        return RetiredResolutionStamp;
+    }
+
     public string ScopeToken =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(ScopeMaterial(this))));
 
@@ -55,7 +64,7 @@ public sealed record StoreSidecarStamp(
             snapshot.Freshness.ViewId,
             snapshot.Freshness.ManifestHash,
             snapshot.Freshness.StoreLogSequence.Value,
-            snapshot.Freshness.ResolutionStamp,
+            RetiredResolutionStamp,
             snapshot.Freshness.StoreInstanceId,
             snapshot.Freshness.GenerationName,
             snapshot.Freshness.ManifestGeneration.Value,
@@ -233,7 +242,7 @@ public static class StoreSidecarCatalog
                 reader.GetString(2),
                 reader.GetString(3),
                 reader.GetInt64(4),
-                reader.IsDBNull(5) ? null : reader.GetString(5),
+                StoreSidecarStamp.NormalizeResolutionStamp(reader.IsDBNull(5) ? null : reader.GetString(5)),
                 reader.GetString(6),
                 reader.GetString(7),
                 reader.GetInt64(8),
@@ -408,7 +417,7 @@ public static class StoreSidecarCatalog
             reader.GetString(2),
             reader.GetString(3),
             reader.GetInt64(4),
-            reader.IsDBNull(5) ? null : reader.GetString(5),
+            StoreSidecarStamp.NormalizeResolutionStamp(reader.IsDBNull(5) ? null : reader.GetString(5)),
             reader.GetString(6),
             reader.GetString(7),
             reader.GetInt64(8),

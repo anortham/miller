@@ -842,7 +842,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
         var search = new SearchSidecarFacts("current", "/family/search.db", 2, 9, 3, null);
         var content = new ContentCorpusFacts("current", "/family/content.db", 1, 9, 2, 4, 100, 100);
         var store = new StoreWorkspaceFacts(
-            "family", "view", "gen-000001", 2, "manifest", 9, "full", "exact", "base", 1, 9,
+            "family", "view", "gen-000001", 2, "manifest", 9, "full",
             true, "legacy_preserved", "available");
         var facts = new DashboardWorkspaceFacts(
             workspace.WorkspaceId,

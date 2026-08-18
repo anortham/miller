@@ -63,6 +63,14 @@ public sealed class WorkspaceRenderTests
         return document.RootElement.Clone();
     }
 
+    private static void AssertNoResolutionKeys(JsonElement store)
+    {
+        Assert.False(store.TryGetProperty("resolution_state", out _));
+        Assert.False(store.TryGetProperty("resolution_base_id", out _));
+        Assert.False(store.TryGetProperty("resolution_delta_generation", out _));
+        Assert.False(store.TryGetProperty("resolution_exact_at", out _));
+    }
+
     private static WorkspaceExtractionHealthFacts ExtractionHealth() => new(
         ParseDiagnostics: HealthFactSection<ParseDiagnosticGroup>.FromRows(new[]
         {
@@ -209,10 +217,6 @@ public sealed class WorkspaceRenderTests
             ManifestHash: "blake3:manifest",
             StoreLogSequence: 91,
             IndexLevel: "full",
-            ResolutionState: "exact",
-            ResolutionBaseId: "base-blake3:manifest-1",
-            ResolutionDeltaGeneration: 3,
-            ResolutionExactAt: 91,
             LegacyArtifactPresent: true,
             MigrationState: "legacy_preserved",
             RollbackState: "available",
@@ -228,10 +232,12 @@ public sealed class WorkspaceRenderTests
 
         const string expected =
             "store: family=11111111-1111-4111-8111-111111111111  view=view-worktree  " +
-            "generation=7  manifest=blake3:manifest  sequence=91  level=full  resolution=exact  " +
+            "generation=7  manifest=blake3:manifest  sequence=91  level=full  " +
             "migration=legacy_preserved  rollback=available";
         Assert.Contains(expected, compact);
         Assert.Contains(expected, healthCompact);
+        Assert.DoesNotContain("resolution=", compact);
+        Assert.DoesNotContain("resolution=", healthCompact);
         Assert.Contains("root=/family/store", compact);
         Assert.Contains("members=alpha-111111111111,bravo-222222222222 (+4 more)", compact);
         Assert.Equal("view-worktree", statusJson.GetProperty("store").GetProperty("view_id").GetString());
@@ -243,7 +249,10 @@ public sealed class WorkspaceRenderTests
             statusJson.GetProperty("store").GetProperty("member_display_labels")
                 .EnumerateArray().Select(static value => value.GetString()).ToArray());
         Assert.Equal(7, statusJson.GetProperty("store").GetProperty("manifest_generation").GetInt64());
-        Assert.Equal("exact", statusJson.GetProperty("store").GetProperty("resolution_state").GetString());
+        AssertNoResolutionKeys(statusJson.GetProperty("store"));
+        AssertNoResolutionKeys(healthJson.GetProperty("store"));
+        Assert.NotEqual("resolving", statusJson.GetProperty("index").GetProperty("freshness_status").GetString());
+        Assert.NotEqual("resolving", healthJson.GetProperty("index").GetProperty("freshness_status").GetString());
         Assert.Equal("available", healthJson.GetProperty("store").GetProperty("rollback_state").GetString());
         Assert.DoesNotContain("\"store\"", WorkspaceRender.Status(Facts(), TelemetrySummary.Empty, json: true));
     }

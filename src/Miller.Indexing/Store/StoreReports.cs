@@ -18,6 +18,7 @@ public enum StoreManifestDisposition
     NotPublished,
 }
 
+// razorback: parse-only compatibility DTO for julie-extract 2.33.7 reports. Phase 3 removes this enum.
 public enum StoreResolutionState
 {
     Unbound,
@@ -66,6 +67,7 @@ public sealed record StoreManifestResult(
 
 public sealed record StoreRowCounts(long FileVersions, long L1, long L2, long L3);
 
+// razorback: parse-only compatibility DTO for julie-extract 2.33.7 reports. Phase 3 removes this type.
 public sealed record StoreResolutionResult(
     StoreResolutionState State,
     bool ExactAtMatches,
@@ -92,7 +94,7 @@ public sealed record StoreRequestResult(
     StoreLevelCompletion Completion,
     StoreManifestResult Manifest,
     StoreRowCounts RowCounts,
-    StoreResolutionResult Resolution,
+    StoreResolutionResult? Resolution,
     StoreExportResult? Export,
     StoreCoordinatorDisposition Coordinator,
     StoreFailure Failure,

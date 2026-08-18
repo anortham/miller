@@ -28,8 +28,7 @@ internal static class WorkspaceFactsAssembler
             string.IsNullOrWhiteSpace(snapshot.GenerationName) ||
             snapshot.ManifestGeneration is null ||
             string.IsNullOrWhiteSpace(snapshot.Freshness.ManifestHash) ||
-            snapshot.Freshness.StoreLogSequence is null ||
-            string.IsNullOrWhiteSpace(snapshot.ResolutionState))
+            snapshot.Freshness.StoreLogSequence is null)
         {
             throw new ArgumentException(
                 "A complete family-store read snapshot is required for workspace provenance.",
@@ -44,10 +43,6 @@ internal static class WorkspaceFactsAssembler
             snapshot.Freshness.ManifestHash,
             snapshot.Freshness.StoreLogSequence.Value,
             snapshot.IndexLevel,
-            snapshot.ResolutionState,
-            snapshot.ResolutionBaseId,
-            snapshot.ResolutionDeltaGeneration,
-            snapshot.ResolutionExactAt,
             legacyArtifactPresent,
             legacyArtifactPresent ? "legacy_preserved" : "native",
             legacyArtifactPresent ? "available" : "export_required",
@@ -125,12 +120,11 @@ internal static class WorkspaceFactsAssembler
     /// <para>It also contradicted the honesty contract on <see cref="Miller.Server.Hosting.IndexFreshProbe"/>:
     /// an unmeasurable freshness yields <c>null</c> — "not measured" — never a fabricated true or false.</para>
     ///
-    /// <para>Store mode has no second revision to compare against here, but it does have three direct
-    /// convergence signals, all already read by the caller. Any one of them being unhealthy means the served
+    /// <para>Store mode has no second revision to compare against here, but it does have two direct
+    /// convergence signals, both already read by the caller. Either one being unhealthy means the served
     /// view does NOT reflect the workspace:</para>
     /// <list type="bullet">
     ///   <item>a persisted scan-failure record — new work is not reaching the store at all;</item>
-    ///   <item>a resolution fence that is not exact at the current manifest — the view has not finished binding;</item>
     ///   <item>a stale or unavailable search/content sidecar — the derived artifacts lag the store (an intentionally
     ///   disabled search sidecar is supported because the in-memory backend remains available).</item>
     /// </list>
@@ -152,24 +146,6 @@ internal static class WorkspaceFactsAssembler
                 $"{failure.ConsecutiveFailures} consecutive scan failure(s) since " +
                 $"{failure.LastFailureAtUtc:u}; the next attempt is not before " +
                 $"{failure.NextAttemptAtUtc:u}. The served view may not reflect the workspace.");
-        }
-
-        // A blank resolution state is genuinely unknown, not a failure: report "not measured" per the
-        // IndexFreshProbe honesty contract rather than inventing either answer.
-        if (string.IsNullOrWhiteSpace(snapshot.ResolutionState))
-            return (null, "unknown", null);
-
-        if (snapshot.Mode == WorkspaceReadMode.FamilyStore
-            && (!string.Equals(snapshot.ResolutionState, "exact", StringComparison.OrdinalIgnoreCase)
-                || snapshot.ResolutionExactAt != snapshot.ManifestGeneration
-                || snapshot.ResolutionBaseId is null
-                || snapshot.ResolutionDeltaGeneration is null))
-        {
-            return (
-                false,
-                "resolving",
-                $"The store view resolution is '{snapshot.ResolutionState}', not exact at the current manifest. " +
-                "Symbol-level reads may be unavailable until it converges.");
         }
 
         if (!string.Equals(search.State, "current", StringComparison.Ordinal) &&

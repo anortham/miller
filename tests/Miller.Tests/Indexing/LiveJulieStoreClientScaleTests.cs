@@ -64,11 +64,6 @@ public sealed class LiveJulieStoreClientScaleTests : IDisposable
             StoreLevel.Full,
             Controls("update-a", "update-key"),
             scan), cancellationToken);
-        StoreRequestResult resolved = client.Submit(new StoreResolveRequest(
-            store,
-            family,
-            "view-a",
-            Controls("resolve-a", "resolve-key")), cancellationToken);
         string exportPath = Path.Combine(_directory, "view-a.db");
         StoreRequestResult exported = client.Submit(new StoreExportRequest(
             store,
@@ -86,8 +81,6 @@ public sealed class LiveJulieStoreClientScaleTests : IDisposable
         Assert.True(updated.Completion.L1);
         Assert.True(updated.Completion.L2);
         Assert.True(updated.Completion.L3);
-        Assert.Equal(StoreResolutionState.Exact, resolved.Resolution.State);
-        Assert.True(resolved.Resolution.ExactAtMatches);
         Assert.Equal(Path.GetFileName(exportPath), Path.GetFileName(exported.Export?.Output));
         Assert.True(File.Exists(exported.Export?.Output));
         Assert.Equal(0, deleted.RowCounts.FileVersions);

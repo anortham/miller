@@ -539,10 +539,6 @@ public sealed class JulieStoreClient : IJulieStoreClient
                     Add(arguments, "--file", RequireText(file, nameof(delete.FilePaths)));
                 AddRequestControls(arguments, delete.Request);
                 break;
-            case StoreResolveRequest resolve:
-                Add(arguments, "--view", resolve.ViewId);
-                AddRequestControls(arguments, resolve.Request);
-                break;
             case StoreExportRequest export:
                 Add(arguments, "--view", export.ViewId);
                 Add(arguments, "--out", RequireText(export.OutputPath, nameof(export.OutputPath)));
@@ -601,7 +597,17 @@ public sealed class JulieStoreClient : IJulieStoreClient
         StoreLevelCompletionDto completion = dto.Completion ?? throw ContractFailure("Store report omitted completion.");
         StoreManifestResultDto manifest = dto.Manifest ?? throw ContractFailure("Store report omitted manifest.");
         StoreRowCountsDto rowCounts = dto.RowCounts ?? throw ContractFailure("Store report omitted row_counts.");
-        StoreResolutionResultDto resolution = dto.Resolution ?? throw ContractFailure("Store report omitted resolution.");
+        StoreResolutionResult? resolution = dto.Resolution is null
+            ? null
+            : new StoreResolutionResult(
+                ParseResolutionState(dto.Resolution.State),
+                dto.Resolution.ExactAtMatches,
+                dto.Resolution.BaseId,
+                dto.Resolution.DeltaGeneration,
+                dto.Resolution.ExactAtGeneration,
+                dto.Resolution.GapLowerBound,
+                dto.Resolution.ExactGapRows,
+                dto.Resolution.ExactGapFiles);
 
         return new StoreRequestResult(
             dto.ReportSchemaVersion.Value,
@@ -618,15 +624,7 @@ public sealed class JulieStoreClient : IJulieStoreClient
                 manifest.Hash,
                 ParseManifestDisposition(manifest.Disposition)),
             new StoreRowCounts(rowCounts.FileVersions, rowCounts.L1, rowCounts.L2, rowCounts.L3),
-            new StoreResolutionResult(
-                ParseResolutionState(resolution.State),
-                resolution.ExactAtMatches,
-                resolution.BaseId,
-                resolution.DeltaGeneration,
-                resolution.ExactAtGeneration,
-                resolution.GapLowerBound,
-                resolution.ExactGapRows,
-                resolution.ExactGapFiles),
+            resolution,
             dto.Export is null
                 ? null
                 : new StoreExportResult(
@@ -692,7 +690,6 @@ public sealed class JulieStoreClient : IJulieStoreClient
         StoreImportRequest import => import.Request,
         StoreUpdateRequest update => update.Request,
         StoreDeleteRequest delete => delete.Request,
-        StoreResolveRequest resolve => resolve.Request,
         _ => throw new InvalidOperationException($"Store operation '{request.Operation}' has no request controls."),
     };
 

@@ -379,11 +379,6 @@ public static class DashboardIndexFactsReader
                     ?? throw new InvalidOperationException("The family-store snapshot has no manifest hash."),
                 revision,
                 snapshot.IndexLevel,
-                snapshot.ResolutionState
-                    ?? throw new InvalidOperationException("The family-store snapshot has no resolution state."),
-                snapshot.ResolutionBaseId,
-                snapshot.ResolutionDeltaGeneration,
-                snapshot.ResolutionExactAt,
                 File.Exists(workspace.IndexDbPath),
                 File.Exists(workspace.IndexDbPath) ? "legacy_preserved" : "native",
                 File.Exists(workspace.IndexDbPath) ? "available" : "export_required",

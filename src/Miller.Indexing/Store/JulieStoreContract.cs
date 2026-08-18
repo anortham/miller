@@ -87,16 +87,6 @@ public sealed record StoreDeleteRequest(
     public override StoreOperation Operation => StoreOperation.Delete;
 }
 
-public sealed record StoreResolveRequest(
-    string StoreRoot,
-    string? FamilyId,
-    string ViewId,
-    StoreRequestControls Request)
-    : StoreRequest(StoreRoot, FamilyId, ViewId)
-{
-    public override StoreOperation Operation => StoreOperation.Resolve;
-}
-
 public sealed record StoreExportRequest(
     string StoreRoot,
     string? FamilyId,

@@ -7,7 +7,7 @@ namespace Miller.Tests.Server;
 /// <summary>
 /// Pins the idle bind heartbeat defense: a completed no-work bind is Debug so a quiet 250 ms
 /// drain tick cannot flood the shared daily log. Failed binds and did-work binds stay Information.
-/// Import, resolve, and sidecar_total stay Information.
+/// Import and sidecar_total stay Information.
 /// </summary>
 public sealed class IndexerPhaseRecordTests
 {
@@ -56,12 +56,6 @@ public sealed class IndexerPhaseRecordTests
     public void CompletedImport_LogsAtInformation()
     {
         AssertInformation(IndexerPhaseNames.Import);
-    }
-
-    [Fact]
-    public void CompletedResolve_LogsAtInformation()
-    {
-        AssertInformation(IndexerPhaseNames.Resolve);
     }
 
     [Fact]

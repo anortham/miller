@@ -698,10 +698,6 @@ public sealed class DashboardActivityFeedTests : IDisposable
             "blake3:manifest",
             91,
             "full",
-            "exact",
-            "base-1",
-            3,
-            91,
             true,
             "legacy_preserved",
             "available",
@@ -722,7 +718,7 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.Contains("Family store", html);
         Assert.Contains("view-worktree", html);
         Assert.Contains("Generation 7", html);
-        Assert.Contains("exact", html);
+        Assert.DoesNotContain("exact", html);
         Assert.Contains("/family/store", html);
         Assert.Contains("alpha-111111111111", html);
         Assert.Contains("bravo-222222222222", html);

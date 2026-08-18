@@ -113,11 +113,9 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     private readonly Func<string> _mintRequestId;
     private readonly StoreRequestJournal? _requestJournal;
     private readonly HashSet<string> _replayedImportRequestIds = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _replayedResolveRequestIds = new(StringComparer.Ordinal);
     private readonly string? _fromArtifact;
     private readonly IIndexerPhaseSink _phaseSink;
     private readonly Func<StoreTreeDelta>? _inspectTree;
-    private readonly Func<StoreFamilyBinding, bool> _tryCarryExact;
     private IReadOnlySet<string>? _supportedExtensions;
 
     public StoreWorkspaceCoordinator(
@@ -146,8 +144,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         Func<string>? mintRequestId,
         string? fromArtifact,
         IIndexerPhaseSink? phaseSink = null,
-        Func<StoreTreeDelta>? inspectTree = null,
-        Func<StoreFamilyBinding, bool>? tryCarryExact = null)
+        Func<StoreTreeDelta>? inspectTree = null)
     {
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(client);
@@ -164,8 +161,6 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         _fromArtifact = fromArtifact;
         _phaseSink = phaseSink ?? NullIndexerPhaseSink.Instance;
         _inspectTree = inspectTree;
-        _tryCarryExact = tryCarryExact ?? (static candidate =>
-            StoreResolutionCarry.TryCarryExactWhenNoResolveKeys(candidate.StoreRoot, candidate.ViewId));
     }
 
     internal void SetSupportedExtensions(IReadOnlySet<string>? extensions) =>
@@ -396,8 +391,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             request,
             before,
             changedFiles: 1,
-            deletedFiles: 0,
-            resolveAfter: level == StoreLevel.Full);
+            deletedFiles: 0);
     }
 
     public ExtractReport Delete(string path)
@@ -418,8 +412,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             request,
             before,
             changedFiles: 0,
-            deletedFiles: 1,
-            resolveAfter: string.Equals(before.IndexLevel, "full", StringComparison.Ordinal));
+            deletedFiles: 1);
     }
 
     public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
@@ -454,8 +447,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             request,
             before,
             changedFiles: 0,
-            deletedFiles: 0,
-            resolveAfter: level == StoreLevel.Full);
+            deletedFiles: 0);
     }
 
     private StoreTreeDelta InspectCurrentTree()
@@ -565,32 +557,6 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             }
         }
 
-        if (ShouldSubmitResolve(level == StoreLevel.Full && anyCreated, last))
-        {
-            string resolveFingerprint = ResolveFingerprint(delta);
-            StoreRequestControls resolveControls = Controls(resolveFingerprint, StoreOperation.Resolve);
-            var resolve = new StoreResolveRequest(
-                _binding.StoreRoot,
-                _binding.FamilyId.ToString("D"),
-                _binding.ViewId,
-                resolveControls);
-            bool replayedResolve = _replayedResolveRequestIds.Remove(resolveControls.RequestId);
-            _ = SubmitPhase(
-                true,
-                IndexerPhaseNames.Resolve,
-                () => SubmitResolveRequest(resolve, resolveFingerprint, replayedResolve),
-                resolveResult => resolveResult.State is StoreRequestState.Committed or StoreRequestState.Acknowledged);
-        }
-        else
-        {
-            _phaseSink.RecordSafely(
-                IndexerPhaseNames.Resolve,
-                TimeSpan.Zero,
-                IndexerPhaseOutcomes.Skipped,
-                storeSequence: null,
-                didWork: false);
-        }
-
         StoreWorkspaceState after = ReadRequiredState();
         PublishFreshnessStamp();
         bool changed = anyCreated || !string.Equals(before.IndexLevel, after.IndexLevel, StringComparison.Ordinal);
@@ -622,12 +588,6 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         using var totalPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.CoordinatorTotal);
         _phaseSink.RecordSafely(
             IndexerPhaseNames.Import,
-            TimeSpan.Zero,
-            IndexerPhaseOutcomes.Skipped,
-            state.StoreLogSequence,
-            false);
-        _phaseSink.RecordSafely(
-            IndexerPhaseNames.Resolve,
             TimeSpan.Zero,
             IndexerPhaseOutcomes.Skipped,
             state.StoreLogSequence,
@@ -694,8 +654,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         StoreRequest request,
         StoreWorkspaceState? before,
         long changedFiles,
-        long deletedFiles,
-        bool resolveAfter)
+        long deletedFiles)
     {
         using var totalPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.CoordinatorTotal);
         InvalidateFreshnessStamp();
@@ -709,40 +668,13 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
                 || before is null
                 || request is StoreImportRequest { Level: StoreLevel.Full }
                     && !string.Equals(before?.IndexLevel, "full", StringComparison.Ordinal));
-        bool resolveSubmitted = false;
-        if (ShouldSubmitResolve(resolveAfter, result))
-        {
-            resolveSubmitted = true;
-            string resolveFingerprint = ResolveFingerprint(ResolveToken(request));
-            StoreRequestControls controls = Controls(resolveFingerprint, StoreOperation.Resolve);
-            var resolve = new StoreResolveRequest(
-                _binding.StoreRoot,
-                _binding.FamilyId.ToString("D"),
-                _binding.ViewId,
-                controls);
-            bool replayedResolve = _replayedResolveRequestIds.Remove(controls.RequestId);
-            _ = SubmitPhase(
-                true,
-                IndexerPhaseNames.Resolve,
-                () => SubmitResolveRequest(resolve, resolveFingerprint, replayedResolve),
-                resolveResult => resolveResult.State is StoreRequestState.Committed or StoreRequestState.Acknowledged);
-        }
-        else
-        {
-            _phaseSink.RecordSafely(
-                IndexerPhaseNames.Resolve,
-                TimeSpan.Zero,
-                IndexerPhaseOutcomes.Skipped,
-                storeSequence: null,
-                didWork: false);
-        }
 
         StoreWorkspaceState after = ReadRequiredState();
         PublishFreshnessStamp();
         bool changed = result.Manifest.Disposition == StoreManifestDisposition.Created
             || before is null
             || !string.Equals(before.IndexLevel, after.IndexLevel, StringComparison.Ordinal);
-        totalPhase.Complete(after.StoreLogSequence, changed || resolveSubmitted);
+        totalPhase.Complete(after.StoreLogSequence, changed);
         return Report(result, after, changed, changedFiles, deletedFiles);
     }
 
@@ -783,26 +715,6 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             };
             result = _client.Submit(freshImport);
             RequireCommittedAndCompleteJournal(freshImport, result);
-        }
-
-        return result;
-    }
-
-    private StoreRequestResult SubmitResolveRequest(
-        StoreResolveRequest request,
-        string resolveFingerprint,
-        bool replayedResolve)
-    {
-        StoreRequestResult result = _client.Submit(request);
-        RequireCommittedAndCompleteJournal(request, result);
-        if (replayedResolve)
-        {
-            StoreResolveRequest freshResolve = request with
-            {
-                Request = Controls(resolveFingerprint, StoreOperation.Resolve),
-            };
-            result = _client.Submit(freshResolve);
-            RequireCommittedAndCompleteJournal(freshResolve, result);
         }
 
         return result;
@@ -1006,33 +918,11 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         string requestId = _requestJournal?.GetOrCreate(fingerprint, RequestId, out resumed) ?? RequestId();
         if (resumed && operation == StoreOperation.Import)
             _replayedImportRequestIds.Add(requestId);
-        if (resumed && operation == StoreOperation.Resolve)
-            _replayedResolveRequestIds.Add(requestId);
         return new StoreRequestControls(requestId, requestId, RequestTimeout(operation));
     }
 
     private string ImportFingerprint(StoreLevel level, string? fromArtifact) =>
         $"import|{_binding.FamilyId:D}|{_binding.ViewId}|{level}|{fromArtifact ?? string.Empty}";
-
-    private string ResolveFingerprint(string token) =>
-        $"resolve|{_binding.FamilyId:D}|{_binding.ViewId}|{token}";
-
-    private string ResolveFingerprint(StoreTreeDelta delta) =>
-        ResolveFingerprint($"{string.Join(',', delta.ChangedOrAdded)}|{string.Join(',', delta.Deleted)}");
-
-    private static string ResolveToken(StoreRequest request) => request switch
-    {
-        StoreUpdateRequest update => update.FilePath,
-        StoreDeleteRequest delete => string.Join(',', delete.FilePaths),
-        StoreImportRequest => "import",
-        _ => "resolve",
-    };
-
-    private static bool ResolutionAlreadyExact(StoreRequestResult? result) =>
-        result is { Resolution.State: StoreResolutionState.Exact, Resolution.ExactAtMatches: true };
-
-    private bool ShouldSubmitResolve(bool resolveAfter, StoreRequestResult? last) =>
-        resolveAfter && !ResolutionAlreadyExact(last) && !_tryCarryExact(_binding);
 
     private static TimeSpan RequestTimeout(StoreOperation operation)
     {
@@ -1043,7 +933,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
 
     internal static TimeSpan RequestTimeout(StoreOperation operation, string? configured)
     {
-        if ((operation is StoreOperation.Import or StoreOperation.Resolve) &&
+        if (operation is StoreOperation.Import &&
             ExtractWaitPolicy.ParseDuration(configured) is { } parsed
             && parsed.TotalSeconds <= int.MaxValue
             && parsed.TotalSeconds == Math.Truncate(parsed.TotalSeconds))
@@ -1051,7 +941,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             return parsed;
         }
 
-        return operation is StoreOperation.Import or StoreOperation.Resolve
+        return operation is StoreOperation.Import
             ? DefaultLongRequestTimeout
             : DefaultRequestTimeout;
     }
@@ -1069,7 +959,6 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         StoreImportRequest import => import.Request,
         StoreUpdateRequest update => update.Request,
         StoreDeleteRequest delete => delete.Request,
-        StoreResolveRequest resolve => resolve.Request,
         _ => throw new InvalidOperationException($"Store operation '{request.Operation}' has no request controls."),
     };
 

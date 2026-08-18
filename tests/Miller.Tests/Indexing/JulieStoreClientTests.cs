@@ -340,29 +340,14 @@ public sealed class JulieStoreClientTests
     }
 
     [Fact]
-    public void ResolveAndExportArgumentsStayOperationSpecific()
+    public void ExportArgumentsStayOperationSpecific()
     {
-        var resolve = new StoreResolveRequest(
-            StoreRoot: "/family",
-            FamilyId: null,
-            ViewId: "view-a",
-            Request: Controls());
         var export = new StoreExportRequest(
             StoreRoot: "/family",
             FamilyId: "11111111-1111-4111-8111-111111111111",
             ViewId: "view-a",
             OutputPath: "/exports/view-a.db");
 
-        Assert.Equal(
-        [
-            "store", "resolve",
-            "--store", "/family",
-            "--view", "view-a",
-            "--request-id", "request-a",
-            "--idempotency-key", "key-a",
-            "--request-timeout-seconds", "30",
-            "--json",
-        ], JulieStoreClient.BuildArguments(resolve));
         Assert.Equal(
         [
             "store", "export",
@@ -372,6 +357,7 @@ public sealed class JulieStoreClientTests
             "--out", "/exports/view-a.db",
             "--json",
         ], JulieStoreClient.BuildArguments(export));
+        Assert.DoesNotContain("resolve", JulieStoreClient.BuildArguments(export), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -390,12 +376,29 @@ public sealed class JulieStoreClientTests
         Assert.Equal(new StoreLevelCompletion(true, false, false), result.Completion);
         Assert.Equal(new StoreManifestResult(4, "abc123", StoreManifestDisposition.Created), result.Manifest);
         Assert.Equal(new StoreRowCounts(2, 30, 0, 0), result.RowCounts);
-        Assert.Equal(StoreResolutionState.Unbound, result.Resolution.State);
-        Assert.False(result.Resolution.ExactAtMatches);
+        Assert.Equal(StoreResolutionState.Unbound, result.Resolution?.State);
+        Assert.False(result.Resolution?.ExactAtMatches);
         Assert.Equal(StoreCoordinatorDisposition.Committed, result.Coordinator);
         Assert.Equal(StoreFailureClass.None, result.Failure.Class);
         Assert.Null(result.Failure.Message);
         Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public void ParseReportToleratesAnAbsentResolutionObject()
+    {
+        string json = SuccessReport.Replace(
+            """
+            ,"resolution":{"state":"unbound","exact_at_matches":false}
+            """,
+            string.Empty,
+            StringComparison.Ordinal);
+
+        StoreRequestResult result = JulieStoreClient.ParseReport(json, StoreOperation.Import, 0);
+
+        Assert.Null(result.Resolution);
+        Assert.Equal(StoreRequestState.Committed, result.State);
+        Assert.Equal(new StoreRowCounts(2, 30, 0, 0), result.RowCounts);
     }
 
     [Fact]
@@ -433,10 +436,10 @@ public sealed class JulieStoreClientTests
                 "/family", "not-a-uuid", "view-a", "/workspace", StoreLevel.Full,
                 Controls(), StoreScanControls.Default, null)));
         Assert.Throws<ArgumentOutOfRangeException>(() => JulieStoreClient.BuildArguments(
-            new StoreResolveRequest("/family", null, "view-a", Controls() with
-            {
-                Timeout = TimeSpan.Zero,
-            })));
+            new StoreUpdateRequest(
+                "/family", null, "view-a", "/workspace", "src/a.cs", StoreLevel.Full,
+                Controls() with { Timeout = TimeSpan.Zero },
+                StoreScanControls.Default)));
     }
 
     [Fact]
@@ -569,7 +572,7 @@ public sealed class JulieStoreClientTests
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
         var client = new JulieStoreClient("missing-julie-extract");
-        var request = new StoreResolveRequest("/family", null, "view-a", Controls());
+        var request = new StoreExportRequest("/family", null, "view-a", "/exports/view-a.db");
 
         Assert.Throws<OperationCanceledException>(() => client.Submit(request, canceled.Token));
     }

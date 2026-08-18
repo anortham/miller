@@ -56,10 +56,6 @@ public sealed record StoreWorkspaceFacts(
     string ManifestHash,
     long StoreLogSequence,
     string IndexLevel,
-    string ResolutionState,
-    string? ResolutionBaseId,
-    long? ResolutionDeltaGeneration,
-    long? ResolutionExactAt,
     bool LegacyArtifactPresent,
     string MigrationState,
     string RollbackState,
@@ -79,10 +75,6 @@ public sealed record StoreWorkspaceFacts(
             string.Empty,
             0,
             string.Empty,
-            string.Empty,
-            null,
-            null,
-            null,
             false,
             "unknown",
             "unavailable",
@@ -675,7 +667,6 @@ public static class WorkspaceRender
             .Append("  manifest=").Append(facts.ManifestHash)
             .Append("  sequence=").Append(facts.StoreLogSequence)
             .Append("  level=").Append(facts.IndexLevel)
-            .Append("  resolution=").Append(facts.ResolutionState)
             .Append("  migration=").Append(facts.MigrationState)
             .Append("  rollback=").Append(facts.RollbackState);
         if (!string.IsNullOrWhiteSpace(facts.StoreRoot))
@@ -710,13 +701,6 @@ public static class WorkspaceRender
         w.WriteString("manifest_hash", facts.ManifestHash);
         w.WriteNumber("store_log_sequence", facts.StoreLogSequence);
         w.WriteString("index_level", facts.IndexLevel);
-        w.WriteString("resolution_state", facts.ResolutionState);
-        if (facts.ResolutionBaseId is null) w.WriteNull("resolution_base_id");
-        else w.WriteString("resolution_base_id", facts.ResolutionBaseId);
-        if (facts.ResolutionDeltaGeneration is { } delta) w.WriteNumber("resolution_delta_generation", delta);
-        else w.WriteNull("resolution_delta_generation");
-        if (facts.ResolutionExactAt is { } exactAt) w.WriteNumber("resolution_exact_at", exactAt);
-        else w.WriteNull("resolution_exact_at");
         w.WriteBoolean("legacy_artifact_present", facts.LegacyArtifactPresent);
         w.WriteString("migration_state", facts.MigrationState);
         w.WriteString("rollback_state", facts.RollbackState);

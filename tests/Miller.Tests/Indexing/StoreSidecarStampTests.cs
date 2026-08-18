@@ -50,6 +50,43 @@ public sealed class StoreSidecarStampTests : IDisposable
     }
 
     [Fact]
+    public void FromSnapshotWritesTheRetiredResolutionStamp()
+    {
+        StoreSidecarStamp stamp = StoreSidecarStamp.FromSnapshot(
+            StoreSidecarKind.Search,
+            Snapshot("manifest-a", sequence: 17));
+
+        Assert.Equal("retired", stamp.ResolutionStamp);
+    }
+
+    [Theory]
+    [InlineData(StoreSidecarKind.Search)]
+    [InlineData(StoreSidecarKind.Content)]
+    [InlineData(StoreSidecarKind.Vector)]
+    public void PreChangeResolutionStampAtUnchangedSequenceDoesNotRebuild(StoreSidecarKind kind)
+    {
+        Directory.CreateDirectory(_root);
+        string databasePath = StoreSidecarCatalog.PathFor(_root, kind, "view-a");
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+        }
+
+        WorkspaceReadSnapshot snapshot = Snapshot("manifest-a", sequence: 17);
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(kind, snapshot);
+        StoreSidecarCatalog.Stamp(databasePath, expected with { ResolutionStamp = "exact" });
+
+        Assert.Equal(expected, StoreSidecarCatalog.TryRead(databasePath));
+        Assert.True(StoreSidecarCatalog.IsCurrent(databasePath, expected));
+        AssertSidecarDoesNotNeedRebuild(kind, snapshot);
+    }
+
+    [Fact]
     public void ScopeTokenChangesWhenAnyStampFieldChanges()
     {
         StoreSidecarStamp stamp = StoreSidecarStamp.FromSnapshot(
@@ -382,4 +419,23 @@ public sealed class StoreSidecarStampTests : IDisposable
             ResolutionState: resolutionState);
 
     private static string ScopeToken(StoreSidecarStamp stamp) => stamp.ScopeToken;
+
+    private void AssertSidecarDoesNotNeedRebuild(StoreSidecarKind kind, WorkspaceReadSnapshot snapshot)
+    {
+        switch (kind)
+        {
+            case StoreSidecarKind.Search:
+                Assert.NotEqual("stale", new SymbolSearchSidecar(enabled: true).InspectStore(_root, snapshot).State);
+                return;
+            case StoreSidecarKind.Content:
+                Assert.NotEqual("stale", new ContentCorpusSidecar().InspectStore(_root, snapshot).State);
+                return;
+            case StoreSidecarKind.Vector:
+                VectorSidecarFacts vectors = new VectorSidecar(SemanticMode.On).InspectStore(_root, snapshot);
+                Assert.DoesNotContain("completeness stamp", vectors.Reason ?? string.Empty, StringComparison.Ordinal);
+                return;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind), kind, null);
+        }
+    }
 }

@@ -56,7 +56,8 @@ continuous testing, launcher smokes, fleet inventory, and local readiness checks
 - `artifact_id`: current extract artifact generation ID, or `null` when unavailable. Pair this with
   `latest_revision` when calling `impact --from-index-revision`.
 - `index_fresh`: `true`, `false`, or `null` when freshness is not known.
-- `freshness_status`: stable status string such as `ready`, `stale`, or `missing`.
+- `freshness_status`: stable status string such as `ready`, `stale`, `missing`, `current`,
+  `scan_failing`, or `sidecar_stale`. It is never `resolving`.
 - `warning`: warning text, or `null`.
 - `queue_empty`: whether the leader work queue is empty from this process's perspective.
 - `search_sidecar`: search sidecar facts, or `null`.
