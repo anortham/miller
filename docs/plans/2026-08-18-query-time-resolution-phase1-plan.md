@@ -138,9 +138,9 @@ public sealed class QueryTimeResolver(IResolutionFacts facts)
 **Approach:** Test-drive from the contract: each tier gets tests for its resolve, refuse, and ambiguity cases; the driver gets chain-order, first-ambiguous, skip-vs-attempt (`no_context` vs `missing`), and confidence-min tests. The three parity-ladder bugs from the spike findings (span locate, dotted-namespace flattening, kind-filtered scope stop) each get a dedicated regression test. Keep allocation low on hot paths (candidate enumeration) but do not micro-optimize past clarity — the cache layer owns performance.
 
 **Acceptance criteria:**
-- [ ] Every rule and gotcha in `resolution-policy-v6.md` has a covering unit test; all pass
-- [ ] `Miller.Core` still references no I/O packages
-- [ ] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit)
+- [x] Every rule and gotcha in `resolution-policy-v6.md` has a covering unit test; all pass
+- [x] `Miller.Core` still references no I/O packages
+- [x] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit)
 
 ### Task 2: Remove the dead-code candidates feature
 
