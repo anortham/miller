@@ -272,11 +272,11 @@ Second loader, same cache: `RevisionFactCache.LoadFromArtifact(SqliteConnection 
 **Approach:** Write the parity test FIRST: a fixture store built with the existing test schema helpers, populated so every tier/reason/fallback arm fires, asserting the new reader's edge set equals the old view SQL's edge set on the same fixture (run the old SQL in the test against the fixture's base tables before deleting it from production code — the test keeps a private copy of the expected tuples, not the old production SQL). `StoreVisibility.ResolutionState` may keep existing as a read field this task ignores; Task 5 removes its production surfacing. Note on `WorkspaceIndexProvider` :1508: leave the stamp interpolation intact — Task 5 owns the stamp decision.
 
 **Acceptance criteria:**
-- [ ] Golden per-surface parity tests pass: identical serialized output (labels, tiers, confidences, ordering) vs the retired SQL for graph edges, evidence bundles, AND export rows — family-store arm and legacy-artifact arm both
-- [ ] No production code references `identifier_resolutions`, `pending_resolutions`, `resolution_identifier_deltas`, resolution bases, or `AttachValidatedResolutionBase` — verified by tree-wide grep, not just the plan's file list
-- [ ] Family-mode evidence dispatch works with no resolution base attached; `references export` produces contract-identical rows; the in-memory holder graph builds via the resolver sweep
-- [ ] All five tool degraded paths and the rename refusal are gone; tools answer on a bound view regardless of `views.resolution_state`
-- [ ] Worker-scope verification passes; worker commits owned files (serial-worker-commit)
+- [x] Golden per-surface parity tests pass: identical serialized output (labels, tiers, confidences, ordering) vs the retired SQL for graph edges, evidence bundles, AND export rows — family-store arm and legacy-artifact arm both
+- [x] No production code references `identifier_resolutions`, `pending_resolutions`, `resolution_identifier_deltas`, resolution bases, or `AttachValidatedResolutionBase` — verified by tree-wide grep, not just the plan's file list
+- [x] Family-mode evidence dispatch works with no resolution base attached; `references export` produces contract-identical rows; the in-memory holder graph builds via the resolver sweep
+- [x] All five tool degraded paths and the rename refusal are gone; tools answer on a bound view regardless of `views.resolution_state`
+- [x] Worker-scope verification passes; worker commits owned files (serial-worker-commit)
 
 ### Task 5: Stop submitting resolves; remove the machinery and status surface
 
