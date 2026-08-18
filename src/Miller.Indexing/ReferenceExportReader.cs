@@ -4,6 +4,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Resolution;
 
 namespace Miller.Indexing;
 
@@ -14,8 +15,8 @@ namespace Miller.Indexing;
 /// consumer span matching. Rows are ordered by path, producer start byte, reference-site ID, canonical kind,
 /// and target identity so re-exporting an unchanged artifact is byte-identical.
 ///
-/// <para>Every row carries the artifact's <c>index_level</c>. The union's <c>identifiers</c> and
-/// <c>identifier_resolutions</c> arms are EMPTY at symbols level while the <c>relationships</c> arm is populated,
+/// <para>Every row carries the artifact's <c>index_level</c>. Identifier-derived arms are EMPTY at symbols
+/// level while the <c>relationships</c> arm is populated,
 /// so this feed degrades to a partial — not an empty — stream, and a consumer reading stdout alone has no other
 /// way to tell a symbols-level export from a complete one.</para>
 /// </summary>
@@ -36,7 +37,7 @@ public static class ReferenceExportReader
         ArgumentNullException.ThrowIfNull(writer);
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
-        WriteJsonLines(connection, writer);
+        WriteJsonLines(connection, writer, reader: null);
     }
 
     public static void WriteJsonLines(IWorkspaceReadSession session, TextWriter writer)
@@ -45,19 +46,24 @@ public static class ReferenceExportReader
         ArgumentNullException.ThrowIfNull(writer);
         session.Read(connection =>
         {
-            WriteJsonLines(connection, writer);
+            WriteJsonLines(connection, writer, ReferenceEvidenceReader.ReaderFor(session, connection));
             return true;
         });
     }
 
-    private static void WriteJsonLines(SqliteConnection connection, TextWriter writer)
+    private static void WriteJsonLines(
+        SqliteConnection connection,
+        TextWriter writer,
+        QueryTimeResolutionReader? reader)
     {
-        JulieSchemaGate.Verify(connection);
+        if (reader is null)
+            JulieSchemaGate.Verify(connection);
 
         string? artifactId = ReadArtifactId(connection);
         long? workspaceRevision = ReadWorkspaceRevision(connection);
         string indexLevel = ExtractIndexLevelReader.Read(connection);
-        IReadOnlyList<ReferenceAssertionRow> rows = ReadAssertions(connection);
+        reader ??= new QueryTimeResolutionReader(RevisionFactCache.LoadFromArtifact(connection), visibility: null);
+        IReadOnlyList<ReferenceAssertionRow> rows = ReadAssertions(reader, connection);
         foreach (ReferenceAssertionRow row in rows)
         {
             writer.Write(RenderRow(row, artifactId, workspaceRevision, indexLevel));
@@ -65,84 +71,37 @@ public static class ReferenceExportReader
         }
     }
 
-    private static IReadOnlyList<ReferenceAssertionRow> ReadAssertions(SqliteConnection connection)
+    private static IReadOnlyList<ReferenceAssertionRow> ReadAssertions(
+        QueryTimeResolutionReader resolution,
+        SqliteConnection connection)
     {
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT s.reference_site_id, s.is_exact, s.provenance, s.path, s.language,
-                   s.containing_symbol_id, s.start_line, s.start_column, s.end_line, s.end_column,
-                   s.start_byte, s.end_byte, i.kind, NULL AS target_symbol_id, i.name,
-                   NULL AS target_kind, NULL AS target_is_test, NULL AS resolution_tier, i.confidence,
-                   'name_fallback' AS evidence_source, source.name, source.kind, source.is_test
-            FROM identifiers i
-            JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
-            LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-            LEFT JOIN symbols source ON source.symbol_id = s.containing_symbol_id
-            WHERE ir.target_symbol_id IS NULL
-            UNION ALL
-            SELECT s.reference_site_id, s.is_exact, s.provenance, s.path, s.language,
-                   s.containing_symbol_id, s.start_line, s.start_column, s.end_line, s.end_column,
-                   s.start_byte, s.end_byte, i.kind, ir.target_symbol_id, target.name,
-                   target.kind, target.is_test, ir.tier, COALESCE(ir.confidence, i.confidence),
-                   'identifier_resolution', source.name, source.kind, source.is_test
-            FROM identifier_resolutions ir
-            JOIN identifiers i ON i.identifier_id = ir.identifier_id
-            JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
-            LEFT JOIN symbols source ON source.symbol_id = s.containing_symbol_id
-            JOIN symbols target ON target.symbol_id = ir.target_symbol_id
-            UNION ALL
-            SELECT s.reference_site_id, s.is_exact, s.provenance, s.path, s.language,
-                   s.containing_symbol_id, s.start_line, s.start_column, s.end_line, s.end_column,
-                   s.start_byte, s.end_byte, r.kind, r.to_symbol_id, target.name,
-                   target.kind, target.is_test, NULL, r.confidence,
-                   'relationship', source.name, source.kind, source.is_test
-            FROM relationships r
-            JOIN reference_sites s ON s.reference_site_id = r.reference_site_id
-            LEFT JOIN symbols source ON source.symbol_id = s.containing_symbol_id
-            JOIN symbols target ON target.symbol_id = r.to_symbol_id
-            UNION ALL
-            SELECT s.reference_site_id, s.is_exact, s.provenance, s.path, s.language,
-                   s.containing_symbol_id, s.start_line, s.start_column, s.end_line, s.end_column,
-                   s.start_byte, s.end_byte, p.kind, pr.target_symbol_id,
-                   COALESCE(target.name, p.target_display_name), target.kind, target.is_test,
-                   pr.tier, CASE WHEN pr.confidence IS NULL THEN p.confidence ELSE MIN(p.confidence, pr.confidence) END,
-                   CASE WHEN pr.target_symbol_id IS NULL THEN 'name_fallback' ELSE 'pending_resolution' END,
-                   source.name, source.kind, source.is_test
-            FROM pending_relationships p
-            JOIN reference_sites s ON s.reference_site_id = p.reference_site_id
-            LEFT JOIN pending_resolutions pr ON pr.pending_relationship_id = p.pending_relationship_id
-            LEFT JOIN symbols source ON source.symbol_id = s.containing_symbol_id
-            LEFT JOIN symbols target ON target.symbol_id = pr.target_symbol_id;
-            """;
-
         var evidence = new List<ReferenceEvidenceExportRow>();
-        using SqliteDataReader reader = command.ExecuteReader();
-        while (reader.Read())
+        foreach (QueryTimeExportEvidence row in resolution.ReadExportEvidence(connection))
         {
             evidence.Add(new ReferenceEvidenceExportRow(
-                ReferenceSiteId: reader.GetString(0),
-                IsExact: reader.GetInt64(1) == 1,
-                SiteProvenance: reader.GetString(2),
-                Path: reader.GetString(3),
-                Language: reader.GetString(4),
-                ContainingSymbolId: ReadString(reader, 5),
-                StartLine: ReadInt64(reader, 6),
-                StartColumn: ReadInt64(reader, 7),
-                EndLine: ReadInt64(reader, 8),
-                EndColumn: ReadInt64(reader, 9),
-                StartByte: ReadInt64(reader, 10),
-                EndByte: ReadInt64(reader, 11),
-                CanonicalKind: CanonicalKind(reader.GetString(12)),
-                TargetSymbolId: ReadString(reader, 13),
-                TargetName: reader.GetString(14),
-                TargetKind: ReadString(reader, 15),
-                TargetIsTest: ReadBool(reader, 16),
-                ResolutionTier: ReadInt64(reader, 17),
-                Confidence: reader.GetDouble(18),
-                EvidenceSource: reader.GetString(19),
-                SourceName: ReadString(reader, 20),
-                SourceKind: ReadString(reader, 21),
-                SourceIsTest: ReadBool(reader, 22)));
+                row.ReferenceSiteId,
+                row.IsExact,
+                row.SiteProvenance,
+                row.Path,
+                row.Language,
+                row.ContainingSymbolId,
+                row.StartLine,
+                row.StartColumn,
+                row.EndLine,
+                row.EndColumn,
+                row.StartByte,
+                row.EndByte,
+                row.CanonicalKind,
+                row.TargetSymbolId,
+                row.TargetName,
+                row.TargetKind,
+                row.TargetIsTest,
+                row.ResolutionTier,
+                row.Confidence,
+                row.EvidenceSource,
+                row.SourceName,
+                row.SourceKind,
+                row.SourceIsTest));
         }
 
         return evidence

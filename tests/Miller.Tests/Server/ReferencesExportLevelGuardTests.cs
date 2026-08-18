@@ -42,7 +42,7 @@ public sealed class ReferencesExportLevelGuardTests : IDisposable
         Assert.NotEmpty(outText);
         Assert.Contains("diagnostic_code=reference_layer_converging", errText, StringComparison.Ordinal);
         Assert.Contains("identifiers", errText, StringComparison.Ordinal);
-        Assert.Contains("identifier_resolutions", errText, StringComparison.Ordinal);
+        Assert.DoesNotContain("identifier_resolutions", errText, StringComparison.Ordinal);
         Assert.Contains("partial", errText, StringComparison.OrdinalIgnoreCase);
     }
 

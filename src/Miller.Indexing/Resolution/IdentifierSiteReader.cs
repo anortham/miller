@@ -79,6 +79,27 @@ internal static class IdentifierSiteReader
         return rows;
     }
 
+    internal static IEnumerable<IdentifierSite> SitesAll(
+        SqliteConnection storeRead,
+        StoreVisibility visibility)
+    {
+        ArgumentNullException.ThrowIfNull(storeRead);
+        ArgumentNullException.ThrowIfNull(visibility);
+        using SqliteCommand command = storeRead.CreateCommand();
+        command.CommandText =
+            """
+            SELECT i.version_id,i.rowid,i.identifier_id,i.name,i.kind,i.containing_symbol_id,
+                   i.confidence,i.start_byte,i.end_byte,i.start_line,i.metadata_json
+            FROM main.identifiers AS i
+            JOIN main.manifest_entries AS e ON e.version_id=i.version_id
+            WHERE e.view_id=$view_id AND e.generation=$generation
+            ORDER BY i.version_id,i.rowid
+            """;
+        command.Parameters.AddWithValue("$view_id", visibility.ViewId);
+        command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
+        return ReadSites(command).ToArray();
+    }
+
     internal static IEnumerable<IdentifierSite> SitesNamed(SqliteConnection artifactRead, string name)
     {
         ArgumentNullException.ThrowIfNull(artifactRead);
@@ -94,6 +115,21 @@ internal static class IdentifierSiteReader
             ORDER BY 1,i.rowid
             """;
         command.Parameters.AddWithValue("$name", name);
+        return ReadSites(command).ToArray();
+    }
+
+    internal static IEnumerable<IdentifierSite> SitesAll(SqliteConnection artifactRead)
+    {
+        ArgumentNullException.ThrowIfNull(artifactRead);
+        using SqliteCommand command = artifactRead.CreateCommand();
+        command.CommandText =
+            """
+            SELECT CAST(i.file_id AS INTEGER),i.rowid,i.identifier_id,i.name,i.kind,i.containing_symbol_id,
+                   i.confidence,i.start_byte,i.end_byte,i.start_line,i.metadata_json
+            FROM identifiers AS i
+            JOIN files AS f ON f.file_id=i.file_id
+            ORDER BY 1,i.rowid
+            """;
         return ReadSites(command).ToArray();
     }
 
@@ -143,10 +179,10 @@ internal static class IdentifierSiteReader
                 receiver,
                 qualifier,
                 reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.GetDouble(6),
-                reader.GetInt64(7),
-                reader.GetInt64(8),
-                reader.GetInt64(9)));
+                reader.IsDBNull(6) ? 1.0 : reader.GetDouble(6),
+                reader.IsDBNull(7) ? 0 : reader.GetInt64(7),
+                reader.IsDBNull(8) ? 0 : reader.GetInt64(8),
+                reader.IsDBNull(9) ? 0 : reader.GetInt64(9)));
         }
 
         return rows;

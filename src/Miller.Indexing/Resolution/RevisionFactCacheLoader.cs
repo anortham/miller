@@ -31,6 +31,9 @@ internal static class RevisionFactCacheLoader
 
     internal static List<VisibleFile> ReadVisibleArtifact(SqliteConnection connection)
     {
+        if (!TableExists(connection, "files"))
+            return [];
+
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
             """
@@ -43,6 +46,14 @@ internal static class RevisionFactCacheLoader
         while (reader.Read())
             rows.Add(new VisibleFile(reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
         return rows;
+    }
+
+    private static bool TableExists(SqliteConnection connection, string name)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$name LIMIT 1;";
+        command.Parameters.AddWithValue("$name", name);
+        return command.ExecuteScalar() is not null;
     }
 
     internal static Dictionary<long, VersionSlice> LoadAllStoreSlices(
@@ -89,6 +100,9 @@ internal static class RevisionFactCacheLoader
                 [],
                 []);
         }
+
+        if (slices.Count == 0)
+            return slices;
 
         FillArtifactSymbols(connection, slices, intern);
         FillArtifactTypeFacts(connection, slices, intern);
@@ -343,9 +357,9 @@ internal static class RevisionFactCacheLoader
             rowIds.Add(reader.GetInt64(1));
             candidates.Add(new PropagationCandidate(
                 reader.GetString(2),
-                reader.GetInt64(3),
-                reader.GetInt64(4),
-                reader.GetInt64(5)));
+                ReadNullableInt64(reader, 3) ?? 0,
+                ReadNullableInt64(reader, 4) ?? 0,
+                reader.IsDBNull(5) ? 0 : reader.GetInt64(5)));
         }
 
         FlushLocated(slices, currentVersion, candidates, rowIds, pending, relationships);

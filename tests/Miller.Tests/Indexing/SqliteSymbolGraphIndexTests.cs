@@ -96,14 +96,14 @@ public sealed class SqliteSymbolGraphIndexTests
             [
                 GraphStatementPhase.RelationshipForward,
                 GraphStatementPhase.RelationshipReverse,
+                GraphStatementPhase.FamilyResolution,
                 GraphStatementPhase.UnresolvedNameForward,
             ],
             observations.Select(static observation => observation.Phase));
         Assert.All(observations, static observation => Assert.True(observation.Elapsed >= TimeSpan.Zero));
         Assert.DoesNotContain(
             observations,
-            static observation => observation.Phase is GraphStatementPhase.FamilyResolution
-                or GraphStatementPhase.Supplemental
+            static observation => observation.Phase is GraphStatementPhase.Supplemental
                 or GraphStatementPhase.Completion);
     }
 
@@ -138,7 +138,11 @@ public sealed class SqliteSymbolGraphIndexTests
             sqlite.Reach(ids, 1, 20, Direction.Forward));
 
         Assert.Equal(
-            [GraphStatementPhase.RelationshipForward, GraphStatementPhase.UnresolvedNameForward],
+            [
+                GraphStatementPhase.RelationshipForward,
+                GraphStatementPhase.FamilyResolution,
+                GraphStatementPhase.UnresolvedNameForward,
+            ],
             observations.Select(static observation => observation.Phase));
         Assert.All(observations, observation =>
         {

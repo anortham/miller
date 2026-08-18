@@ -183,9 +183,7 @@ public sealed class JulieSchemaGateTests
     [InlineData("reference_sites")]
     [InlineData("identifiers")]
     [InlineData("relationships")]
-    [InlineData("identifier_resolutions")]
     [InlineData("pending_relationships")]
-    [InlineData("pending_resolutions")]
     [InlineData("structural_facts")]
     [InlineData("language_capability_gaps")]
     public void Verify_MissingRequiredSchemaFiveTable_ThrowsNamingTheTable(string tableName)

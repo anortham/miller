@@ -1980,9 +1980,61 @@ public sealed class CliDispatchTests : IDisposable
     [Fact]
     public void References_Export_EmitsCanonicalAssertionPerSiteTargetAndKind()
     {
-        using var fx = JulieDbFixture.CreateForEdit();
-        MarkSymbolAsTest(fx.DbPath, "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00");
-        SetIdentifierTarget(fx.DbPath, "d100000000000000000000000000000c", JulieDbFixture.TotalMethodId);
+        const string sumId = "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    JulieDbFixture.TotalMethodId,
+                    "Total",
+                    "function",
+                    "csharp",
+                    "orders/OrderService.cs",
+                    "public int Total()",
+                    2,
+                    null),
+                new JulieDbFixture.SymbolRow(
+                    sumId,
+                    "Sum",
+                    "method",
+                    "csharp",
+                    "billing/Invoice.cs",
+                    "public int Sum()",
+                    2,
+                    null)
+                {
+                    IsTest = true,
+                },
+            ],
+            identifiers:
+            [
+                new JulieDbFixture.IdentifierRow(
+                    "d100000000000000000000000000000c",
+                    "Total",
+                    "call",
+                    "csharp",
+                    "billing/Invoice.cs",
+                    3,
+                    sumId)
+                {
+                    StartByte = 71,
+                    EndByte = 76,
+                },
+                new JulieDbFixture.IdentifierRow(
+                    "d100000000000000000000000000000d",
+                    "Missing",
+                    "call",
+                    "csharp",
+                    "unicode/Cafe.cs",
+                    2,
+                    null)
+                {
+                    StartByte = 31,
+                    EndByte = 36,
+                },
+            ],
+            workspaceId: "ws-edit-001");
 
         var (code, outText, errText) = Run(
             new[] { "references", "export", "--jsonl" },
@@ -1991,7 +2043,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(0, code);
         Assert.Empty(errText);
         string[] lines = outText.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        Assert.Equal(4, lines.Length);
+        Assert.Equal(2, lines.Length);
         JsonElement call = lines
             .Select(line => JsonDocument.Parse(line).RootElement.Clone())
             .Single(row =>
@@ -2008,17 +2060,17 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(3, span.GetProperty("start_line").GetInt64());
         Assert.Equal(71, span.GetProperty("start_byte").GetInt64());
         Assert.Equal(76, span.GetProperty("end_byte").GetInt64());
-        Assert.Equal("5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00", call.GetProperty("source_symbol_id").GetString());
+        Assert.Equal(sumId, call.GetProperty("source_symbol_id").GetString());
         Assert.Equal("Sum", call.GetProperty("source_symbol_name").GetString());
         Assert.Equal("method", call.GetProperty("source_symbol_kind").GetString());
         Assert.True(call.GetProperty("source_symbol_is_test").GetBoolean());
         Assert.Equal(JulieDbFixture.TotalMethodId, call.GetProperty("target_symbol_id").GetString());
         Assert.Equal("Total", call.GetProperty("target_name").GetString());
-        Assert.Equal("method", call.GetProperty("target_symbol_kind").GetString());
+        Assert.Equal("function", call.GetProperty("target_symbol_kind").GetString());
         Assert.False(call.GetProperty("target_symbol_is_test").GetBoolean());
         Assert.Equal("resolved", call.GetProperty("resolution_status").GetString());
-        Assert.Equal(1, call.GetProperty("resolution_tier").GetInt32());
-        Assert.Equal(1d, call.GetProperty("confidence").GetDouble());
+        Assert.Equal(4, call.GetProperty("resolution_tier").GetInt32());
+        Assert.Equal(0.55d, call.GetProperty("confidence").GetDouble());
         Assert.Equal(
             new[] { "identifier_resolution" },
             call.GetProperty("provenance").EnumerateArray()
@@ -2267,27 +2319,6 @@ public sealed class CliDispatchTests : IDisposable
         cmd.CommandText = "UPDATE symbols SET body_hash = $hash WHERE symbol_id = $id;";
         cmd.Parameters.AddWithValue("$hash", bodyHash);
         cmd.Parameters.AddWithValue("$id", symbolId);
-        cmd.ExecuteNonQuery();
-    }
-
-    private static void SetIdentifierTarget(string dbPath, string identifierId, string targetSymbolId)
-    {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadWrite,
-            Pooling = false,
-        }.ToString());
-        connection.Open();
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            UPDATE identifiers SET target_symbol_id = $target WHERE identifier_id = $id;
-            INSERT OR REPLACE INTO identifier_resolutions
-                (identifier_id, target_symbol_id, tier, confidence, method, outcome, candidates, resolved_at_revision)
-            VALUES ($id, $target, 1, 1.0, 'exact', 'resolved', 1, 1);
-            """;
-        cmd.Parameters.AddWithValue("$target", targetSymbolId);
-        cmd.Parameters.AddWithValue("$id", identifierId);
         cmd.ExecuteNonQuery();
     }
 
@@ -3184,7 +3215,7 @@ public sealed class CliDispatchTests : IDisposable
             link =>
                 link.GetProperty("kind").GetString() == "dependency_path" &&
                 link.GetProperty("edge_kind").GetString() == "call" &&
-                link.GetProperty("confidence").GetDouble() == 1.0 &&
+                link.GetProperty("confidence").GetDouble() == 0.55 &&
                 link.GetProperty("provenance").GetString() == "identifier_target");
     }
 
@@ -5274,6 +5305,16 @@ public sealed class CliDispatchTests : IDisposable
                   start_byte INTEGER,
                   end_byte INTEGER,
                   confidence REAL NOT NULL,
+                  metadata_json TEXT);
+                CREATE TABLE type_facts (
+                  version_id INTEGER NOT NULL,
+                  type_fact_id TEXT NOT NULL,
+                  symbol_id TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  resolved_type TEXT NOT NULL,
+                  generic_params_json TEXT,
+                  constraints_json TEXT,
+                  is_inferred INTEGER NOT NULL,
                   metadata_json TEXT);
                 CREATE TABLE resolution_identifier_deltas (
                   view_id TEXT NOT NULL,

@@ -156,16 +156,12 @@ public sealed partial class ContextTool
             int candidatesExamined;
             string output;
             ReferenceMode parsedReferenceMode = ParseReferenceMode(reference_mode);
-            bool resolutionConverging = parsedReferenceMode == ReferenceMode.Usage
-                && IndexLevelGuard.ResolutionLayerConverging(context.ReadSession.Snapshot);
             bool rescueExcludeTests = parsedReferenceMode == ReferenceMode.Usage
                 ? exclude_tests
                 : SearchTool.ResolveExcludeTests(null, query, SearchToolMode.Symbol);
             IReadOnlyList<ContextSemanticSeed> semanticSeeds = [];
             IReadOnlyList<ContextSourceSeed> sourceSeeds = [];
-            if (!resolutionConverging)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
+            cancellationToken.ThrowIfCancellationRequested();
                 semanticSeeds = LoadSemanticSeeds(
                     context,
                     contextIndex,
@@ -255,22 +251,10 @@ public sealed partial class ContextTool
                     default:
                         throw new ArgumentOutOfRangeException(nameof(reference_mode));
                 }
-                CompletePhase("bundle", telemetry, ref phaseStart);
-            }
-            else
-            {
-                output = string.Empty;
-                selectedCount = 0;
-                candidatesExamined = 0;
-            }
+            CompletePhase("bundle", telemetry, ref phaseStart);
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
             ToolDiagnostic? diagnostic = null;
-            if (resolutionConverging)
-            {
-                IndexLevelGuard.MarkDegraded(telemetry, "resolution_converging");
-                diagnostic = IndexLevelGuard.ResolutionConverging();
-            }
-            else if (selectedCount == 0)
+            if (selectedCount == 0)
             {
                 diagnostic = EmptyDiagnostic(
                     query,

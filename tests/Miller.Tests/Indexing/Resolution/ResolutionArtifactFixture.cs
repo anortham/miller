@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 namespace Miller.Tests.Indexing.Resolution;
@@ -61,6 +62,16 @@ internal sealed class ResolutionArtifactFixture : IDisposable
               constraints_json TEXT,
               is_inferred INTEGER NOT NULL,
               metadata_json TEXT);
+            CREATE TABLE reference_sites (
+              reference_site_id TEXT PRIMARY KEY,
+              file_id TEXT NOT NULL,
+              path TEXT NOT NULL,
+              language TEXT NOT NULL,
+              containing_symbol_id TEXT,
+              start_line INTEGER, start_column INTEGER, end_line INTEGER, end_column INTEGER,
+              start_byte INTEGER, end_byte INTEGER,
+              is_exact INTEGER NOT NULL,
+              provenance TEXT NOT NULL);
             CREATE TABLE identifiers (
               identifier_id TEXT PRIMARY KEY,
               reference_site_id TEXT NOT NULL,
@@ -106,7 +117,16 @@ internal sealed class ResolutionArtifactFixture : IDisposable
               confidence REAL NOT NULL,
               metadata_json TEXT);
             CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            INSERT INTO artifact_metadata VALUES ('artifact_id','art-1');
+            INSERT INTO artifact_metadata VALUES
+              ('artifact_id','art-1'),
+              ('sqlite_schema_version','6'),
+              ('extract_contract_version','4'),
+              ('hash_algorithm','blake3'),
+              ('index_level','full');
+            CREATE TABLE extraction_revisions (revision_id INTEGER);
+            INSERT INTO extraction_revisions VALUES (1);
+            CREATE TABLE structural_facts (id INTEGER);
+            CREATE TABLE language_capability_gaps (id INTEGER);
             """;
         command.ExecuteNonQuery();
         return new ResolutionArtifactFixture(root, dbPath);
@@ -188,6 +208,74 @@ internal sealed class ResolutionArtifactFixture : IDisposable
             VALUES (
               '{Escape(identifierId)}','site-{Escape(identifierId)}','{Escape(fileId)}','{Escape(path)}','csharp',
               '{Escape(name)}','{Escape(kind)}',{containing},{startLine},1,{startLine},4,{startByte},{endByte},1.0,{meta});
+            INSERT OR REPLACE INTO reference_sites (
+              reference_site_id,file_id,path,language,containing_symbol_id,
+              start_line,start_column,end_line,end_column,start_byte,end_byte,is_exact,provenance)
+            VALUES (
+              'site-{Escape(identifierId)}','{Escape(fileId)}','{Escape(path)}','csharp',{containing},
+              {startLine},1,{startLine},4,{startByte},{endByte},1,'target_token');
+            """);
+    }
+
+    public void AddPending(
+        string fileId,
+        string pendingId,
+        string fromSymbolId,
+        string name,
+        string path,
+        string kind = "calls",
+        long? startByte = 0,
+        long? endByte = 3,
+        long startLine = 1)
+    {
+        string start = startByte is { } sb ? sb.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
+        string end = endByte is { } eb ? eb.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
+        ExecuteWrite(
+            $"""
+            INSERT OR REPLACE INTO pending_relationships (
+              pending_relationship_id,reference_site_id,from_symbol_id,caller_scope_symbol_id,file_id,path,kind,
+              target_display_name,target_terminal_name,target_receiver,target_namespace_json,target_import_context,
+              start_line,start_column,end_line,end_column,start_byte,end_byte,confidence,metadata_json)
+            VALUES (
+              '{Escape(pendingId)}','site-{Escape(pendingId)}','{Escape(fromSymbolId)}',NULL,'{Escape(fileId)}','{Escape(path)}',
+              '{Escape(kind)}','{Escape(name)}','{Escape(name)}',NULL,'[]',NULL,{startLine},1,{startLine},4,{start},{end},1.0,NULL);
+            INSERT OR REPLACE INTO reference_sites (
+              reference_site_id,file_id,path,language,containing_symbol_id,
+              start_line,start_column,end_line,end_column,start_byte,end_byte,is_exact,provenance)
+            VALUES (
+              'site-{Escape(pendingId)}','{Escape(fileId)}','{Escape(path)}','csharp','{Escape(fromSymbolId)}',
+              {startLine},1,{startLine},4,{start},{end},1,'target_token');
+            """);
+    }
+
+    public void AddRelationship(
+        string fileId,
+        string relationshipId,
+        string fromSymbolId,
+        string toSymbolId,
+        string path,
+        string kind = "calls",
+        long? startByte = 0,
+        long? endByte = 3,
+        long startLine = 1)
+    {
+        string start = startByte is { } sb ? sb.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
+        string end = endByte is { } eb ? eb.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
+        ExecuteWrite(
+            $"""
+            INSERT OR REPLACE INTO relationships (
+              relationship_id,reference_site_id,from_symbol_id,to_symbol_id,file_id,path,kind,
+              start_line,start_column,end_line,end_column,start_byte,end_byte,confidence,metadata_json)
+            VALUES (
+              '{Escape(relationshipId)}','site-{Escape(relationshipId)}','{Escape(fromSymbolId)}',
+              '{Escape(toSymbolId)}','{Escape(fileId)}','{Escape(path)}','{Escape(kind)}',
+              {startLine},1,{startLine},4,{start},{end},1.0,NULL);
+            INSERT OR REPLACE INTO reference_sites (
+              reference_site_id,file_id,path,language,containing_symbol_id,
+              start_line,start_column,end_line,end_column,start_byte,end_byte,is_exact,provenance)
+            VALUES (
+              'site-{Escape(relationshipId)}','{Escape(fileId)}','{Escape(path)}','csharp','{Escape(fromSymbolId)}',
+              {startLine},1,{startLine},4,{start},{end},1,'target_token');
             """);
     }
 

@@ -37,23 +37,6 @@ internal static class IndexLevelGuard
     public static bool IsSymbolsLevel(string? indexLevel) =>
         IndexLevels.IsSymbolsLevel(indexLevel);
 
-    public static bool ResolutionLayerConverging(WorkspaceReadSnapshot snapshot) =>
-        snapshot.Mode == WorkspaceReadMode.FamilyStore
-        && (!string.Equals(snapshot.ResolutionState, "exact", StringComparison.OrdinalIgnoreCase)
-            || snapshot.ResolutionExactAt != snapshot.ManifestGeneration
-            || snapshot.ResolutionBaseId is null
-            || snapshot.ResolutionDeltaGeneration is null);
-
-    public static ToolDiagnostic ResolutionConverging() =>
-        ToolDiagnostic.ExpectedEmpty(
-            "resolution_converging",
-            "This family-store view has not completed exact identifier resolution, so usage-dependent results " +
-            "are not authoritative. Retry after the resolve operation completes.",
-            [
-                new ToolDiagnosticAction("workspace(operation=\"status\")", "check resolution state"),
-                new ToolDiagnosticAction("workspace(operation=\"refresh\")", "retry store convergence"),
-            ]);
-
     /// <summary>The data-bearing "reference layer converging" diagnostic for read tools: what is missing, what
     /// still works, and how the upgrade happens. The upgrade is NOT promised as automatic — only a session
     /// leading the workspace runs it in the background; a workspace served purely cross-workspace stays at
@@ -80,7 +63,7 @@ internal static class IndexLevelGuard
     public static ToolDiagnostic ReferenceExportConverging() =>
         ToolDiagnostic.ExpectedEmpty(
             "reference_layer_converging",
-            "This workspace serves a symbols-level index: identifiers and identifier_resolutions have not been "
+            "This workspace serves a symbols-level index: identifiers have not been "
             + "extracted yet, so this feed carries only relationship-derived reference rows. The stream is "
             + "partial, NOT empty — treat it as an undercount, not as this workspace's complete reference set. "
             + "Every emitted row carries index_level=\"symbols\". Progressive policy upgrades it in the "

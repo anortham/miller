@@ -216,7 +216,6 @@ public sealed class StoreFamilyResolverTests : IDisposable
     [InlineData("store-root")]
     [InlineData("generation")]
     [InlineData("coordinator")]
-    [InlineData("base")]
     [InlineData("root-replaced")]
     public void InvalidPointerCannotMintOrMutateRegistry(string failure)
     {

@@ -3,7 +3,7 @@ using Miller.Indexing.Reads;
 
 namespace Miller.Indexing.Resolution;
 
-internal sealed class RevisionFactCacheStore
+public sealed class RevisionFactCacheStore
 {
     internal const long DefaultByteBudget = 256L * 1024 * 1024;
 

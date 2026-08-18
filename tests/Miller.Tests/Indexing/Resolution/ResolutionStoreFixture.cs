@@ -30,6 +30,14 @@ internal sealed class ResolutionStoreFixture : IDisposable
         command.ExecuteNonQuery();
         command.CommandText =
             """
+            CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO artifact_metadata VALUES
+              ('artifact_id','11111111-1111-4111-8111-111111111111'),
+              ('sqlite_schema_version','6'),
+              ('extract_contract_version','4'),
+              ('hash_algorithm','blake3');
+            CREATE TABLE extraction_revisions (revision_id INTEGER);
+            INSERT INTO extraction_revisions VALUES (1);
             INSERT INTO store_meta VALUES
               ('family_id','11111111-1111-4111-8111-111111111111'),
               ('store_sqlite_schema_version','2'),
@@ -179,6 +187,12 @@ internal sealed class ResolutionStoreFixture : IDisposable
             VALUES (
               {versionId},'{Escape(identifierId)}','site-{Escape(identifierId)}','{Escape(path)}','{Escape(language)}',
               '{Escape(name)}','{Escape(kind)}',{containing},{startLine},1,{startLine},4,{startByte},{endByte},{confidence.ToString(System.Globalization.CultureInfo.InvariantCulture)},NULL,{meta});
+            INSERT OR REPLACE INTO reference_sites (
+              version_id,reference_site_id,path,language,containing_symbol_id,
+              start_line,start_column,end_line,end_column,start_byte,end_byte,is_exact,provenance)
+            VALUES (
+              {versionId},'site-{Escape(identifierId)}','{Escape(path)}','{Escape(language)}',{containing},
+              {startLine},1,{startLine},4,{startByte},{endByte},1,'target_token');
             """);
     }
 
@@ -205,6 +219,12 @@ internal sealed class ResolutionStoreFixture : IDisposable
             VALUES (
               {versionId},'{Escape(pendingId)}','site-{Escape(pendingId)}','{Escape(fromSymbolId)}',NULL,'{Escape(path)}',
               '{Escape(kind)}','{Escape(name)}','{Escape(name)}',NULL,'[]',NULL,{startLine},1,{startLine},4,{start},{end},1.0,NULL);
+            INSERT OR REPLACE INTO reference_sites (
+              version_id,reference_site_id,path,language,containing_symbol_id,
+              start_line,start_column,end_line,end_column,start_byte,end_byte,is_exact,provenance)
+            VALUES (
+              {versionId},'site-{Escape(pendingId)}','{Escape(path)}','{Escape(language)}','{Escape(fromSymbolId)}',
+              {startLine},1,{startLine},4,{start},{end},1,'target_token');
             """);
         _ = language;
     }
@@ -230,6 +250,12 @@ internal sealed class ResolutionStoreFixture : IDisposable
             VALUES (
               {versionId},'{Escape(relationshipId)}','site-{Escape(relationshipId)}','{Escape(fromSymbolId)}',
               '{Escape(toSymbolId)}','{Escape(path)}','{Escape(kind)}',{startLine},1,{startLine},4,{start},{end},1.0,NULL);
+            INSERT OR REPLACE INTO reference_sites (
+              version_id,reference_site_id,path,language,containing_symbol_id,
+              start_line,start_column,end_line,end_column,start_byte,end_byte,is_exact,provenance)
+            VALUES (
+              {versionId},'site-{Escape(relationshipId)}','{Escape(path)}','csharp','{Escape(fromSymbolId)}',
+              {startLine},1,{startLine},4,{start},{end},1,'target_token');
             """);
     }
 
@@ -365,6 +391,21 @@ internal sealed class ResolutionStoreFixture : IDisposable
           is_inferred INTEGER NOT NULL,
           metadata_json TEXT,
           PRIMARY KEY(version_id,type_fact_id)) STRICT;
+        CREATE TABLE reference_sites (
+          version_id INTEGER NOT NULL,
+          reference_site_id TEXT NOT NULL,
+          path TEXT NOT NULL,
+          language TEXT NOT NULL,
+          containing_symbol_id TEXT,
+          start_line INTEGER,
+          start_column INTEGER,
+          end_line INTEGER,
+          end_column INTEGER,
+          start_byte INTEGER,
+          end_byte INTEGER,
+          is_exact INTEGER NOT NULL,
+          provenance TEXT NOT NULL,
+          PRIMARY KEY(version_id,reference_site_id)) STRICT;
         CREATE TABLE identifiers (
           version_id INTEGER NOT NULL,
           identifier_id TEXT NOT NULL,

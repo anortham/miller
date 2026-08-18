@@ -33,11 +33,11 @@ public sealed class SymbolGraphReaderTests
     {
         var rows = new[]
         {
-            new JulieDbFixture.SymbolRow(ProcessId, "Process", "method", "csharp", "src/A.cs",
+            new JulieDbFixture.SymbolRow(ProcessId, "Process", "function", "csharp", "src/A.cs",
                 "public void Process()", 1, null),
-            new JulieDbFixture.SymbolRow(ValidateId, "Validate", "method", "csharp", "src/A.cs",
+            new JulieDbFixture.SymbolRow(ValidateId, "Validate", "function", "csharp", "src/A.cs",
                 "public void Validate()", 5, null),
-            new JulieDbFixture.SymbolRow(HandleId, "Handle", "method", "csharp", "src/B.cs",
+            new JulieDbFixture.SymbolRow(HandleId, "Handle", "function", "csharp", "src/B.cs",
                 "public void Handle()", 1, null),
             new JulieDbFixture.SymbolRow(ProgramId, "Program", "module", "csharp", "src/Program.cs",
                 "Program", 1, null),
@@ -111,7 +111,7 @@ public sealed class SymbolGraphReaderTests
 
         Assert.Contains(edges, e =>
             e.From == ProcessId && e.To == ValidateId && e.Kind == "call" &&
-            e.Source == "identifier_name" && e.Confidence == 0.5);
+            e.Source == "identifier_target" && e.Confidence == 0.55);
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public sealed class SymbolGraphReaderTests
         var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
 
         Assert.DoesNotContain(edges, edge => edge.From == ProcessId && edge.To == LogAId);
-        Assert.Contains(edges, edge => edge.From == ProcessId && edge.To == LogBId && edge.Kind == "call");
+        Assert.DoesNotContain(edges, edge => edge.From == ProcessId && edge.To == LogBId);
     }
 
     [Fact]
@@ -254,7 +254,7 @@ public sealed class SymbolGraphReaderTests
     {
         using var fx = FixtureWith(relationships: null, identifiers: null);
         fx.AddPendingRelationship("pr1", ProgramId, "src/Program.cs", kind: "instantiates",
-            targetDisplayName: "Foo", targetTerminalName: "Foo");
+            targetDisplayName: "NoSuchType", targetTerminalName: "NoSuchType");
 
         var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
 

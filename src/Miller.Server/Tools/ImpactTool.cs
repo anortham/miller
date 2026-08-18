@@ -125,8 +125,6 @@ public sealed class ImpactTool
             continuationWorkspaceId =
                 context.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(context.WorkspaceRoot);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            bool resolutionConverging =
-                IndexLevelGuard.ResolutionLayerConverging(context.ReadSession.Snapshot);
             bool explicitGit = git || staged || !string.IsNullOrWhiteSpace(@base);
             int provided =
                 (string.IsNullOrWhiteSpace(target) ? 0 : 1) +
@@ -205,17 +203,7 @@ public sealed class ImpactTool
             ImpactEmptyReason? emptyReason;
             string? diagnosticTraceTarget;
             bool revisionDelta = from_index_revision.HasValue;
-            if (resolutionConverging)
-            {
-                output = string.Empty;
-                impactedCount = 0;
-                returnedCount = 0;
-                nodesVisited = 0;
-                unseededPaths = [];
-                emptyReason = null;
-                diagnosticTraceTarget = null;
-            }
-            else if (revisionDelta)
+            if (revisionDelta)
             {
                 ImpactRevisionDeltaSnapshot snapshot = PrepareIndexRevisionDelta(
                     workspace_id ?? context.WorkspaceId ?? context.WorkspaceRoot,
@@ -273,12 +261,7 @@ public sealed class ImpactTool
             }
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
             ToolDiagnostic? diagnostic = null;
-            if (resolutionConverging)
-            {
-                IndexLevelGuard.MarkDegraded(telemetry, "resolution_converging");
-                diagnostic = IndexLevelGuard.ResolutionConverging();
-            }
-            else if (IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel))
+            if (IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel))
             {
                 // Blast-radius math over a symbols-level artifact sees relationship edges only — the impacted
                 // set is incomplete by construction, so say so instead of letting a thin result read as safety.

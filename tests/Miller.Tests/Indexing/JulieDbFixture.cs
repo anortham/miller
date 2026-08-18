@@ -204,7 +204,12 @@ internal sealed class JulieDbFixture : IDisposable
     public void SetIdentifierTarget(string identifierId, string? targetSymbolId)
     {
         ExecuteWrite(
-            "UPDATE identifiers SET target_symbol_id = $target WHERE identifier_id = $id;",
+            """
+            UPDATE identifiers
+            SET target_symbol_id = $target,
+                metadata_json = CASE WHEN $target IS NULL THEN '{"receiver":"unresolved"}' ELSE NULL END
+            WHERE identifier_id = $id;
+            """,
             p =>
             {
                 p.AddWithValue("$id", identifierId);
@@ -230,7 +235,11 @@ internal sealed class JulieDbFixture : IDisposable
     public void SetAllIdentifierTargets(string? targetSymbolId)
     {
         ExecuteWrite(
-            "UPDATE identifiers SET target_symbol_id = $target;",
+            """
+            UPDATE identifiers
+            SET target_symbol_id = $target,
+                metadata_json = CASE WHEN $target IS NULL THEN '{"receiver":"unresolved"}' ELSE NULL END;
+            """,
             p => p.AddWithValue("$target", (object?)targetSymbolId ?? DBNull.Value));
         ExecuteWrite("""
             UPDATE identifier_resolutions
@@ -1017,7 +1026,7 @@ internal sealed class JulieDbFixture : IDisposable
                 "auth/UserService.cs", "public class UserService", 1, null)
             { Visibility = "public", DocComment = "The user service." },
 
-            new SymbolRow(GetUserId, "GetUser", "method", "csharp",
+            new SymbolRow(GetUserId, "GetUser", "function", "csharp",
                 "auth/UserService.cs", "public User GetUser(int id)", 2, UserServiceId)
             {
                 Visibility = "public",
@@ -1033,7 +1042,7 @@ internal sealed class JulieDbFixture : IDisposable
             { Visibility = "public" },
 
             // A helper that GetUser calls (callee target by name).
-            new SymbolRow("dd001122334455667788990a1b2c3d4e", "Find", "method", "csharp",
+            new SymbolRow("dd001122334455667788990a1b2c3d4e", "Find", "function", "csharp",
                 "auth/Repo.cs", "public User Find(int id)", 3, null),
 
             // An unrelated caller in another file that references GetUser by name.
@@ -1121,8 +1130,9 @@ internal sealed class JulieDbFixture : IDisposable
             { Visibility = "public", StartByte = 0, EndByte = 116, BodyStartByte = 26, BodyEndByte = 115,
               BodyStartLine = 1, BodyEndLine = 6 },
 
-            // Total method: signature span [30,49), body span [49,91). end_byte = body_end = 91.
-            new SymbolRow(TotalMethodId, "Total", "method", "csharp",
+            // Total function: signature span [30,49), body span [49,91). end_byte = body_end = 91.
+            // Kind is function so query-time Global Call can bind the unique name.
+            new SymbolRow(TotalMethodId, "Total", "function", "csharp",
                 "orders/OrderService.cs", "public int Total()", 2, OrderServiceId)
             { Visibility = "public", StartByte = 30, EndByte = 91, BodyStartByte = 49, BodyEndByte = 91,
               BodyStartLine = 2, BodyEndLine = 4 },
@@ -1150,10 +1160,10 @@ internal sealed class JulieDbFixture : IDisposable
         var identifiers = new[]
         {
             // orders/OrderService.cs: the method-header name token [41,46) and the i.Total access [80,85).
-            new IdentifierRow("d100000000000000000000000000000a", "Total", "member_access", "csharp",
+            new IdentifierRow("d100000000000000000000000000000a", "Total", "call", "csharp",
                 "orders/OrderService.cs", 2, TotalMethodId)
                 { StartByte = 41, EndByte = 46, TargetSymbolId = resolveReferenceTargets ? TotalMethodId : null },
-            new IdentifierRow("d100000000000000000000000000000b", "Total", "member_access", "csharp",
+            new IdentifierRow("d100000000000000000000000000000b", "Total", "call", "csharp",
                 "orders/OrderService.cs", 3, TotalMethodId)
                 { StartByte = 80, EndByte = 85, TargetSymbolId = resolveReferenceTargets ? TotalMethodId : null },
             // billing/Invoice.cs: the genuine o.Total() call [71,76).

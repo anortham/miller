@@ -1,3 +1,4 @@
+using Miller.Indexing.Resolution;
 using Miller.Indexing.Store;
 
 namespace Miller.Indexing.Reads;
@@ -10,7 +11,15 @@ public static class WorkspaceReadSessionFactory
         string legacyDatabasePath,
         string workspaceRoot,
         string? workspaceId,
-        bool? storeEnabled = null)
+        bool? storeEnabled = null) =>
+        Open(legacyDatabasePath, workspaceRoot, workspaceId, storeEnabled, factCacheStore: null);
+
+    internal static WorkspaceReadHandle Open(
+        string legacyDatabasePath,
+        string workspaceRoot,
+        string? workspaceId,
+        bool? storeEnabled,
+        RevisionFactCacheStore? factCacheStore)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(legacyDatabasePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -41,7 +50,7 @@ public static class WorkspaceReadSessionFactory
             pointer.ViewId,
             pointer.WorkspaceRoot,
             StoreBindingState.Ready);
-        return new WorkspaceReadHandle(FamilyStoreReadSession.Open(binding, workspaceId));
+        return new WorkspaceReadHandle(FamilyStoreReadSession.Open(binding, workspaceId, factCacheStore));
     }
 
     public static WorkspaceFreshnessProbe Probe(

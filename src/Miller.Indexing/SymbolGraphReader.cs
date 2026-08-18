@@ -1,5 +1,6 @@
 using Miller.Core.Graph;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Resolution;
 
 namespace Miller.Indexing;
 
@@ -8,12 +9,11 @@ namespace Miller.Indexing;
 /// <list type="bullet">
 /// <item><b><c>relationships</c></b> (precise, sparse): <c>from_symbol_id → to_symbol_id</c> directly, by id,
 ///   carrying <c>kind</c>. No name resolution — both endpoints are already resolved symbol ids.</item>
-/// <item><b>resolved <c>pending_relationships</c></b> (precise, sparse): join each pending row to
-///   <c>pending_resolutions</c> by <c>pending_relationship_id</c>, then emit its <c>from_symbol_id →
-///   target_symbol_id</c> by id, carrying the pending row's <c>kind</c>. Unresolved pending rows are omitted.</item>
-/// <item><b><c>identifiers</c></b> (dense): take the target from the <c>identifier_resolutions</c> row joined by
-///   <c>identifier_id</c> — that table is the sole source of resolution outcomes. Use name fallback only when the
-///   name resolves to exactly one symbol.</item>
+/// <item><b>resolved <c>pending_relationships</c></b> (precise, sparse): resolve each pending row at query
+///   time, then emit its <c>from_symbol_id → target</c> by id, carrying the pending row's <c>kind</c>.
+///   Unresolved pending rows are omitted.</item>
+/// <item><b><c>identifiers</c></b> (dense): resolve each identifier at query time. Use name fallback only when
+///   the outcome is not Resolved and the name maps to exactly one symbol.</item>
 /// </list>
 ///
 /// <para>Rows without a source node, external names, ambiguous fallback names, and self-edges are omitted.
@@ -52,19 +52,57 @@ public static class SymbolGraphReader
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(resolveName);
-        return session.Read(connection => Read(connection, resolveName));
+        return session.Read(connection => Read(session, connection, resolveName));
     }
 
     private static IReadOnlyList<GraphEdge> Read(
+        IWorkspaceReadSession session,
         Microsoft.Data.Sqlite.SqliteConnection connection,
         Func<string, IReadOnlyList<string>> resolveName)
     {
         var edges = new List<GraphEdge>();
         ReadRelationships(connection, edges);
-        ReadResolvedPendingRelationships(connection, edges);
-        ReadIdentifiers(connection, resolveName, edges);
+        if (HasTable(connection, "files") && HasTable(connection, "identifiers"))
+        {
+            QueryTimeResolutionReader reader = ReferenceEvidenceReader.ReaderFor(session, connection);
+            IReadOnlyList<string> symbolIds = ReadSymbolIds(connection);
+            foreach (FamilyGraphResolutionEdge edge in reader.ReadResolutionEdges(
+                         connection, symbolIds, Direction.Both, statementObserver: null))
+            {
+                if (!string.Equals(edge.FromId, edge.ToId, StringComparison.Ordinal))
+                    edges.Add(new GraphEdge(edge.FromId, edge.ToId, edge.Kind, edge.Confidence, edge.Source));
+            }
+
+            foreach (FamilyGraphUnresolvedNameEdge edge in reader.ReadUnresolvedNameEdges(
+                         connection, symbolIds, Direction.Both, statementObserver: null))
+            {
+                if (!string.Equals(edge.FromId, edge.ToId, StringComparison.Ordinal))
+                    edges.Add(new GraphEdge(edge.FromId, edge.ToId, edge.Kind, edge.Confidence, edge.Source));
+            }
+        }
+
+        _ = resolveName;
         edges.AddRange(TestLinkageReader.Read(connection));
         return edges;
+    }
+
+    private static bool HasTable(Microsoft.Data.Sqlite.SqliteConnection connection, string name)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$name LIMIT 1;";
+        command.Parameters.AddWithValue("$name", name);
+        return command.ExecuteScalar() is not null;
+    }
+
+    private static IReadOnlyList<string> ReadSymbolIds(Microsoft.Data.Sqlite.SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT symbol_id FROM symbols;";
+        using var reader = command.ExecuteReader();
+        var ids = new List<string>();
+        while (reader.Read())
+            ids.Add(reader.GetString(0));
+        return ids;
     }
 
     // relationships: precise by-id edges. Both endpoints are NOT NULL resolved ids; we only guard self-loops.
@@ -94,85 +132,5 @@ public static class SymbolGraphReader
             edges.Add(new GraphEdge(from, to, kind, reader.GetDouble(oConfidence), "relationship"));
         }
     }
-
-    private static void ReadResolvedPendingRelationships(
-        Microsoft.Data.Sqlite.SqliteConnection connection,
-        List<GraphEdge> edges)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT pending.from_symbol_id, resolution.target_symbol_id, pending.kind,
-                   MIN(pending.confidence, resolution.confidence) AS confidence
-            FROM pending_relationships AS pending
-            INNER JOIN pending_resolutions AS resolution
-                ON resolution.pending_relationship_id = pending.pending_relationship_id;
-            """;
-
-        using var reader = command.ExecuteReader();
-        int oFrom = reader.GetOrdinal("from_symbol_id");
-        int oTo = reader.GetOrdinal("target_symbol_id");
-        int oKind = reader.GetOrdinal("kind");
-        int oConfidence = reader.GetOrdinal("confidence");
-        while (reader.Read())
-        {
-            string from = reader.GetString(oFrom);
-            string to = reader.GetString(oTo);
-            string kind = reader.GetString(oKind);
-
-            if (!string.Equals(from, to, StringComparison.Ordinal))
-                edges.Add(new GraphEdge(
-                    from, to, kind, reader.GetDouble(oConfidence), "pending_resolution"));
-        }
-    }
-
-    private static void ReadIdentifiers(
-        Microsoft.Data.Sqlite.SqliteConnection connection,
-        Func<string, IReadOnlyList<string>> resolveName,
-        List<GraphEdge> edges)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT i.name, i.kind, i.containing_symbol_id,
-                   ir.target_symbol_id,
-                   i.confidence,
-                   ir.confidence AS overlay_confidence
-            FROM identifiers i
-            LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-            WHERE i.containing_symbol_id IS NOT NULL;
-            """;
-
-        using var reader = command.ExecuteReader();
-        int oName = reader.GetOrdinal("name");
-        int oKind = reader.GetOrdinal("kind");
-        int oContaining = reader.GetOrdinal("containing_symbol_id");
-        int oTarget = reader.GetOrdinal("target_symbol_id");
-        int oConfidence = reader.GetOrdinal("confidence");
-        int oOverlayConfidence = reader.GetOrdinal("overlay_confidence");
-        while (reader.Read())
-        {
-            string name = reader.GetString(oName);
-            string kind = reader.GetString(oKind);
-            string from = reader.GetString(oContaining);
-            string? exactTarget = reader.IsDBNull(oTarget) ? null : reader.GetString(oTarget);
-            IReadOnlyList<string> targets = exactTarget is null
-                ? resolveName(name) ?? Array.Empty<string>()
-                : [exactTarget];
-            if (exactTarget is null && targets.Count != 1)
-                continue;
-
-            foreach (var to in targets)
-            {
-                if (string.Equals(from, to, StringComparison.Ordinal))
-                    continue;
-
-                string source = exactTarget is not null ? "identifier_target" : "identifier_name";
-                double confidence = exactTarget is not null && !reader.IsDBNull(oOverlayConfidence)
-                    ? reader.GetDouble(oOverlayConfidence)
-                    : reader.GetDouble(oConfidence);
-                if (exactTarget is null)
-                    confidence *= 0.5;
-                edges.Add(new GraphEdge(from, to, kind, confidence, source));
-            }
-        }
-    }
 }
+

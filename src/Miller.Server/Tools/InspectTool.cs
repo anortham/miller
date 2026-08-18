@@ -79,44 +79,28 @@ public sealed class InspectTool
             using WorkspaceSymbolReadContext context =
                 _workspaceSymbolReadProvider.ResolveSymbolRead(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            bool resolutionConverging = parsedDepth is not InspectDepth.Summary
-                && IndexLevelGuard.ResolutionLayerConverging(context.ReadSession.Snapshot);
-            string output;
-            int count;
-            ToolDiagnostic? diagnostic;
-            if (resolutionConverging)
-            {
-                output = string.Empty;
-                count = 0;
-                diagnostic = IndexLevelGuard.ResolutionConverging();
-                IndexLevelGuard.MarkDegraded(telemetry, "resolution_converging");
-            }
-            else
-            {
-                output = RunLookupWithDiagnostics(
-                    context.Index,
-                    context.ReadSession,
-                    context.WorkspaceRoot,
-                    context.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(context.WorkspaceRoot),
-                    target,
-                    depth,
-                    kind,
-                    scope,
-                    effectiveLimit,
-                    json,
-                    continuation,
-                    out count,
-                    out diagnostic,
-                    compactBanner,
-                    boundAgentOutput: true);
-            }
-            if (resolutionConverging)
-                output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
+            string output = RunLookupWithDiagnostics(
+                context.Index,
+                context.ReadSession,
+                context.WorkspaceRoot,
+                context.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(context.WorkspaceRoot),
+                target,
+                depth,
+                kind,
+                scope,
+                effectiveLimit,
+                json,
+                continuation,
+                out int count,
+                out ToolDiagnostic? diagnostic,
+                compactBanner,
+                boundAgentOutput: true);
+            output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
 
             if (telemetry is not null)
                 ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
 
-            if (!resolutionConverging && parsedDepth is not InspectDepth.Summary
+            if (parsedDepth is not InspectDepth.Summary
                 && diagnostic is null
                 && IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel))
             {

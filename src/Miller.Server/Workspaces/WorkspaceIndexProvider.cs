@@ -1,6 +1,7 @@
 using Miller.Core.Graph;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Resolution;
 using Miller.Indexing.Store;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
@@ -38,6 +39,7 @@ public sealed class WorkspaceIndexProvider
     private readonly Dictionary<CacheKey, Lazy<CachedTextContentSearch>> _textContentSearchCache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedRegionSearch>> _regionSearchCache = new();
     private readonly SupplementalEdgeCache _supplementalEdgesCache;
+    private readonly RevisionFactCacheStore _factCacheStore;
 
     public WorkspaceIndexProvider(
         IndexHolder holder,
@@ -45,7 +47,8 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistry registry,
         CrossWorkspaceRefreshService refreshService,
         SymbolSearchSidecar sidecar,
-        SupplementalEdgeCache supplementalEdgesCache)
+        SupplementalEdgeCache supplementalEdgesCache,
+        RevisionFactCacheStore factCacheStore)
         : this(
             holder,
             currentWorkspace,
@@ -63,8 +66,9 @@ public sealed class WorkspaceIndexProvider
             currentIndexFresh: _ => null,
             sidecar,
             openReadSession: (databasePath, root, workspaceId) =>
-                WorkspaceReadSessionFactory.Open(databasePath, root, workspaceId),
-            supplementalEdgesCache: supplementalEdgesCache)
+                WorkspaceReadSessionFactory.Open(databasePath, root, workspaceId, storeEnabled: null, factCacheStore),
+            supplementalEdgesCache: supplementalEdgesCache,
+            factCacheStore: factCacheStore)
     {
     }
 
@@ -88,7 +92,8 @@ public sealed class WorkspaceIndexProvider
         Action<GraphStatementObservation>? graphStatementObserver = null,
         Func<WorkspaceReadHandle, ITextContentSearchIndex>? openStoreTextContentSearch = null,
         Func<WorkspaceReadHandle, IReadOnlyList<GraphEdge>>? loadSupplementalEdges = null,
-        SupplementalEdgeCache? supplementalEdgesCache = null)
+        SupplementalEdgeCache? supplementalEdgesCache = null,
+        RevisionFactCacheStore? factCacheStore = null)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(currentWorkspace);
@@ -130,6 +135,7 @@ public sealed class WorkspaceIndexProvider
         _loadSessionBridgeGraph = loadSessionBridgeGraph ?? (session => SessionBridgeGraphLoader.Load(session));
         _loadSupplementalEdges = loadSupplementalEdges;
         _supplementalEdgesCache = supplementalEdgesCache ?? new SupplementalEdgeCache();
+        _factCacheStore = factCacheStore ?? new RevisionFactCacheStore();
         _graphStatementObserver = graphStatementObserver ?? ObserveGraphStatement;
     }
 

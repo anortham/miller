@@ -30,6 +30,9 @@ public sealed class WorkspaceReadHandle : IWorkspaceReadSession
     internal IFamilyGraphRelationshipReader? FamilyGraphRelationshipReader =>
         _session as IFamilyGraphRelationshipReader;
 
+    internal QueryTimeResolutionReader? ResolutionReader =>
+        _session is IQueryTimeResolutionHost host ? host.Resolution : null;
+
     public TResult Read<TResult>(Func<SqliteConnection, TResult> query) => _session.Read(query);
 
     public void Dispose() => _session.Dispose();

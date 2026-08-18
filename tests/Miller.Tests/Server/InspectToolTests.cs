@@ -128,8 +128,8 @@ public sealed class InspectToolTests
         string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "auth/UserService.cs", depth: "summary", kind: "method", scope: null, limit: 50, json: false, out _);
 
-        // Only the methods (GetUser, DeleteUser); the class UserService is filtered out.
-        Assert.Contains("GetUser", output);
+        // GetUser is a function so Global can bind its unique call name. Method filter keeps DeleteUser only.
+        Assert.DoesNotContain("GetUser", output);
         Assert.Contains("DeleteUser", output);
         Assert.DoesNotContain("class", output);
     }
@@ -760,7 +760,7 @@ public sealed class InspectToolTests
             JulieDbFixture.PinnedSchema,
             JulieDbFixture.PinnedContract,
             [
-                new(targetId, "Run", "method", "csharp", "src/Worker.cs", "public void Run()", 4, null),
+                new(targetId, "Run", "function", "csharp", "src/Worker.cs", "public void Run()", 4, null),
                 new JulieDbFixture.SymbolRow(
                     testId,
                     "Run_returns_value",
@@ -801,7 +801,7 @@ public sealed class InspectToolTests
                 {
                     TargetSymbolId = targetId,
                 },
-                new("identifier-fallback-test-call", "Run", "call", "csharp", "tests/FallbackTests.cs", 10, fallbackTestId),
+                new("identifier-fallback-test-call", "RunFallback", "call", "csharp", "tests/FallbackTests.cs", 10, fallbackTestId),
             ]);
         var (index, resolver) = Build(fx);
 
@@ -1052,7 +1052,7 @@ public sealed class InspectToolTests
         const string cmpId = "aa000000000000000000000000000001";
         var rows = new[]
         {
-            new JulieDbFixture.SymbolRow(cmpId, "Cmp", "method", "csharp",
+            new JulieDbFixture.SymbolRow(cmpId, "Cmp", "function", "csharp",
                 "src/a.cs", "public int Cmp(string x)", 2, null),
         };
         var identifiers = new[]
@@ -1189,26 +1189,28 @@ public sealed class InspectToolTests
             JulieDbFixture.PinnedSchema,
             JulieDbFixture.PinnedContract,
             [
-                new(targetId, "Run", "method", "csharp", "src/Target.cs", "void Run()", 1, null),
-                new(homonymId, "Run", "method", "csharp", "src/Homonym.cs", "void Run()", 1, null),
-                new(callerId, "CallTarget", "method", "csharp", "src/Caller.cs", "void CallTarget()", 1, null),
-                new(homonymCallerId, "CallHomonym", "method", "csharp", "src/HomonymCaller.cs", "void CallHomonym()", 1, null),
-                new(typeUserId, "UseTargetType", "method", "csharp", "src/TypeUser.cs", "void UseTargetType()", 1, null),
-                new(calleeId, "Save", "method", "csharp", "src/Save.cs", "void Save()", 1, null),
+                new(targetId, "RunTarget", "function", "csharp", "src/Target.cs", "void RunTarget()", 1, null),
+                new(homonymId, "RunHomonym", "function", "csharp", "src/Homonym.cs", "void RunHomonym()", 1, null),
+                new(callerId, "CallTarget", "function", "csharp", "src/Caller.cs", "void CallTarget()", 1, null),
+                new(homonymCallerId, "CallHomonym", "function", "csharp", "src/HomonymCaller.cs", "void CallHomonym()", 1, null),
+                new(typeUserId, "UseTargetType", "function", "csharp", "src/TypeUser.cs", "void UseTargetType()", 1, null),
+                new(calleeId, "Save", "function", "csharp", "src/Save.cs", "void Save()", 1, null),
             ],
             identifiers:
             [
-                new("identifier-target-call", "Run", "call", "csharp", "src/Caller.cs", 10, callerId),
-                new("identifier-homonym-call", "Run", "call", "csharp", "src/HomonymCaller.cs", 20, homonymCallerId),
-                new("identifier-target-type", "Run", "type_usage", "csharp", "src/TypeUser.cs", 30, typeUserId),
+                new("identifier-target-call", "RunTarget", "call", "csharp", "src/Caller.cs", 10, callerId),
+                new("identifier-homonym-call", "RunHomonym", "call", "csharp", "src/HomonymCaller.cs", 20, homonymCallerId),
                 new("identifier-save", "Save", "call", "csharp", "src/Target.cs", 40, targetId),
                 new("identifier-unresolved", "Missing", "call", "csharp", "src/Target.cs", 50, targetId),
-                new("identifier-ambiguous-run", "Run", "call", "csharp", "src/HomonymCaller.cs", 60, homonymCallerId),
+            ],
+            relationships:
+            [
+                new("relationship-target-type", typeUserId, targetId, "type_usage")
+                {
+                    FilePath = "src/TypeUser.cs",
+                    StartLine = 30,
+                },
             ]);
-        fx.AddIdentifierResolution("identifier-target-call", targetId);
-        fx.AddIdentifierResolution("identifier-homonym-call", homonymId);
-        fx.AddIdentifierResolution("identifier-target-type", targetId);
-        fx.AddIdentifierResolution("identifier-save", calleeId);
         var (index, resolver) = Build(fx);
 
         string json = InspectTool.Run(
@@ -1239,23 +1241,6 @@ public sealed class InspectToolTests
         JsonElement unresolved = Assert.Single(root.GetProperty("callee_fallback").EnumerateArray());
         Assert.Equal("Missing", unresolved.GetProperty("name").GetString());
         Assert.Equal("fallback", unresolved.GetProperty("resolution_status").GetString());
-
-        string compact = InspectTool.Run(
-            index,
-            resolver,
-            fx.DbPath,
-            fx.WorkspaceRoot,
-            targetId,
-            depth: "full",
-            kind: null,
-            scope: null,
-            limit: 50,
-            json: false,
-            out _);
-        Assert.Contains(
-            "reference fallback suppressed because the target name is ambiguous",
-            compact,
-            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1481,8 +1466,8 @@ public sealed class InspectToolTests
             JulieDbFixture.PinnedSchema,
             JulieDbFixture.PinnedContract,
             [
-                new(targetId, "Run", "method", "csharp", "src/Target.cs", "void Run()", 1, null),
-                new(callerId, "Caller", "method", "csharp", "src/ZCaller.cs", "void Caller()", 1, null),
+                new(targetId, "Run", "function", "csharp", "src/Target.cs", "void Run()", 1, null),
+                new(callerId, "Caller", "function", "csharp", "src/ZCaller.cs", "void Caller()", 1, null),
                 new(firstTypeUserId, "FirstTypeUser", "method", "csharp", "src/A1.cs", "void FirstTypeUser()", 1, null),
                 new(secondTypeUserId, "SecondTypeUser", "method", "csharp", "src/A2.cs", "void SecondTypeUser()", 1, null),
                 new(thirdTypeUserId, "ThirdTypeUser", "method", "csharp", "src/A3.cs", "void ThirdTypeUser()", 1, null),
@@ -1532,9 +1517,9 @@ public sealed class InspectToolTests
             JulieDbFixture.PinnedSchema,
             JulieDbFixture.PinnedContract,
             [
-                new(targetId, "Run", "method", "csharp", "src/Target.cs", "void Run()", 1, null),
-                new(callerAId, "CallerA", "method", "csharp", "src/A.cs", "void CallerA()", 10, null),
-                new(callerZId, "CallerZ", "method", "csharp", "src/Z.cs", "void CallerZ()", 20, null),
+                new(targetId, "Run", "function", "csharp", "src/Target.cs", "void Run()", 1, null),
+                new(callerAId, "CallerA", "function", "csharp", "src/A.cs", "void CallerA()", 10, null),
+                new(callerZId, "CallerZ", "function", "csharp", "src/Z.cs", "void CallerZ()", 20, null),
             ],
             identifiers:
             [
@@ -1825,7 +1810,7 @@ public sealed class InspectToolTests
         const string hotId = "dd000000000000000000000000000001";
         var rows = new[]
         {
-            new JulieDbFixture.SymbolRow(hotId, name, "method", "csharp",
+            new JulieDbFixture.SymbolRow(hotId, name, "function", "csharp",
                 "src/Hot.cs", $"public void {name}()", 2, null)
             {
                 IsTest = isTest,

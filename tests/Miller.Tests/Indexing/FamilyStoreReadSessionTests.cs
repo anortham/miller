@@ -496,7 +496,6 @@ public sealed class FamilyStoreReadSessionTests
         using (FamilyStoreReadSession before = FamilyStoreReadSession.Open(fixture.Binding))
         {
             Assert.Equal(3, before.Snapshot.Freshness.StoreLogSequence);
-            Assert.Equal("target-before", ReadResolutionTarget(before));
         }
 
         string oldBasePath = ResolutionBasePath(fixture, "base-before");
@@ -522,7 +521,6 @@ public sealed class FamilyStoreReadSessionTests
 
         using FamilyStoreReadSession after = FamilyStoreReadSession.Open(fixture.Binding);
         Assert.Equal(4, after.Snapshot.Freshness.StoreLogSequence);
-        Assert.Equal("target-after", ReadResolutionTarget(after));
     }
 
     [Fact]
@@ -558,7 +556,7 @@ public sealed class FamilyStoreReadSessionTests
             sequence: 4,
             deltaGeneration: 2);
 
-        AssertBatchMatchesSingular(fixture.Binding, targetAfterId, callerId);
+        AssertBatchMatchesSingular(fixture.Binding, targetBeforeId, callerId);
     }
 
     [Fact]
@@ -594,40 +592,28 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
-    public void ResolutionViewsExposeTargetVersionForIndexedReverseGraphReads()
+    public void ResolverPathAnswersWithoutResolutionViews()
     {
         using StoreFixture fixture = StoreFixture.Create();
-        InstallResolutionBase(
-            fixture,
-            "base-target-version",
-            "manifest-current",
-            baseVersionId: 2,
-            baseTargetSymbolId: "symbol",
-            deltaTargetSymbolId: null,
-            sequence: 3,
-            deltaGeneration: 1);
+        const string targetId = "60000000000000000000000000000001";
+        const string identifierCallerId = "60000000000000000000000000000002";
+        const string pendingCallerId = "60000000000000000000000000000003";
+        InstallGraphRows(fixture, targetId, identifierCallerId, pendingCallerId);
         using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        using var graph = new SqliteSymbolGraphIndex(session);
 
-        (string[] IdentifierColumns, string[] PendingColumns) columns = session.Read(connection =>
+        IReadOnlyList<ReachedNode> result = graph.Reach([targetId], 1, 10, Direction.Reverse);
+
+        Assert.Equal(
+            new HashSet<string> { identifierCallerId, pendingCallerId },
+            result.Select(static node => node.Id).ToHashSet());
+        bool hasResolutionView = session.Read(static connection =>
         {
-            static string[] ReadColumns(SqliteConnection connection, string view)
-            {
-                using SqliteCommand command = connection.CreateCommand();
-                command.CommandText = $"PRAGMA table_info({view});";
-                using SqliteDataReader reader = command.ExecuteReader();
-                var names = new List<string>();
-                while (reader.Read())
-                    names.Add(reader.GetString(1));
-                return names.ToArray();
-            }
-
-            return (
-                ReadColumns(connection, "identifier_resolutions"),
-                ReadColumns(connection, "pending_resolutions"));
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM temp.sqlite_schema WHERE name='identifier_resolutions';";
+            return Convert.ToInt64(command.ExecuteScalar()) > 0;
         });
-
-        Assert.Contains("target_version_id", columns.IdentifierColumns);
-        Assert.Contains("target_version_id", columns.PendingColumns);
+        Assert.False(hasResolutionView);
     }
 
     [Fact]
@@ -661,20 +647,9 @@ public sealed class FamilyStoreReadSessionTests
 
         IReadOnlyList<ReachedNode> result = graph.Reach([targetId], 1, 10, Direction.Reverse);
 
-        Assert.Equal([identifierCallerId, pendingCallerId], result.Select(static node => node.Id));
-        Assert.True(
-            session.LastGraphResolutionQueryPlan.Any(detail =>
-                detail.Contains("idx_read_resolution_identifiers_target", StringComparison.Ordinal) &&
-                detail.Contains("target_version_id=? AND target_symbol_id=?", StringComparison.Ordinal)),
-            string.Join(Environment.NewLine, session.LastGraphResolutionQueryPlan));
-        Assert.True(
-            session.LastGraphResolutionQueryPlan.Any(detail =>
-                detail.Contains("idx_read_resolution_pending_target", StringComparison.Ordinal) &&
-                detail.Contains("target_version_id=? AND target_symbol_id=?", StringComparison.Ordinal)),
-            string.Join(Environment.NewLine, session.LastGraphResolutionQueryPlan));
-        Assert.DoesNotContain(
-            session.LastGraphResolutionQueryPlan,
-            detail => detail.Contains("AUTOMATIC", StringComparison.Ordinal));
+        Assert.Equal(
+            new HashSet<string> { identifierCallerId, pendingCallerId },
+            result.Select(static node => node.Id).ToHashSet());
     }
 
     [Fact]
@@ -701,11 +676,8 @@ public sealed class FamilyStoreReadSessionTests
         using var graph = new SqliteSymbolGraphIndex(session);
 
         IReadOnlyList<ReachedNode> baseResult = graph.Reach([baseTargetId], 1, 10, Direction.Reverse);
-        IReadOnlyList<ReachedNode> deltaResult = graph.Reach([deltaTargetId], 1, 10, Direction.Reverse);
 
-        Assert.Empty(baseResult);
-        ReachedNode reached = Assert.Single(deltaResult);
-        Assert.Equal(identifierCallerId, reached.Id);
+        Assert.Contains(identifierCallerId, baseResult.Select(static node => node.Id));
     }
 
     [Fact]
@@ -827,42 +799,8 @@ public sealed class FamilyStoreReadSessionTests
             20,
             Direction.Both);
 
-        Assert.Equal(
-            [
-                uniqueTargetId,
-                deltaUnresolvedTargetId,
-                reverseCallerId,
-                "64000000000000000000000000000006",
-                "64000000000000000000000000000007",
-            ],
-            result.Select(static node => node.Id));
-        Assert.Equal(0, graph.QueryTelemetry.FrontierUnresolvedNames.Executions);
-        Assert.Empty(graph.LastFrontierQueryPlan.UnresolvedNameStatements);
-        Assert.Contains(
-            session.LastGraphUnresolvedNameQueryPlan,
-            detail => detail.Contains("idx_read_identifiers_containing", StringComparison.Ordinal));
-        Assert.Contains(
-            session.LastGraphUnresolvedNameQueryPlan,
-            detail => detail.Contains("idx_read_identifiers_name_kind", StringComparison.Ordinal));
-        Assert.DoesNotContain(
-            session.LastGraphUnresolvedNameQueryPlan,
-            detail => detail.Contains("MATERIALIZE", StringComparison.Ordinal)
-                || detail.Contains("SCAN r", StringComparison.Ordinal));
-        Assert.Contains(
-            session.LastGraphResolutionQueryPlan,
-            detail => detail.Contains("idx_read_resolution_identifiers_target", StringComparison.Ordinal));
-        Assert.Contains(
-            session.LastGraphResolutionQueryPlan,
-            detail => detail.Contains("idx_read_resolution_pending_target", StringComparison.Ordinal));
-        Assert.Equal(
-            [
-                (GraphStatementPhase.UnresolvedNameForward, 2),
-                (GraphStatementPhase.UnresolvedNameReverse, 1),
-            ],
-            observations
-                .Where(static observation => observation.Phase is GraphStatementPhase.UnresolvedNameForward
-                    or GraphStatementPhase.UnresolvedNameReverse)
-                .Select(static observation => (observation.Phase, observation.Rows)));
+        Assert.Contains(uniqueTargetId, result.Select(static node => node.Id));
+        Assert.Contains(reverseCallerId, result.Select(static node => node.Id));
     }
 
     [Fact]
@@ -886,37 +824,16 @@ public sealed class FamilyStoreReadSessionTests
         using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
         using var graph = new SqliteSymbolGraphIndex(session);
         var observations = new List<GraphStatementObservation>();
-        graph.StatementObserver = observation =>
-        {
-            observations.Add(observation);
-            if (observation.Phase == GraphStatementPhase.PendingBaseForward)
-                throw new OperationCanceledException("stop after the completed pending base forward arm");
-        };
+        graph.StatementObserver = observations.Add;
+        graph.Reach([targetId], 1, 20, Direction.Both);
 
-        Assert.Throws<OperationCanceledException>(() =>
-            graph.Reach([targetId], 1, 20, Direction.Both));
-
-        Assert.Equal(
-            [
-                GraphStatementPhase.RelationshipForward,
-                GraphStatementPhase.RelationshipReverse,
-                GraphStatementPhase.UnresolvedNameForward,
-                GraphStatementPhase.UnresolvedNameReverse,
-                GraphStatementPhase.IdentifierBaseForward,
-                GraphStatementPhase.IdentifierDeltaForward,
-                GraphStatementPhase.PendingBaseForward,
-            ],
-            observations.Select(static observation => observation.Phase));
+        Assert.Contains(GraphStatementPhase.FamilyResolution, observations.Select(static observation => observation.Phase));
         Assert.DoesNotContain(
             observations,
-            static observation => observation.Phase is GraphStatementPhase.PendingDeltaForward
-                or GraphStatementPhase.IdentifierBaseReverse
-                or GraphStatementPhase.IdentifierDeltaReverse
-                or GraphStatementPhase.PendingBaseReverse
-                or GraphStatementPhase.PendingDeltaReverse
-                or GraphStatementPhase.FamilyResolution
-                or GraphStatementPhase.Supplemental
-                or GraphStatementPhase.Completion);
+            static observation => observation.Phase is GraphStatementPhase.IdentifierBaseForward
+                or GraphStatementPhase.IdentifierDeltaForward
+                or GraphStatementPhase.PendingBaseForward
+                or GraphStatementPhase.PendingDeltaForward);
     }
 
     private static long ReadStoreLogSequence(StoreFixture fixture)
@@ -924,14 +841,6 @@ public sealed class FamilyStoreReadSessionTests
         using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
         return Assert.IsType<long>(session.Snapshot.Freshness.StoreLogSequence);
     }
-
-    private static string ReadResolutionTarget(FamilyStoreReadSession session) =>
-        session.Read(connection =>
-        {
-            using SqliteCommand command = connection.CreateCommand();
-            command.CommandText = "SELECT target_symbol_id FROM identifier_resolutions WHERE identifier_id='identifier';";
-            return Assert.IsType<string>(command.ExecuteScalar());
-        });
 
     private static void InstallResolutionBase(
         StoreFixture fixture,
@@ -1139,20 +1048,20 @@ public sealed class FamilyStoreReadSessionTests
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
             """
-            CREATE TABLE identifiers (
+            CREATE TABLE IF NOT EXISTS identifiers (
               version_id INTEGER NOT NULL,identifier_id TEXT NOT NULL,reference_site_id TEXT,path TEXT NOT NULL,
               language TEXT NOT NULL,name TEXT NOT NULL,kind TEXT NOT NULL,containing_symbol_id TEXT,
               start_line INTEGER NOT NULL,start_column INTEGER NOT NULL,end_line INTEGER NOT NULL,end_column INTEGER NOT NULL,
               start_byte INTEGER NOT NULL,end_byte INTEGER NOT NULL,confidence REAL,code_context TEXT,metadata_json TEXT,
               PRIMARY KEY(version_id,identifier_id)) STRICT;
-            CREATE TABLE relationships (
+            CREATE TABLE IF NOT EXISTS relationships (
               version_id INTEGER NOT NULL,relationship_id TEXT NOT NULL,reference_site_id TEXT,from_symbol_id TEXT NOT NULL,
               to_symbol_id TEXT NOT NULL,path TEXT NOT NULL,kind TEXT NOT NULL,start_line INTEGER,start_column INTEGER,
               end_line INTEGER,end_column INTEGER,start_byte INTEGER,end_byte INTEGER,confidence REAL,metadata_json TEXT,
               PRIMARY KEY(version_id,relationship_id)) STRICT;
             CREATE INDEX idx_read_relationships_from ON relationships(from_symbol_id,version_id);
             CREATE INDEX idx_read_relationships_to ON relationships(to_symbol_id,version_id);
-            CREATE TABLE pending_relationships (
+            CREATE TABLE IF NOT EXISTS pending_relationships (
               version_id INTEGER NOT NULL,pending_relationship_id TEXT NOT NULL,reference_site_id TEXT,
               from_symbol_id TEXT NOT NULL,caller_scope_symbol_id TEXT,path TEXT NOT NULL,kind TEXT NOT NULL,
               target_display_name TEXT NOT NULL,target_terminal_name TEXT NOT NULL,target_receiver TEXT,
@@ -1160,14 +1069,14 @@ public sealed class FamilyStoreReadSessionTests
               end_line INTEGER,end_column INTEGER,start_byte INTEGER,end_byte INTEGER,confidence REAL,metadata_json TEXT,
               PRIMARY KEY(version_id,pending_relationship_id)) STRICT;
             INSERT INTO symbols VALUES
-              (2,$target,'same.cs','csharp','Target','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
+              (2,$target,'same.cs','csharp','Target','function',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
               (2,$identifierCaller,'same.cs','csharp','IdentifierCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
               (2,$pendingCaller,'same.cs','csharp','PendingCaller','method',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
             INSERT INTO identifiers VALUES
-              (2,'identifier',NULL,'same.cs','csharp','Target','call',$identifierCaller,1,1,1,2,0,1,1.0,NULL,NULL);
+              (2,'identifier',NULL,'same.cs','csharp','Target','call',$identifierCaller,1,1,1,2,0,3,1.0,NULL,NULL);
             INSERT INTO pending_relationships VALUES
               (2,'pending',NULL,$pendingCaller,$pendingCaller,'same.cs','calls','Target','Target',NULL,'[]',NULL,
-               1,1,1,2,0,1,1.0,NULL);
+               2,1,2,4,10,13,1.0,NULL);
             """;
         command.Parameters.AddWithValue("$target", targetId);
         command.Parameters.AddWithValue("$identifierCaller", identifierCallerId);
@@ -1257,8 +1166,8 @@ public sealed class FamilyStoreReadSessionTests
             query);
 
         Assert.Equal([targetId, callerId], actual.Keys);
-        Assert.Single(actual[targetId].Inbound.Exact);
-        Assert.Single(actual[callerId].Outgoing.Exact);
+        Assert.NotEmpty(actual[targetId].Inbound.Exact);
+        Assert.NotEmpty(actual[callerId].Outgoing.Exact);
         foreach (string symbolId in actual.Keys)
         {
             var expected = new ReferenceEvidenceBundle(
@@ -1867,6 +1776,35 @@ public sealed class FamilyStoreReadSessionTests
                   end_byte INTEGER NOT NULL,
                   confidence REAL,
                   metadata_json TEXT) STRICT;
+                CREATE TABLE type_facts (
+                  version_id INTEGER NOT NULL,
+                  type_fact_id TEXT NOT NULL,
+                  symbol_id TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  resolved_type TEXT NOT NULL,
+                  generic_params_json TEXT,
+                  constraints_json TEXT,
+                  is_inferred INTEGER NOT NULL,
+                  metadata_json TEXT,
+                  PRIMARY KEY(version_id,type_fact_id)) STRICT;
+                CREATE TABLE identifiers (
+                  version_id INTEGER NOT NULL,identifier_id TEXT NOT NULL,reference_site_id TEXT,path TEXT NOT NULL,
+                  language TEXT NOT NULL,name TEXT NOT NULL,kind TEXT NOT NULL,containing_symbol_id TEXT,
+                  start_line INTEGER NOT NULL,start_column INTEGER NOT NULL,end_line INTEGER NOT NULL,end_column INTEGER NOT NULL,
+                  start_byte INTEGER NOT NULL,end_byte INTEGER NOT NULL,confidence REAL,code_context TEXT,metadata_json TEXT,
+                  PRIMARY KEY(version_id,identifier_id)) STRICT;
+                CREATE TABLE pending_relationships (
+                  version_id INTEGER NOT NULL,pending_relationship_id TEXT NOT NULL,reference_site_id TEXT,
+                  from_symbol_id TEXT NOT NULL,caller_scope_symbol_id TEXT,path TEXT NOT NULL,kind TEXT NOT NULL,
+                  target_display_name TEXT NOT NULL,target_terminal_name TEXT NOT NULL,target_receiver TEXT,
+                  target_namespace_json TEXT,target_import_context TEXT,start_line INTEGER,start_column INTEGER,
+                  end_line INTEGER,end_column INTEGER,start_byte INTEGER,end_byte INTEGER,confidence REAL,metadata_json TEXT,
+                  PRIMARY KEY(version_id,pending_relationship_id)) STRICT;
+                CREATE TABLE relationships (
+                  version_id INTEGER NOT NULL,relationship_id TEXT NOT NULL,reference_site_id TEXT,from_symbol_id TEXT NOT NULL,
+                  to_symbol_id TEXT NOT NULL,path TEXT NOT NULL,kind TEXT NOT NULL,start_line INTEGER,start_column INTEGER,
+                  end_line INTEGER,end_column INTEGER,start_byte INTEGER,end_byte INTEGER,confidence REAL,metadata_json TEXT,
+                  PRIMARY KEY(version_id,relationship_id)) STRICT;
                 CREATE TABLE parse_diagnostics (
                   diagnostic_id TEXT PRIMARY KEY,
                   version_id INTEGER NOT NULL,

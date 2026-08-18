@@ -1,10 +1,10 @@
-using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Graph;
+using Miller.Indexing.Resolution;
 using Miller.Indexing.Store;
 
 namespace Miller.Indexing.Reads;
@@ -38,18 +38,19 @@ public sealed class FamilyStoreReadSession :
     IWorkspaceReadSession,
     IFamilyGraphResolutionReader,
     IFamilyGraphUnresolvedNameReader,
-    IFamilyGraphRelationshipReader
+    IFamilyGraphRelationshipReader,
+    IQueryTimeResolutionHost
 {
     private const int StoreSchemaVersion = 2;
     private const int StoreFormatEpoch = 1;
     private static readonly Regex GenerationName = new(
         @"^gen-[0-9]{3,}$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly ConcurrentDictionary<string, ResolutionBaseFileIdentity> ValidatedResolutionBases = new(
-        StringComparer.Ordinal);
 
     private readonly SqliteConnection _connection;
+    private readonly RevisionFactCacheStore? _factCacheStore;
     private readonly object _gate = new();
+    private QueryTimeResolutionReader? _resolution;
     private bool _disposed;
 
     internal bool CaptureGraphResolutionQueryPlan { get; set; }
@@ -67,20 +68,61 @@ public sealed class FamilyStoreReadSession :
     private FamilyStoreReadSession(
         SqliteConnection connection,
         StoreVisibility visibility,
-        WorkspaceReadSnapshot snapshot)
+        WorkspaceReadSnapshot snapshot,
+        RevisionFactCacheStore? factCacheStore)
     {
         _connection = connection;
         Visibility = visibility;
         Snapshot = snapshot;
+        _factCacheStore = factCacheStore;
+    }
+
+    private QueryTimeResolutionReader CreateResolutionReader()
+    {
+        RevisionFactCache cache;
+        if (_factCacheStore is { } store)
+        {
+            cache = store.GetOrAdvance(
+                Visibility.FamilyId + "\0" + Visibility.ViewId + "\0" + Visibility.WorkspaceRoot,
+                Visibility.ManifestHash + ":" + Visibility.ManifestGeneration.ToString(CultureInfo.InvariantCulture) + ":" + Visibility.StoreLogSequence.ToString(CultureInfo.InvariantCulture),
+                () => OpenReadOnly(Visibility.StoreDatabasePath),
+                Visibility);
+        }
+        else
+        {
+            cache = RevisionFactCache.Load(_connection, Visibility);
+        }
+
+        return new QueryTimeResolutionReader(cache, Visibility);
     }
 
     public StoreVisibility Visibility { get; }
 
     public WorkspaceReadSnapshot Snapshot { get; }
 
+    QueryTimeResolutionReader IQueryTimeResolutionHost.Resolution => Resolution;
+
+    internal QueryTimeResolutionReader Resolution
+    {
+        get
+        {
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                return _resolution ??= CreateResolutionReader();
+            }
+        }
+    }
+
     public static FamilyStoreReadSession Open(
         StoreFamilyBinding binding,
-        string? workspaceId = null)
+        string? workspaceId = null) =>
+        Open(binding, workspaceId, factCacheStore: null);
+
+    internal static FamilyStoreReadSession Open(
+        StoreFamilyBinding binding,
+        string? workspaceId,
+        RevisionFactCacheStore? factCacheStore)
     {
         ArgumentNullException.ThrowIfNull(binding);
         if (binding.State != StoreBindingState.Ready)
@@ -111,13 +153,11 @@ public sealed class FamilyStoreReadSession :
                     coordinatorDatabasePath,
                     workspaceRoot,
                     Required(metadata, "binary_version"));
-                bool resolutionAttached = AttachValidatedResolutionBase(connection, visibility);
                 CreateCompatibilityProjection(
                     connection,
                     visibility,
                     metadata,
-                    extractionIdentityEpoch,
-                    resolutionAttached);
+                    extractionIdentityEpoch);
                 SetQueryOnly(connection);
                 var freshness = new WorkspaceFreshnessToken(
                     visibility.FamilyId,
@@ -147,7 +187,7 @@ public sealed class FamilyStoreReadSession :
                     visibility.ResolutionBaseId,
                     visibility.ResolutionDeltaGeneration,
                     visibility.ResolutionExactAt);
-                return new FamilyStoreReadSession(connection, visibility, snapshot);
+                return new FamilyStoreReadSession(connection, visibility, snapshot, factCacheStore);
             }
             catch
             {
@@ -221,50 +261,13 @@ public sealed class FamilyStoreReadSession :
         Direction direction,
         Action<GraphStatementObservation>? statementObserver)
     {
-        if (candidateIds.Count == 0 || Visibility.ResolutionState != "exact")
+        if (candidateIds.Count == 0)
             return [];
 
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            IReadOnlyList<(string Id, long VersionId)> candidates = ReadGraphCandidates(candidateIds);
-            if (candidates.Count == 0)
-                return [];
-
-            var edges = new List<FamilyGraphResolutionEdge>();
-            var plans = new List<string>();
-            if (direction is Direction.Forward or Direction.Both)
-            {
-                ReadGraphResolutionArm(
-                    candidates, candidateIds, IdentifierBaseForwardSql, edges, plans,
-                    GraphStatementPhase.IdentifierBaseForward, statementObserver);
-                ReadGraphResolutionArm(
-                    candidates, candidateIds, IdentifierDeltaForwardSql, edges, plans,
-                    GraphStatementPhase.IdentifierDeltaForward, statementObserver);
-                ReadGraphResolutionArm(
-                    candidates, candidateIds, PendingBaseForwardSql, edges, plans,
-                    GraphStatementPhase.PendingBaseForward, statementObserver);
-                ReadGraphResolutionArm(
-                    candidates, candidateIds, PendingDeltaForwardSql, edges, plans,
-                    GraphStatementPhase.PendingDeltaForward, statementObserver);
-            }
-            if (direction is Direction.Reverse or Direction.Both)
-            {
-                ReadGraphResolutionArm(
-                    candidates, candidateIds, IdentifierBaseReverseSql, edges, plans,
-                    GraphStatementPhase.IdentifierBaseReverse, statementObserver);
-                ReadGraphResolutionArm(
-                    candidates, candidateIds, IdentifierDeltaReverseSql, edges, plans,
-                    GraphStatementPhase.IdentifierDeltaReverse, statementObserver);
-                ReadGraphResolutionArm(
-                    candidates, candidateIds, PendingBaseReverseSql, edges, plans,
-                    GraphStatementPhase.PendingBaseReverse, statementObserver);
-                ReadGraphResolutionArm(
-                    candidates, candidateIds, PendingDeltaReverseSql, edges, plans,
-                    GraphStatementPhase.PendingDeltaReverse, statementObserver);
-            }
-            LastGraphResolutionQueryPlan = plans;
-            return edges;
+            return Resolution.ReadResolutionEdges(_connection, candidateIds, direction, statementObserver);
         }
     }
 
@@ -273,42 +276,13 @@ public sealed class FamilyStoreReadSession :
         Direction direction,
         Action<GraphStatementObservation>? statementObserver)
     {
-        if (candidateIds.Count == 0 || Visibility.ResolutionState != "exact")
+        if (candidateIds.Count == 0)
             return [];
 
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            IReadOnlyList<(string Id, long VersionId)> candidates = ReadGraphCandidates(candidateIds);
-            if (candidates.Count == 0)
-                return [];
-
-            var edges = new List<FamilyGraphUnresolvedNameEdge>();
-            var plans = new List<string>();
-            if (direction is Direction.Forward or Direction.Both)
-            {
-                ReadGraphUnresolvedNameArm(
-                    candidates,
-                    candidateIds,
-                    UnresolvedNameForwardSql,
-                    edges,
-                    plans,
-                    GraphStatementPhase.UnresolvedNameForward,
-                    statementObserver);
-            }
-            if (direction is Direction.Reverse or Direction.Both)
-            {
-                ReadGraphUnresolvedNameArm(
-                    candidates,
-                    candidateIds,
-                    UnresolvedNameReverseSql,
-                    edges,
-                    plans,
-                    GraphStatementPhase.UnresolvedNameReverse,
-                    statementObserver);
-            }
-            LastGraphUnresolvedNameQueryPlan = plans;
-            return edges;
+            return Resolution.ReadUnresolvedNameEdges(_connection, candidateIds, direction, statementObserver);
         }
     }
 
@@ -377,94 +351,6 @@ public sealed class FamilyStoreReadSession :
         return candidates;
     }
 
-    private void ReadGraphResolutionArm(
-        IReadOnlyList<(string Id, long VersionId)> candidates,
-        IReadOnlyList<string> candidateIds,
-        string sql,
-        List<FamilyGraphResolutionEdge> edges,
-        List<string> plans,
-        GraphStatementPhase phase,
-        Action<GraphStatementObservation>? statementObserver)
-    {
-        string values = string.Join(", ", Enumerable.Range(0, candidates.Count).Select(index => $"($id{index},$version{index})"));
-        using SqliteCommand command = _connection.CreateCommand();
-        command.CommandText = $"WITH candidates(id,version_id) AS (VALUES {values})\n" + sql;
-        for (int index = 0; index < candidates.Count; index++)
-        {
-            command.Parameters.AddWithValue($"$id{index}", candidates[index].Id);
-            command.Parameters.AddWithValue($"$version{index}", candidates[index].VersionId);
-        }
-        if (CaptureGraphResolutionQueryPlan)
-            plans.AddRange(ReadQueryPlan(command));
-
-        long started = System.Diagnostics.Stopwatch.GetTimestamp();
-        int rows = 0;
-        using (SqliteDataReader reader = command.ExecuteReader())
-        {
-            while (reader.Read())
-            {
-                rows++;
-                edges.Add(new FamilyGraphResolutionEdge(
-                    reader.GetString(0),
-                    reader.GetString(1),
-                    reader.GetString(2),
-                    reader.GetString(3),
-                    reader.GetDouble(4),
-                    reader.GetString(5)));
-            }
-        }
-        statementObserver?.Invoke(GraphStatementObservation.Completed(
-            phase,
-            rows,
-            System.Diagnostics.Stopwatch.GetElapsedTime(started),
-            candidateIds));
-    }
-
-    private void ReadGraphUnresolvedNameArm(
-        IReadOnlyList<(string Id, long VersionId)> candidates,
-        IReadOnlyList<string> candidateIds,
-        string sql,
-        List<FamilyGraphUnresolvedNameEdge> edges,
-        List<string> plans,
-        GraphStatementPhase phase,
-        Action<GraphStatementObservation>? statementObserver)
-    {
-        string values = string.Join(
-            ", ",
-            Enumerable.Range(0, candidates.Count).Select(index => $"($id{index},$version{index})"));
-        using SqliteCommand command = _connection.CreateCommand();
-        command.CommandText = $"WITH candidates(id,version_id) AS (VALUES {values})\n" + sql;
-        for (int index = 0; index < candidates.Count; index++)
-        {
-            command.Parameters.AddWithValue($"$id{index}", candidates[index].Id);
-            command.Parameters.AddWithValue($"$version{index}", candidates[index].VersionId);
-        }
-        if (CaptureGraphUnresolvedNameQueryPlan)
-            plans.AddRange(ReadQueryPlan(command));
-
-        long started = System.Diagnostics.Stopwatch.GetTimestamp();
-        int rows = 0;
-        using (SqliteDataReader reader = command.ExecuteReader())
-        {
-            while (reader.Read())
-            {
-                rows++;
-                edges.Add(new FamilyGraphUnresolvedNameEdge(
-                    reader.GetString(0),
-                    reader.GetString(1),
-                    reader.GetString(2),
-                    reader.GetString(3),
-                    reader.GetDouble(4),
-                    reader.GetString(5)));
-            }
-        }
-        statementObserver?.Invoke(GraphStatementObservation.Completed(
-            phase,
-            rows,
-            System.Diagnostics.Stopwatch.GetElapsedTime(started),
-            candidateIds));
-    }
-
     private void ReadGraphRelationshipArm(
         IReadOnlyList<(string Id, long VersionId)> candidates,
         IReadOnlyList<string> candidateIds,
@@ -523,23 +409,6 @@ public sealed class FamilyStoreReadSession :
         return plan;
     }
 
-    private const string IdentifierBaseForwardSql = """
-        SELECT candidates.id,i.containing_symbol_id,r.target_symbol_id,i.kind,
-               COALESCE(r.confidence,i.confidence),'identifier_target'
-        FROM candidates
-        JOIN main.identifiers AS i ON i.version_id=candidates.version_id AND i.containing_symbol_id=candidates.id
-        JOIN resolution_base.identifier_resolutions AS r
-          ON r.version_id=i.version_id AND r.identifier_id=i.identifier_id
-        JOIN _miller_visible_entries AS target_visible ON target_visible.version_id=r.target_version_id
-        JOIN main.symbols AS target
-          ON target.version_id=r.target_version_id AND target.symbol_id=r.target_symbol_id
-        WHERE NOT EXISTS (
-          SELECT 1 FROM main.resolution_identifier_deltas AS d
-          WHERE d.view_id=(SELECT view_id FROM _miller_session)
-            AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-            AND d.version_id=r.version_id AND d.identifier_id=r.identifier_id);
-        """;
-
     private const string RelationshipForwardSql = """
         SELECT candidates.id,r.from_symbol_id,r.to_symbol_id,r.kind,r.confidence,'relationship'
         FROM candidates
@@ -558,171 +427,6 @@ public sealed class FamilyStoreReadSession :
         JOIN main.symbols AS source
           ON source.version_id=r.version_id AND source.symbol_id=r.from_symbol_id
         WHERE r.from_symbol_id<>r.to_symbol_id;
-        """;
-
-    private const string UnresolvedNameForwardSql = """
-        SELECT candidates.id,i.containing_symbol_id,target.symbol_id,i.kind,
-               i.confidence * 0.5,'identifier_name'
-        FROM candidates
-        JOIN main.identifiers AS i
-          ON i.version_id=candidates.version_id AND i.containing_symbol_id=candidates.id
-        LEFT JOIN main.resolution_identifier_deltas AS d
-          ON d.view_id=(SELECT view_id FROM _miller_session)
-         AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-         AND d.version_id=i.version_id AND d.identifier_id=i.identifier_id
-        LEFT JOIN resolution_base.identifier_resolutions AS r
-          ON r.version_id=i.version_id AND r.identifier_id=i.identifier_id
-        JOIN main.symbols AS target ON target.name=i.name
-        JOIN _miller_visible_entries AS target_visible ON target_visible.version_id=target.version_id
-        WHERE ((d.identifier_id IS NOT NULL AND d.target_symbol_id IS NULL)
-            OR (d.identifier_id IS NULL AND r.target_symbol_id IS NULL))
-          AND i.containing_symbol_id<>target.symbol_id
-          AND NOT EXISTS (
-              SELECT 1
-              FROM main.symbols AS duplicate
-              JOIN _miller_visible_entries AS duplicate_visible
-                ON duplicate_visible.version_id=duplicate.version_id
-              WHERE duplicate.name=i.name AND duplicate.symbol_id<>target.symbol_id);
-        """;
-
-    private const string UnresolvedNameReverseSql = """
-        SELECT candidates.id,i.containing_symbol_id,target.symbol_id,i.kind,
-               i.confidence * 0.5,'identifier_name'
-        FROM candidates
-        JOIN main.symbols AS target
-          ON target.version_id=candidates.version_id AND target.symbol_id=candidates.id
-        JOIN main.identifiers AS i ON i.name=target.name
-        JOIN _miller_visible_entries AS source_visible ON source_visible.version_id=i.version_id
-        JOIN main.symbols AS source
-          ON source.version_id=i.version_id AND source.symbol_id=i.containing_symbol_id
-        LEFT JOIN main.resolution_identifier_deltas AS d
-          ON d.view_id=(SELECT view_id FROM _miller_session)
-         AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-         AND d.version_id=i.version_id AND d.identifier_id=i.identifier_id
-        LEFT JOIN resolution_base.identifier_resolutions AS r
-          ON r.version_id=i.version_id AND r.identifier_id=i.identifier_id
-        WHERE ((d.identifier_id IS NOT NULL AND d.target_symbol_id IS NULL)
-            OR (d.identifier_id IS NULL AND r.target_symbol_id IS NULL))
-          AND i.containing_symbol_id<>target.symbol_id
-          AND NOT EXISTS (
-              SELECT 1
-              FROM main.symbols AS duplicate
-              JOIN _miller_visible_entries AS duplicate_visible
-                ON duplicate_visible.version_id=duplicate.version_id
-              WHERE duplicate.name=target.name AND duplicate.symbol_id<>target.symbol_id);
-        """;
-
-    private const string IdentifierDeltaForwardSql = """
-        SELECT candidates.id,i.containing_symbol_id,d.target_symbol_id,i.kind,
-               COALESCE(d.confidence,i.confidence),'identifier_target'
-        FROM candidates
-        JOIN main.identifiers AS i ON i.version_id=candidates.version_id AND i.containing_symbol_id=candidates.id
-        JOIN main.resolution_identifier_deltas AS d
-          ON d.view_id=(SELECT view_id FROM _miller_session)
-         AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-         AND d.version_id=i.version_id AND d.identifier_id=i.identifier_id
-        JOIN _miller_visible_entries AS target_visible ON target_visible.version_id=d.target_version_id
-        JOIN main.symbols AS target
-          ON target.version_id=d.target_version_id AND target.symbol_id=d.target_symbol_id;
-        """;
-
-    private const string PendingBaseForwardSql = """
-        SELECT candidates.id,p.from_symbol_id,r.target_symbol_id,p.kind,
-               MIN(p.confidence,r.confidence),'pending_resolution'
-        FROM candidates
-        JOIN main.pending_relationships AS p
-          ON p.version_id=candidates.version_id AND p.from_symbol_id=candidates.id
-        JOIN resolution_base.pending_resolutions AS r
-          ON r.version_id=p.version_id AND r.pending_relationship_id=p.pending_relationship_id
-        JOIN _miller_visible_entries AS target_visible ON target_visible.version_id=r.target_version_id
-        JOIN main.symbols AS target
-          ON target.version_id=r.target_version_id AND target.symbol_id=r.target_symbol_id
-        WHERE NOT EXISTS (
-          SELECT 1 FROM main.resolution_pending_deltas AS d
-          WHERE d.view_id=(SELECT view_id FROM _miller_session)
-            AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-            AND d.version_id=r.version_id AND d.pending_relationship_id=r.pending_relationship_id);
-        """;
-
-    private const string PendingDeltaForwardSql = """
-        SELECT candidates.id,p.from_symbol_id,d.target_symbol_id,p.kind,
-               MIN(p.confidence,d.confidence),'pending_resolution'
-        FROM candidates
-        JOIN main.pending_relationships AS p
-          ON p.version_id=candidates.version_id AND p.from_symbol_id=candidates.id
-        JOIN main.resolution_pending_deltas AS d
-          ON d.view_id=(SELECT view_id FROM _miller_session)
-         AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-         AND d.version_id=p.version_id AND d.pending_relationship_id=p.pending_relationship_id
-         AND d.operation='replace'
-        JOIN _miller_visible_entries AS target_visible ON target_visible.version_id=d.target_version_id
-        JOIN main.symbols AS target
-          ON target.version_id=d.target_version_id AND target.symbol_id=d.target_symbol_id;
-        """;
-
-    private const string IdentifierBaseReverseSql = """
-        SELECT candidates.id,i.containing_symbol_id,r.target_symbol_id,i.kind,
-               COALESCE(r.confidence,i.confidence),'identifier_target'
-        FROM candidates
-        JOIN resolution_base.identifier_resolutions AS r
-          ON r.target_version_id=candidates.version_id AND r.target_symbol_id=candidates.id
-        JOIN _miller_visible_entries AS source_visible ON source_visible.version_id=r.version_id
-        JOIN main.identifiers AS i ON i.version_id=r.version_id AND i.identifier_id=r.identifier_id
-        JOIN main.symbols AS source
-          ON source.version_id=i.version_id AND source.symbol_id=i.containing_symbol_id
-        WHERE NOT EXISTS (
-          SELECT 1 FROM main.resolution_identifier_deltas AS d
-          WHERE d.view_id=(SELECT view_id FROM _miller_session)
-            AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-            AND d.version_id=r.version_id AND d.identifier_id=r.identifier_id);
-        """;
-
-    private const string IdentifierDeltaReverseSql = """
-        SELECT candidates.id,i.containing_symbol_id,d.target_symbol_id,i.kind,
-               COALESCE(d.confidence,i.confidence),'identifier_target'
-        FROM candidates
-        JOIN main.resolution_identifier_deltas AS d
-          ON d.view_id=(SELECT view_id FROM _miller_session)
-         AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-         AND d.target_version_id=candidates.version_id AND d.target_symbol_id=candidates.id
-        JOIN _miller_visible_entries AS source_visible ON source_visible.version_id=d.version_id
-        JOIN main.identifiers AS i ON i.version_id=d.version_id AND i.identifier_id=d.identifier_id
-        JOIN main.symbols AS source
-          ON source.version_id=i.version_id AND source.symbol_id=i.containing_symbol_id;
-        """;
-
-    private const string PendingBaseReverseSql = """
-        SELECT candidates.id,p.from_symbol_id,r.target_symbol_id,p.kind,
-               MIN(p.confidence,r.confidence),'pending_resolution'
-        FROM candidates
-        JOIN resolution_base.pending_resolutions AS r
-          ON r.target_version_id=candidates.version_id AND r.target_symbol_id=candidates.id
-        JOIN _miller_visible_entries AS source_visible ON source_visible.version_id=r.version_id
-        JOIN main.pending_relationships AS p
-          ON p.version_id=r.version_id AND p.pending_relationship_id=r.pending_relationship_id
-        JOIN main.symbols AS source
-          ON source.version_id=p.version_id AND source.symbol_id=p.from_symbol_id
-        WHERE NOT EXISTS (
-          SELECT 1 FROM main.resolution_pending_deltas AS d
-          WHERE d.view_id=(SELECT view_id FROM _miller_session)
-            AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-            AND d.version_id=r.version_id AND d.pending_relationship_id=r.pending_relationship_id);
-        """;
-
-    private const string PendingDeltaReverseSql = """
-        SELECT candidates.id,p.from_symbol_id,d.target_symbol_id,p.kind,
-               MIN(p.confidence,d.confidence),'pending_resolution'
-        FROM candidates
-        JOIN main.resolution_pending_deltas AS d
-          ON d.view_id=(SELECT view_id FROM _miller_session)
-         AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-         AND d.target_version_id=candidates.version_id AND d.target_symbol_id=candidates.id
-         AND d.operation='replace'
-        JOIN _miller_visible_entries AS source_visible ON source_visible.version_id=d.version_id
-        JOIN main.pending_relationships AS p
-          ON p.version_id=d.version_id AND p.pending_relationship_id=d.pending_relationship_id
-        JOIN main.symbols AS source
-          ON source.version_id=p.version_id AND source.symbol_id=p.from_symbol_id;
         """;
 
     public void Dispose()
@@ -1059,8 +763,7 @@ public sealed class FamilyStoreReadSession :
         SqliteConnection connection,
         StoreVisibility visibility,
         IReadOnlyDictionary<string, string> metadata,
-        int extractionIdentityEpoch,
-        bool resolutionAttached)
+        int extractionIdentityEpoch)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
@@ -1237,8 +940,6 @@ public sealed class FamilyStoreReadSession :
         command.Parameters.AddWithValue("$resolution_delta_generation", (object?)visibility.ResolutionDeltaGeneration ?? DBNull.Value);
         command.ExecuteNonQuery();
 
-        CreateResolutionViews(connection, resolutionAttached);
-
         InsertMetadata(connection, "artifact_id", visibility.FamilyId);
         InsertMetadata(connection, "root_path", visibility.WorkspaceRoot);
         InsertMetadata(connection, "index_level", visibility.IndexLevel);
@@ -1254,204 +955,6 @@ public sealed class FamilyStoreReadSession :
         InsertMetadata(connection, "binary_version", Required(metadata, "binary_version"));
     }
 
-    private static bool AttachValidatedResolutionBase(
-        SqliteConnection connection,
-        StoreVisibility visibility)
-    {
-        if (visibility.ResolutionState != "exact" ||
-            visibility.ResolutionExactAt != visibility.ManifestGeneration ||
-            visibility.ResolutionBaseId is null ||
-            visibility.ResolutionDeltaGeneration is null)
-        {
-            return false;
-        }
-
-        using SqliteCommand command = connection.CreateCommand();
-        command.CommandText =
-            """
-            SELECT b.manifest_hash,b.resolver_output_epoch,b.state,b.relative_path,
-                   b.file_bytes,b.file_sha256,d.manifest_hash,d.resolver_output_epoch
-            FROM resolution_bases AS b
-            JOIN resolution_deltas AS d
-              ON d.base_id=b.base_id
-             AND d.view_id=$view_id
-             AND d.delta_generation=$delta_generation
-            WHERE b.base_id=$base_id
-            """;
-        command.Parameters.AddWithValue("$view_id", visibility.ViewId);
-        command.Parameters.AddWithValue("$delta_generation", visibility.ResolutionDeltaGeneration.Value);
-        command.Parameters.AddWithValue("$base_id", visibility.ResolutionBaseId);
-        using SqliteDataReader reader = command.ExecuteReader();
-        if (!reader.Read())
-            throw new FamilyStoreReadException(
-                FamilyStoreReadFailure.Corrupt,
-                "The exact resolution binding has no matching ready base and delta.");
-        string baseManifestHash = reader.GetString(0);
-        long baseEpoch = reader.GetInt64(1);
-        string state = reader.GetString(2);
-        string relativePath = reader.GetString(3);
-        long fileBytes = reader.GetInt64(4);
-        string fileSha256 = reader.GetString(5);
-        string deltaManifestHash = reader.GetString(6);
-        long deltaEpoch = reader.GetInt64(7);
-        reader.Close();
-        if (state != "ready" || deltaManifestHash != visibility.ManifestHash || baseEpoch != deltaEpoch)
-        {
-            throw new FamilyStoreReadException(
-                FamilyStoreReadFailure.Corrupt,
-                "The exact resolution base or delta does not match the current manifest.");
-        }
-
-        string generationDirectory = Path.GetDirectoryName(visibility.StoreDatabasePath)
-            ?? throw new FamilyStoreReadException(
-                FamilyStoreReadFailure.Corrupt,
-                "The family-store generation has no directory.");
-        if (Path.IsPathRooted(relativePath))
-            throw new FamilyStoreReadException(
-                FamilyStoreReadFailure.Corrupt,
-                "The exact resolution base path is absolute.");
-        string basePath = CanonicalizeContained(
-            generationDirectory,
-            Path.Combine(generationDirectory, relativePath),
-            "The exact resolution base file escapes its generation.");
-        if (!File.Exists(basePath))
-            throw new FamilyStoreReadException(
-                FamilyStoreReadFailure.Corrupt,
-                "The exact resolution base file is missing.");
-        var info = new FileInfo(basePath);
-        if (info.Length != fileBytes)
-            throw new FamilyStoreReadException(
-                FamilyStoreReadFailure.Corrupt,
-                "The exact resolution base file does not match its recorded identity.");
-        ResolutionBaseFileIdentity currentIdentity = new(
-            info.Length,
-            info.LastWriteTimeUtc.Ticks,
-            fileSha256);
-        if (!ValidatedResolutionBases.TryGetValue(basePath, out ResolutionBaseFileIdentity? cached) ||
-            !cached.Matches(currentIdentity))
-        {
-            if (!StringComparer.OrdinalIgnoreCase.Equals(Sha256(basePath), fileSha256))
-                throw new FamilyStoreReadException(
-                    FamilyStoreReadFailure.Corrupt,
-                    "The exact resolution base file does not match its recorded identity.");
-            if (ValidatedResolutionBases.Count >= 512)
-                ValidatedResolutionBases.Clear();
-            ValidatedResolutionBases[basePath] = currentIdentity;
-        }
-
-        using SqliteCommand attach = connection.CreateCommand();
-        attach.CommandText = "ATTACH DATABASE $base_path AS resolution_base";
-        attach.Parameters.AddWithValue("$base_path", basePath);
-        attach.ExecuteNonQuery();
-        ValidateAttachedBase(connection, baseManifestHash, baseEpoch);
-        return true;
-    }
-
-    private static string CanonicalizeContained(string root, string path, string message)
-    {
-        string canonical = PathCanonicalizer.CanonicalizeFile(root, path);
-        string relative = Path.GetRelativePath(root, canonical);
-        if (Path.IsPathRooted(relative) ||
-            relative == ".." ||
-            relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
-            relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
-        {
-            throw new FamilyStoreReadException(FamilyStoreReadFailure.Corrupt, message);
-        }
-        return canonical;
-    }
-
-    private static void ValidateAttachedBase(
-        SqliteConnection connection,
-        string baseManifestHash,
-        long resolverOutputEpoch)
-    {
-        using SqliteCommand command = connection.CreateCommand();
-        command.CommandText =
-            """
-            SELECT
-              (SELECT value FROM resolution_base.base_meta WHERE key='completed'),
-              (SELECT value FROM resolution_base.base_meta WHERE key='manifest_hash'),
-              (SELECT value FROM resolution_base.base_meta WHERE key='resolver_output_epoch')
-            """;
-        using SqliteDataReader reader = command.ExecuteReader();
-        AssertRow(reader);
-        if (reader.IsDBNull(0) || reader.GetString(0) != "1" ||
-            reader.IsDBNull(1) || reader.GetString(1) != baseManifestHash ||
-            reader.IsDBNull(2) || reader.GetString(2) != resolverOutputEpoch.ToString(CultureInfo.InvariantCulture))
-        {
-            throw new FamilyStoreReadException(
-                FamilyStoreReadFailure.Corrupt,
-                "The attached resolution base metadata does not match the current binding.");
-        }
-    }
-
-    private static void CreateResolutionViews(SqliteConnection connection, bool resolutionAttached)
-    {
-        using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = resolutionAttached
-            ?
-            """
-            CREATE TEMP VIEW identifier_resolutions AS
-            SELECT b.identifier_id,b.target_version_id,b.target_symbol_id,b.tier,b.confidence,b.method,b.outcome,b.candidates,
-                   (SELECT generation FROM _miller_session) AS resolved_at_revision
-            FROM resolution_base.identifier_resolutions AS b
-            JOIN _miller_visible_entries AS e ON e.version_id=b.version_id
-            WHERE NOT EXISTS (
-              SELECT 1 FROM main.resolution_identifier_deltas AS d
-              WHERE d.view_id=(SELECT view_id FROM _miller_session)
-                AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-                AND d.version_id=b.version_id AND d.identifier_id=b.identifier_id)
-            UNION ALL
-            SELECT d.identifier_id,d.target_version_id,d.target_symbol_id,d.tier,d.confidence,d.method,d.outcome,d.candidates,
-                   (SELECT generation FROM _miller_session)
-            FROM main.resolution_identifier_deltas AS d
-            JOIN _miller_visible_entries AS e ON e.version_id=d.version_id
-            WHERE d.view_id=(SELECT view_id FROM _miller_session)
-              AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session);
-            CREATE TEMP VIEW pending_resolutions AS
-            SELECT b.pending_relationship_id,b.target_version_id,b.target_symbol_id,b.tier,b.confidence,b.method,
-                   (SELECT generation FROM _miller_session) AS resolved_at_revision
-            FROM resolution_base.pending_resolutions AS b
-            JOIN _miller_visible_entries AS e ON e.version_id=b.version_id
-            WHERE NOT EXISTS (
-              SELECT 1 FROM main.resolution_pending_deltas AS d
-              WHERE d.view_id=(SELECT view_id FROM _miller_session)
-                AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-                AND d.version_id=b.version_id AND d.pending_relationship_id=b.pending_relationship_id)
-            UNION ALL
-            SELECT d.pending_relationship_id,d.target_version_id,d.target_symbol_id,d.tier,d.confidence,d.method,
-                   (SELECT generation FROM _miller_session)
-            FROM main.resolution_pending_deltas AS d
-            JOIN _miller_visible_entries AS e ON e.version_id=d.version_id
-            WHERE d.view_id=(SELECT view_id FROM _miller_session)
-              AND d.delta_generation=(SELECT resolution_delta_generation FROM _miller_session)
-              AND d.operation='replace';
-            """
-            :
-            """
-            CREATE TEMP VIEW identifier_resolutions AS
-            SELECT CAST(NULL AS TEXT) AS identifier_id,CAST(NULL AS INTEGER) AS target_version_id,
-                   CAST(NULL AS TEXT) AS target_symbol_id,
-                   CAST(NULL AS INTEGER) AS tier,CAST(NULL AS REAL) AS confidence,
-                   CAST(NULL AS TEXT) AS method,CAST(NULL AS TEXT) AS outcome,
-                   CAST(NULL AS INTEGER) AS candidates,CAST(NULL AS INTEGER) AS resolved_at_revision
-            WHERE 0;
-            CREATE TEMP VIEW pending_resolutions AS
-            SELECT CAST(NULL AS TEXT) AS pending_relationship_id,CAST(NULL AS INTEGER) AS target_version_id,
-                   CAST(NULL AS TEXT) AS target_symbol_id,
-                   CAST(NULL AS INTEGER) AS tier,CAST(NULL AS REAL) AS confidence,
-                   CAST(NULL AS TEXT) AS method,CAST(NULL AS INTEGER) AS resolved_at_revision
-            WHERE 0;
-            """;
-        command.ExecuteNonQuery();
-    }
-
-    private static string Sha256(string path)
-    {
-        using FileStream stream = File.OpenRead(path);
-        return Convert.ToHexStringLower(SHA256.HashData(stream));
-    }
 
 
     private static void InsertMetadata(SqliteConnection connection, string key, string value)
@@ -1515,21 +1018,25 @@ public sealed class FamilyStoreReadSession :
                 "The family store query returned no aggregate row.");
     }
 
+    private static string CanonicalizeContained(string root, string path, string message)
+    {
+        string canonical = PathCanonicalizer.CanonicalizeFile(root, path);
+        string relative = Path.GetRelativePath(root, canonical);
+        if (Path.IsPathRooted(relative) ||
+            relative == ".." ||
+            relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+            relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            throw new FamilyStoreReadException(FamilyStoreReadFailure.Corrupt, message);
+        }
+        return canonical;
+    }
+
     private sealed record ServingStorePaths(
         string StoreRoot,
         string WorkspaceRoot,
         string GenerationName,
         string StoreDatabasePath,
         string CoordinatorDatabasePath);
-
-    private sealed record ResolutionBaseFileIdentity(
-        long FileBytes,
-        long LastWriteUtcTicks,
-        string Sha256)
-    {
-        public bool Matches(ResolutionBaseFileIdentity other) =>
-            FileBytes == other.FileBytes &&
-            LastWriteUtcTicks == other.LastWriteUtcTicks &&
-            StringComparer.OrdinalIgnoreCase.Equals(Sha256, other.Sha256);
-    }
 }
+

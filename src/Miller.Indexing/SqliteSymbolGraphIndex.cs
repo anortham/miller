@@ -1,6 +1,7 @@
 using Miller.Core.Contracts;
 using Miller.Core.Graph;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Resolution;
 using System.Collections.Immutable;
 using System.Diagnostics;
 
@@ -23,6 +24,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     private readonly IFamilyGraphResolutionReader? _familyGraphResolutionReader;
     private readonly IFamilyGraphUnresolvedNameReader? _familyGraphUnresolvedNameReader;
     private readonly IFamilyGraphRelationshipReader? _familyGraphRelationshipReader;
+    private QueryTimeResolutionReader? _queryTimeResolutionReader;
     private readonly Dictionary<(string Id, Direction Direction), IReadOnlyList<string>> _neighbourCache = new();
     private readonly Dictionary<(string Id, Direction Direction), IReadOnlyList<GraphNeighbour>>
         _evidenceCache = new();
@@ -382,26 +384,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         }
         else
         {
-            if (direction is Direction.Forward or Direction.Both)
-            {
-                frontierRows += ExecuteObservedFrontierStatement(
-                    missingIds,
-                    UnresolvedNameForwardSql,
-                    edgesById,
-                    _queryTelemetry.FrontierUnresolvedNames,
-                    unresolvedNamePlans,
-                    GraphStatementPhase.UnresolvedNameForward);
-            }
-            if (direction is Direction.Reverse or Direction.Both)
-            {
-                frontierRows += ExecuteObservedFrontierStatement(
-                    missingIds,
-                    UnresolvedNameReverseSql,
-                    edgesById,
-                    _queryTelemetry.FrontierUnresolvedNames,
-                    unresolvedNamePlans,
-                    GraphStatementPhase.UnresolvedNameReverse);
-            }
+            // Query-time unresolved names are emitted with resolution edges below.
         }
         _queryTelemetry.FrontierBatch.Add(frontierRows, Stopwatch.GetElapsedTime(frontierStarted));
         if (CaptureFrontierQueryPlan)
@@ -430,10 +413,38 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         }
         else
         {
-            if (direction is Direction.Forward or Direction.Both)
-                resolutionRows += ExecuteFrontierStatement(missingIds, ResolutionForwardSql, edgesById, null, null);
-            if (direction is Direction.Reverse or Direction.Both)
-                resolutionRows += ExecuteFrontierStatement(missingIds, ResolutionReverseSql, edgesById, null, null);
+            QueryTimeResolutionReader resolution = ResolutionReader(Connection);
+            IReadOnlyList<FamilyGraphResolutionEdge> resolutionEdges =
+                resolution.ReadResolutionEdges(Connection, missingIds, direction, StatementObserver);
+            resolutionRows = resolutionEdges.Count;
+            foreach (FamilyGraphResolutionEdge edge in resolutionEdges)
+            {
+                if (!edgesById.TryGetValue(edge.CurrentId, out Dictionary<string, GraphEdge>? currentEdges))
+                    continue;
+                string neighbour = string.Equals(edge.FromId, edge.CurrentId, StringComparison.Ordinal)
+                    ? edge.ToId
+                    : edge.FromId;
+                AddEdge(
+                    currentEdges,
+                    edge.CurrentId,
+                    neighbour,
+                    new GraphEdge(edge.FromId, edge.ToId, edge.Kind, edge.Confidence, edge.Source));
+            }
+
+            foreach (FamilyGraphUnresolvedNameEdge edge in resolution.ReadUnresolvedNameEdges(
+                         Connection, missingIds, direction, StatementObserver))
+            {
+                if (!edgesById.TryGetValue(edge.CurrentId, out Dictionary<string, GraphEdge>? currentEdges))
+                    continue;
+                string neighbour = string.Equals(edge.FromId, edge.CurrentId, StringComparison.Ordinal)
+                    ? edge.ToId
+                    : edge.FromId;
+                AddEdge(
+                    currentEdges,
+                    edge.CurrentId,
+                    neighbour,
+                    new GraphEdge(edge.FromId, edge.ToId, edge.Kind, edge.Confidence, edge.Source));
+            }
         }
         ObserveStatement(GraphStatementPhase.FamilyResolution, resolutionRows, resolutionStarted, missingIds);
 
@@ -601,72 +612,6 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         WHERE r.from_symbol_id<>r.to_symbol_id;
         """;
 
-    private const string UnresolvedNameForwardSql = """
-        SELECT candidates.id AS current_id,i.containing_symbol_id AS from_id,
-               target_symbol.symbol_id AS to_id,i.kind,i.confidence * 0.5 AS confidence,
-               'identifier_name' AS source
-        FROM candidates
-        JOIN identifiers i ON i.containing_symbol_id=candidates.id
-        LEFT JOIN identifier_resolutions ir ON ir.identifier_id=i.identifier_id
-        JOIN symbols target_symbol ON target_symbol.name=i.name
-        WHERE ir.target_symbol_id IS NULL
-          AND i.containing_symbol_id<>target_symbol.symbol_id
-          AND NOT EXISTS (
-              SELECT 1 FROM symbols duplicate
-              WHERE duplicate.name=i.name AND duplicate.symbol_id<>target_symbol.symbol_id);
-        """;
-
-    private const string UnresolvedNameReverseSql = """
-        SELECT candidates.id AS current_id,i.containing_symbol_id AS from_id,
-               target_symbol.symbol_id AS to_id,i.kind,i.confidence * 0.5 AS confidence,
-               'identifier_name' AS source
-        FROM candidates
-        JOIN symbols target_symbol ON target_symbol.symbol_id=candidates.id
-        JOIN identifiers i ON i.name=target_symbol.name
-        LEFT JOIN identifier_resolutions ir ON ir.identifier_id=i.identifier_id
-        JOIN symbols source_symbol ON source_symbol.symbol_id=i.containing_symbol_id
-        WHERE ir.target_symbol_id IS NULL
-          AND i.containing_symbol_id<>target_symbol.symbol_id
-          AND NOT EXISTS (
-              SELECT 1 FROM symbols duplicate
-              WHERE duplicate.name=target_symbol.name AND duplicate.symbol_id<>target_symbol.symbol_id);
-        """;
-
-    private const string ResolutionForwardSql = """
-        SELECT candidates.id AS current_id,p.from_symbol_id AS from_id,pr.target_symbol_id AS to_id,
-               p.kind,MIN(p.confidence,pr.confidence) AS confidence,'pending_resolution' AS source
-        FROM candidates
-        JOIN pending_relationships p ON p.from_symbol_id=candidates.id
-        JOIN pending_resolutions pr ON pr.pending_relationship_id=p.pending_relationship_id
-        JOIN symbols target_symbol ON target_symbol.symbol_id=pr.target_symbol_id
-        WHERE p.from_symbol_id<>pr.target_symbol_id
-        UNION ALL
-        SELECT candidates.id,i.containing_symbol_id,ir.target_symbol_id,i.kind,
-               COALESCE(ir.confidence,i.confidence),'identifier_target'
-        FROM candidates
-        JOIN identifiers i ON i.containing_symbol_id=candidates.id
-        JOIN identifier_resolutions ir ON ir.identifier_id=i.identifier_id
-        JOIN symbols target_symbol ON target_symbol.symbol_id=ir.target_symbol_id
-        WHERE i.containing_symbol_id<>ir.target_symbol_id;
-        """;
-
-    private const string ResolutionReverseSql = """
-        SELECT candidates.id AS current_id,p.from_symbol_id AS from_id,pr.target_symbol_id AS to_id,
-               p.kind,MIN(p.confidence,pr.confidence) AS confidence,'pending_resolution' AS source
-        FROM candidates
-        JOIN pending_resolutions pr ON pr.target_symbol_id=candidates.id
-        JOIN pending_relationships p ON p.pending_relationship_id=pr.pending_relationship_id
-        JOIN symbols source_symbol ON source_symbol.symbol_id=p.from_symbol_id
-        WHERE p.from_symbol_id<>pr.target_symbol_id
-        UNION ALL
-        SELECT candidates.id,i.containing_symbol_id,ir.target_symbol_id,i.kind,
-               COALESCE(ir.confidence,i.confidence),'identifier_target'
-        FROM candidates
-        JOIN identifier_resolutions ir ON ir.target_symbol_id=candidates.id
-        JOIN identifiers i ON i.identifier_id=ir.identifier_id
-        JOIN symbols source_symbol ON source_symbol.symbol_id=i.containing_symbol_id
-        WHERE i.containing_symbol_id<>ir.target_symbol_id;
-        """;
 
     private static void AddEdge(
         Dictionary<string, GraphEdge> edges,
@@ -773,61 +718,24 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             _queryTelemetry.RelationshipsForward.Add(rows, Stopwatch.GetElapsedTime(started));
         }
 
-        using (var command = Connection.CreateCommand())
+        long resolutionStarted = Stopwatch.GetTimestamp();
+        QueryTimeResolutionReader resolution = ResolutionReader(Connection);
+        int resolutionRows = 0;
+        foreach (FamilyGraphResolutionEdge edge in resolution.ReadResolutionEdges(
+                     Connection, [id], Direction.Forward, StatementObserver))
         {
-            command.CommandText = """
-                SELECT pr.target_symbol_id
-                FROM pending_relationships p
-                JOIN pending_resolutions pr
-                  ON pr.pending_relationship_id = p.pending_relationship_id
-                JOIN symbols s ON s.symbol_id = pr.target_symbol_id
-                WHERE p.from_symbol_id = $id;
-                """;
-            command.Parameters.AddWithValue("$id", id);
-            long started = Stopwatch.GetTimestamp();
-            using var reader = command.ExecuteReader();
-            int rows = 0;
-            while (reader.Read())
-            {
-                rows++;
-                AddCandidate(ids, id, reader.GetString(0));
-            }
-            _queryTelemetry.PendingForward.Add(rows, Stopwatch.GetElapsedTime(started));
+            resolutionRows++;
+            AddCandidate(ids, id, edge.ToId);
         }
 
-        using (var command = Connection.CreateCommand())
+        foreach (FamilyGraphUnresolvedNameEdge edge in resolution.ReadUnresolvedNameEdges(
+                     Connection, [id], Direction.Forward, StatementObserver))
         {
-            command.CommandText = """
-                SELECT i.name, ir.target_symbol_id
-                FROM identifiers i
-                LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-                LEFT JOIN symbols target
-                  ON target.symbol_id = ir.target_symbol_id
-                WHERE i.containing_symbol_id = $id
-                  AND (
-                      ir.target_symbol_id IS NULL
-                      OR target.symbol_id IS NOT NULL
-                  );
-                """;
-            command.Parameters.AddWithValue("$id", id);
-            long started = Stopwatch.GetTimestamp();
-            using var reader = command.ExecuteReader();
-            int rows = 0;
-            while (reader.Read())
-            {
-                rows++;
-                if (!reader.IsDBNull(1))
-                {
-                    AddCandidate(ids, id, reader.GetString(1));
-                    continue;
-                }
-
-                IReadOnlyList<string> targets = ResolveNameIds(reader.GetString(0));
-                if (targets.Count == 1)
-                    AddCandidate(ids, id, targets[0]);
-            }
-            _queryTelemetry.IdentifiersForward.Add(rows, Stopwatch.GetElapsedTime(started));
+            resolutionRows++;
+            AddCandidate(ids, id, edge.ToId);
         }
+
+        _queryTelemetry.IdentifiersForward.Add(resolutionRows, Stopwatch.GetElapsedTime(resolutionStarted));
 
         foreach (GraphEdge edge in SupplementalEdges())
         {
@@ -865,72 +773,24 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             _queryTelemetry.RelationshipsReverse.Add(rows, Stopwatch.GetElapsedTime(started));
         }
 
-        using (var command = Connection.CreateCommand())
+        long resolutionStarted = Stopwatch.GetTimestamp();
+        QueryTimeResolutionReader resolution = ResolutionReader(Connection);
+        int resolutionRows = 0;
+        foreach (FamilyGraphResolutionEdge edge in resolution.ReadResolutionEdges(
+                     Connection, [id], Direction.Reverse, StatementObserver))
         {
-            command.CommandText = """
-                SELECT p.from_symbol_id
-                FROM pending_relationships p
-                JOIN pending_resolutions pr
-                  ON pr.pending_relationship_id = p.pending_relationship_id
-                JOIN symbols s ON s.symbol_id = p.from_symbol_id
-                WHERE pr.target_symbol_id = $id;
-                """;
-            command.Parameters.AddWithValue("$id", id);
-            long started = Stopwatch.GetTimestamp();
-            using var reader = command.ExecuteReader();
-            int rows = 0;
-            while (reader.Read())
-            {
-                rows++;
-                AddCandidate(ids, id, reader.GetString(0));
-            }
-            _queryTelemetry.PendingReverse.Add(rows, Stopwatch.GetElapsedTime(started));
+            resolutionRows++;
+            AddCandidate(ids, id, edge.FromId);
         }
 
-        using (var command = Connection.CreateCommand())
+        foreach (FamilyGraphUnresolvedNameEdge edge in resolution.ReadUnresolvedNameEdges(
+                     Connection, [id], Direction.Reverse, StatementObserver))
         {
-            command.CommandText = """
-                SELECT i.containing_symbol_id
-                FROM identifiers i
-                LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-                JOIN symbols s ON s.symbol_id = i.containing_symbol_id
-                WHERE ir.target_symbol_id = $id;
-                """;
-            command.Parameters.AddWithValue("$id", id);
-            long started = Stopwatch.GetTimestamp();
-            using var reader = command.ExecuteReader();
-            int rows = 0;
-            while (reader.Read())
-            {
-                rows++;
-                AddCandidate(ids, id, reader.GetString(0));
-            }
-            _queryTelemetry.IdentifiersReverse.Add(rows, Stopwatch.GetElapsedTime(started));
+            resolutionRows++;
+            AddCandidate(ids, id, edge.FromId);
         }
 
-        IReadOnlyList<string> nameTargets = ResolveNameIds(targetName);
-        if (nameTargets.Count == 1)
-        {
-            using var command = Connection.CreateCommand();
-            command.CommandText = """
-                SELECT i.containing_symbol_id
-                FROM identifiers i
-                LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-                JOIN symbols s ON s.symbol_id = i.containing_symbol_id
-                WHERE i.name = $name
-                  AND ir.target_symbol_id IS NULL;
-                """;
-            command.Parameters.AddWithValue("$name", targetName);
-            long started = Stopwatch.GetTimestamp();
-            using var reader = command.ExecuteReader();
-            int rows = 0;
-            while (reader.Read())
-            {
-                rows++;
-                AddCandidate(ids, id, reader.GetString(0));
-            }
-            _queryTelemetry.UnresolvedIdentifiersReverse.Add(rows, Stopwatch.GetElapsedTime(started));
-        }
+        _queryTelemetry.IdentifiersReverse.Add(resolutionRows, Stopwatch.GetElapsedTime(resolutionStarted));
 
         foreach (GraphEdge edge in SupplementalEdges())
         {
@@ -949,6 +809,17 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
 
     private Microsoft.Data.Sqlite.SqliteConnection Connection =>
         _activeSessionConnection ?? (_connection ??= SqliteReadOnlyAccess.Open(_dbPath!));
+
+    private QueryTimeResolutionReader ResolutionReader(Microsoft.Data.Sqlite.SqliteConnection connection)
+    {
+        if (_readSession is WorkspaceReadHandle handle && handle.ResolutionReader is { } hosted)
+            return hosted;
+        if (_readSession is IQueryTimeResolutionHost host)
+            return host.Resolution;
+        return _queryTimeResolutionReader ??= new QueryTimeResolutionReader(
+            RevisionFactCache.LoadFromArtifact(connection),
+            visibility: null);
+    }
 
     private TResult Read<TResult>(Func<TResult> query)
     {

@@ -159,7 +159,11 @@ internal static class WorkspaceFactsAssembler
         if (string.IsNullOrWhiteSpace(snapshot.ResolutionState))
             return (null, "unknown", null);
 
-        if (IndexLevelGuard.ResolutionLayerConverging(snapshot))
+        if (snapshot.Mode == WorkspaceReadMode.FamilyStore
+            && (!string.Equals(snapshot.ResolutionState, "exact", StringComparison.OrdinalIgnoreCase)
+                || snapshot.ResolutionExactAt != snapshot.ManifestGeneration
+                || snapshot.ResolutionBaseId is null
+                || snapshot.ResolutionDeltaGeneration is null))
         {
             return (
                 false,

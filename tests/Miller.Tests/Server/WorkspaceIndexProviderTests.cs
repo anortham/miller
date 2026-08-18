@@ -146,6 +146,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal(
             [
                 GraphStatementPhase.RelationshipForward,
+                GraphStatementPhase.FamilyResolution,
                 GraphStatementPhase.UnresolvedNameForward,
                 GraphStatementPhase.FamilyResolution,
                 GraphStatementPhase.Supplemental,

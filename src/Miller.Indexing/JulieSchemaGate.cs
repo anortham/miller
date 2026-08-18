@@ -20,9 +20,7 @@ internal static class JulieSchemaGate
         "reference_sites",
         "identifiers",
         "relationships",
-        "identifier_resolutions",
         "pending_relationships",
-        "pending_resolutions",
         "structural_facts",
         "language_capability_gaps",
     ];

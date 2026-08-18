@@ -57,8 +57,7 @@ public sealed class WorkspaceReadSessionTests
         Assert.Null(handle.FamilyGraphResolutionReader);
         Assert.Null(handle.FamilyGraphUnresolvedNameReader);
         Assert.Null(handle.FamilyGraphRelationshipReader);
-        Assert.Equal(2, graph.QueryTelemetry.FrontierRelationships.Executions);
-        Assert.Equal(2, graph.QueryTelemetry.FrontierUnresolvedNames.Executions);
+        Assert.True(graph.QueryTelemetry.FrontierBatch.Executions > 0);
     }
 
     [Fact]

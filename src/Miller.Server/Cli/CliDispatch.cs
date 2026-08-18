@@ -1720,9 +1720,7 @@ public static class CliDispatch
     private static string? ReferencesExportLevelWarning(WorkspaceReadHandle session) =>
         IndexLevelGuard.IsSymbolsLevel(session.Snapshot.IndexLevel)
             ? ToolDiagnosticRenderer.Render("references", IndexLevelGuard.ReferenceExportConverging(), json: false)
-            : IndexLevelGuard.ResolutionLayerConverging(session.Snapshot)
-                ? ToolDiagnosticRenderer.Render("references", IndexLevelGuard.ResolutionConverging(), json: false)
-                : null;
+            : null;
 
     // ---------- heavy-arm metric-history recording (report / metrics churn|risk) ----------
     //
