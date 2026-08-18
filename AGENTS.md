@@ -273,8 +273,9 @@ scripts/test.ps1 all
   a repair (`RootRebind`/`SchemaHeal`/`CorruptionHeal`, own-intent-only) is never cleared by someone else's rebuild
   and a repair folded beside a user rebuild never inherits its downgrade permission. `ExtractorUpgrade` is the one
   exception: ANY completed force discharges it, because every force re-extracts the repo with the bundled binary
-  and requiring its own intent made a completed `workspace full` run a second byte-equivalent rebuild. Watcher
-  overflow is NOT a force.
+  and requiring its own intent made a completed `workspace full` run a second byte-equivalent rebuild. A claim
+  whose artifact is older than the bundled extractor therefore skips the startup delta and runs only the
+  upgrade scan — the delta's generation would be replaced immediately. Watcher overflow is NOT a force.
 - **A downgrade is a THIRD scan outcome (load-bearing).** Neither success nor failure: a delta ran, the prior
   artifact is served with degraded freshness, and the rebuild is STILL OWED. It must not clear the failure record
   (`IScanFailurePolicy.RecordDowngradedServe` rewrites `next_attempt_at` at the CURRENT streak without

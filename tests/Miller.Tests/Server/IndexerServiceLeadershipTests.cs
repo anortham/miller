@@ -59,6 +59,7 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
     {
         private readonly object _gate = new();
         private readonly List<bool> _scanForce = new();
+        private readonly List<ScanIntent> _scanIntents = new();
 
         public ManualResetEventSlim ScansReached { get; } = new();
         public int SignalAtScanCount { get; init; } = 1;
@@ -73,6 +74,15 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
             }
         }
 
+        public IReadOnlyList<ScanIntent> ScanIntents
+        {
+            get
+            {
+                lock (_gate)
+                    return _scanIntents.ToArray();
+            }
+        }
+
         public ExtractReport Update(string path) => Stub(Revision);
         public ExtractReport Delete(string path) => Stub(Revision);
 
@@ -81,6 +91,7 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
             lock (_gate)
             {
                 _scanForce.Add(ScanIntentPolicy.RequiresForce(intent));
+                _scanIntents.Add(intent);
                 if (_scanForce.Count >= SignalAtScanCount)
                     ScansReached.Set();
             }
@@ -311,7 +322,7 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-leadership-upgrade-" + Guid.NewGuid().ToString("N"));
         var lease = new TestLease();
-        var ops = new RecordingOps { SignalAtScanCount = 2, Revision = 11 };
+        var ops = new RecordingOps { Revision = 11 };
         try
         {
             WorkspaceContext workspace = CreateWorkspace(dir);
@@ -328,8 +339,7 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
 
             await service.StopAsync(CancellationToken.None);
 
-            // Exactly the startup delta scan (force:false) then ONE forced upgrade rescan (force:true) — never more.
-            Assert.Equal(new[] { false, true }, ops.ScanForce);
+            Assert.Equal(new[] { ScanIntent.ExtractorUpgrade }, ops.ScanIntents);
         }
         finally
         {
@@ -352,7 +362,7 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
             Assert.True(ops.ScansReached.Wait(ScanSignalTimeoutMs, CancellationToken.None));
             await service.StopAsync(CancellationToken.None);
 
-            Assert.Equal(new[] { false }, ops.ScanForce); // equal versions: no upgrade rescan (D7 swarm calm)
+            Assert.Equal(new[] { ScanIntent.IncrementalReconcile }, ops.ScanIntents);
         }
         finally
         {

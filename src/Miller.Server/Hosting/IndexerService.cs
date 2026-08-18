@@ -487,12 +487,14 @@ public sealed class IndexerService : BackgroundService
         if (bindingGeneration != _bootstrap.BindingGeneration)
             return false;
 
-        RunStartupDeltaScan(workspace);
-        if (bindingGeneration != _bootstrap.BindingGeneration)
-            return false;
-
+        // An extractor-upgrade rebuild re-extracts the repo with the bundled binary. A startup
+        // delta first would import+resolve a generation the upgrade immediately replaces.
         if (claimVerdict is { ArtifactOlderThanOwn: true })
             RunExtractorUpgradeRescan();
+        else
+            RunStartupDeltaScan(workspace);
+        if (bindingGeneration != _bootstrap.BindingGeneration)
+            return false;
 
         // AFTER the extractor-upgrade rescan: that path rebuilds at full level, so a fresh read here sees the
         // upgraded artifact and correctly derives nothing owed instead of scheduling a duplicate rebuild.
