@@ -333,11 +333,11 @@ Second loader, same cache: `RevisionFactCache.LoadFromArtifact(SqliteConnection 
 **Approach:** Parity test scope: the existing Scale fixture repo(s) used by `LiveReferenceResolutionScaleTests` — full-corpus sweep, not sampling. For the aspnetcore-scale gates, write a small measurement path reachable from test code or a throwaway harness under `tests/` (Scale-tagged, skipped when the snapshot directory is absent) — measure warm p95 over the spike's name mix (top-fan-out + random), and resident bytes after load + one query pass (`GC.GetTotalMemory` + RSS). Record report-only numbers too (cold load, full sweep). Then run the branch gate: Release build + `scripts/test.sh all`.
 
 **Acceptance criteria:**
-- [ ] Scale parity test green with zero unexplained divergences
-- [ ] Findings doc records all four hard gates with measured numbers; all pass (a failed gate is a stop-and-report, not a silent accept)
-- [ ] `cmp -s CLAUDE.md AGENTS.md` passes; docs map updated
-- [ ] Branch gate green: Release build 0/0, `scripts/test.sh all` green
-- [ ] Worker-scope verification passes; worker commits owned files (serial-worker-commit)
+- [x] Scale parity test green with zero unexplained divergences
+- [x] Findings doc records all four hard gates with measured numbers; all pass (a failed gate is a stop-and-report, not a silent accept)
+- [x] `cmp -s CLAUDE.md AGENTS.md` passes; docs map updated
+- [x] Branch gate green: Release build 0/0, `scripts/test.sh all` green
+- [x] Worker-scope verification passes; worker commits owned files (serial-worker-commit)
 
 ---
 
