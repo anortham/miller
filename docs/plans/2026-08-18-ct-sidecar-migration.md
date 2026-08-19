@@ -203,10 +203,10 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **What to build:** Port runner + tooling paths + dotnet provider. Process-spawning tests: `[Trait("Category","Scale")]`, obtain toolchains via the (temporary, local) skip helper — Task 14 centralizes it as `CtProviderTestSupport`.
 
 **Acceptance criteria:**
-- [ ] Fast tests pass under `dotnet test --filter "FullyQualifiedName~Testing.Providers&Category!=Scale"`.
-- [ ] Dotnet Scale smoke really executes a `dotnet test` on a tiny fixture and parses results (`--filter "FullyQualifiedName~Testing.Providers.Dotnet&Category=Scale"`).
-- [ ] The shared runner kills the entire process tree on cancel/stop and builds only into per-generation dirs (test-guarded; Windows-specific assertions run when the suite runs on Windows).
-- [ ] Verified diff handed to the lead (parallel-lead-commit).
+- [x] Fast tests pass under `dotnet test --filter "FullyQualifiedName~Testing.Providers&Category!=Scale"`.
+- [x] Dotnet Scale smoke really executes a `dotnet test` on a tiny fixture and parses results (`--filter "FullyQualifiedName~Testing.Providers.Dotnet&Category=Scale"`).
+- [x] The shared runner kills the entire process tree on cancel/stop and builds only into per-generation dirs (test-guarded; Windows-specific assertions run when the suite runs on Windows).
+- [x] Verified diff handed to the lead (parallel-lead-commit).
 
 ### Task 6: `ct.db` store — coverage maps + generations
 
