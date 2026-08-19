@@ -73,6 +73,8 @@ Current `json_commands` include:
 | `complexity export --jsonl` | Bulk-export per-symbol/per-file complexity metric rows for fleet hotspot ranking. |
 | `patterns export --jsonl` | Bulk-export structural fact rows for fleet code-shape inventory. |
 | `dashboard --json` | Start/reuse the local dashboard helper and return its URL. |
+| `tests status --json` | Continuous-test status: enabled projects, daemon running/paused + reason, aggregate verdict, selected `(index_identity, revision)`, stale counts, last run, and budget holder. Creates nothing. See [`tests-cli-v1.md`](tests-cli-v1.md). |
+| `tests run --json` | Request a CT run: live daemon uses the command channel; otherwise a foreground one-shot. `--wait` waits for a verdict. See [`tests-cli-v1.md`](tests-cli-v1.md). |
 | `capabilities --json` | Discover this contract surface. |
 
 `capabilities --json` reports `optional_features.reference_aware_context=true` when `context --reference-mode usage`
@@ -94,7 +96,9 @@ does not exonerate tests; `unseeded_paths` are separate warnings. See
 [`impact-traversal-evidence-v1.md`](impact-traversal-evidence-v1.md) for every field and status/reason pair.
 Role flags are positive evidence only. The role scope is candidate-only and absence is unknown; compact
 `likely tests` and JSON `tests[]` may contain lifecycle hooks, so use `test_evidence.test_case` when the role
-feature is present. Eros—not Miller—owns runner inventory, freshness policy, scheduling, results, and verdicts.
+feature is present. Miller owns continuous-test runner inventory, freshness policy, scheduling, results, and
+verdicts (`miller tests` / [`tests-cli-v1.md`](tests-cli-v1.md)). Impact `tests[]` remains likely-test evidence
+from the graph, not a CT run list.
 See [`impact-test-role-evidence-v1.md`](impact-test-role-evidence-v1.md).
 
 `patterns --json` is the stable way to consume `julie-extractors` structural facts. Eros should use this command
@@ -391,8 +395,9 @@ with the standard rebuild message. Fields (`schema_version` 1):
 - `test_evidence_reason` — nullable reason for unknown currency: `file_status`, `parse_diagnostics`,
   `file_status_and_parse_diagnostics`, or `file_evidence_unavailable`.
 
-These fields do not form runnable-test inventory. Eros owns runner discovery, freshness, scheduling, execution
-results, and verdicts; false flags and zero counts are not proof of absence.
+These fields do not form runnable-test inventory. Miller owns runner discovery, freshness, scheduling, execution
+results, and verdicts through `miller tests` ([`tests-cli-v1.md`](tests-cli-v1.md)); false flags and zero counts
+on this export are not proof of absence.
 
 `miller references export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits schema-2 canonical
 reference assertions keyed by producer-owned `reference_site_id`. See

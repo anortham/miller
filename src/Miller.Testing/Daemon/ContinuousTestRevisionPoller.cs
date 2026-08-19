@@ -338,12 +338,11 @@ public sealed class MillerArtifactRevisionSource : IContinuousTestRevisionSource
 /// </summary>
 public sealed class MillerFactImpactSource : IContinuousTestImpactSource
 {
-    private readonly Func<string, ICtFactSource> _openFacts;
+    private readonly Func<string, ICtFactSource>? _openFacts;
 
     public MillerFactImpactSource(Func<string, ICtFactSource>? openFacts = null)
     {
-        _openFacts = openFacts ?? (root => CtFactAdapter.OpenArtifact(
-            Path.Combine(root, CtSchema.MillerDirectoryName, "symbols.db")));
+        _openFacts = openFacts;
     }
 
     public Task<ContinuousTestImpactResult?> ImpactAsync(
@@ -374,7 +373,7 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
         string dbPath = Path.Combine(workspaceRoot, CtSchema.MillerDirectoryName, "symbols.db");
         try
         {
-            using IWorkspaceReadSession session = LegacyArtifactReadSession.Open(dbPath, workspaceRoot);
+            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId: null);
             RevisionDeltaResult delta = RevisionDeltaReader.Read(session, fromKey.Revision, fromKey.IndexIdentity);
             if (delta.Status != RevisionDeltaStatus.Complete || delta.ToRevision != current.Revision)
             {
@@ -398,7 +397,7 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
                 });
             }
 
-            ICtFactSource facts = OpenFacts(workspaceRoot);
+            ICtFactSource facts = _openFacts?.Invoke(workspaceRoot) ?? new CtFactAdapter(session);
             try
             {
                 IReadOnlyList<CtSymbolFact> symbols = facts.SymbolsForChangedFiles(delta.ChangedPaths);
@@ -417,7 +416,8 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
             }
             finally
             {
-                (facts as IDisposable)?.Dispose();
+                if (_openFacts is not null)
+                    (facts as IDisposable)?.Dispose();
             }
         }
         catch (Exception ex) when (
@@ -430,8 +430,6 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
             });
         }
     }
-
-    private ICtFactSource OpenFacts(string workspaceRoot) => _openFacts(workspaceRoot);
 
     private static ContinuousTestImpactedSymbol ToSymbol(CtImpactedSymbol row) =>
         new(SymbolId: row.SymbolId, Path: row.FilePath, Name: row.Name);

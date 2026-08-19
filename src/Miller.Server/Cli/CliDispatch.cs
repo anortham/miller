@@ -17,6 +17,7 @@ using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
+using Miller.Testing;
 
 namespace Miller.Server.Cli;
 
@@ -77,7 +78,8 @@ public static class CliDispatch
         TextWriter stdout,
         TextWriter stderr,
         IDashboardLauncher dashboardLauncher,
-        IGitDiffReader gitDiffReader)
+        IGitDiffReader gitDiffReader,
+        TestsCoreHooks? testsHooks = null)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(context);
@@ -149,6 +151,10 @@ public static class CliDispatch
                     return Dashboard(rest, context, stdout, stderr, dashboardLauncher);
                 case "workspace":
                     return Workspace(rest, context, stdout, stderr);
+                case "tests":
+                    return Tests(rest, context, stdout, stderr, testsHooks);
+                case "ct-daemon":
+                    return TestsDaemon(rest, context, stdout, stderr);
                 case "semantic":
                     return Semantic(rest, context, stdout, stderr);
                 default:
@@ -2487,6 +2493,148 @@ public static class CliDispatch
         }
     }
 
+    private static int Tests(
+        IReadOnlyList<string> args,
+        WorkspaceContext ctx,
+        TextWriter outw,
+        TextWriter err,
+        TestsCoreHooks? testsHooks)
+    {
+        CliOptions o = CliOptions.Parse(args, "json", "wait");
+        if (o.Positionals.Count > 1)
+            return Usage(err, TestsCore.Usage);
+
+        string operation = o.Positionals.Count == 0 ? "status" : o.Positionals[0].ToLowerInvariant();
+        if (operation is "help" or "-h" || o.Has("help"))
+        {
+            outw.WriteLine(TestsHelpText);
+            return 0;
+        }
+
+        foreach (string flag in new[] { "workspace-id", "workspace", "project" })
+        {
+            if (o.Has(flag) && string.IsNullOrWhiteSpace(o.Value(flag)))
+            {
+                err.WriteLine($"--{flag} requires a value.");
+                return 2;
+            }
+        }
+
+        if (!TryResolveTestsWorkspace(ctx, o, err, out string root))
+            return 2;
+
+        var request = new TestsCoreRequest(
+            WorkspaceRoot: root,
+            MillerHome: MillerHomeFor(ctx),
+            KillSwitch: Environment.GetEnvironmentVariable(CtEnvironment.KillSwitch),
+            MillerVersion: MillerVersion.Current,
+            Hooks: testsHooks,
+            Json: o.Has("json"),
+            Wait: o.Has("wait"),
+            ProjectPath: o.Value("project"));
+
+        switch (operation)
+        {
+            case "status":
+                outw.WriteLine(TestsCore.Status(request).Render(request.Json));
+                return 0;
+            case "serve":
+            {
+                TestsServeResult result = TestsCore.Start(request);
+                if (result.ExitCode != 0 && result.Reason is not null)
+                    err.WriteLine(result.Reason);
+                outw.WriteLine(result.Render(request.Json));
+                return result.ExitCode;
+            }
+            case "run":
+            {
+                TestsRunResult result = TestsCore.Run(request);
+                if (result.ExitCode != 0 && result.Reason is not null && !request.Json)
+                    err.WriteLine(result.Reason);
+                outw.WriteLine(result.Render(request.Json));
+                return result.ExitCode;
+            }
+            case "enable":
+            {
+                TestsMutationResult result = TestsCore.Enable(request);
+                if (result.ExitCode != 0 && result.Error is not null)
+                    err.WriteLine(result.Error);
+                if (result.ExitCode == 0 || request.Json)
+                    outw.WriteLine(result.Render(request.Json));
+                return result.ExitCode;
+            }
+            case "disable":
+            {
+                TestsMutationResult result = TestsCore.Disable(request);
+                if (result.ExitCode != 0 && result.Error is not null)
+                    err.WriteLine(result.Error);
+                if (result.ExitCode == 0 || request.Json)
+                    outw.WriteLine(result.Render(request.Json));
+                return result.ExitCode;
+            }
+            case "stop":
+            {
+                TestsStopResult result = TestsCore.Stop(request);
+                if (result.ExitCode != 0 && result.Reason is not null)
+                    err.WriteLine(result.Reason);
+                outw.WriteLine(result.Render(request.Json));
+                return result.ExitCode;
+            }
+            default:
+                err.WriteLine($"unknown tests operation '{operation}'.");
+                return Usage(err, TestsCore.Usage);
+        }
+    }
+
+    private static int TestsDaemon(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        _ = args;
+        _ = err;
+        string root = Environment.GetEnvironmentVariable(CtEnvironment.WorkspaceRoot)
+            ?? ctx.CanonicalRoot
+            ?? ctx.WorkspaceRoot;
+        TestsServeResult result = TestsCore.ServeHost(new TestsCoreRequest(
+            WorkspaceRoot: root,
+            MillerHome: MillerHomeFor(ctx),
+            KillSwitch: Environment.GetEnvironmentVariable(CtEnvironment.KillSwitch),
+            MillerVersion: MillerVersion.Current,
+            Json: true));
+        outw.WriteLine(result.Render(json: true));
+        return result.ExitCode;
+    }
+
+    private static bool TryResolveTestsWorkspace(
+        WorkspaceContext ctx, CliOptions o, TextWriter err, out string root)
+    {
+        string? id = o.Value("workspace-id");
+        string? workspaceDir = o.Value("workspace");
+        if (!string.IsNullOrWhiteSpace(workspaceDir))
+        {
+            root = Path.GetFullPath(workspaceDir, ctx.WorkspaceRoot);
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(id))
+        {
+            using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+            try
+            {
+                WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, id);
+                root = row.CanonicalRoot;
+                return true;
+            }
+            catch (KeyNotFoundException ex)
+            {
+                err.WriteLine(ex.Message);
+                root = ctx.WorkspaceRoot;
+                return false;
+            }
+        }
+
+        root = ctx.CanonicalRoot ?? ctx.WorkspaceRoot;
+        return true;
+    }
+
     private static int WorkspaceLevels(
         WorkspaceContext ctx, string? id, string? path, string? set, bool clear, bool json,
         TextWriter outw, TextWriter err)
@@ -4010,6 +4158,14 @@ public static class CliDispatch
                              remove (--id ID | --path DIR)  Delete a workspace's .miller index dir.
                              prune  [--dry-run]              Remove registry rows whose roots no longer exist.
                              [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json]
+          tests [op]         Continuous testing. op = status (default) | serve | run | enable | disable | stop.
+                             status [--json]                Cheap read: projects, daemon, verdict. Creates nothing.
+                             serve                          Start the detached CT daemon (explicit only).
+                             run [--wait] [--json]          Daemon command channel, or a foreground one-shot.
+                             enable [--project PATH]        Discover and persist test projects in ct.db.
+                             disable [--project PATH]       Disable stored project rows.
+                             stop                           Graceful daemon stop.
+                             [--workspace-id SELECTOR] [--workspace DIR]
           semantic <op>      Optional semantic retrieval lifecycle. op = prepare.
                              prepare [--model <id>] [--json]   Consent to and run the pinned sidecar's model
                              download (sha256-verified, into the shared cache). Streams progress; exits with the
@@ -4064,6 +4220,23 @@ public static class CliDispatch
         Selectors / flags: [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json] [--handoff] [--wait] [--dry-run]
           --workspace-id aliases --id; --workspace (a directory, resolved against the cwd) aliases --path —
           the same selector flags every read verb accepts.
+        """;
+
+    private const string TestsHelpText =
+        """
+        miller tests — continuous testing for the current (or a selected) workspace.
+
+        Usage: miller tests [op] [args]
+
+        Operations:
+          status   Cheap honest status. Creates nothing. Default when no op is given. [--json]
+          serve    Start the detached CT daemon. Explicit start only.
+          run      Live daemon: command channel. No daemon: foreground one-shot. [--wait] [--json]
+          enable   Discover test projects and persist rows in ct.db. [--project PATH]
+          disable  Disable stored project rows. [--project PATH]
+          stop     Graceful daemon stop.
+
+        Selectors / flags: [--workspace-id SELECTOR] [--workspace DIR] [--json] [--wait] [--project PATH]
         """;
 }
 

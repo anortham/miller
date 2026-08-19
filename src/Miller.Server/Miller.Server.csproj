@@ -48,6 +48,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Miller.Core\Miller.Core.csproj" />
     <ProjectReference Include="..\Miller.Indexing\Miller.Indexing.csproj" />
+    <ProjectReference Include="..\Miller.Testing\Miller.Testing.csproj" />
   </ItemGroup>
 
   <!-- The pinned julie-extract is restored (gitignored) to the repo-root .tools/ by the restore scripts.
