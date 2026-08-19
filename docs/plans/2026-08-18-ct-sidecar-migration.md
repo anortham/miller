@@ -128,9 +128,9 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **What to build:** The core store over `ct.db`. Corruption and newer-schema files fail visibly with an actionable error (follow the search-sidecar precedent); reads on a missing db return empty/disabled without creating the file.
 
 **Acceptance criteria:**
-- [ ] Round-trip tests for cases, statuses, runs, artifacts, flakiness under `dotnet test --filter "FullyQualifiedName~Testing.Store.Core&Category!=Scale"`.
-- [ ] Newer-schema and corrupt files produce visible, actionable failures; status reads never create the db.
-- [ ] Verified diff handed to the lead (parallel-lead-commit).
+- [x] Round-trip tests for cases, statuses, runs, artifacts, flakiness under `dotnet test --filter "FullyQualifiedName~Testing.Store.Core&Category!=Scale"`.
+- [x] Newer-schema and corrupt files produce visible, actionable failures; status reads never create the db.
+- [x] Verified diff handed to the lead (parallel-lead-commit).
 
 ### Task 3: Pure parsers + classifiers port
 
