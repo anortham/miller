@@ -52,13 +52,14 @@ public static class ContinuousTestProjectInventory
         var projects = new List<ContinuousTestProject>();
         foreach (string path in EnumerateCandidateFiles(root))
         {
-            if (!TryIdentify(path, out string? framework))
+            if (!TryIdentify(path, out string? framework, out IReadOnlyList<string> excludeTraits))
                 continue;
             projects.Add(new ContinuousTestProject(
                 Id: ProjectId(workspaceId, root, path),
                 WorkspaceId: workspaceId,
                 ProjectPath: path,
-                Framework: framework));
+                Framework: framework,
+                ExcludeTraits: excludeTraits));
         }
 
         return projects
@@ -74,13 +75,19 @@ public static class ContinuousTestProjectInventory
         string full = Path.GetFullPath(projectPath);
         if (!File.Exists(full))
             return null;
-        if (!TryIdentify(full, out string? framework))
+        if (!TryIdentify(full, out string? framework, out IReadOnlyList<string> excludeTraits))
+        {
             framework = FrameworkFallback(full);
+            excludeTraits = DotnetProjectExtensions.Contains(Path.GetExtension(full))
+                ? ParseDefaultFilterExclusions(ReadHead(full))
+                : [];
+        }
         return new ContinuousTestProject(
             Id: ProjectId(workspaceId, workspaceRoot, full),
             WorkspaceId: workspaceId,
             ProjectPath: full,
-            Framework: framework);
+            Framework: framework,
+            ExcludeTraits: excludeTraits);
     }
 
     public static string ProjectId(string workspaceId, string workspaceRoot, string projectPath)
@@ -197,8 +204,9 @@ public static class ContinuousTestProjectInventory
             || PythonProjectNames.Contains(name);
     }
 
-    private static bool TryIdentify(string path, out string? framework)
+    private static bool TryIdentify(string path, out string? framework, out IReadOnlyList<string> excludeTraits)
     {
+        excludeTraits = [];
         string name = Path.GetFileName(path);
         if (string.Equals(name, "Cargo.toml", StringComparison.OrdinalIgnoreCase))
         {
@@ -234,10 +242,10 @@ public static class ContinuousTestProjectInventory
         if (DotnetProjectExtensions.Contains(Path.GetExtension(path)))
         {
             string text = ReadHead(path);
-            string fileName = Path.GetFileNameWithoutExtension(path);
-            bool namedTest = fileName.Contains("Test", StringComparison.OrdinalIgnoreCase);
             bool sdkTest = ContainsToken(text, "Microsoft.NET.Sdk.Test")
-                || ContainsToken(text, "Microsoft.NET.Test.Sdk");
+                || ContainsToken(text, "Microsoft.NET.Test.Sdk")
+                || ContainsToken(text, "Microsoft.Testing.Platform");
+            excludeTraits = ParseDefaultFilterExclusions(text);
             if (ContainsToken(text, "xunit"))
             {
                 framework = "xunit";
@@ -256,12 +264,13 @@ public static class ContinuousTestProjectInventory
                 return true;
             }
 
-            if (sdkTest || namedTest)
+            if (sdkTest)
             {
                 framework = "dotnet";
                 return true;
             }
 
+            excludeTraits = [];
             framework = null;
             return false;
         }
@@ -269,6 +278,52 @@ public static class ContinuousTestProjectInventory
         framework = null;
         return false;
     }
+
+    /// <summary>
+    /// Maps a project's default VSTest case filter (<c>VSTestTestCaseFilter</c>) onto trait
+    /// exclusions, so a continuous run honors the same default suite as a bare
+    /// <c>dotnet test</c>. Only pure conjunctions of <c>Name!=Value</c> terms translate; any
+    /// other filter shape seeds nothing rather than a partial, wrong exclusion set.
+    /// </summary>
+    internal static IReadOnlyList<string> ParseDefaultFilterExclusions(string projectText)
+    {
+        const string openTag = "<VSTestTestCaseFilter>";
+        const string closeTag = "</VSTestTestCaseFilter>";
+        int start = projectText.IndexOf(openTag, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+            return [];
+        start += openTag.Length;
+        int end = projectText.IndexOf(closeTag, start, StringComparison.OrdinalIgnoreCase);
+        if (end < 0)
+            return [];
+
+        string filter = projectText[start..end].Replace("&amp;", "&", StringComparison.Ordinal).Trim();
+        if (filter.Length == 0)
+            return [];
+
+        var exclusions = new List<string>();
+        foreach (string segment in filter.Split('&'))
+        {
+            string term = segment.Trim();
+            int op = term.IndexOf("!=", StringComparison.Ordinal);
+            if (op <= 0)
+                return [];
+
+            string traitName = term[..op].Trim();
+            string traitValue = term[(op + 2)..].Trim();
+            if (traitName.Length == 0 || traitValue.Length == 0)
+                return [];
+            if (!IsPlainFilterToken(traitName) || !IsPlainFilterToken(traitValue))
+                return [];
+
+            exclusions.Add(traitName + "=" + traitValue);
+        }
+
+        return exclusions;
+    }
+
+    private static bool IsPlainFilterToken(string value) =>
+        value.All(static ch => char.IsLetterOrDigit(ch) || ch is '_' or '.' or '-');
 
     private static string? FrameworkFallback(string path)
     {

@@ -99,7 +99,12 @@ public sealed class CtDaemonLauncherTests : IDisposable
             Assert.False(string.IsNullOrWhiteSpace(result.Executable));
             Assert.True(File.Exists(result.Executable));
             Assert.Equal(holder.Id, result.ProcessId);
-            Assert.Equal(_root, captured.Environment[CtEnvironment.WorkspaceRoot]);
+            Assert.Equal(_root, captured.Environment[CtEnvironment.DaemonWorkspaceRoot]);
+            Assert.False(
+                captured.Environment.ContainsKey(CtEnvironment.WorkspaceRoot),
+                "the daemon spawn must not use the provider-facing workspace variable: " +
+                "test processes under CT inherit it, and a CLI verb run inside such a test " +
+                "would bind the real workspace instead of the test's own root");
             Assert.Contains(CtDaemonLauncher.DaemonVerb, StartArguments(captured));
             Assert.False(captured.UseShellExecute);
             if (OperatingSystem.IsWindows())

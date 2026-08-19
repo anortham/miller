@@ -146,7 +146,7 @@ public static class CtDaemonLauncher
         ProcessStartInfo startInfo = OperatingSystem.IsWindows()
             ? WindowsStartInfo(fileName, dllArgument)
             : UnixDetachedStartInfo(fileName, dllArgument, workspaceRoot);
-        startInfo.Environment[CtEnvironment.WorkspaceRoot] = workspaceRoot;
+        startInfo.Environment[CtEnvironment.DaemonWorkspaceRoot] = workspaceRoot;
         return startInfo;
     }
 

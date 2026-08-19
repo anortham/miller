@@ -400,6 +400,20 @@ public static class TestsCore
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
+    /// <summary>
+    /// Human-facing freshness key: the full index identity is a store cursor that can run to
+    /// hundreds of characters, so compact output keeps the revision and a recognizable identity
+    /// prefix. JSON output carries the full identity.
+    /// </summary>
+    internal static string CompactFreshness(CtFreshnessKey key)
+    {
+        const int identityPrefixLength = 24;
+        string identity = key.IndexIdentity.Length <= identityPrefixLength
+            ? key.IndexIdentity
+            : key.IndexIdentity[..identityPrefixLength] + "…";
+        return $"rev {key.Revision.ToString(CultureInfo.InvariantCulture)} ({identity})";
+    }
+
     internal static string RenderStatusCompact(TestsStatusResult result)
     {
         var sb = new StringBuilder();
@@ -407,7 +421,7 @@ public static class TestsCore
         sb.AppendLine("enabled: " + (result.Enabled ? "true" : "false"));
         sb.AppendLine($"daemon: {Snake(result.DaemonState.ToString())} ({result.DaemonReason})");
         sb.AppendLine("verdict: " + Snake(result.Verdict.ToString()));
-        sb.AppendLine("selected: " + (result.Selected?.ToString() ?? "-"));
+        sb.AppendLine("selected: " + (result.Selected is { } selectedKey ? CompactFreshness(selectedKey) : "-"));
         sb.AppendLine($"stale: {result.StaleCount.ToString(CultureInfo.InvariantCulture)}");
         sb.AppendLine("last_run: " + (result.LastRun ?? "-"));
         sb.AppendLine("budget: " + (result.BudgetHolder is { } holder

@@ -2590,9 +2590,9 @@ public static class CliDispatch
     {
         _ = args;
         _ = err;
-        string root = Environment.GetEnvironmentVariable(CtEnvironment.WorkspaceRoot)
-            ?? ctx.CanonicalRoot
-            ?? ctx.WorkspaceRoot;
+        string root = CtEnvironment.ResolveDaemonWorkspaceRoot(
+            ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
+            Environment.GetEnvironmentVariable)!;
         TestsServeResult result = TestsCore.ServeHost(new TestsCoreRequest(
             WorkspaceRoot: root,
             MillerHome: MillerHomeFor(ctx),

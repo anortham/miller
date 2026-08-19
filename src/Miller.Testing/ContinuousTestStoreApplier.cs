@@ -25,45 +25,48 @@ public sealed class ContinuousTestStoreApplier
             throw new ArgumentException("must not be empty", nameof(providerSource));
 
         string? normalizedProjectPath = string.IsNullOrWhiteSpace(projectPath) ? null : Path.GetFullPath(projectPath);
-        if (normalizedProjectPath is not null)
+        _store.Transaction(() =>
         {
-            HashSet<string> discoveredIds = testCases
-                .Select(row => row.Id)
-                .ToHashSet(StringComparer.Ordinal);
-            string[] oldProviderCases = _store.ListTestCases(workspaceId)
-                .Where(row => string.Equals(row.Source, providerSource, StringComparison.Ordinal))
-                .Where(row => string.Equals(
-                    MetadataString(row.Metadata, "ct_project_path"),
-                    normalizedProjectPath,
-                    PathComparison))
-                .Select(row => row.Id)
-                .Where(id => !discoveredIds.Contains(id))
-                .ToArray();
-            foreach (string oldId in oldProviderCases)
-                _store.DeleteTestCase(workspaceId, oldId);
-        }
+            if (normalizedProjectPath is not null)
+            {
+                HashSet<string> discoveredIds = testCases
+                    .Select(row => row.Id)
+                    .ToHashSet(StringComparer.Ordinal);
+                string[] oldProviderCases = _store.ListTestCases(workspaceId)
+                    .Where(row => string.Equals(row.Source, providerSource, StringComparison.Ordinal))
+                    .Where(row => string.Equals(
+                        MetadataString(row.Metadata, "ct_project_path"),
+                        normalizedProjectPath,
+                        PathComparison))
+                    .Select(row => row.Id)
+                    .Where(id => !discoveredIds.Contains(id))
+                    .ToArray();
+                foreach (string oldId in oldProviderCases)
+                    _store.DeleteTestCase(workspaceId, oldId);
+            }
 
-        foreach (ProviderTestCase testCase in testCases)
-        {
-            var metadata = new Dictionary<string, object?>(testCase.Metadata, StringComparer.Ordinal);
-            if (!string.IsNullOrWhiteSpace(testCase.SourcePath))
-                metadata["source_path"] = testCase.SourcePath;
-            if (!string.IsNullOrWhiteSpace(normalizedProjectPath))
-                metadata["ct_project_path"] = normalizedProjectPath;
+            foreach (ProviderTestCase testCase in testCases)
+            {
+                var metadata = new Dictionary<string, object?>(testCase.Metadata, StringComparer.Ordinal);
+                if (!string.IsNullOrWhiteSpace(testCase.SourcePath))
+                    metadata["source_path"] = testCase.SourcePath;
+                if (!string.IsNullOrWhiteSpace(normalizedProjectPath))
+                    metadata["ct_project_path"] = normalizedProjectPath;
 
-            _store.PutTestCase(new ContinuousTestCase(
-                Id: testCase.Id,
-                WorkspaceId: workspaceId,
-                Name: testCase.DisplayName,
-                QualifiedName: testCase.FullyQualifiedName,
-                Selector: testCase.Selector,
-                FilePath: testCase.SourcePath,
-                Framework: testCase.Framework,
-                Role: ContinuousTestRole.TestCase,
-                Source: providerSource,
-                Confidence: 1.0,
-                Metadata: metadata));
-        }
+                _store.PutTestCase(new ContinuousTestCase(
+                    Id: testCase.Id,
+                    WorkspaceId: workspaceId,
+                    Name: testCase.DisplayName,
+                    QualifiedName: testCase.FullyQualifiedName,
+                    Selector: testCase.Selector,
+                    FilePath: testCase.SourcePath,
+                    Framework: testCase.Framework,
+                    Role: ContinuousTestRole.TestCase,
+                    Source: providerSource,
+                    Confidence: 1.0,
+                    Metadata: metadata));
+            }
+        });
     }
 
     public void StartRun(ContinuousTestProviderRunStart run)

@@ -38,6 +38,29 @@ public sealed class TestsToolTests : IDisposable
     }
 
     [Fact]
+    public void Compact_status_renders_a_bounded_selected_line_for_a_long_index_identity()
+    {
+        var result = new TestsStatusResult(
+            Enabled: true,
+            KillSwitchOff: false,
+            Projects: [],
+            DaemonState: CtDaemonLifecycleState.Running,
+            DaemonReason: "idle",
+            Verdict: ContinuousTestVerdict.Green,
+            Selected: new CtFreshnessKey(new string('a', 300), 29158),
+            StaleCount: 0,
+            SelectedCount: 10,
+            LastRun: null,
+            BudgetHolder: null);
+
+        string compact = TestsCore.RenderStatusCompact(result);
+
+        string line = compact.Split('\n').Single(row => row.StartsWith("selected:", StringComparison.Ordinal));
+        Assert.True(line.Length <= 80, $"selected line is {line.Length} chars: {line}");
+        Assert.Contains("29158", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Status_OnNeverEnabledWorkspace_StartsNothingAndCreatesNoState()
     {
         ProcessStartInfo? seen = null;

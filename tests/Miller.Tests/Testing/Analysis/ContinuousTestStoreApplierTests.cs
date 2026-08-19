@@ -80,6 +80,36 @@ public sealed class ContinuousTestStoreApplierTests : IDisposable
     }
 
     [Fact]
+    public void Apply_discovery_stores_all_cases_or_none()
+    {
+        using var store = new ContinuousTestStore(_dbPath);
+        var applier = new ContinuousTestStoreApplier(store);
+        var good = new ProviderTestCase(
+            Id: "test:good",
+            DisplayName: "Passes",
+            FullyQualifiedName: "Sample.Tests.Passes",
+            Selector: "Sample.Tests.Passes",
+            Framework: "xunit");
+        var bad = new ProviderTestCase(
+            Id: "test:bad",
+            DisplayName: "Breaks",
+            FullyQualifiedName: "Sample.Tests.Breaks",
+            Selector: "Sample.Tests.Breaks",
+            Framework: "xunit",
+            Metadata: new Dictionary<string, object?> { ["boom"] = ThrowingSequence() });
+
+        Assert.ThrowsAny<Exception>(() => applier.ApplyDiscovery(Workspace, [good, bad]));
+
+        Assert.Empty(store.ListTestCases(Workspace));
+    }
+
+    private static IEnumerable<object?> ThrowingSequence()
+    {
+        yield return "first";
+        throw new InvalidOperationException("boom");
+    }
+
+    [Fact]
     public void Store_applier_records_project_path_on_discovered_cases()
     {
         using var store = new ContinuousTestStore(_dbPath);

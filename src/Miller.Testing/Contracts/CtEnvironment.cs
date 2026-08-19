@@ -10,6 +10,20 @@ public static class CtEnvironment
 
     public const string WorkspaceRoot = "MILLER_CT_WORKSPACE_ROOT";
 
+    public const string DaemonWorkspaceRoot = "MILLER_CT_DAEMON_WORKSPACE_ROOT";
+
+    /// <summary>
+    /// Resolves the workspace root for the <c>ct-daemon</c> verb: the dedicated spawn variable
+    /// wins, otherwise the explicit CLI context. The provider-facing <see cref="WorkspaceRoot"/>
+    /// variable is never consulted — test processes under CT inherit it, and a CLI verb run
+    /// inside such a test must bind its own root, not the workspace under test.
+    /// </summary>
+    public static string? ResolveDaemonWorkspaceRoot(string? contextRoot, Func<string, string?> readVariable)
+    {
+        ArgumentNullException.ThrowIfNull(readVariable);
+        return readVariable(DaemonWorkspaceRoot) ?? contextRoot;
+    }
+
     public static bool IsOff() => IsOff(Environment.GetEnvironmentVariable(KillSwitch));
 
     /// <summary>

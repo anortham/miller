@@ -30,6 +30,127 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
     }
 
     [Fact]
+    public void Discover_skips_a_class_library_whose_name_contains_Test()
+    {
+        WriteProject("src/App.Testing/App.Testing.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+    }
+
+    [Fact]
+    public void Discover_skips_a_helper_host_whose_name_contains_Test()
+    {
+        WriteProject("tests/App.SharedTestHost/App.SharedTestHost.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <OutputType>Exe</OutputType>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+    }
+
+    [Fact]
+    public void Discover_accepts_a_test_sdk_project_regardless_of_name()
+    {
+        WriteProject("checks/App.Checks/App.Checks.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal("dotnet", project.Framework);
+    }
+
+    [Fact]
+    public void Discover_accepts_a_testing_platform_project()
+    {
+        WriteProject("tests/App.Platform/App.Platform.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="Microsoft.Testing.Platform" Version="2.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal("dotnet", project.Framework);
+    }
+
+    [Fact]
+    public void Discover_seeds_trait_exclusions_from_the_projects_default_test_case_filter()
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <VSTestTestCaseFilter>Category!=Scale</VSTestTestCaseFilter>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="xunit.v3" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal("xunit", project.Framework);
+        Assert.Equal(["Category=Scale"], project.ExcludeTraits);
+    }
+
+    [Fact]
+    public void Discover_seeds_every_exclusion_from_a_conjunctive_filter()
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <VSTestTestCaseFilter>Category!=Scale&amp;Category!=Nightly</VSTestTestCaseFilter>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="xunit.v3" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal(["Category=Scale", "Category=Nightly"], project.ExcludeTraits);
+    }
+
+    [Fact]
+    public void Discover_seeds_nothing_from_a_filter_it_cannot_represent_as_trait_exclusions()
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <VSTestTestCaseFilter>Category!=Scale|Priority=1</VSTestTestCaseFilter>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="xunit.v3" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Empty(project.ExcludeTraits);
+    }
+
+    private void WriteProject(string relativePath, string content)
+    {
+        string full = Path.Combine(_root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, content);
+    }
+
+    [Fact]
     public void Disabled_projects_are_skipped()
     {
         string project = Path.Combine(_root, "src", "App.Tests.csproj");

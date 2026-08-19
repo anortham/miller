@@ -41,6 +41,8 @@ public sealed class ContinuousTestDaemonHostOptions
 
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromMilliseconds(250);
 
+    public TimeSpan HeartbeatInterval { get; init; } = TimeSpan.FromSeconds(15);
+
     public Action<ContinuousTestDaemonSnapshot>? StatusSink { get; init; }
 
     public IContinuousTestDaemonEnqueuer? Enqueuer { get; init; }
@@ -63,6 +65,7 @@ public sealed class ContinuousTestDaemonHost
     private readonly IReadOnlyList<ContinuousTestProject> _projects;
     private readonly string _workspaceId;
     private CtFreshnessKey? _startedAt;
+    private DateTimeOffset _runStartedAtUtc;
 
     public ContinuousTestDaemonHost(string workspaceRoot, ContinuousTestDaemonHostOptions? options = null)
     {
@@ -135,6 +138,7 @@ public sealed class ContinuousTestDaemonHost
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
+        _runStartedAtUtc = _options.Clock();
         if (!ContinuousTestPolicy.ShouldConstructEngine(_workspaceRoot, _options.KillSwitch, _options.Enabled))
         {
             Publish(DisabledSnapshot());
@@ -163,6 +167,10 @@ public sealed class ContinuousTestDaemonHost
 
         IContinuousTestDaemonEnqueuer enqueuer = _options.Enqueuer ?? _queue
             ?? throw new InvalidOperationException("CT daemon host requires a queue or enqueuer");
+
+        Task heartbeat = lease is null
+            ? Task.CompletedTask
+            : PulseHeartbeatAsync(lease, cancellationToken);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -264,6 +272,35 @@ public sealed class ContinuousTestDaemonHost
 
         lease?.WriteStatus(CtDaemonLifecycleState.Stopped, "stopped");
         Publish(Evaluate("stopped", CtDaemonLifecycleState.Stopped, executing: false));
+        await heartbeat.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Keeps <c>daemon.heartbeat.json</c> fresh for the life of the loop, including while a long
+    /// drain blocks the main loop. Never throws: liveness is carried by the OS lock on
+    /// <c>daemon-v1.lock</c>; the heartbeat file is an observable freshness signal only.
+    /// </summary>
+    private async Task PulseHeartbeatAsync(CtDaemonLease lease, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await _options.Delay(_options.HeartbeatInterval, cancellationToken).ConfigureAwait(false);
+                lease.Heartbeat();
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     private void ProcessCommands(CtDaemonLease? lease, CancellationToken cancellationToken)
@@ -282,6 +319,16 @@ public sealed class ContinuousTestDaemonHost
                 continue;
             if (request.Kind == CtDaemonCommandKind.Stop)
             {
+                // A stop request targets the daemon that was alive when it was written. One left
+                // unacknowledged by a dead predecessor must not kill this instance at startup.
+                if (request.RequestedAtUtc < _runStartedAtUtc)
+                {
+                    CtCommandChannel.WriteAck(
+                        _workspaceRoot,
+                        new CtDaemonCommandAck(id, CtDaemonCommandState.Acknowledged, DateTimeOffset.UtcNow, "stale-stop-ignored"));
+                    continue;
+                }
+
                 CtCommandChannel.WriteAck(
                     _workspaceRoot,
                     new CtDaemonCommandAck(id, CtDaemonCommandState.Acknowledged, DateTimeOffset.UtcNow, "stopping"));

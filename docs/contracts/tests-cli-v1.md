@@ -95,6 +95,14 @@ writes `.miller/ct.enabled`. `--project PATH` scopes one file. `disable` mirrors
 disables one row; omitting it disables every stored row and removes the opt-in marker when none
 remain enabled.
 
+Discovery accepts a dotnet project only on a real test signal: an xunit/NUnit/MSTest reference,
+`Microsoft.NET.Test.Sdk`, `Microsoft.NET.Sdk.Test`, or `Microsoft.Testing.Platform`. A test-like
+file name alone does not qualify. When the project sets `VSTestTestCaseFilter` to a pure
+conjunction of `Name!=Value` terms (for example `Category!=Scale`), enable seeds the row's
+`exclude_traits` with the matching `Name=Value` exclusions, so a continuous run honors the same
+default suite as a bare `dotnet test`. Any other filter shape seeds nothing. Re-running enable
+refreshes stored exclusions.
+
 Enable and disable do not start the daemon.
 
 ## `tests run --json`
