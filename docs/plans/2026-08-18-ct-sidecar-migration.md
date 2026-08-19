@@ -229,10 +229,10 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **What to build:** The remaining durable state surface, including the coverage-map maintenance logic Eros kept in the store layer.
 
 **Acceptance criteria:**
-- [ ] Coverage delta application and narrowing-evidence reads match Eros behavior on ported test scenarios (`--filter "FullyQualifiedName~Testing.Store.Coverage&Category!=Scale"`).
-- [ ] Durable freshness round-trips the composite key; a changed index identity invalidates stored freshness (test-guarded).
-- [ ] Reap debt: a generation dir that cannot be deleted (held handle) is recorded and retried later, never a run failure; generation dir names are short/hashed (MAX_PATH headroom, test-guarded).
-- [ ] Verified diff handed to the lead (parallel-lead-commit).
+- [x] Coverage delta application and narrowing-evidence reads match Eros behavior on ported test scenarios (`--filter "FullyQualifiedName~Testing.Store.Coverage&Category!=Scale"`).
+- [x] Durable freshness round-trips the composite key; a changed index identity invalidates stored freshness (test-guarded).
+- [x] Reap debt: a generation dir that cannot be deleted (held handle) is recorded and retried later, never a run failure; generation dir names are short/hashed (MAX_PATH headroom, test-guarded).
+- [x] Verified diff handed to the lead (parallel-lead-commit).
 
 ### Task 7: Selector rewire
 

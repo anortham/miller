@@ -459,17 +459,17 @@ public sealed class ContinuousTestStoreTests : IDisposable
     }
 
     [Fact]
-    public void Store_has_no_coverage_or_generation_public_methods()
+    public void Store_never_exposes_a_sqlite_connection()
     {
         string[] names = typeof(ContinuousTestStore)
             .GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
             .Select(method => method.Name)
             .ToArray();
-        Assert.DoesNotContain(names, name => name.Contains("Coverage", StringComparison.Ordinal));
-        Assert.DoesNotContain(names, name => name.Contains("Generation", StringComparison.Ordinal));
-        Assert.DoesNotContain(names, name => name.Contains("Watermark", StringComparison.Ordinal));
         Assert.DoesNotContain("Conn", names);
         Assert.DoesNotContain("Connection", names);
+        Assert.Contains(names, name => name.Contains("Coverage", StringComparison.Ordinal));
+        Assert.Contains(names, name => name.Contains("Generation", StringComparison.Ordinal));
+        Assert.Contains(names, name => name.Contains("Watermark", StringComparison.Ordinal));
     }
 
     private ContinuousTestStore CreateStoreWithTests(params string[] testCaseIds)
