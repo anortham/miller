@@ -27,6 +27,7 @@ verified against Eros main @ 71d78cd and this worktree @ f0b9e62d).
 - Verdict semantics: aggregate `Green` only with complete results at the selected `(index identity, revision)`; known staleness → `Partial`; unknown execution/watch health → `Unknown`.
 - All durable CT state lives in `<workspace>/.miller/ct.db`; providers write only bounded build/result/temp artifacts under supervised CT paths.
 - MCP guidance budgets: `tests` description ≤900 chars, params ≤250 each, embedded core ≤1,900 chars, total descriptions ≤9,000. Gates: `tests/Miller.Tests/Server/AgentInstructionsTests.cs`.
+- **Windows file-locking discipline:** CT builds/executes only inside per-generation dirs (never the workspace's `bin`/`obj`); undeletable generation dirs become recorded reap debt retried later, never run failures; artifact moves retry on sharing violations (the `MILLER_PROMOTE_RETRY_TIMEOUT` precedent); process termination kills the entire process tree (`Process.Kill(entireProcessTree: true)` — no POSIX signals on Windows); generation dir names stay short (hashed) to respect MAX_PATH; an app-control block (`0x800711C7` / Code Integrity) is a run-level execution outcome — affected tests stay stale and the verdict is `Partial`/`Unknown`, never `Green` on incomplete results.
 - Port source of truth: `~/source/eros` main @ 71d78cd. Port sources: `src/Eros.ContinuousTesting/`, `src/Eros.Store/WorkspaceStore.ContinuousTesting|CtGenerations|CtGenerationDisk|CoverageMaps.cs` (+ CT-relevant `Graph`/`Queries` reads and raw-SQL-via-`Conn` call sites, which become store methods), `src/Eros.Hub/ContinuousTesting/`. Read them directly; do not rewrite logic that ports cleanly, and do not port behaviors this plan marks forbidden.
 
 ## Verification Strategy
@@ -204,6 +205,7 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **Acceptance criteria:**
 - [ ] Fast tests pass under `dotnet test --filter "FullyQualifiedName~Testing.Providers&Category!=Scale"`.
 - [ ] Dotnet Scale smoke really executes a `dotnet test` on a tiny fixture and parses results (`--filter "FullyQualifiedName~Testing.Providers.Dotnet&Category=Scale"`).
+- [ ] The shared runner kills the entire process tree on cancel/stop and builds only into per-generation dirs (test-guarded; Windows-specific assertions run when the suite runs on Windows).
 - [ ] Verified diff handed to the lead (parallel-lead-commit).
 
 ### Task 6: `ct.db` store — coverage maps + generations
@@ -229,6 +231,7 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **Acceptance criteria:**
 - [ ] Coverage delta application and narrowing-evidence reads match Eros behavior on ported test scenarios (`--filter "FullyQualifiedName~Testing.Store.Coverage&Category!=Scale"`).
 - [ ] Durable freshness round-trips the composite key; a changed index identity invalidates stored freshness (test-guarded).
+- [ ] Reap debt: a generation dir that cannot be deleted (held handle) is recorded and retried later, never a run failure; generation dir names are short/hashed (MAX_PATH headroom, test-guarded).
 - [ ] Verified diff handed to the lead (parallel-lead-commit).
 
 ### Task 7: Selector rewire
@@ -329,7 +332,7 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 
 **Acceptance criteria:**
 - [ ] Second daemon start on the same workspace is refused by the lease; a dead-PID stale lease is reclaimed (test-guarded, PID+start-time identity).
-- [ ] `stop` terminates only the leased daemon, gracefully, with bounded wait.
+- [ ] `stop` terminates only the leased daemon, gracefully, with bounded wait, and reaps the daemon's entire process tree on Windows and Unix alike.
 - [ ] Workspace removal acquires `ct.lock` in the fixed order; removal tests cover an active CT store.
 - [ ] Fast suite passes (escalation: shared lock + removal touched).
 - [ ] Worker commit created and SHA recorded.
@@ -357,6 +360,7 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **Acceptance criteria:**
 - [ ] Regression tests prove: unavailable impact enqueues nothing; start executes nothing until change or explicit run; budget is execution-scoped (idle daemon holds nothing; second workspace reports paused only during the first's execution); `MILLER_CT=off` constructs zero CT machinery with honest status.
 - [ ] Verdict tests prove Green/Partial/Unknown at the composite key; a rebuild (new index identity) demotes prior Green.
+- [ ] An execution-blocked outcome (e.g. Windows app-control `0x800711C7`) keeps selected tests stale and the verdict `Partial`/`Unknown` — a policy-blocked run can never report Green (test-guarded with a faked provider outcome).
 - [ ] Fast engine tests pass (`--filter "FullyQualifiedName~Testing.Daemon&Category!=Scale"`); the dotnet end-to-end passes (`&Category=Scale`).
 - [ ] Worker commit created and SHA recorded.
 
