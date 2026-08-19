@@ -266,6 +266,23 @@ public sealed class TestsCliTests : IDisposable
     }
 
     [Fact]
+    public void ServeHost_reopens_live_facts_per_selector_read()
+    {
+        string source = File.ReadAllText(Path.Combine(
+            ScaleTestSupport.RepoRoot(),
+            "src",
+            "Miller.Server",
+            "Tools",
+            "TestsCore.cs"));
+        int serveHost = source.IndexOf("public static TestsServeResult ServeHost", StringComparison.Ordinal);
+        int nextMethod = source.IndexOf("public static TestsStopResult Stop", StringComparison.Ordinal);
+        Assert.True(serveHost >= 0 && nextMethod > serveHost);
+        string body = source[serveHost..nextMethod];
+        Assert.Contains("new ReopeningMillerFactSource(() => OpenLiveFacts", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("using IOwnedFactSource facts = OpenLiveFacts", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CtDaemonVerb_WhenNotEnabled_ReturnsWithoutCreatingState()
     {
         var (code, outText, errText) = Run("ct-daemon");

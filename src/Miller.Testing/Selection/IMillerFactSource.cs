@@ -38,3 +38,47 @@ public sealed class MillerFactSource : IMillerFactSource
     public CtImpactResult Impact(IReadOnlyList<string> seedSymbolIds, int maxDepth = 2, int limit = 100) =>
         _inner.Impact(seedSymbolIds, maxDepth, limit);
 }
+
+/// <summary>
+/// Opens a fresh fact source for every read so a promoted generation is visible.
+/// </summary>
+public sealed class ReopeningMillerFactSource : IMillerFactSource
+{
+    private readonly Func<IMillerFactSource> _open;
+
+    public ReopeningMillerFactSource(Func<IMillerFactSource> open)
+    {
+        ArgumentNullException.ThrowIfNull(open);
+        _open = open;
+    }
+
+    public CtIndexCursor Current => With(static facts => facts.Current);
+
+    public CtFreshnessKey Freshness =>
+        With(static facts => new CtFreshnessKey(facts.Current.IndexIdentity, facts.Current.Revision));
+
+    public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths) =>
+        With(facts => facts.SymbolsForChangedFiles(changedPaths));
+
+    public IReadOnlyList<CtReferenceFact> ReferencesTo(IReadOnlyList<string> symbolIds) =>
+        With(facts => facts.ReferencesTo(symbolIds));
+
+    public IReadOnlyList<CtReferenceFact> IdentifierEvidenceTo(IReadOnlyList<string> symbolIds) =>
+        With(facts => facts.IdentifierEvidenceTo(symbolIds));
+
+    public CtImpactResult Impact(IReadOnlyList<string> seedSymbolIds, int maxDepth = 2, int limit = 100) =>
+        With(facts => facts.Impact(seedSymbolIds, maxDepth, limit));
+
+    private T With<T>(Func<IMillerFactSource, T> read)
+    {
+        IMillerFactSource facts = _open();
+        try
+        {
+            return read(facts);
+        }
+        finally
+        {
+            (facts as IDisposable)?.Dispose();
+        }
+    }
+}

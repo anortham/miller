@@ -277,8 +277,9 @@ public static class TestsCore
 
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
         IReadOnlyList<ContinuousTestProject> projects = store.ListContinuousTestProjects(workspaceId);
-        using IOwnedFactSource facts = OpenLiveFacts(root, workspaceId);
-        var selector = new ContinuousTestImpactSelector(store, facts);
+        var selector = new ContinuousTestImpactSelector(
+            store,
+            new ReopeningMillerFactSource(() => OpenLiveFacts(root, workspaceId)));
         var coordinator = new ContinuousTestCoordinator(ContinuousTestProviderFactory.CreateDefault(), store);
         var queue = new ContinuousTestDaemonQueue(store, selector, coordinator);
         var poller = new ContinuousTestRevisionPoller(
