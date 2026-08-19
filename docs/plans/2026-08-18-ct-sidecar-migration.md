@@ -386,11 +386,11 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **What to build:** The verb family over `TestsCore`. Status on a never-enabled workspace: cheap honest read, nothing created.
 
 **Acceptance criteria:**
-- [ ] Contract test asserts the documented `tests status --json` fields; `capabilities --json` advertises `tests`.
-- [ ] `enable`/`disable` persist per-project rows; `status` reflects them; `status` on a stopped daemon starts nothing (test-guarded).
-- [ ] `cli-eros-v1.md` no longer assigns CT execution to Eros.
-- [ ] Fast suite passes (escalation: `CliDispatch.cs` touched).
-- [ ] Worker commit created and SHA recorded.
+- [x] Contract test asserts the documented `tests status --json` fields; `capabilities --json` advertises `tests`.
+- [x] `enable`/`disable` persist per-project rows; `status` reflects them; `status` on a stopped daemon starts nothing (test-guarded).
+- [x] `cli-eros-v1.md` no longer assigns CT execution to Eros.
+- [x] Fast suite passes (escalation: `CliDispatch.cs` touched).
+- [x] Worker commit created and SHA recorded. (`e6f286f1`)
 
 ### Task 13: MCP `tests` tool + guidance + AOT
 
