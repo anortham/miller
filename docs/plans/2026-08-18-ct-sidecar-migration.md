@@ -331,11 +331,11 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **What to build:** Everything Eros never needed because CT lived in its hub: the detached-daemon lifecycle. Defined behavior for `run` with no daemon: a foreground one-shot pass in the calling process (no daemon spawn).
 
 **Acceptance criteria:**
-- [ ] Second daemon start on the same workspace is refused by the lease; a dead-PID stale lease is reclaimed (test-guarded, PID+start-time identity).
-- [ ] `stop` terminates only the leased daemon, gracefully, with bounded wait, and reaps the daemon's entire process tree on Windows and Unix alike.
-- [ ] Workspace removal acquires `ct.lock` in the fixed order; removal tests cover an active CT store.
-- [ ] Fast suite passes (escalation: shared lock + removal touched).
-- [ ] Worker commit created and SHA recorded.
+- [x] Second daemon start on the same workspace is refused by the lease; a dead-PID stale lease is reclaimed (test-guarded, PID+start-time identity).
+- [x] `stop` terminates only the leased daemon, gracefully, with bounded wait, and reaps the daemon's entire process tree on Windows and Unix alike.
+- [x] Workspace removal acquires `ct.lock` in the fixed order; removal tests cover an active CT store.
+- [x] Fast suite passes (escalation: shared lock + removal touched).
+- [x] Worker commit created and SHA recorded. (`3298d407`)
 
 ### Task 11: Daemon engine — policies, queue, coordinator, poller
 
