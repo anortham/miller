@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Miller.Testing — continuous-testing sidecar. Owns the ct.db schema, provider/selector/daemon
+    contracts, and (later) the store, providers, and daemon engine. References Miller.Core and
+    Miller.Indexing. Must not reference Miller.Server.
+    Microsoft.Data.Sqlite (bundled, not .Core) auto-initializes the e_sqlite3 provider — do NOT call
+    SQLitePCLRaw.Batteries_V2.Init().
+  -->
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Miller.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Miller.Core\Miller.Core.csproj" />
+    <ProjectReference Include="..\Miller.Indexing\Miller.Indexing.csproj" />
+  </ItemGroup>
+
+</Project>

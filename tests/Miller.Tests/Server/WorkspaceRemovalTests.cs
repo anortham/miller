@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
+using Miller.Testing;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -94,6 +95,26 @@ public sealed class WorkspaceRemovalTests : IDisposable
         Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
         Assert.False(result.IndexDirDeleted);
         Assert.Null(registry.Get("ws-orphan-00000001"));
+    }
+
+    [Fact]
+    public void RemoveById_WhenCtStoreLockHeld_RefusedInUse_CtDbIntact()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-ct-locked");
+        string ctDb = Path.Combine(millerDir, CtSchema.DbFileName);
+        File.WriteAllText(ctDb, "active-ct-store");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-ct-locked-000001", "ct-locked-disp", root);
+
+        using CtWriteLock held = CtWriteLock.AcquireFor(ctDb, TimeSpan.FromMilliseconds(200));
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "ct-locked-disp", liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedInUse, result.Result);
+        Assert.True(File.Exists(ctDb));
+        Assert.Equal("active-ct-store", File.ReadAllText(ctDb));
+        Assert.True(File.Exists(Path.Combine(millerDir, "symbols.db")));
+        Assert.NotNull(registry.Get("ws-ct-locked-000001"));
     }
 
     [Fact]

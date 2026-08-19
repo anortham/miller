@@ -9,7 +9,7 @@ namespace Miller.Tests.Server;
 
 /// <summary>
 /// Pins <see cref="AgentInstructions.Load"/> — the embedded MCP server instructions wired onto
-/// <c>McpServerOptions.ServerInstructions</c> — and the nine tool <c>[Description]</c> attributes that act as the
+/// <c>McpServerOptions.ServerInstructions</c> — and the ten tool <c>[Description]</c> attributes that act as the
 /// post-discovery usage contracts. The ServerInstructions core is the DISCOVERY contract and must fit Claude
 /// Code's real delivery window (see <see cref="MaxServerInstructionsChars"/>); the per-tool descriptions are the
 /// USAGE contracts (delivered separately, un-shared, deferred under Tool Search) and must each be a self-sufficient
@@ -39,7 +39,7 @@ public sealed class AgentInstructionsTests
     private static int ToolDescriptionBudget(string toolName) =>
         ToolDescriptionBudgets.TryGetValue(toolName, out int budget) ? budget : DefaultToolDescriptionChars;
 
-    // Total schema budget (design §4): the nine tool descriptions are the post-discovery usage contract; their
+    // Total schema budget (design §4): the ten tool descriptions are the post-discovery usage contract; their
     // combined length is gated so the pool cannot silently regrow into the deleted 12k ServerInstructions fiction.
     // The baseline the design records — 4,512 chars on 2026-07-02 — is descriptions-only (each parameter
     // description is separately capped at 250, below), so this total tracks the description text that grows.
@@ -57,6 +57,7 @@ public sealed class AgentInstructionsTests
             "patterns",
             "content",
             "workspace",
+            "tests",
         };
 
     private static readonly string[] AllToolNames =
@@ -68,6 +69,7 @@ public sealed class AgentInstructionsTests
         "inspect",
         "patterns",
         "search",
+        "tests",
         "trace",
         "workspace",
     };
@@ -142,7 +144,7 @@ public sealed class AgentInstructionsTests
     }
 
     [Fact]
-    public void PublicMcpToolNames_AreTheDocumented1_0Surface()
+    public void PublicMcpToolNames_AreTheDocumentedSurface()
     {
         string[] toolNames = DiscoverToolMethods().Select(static method => ToolName(method)).ToArray();
 
@@ -156,10 +158,28 @@ public sealed class AgentInstructionsTests
                 "inspect",
                 "patterns",
                 "search",
+                "tests",
                 "trace",
                 "workspace",
             },
             toolNames);
+    }
+
+    [Fact]
+    public void TestsDescription_LeadsWithCheapStatusAndExplicitStart()
+    {
+        string description = DiscoverToolMethods()
+            .Single(static method => string.Equals(ToolName(method), "tests", StringComparison.Ordinal))
+            .GetCustomAttribute<DescriptionAttribute>()
+            ?.Description ?? string.Empty;
+
+        int statusAt = description.IndexOf("status", StringComparison.OrdinalIgnoreCase);
+        int startAt = description.IndexOf("start", StringComparison.OrdinalIgnoreCase);
+        int enableAt = description.IndexOf("enable", StringComparison.OrdinalIgnoreCase);
+        Assert.True(statusAt >= 0, "tests description must name status.");
+        Assert.True(startAt > statusAt, "tests description must put status before start.");
+        Assert.True(enableAt > startAt, "tests description must put start before enable.");
+        Assert.Contains("opt-in", description, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

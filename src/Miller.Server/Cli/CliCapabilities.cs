@@ -114,6 +114,8 @@ internal static class CliCapabilities
         "workspace full --json",
         "workspace open --json",
         "workspace remove --json",
+        "tests status --json",
+        "tests run --json",
     ];
 
     private static readonly string[] ContentKinds =
@@ -147,6 +149,8 @@ internal static class CliCapabilities
             "docs/contracts/impact-test-role-evidence-v1.md"),
         ("impact_mcp_output_page", "impact --json", 1,
             "docs/contracts/impact-mcp-output-page-v1.md"),
+        (TestsCore.StatusContractName, "tests status --json", TestsCore.JsonSchemaVersion,
+            TestsCore.StatusContractDoc),
     ];
 
     /// <summary>

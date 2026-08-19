@@ -105,6 +105,7 @@ builder.Services
     .WithTools<ContentTool>()
     .WithTools<PatternsTool>()
     .WithTools<WorkspaceTool>()
+    .WithTools<TestsTool>()
     .WithRequestFilters(filters =>
     {
         filters.AddCallToolFilter(WorkspaceBindingCallToolFilter.Create());

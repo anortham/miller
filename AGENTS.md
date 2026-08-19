@@ -88,10 +88,11 @@ that, and there are guards that will fail the build if the split erodes.
   compare repeated runs on the same local machine when measuring performance. (A well-formed
   `.runsettings` `<TestCaseFilter>` works too; the csproj property is preferred because it needs no extra
   file and fails the build loudly on a typo instead of silently running everything.)
-- **Scale suite is opt-in.** `Category=Scale` tests spawn the real `julie-extract` or build large
-  fixtures. Run them with `scripts/test.sh scale` / `scripts/test.ps1 scale` (or `all`) once at the
-  branch gate (before commit/PR), or when you touch the indexing/extract path. They **skip** (not fail) if
-  `.tools/julie-extract` is missing.
+- **Scale suite is opt-in.** `Category=Scale` tests spawn the real `julie-extract`, spawn a real CT
+  provider (`dotnet test` / `cargo test` / node / pytest), or build large fixtures. Run them with
+  `scripts/test.sh scale` / `scripts/test.ps1 scale` (or `all`) once at the branch gate (before commit/PR),
+  or when you touch the indexing/extract or CT-provider path. They **skip** (not fail) if
+  `.tools/julie-extract` or the provider toolchain is missing.
 - **Never rerun a green suite on an unchanged tree.** A fast-forward merge, a branch switch, or a
   metadata-only commit does not change the source tree. If a scope already passed on this exact tree,
   cite that run instead of running it again.
@@ -123,8 +124,16 @@ scripts/test.ps1 all
   [`ScaleTraitConventionTests`](tests/Miller.Tests/Conventions/ScaleTraitConventionTests.cs) source-scans
   the tests and FAILS if any file referencing the launch signal is not tagged Scale. If it fails, you
   added a julie-spawning test without the trait — add the trait, don't weaken the guard.
+- **A test that spawns a real CT provider (`dotnet test`, `cargo test`, node, pytest) MUST be tagged
+  `[Trait("Category","Scale")]`** at the class level, and MUST obtain the toolchain via
+  `CtProviderTestSupport.RequireDotnet()` / `RequireCargo()` / `RequireNode()` / `RequirePython()` (the
+  launch signals). Do not re-add a private `FindOnPath()` copy — those were deduplicated into
+  [`CtProviderTestSupport`](tests/Miller.Tests/Testing/CtProviderTestSupport.cs) so the guard has one
+  signal to trust. The convention guard
+  [`CtScaleTraitConventionTests`](tests/Miller.Tests/Conventions/CtScaleTraitConventionTests.cs)
+  source-scans the tests and FAILS if any file referencing those signals is not tagged Scale.
 - A test may be Scale for other reasons (e.g. a 50k-symbol fixture build with no julie). That's fine; the
-  guard is one-directional (spawns julie ⟹ Scale), not the converse.
+  guard is one-directional (spawns julie / a CT provider ⟹ Scale), not the converse.
 - Keep the fast suite genuinely fast and pure. If a "fast" test starts doing real I/O or heavy work, it
   belongs in Scale.
 
@@ -339,9 +348,9 @@ scripts/test.ps1 all
 - **Eros-facing CLI/export contracts.** Keep Eros on public process/artifact contracts, not Miller private .NET
   internals. Current documented surfaces live in [`docs/contracts/cli-eros-v1.md`](docs/contracts/cli-eros-v1.md):
   `capabilities --json`, `refresh --json --wait`, `workspace status --json`, `workspace health --json`,
-  `content export`, `telemetry export --jsonl`, and stable read-command JSON such as `impact --json`,
-  `trace --json`, and `patterns --json`. Add or harden new surfaces only when a concrete Eros workflow needs
-  facts the documented contracts do not cover.
+  `content export`, `telemetry export --jsonl`, `tests status --json`, and stable read-command JSON such as
+  `impact --json`, `trace --json`, and `patterns --json`. Add or harden new surfaces only when a concrete
+  Eros workflow needs facts the documented contracts do not cover.
 - **Logging.** All processes append to ONE shared daily pair (`.miller/logs/miller-<YYYYMMDD>.log` +
   `.jsonl`, Serilog `shared:true`); `pid`/`role`/`cid` are line properties, not file-name segments. There
   is no per-pid file and no startup reaper (both removed 2026-05-31; see the superseded D1/D6 notes in
@@ -350,7 +359,7 @@ scripts/test.ps1 all
   surface is `~/.miller/workspaces.db`. Read tools accept `workspace_id` selectors: display ID, unique prefix,
   full ID, registered root path, `current`, or `primary`; explicit `workspace_id` defaults to refresh-first.
   When a user asks from workspace A to inspect workspace B, keep the session in A, run `workspace list`, and pass
-  B's selector to `search`/`inspect`/`context`/`impact`/`trace`/`patterns`. If B is not registered, run
+  B's selector to `search`/`inspect`/`context`/`impact`/`trace`/`patterns`/`tests`. If B is not registered, run
   `workspace open` with its root path first. `workspace_id=all` is only for `content search` text audits, not
   symbol/code read tools. The dashboard reads the registry, shared telemetry DB, and read-only aggregate facts
   from workspace artifacts, and may perform registry-lifecycle mutations (workspace remove/prune) through its
@@ -371,6 +380,23 @@ scripts/test.ps1 all
   [`docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md`](docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md).
   `search.db` stays lexical-only: the default-on semantic arm lives in a separate `<workspace>/.miller/vectors.db`
   artifact and is fused after ranking, so lexical-only output stays byte-identical (ADR-0003).
+- **Continuous testing sidecar.** CT verdicts live in the Miller-owned `<workspace>/.miller/ct.db` (a
+  revision-keyed sidecar, same pattern as `telemetry.db` / `history.db`). Providers may write only bounded
+  build/result/temp artifacts under supervised CT paths (`BuildOutputRoot` generations and `miller-ct`
+  temps) — never workspace `bin`/`obj`. `ct.db` is self-contained: no foreign keys into `symbols.db` or
+  `search.db`; rows name files by path+blake3 hash and symbols by name+path. Freshness is the composite
+  `(index_identity, revision)` from `WorkspaceReadSnapshot.IndexIdentity`. Revision alone is forbidden: a
+  rebuild restarts the counter, so a stale green must not match a new generation that reuses the number.
+  **Safety (load-bearing).** Opt-in per workspace (`.miller/ct.enabled`), default off. Explicit start only:
+  `miller tests serve`, the dashboard, or MCP `tests operation=start`. Status reads never create `ct.db`,
+  never create `.miller/ct/`, and never start the daemon. On start the daemon is status-only: it reports
+  staleness but executes nothing until a new change or an explicit `run`. Delta-unavailable or degraded
+  index never falls back to a full-suite run. User-global execution budget: at most one workspace executes
+  tests at a time. `MILLER_CT=off` (also `0`/`false`/`no`) is a permanent zero-work guarantee: no daemon,
+  no `ct.db` writes, honest status. Green requires complete results at the selected composite key.
+  The tenth MCP tool is `tests` (approved 2026-08-18): `status|failures|start|stop|enable|disable|run`.
+  Status is cheap. Start is the only spawn. JSON contract:
+  [`docs/contracts/tests-cli-v1.md`](docs/contracts/tests-cli-v1.md).
 - **Content corpus and text search.** File/content text search is served from the Miller-owned content corpus
   sidecar `<workspace>/.miller/content.db`, plus explicit external/web imports. Keep symbol search narrow
   (`name + signature`) unless real dogfood shows the explicit text modes fail an agent task. Route by intent:
@@ -400,7 +426,7 @@ scripts/test.ps1 all
 - **Guidance delivery channels (load-bearing).** Guidance rides three channels with distinct jobs: the
   embedded `MILLER_AGENT_INSTRUCTIONS.md` core is the DISCOVERY contract (≤1,900 chars — Claude Code truncates
   MCP `ServerInstructions` at ~2KB/server inside a shared ~4KB block, silent and mid-sentence, so the routing
-  table is written most-important-first); the nine tool `[Description]`s are the post-discovery USAGE contracts
+  table is written most-important-first); the ten tool `[Description]`s are the post-discovery USAGE contracts
   (≤900 default, `trace` ≤1,500, `search` ≤1,100, total ≤9,000 descriptions-only, params ≤250 each — descriptions are deferred under
   Tool Search and cannot carry discovery); one-line success-path nudges through `NextStepHint` are the adoption
   lever (compact-only, JSON untouched). Do NOT grow the core or a description budget, re-add a long embedded

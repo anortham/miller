@@ -16,7 +16,7 @@ registered root path, `current`, or `primary`.
 
 `miller help` lists every verb: `capabilities`, `search`, `todos`, `content`, `patterns`, `metrics`,
 `telemetry`, `symbols`, `references`, `complexity`, `refresh`, `inspect`, `context`, `impact`, `trace`,
-`dashboard`, `workspace`, `version`, `help`, and `serve`.
+`dashboard`, `workspace`, `tests`, `version`, `help`, and `serve`.
 
 ## Command examples
 
@@ -50,6 +50,8 @@ dotnet run --project src/Miller.Server -c Release -- workspace health --json
 dotnet run --project src/Miller.Server -c Release -- workspace onboarding --json
 dotnet run --project src/Miller.Server -c Release -- workspace leader --json
 dotnet run --project src/Miller.Server -c Release -- workspace list
+dotnet run --project src/Miller.Server -c Release -- tests status --json
+dotnet run --project src/Miller.Server -c Release -- tests enable
 dotnet run --project src/Miller.Server -c Release -- version
 ```
 

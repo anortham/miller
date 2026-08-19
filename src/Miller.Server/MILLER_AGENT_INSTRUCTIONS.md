@@ -1,6 +1,6 @@
 # Miller — Code Intelligence Server
 
-Fresh index of this workspace's code. One Miller call beats shell greps and full-file reads: ranked, structured, fewer tokens.
+Fresh index of this workspace's code. One Miller call beats shell greps and full-file reads.
 
 ## Rules
 
@@ -19,8 +19,9 @@ Fresh index of this workspace's code. One Miller call beats shell greps and full
 - trace — exact refs, shortest dependency paths, or cross-language route chains.
 - impact — before a refactor or after edits: impacted symbols plus likely tests, from a symbol, file, or git diff.
 - edit — index-aware replace/rename/body-rewrite with a diff preview and match proof.
-- patterns — pre-extracted code-shape facts (routes, config keys, doc structure) across 38 languages.
-- content — import then search/read logs, CI output, web markdown, and other large text without full-file reads.
+- patterns — pre-extracted code-shape facts (routes, config keys, doc structure).
+- content — import then search/read logs, CI output, web markdown, and large text.
 - workspace — index lifecycle and semantic-broker health: status, refresh, health, list, onboarding, dashboard.
+- tests — continuous-test status (cheap, starts nothing); start is explicit; enable is opt-in.
 
 Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.

@@ -51,11 +51,6 @@ public sealed class ImpactTool
     private const int CompactLikelyTestsLimit = 20;
     private const int CompactImpactedLimit = 40;
     private const int CompactOutputMaxChars = 6000;
-    private const int MaximumDepth = 5;
-    private const int MaximumLimit = 1000;
-    private const int MinimumRankingCandidates = 500;
-    private const int MaximumRankingCandidates = 2000;
-    private const int RankingCandidateMultiplier = 8;
 
     private readonly IWorkspaceIndexProvider _workspaceProvider;
     private readonly IGitDiffReader _gitDiffReader;
@@ -298,7 +293,7 @@ public sealed class ImpactTool
                 telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
                 telemetry.SetMetadata("max_depth_bucket", DepthBucket(max_depth));
                 ImpactTelemetrySnapshot facts = impactTelemetry ??
-                    ImpactTelemetrySnapshot.Empty(RankingCandidateLimit(limit));
+                    ImpactTelemetrySnapshot.Empty(ImpactAnalysis.RankingCandidateLimit(limit));
                 telemetry.SetMetadata("traversal_candidate_limit", facts.TraversalCandidateLimit);
                 telemetry.SetMetadata("graph_reached_count", facts.GraphReachedCount);
                 telemetry.SetMetadata("heuristic_test_candidate_count", facts.HeuristicTestCandidateCount);
@@ -475,15 +470,9 @@ public sealed class ImpactTool
         _ => "3-5",
     };
 
-    private static int NormalizeDepth(int depth) => Math.Clamp(depth, 1, MaximumDepth);
+    private static int NormalizeDepth(int depth) => ImpactAnalysis.NormalizeDepth(depth);
 
-    private static int NormalizeLimit(int limit) => Math.Clamp(limit, 1, MaximumLimit);
-
-    private static int RankingCandidateLimit(int limit)
-    {
-        long scaled = Math.Max(MinimumRankingCandidates, (long)limit * RankingCandidateMultiplier);
-        return Math.Max(limit, (int)Math.Min(MaximumRankingCandidates, scaled));
-    }
+    private static int NormalizeLimit(int limit) => ImpactAnalysis.NormalizeLimit(limit);
 
     /// <summary>
     /// The pure execution core (no MCP/DI/telemetry; no DB — the graph is in-memory). Resolves the seed symbols
@@ -903,61 +892,28 @@ public sealed class ImpactTool
         int maxDepth,
         int limit)
     {
-        int traversalCandidateLimit = RankingCandidateLimit(limit);
-        GraphReachResult graphResult =
-            graph.ReachWithEvidence(seedIds, maxDepth, traversalCandidateLimit, Direction.Reverse);
-        TestCandidateExpansion expansion = AddHeuristicTestCandidates(
-            index, seedIds, graphResult.Nodes, graphResult.Nodes.Count + limit);
-        var symbolsById =
-            SymbolLookupBatch.FindBySymbolIds(index, expansion.Nodes.Select(static node => node.Id));
-        ImpactRankSignal[] selected = ImpactRanker.Rank(expansion.Nodes
-            .Where(node => symbolsById.ContainsKey(node.Id))
-            .Select(node =>
-            {
-                IndexedSymbol symbol = symbolsById[node.Id];
-                return new ImpactRankSignal(node, symbol.FilePath, symbol.StartLine, symbol.Name, symbol.SymbolId);
-            }))
-            .Take(limit)
-            .ToArray();
-
-        var impacted = new List<Reached>();
-        var tests = new List<Reached>();
-        foreach (ImpactRankSignal candidate in selected)
-        {
-            IndexedSymbol symbol = symbolsById[candidate.SymbolId];
-            (symbol.IsTest ? tests : impacted).Add(new Reached(symbol, candidate.Evidence));
-        }
-
-        int returnedTestCandidateCount = selected.Count(static candidate =>
-            string.Equals(candidate.Evidence.EdgeSource, "filename_role", StringComparison.Ordinal));
-        int returnedGraphCount = selected.Length - returnedTestCandidateCount;
-        int resolvableGraphRows = graphResult.Nodes.Count(node => symbolsById.ContainsKey(node.Id));
-        bool testCandidatesTruncated =
-            expansion.Truncated || expansion.CandidateCount > returnedTestCandidateCount;
-        GraphReachResult truthfulGraph = graphResult with
-        {
-            TruncatedByLimit =
-                graphResult.TruncatedByLimit ||
-                resolvableGraphRows > returnedGraphCount ||
-                testCandidatesTruncated,
-        };
+        ImpactAnalysisResult computed = ImpactAnalysis.Compute(index, graph, seedIds, maxDepth, limit);
+        var impacted = computed.Impacted.Select(static hit => new Reached(hit.Symbol, hit.Evidence)).ToArray();
+        var tests = computed.Tests.Select(static hit => new Reached(hit.Symbol, hit.Evidence)).ToArray();
+        int returnedTestCandidateCount = computed.Impacted.Concat(computed.Tests)
+            .Count(static hit => string.Equals(hit.Evidence.EdgeSource, "filename_role", StringComparison.Ordinal));
         (string status, string reason) =
-            TraversalDisposition(truthfulGraph, testCandidatesTruncated);
+            TraversalDisposition(computed.Graph, computed.TestCandidatesTruncated);
         var telemetry = new ImpactTelemetrySnapshot(
-            traversalCandidateLimit,
-            graphResult.Nodes.Count,
-            expansion.CandidateCount,
-            Math.Max(0, resolvableGraphRows - returnedGraphCount),
-            selected.Length,
-            testCandidatesTruncated,
-            graphResult.TruncatedByDepth,
-            truthfulGraph.TruncatedByLimit);
+            computed.TraversalCandidateLimit,
+            computed.GraphReachedCount,
+            computed.HeuristicTestCandidateCount,
+            computed.GraphDisplacementCount,
+            computed.SelectedCount,
+            computed.TestCandidatesTruncated,
+            computed.Graph.TruncatedByDepth,
+            computed.Graph.TruncatedByLimit);
         return new RankedImpactResult(
             impacted,
             tests,
-            truthfulGraph,
+            computed.Graph,
             returnedTestCandidateCount,
-            testCandidatesTruncated,
+            computed.TestCandidatesTruncated,
             status,
             reason,
             telemetry);
@@ -978,76 +934,6 @@ public sealed class ImpactTool
         };
         return (status, reason);
     }
-
-    private static TestCandidateExpansion AddHeuristicTestCandidates(
-        ISymbolLookupIndex index,
-        IReadOnlyList<string> seedIds,
-        IReadOnlyList<ReachedNode> graphNodes,
-        int limit)
-    {
-        var combined = graphNodes.ToList();
-        int candidateCount = 0;
-        var seen = new HashSet<string>(
-            seedIds.Concat(graphNodes.Select(static node => node.Id)),
-            StringComparer.Ordinal);
-        var seenStems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        IReadOnlyDictionary<string, IndexedSymbol> seeds =
-            SymbolLookupBatch.FindBySymbolIds(index, seedIds);
-        foreach (IndexedSymbol seed in seeds.Values
-                     .OrderBy(static symbol => symbol.FilePath, StringComparer.Ordinal)
-                     .ThenBy(static symbol => symbol.StartLine)
-                     .ThenBy(static symbol => symbol.SymbolId, StringComparer.Ordinal))
-        {
-            string stem = Path.GetFileNameWithoutExtension(seed.FilePath);
-            if (string.IsNullOrWhiteSpace(stem) || !seenStems.Add(stem))
-                continue;
-
-            IReadOnlyList<string> candidatePaths = index
-                .FindFilePathsByFragment(stem, int.MaxValue)
-                .Where(path => IsFilenameRoleCandidate(stem, path))
-                .ToArray();
-            foreach (IndexedSymbol candidate in candidatePaths
-                         .SelectMany(index.FindByFilePath)
-                         .Where(static symbol => symbol.IsTest)
-                         .OrderBy(static symbol => symbol.FilePath, StringComparer.Ordinal)
-                         .ThenBy(static symbol => symbol.StartLine)
-                         .ThenBy(static symbol => symbol.SymbolId, StringComparer.Ordinal))
-            {
-                if (!seen.Add(candidate.SymbolId))
-                    continue;
-                if (combined.Count >= limit)
-                    return new(combined, candidateCount, true);
-
-                combined.Add(new ReachedNode(
-                    candidate.SymbolId,
-                    1,
-                    seed.SymbolId,
-                    "test_candidate",
-                    0.35,
-                    "filename_role",
-                    Visibility: candidate.Visibility));
-                candidateCount++;
-            }
-        }
-        return new(combined, candidateCount, false);
-    }
-
-    private static bool IsFilenameRoleCandidate(string sourceStem, string candidatePath)
-    {
-        string candidateStem = Path.GetFileNameWithoutExtension(candidatePath);
-        if (candidateStem.StartsWith(sourceStem, StringComparison.OrdinalIgnoreCase) &&
-            IsTestRole(candidateStem[sourceStem.Length..].Trim('_', '.', '-')))
-            return true;
-
-        return candidateStem.EndsWith(sourceStem, StringComparison.OrdinalIgnoreCase) &&
-               IsTestRole(candidateStem[..^sourceStem.Length].Trim('_', '.', '-'));
-    }
-
-    private static bool IsTestRole(string value) =>
-        value.Equals("test", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("tests", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("spec", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("specs", StringComparison.OrdinalIgnoreCase);
 
     private static string RenderDeltaJson(
         string workspaceId, bool complete, long fromRevision, long toRevision,
@@ -1201,11 +1087,6 @@ public sealed class ImpactTool
         string Status,
         string Reason,
         ImpactTelemetrySnapshot? Telemetry = null);
-
-    private sealed record TestCandidateExpansion(
-        IReadOnlyList<ReachedNode> Nodes,
-        int CandidateCount,
-        bool Truncated);
 
     private sealed record RankedImpactResult(
         IReadOnlyList<Reached> Impacted,
