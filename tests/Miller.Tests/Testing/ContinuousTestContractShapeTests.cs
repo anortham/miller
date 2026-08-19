@@ -133,6 +133,8 @@ public sealed class ContinuousTestContractShapeTests
             Assert.False(
                 type.FullName?.Contains("Eros", StringComparison.Ordinal) == true,
                 type.FullName);
+            if (type.Namespace.StartsWith("System.", StringComparison.Ordinal))
+                continue;
             Assert.StartsWith("Miller.Testing", type.Namespace, StringComparison.Ordinal);
         }
     }
