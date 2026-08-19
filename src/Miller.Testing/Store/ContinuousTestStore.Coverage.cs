@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace Miller.Testing;
@@ -447,7 +446,7 @@ public sealed partial class ContinuousTestStore
                       ON m.test_case_id = tc.id AND m.workspace_id = tc.workspace_id
                     ORDER BY requested.value;
                     """;
-                command.Parameters.AddWithValue("$test_case_ids", JsonSerializer.Serialize(requestedIds));
+                command.Parameters.AddWithValue("$test_case_ids", TestingJson.Strings(requestedIds));
                 command.Parameters.AddWithValue("$workspace_id", workspaceId);
                 using SqliteDataReader reader = command.ExecuteReader();
                 var evidence = new List<CtCoverageNarrowingEvidence>(requestedIds.Length);

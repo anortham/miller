@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text;
-using System.Text.Json;
 
 namespace Miller.Testing;
 
@@ -44,7 +43,7 @@ public static class CtDaemonLog
             + " cid:) CtDaemon: " + message;
         AppendLine(humanPath, human);
 
-        var payload = new Dictionary<string, object>
+        var payload = new Dictionary<string, object?>
         {
             ["@t"] = when.UtcDateTime.ToString("o", CultureInfo.InvariantCulture),
             ["@l"] = "Information",
@@ -52,7 +51,7 @@ public static class CtDaemonLog
             ["role"] = Role,
             ["pid"] = processId,
         };
-        AppendLine(jsonPath, JsonSerializer.Serialize(payload));
+        AppendLine(jsonPath, TestingJson.Value(payload));
     }
 
     private static void AppendLine(string path, string line)

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Miller.Server.Cli;
+using Miller.Server.Tools;
 
 namespace Miller.Server;
 
@@ -20,6 +21,24 @@ internal static class ServerJson
 
     public static string Serialize(DashboardProcessMetadata value) =>
         JsonSerializer.Serialize(value, DashboardMetadataJsonContext.Default.DashboardProcessMetadata);
+
+    public static string Serialize(TestsStatusResult value) =>
+        JsonSerializer.Serialize(value, ServerJsonContext.Default.TestsStatusResult);
+
+    public static string Serialize(TestsFailuresResult value) =>
+        JsonSerializer.Serialize(value, ServerJsonContext.Default.TestsFailuresResult);
+
+    public static string Serialize(TestsMutationResult value) =>
+        JsonSerializer.Serialize(value, ServerJsonContext.Default.TestsMutationResult);
+
+    public static string Serialize(TestsServeResult value) =>
+        JsonSerializer.Serialize(value, ServerJsonContext.Default.TestsServeResult);
+
+    public static string Serialize(TestsStopResult value) =>
+        JsonSerializer.Serialize(value, ServerJsonContext.Default.TestsStopResult);
+
+    public static string Serialize(TestsRunResult value) =>
+        JsonSerializer.Serialize(value, ServerJsonContext.Default.TestsRunResult);
 }
 
 internal sealed record DashboardLaunchJson(string Status, string Url, int? Pid, string? Message);
@@ -28,6 +47,12 @@ internal sealed record DashboardLaunchJson(string Status, string Url, int? Pid, 
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(ImmutableArray<string>))]
 [JsonSerializable(typeof(DashboardLaunchJson))]
+[JsonSerializable(typeof(TestsStatusResult))]
+[JsonSerializable(typeof(TestsFailuresResult))]
+[JsonSerializable(typeof(TestsMutationResult))]
+[JsonSerializable(typeof(TestsServeResult))]
+[JsonSerializable(typeof(TestsStopResult))]
+[JsonSerializable(typeof(TestsRunResult))]
 internal sealed partial class ServerJsonContext : JsonSerializerContext;
 
 [JsonSourceGenerationOptions(WriteIndented = true)]

@@ -1908,8 +1908,9 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         if (value.ValueKind != JsonValueKind.Object)
             throw new ContinuousTestProviderException("Provider JSONL property 'metadata' must be an object.");
 
-        var metadata = JsonSerializer.Deserialize<Dictionary<string, object?>>(value.GetRawText())
-            ?? new Dictionary<string, object?>(StringComparer.Ordinal);
-        return new ReadOnlyDictionary<string, object?>(metadata);
+        IReadOnlyDictionary<string, object?> metadata = TestingJson.Object(value);
+        return metadata as ReadOnlyDictionary<string, object?>
+            ?? new ReadOnlyDictionary<string, object?>(
+                new Dictionary<string, object?>(metadata, StringComparer.Ordinal));
     }
 }

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Miller.Server;
 using Miller.Server.Hosting;
@@ -29,9 +30,10 @@ public static class WorkspaceBindingCallToolFilter
                 // The workspace tool is exempt on IsBound, not Phase: while a rebind is running or
                 // after one failed, the previous workspace is still bound and the tool constructs —
                 // it must flow through so `workspace status` keeps working (and renders the rebind
-                // notice). Only when nothing is bound does the filter render the snapshot itself,
+                // notice). tests status follows the same unbound path so the cheap read stays honest.
+                // Only when nothing is bound does the filter render the snapshot itself,
                 // because the tool cannot construct before the first bind.
-                if (IsWorkspaceTool(request))
+                if (IsWorkspaceTool(request) || IsTestsStatus(request))
                 {
                     if (snapshot.IsBound)
                         return await next(request, cancellationToken).ConfigureAwait(false);
@@ -74,6 +76,22 @@ public static class WorkspaceBindingCallToolFilter
 
     private static bool IsWorkspaceTool(RequestContext<CallToolRequestParams> request) =>
         string.Equals(request.Params?.Name, "workspace", StringComparison.Ordinal);
+
+    private static bool IsTestsStatus(RequestContext<CallToolRequestParams> request)
+    {
+        if (!string.Equals(request.Params?.Name, "tests", StringComparison.Ordinal))
+            return false;
+
+        IDictionary<string, JsonElement>? arguments = request.Params!.Arguments;
+        if (arguments is null || !arguments.TryGetValue("operation", out JsonElement operation))
+            return true;
+        if (operation.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return true;
+
+        string? text = operation.ValueKind == JsonValueKind.String ? operation.GetString() : operation.ToString();
+        return string.IsNullOrWhiteSpace(text)
+            || string.Equals(text.Trim(), "status", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static async Task<bool> WaitForRunWithinGraceAsync(
         IWorkspaceBindingService binding,

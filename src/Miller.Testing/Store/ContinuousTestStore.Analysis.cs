@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace Miller.Testing;
@@ -239,8 +238,8 @@ public sealed partial class ContinuousTestStore
                     ORDER BY coverage_spans.id;
                     """;
                 command.Parameters.AddWithValue("$ws", workspaceId);
-                command.Parameters.AddWithValue("$symbols", JsonSerializer.Serialize(symbols));
-                command.Parameters.AddWithValue("$paths", JsonSerializer.Serialize(paths));
+                command.Parameters.AddWithValue("$symbols", TestingJson.Strings(symbols));
+                command.Parameters.AddWithValue("$paths", TestingJson.Strings(paths));
                 var rows = new List<CoverageSpan>();
                 using SqliteDataReader reader = command.ExecuteReader();
                 while (reader.Read())
@@ -858,24 +857,9 @@ public sealed partial class ContinuousTestStore
     {
         if (string.IsNullOrWhiteSpace(json))
             return [];
-        return JsonSerializer.Deserialize<string[]>(json) ?? [];
+        return TestingJson.ReadStrings(json);
     }
 
-    private static IReadOnlyList<IReadOnlyDictionary<string, object?>> DictListFromJson(string json)
-    {
-        if (string.IsNullOrWhiteSpace(json) || json == "[]")
-            return [];
-
-        List<Dictionary<string, JsonElement>>? raw =
-            JsonSerializer.Deserialize<List<Dictionary<string, JsonElement>>>(json);
-        if (raw is null)
-            return [];
-
-        return raw
-            .Select(row => (IReadOnlyDictionary<string, object?>)row.ToDictionary(
-                pair => pair.Key,
-                pair => JsonElementToObject(pair.Value),
-                StringComparer.Ordinal))
-            .ToArray();
-    }
+    private static IReadOnlyList<IReadOnlyDictionary<string, object?>> DictListFromJson(string json) =>
+        TestingJson.ObjectList(json);
 }

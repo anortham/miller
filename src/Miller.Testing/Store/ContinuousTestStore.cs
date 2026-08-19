@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace Miller.Testing;
@@ -52,11 +51,6 @@ public sealed partial class ContinuousTestStore : IDisposable
     private const int SqliteCorrupt = 11;
     private const int SqliteNotADb = 26;
     private const int WriteBusyTimeoutSeconds = 5;
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-    };
 
     private readonly object _gate = new();
     private SqliteConnection? _write;
@@ -586,32 +580,10 @@ public sealed partial class ContinuousTestStore : IDisposable
     private static bool IsCorruption(SqliteException ex) =>
         ex.SqliteErrorCode is SqliteCorrupt or SqliteNotADb;
 
-    private static string JsonText(object? value) =>
-        value is null ? "null" : JsonSerializer.Serialize(value, JsonOptions);
+    private static string JsonText(object? value) => TestingJson.Value(value);
 
-    private static IReadOnlyDictionary<string, object?> MetadataFromJson(string json)
-    {
-        Dictionary<string, JsonElement>? raw =
-            JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
-        if (raw is null)
-            return new Dictionary<string, object?>();
-        return raw.ToDictionary(
-            pair => pair.Key,
-            pair => JsonElementToObject(pair.Value),
-            StringComparer.Ordinal);
-    }
-
-    private static object? JsonElementToObject(JsonElement element) =>
-        element.ValueKind switch
-        {
-            JsonValueKind.Null => null,
-            JsonValueKind.False => false,
-            JsonValueKind.True => true,
-            JsonValueKind.String => element.GetString(),
-            JsonValueKind.Number when element.TryGetInt64(out long integer) => integer,
-            JsonValueKind.Number when element.TryGetDouble(out double number) => number,
-            _ => element.Clone(),
-        };
+    private static IReadOnlyDictionary<string, object?> MetadataFromJson(string json) =>
+        TestingJson.Object(json);
 
     private static object DateTimeText(DateTimeOffset? value) =>
         value is null

@@ -1,4 +1,5 @@
 using System.IO.Pipelines;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Server;
@@ -282,6 +283,87 @@ public sealed class WorkspaceBindingCallToolFilterTests
     }
 
     [Fact]
+    public async Task UnboundTestsStatus_RendersRunningSnapshotWithoutCallingTool()
+    {
+        var binding = new ScriptedBindingService
+        {
+            Snapshot = RunningSnapshot("/tmp/miller-tests", runGeneration: 41),
+        };
+
+        var result = await InvokeFilterAsync(
+            binding, "tests", (_, _) => Task.FromResult(TextResult("unreachable")),
+            TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Equal("bootstrap: running /tmp/miller-tests, started 0s ago", ResultText(result));
+    }
+
+    [Fact]
+    public async Task UnboundTestsDefaultOperation_TreatsAsStatus()
+    {
+        var binding = new ScriptedBindingService
+        {
+            Snapshot = RunningSnapshot("/tmp/miller-tests-default", runGeneration: 43),
+        };
+
+        var result = await InvokeFilterAsync(
+            binding, "tests", (_, _) => Task.FromResult(TextResult("unreachable")),
+            TestContext.Current.CancellationToken,
+            arguments: new Dictionary<string, JsonElement>());
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Contains("/tmp/miller-tests-default", ResultText(result), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UnboundTestsStart_ReturnsNotReadyToolError()
+    {
+        using var env = ScopedEnvironment.Set("MILLER_BOOTSTRAP_GRACE_SECONDS", "0");
+        var binding = new ScriptedBindingService
+        {
+            Snapshot = RunningSnapshot("/tmp/miller-tests-start", runGeneration: 45),
+        };
+        int nextCalls = 0;
+
+        var result = await InvokeFilterAsync(
+            binding, "tests", (_, _) =>
+            {
+                nextCalls++;
+                return Task.FromResult(TextResult("unreachable"));
+            },
+            TestContext.Current.CancellationToken,
+            arguments: new Dictionary<string, JsonElement>
+            {
+                ["operation"] = JsonSerializer.SerializeToElement("start"),
+            });
+
+        Assert.Equal(0, nextCalls);
+        Assert.Equal(true, result.IsError);
+        Assert.Contains("/tmp/miller-tests-start", ResultText(result), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BoundTestsTool_CallsNextHandler()
+    {
+        var binding = new ScriptedBindingService
+        {
+            Snapshot = BoundSnapshot("/tmp/miller-bound-tests", runGeneration: 47),
+        };
+        int nextCalls = 0;
+
+        var result = await InvokeFilterAsync(
+            binding, "tests", (_, _) =>
+            {
+                nextCalls++;
+                return Task.FromResult(TextResult("tests-status"));
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, nextCalls);
+        Assert.Equal("tests-status", ResultText(result));
+    }
+
+    [Fact]
     public async Task CallToolFilter_InvokesBindingBeforeToolHandler()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -371,7 +453,8 @@ public sealed class WorkspaceBindingCallToolFilterTests
         IWorkspaceBindingService binding,
         string toolName,
         Func<RequestContext<CallToolRequestParams>, CancellationToken, Task<CallToolResult>> next,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Dictionary<string, JsonElement>? arguments = null)
     {
         if (cancellationToken == default)
             cancellationToken = TestContext.Current.CancellationToken;
@@ -390,7 +473,7 @@ public sealed class WorkspaceBindingCallToolFilterTests
         var request = new RequestContext<CallToolRequestParams>(
             server,
             new JsonRpcRequest { Method = "tools/call" },
-            new CallToolRequestParams { Name = toolName });
+            new CallToolRequestParams { Name = toolName, Arguments = arguments });
         var filtered = WorkspaceBindingCallToolFilter.Create()(async (ctx, ct) => await next(ctx, ct));
         return await filtered(request, cancellationToken);
     }
