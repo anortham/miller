@@ -115,14 +115,14 @@ reads Miller's own fact tables (symbols, references, identifiers via
 3. Port providers + daemon runner behind `miller tests serve`, with Scale tests.
 4. CLI verbs + JSON contracts.
 5. MCP `tests` tool + guidance budget updates.
-6. Release notes, docs map, README surface.
+6. Docs map, README surface, working notes. Release notes land with the release prep on main, not on this branch.
 
 ## Acceptance criteria
 
 - [ ] `Eros.ContinuousTesting` functionality runs in Miller with no `Eros.*`
       references; all four providers work.
 - [ ] Selection reads Miller fact tables directly; no projection layer.
-- [ ] `ct.db` sidecar; no CT writes anywhere else.
+- [ ] `ct.db` sidecar holds all durable CT state; providers may write only bounded build/result/temp artifacts under supervised CT paths.
 - [ ] Explicit-start-only enforced; a status call on a stopped daemon starts
       nothing (test-guarded).
 - [ ] Start executes nothing until a new change or explicit `run` (test-guarded).
