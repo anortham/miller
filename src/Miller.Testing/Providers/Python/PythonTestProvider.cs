@@ -61,9 +61,25 @@ public sealed class PythonTestProvider : IContinuousTestProvider
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var command = BuildRunCommand(request);
+        var paths = CtGenerationPaths.Allocate(request.Workspace);
+        try
+        {
+            return await RunInGenerationAsync(request, paths, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ContinuousTestProviderException exception) when (exception.GenerationId is null)
+        {
+            throw StampGeneration(exception, paths);
+        }
+    }
+
+    private async Task<ProviderRunResult> RunInGenerationAsync(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        CancellationToken cancellationToken)
+    {
+        var command = BuildRunCommand(request, paths);
         var result = await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
-        var artifactPath = ResultArtifactPath(request);
+        var artifactPath = ResultArtifactPath(request, paths);
         var caseResults = File.Exists(artifactPath)
             ? ParsePytestJunit(request, artifactPath)
             : [];
@@ -82,20 +98,37 @@ public sealed class PythonTestProvider : IContinuousTestProvider
             Status: RunStatus(caseResults),
             CaseResults: caseResults,
             ResultArtifactPath: File.Exists(artifactPath) ? artifactPath : null,
-            CoverageArtifacts: DiscoverCoverageArtifacts(request.Workspace));
+            CoverageArtifacts: DiscoverCoverageArtifacts(request.Workspace))
+        {
+            GenerationId = paths.GenerationId,
+        };
     }
 
+    /// <summary>
+    /// Preview/test seam: builds the run command against the latest existing generation (or the
+    /// would-be first). Production runs never use it — <see cref="RunAsync"/> allocates its own
+    /// generation and builds every command and result path from that one handle.
+    /// </summary>
     public TestProcessCommand BuildRunCommand(ContinuousTestProviderRunRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        return BuildRunCommand(request, CtGenerationPaths.ResolveLatestOrFirst(request.Workspace));
+    }
+
+    private TestProcessCommand BuildRunCommand(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths)
+    {
         var framework = RequiredFramework(request.Workspace);
         if (framework != "pytest")
             throw UnsupportedFramework(framework, request.Workspace.ProjectPath);
 
         var projectRoot = ProjectRoot(request.Workspace);
-        var artifactPath = ResultArtifactPath(request);
+        paths.EnsureDirectories();
+        Directory.CreateDirectory(CacheDirectory(paths));
+        var artifactPath = ResultArtifactPath(request, paths);
         Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
-        Directory.CreateDirectory(TempDirectory(request.Workspace));
 
         var selectedFiles = request.TestCaseIds
             .Select(TestFileFromId)
@@ -104,7 +137,12 @@ public sealed class PythonTestProvider : IContinuousTestProvider
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
-        var pytestArgs = new[] { $"--junitxml={artifactPath}" }
+        var pytestArgs = new[]
+            {
+                $"--junitxml={artifactPath}",
+                "-o",
+                $"cache_dir={CacheDirectory(paths)}",
+            }
             .Concat(selectedFiles)
             .ToArray();
 
@@ -118,7 +156,7 @@ public sealed class PythonTestProvider : IContinuousTestProvider
                 tokens[0],
                 tokens.Skip(1).Concat(pytestArgs).ToArray(),
                 projectRoot,
-                WorkspaceEnvironment(request.Workspace));
+                WorkspaceEnvironment(request.Workspace, paths));
         }
 
         if (File.Exists(Path.Combine(projectRoot, "uv.lock")))
@@ -127,14 +165,14 @@ public sealed class PythonTestProvider : IContinuousTestProvider
                 "uv",
                 new[] { "run", "python", "-m", "pytest" }.Concat(pytestArgs).ToArray(),
                 projectRoot,
-                WorkspaceEnvironment(request.Workspace));
+                WorkspaceEnvironment(request.Workspace, paths));
         }
 
         return new TestProcessCommand(
             LocalPython(projectRoot),
             new[] { "-m", "pytest" }.Concat(pytestArgs).ToArray(),
             projectRoot,
-            WorkspaceEnvironment(request.Workspace));
+            WorkspaceEnvironment(request.Workspace, paths));
     }
 
     public static string TestCaseId(string relativePath)
@@ -317,12 +355,21 @@ public sealed class PythonTestProvider : IContinuousTestProvider
                 : Path.GetDirectoryName(projectPath)!;
     }
 
-    private static string ResultArtifactPath(ContinuousTestProviderRunRequest request)
+    private static string ResultArtifactPath(ContinuousTestProviderRunRequest request, CtGenerationPaths paths)
     {
         var runKey = request.RunId ?? NewRunId(request);
         var runHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(runKey))).ToLowerInvariant();
-        return Path.Combine(request.Workspace.BuildOutputRoot, "TestResults", $"run-{runHash}.xml");
+        return Path.Combine(paths.ResultsDirectory, $"run-{runHash}.xml");
     }
+
+    private static ContinuousTestProviderException StampGeneration(
+        ContinuousTestProviderException exception,
+        CtGenerationPaths paths) =>
+        new(exception.Message, exception)
+        {
+            GenerationId = paths.GenerationId,
+            ResultArtifactPath = exception.ResultArtifactPath,
+        };
 
     private static string NewRunId(ContinuousTestProviderRunRequest request) =>
         StableId(
@@ -407,20 +454,25 @@ public sealed class PythonTestProvider : IContinuousTestProvider
             or "dist"
             or "node_modules";
 
-    private static IReadOnlyDictionary<string, string?> WorkspaceEnvironment(ContinuousTestWorkspace workspace)
+    private static IReadOnlyDictionary<string, string?> WorkspaceEnvironment(
+        ContinuousTestWorkspace workspace,
+        CtGenerationPaths paths)
     {
-        var tempDirectory = TempDirectory(workspace);
+        Directory.CreateDirectory(paths.TempDirectory);
+        var cacheDirectory = CacheDirectory(paths);
+        Directory.CreateDirectory(cacheDirectory);
         return new Dictionary<string, string?>(StringComparer.Ordinal)
         {
             [CtEnvironment.WorkspaceRoot] = workspace.WorkspaceRoot,
-            ["TMPDIR"] = tempDirectory,
-            ["TMP"] = tempDirectory,
-            ["TEMP"] = tempDirectory,
+            ["TMPDIR"] = paths.TempDirectory,
+            ["TMP"] = paths.TempDirectory,
+            ["TEMP"] = paths.TempDirectory,
+            ["PYTHONPYCACHEPREFIX"] = cacheDirectory,
         };
     }
 
-    private static string TempDirectory(ContinuousTestWorkspace workspace) =>
-        CtTempPaths.ForWorkspace(workspace);
+    private static string CacheDirectory(CtGenerationPaths paths) =>
+        Path.Combine(paths.GenerationRoot, "cache");
 
     private static string LocalPython(string projectRoot)
     {

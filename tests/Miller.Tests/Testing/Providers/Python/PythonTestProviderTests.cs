@@ -56,6 +56,7 @@ public sealed class PythonTestProviderTests : IDisposable
         WriteProjectFile("tests/test_math.py", "def test_add():\n    assert True\n");
         var provider = new PythonTestProvider(new FakeTestProcessRunner());
         var workspace = Workspace("pytest");
+        var generation = CtGenerationPaths.ResolveLatestOrFirst(workspace);
 
         var command = provider.BuildRunCommand(
             Request(workspace, PythonTestProvider.TestCaseId("tests/test_math.py")));
@@ -63,15 +64,15 @@ public sealed class PythonTestProviderTests : IDisposable
         Assert.Equal(ExpectedPythonExecutable(), command.FileName);
         Assert.Equal(ProjectRoot, command.WorkingDirectory);
         Assert.Equal(["-m", "pytest"], command.Arguments.Take(2).ToArray());
-        Assert.Contains(command.Arguments, arg => arg.StartsWith("--junitxml=", StringComparison.Ordinal));
+        var artifactArg = Assert.Single(command.Arguments, arg => arg.StartsWith("--junitxml=", StringComparison.Ordinal));
+        var artifactPath = artifactArg["--junitxml=".Length..];
         Assert.Contains("tests/test_math.py", command.Arguments);
-        Assert.Equal(ProjectRoot, command.Environment[CtEnvironment.WorkspaceRoot]);
-        var temp = CtTempPaths.ForWorkspace(workspace);
-        Assert.Contains("miller-ct", temp, StringComparison.Ordinal);
-        Assert.Equal(temp, command.Environment["TMPDIR"]);
-        Assert.Equal(temp, command.Environment["TMP"]);
-        Assert.Equal(temp, command.Environment["TEMP"]);
-        Assert.True(Directory.Exists(temp));
+        AssertUsesGeneration(command, workspace, generation, artifactPath);
+        Assert.Equal("-o", command.Arguments[command.Arguments.ToList().IndexOf("-o")]);
+        Assert.Equal(
+            $"cache_dir={CacheDirectory(generation)}",
+            command.Arguments[command.Arguments.ToList().IndexOf("-o") + 1]);
+        Assert.Equal(CacheDirectory(generation), command.Environment["PYTHONPYCACHEPREFIX"]);
     }
 
     [Fact]
@@ -114,10 +115,11 @@ public sealed class PythonTestProviderTests : IDisposable
                 """);
         };
         var provider = new PythonTestProvider(runner);
+        var workspace = Workspace(null);
 
         var result = await provider.RunAsync(
             Request(
-                Workspace(null),
+                workspace,
                 PythonTestProvider.TestCaseId("tests/test_math.py"),
                 PythonTestProvider.TestCaseId("tests/widgets_test.py")),
             TestContext.Current.CancellationToken);
@@ -131,6 +133,44 @@ public sealed class PythonTestProviderTests : IDisposable
         Assert.Equal("pytest", byCaseId[PythonTestProvider.TestCaseId("tests/widgets_test.py")].Metadata["framework"]);
         Assert.All(result.CaseResults, row => Assert.Equal(IndexIdentity, row.IndexIdentity));
         Assert.All(result.CaseResults, row => Assert.Equal("rev-1", row.ResultRevision));
+        Assert.Equal(CtGenerationPaths.IdForOrdinal(workspace, 1), result.GenerationId);
+        Assert.StartsWith(
+            CtGenerationPaths.For(workspace, result.GenerationId!).ResultsDirectory,
+            result.ResultArtifactPath!,
+            StringComparison.Ordinal);
+        AssertUsesGeneration(runner.Calls[0], workspace, FirstGeneration(workspace), result.ResultArtifactPath!);
+    }
+
+    [Fact]
+    public async Task Sequential_runs_allocate_distinct_generation_directories()
+    {
+        WriteProjectFile("pyproject.toml", "[project]\nname = \"sample\"\n");
+        var workspace = Workspace("pytest");
+        var runner = new FakeTestProcessRunner();
+        runner.OnRun = WriteEmptyPytestArtifact;
+        runner.Enqueue(exitCode: 0);
+        runner.Enqueue(exitCode: 0);
+        var provider = new PythonTestProvider(runner);
+
+        var first = await provider.RunAsync(
+            Request(workspace, PythonTestProvider.TestCaseId("tests/test_math.py")),
+            TestContext.Current.CancellationToken);
+        var second = await provider.RunAsync(
+            Request(workspace, PythonTestProvider.TestCaseId("tests/widgets_test.py")),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(CtGenerationPaths.IdForOrdinal(workspace, 1), first.GenerationId);
+        Assert.Equal(CtGenerationPaths.IdForOrdinal(workspace, 2), second.GenerationId);
+        Assert.NotEqual(first.ResultArtifactPath, second.ResultArtifactPath);
+        Assert.StartsWith(
+            CtGenerationPaths.For(workspace, first.GenerationId!).ResultsDirectory,
+            first.ResultArtifactPath!,
+            StringComparison.Ordinal);
+        Assert.StartsWith(
+            CtGenerationPaths.For(workspace, second.GenerationId!).ResultsDirectory,
+            second.ResultArtifactPath!,
+            StringComparison.Ordinal);
+        AssertWorkspaceIsolation(workspace);
     }
 
     [Fact]
@@ -140,9 +180,10 @@ public sealed class PythonTestProviderTests : IDisposable
         var runner = new FakeTestProcessRunner();
         runner.Enqueue(standardError: "pytest: command not found", exitCode: 127);
         var provider = new PythonTestProvider(runner);
+        var workspace = Workspace(null);
 
         var result = await provider.RunAsync(
-            Request(Workspace(null), PythonTestProvider.TestCaseId("tests/test_missing.py")),
+            Request(workspace, PythonTestProvider.TestCaseId("tests/test_missing.py")),
             TestContext.Current.CancellationToken);
 
         var row = Assert.Single(result.CaseResults);
@@ -151,6 +192,7 @@ public sealed class PythonTestProviderTests : IDisposable
         Assert.Equal("pytest: command not found", row.FailureSummary);
         Assert.Equal(127, row.Metadata["exit_code"]);
         Assert.Equal(IndexIdentity, row.IndexIdentity);
+        Assert.Equal(CtGenerationPaths.IdForOrdinal(workspace, 1), result.GenerationId);
     }
 
     private ContinuousTestWorkspace Workspace(string? framework)
@@ -184,6 +226,45 @@ public sealed class PythonTestProviderTests : IDisposable
 
     private static string ExpectedPythonExecutable() =>
         OperatingSystem.IsWindows() ? "python" : "python3";
+
+    private static void WriteEmptyPytestArtifact(TestProcessCommand command)
+    {
+        var artifactArg = command.Arguments.Single(arg => arg.StartsWith("--junitxml=", StringComparison.Ordinal));
+        var artifactPath = artifactArg["--junitxml=".Length..];
+        Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+        File.WriteAllText(artifactPath, """<testsuite name="pytest" tests="0" />""");
+    }
+
+    private static void AssertUsesGeneration(
+        TestProcessCommand command,
+        ContinuousTestWorkspace workspace,
+        CtGenerationPaths generation,
+        string artifactPath)
+    {
+        Assert.Equal(generation.TempDirectory, command.Environment["TMPDIR"]);
+        Assert.Equal(generation.TempDirectory, command.Environment["TMP"]);
+        Assert.Equal(generation.TempDirectory, command.Environment["TEMP"]);
+        Assert.True(Directory.Exists(generation.TempDirectory));
+        Assert.Equal(workspace.WorkspaceRoot, command.Environment[CtEnvironment.WorkspaceRoot]);
+        Assert.StartsWith(generation.ResultsDirectory, artifactPath, StringComparison.Ordinal);
+        AssertWorkspaceIsolation(workspace);
+    }
+
+    private static void AssertWorkspaceIsolation(ContinuousTestWorkspace workspace)
+    {
+        var repoBin = Path.Combine(workspace.WorkspaceRoot, "bin");
+        var repoObj = Path.Combine(workspace.WorkspaceRoot, "obj");
+        var repoTestResults = Path.Combine(workspace.WorkspaceRoot, "TestResults");
+        Assert.False(Directory.Exists(repoBin) && Directory.EnumerateFileSystemEntries(repoBin).Any());
+        Assert.False(Directory.Exists(repoObj) && Directory.EnumerateFileSystemEntries(repoObj).Any());
+        Assert.False(Directory.Exists(repoTestResults));
+    }
+
+    private static string CacheDirectory(CtGenerationPaths generation) =>
+        Path.Combine(generation.GenerationRoot, "cache");
+
+    private static CtGenerationPaths FirstGeneration(ContinuousTestWorkspace workspace) =>
+        CtGenerationPaths.For(workspace, CtGenerationPaths.IdForOrdinal(workspace, 1));
 
     private static void BestEffortDelete(string path)
     {

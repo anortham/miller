@@ -76,8 +76,9 @@ public sealed class PythonProviderScaleTests : IDisposable
         Assert.Equal("store:scale-identity", caseResult.IndexIdentity);
         Assert.NotNull(result.ResultArtifactPath);
         Assert.True(File.Exists(result.ResultArtifactPath!));
+        Assert.True(CtGenerationPaths.IsGenerationId(result.GenerationId));
         Assert.StartsWith(
-            Path.Combine(workspace.BuildOutputRoot, "TestResults"),
+            CtGenerationPaths.For(workspace, result.GenerationId!).ResultsDirectory,
             result.ResultArtifactPath!,
             StringComparison.Ordinal);
     }

@@ -84,6 +84,7 @@ public sealed class JavaScriptTestProviderTests : IDisposable
             TestContext.Current.CancellationToken);
 
         Assert.Equal("failed", result.Status);
+        Assert.Equal(CtGenerationPaths.IdForOrdinal(workspace, 1), result.GenerationId);
         Assert.Collection(
             result.CaseResults,
             first =>
@@ -103,10 +104,42 @@ public sealed class JavaScriptTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Sequential_runs_allocate_distinct_generation_directories()
+    {
+        var workspace = Workspace("jest");
+        var runner = new FakeTestProcessRunner();
+        runner.OnRun = WriteEmptyJestArtifact;
+        runner.Enqueue(exitCode: 0);
+        runner.Enqueue(exitCode: 0);
+        var provider = new JavaScriptTestProvider(runner);
+
+        var first = await provider.RunAsync(
+            Request(workspace, "js-test:src/math.test.ts"),
+            TestContext.Current.CancellationToken);
+        var second = await provider.RunAsync(
+            Request(workspace, "js-test:src/string.spec.js"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(CtGenerationPaths.IdForOrdinal(workspace, 1), first.GenerationId);
+        Assert.Equal(CtGenerationPaths.IdForOrdinal(workspace, 2), second.GenerationId);
+        Assert.NotEqual(first.ResultArtifactPath, second.ResultArtifactPath);
+        Assert.StartsWith(
+            CtGenerationPaths.For(workspace, first.GenerationId!).ResultsDirectory,
+            first.ResultArtifactPath!,
+            StringComparison.Ordinal);
+        Assert.StartsWith(
+            CtGenerationPaths.For(workspace, second.GenerationId!).ResultsDirectory,
+            second.ResultArtifactPath!,
+            StringComparison.Ordinal);
+        AssertWorkspaceIsolation(workspace);
+    }
+
+    [Fact]
     public void Build_run_command_for_vitest_uses_local_bin_and_json_output_file()
     {
         var workspace = Workspace("vitest");
         var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+        var generation = CtGenerationPaths.ResolveLatestOrFirst(workspace);
 
         var command = provider.BuildRunCommand(Request(workspace, "js-test:src/math.test.ts"));
 
@@ -116,14 +149,13 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         Assert.Contains("--reporter=json", command.Arguments);
         Assert.Contains("--outputFile", command.Arguments);
         Assert.Contains("src/math.test.ts", command.Arguments);
-        Assert.EndsWith(".json", command.Arguments[command.Arguments.ToList().IndexOf("--outputFile") + 1], StringComparison.Ordinal);
-        var temp = CtTempPaths.ForWorkspace(workspace);
-        Assert.Contains("miller-ct", temp, StringComparison.Ordinal);
-        Assert.Equal(temp, command.Environment["TMPDIR"]);
-        Assert.Equal(temp, command.Environment["TMP"]);
-        Assert.Equal(temp, command.Environment["TEMP"]);
-        Assert.Equal(workspace.WorkspaceRoot, command.Environment[CtEnvironment.WorkspaceRoot]);
-        Assert.True(Directory.Exists(temp));
+        var artifactPath = command.Arguments[command.Arguments.ToList().IndexOf("--outputFile") + 1];
+        Assert.EndsWith(".json", artifactPath, StringComparison.Ordinal);
+        AssertUsesGeneration(command, workspace, generation, artifactPath);
+        Assert.Contains("--cache.dir", command.Arguments);
+        Assert.Equal(
+            CacheDirectory(generation),
+            command.Arguments[command.Arguments.ToList().IndexOf("--cache.dir") + 1]);
     }
 
     [Fact]
@@ -131,6 +163,7 @@ public sealed class JavaScriptTestProviderTests : IDisposable
     {
         var workspace = Workspace("jest");
         var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+        var generation = CtGenerationPaths.ResolveLatestOrFirst(workspace);
 
         var command = provider.BuildRunCommand(Request(workspace, "js-test:src/math.test.ts"));
 
@@ -139,7 +172,13 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         Assert.Contains("--json", command.Arguments);
         Assert.Contains("--outputFile", command.Arguments);
         Assert.Contains("src/math.test.ts", command.Arguments);
-        Assert.EndsWith(".json", command.Arguments[command.Arguments.ToList().IndexOf("--outputFile") + 1], StringComparison.Ordinal);
+        var artifactPath = command.Arguments[command.Arguments.ToList().IndexOf("--outputFile") + 1];
+        Assert.EndsWith(".json", artifactPath, StringComparison.Ordinal);
+        AssertUsesGeneration(command, workspace, generation, artifactPath);
+        Assert.Contains("--cacheDirectory", command.Arguments);
+        Assert.Equal(
+            CacheDirectory(generation),
+            command.Arguments[command.Arguments.ToList().IndexOf("--cacheDirectory") + 1]);
     }
 
     [Fact]
@@ -147,6 +186,7 @@ public sealed class JavaScriptTestProviderTests : IDisposable
     {
         var workspace = Workspace("node-test");
         var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+        var generation = CtGenerationPaths.ResolveLatestOrFirst(workspace);
 
         var command = provider.BuildRunCommand(Request(workspace, "js-test:src/math.test.js"));
 
@@ -157,7 +197,10 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         Assert.Contains("junit", command.Arguments);
         Assert.Contains("--test-reporter-destination", command.Arguments);
         Assert.Contains("src/math.test.js", command.Arguments);
-        Assert.EndsWith(".xml", command.Arguments[command.Arguments.ToList().IndexOf("--test-reporter-destination") + 1], StringComparison.Ordinal);
+        var artifactPath = command.Arguments[command.Arguments.ToList().IndexOf("--test-reporter-destination") + 1];
+        Assert.EndsWith(".xml", artifactPath, StringComparison.Ordinal);
+        AssertUsesGeneration(command, workspace, generation, artifactPath);
+        Assert.Equal(CacheDirectory(generation), command.Environment["NODE_COMPILE_CACHE"]);
     }
 
     [Fact]
@@ -252,6 +295,13 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         Assert.Equal("Expected 2 to be 3", caseResult.FailureSummary);
         Assert.Equal(IndexIdentity, caseResult.IndexIdentity);
         Assert.Equal("rev-1", caseResult.ResultRevision);
+        Assert.Equal(CtGenerationPaths.IdForOrdinal(workspace, 1), result.GenerationId);
+        Assert.StartsWith(
+            CtGenerationPaths.For(workspace, result.GenerationId!).ResultsDirectory,
+            result.ResultArtifactPath!,
+            StringComparison.Ordinal);
+        AssertUsesGeneration(runner.Calls[0], workspace, FirstGeneration(workspace), result.ResultArtifactPath!);
+        AssertWorkspaceIsolation(workspace);
     }
 
     [Fact]
@@ -287,6 +337,11 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         Assert.Equal("failed", caseResult.Status);
         Assert.Equal("Expected 2 to be 3", caseResult.FailureSummary);
         Assert.Equal(IndexIdentity, caseResult.IndexIdentity);
+        Assert.Equal(CtGenerationPaths.IdForOrdinal(workspace, 1), result.GenerationId);
+        Assert.StartsWith(
+            CtGenerationPaths.For(workspace, result.GenerationId!).ResultsDirectory,
+            result.ResultArtifactPath!,
+            StringComparison.Ordinal);
     }
 
     private string PackageRoot => Path.Combine(_dir, "package");
@@ -320,6 +375,48 @@ public sealed class JavaScriptTestProviderTests : IDisposable
 
     private string LocalBin(string name) =>
         Path.Combine(PackageRoot, "node_modules", ".bin", name + (OperatingSystem.IsWindows() ? ".cmd" : ""));
+
+    private static void WriteEmptyJestArtifact(TestProcessCommand command)
+    {
+        var outputIndex = command.Arguments.ToList().IndexOf("--outputFile");
+        if (outputIndex < 0)
+            return;
+
+        var outputPath = command.Arguments[outputIndex + 1];
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        File.WriteAllText(outputPath, """{"testResults":[]}""");
+    }
+
+    private static void AssertUsesGeneration(
+        TestProcessCommand command,
+        ContinuousTestWorkspace workspace,
+        CtGenerationPaths generation,
+        string artifactPath)
+    {
+        Assert.Equal(generation.TempDirectory, command.Environment["TMPDIR"]);
+        Assert.Equal(generation.TempDirectory, command.Environment["TMP"]);
+        Assert.Equal(generation.TempDirectory, command.Environment["TEMP"]);
+        Assert.True(Directory.Exists(generation.TempDirectory));
+        Assert.Equal(workspace.WorkspaceRoot, command.Environment[CtEnvironment.WorkspaceRoot]);
+        Assert.StartsWith(generation.ResultsDirectory, artifactPath, StringComparison.Ordinal);
+        AssertWorkspaceIsolation(workspace);
+    }
+
+    private static void AssertWorkspaceIsolation(ContinuousTestWorkspace workspace)
+    {
+        var repoBin = Path.Combine(workspace.WorkspaceRoot, "bin");
+        var repoObj = Path.Combine(workspace.WorkspaceRoot, "obj");
+        var repoTestResults = Path.Combine(workspace.WorkspaceRoot, "TestResults");
+        Assert.False(Directory.Exists(repoBin) && Directory.EnumerateFileSystemEntries(repoBin).Any());
+        Assert.False(Directory.Exists(repoObj) && Directory.EnumerateFileSystemEntries(repoObj).Any());
+        Assert.False(Directory.Exists(repoTestResults));
+    }
+
+    private static string CacheDirectory(CtGenerationPaths generation) =>
+        Path.Combine(generation.GenerationRoot, "cache");
+
+    private static CtGenerationPaths FirstGeneration(ContinuousTestWorkspace workspace) =>
+        CtGenerationPaths.For(workspace, CtGenerationPaths.IdForOrdinal(workspace, 1));
 
     private static void BestEffortDelete(string path)
     {
