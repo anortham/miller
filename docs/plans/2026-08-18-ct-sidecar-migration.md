@@ -178,9 +178,9 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **What to build:** The one public typed seam between CT and Miller's fact machinery. If a fact the Eros selector used has no Miller equivalent, report the gap — do not fake it.
 
 **Acceptance criteria:**
-- [ ] Adapter serves typed facts from a real test artifact fixture; `(index identity, revision)` exposed.
-- [ ] `ImpactTool` behavior unchanged (existing impact tests green under `dotnet test --filter "FullyQualifiedName~Impact&Category!=Scale"`).
-- [ ] Verified diff handed to the lead (parallel-lead-commit).
+- [x] Adapter serves typed facts from a real test artifact fixture; `(index identity, revision)` exposed.
+- [x] `ImpactTool` behavior unchanged (existing impact tests green under `dotnet test --filter "FullyQualifiedName~Impact&Category!=Scale"`).
+- [x] Verified diff handed to the lead (parallel-lead-commit).
 
 ### Task 5: Dotnet provider + shared process infra
 
