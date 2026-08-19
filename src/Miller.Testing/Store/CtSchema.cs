@@ -184,6 +184,14 @@ public static class CtSchema
             computed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         );
 
+        CREATE TABLE IF NOT EXISTS ct_parser_diagnostics (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            code TEXT,
+            message TEXT NOT NULL,
+            severity TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS ct_test_states (
             test_case_id TEXT PRIMARY KEY REFERENCES test_cases(id) ON DELETE CASCADE,
             workspace_id TEXT NOT NULL,
@@ -359,6 +367,8 @@ public static class CtSchema
             ON ct_coverage_project_offers(workspace_id, last_offer_sequence, project_path);
         CREATE INDEX IF NOT EXISTS idx_confidence_snapshots_subject
             ON confidence_snapshots(workspace_id, subject_type, subject_id);
+        CREATE INDEX IF NOT EXISTS idx_ct_parser_diagnostics_workspace
+            ON ct_parser_diagnostics(workspace_id, code);
         """;
 
     public static string DbPathFor(string workspaceRoot)

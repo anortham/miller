@@ -430,6 +430,7 @@ public sealed record ContinuousTestProviderRunStart
     public string RunId { get; init; }
     public string SelectedRevision { get; init; }
     public string IndexIdentity { get; init; }
+    public long Revision { get; init; }
     public IReadOnlyList<string> SelectedTestCaseIds { get; init; }
     public string? Command { get; init; }
     public string? Framework { get; init; }
@@ -441,6 +442,7 @@ public sealed record ContinuousTestProviderRunStart
         string RunId,
         string SelectedRevision,
         string IndexIdentity,
+        long Revision,
         IReadOnlyList<string>? SelectedTestCaseIds = null,
         string? Command = null,
         string? Framework = null,
@@ -453,11 +455,14 @@ public sealed record ContinuousTestProviderRunStart
             throw new ArgumentException("must not be empty", nameof(SelectedRevision));
         if (string.IsNullOrWhiteSpace(IndexIdentity))
             throw new ArgumentException("must not be empty", nameof(IndexIdentity));
+        if (Revision < 0)
+            throw new ArgumentOutOfRangeException(nameof(Revision), "must not be negative");
 
         this.WorkspaceId = WorkspaceId;
         this.RunId = RunId;
         this.SelectedRevision = SelectedRevision;
         this.IndexIdentity = IndexIdentity;
+        this.Revision = Revision;
         this.SelectedTestCaseIds = SelectedTestCaseIds ?? [];
         this.Command = Command;
         this.Framework = Framework;

@@ -195,6 +195,17 @@ public sealed partial class ContinuousTestStore : IDisposable
             });
     }
 
+    public ContinuousTestCase? GetTestCase(string workspaceId, string testCaseId)
+    {
+        if (string.IsNullOrEmpty(workspaceId))
+            throw new ArgumentException("must not be empty", nameof(workspaceId));
+        if (string.IsNullOrEmpty(testCaseId))
+            throw new ArgumentException("must not be empty", nameof(testCaseId));
+
+        return ListTestCases(workspaceId).FirstOrDefault(row =>
+            string.Equals(row.Id, testCaseId, StringComparison.Ordinal));
+    }
+
     public void PutTestCase(ContinuousTestCase testCase)
     {
         ArgumentNullException.ThrowIfNull(testCase);
