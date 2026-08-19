@@ -115,7 +115,9 @@ reads Miller's own fact tables (symbols, references, identifiers via
 3. Port providers + daemon runner behind `miller tests serve`, with Scale tests.
 4. CLI verbs + JSON contracts.
 5. MCP `tests` tool + guidance budget updates.
-6. Docs map, README surface, working notes. Release notes land with the release prep on main, not on this branch.
+6. Docs map, README surface, working notes.
+
+Release notes (`docs/release-notes/`) are deferred to release prep on main. This branch does not write them.
 
 ## Acceptance criteria
 

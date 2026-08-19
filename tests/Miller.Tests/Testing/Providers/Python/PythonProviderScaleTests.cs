@@ -21,7 +21,7 @@ public sealed class PythonProviderScaleTests : IDisposable
     [Fact]
     public async Task Python_smoke_executes_a_tiny_pytest_fixture_and_parses_results()
     {
-        var python = RequirePythonOrSkip();
+        var python = CtProviderTestSupport.RequirePython();
         var ct = TestContext.Current.CancellationToken;
         var projectRoot = Path.Combine(_dir, "project");
         Directory.CreateDirectory(Path.Combine(projectRoot, "tests"));
@@ -82,21 +82,12 @@ public sealed class PythonProviderScaleTests : IDisposable
             StringComparison.Ordinal);
     }
 
-    private static string RequirePythonOrSkip()
-    {
-        var python = FindOnPath(OperatingSystem.IsWindows() ? "python.exe" : "python3")
-            ?? FindOnPath("python");
-        if (python is null)
-            Assert.Skip("python is required for PythonTestProvider Scale smoke");
-        return python;
-    }
-
     private static async Task EnsurePytestAsync(string projectRoot, string python, CancellationToken cancellationToken)
     {
         if (await ModuleAvailableAsync(python, "pytest", cancellationToken))
             return;
 
-        var uv = FindOnPath(OperatingSystem.IsWindows() ? "uv.exe" : "uv");
+        var uv = CtProviderTestSupport.LocateOnPath(OperatingSystem.IsWindows() ? "uv.exe" : "uv");
         if (uv is null)
             Assert.Skip("pytest is required for PythonTestProvider Scale smoke");
 
@@ -177,25 +168,6 @@ public sealed class PythonProviderScaleTests : IDisposable
 
         await process.WaitForExitAsync(cancellationToken);
         return process.ExitCode;
-    }
-
-    private static string? FindOnPath(string fileName)
-    {
-        var path = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(path))
-            return null;
-
-        foreach (var directory in path.Split(Path.PathSeparator))
-        {
-            if (string.IsNullOrWhiteSpace(directory))
-                continue;
-
-            var candidate = Path.Combine(directory, fileName);
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        return null;
     }
 
     private static void BestEffortDelete(string path)

@@ -19,8 +19,7 @@ public sealed class ContinuousTestDaemonEngineScaleTests : IDisposable
     [Fact]
     public async Task Change_selection_execution_reaches_green_on_a_real_dotnet_provider()
     {
-        if (FindOnPath(OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet") is null)
-            Assert.Skip("dotnet SDK is required for the CT daemon engine Scale smoke");
+        CtProviderTestSupport.RequireDotnet();
 
         CancellationToken ct = TestContext.Current.CancellationToken;
         string workspaceRoot = Path.Combine(_dir, "repo");
@@ -113,21 +112,5 @@ public sealed class ContinuousTestDaemonEngineScaleTests : IDisposable
             ContinuousTestFreshness.Evaluate(statuses, selected, watchHealthy: true));
         Assert.All(statuses, row => Assert.Equal(ContinuousTestState.Green, row.State));
     }
-
-    private static string? FindOnPath(string fileName)
-    {
-        string[]? parts = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator);
-        if (parts is null)
-            return null;
-        foreach (string part in parts)
-        {
-            if (string.IsNullOrWhiteSpace(part))
-                continue;
-            string candidate = Path.Combine(part, fileName);
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        return null;
-    }
 }
+

@@ -5,6 +5,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [`contracts/tests-cli-v1.md`](contracts/tests-cli-v1.md) - active continuous-testing CLI JSON contract: `tests status|run|enable|disable|serve|stop`.
+- [`plans/2026-08-18-ct-sidecar-migration-design.md`](plans/2026-08-18-ct-sidecar-migration-design.md) - CT sidecar migration design: `ct.db`, explicit-start daemon, MCP `tests` tool, `MILLER_CT=off`. Release notes deferred to release prep on main.
+- [`plans/2026-08-18-ct-sidecar-migration.md`](plans/2026-08-18-ct-sidecar-migration.md) - CT sidecar migration implementation plan.
 - [`findings/2026-08-18-query-time-resolution-phase1-gates.md`](findings/2026-08-18-query-time-resolution-phase1-gates.md) - Phase 1 hard-gate numbers: fixture and snapshot parity, aspnetcore warm p95, whole-host memory, and save-to-answer.
 - [`contracts/resolution-policy-v6.md`](contracts/resolution-policy-v6.md) - query-time resolution policy v6: tier chains, confidence, and span locate rules.
 - [`plans/2026-08-18-query-time-resolution-integration-design.md`](plans/2026-08-18-query-time-resolution-integration-design.md) - query-time resolution design; Phase 1 executed.

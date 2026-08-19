@@ -15,7 +15,9 @@ budget made it worse, not better. Method, caveats, and raw evidence are in
 Miller is deterministic, local-first, and runs without a daemon. Semantic retrieval is on by default,
 fully local, and off-switchable; lexical-only results stay byte-identical either way. It does need a
 one-time embedding-model download — run [`miller semantic prepare`](#enable-semantic-retrieval) once, or
-Miller keeps serving lexical-only. The extraction
+Miller keeps serving lexical-only. Continuous testing is opt-in and off by default: `tests status` is a
+cheap read that starts nothing; `tests start` / `miller tests serve` is the only daemon start. Set
+`MILLER_CT=off` for a permanent zero-work switch. The extraction
 layer ([`julie-extractors`](https://github.com/anortham/julie-extractors)) is hand-written across all
 [38 supported languages](#supported-languages), so it reaches structure shell search cannot: framework route facts across ~25
 framework families, dependency-injection registrations as real graph edges, partial classes linked
@@ -55,7 +57,9 @@ codex
 Cursor: install Miller from the Cursor plugin marketplace.
 
 Then ask your agent to search, inspect, or trace something. Miller binds the workspace from MCP client
-roots on the first tool call and writes its index under that workspace's `.miller/` directory.
+roots on the first tool call and writes its index under that workspace's `.miller/` directory. To watch
+tests, ask the agent to enable continuous testing (`tests enable`) then start it (`tests start`); status
+never starts the daemon.
 
 Every other install path is covered step by step in [docs/install.md](docs/install.md):
 
@@ -134,7 +138,7 @@ subagent-dispatch primer, and per-tool parameter detail live in
 
 ## The tools
 
-Nine MCP tools, each with a matching CLI verb and defaults chosen so the common path is the simplest
+Ten MCP tools, each with a matching CLI verb and defaults chosen so the common path is the simplest
 call. Targets are smart strings, not JSON objects.
 
 | Tool | What it answers |
@@ -148,6 +152,7 @@ call. Targets are smart strings, not JSON objects.
 | `patterns` | pre-extracted code-shape facts: routes, config keys, document structure |
 | `content` | import and search logs, CI output, and web pages without full-file reads |
 | `workspace` | index lifecycle: status, refresh, health, list, onboarding, dashboard |
+| `tests` | continuous-test status (cheap, starts nothing); start is explicit; enable is opt-in |
 
 A typical flow: `search` to find candidates, `inspect --depth overview` for a bounded first read of a
 symbol, `trace` or `impact` before changing anything, `edit` with its diff preview for the change
@@ -207,11 +212,13 @@ MCP client (Claude Code / Cursor / Codex)
         ▼
   Miller.Server      MCP host + CLI + telemetry
    ├─ Miller.Core     pure logic, zero I/O: BM25 ranking, resolver, graph, result contracts
-   └─ Miller.Indexing infrastructure: julie-extract subprocess, SQLite readers, sidecar writers
+   ├─ Miller.Indexing infrastructure: julie-extract subprocess, SQLite readers, sidecar writers
+   └─ Miller.Testing  continuous testing: ct.db, providers, explicit-start daemon
         ▼
   .miller/symbols.db  julie-extract output
   .miller/search.db   symbol FTS recall
   .miller/content.db  source/docs/web text
+  .miller/ct.db       continuous-test verdicts (opt-in)
 ```
 
 Design choices that follow from this:
@@ -222,9 +229,10 @@ Design choices that follow from this:
 - Lexical ranking stays deterministic in C#. The default-on semantic arm lives in a separate
   `vectors.db` and is fused after ranking, so disabling it (`MILLER_SEMANTIC=off`) leaves lexical
   output byte-identical.
-- There is no standalone daemon. SQLite WAL is the read-concurrency primitive, so many reader
+- The index host is not a daemon. SQLite WAL is the read-concurrency primitive, so many reader
   instances (agent teams, git worktrees, the dashboard) share local artifacts. Refresh and sidecar
-  writes are explicit Miller operations.
+  writes are explicit Miller operations. Continuous testing, when enabled, runs as `miller tests serve`
+  — the same binary, a separate process, started only by an explicit serve/start.
 - Workspace state matters: freshness, refresh, selectors, registry, telemetry, and the dashboard are
   part of the product, and telemetry-derived onboarding can summarize how agents have used a repo
   without storing raw queries. Stale or corrupt search sidecars fail visibly instead of silently

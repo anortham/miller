@@ -21,7 +21,7 @@ public sealed class JavaScriptProviderScaleTests : IDisposable
     [Fact]
     public async Task Node_smoke_executes_a_tiny_node_test_fixture_and_parses_results()
     {
-        RequireNodeOrSkip();
+        CtProviderTestSupport.RequireNode();
         var ct = TestContext.Current.CancellationToken;
         var packageRoot = Path.Combine(_dir, "package");
         Directory.CreateDirectory(Path.Combine(packageRoot, "src"));
@@ -74,31 +74,6 @@ public sealed class JavaScriptProviderScaleTests : IDisposable
             Path.Combine(workspace.BuildOutputRoot, "TestResults"),
             result.ResultArtifactPath!,
             StringComparison.Ordinal);
-    }
-
-    private static void RequireNodeOrSkip()
-    {
-        if (FindOnPath(OperatingSystem.IsWindows() ? "node.exe" : "node") is null)
-            Assert.Skip("node executable is required for JavaScriptTestProvider Scale smoke");
-    }
-
-    private static string? FindOnPath(string fileName)
-    {
-        var path = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(path))
-            return null;
-
-        foreach (var directory in path.Split(Path.PathSeparator))
-        {
-            if (string.IsNullOrWhiteSpace(directory))
-                continue;
-
-            var candidate = Path.Combine(directory, fileName);
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        return null;
     }
 
     private static void BestEffortDelete(string path)

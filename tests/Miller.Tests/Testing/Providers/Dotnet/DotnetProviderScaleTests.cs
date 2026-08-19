@@ -86,7 +86,7 @@ public sealed class DotnetProviderScaleTests : IDisposable
     [Fact]
     public async Task Dotnet_smoke_executes_a_tiny_fixture_and_parses_results()
     {
-        RequireDotnetOrSkip();
+        CtProviderTestSupport.RequireDotnet();
         var ct = TestContext.Current.CancellationToken;
         var workspaceRoot = Path.Combine(_dir, "repo");
         var projectDir = Path.Combine(workspaceRoot, "tests", "Sample.Tests");
@@ -168,7 +168,7 @@ public sealed class DotnetProviderScaleTests : IDisposable
     {
         if (OperatingSystem.IsWindows())
         {
-            var powershell = FindPowerShellOrSkip();
+            var powershell = CtProviderTestSupport.RequirePowerShell();
             return new TestProcessCommand(
                 powershell,
                 [
@@ -212,39 +212,6 @@ public sealed class DotnetProviderScaleTests : IDisposable
                 ["MILLER_CT_ROOT_PID_PATH"] = rootPidPath,
                 ["MILLER_CT_CHILD_PID_PATH"] = childPidPath,
             });
-    }
-
-    private static void RequireDotnetOrSkip()
-    {
-        if (FindOnPath(OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet") is null)
-            Assert.Skip("dotnet SDK is required for DotnetTestProvider Scale smoke");
-    }
-
-    private static string FindPowerShellOrSkip()
-    {
-        var powershell = FindOnPath("pwsh.exe") ?? FindOnPath("powershell.exe");
-        if (powershell is null)
-            Assert.Skip("PowerShell is required for process-tree Scale tests on Windows");
-        return powershell;
-    }
-
-    private static string? FindOnPath(string fileName)
-    {
-        var path = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(path))
-            return null;
-
-        foreach (var directory in path.Split(Path.PathSeparator))
-        {
-            if (string.IsNullOrWhiteSpace(directory))
-                continue;
-
-            var candidate = Path.Combine(directory, fileName);
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        return null;
     }
 
     private static async Task<int> WaitForPidFileAsync(string path, CancellationToken cancellationToken)

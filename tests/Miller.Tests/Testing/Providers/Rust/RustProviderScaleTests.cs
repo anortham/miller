@@ -21,7 +21,7 @@ public sealed class RustProviderScaleTests : IDisposable
     [Fact]
     public async Task Cargo_smoke_executes_a_tiny_fixture_and_parses_results()
     {
-        RequireCargoOrSkip();
+        CtProviderTestSupport.RequireCargo();
         var ct = TestContext.Current.CancellationToken;
         var repo = Path.Combine(_dir, "repo");
         var src = Path.Combine(repo, "src");
@@ -99,31 +99,6 @@ public sealed class RustProviderScaleTests : IDisposable
         Assert.DoesNotContain(
             Directory.EnumerateFileSystemEntries(repo, "*", SearchOption.AllDirectories),
             path => Path.GetFileName(path) == "target");
-    }
-
-    private static void RequireCargoOrSkip()
-    {
-        if (FindOnPath(OperatingSystem.IsWindows() ? "cargo.exe" : "cargo") is null)
-            Assert.Skip("cargo is required for RustTestProvider Scale smoke");
-    }
-
-    private static string? FindOnPath(string fileName)
-    {
-        var path = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(path))
-            return null;
-
-        foreach (var directory in path.Split(Path.PathSeparator))
-        {
-            if (string.IsNullOrWhiteSpace(directory))
-                continue;
-
-            var candidate = Path.Combine(directory, fileName);
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        return null;
     }
 
     private static void BestEffortDelete(string path)
