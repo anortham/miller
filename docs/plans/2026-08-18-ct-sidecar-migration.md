@@ -358,11 +358,11 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **What to build:** The daemon loop with the safety policies as new code (the Eros hub gate and poller fallback are references for what to REPLACE, not port). One Scale end-to-end: real dotnet provider on a fixture workspace, change → selection → execution → Green.
 
 **Acceptance criteria:**
-- [ ] Regression tests prove: unavailable impact enqueues nothing; start executes nothing until change or explicit run; budget is execution-scoped (idle daemon holds nothing; second workspace reports paused only during the first's execution); `MILLER_CT=off` constructs zero CT machinery with honest status.
-- [ ] Verdict tests prove Green/Partial/Unknown at the composite key; a rebuild (new index identity) demotes prior Green.
-- [ ] An execution-blocked outcome (e.g. Windows app-control `0x800711C7`) keeps selected tests stale and the verdict `Partial`/`Unknown` — a policy-blocked run can never report Green (test-guarded with a faked provider outcome).
-- [ ] Fast engine tests pass (`--filter "FullyQualifiedName~Testing.Daemon&Category!=Scale"`); the dotnet end-to-end passes (`&Category=Scale`).
-- [ ] Worker commit created and SHA recorded.
+- [x] Regression tests prove: unavailable impact enqueues nothing; start executes nothing until change or explicit run; budget is execution-scoped (idle daemon holds nothing; second workspace reports paused only during the first's execution); `MILLER_CT=off` constructs zero CT machinery with honest status.
+- [x] Verdict tests prove Green/Partial/Unknown at the composite key; a rebuild (new index identity) demotes prior Green.
+- [x] An execution-blocked outcome (e.g. Windows app-control `0x800711C7`) keeps selected tests stale and the verdict `Partial`/`Unknown` — a policy-blocked run can never report Green (test-guarded with a faked provider outcome).
+- [x] Fast engine tests pass (`--filter "FullyQualifiedName~Testing.Daemon&Category!=Scale"`); the dotnet end-to-end passes (`&Category=Scale`).
+- [x] Worker commit created and SHA recorded. (`3cf26c1d`)
 
 ### Task 12: CLI verbs + contracts
 
