@@ -101,11 +101,11 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **Approach:** Read the Eros CT migrations and partials first; translate FK relationships into external-identifier columns. Protocol: simplest thing that satisfies status/stop/run reliability — files under `.miller/ct/`, no sockets.
 
 **Acceptance criteria:**
-- [ ] `dotnet build Miller.slnx -c Release` 0/0 with the new project and test reference.
-- [ ] `CtSchema` DDL creates a database with no cross-database references; every run/status/freshness/coverage table carries `(index_identity, revision)`.
-- [ ] `CtDaemonProtocol` defines lease identity (PID + start time), heartbeat, command channel, and status record.
-- [ ] Foundation-notes doc records the decisions above.
-- [ ] Worker commit created and SHA recorded.
+- [x] `dotnet build Miller.slnx -c Release` 0/0 with the new project and test reference.
+- [x] `CtSchema` DDL creates a database with no cross-database references; every run/status/freshness/coverage table carries `(index_identity, revision)`.
+- [x] `CtDaemonProtocol` defines lease identity (PID + start time), heartbeat, command channel, and status record.
+- [x] Foundation-notes doc records the decisions above.
+- [x] Worker commit created and SHA recorded. (`a462364e`)
 
 ### Task 2: `ct.db` store — core CRUD
 
@@ -153,9 +153,9 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **What to build:** Mechanical port of the genuinely pure files with namespace rename and Eros-model swaps. Parser tests must include hostile/malformed input cases (security scope: artifact-parser robustness).
 
 **Acceptance criteria:**
-- [ ] Ported tests pass under `dotnet test --filter "FullyQualifiedName~Testing.Parsing&Category!=Scale"`.
-- [ ] No store or I/O dependency in any ported file.
-- [ ] Verified diff handed to the lead (parallel-lead-commit).
+- [x] Ported tests pass under `dotnet test --filter "FullyQualifiedName~Testing.Parsing&Category!=Scale"`.
+- [x] No store or I/O dependency in any ported file.
+- [x] Verified diff handed to the lead (parallel-lead-commit).
 
 ### Task 4: Public Miller fact/impact adapter
 
