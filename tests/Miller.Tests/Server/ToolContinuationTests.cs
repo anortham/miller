@@ -181,13 +181,79 @@ public sealed class ToolContinuationTests
     [Fact]
     public void Page_RejectsContinuationOffsetInsideMultibyteCodePoint()
     {
-        string token = CreateContinuationToken(nextOffset: 3);
+        string token = CreateBinaryContinuationToken(nextOffset: 3);
 
         var exception = Assert.Throws<ToolDiagnosticException>(() =>
             ToolOutputBudget.PageBody("ab😀cd", 8, Identity, token));
 
         Assert.Equal("continuation_offset_invalid", exception.Diagnostic.Code);
         Assert.Equal(ToolDiagnosticClass.Refusal, exception.Diagnostic.Class);
+    }
+
+    [Fact]
+    public void Page_RejectsLegacyJsonContinuationToken()
+    {
+        string token = CreateLegacyJsonContinuationToken(nextOffset: 5);
+
+        var exception = Assert.Throws<ToolDiagnosticException>(() =>
+            ToolOutputBudget.PageBody("0123456789", 5, Identity, token));
+
+        Assert.Equal("continuation_invalid", exception.Diagnostic.Code);
+    }
+
+    [Fact]
+    public void Page_RejectsPopulationCursorToken()
+    {
+        var identity = new ToolPopulationContinuationIdentity(
+            "inspect_file", "workspace-1", "population-a", "request-a");
+        string token = ToolOutputBudget.EncodePopulationCursor(
+            identity, new ToolPopulationContinuationCursor(1));
+
+        var exception = Assert.Throws<ToolDiagnosticException>(() =>
+            ToolOutputBudget.PageBody("0123456789", 5, Identity, token));
+
+        Assert.Equal("continuation_invalid", exception.Diagnostic.Code);
+    }
+
+    [Fact]
+    public void PopulationCursor_RejectsBodyContinuationToken()
+    {
+        ToolOutputPage first = ToolOutputBudget.PageBody("0123456789", 5, Identity, continuation: null);
+        var identity = new ToolPopulationContinuationIdentity(
+            "inspect_file", "workspace-1", "population-a", "request-a");
+
+        var exception = Assert.Throws<ToolDiagnosticException>(() =>
+            ToolOutputBudget.DecodePopulationCursor(first.Continuation!, identity));
+
+        Assert.Equal("continuation_invalid", exception.Diagnostic.Code);
+    }
+
+    [Fact]
+    public void PopulationCursor_HexIdentityEncodesCompactly()
+    {
+        var identity = new ToolPopulationContinuationIdentity(
+            "inspect_file",
+            new string('a', 64),
+            new string('b', 64),
+            new string('c', 64));
+
+        string token = ToolOutputBudget.EncodePopulationCursor(
+            identity, new ToolPopulationContinuationCursor(10));
+
+        Assert.True(token.Length <= 220, $"token length {token.Length} exceeds the compact budget");
+        Assert.Equal(10, ToolOutputBudget.DecodePopulationCursor(token, identity).Offset);
+    }
+
+    [Fact]
+    public void PopulationCursor_RoundTripsNonHexIdentityFields()
+    {
+        var identity = new ToolPopulationContinuationIdentity(
+            "trace_refs", "Workspace-Ω", "population/α", "request:β");
+
+        string token = ToolOutputBudget.EncodePopulationCursor(
+            identity, new ToolPopulationContinuationCursor(123456));
+
+        Assert.Equal(123456, ToolOutputBudget.DecodePopulationCursor(token, identity).Offset);
     }
 
     [Fact]
@@ -219,7 +285,7 @@ public sealed class ToolContinuationTests
         Assert.Equal("stale_continuation", stalePopulation.Diagnostic.Code);
     }
 
-    private static string CreateContinuationToken(long nextOffset)
+    private static string CreateLegacyJsonContinuationToken(long nextOffset)
     {
         var unsigned = new
         {
@@ -244,9 +310,48 @@ public sealed class ToolContinuationTests
             unsigned.NextOffset,
             Checksum = checksum,
         };
-        return Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(payload))
+        return Base64Url(JsonSerializer.SerializeToUtf8Bytes(payload));
+    }
+
+    private static string CreateBinaryContinuationToken(long nextOffset)
+    {
+        var buffer = new List<byte> { 2, 1 };
+        WriteTokenString(buffer, Identity.WorkspaceId);
+        WriteTokenString(buffer, Identity.SymbolId);
+        WriteTokenString(buffer, Identity.ExtractorHash);
+        WriteTokenVarInt(buffer, Identity.SourceStartByte);
+        WriteTokenVarInt(buffer, Identity.SourceEndByte);
+        WriteTokenVarInt(buffer, nextOffset);
+        byte[] checksum = SHA256.HashData(buffer.ToArray());
+        buffer.AddRange(checksum);
+        return Base64Url([.. buffer]);
+    }
+
+    private static void WriteTokenString(List<byte> buffer, string value)
+    {
+        bool hex = value.Length >= 2 && value.Length % 2 == 0 &&
+            value.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'));
+        byte[] raw = hex ? Convert.FromHexString(value) : Encoding.UTF8.GetBytes(value);
+        buffer.Add(hex ? (byte)1 : (byte)0);
+        WriteTokenVarInt(buffer, raw.Length);
+        buffer.AddRange(raw);
+    }
+
+    private static void WriteTokenVarInt(List<byte> buffer, long value)
+    {
+        ulong remaining = (ulong)value;
+        while (remaining >= 0x80)
+        {
+            buffer.Add((byte)(remaining | 0x80));
+            remaining >>= 7;
+        }
+
+        buffer.Add((byte)remaining);
+    }
+
+    private static string Base64Url(byte[] bytes) =>
+        Convert.ToBase64String(bytes)
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');
-    }
 }

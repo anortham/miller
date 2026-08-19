@@ -1,7 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace Miller.Server.Tools;
 
@@ -217,28 +215,13 @@ public static partial class ToolOutputBudget
         if (cursor.Offset < 0)
             throw new ArgumentOutOfRangeException(nameof(cursor), "Population cursor offset cannot be negative.");
 
-        var unsigned = new UnsignedPopulationContinuationPayload(
-            1,
-            identity.Kind,
-            identity.WorkspaceId,
-            identity.PopulationFingerprint,
-            identity.RequestFingerprint,
-            cursor.Offset);
-        byte[] unsignedBytes = JsonSerializer.SerializeToUtf8Bytes(
-            unsigned,
-            ToolContinuationJsonContext.Default.UnsignedPopulationContinuationPayload);
-        string checksum = Convert.ToHexStringLower(SHA256.HashData(unsignedBytes));
-        var payload = new PopulationContinuationPayload(
-            unsigned.Version,
-            unsigned.Kind,
-            unsigned.WorkspaceId,
-            unsigned.PopulationFingerprint,
-            unsigned.RequestFingerprint,
-            unsigned.Offset,
-            checksum);
-        return Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(
-            payload,
-            ToolContinuationJsonContext.Default.PopulationContinuationPayload));
+        var buffer = new List<byte>(192) { ContinuationFormatVersion, PopulationContinuationType };
+        WriteTokenString(buffer, identity.Kind);
+        WriteTokenString(buffer, identity.WorkspaceId);
+        WriteTokenString(buffer, identity.PopulationFingerprint);
+        WriteTokenString(buffer, identity.RequestFingerprint);
+        WriteTokenVarInt(buffer, cursor.Offset);
+        return Base64UrlEncode(SealToken(buffer));
     }
 
     public static ToolPopulationContinuationCursor DecodePopulationCursor(
@@ -289,44 +272,36 @@ public static partial class ToolOutputBudget
         if (!string.Equals(Base64UrlEncode(payloadBytes), token, StringComparison.Ordinal))
             throw Refusal("continuation_invalid", "Population continuation is not canonical base64url.");
 
-        PopulationContinuationPayload payload;
+        TokenReader reader = OpenTokenReader(
+            payloadBytes,
+            PopulationContinuationType,
+            invalidMessage: "Population continuation is malformed.",
+            checksumMessage: "Population continuation checksum is invalid.",
+            versionMessage: "Population continuation version is unsupported.");
+        string kind;
+        string workspaceId;
+        string populationFingerprint;
+        string requestFingerprint;
+        long offset;
         try
         {
-            payload = JsonSerializer.Deserialize(
-                payloadBytes,
-                ToolContinuationJsonContext.Default.PopulationContinuationPayload)
-                ?? throw new JsonException("Population continuation payload is empty.");
+            kind = reader.ReadString();
+            workspaceId = reader.ReadString();
+            populationFingerprint = reader.ReadString();
+            requestFingerprint = reader.ReadString();
+            offset = reader.ReadVarInt();
+            reader.RequireEnd();
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is FormatException or DecoderFallbackException)
         {
             throw Refusal("continuation_invalid", "Population continuation is malformed.");
         }
 
-        var unsigned = new UnsignedPopulationContinuationPayload(
-            payload.Version,
-            payload.Kind,
-            payload.WorkspaceId,
-            payload.PopulationFingerprint,
-            payload.RequestFingerprint,
-            payload.Offset);
-        byte[] unsignedBytes = JsonSerializer.SerializeToUtf8Bytes(
-            unsigned,
-            ToolContinuationJsonContext.Default.UnsignedPopulationContinuationPayload);
-        string checksum = Convert.ToHexStringLower(SHA256.HashData(unsignedBytes));
-        if (string.IsNullOrWhiteSpace(payload.Checksum) || payload.Checksum.Length != checksum.Length ||
-            !CryptographicOperations.FixedTimeEquals(
-                Encoding.ASCII.GetBytes(checksum),
-                Encoding.ASCII.GetBytes(payload.Checksum)))
-        {
-            throw Refusal("continuation_invalid", "Population continuation checksum is invalid.");
-        }
-
-        if (payload.Version != 1)
-            throw Refusal("continuation_invalid", "Population continuation version is unsupported.");
-        if (payload.Offset < 0)
+        if (offset > int.MaxValue)
             throw Refusal("continuation_offset_invalid", "Population continuation offset is invalid.");
 
-        return payload;
+        return new PopulationContinuationPayload(
+            kind, workspaceId, populationFingerprint, requestFingerprint, (int)offset);
     }
 
     private static void ValidatePopulationIdentity(ToolPopulationContinuationIdentity identity)
@@ -359,30 +334,14 @@ public static partial class ToolOutputBudget
 
     private static string Encode(ToolContinuationIdentity identity, long nextOffset)
     {
-        var unsigned = new UnsignedContinuationPayload(
-            Version: 1,
-            identity.WorkspaceId,
-            identity.SymbolId,
-            identity.ExtractorHash,
-            identity.SourceStartByte,
-            identity.SourceEndByte,
-            nextOffset);
-        byte[] unsignedBytes = JsonSerializer.SerializeToUtf8Bytes(
-            unsigned,
-            ToolContinuationJsonContext.Default.UnsignedContinuationPayload);
-        string checksum = Convert.ToHexStringLower(SHA256.HashData(unsignedBytes));
-        var payload = new ContinuationPayload(
-            unsigned.Version,
-            unsigned.WorkspaceId,
-            unsigned.SymbolId,
-            unsigned.ExtractorHash,
-            unsigned.SourceStartByte,
-            unsigned.SourceEndByte,
-            unsigned.NextOffset,
-            checksum);
-        return Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(
-            payload,
-            ToolContinuationJsonContext.Default.ContinuationPayload));
+        var buffer = new List<byte>(160) { ContinuationFormatVersion, BodyContinuationType };
+        WriteTokenString(buffer, identity.WorkspaceId);
+        WriteTokenString(buffer, identity.SymbolId);
+        WriteTokenString(buffer, identity.ExtractorHash);
+        WriteTokenVarInt(buffer, identity.SourceStartByte);
+        WriteTokenVarInt(buffer, identity.SourceEndByte);
+        WriteTokenVarInt(buffer, nextOffset);
+        return Base64UrlEncode(SealToken(buffer));
     }
 
     private static ContinuationPayload Decode(string token)
@@ -400,43 +359,147 @@ public static partial class ToolOutputBudget
         if (!string.Equals(Base64UrlEncode(bytes), token, StringComparison.Ordinal))
             throw Refusal("continuation_invalid", "Continuation token is not canonical base64url.");
 
-        ContinuationPayload? payload;
+        TokenReader reader = OpenTokenReader(
+            bytes,
+            BodyContinuationType,
+            invalidMessage: "Continuation token is malformed.",
+            checksumMessage: "Continuation token checksum does not match.",
+            versionMessage: "Continuation token version is unsupported.");
         try
         {
-            payload = JsonSerializer.Deserialize(
-                bytes,
-                ToolContinuationJsonContext.Default.ContinuationPayload);
+            var payload = new ContinuationPayload(
+                reader.ReadString(),
+                reader.ReadString(),
+                reader.ReadString(),
+                reader.ReadVarInt(),
+                reader.ReadVarInt(),
+                reader.ReadVarInt());
+            reader.RequireEnd();
+            return payload;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is FormatException or DecoderFallbackException)
         {
-            throw Refusal("continuation_invalid", "Continuation token is not valid JSON.");
+            throw Refusal("continuation_invalid", "Continuation token is malformed.");
         }
+    }
 
-        if (payload is null || payload.Version != 1)
-            throw Refusal("continuation_invalid", "Continuation token version is unsupported.");
-        if (string.IsNullOrWhiteSpace(payload.Checksum))
-            throw Refusal("continuation_invalid", "Continuation token checksum is missing.");
+    private const byte ContinuationFormatVersion = 2;
+    private const byte BodyContinuationType = 1;
+    private const byte PopulationContinuationType = 2;
+    private const int ContinuationChecksumBytes = 32;
 
-        var unsigned = new UnsignedContinuationPayload(
-            payload.Version,
-            payload.WorkspaceId,
-            payload.SymbolId,
-            payload.ExtractorHash,
-            payload.SourceStartByte,
-            payload.SourceEndByte,
-            payload.NextOffset);
-        string checksum = Convert.ToHexStringLower(
-            SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
-                unsigned,
-                ToolContinuationJsonContext.Default.UnsignedContinuationPayload)));
-        if (!CryptographicOperations.FixedTimeEquals(
-                Encoding.ASCII.GetBytes(checksum),
-                Encoding.ASCII.GetBytes(payload.Checksum)))
+    private static void WriteTokenString(List<byte> buffer, string value)
+    {
+        bool hexPacked = IsPackableHex(value);
+        byte[] raw = hexPacked ? Convert.FromHexString(value) : StrictUtf8.GetBytes(value);
+        buffer.Add(hexPacked ? (byte)1 : (byte)0);
+        WriteTokenVarInt(buffer, raw.Length);
+        buffer.AddRange(raw);
+    }
+
+    private static bool IsPackableHex(string value)
+    {
+        if (value.Length < 2 || value.Length % 2 != 0)
+            return false;
+        foreach (char c in value)
         {
-            throw Refusal("continuation_invalid", "Continuation token checksum does not match.");
+            if (c is not ((>= '0' and <= '9') or (>= 'a' and <= 'f')))
+                return false;
         }
 
-        return payload;
+        return true;
+    }
+
+    private static void WriteTokenVarInt(List<byte> buffer, long value)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(value);
+        ulong remaining = (ulong)value;
+        while (remaining >= 0x80)
+        {
+            buffer.Add((byte)(remaining | 0x80));
+            remaining >>= 7;
+        }
+
+        buffer.Add((byte)remaining);
+    }
+
+    private static byte[] SealToken(List<byte> buffer)
+    {
+        byte[] token = new byte[buffer.Count + ContinuationChecksumBytes];
+        buffer.CopyTo(token, 0);
+        SHA256.HashData(token.AsSpan(0, buffer.Count), token.AsSpan(buffer.Count));
+        return token;
+    }
+
+    private static TokenReader OpenTokenReader(
+        byte[] payload,
+        byte expectedType,
+        string invalidMessage,
+        string checksumMessage,
+        string versionMessage)
+    {
+        if (payload.Length < 2 + ContinuationChecksumBytes)
+            throw Refusal("continuation_invalid", invalidMessage);
+        if (payload[0] != ContinuationFormatVersion)
+            throw Refusal("continuation_invalid", versionMessage);
+        if (payload[1] != expectedType)
+            throw Refusal("continuation_invalid", invalidMessage);
+
+        int contentLength = payload.Length - ContinuationChecksumBytes;
+        Span<byte> computed = stackalloc byte[ContinuationChecksumBytes];
+        SHA256.HashData(payload.AsSpan(0, contentLength), computed);
+        if (!CryptographicOperations.FixedTimeEquals(computed, payload.AsSpan(contentLength)))
+            throw Refusal("continuation_invalid", checksumMessage);
+
+        return new TokenReader(payload, position: 2, end: contentLength);
+    }
+
+    private sealed class TokenReader(byte[] bytes, int position, int end)
+    {
+        private readonly byte[] _bytes = bytes;
+        private readonly int _end = end;
+        private int _position = position;
+
+        public long ReadVarInt()
+        {
+            ulong value = 0;
+            int shift = 0;
+            while (true)
+            {
+                if (_position >= _end || shift > 63)
+                    throw new FormatException("Continuation varint is truncated or oversized.");
+                byte current = _bytes[_position++];
+                value |= (ulong)(current & 0x7F) << shift;
+                if ((current & 0x80) == 0)
+                    break;
+                shift += 7;
+            }
+
+            if (value > long.MaxValue)
+                throw new FormatException("Continuation varint exceeds Int64.");
+            return (long)value;
+        }
+
+        public string ReadString()
+        {
+            if (_position >= _end)
+                throw new FormatException("Continuation string flag is missing.");
+            byte flag = _bytes[_position++];
+            if (flag > 1)
+                throw new FormatException("Continuation string flag is unknown.");
+            long length = ReadVarInt();
+            if (length > _end - _position)
+                throw new FormatException("Continuation string payload is truncated.");
+            ReadOnlySpan<byte> raw = _bytes.AsSpan(_position, (int)length);
+            _position += (int)length;
+            return flag == 1 ? Convert.ToHexStringLower(raw) : StrictUtf8.GetString(raw);
+        }
+
+        public void RequireEnd()
+        {
+            if (_position != _end)
+                throw new FormatException("Continuation payload has trailing bytes.");
+        }
     }
 
     private static void ValidateIdentity(ToolContinuationIdentity identity)
@@ -499,8 +562,7 @@ public static partial class ToolOutputBudget
         return Convert.FromBase64String(padded);
     }
 
-    private sealed record UnsignedContinuationPayload(
-        int Version,
+    private sealed record ContinuationPayload(
         string WorkspaceId,
         string SymbolId,
         string ExtractorHash,
@@ -508,36 +570,10 @@ public static partial class ToolOutputBudget
         long SourceEndByte,
         long NextOffset);
 
-    private sealed record ContinuationPayload(
-        int Version,
-        string WorkspaceId,
-        string SymbolId,
-        string ExtractorHash,
-        long SourceStartByte,
-        long SourceEndByte,
-        long NextOffset,
-        string Checksum);
-
-    private sealed record UnsignedPopulationContinuationPayload(
-        int Version,
+    private sealed record PopulationContinuationPayload(
         string Kind,
         string WorkspaceId,
         string PopulationFingerprint,
         string RequestFingerprint,
         int Offset);
-
-    private sealed record PopulationContinuationPayload(
-        int Version,
-        string Kind,
-        string WorkspaceId,
-        string PopulationFingerprint,
-        string RequestFingerprint,
-        int Offset,
-        string Checksum);
-
-    [JsonSerializable(typeof(UnsignedContinuationPayload))]
-    [JsonSerializable(typeof(ContinuationPayload))]
-    [JsonSerializable(typeof(UnsignedPopulationContinuationPayload))]
-    [JsonSerializable(typeof(PopulationContinuationPayload))]
-    private sealed partial class ToolContinuationJsonContext : JsonSerializerContext;
 }
