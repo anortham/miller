@@ -255,9 +255,9 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **What to build:** The selection algorithm over the new fact seam. Highest-risk task: if a Miller fact shape cannot express an Eros evidence class, report the mismatch — never silently drop an evidence class.
 
 **Acceptance criteria:**
-- [ ] Ported selector scenarios pass with a fake `IMillerFactSource` + real store (`--filter "FullyQualifiedName~Testing.Selection&Category!=Scale"`).
-- [ ] All evidence classes present or a reported gap acknowledged by the lead.
-- [ ] Verified diff handed to the lead (parallel-lead-commit).
+- [x] Ported selector scenarios pass with a fake `IMillerFactSource` + real store (`--filter "FullyQualifiedName~Testing.Selection&Category!=Scale"`).
+- [x] All evidence classes present or a reported gap acknowledged by the lead.
+- [x] Verified diff handed to the lead (parallel-lead-commit).
 
 ### Task 8: Rust + JavaScript + Python providers
 
