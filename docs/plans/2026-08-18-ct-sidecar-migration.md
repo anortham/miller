@@ -440,10 +440,10 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **Dependency reason:** Documents and guards the shipped surfaces.
 
 **Acceptance criteria:**
-- [ ] Convention guard fails on an untagged provider-spawning test (proved by a temporary fixture during development) and passes on the real tree.
-- [ ] All provider Scale tests use `CtProviderTestSupport`.
-- [ ] `cmp -s CLAUDE.md AGENTS.md` passes; docs map updated.
-- [ ] Worker commit created and SHA recorded.
+- [x] Convention guard fails on an untagged provider-spawning test (proved by a temporary fixture during development) and passes on the real tree.
+- [x] All provider Scale tests use `CtProviderTestSupport`.
+- [x] `cmp -s CLAUDE.md AGENTS.md` passes; docs map updated.
+- [x] Worker commit created and SHA recorded. (`ffe76679`)
 
 ## Branch gate (after Task 14)
 
