@@ -280,9 +280,9 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **What to build:** Port the three providers. **Each provider gets a real-execution Scale smoke on a tiny fixture** — Eros has no real Python smoke, so write one; do not inherit the gap.
 
 **Acceptance criteria:**
-- [ ] Fast tests pass (`--filter "FullyQualifiedName~Testing.Providers&Category!=Scale"`).
-- [ ] Rust, JS, and Python Scale smokes exist; each really executes when its toolchain is present and skips visibly when absent.
-- [ ] Verified diff handed to the lead (parallel-lead-commit).
+- [x] Fast tests pass (`--filter "FullyQualifiedName~Testing.Providers&Category!=Scale"`).
+- [x] Rust, JS, and Python Scale smokes exist; each really executes when its toolchain is present and skips visibly when absent.
+- [x] Verified diff handed to the lead (parallel-lead-commit).
 
 ### Task 9: Store-dependent analysis + importers
 
