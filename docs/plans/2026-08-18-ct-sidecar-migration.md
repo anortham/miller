@@ -305,9 +305,9 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **What to build:** Port with data source swapped to `ContinuousTestStore`. Importer tests include hostile artifact inputs.
 
 **Acceptance criteria:**
-- [ ] Ported analysis/importer tests pass (`--filter "FullyQualifiedName~Testing.Analysis&Category!=Scale"`).
-- [ ] No raw SQL outside the store partials.
-- [ ] Worker commit created and SHA recorded.
+- [x] Ported analysis/importer tests pass (`--filter "FullyQualifiedName~Testing.Analysis&Category!=Scale"`).
+- [x] No raw SQL outside the store partials.
+- [x] Worker commit created and SHA recorded. (`368bd5e8`)
 
 ### Task 10: Daemon control plane + lifecycle locks
 
