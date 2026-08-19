@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Testing;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -211,6 +212,7 @@ public sealed class SingleWriterLockTests
         File.WriteAllText(Path.Combine(dir.Path, "history.db"), "history");
         File.WriteAllText(Path.Combine(dir.Path, "content.lock"), "");
         File.WriteAllText(Path.Combine(dir.Path, "history.lock"), "");
+        File.WriteAllText(Path.Combine(dir.Path, "ct.lock"), "");
         File.WriteAllText(Path.Combine(dir.Path, "stale.lock"), ""); // debris — unheld, must be deleted
 
         using var lease = SingleWriterLock.TryAcquire(dir.Path);
@@ -222,7 +224,7 @@ public sealed class SingleWriterLockTests
             .Select(Path.GetFileName)
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray()!;
-        Assert.Equal(new[] { "content.lock", "history.lock", "indexer.lock" }, survivors);
+        Assert.Equal(new[] { "content.lock", "ct.lock", "history.lock", "indexer.lock" }, survivors);
     }
 
     [Fact]
@@ -243,12 +245,12 @@ public sealed class SingleWriterLockTests
             Directory.GetFileSystemEntries(dir.Path));
     }
 
-    // ---- WorkspaceWriteLeases: fixed-order acquisition of all three remove leases ----
+    // ---- WorkspaceWriteLeases: fixed-order acquisition of all four remove leases ----
 
     private static readonly TimeSpan ShortTimeout = TimeSpan.FromMilliseconds(200);
 
     [Fact]
-    public void WorkspaceWriteLeases_OnAllFreeLocks_AcquiresAllThree()
+    public void WorkspaceWriteLeases_OnAllFreeLocks_AcquiresAllFour()
     {
         using var dir = new TempMillerDir();
 
@@ -256,12 +258,15 @@ public sealed class SingleWriterLockTests
             WorkspaceWriteLeases.TryAcquireForRemove(dir.Path, SingleWriterLock.TryAcquire, ShortTimeout);
 
         Assert.NotNull(leases);
-        // While held, every underlying lock is exclusive: a second acquire of any of the three is refused.
+        Assert.Contains(CtWriteLock.LockFileName, WorkspaceWriteLeases.SidecarLockFileNames);
+        // While held, every underlying lock is exclusive: a second acquire of any of the four is refused.
         Assert.Null(SingleWriterLock.TryAcquire(dir.Path));
         Assert.Throws<TimeoutException>(() =>
             ContentCorpusWriteLock.AcquireFor(Path.Combine(dir.Path, "content.db"), ShortTimeout));
         Assert.Throws<TimeoutException>(() =>
             MetricHistoryWriteLock.AcquireFor(Path.Combine(dir.Path, "history.db"), ShortTimeout));
+        Assert.Throws<TimeoutException>(() =>
+            CtWriteLock.AcquireFor(Path.Combine(dir.Path, CtSchema.DbFileName), ShortTimeout));
     }
 
     [Fact]
@@ -315,7 +320,28 @@ public sealed class SingleWriterLockTests
     }
 
     [Fact]
-    public void WorkspaceWriteLeases_Dispose_ReleasesAllThree_MakingThemReacquirable()
+    public void WorkspaceWriteLeases_WhenCtLockHeld_Refuses_AndReleasesIndexerContentAndHistory()
+    {
+        using var dir = new TempMillerDir();
+        using CtWriteLock heldCt =
+            CtWriteLock.AcquireFor(Path.Combine(dir.Path, CtSchema.DbFileName), ShortTimeout);
+
+        WorkspaceWriteLeases? leases =
+            WorkspaceWriteLeases.TryAcquireForRemove(dir.Path, SingleWriterLock.TryAcquire, ShortTimeout);
+
+        Assert.Null(leases);
+        using SingleWriterLock? afterIndexer = SingleWriterLock.TryAcquire(dir.Path);
+        Assert.NotNull(afterIndexer);
+        using ContentCorpusWriteLock afterContent =
+            ContentCorpusWriteLock.AcquireFor(Path.Combine(dir.Path, "content.db"), ShortTimeout);
+        Assert.NotNull(afterContent);
+        using MetricHistoryWriteLock afterHistory =
+            MetricHistoryWriteLock.AcquireFor(Path.Combine(dir.Path, "history.db"), ShortTimeout);
+        Assert.NotNull(afterHistory);
+    }
+
+    [Fact]
+    public void WorkspaceWriteLeases_Dispose_ReleasesAllFour_MakingThemReacquirable()
     {
         using var dir = new TempMillerDir();
 
@@ -332,6 +358,9 @@ public sealed class SingleWriterLockTests
         using MetricHistoryWriteLock history =
             MetricHistoryWriteLock.AcquireFor(Path.Combine(dir.Path, "history.db"), ShortTimeout);
         Assert.NotNull(history);
+        using CtWriteLock ct =
+            CtWriteLock.AcquireFor(Path.Combine(dir.Path, CtSchema.DbFileName), ShortTimeout);
+        Assert.NotNull(ct);
     }
 
     private sealed class IOExceptionWithHResult : IOException

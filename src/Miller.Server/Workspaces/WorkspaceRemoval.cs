@@ -127,12 +127,13 @@ public static class WorkspaceRemoval
             return WorkspaceRemoveResult.Removed(millerDir, workspaceId, root, indexDirDeleted: false);
         }
 
-        // Delete the index data while HOLDING all three workspace-local write leases (indexer → content →
-        // history), so no Miller process can start writing this index — nor a CLI content import / history append,
-        // which hold content.lock / history.lock WITHOUT the indexer lock — mid-delete. Any lease unavailable ⇒
-        // refuse, delete nothing. Only the held lock files are skipped (an open FileShare.None handle cannot be
-        // deleted on Windows); after release, the leftover lock files + empty dir are removed best-effort — a
-        // writer that sneaks in after release finds an already-empty index and does a clean rebuild.
+        // Delete the index data while HOLDING all four workspace-local write leases (indexer → content →
+        // history → ct.lock), so no Miller process can start writing this index — nor a CLI content import,
+        // history append, or CT store write, which hold those sidecar locks WITHOUT the indexer lock — mid-delete.
+        // Any lease unavailable ⇒ refuse, delete nothing. Only the held lock files are skipped (an open
+        // FileShare.None handle cannot be deleted on Windows); after release, the leftover lock files + empty dir
+        // are removed best-effort — a writer that sneaks in after release finds an already-empty index and does a
+        // clean rebuild.
         using (WorkspaceWriteLeases? leases =
             WorkspaceWriteLeases.TryAcquireForRemove(
                 millerDir,

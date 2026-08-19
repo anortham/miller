@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace Miller.Indexing;
 
 /// <summary>
@@ -149,18 +151,26 @@ public sealed class SingleWriterLock : IDisposable
 /// write (Windows sharing-violation crash / POSIX unlinked-inode writes).
 ///
 /// <para>Both remove call sites (the CLI <c>workspace remove</c> and the server <c>WorkspaceTool</c> remove
-/// operation) acquire all three through <see cref="TryAcquireForRemove"/> so the FIXED lock order — indexer
-/// <c>SingleWriterLock</c> → <c>content.lock</c> → <c>history.lock</c> — lives in exactly one place and cannot
-/// drift between the two paths. That single order is what lets every writer pair avoid deadlock. This is one
-/// small shared helper, not a general lock manager: it only acquires-in-order and disposes-in-reverse.</para>
+/// operation) acquire all four through <see cref="TryAcquireForRemove"/> so the FIXED lock order — indexer
+/// <c>SingleWriterLock</c> → <c>content.lock</c> → <c>history.lock</c> → <c>ct.lock</c> — lives in exactly one
+/// place and cannot drift between the two paths. <c>ct.lock</c> is last in the workspace-local bundle because
+/// CT store writers already hold it without the indexer lock; adding it after history keeps the existing
+/// indexer/content/history order intact. That single order is what lets every writer pair avoid deadlock. This
+/// is one small shared helper, not a general lock manager: it only acquires-in-order and disposes-in-reverse.</para>
 ///
 /// <para>The full process-wide order extends that with the user-global scan-admission lease: indexer
 /// <see cref="SingleWriterLock"/> → <see cref="ScanGovernor"/> → the indexer's ops gate → <c>content.lock</c> →
-/// <c>history.lock</c>. Nothing may acquire a workspace <see cref="SingleWriterLock"/> while holding the
-/// governor.</para>
+/// <c>history.lock</c> → <c>ct.lock</c>. Nothing may acquire a workspace <see cref="SingleWriterLock"/> while
+/// holding the governor.</para>
 /// </summary>
 public sealed class WorkspaceWriteLeases : IDisposable
 {
+    /// <summary>
+    /// Sibling of <c>ct.db</c>. Same file name as Miller.Testing.CtWriteLock.LockFileName.
+    /// Indexing cannot reference Testing; the name is pinned here so remove holds the store write lease.
+    /// </summary>
+    public const string ContinuousTestLockFileName = "ct.lock";
+
     /// <summary>
     /// The sidecar write-lock file names held ACROSS the delete in addition to the intrinsic indexer
     /// <see cref="SingleWriterLock.LockFileName"/> — the explicit skip-set to pass
@@ -172,6 +182,7 @@ public sealed class WorkspaceWriteLeases : IDisposable
         {
             ContentCorpusWriteLock.LockFileName,
             MetricHistoryWriteLock.LockFileName,
+            ContinuousTestLockFileName,
         };
 
     /// <summary>
@@ -181,26 +192,31 @@ public sealed class WorkspaceWriteLeases : IDisposable
     /// </summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(2);
 
+    private static readonly TimeSpan SidecarPollInterval = TimeSpan.FromMilliseconds(25);
+
     private readonly IDisposable _indexer;
     private readonly IDisposable _content;
     private readonly IDisposable _history;
+    private readonly IDisposable _ct;
 
-    private WorkspaceWriteLeases(IDisposable indexer, IDisposable content, IDisposable history)
+    private WorkspaceWriteLeases(
+        IDisposable indexer, IDisposable content, IDisposable history, IDisposable ct)
     {
         _indexer = indexer;
         _content = content;
         _history = history;
+        _ct = ct;
     }
 
     /// <summary>
-    /// Acquire the indexer, content, and history write leases IN THAT FIXED ORDER, then hand back a bundle that
-    /// releases them in reverse on <see cref="Dispose"/>. Returns <c>null</c> if ANY lease is unavailable — the
-    /// caller's existing refused-in-use result — after releasing whatever was already taken, so a refusal never
-    /// leaves a lease dangling and nothing is deleted.
+    /// Acquire the indexer, content, history, and CT write leases IN THAT FIXED ORDER, then hand back a bundle
+    /// that releases them in reverse on <see cref="Dispose"/>. Returns <c>null</c> if ANY lease is unavailable —
+    /// the caller's existing refused-in-use result — after releasing whatever was already taken, so a refusal
+    /// never leaves a lease dangling and nothing is deleted.
     ///
     /// <para>The indexer acquisition is supplied by <paramref name="acquireIndexerLock"/> (the CLI passes
     /// <see cref="SingleWriterLock.TryAcquire"/>; the server passes its injected try-acquire) — a single
-    /// non-blocking attempt, matching the existing remove behavior. The content and history leases poll up to
+    /// non-blocking attempt, matching the existing remove behavior. The sidecar leases poll up to
     /// <paramref name="timeout"/> (default <see cref="DefaultTimeout"/>) and throw
     /// <see cref="TimeoutException"/> on expiry, which is treated as unavailable.</para>
     /// </summary>
@@ -217,6 +233,7 @@ public sealed class WorkspaceWriteLeases : IDisposable
         TimeSpan effective = timeout ?? DefaultTimeout;
         ContentCorpusWriteLock? content = null;
         MetricHistoryWriteLock? history = null;
+        FileStream? ct = null;
         try
         {
             // The locks live NEXT TO their DB inside the same .miller dir; the *.db filename only supplies the
@@ -224,12 +241,14 @@ public sealed class WorkspaceWriteLeases : IDisposable
             content = ContentCorpusWriteLock.AcquireFor(Path.Combine(millerDir, "content.db"), effective);
             history = MetricHistoryWriteLock.AcquireFor(
                 Path.Combine(millerDir, MetricHistoryStore.HistoryDbFileName), effective);
-            return new WorkspaceWriteLeases(indexer, content, history);
+            ct = AcquireExclusiveSidecar(Path.Combine(millerDir, ContinuousTestLockFileName), effective);
+            return new WorkspaceWriteLeases(indexer, content, history, ct);
         }
         catch (TimeoutException)
         {
-            // A sidecar lock is held by an in-flight import/append: release what we took (reverse order) and
-            // refuse. content.db/history.db are left intact.
+            // A sidecar lock is held by an in-flight import/append/CT write: release what we took (reverse
+            // order) and refuse. The sidecar DBs are left intact.
+            ct?.Dispose();
             history?.Dispose();
             content?.Dispose();
             indexer.Dispose();
@@ -237,11 +256,41 @@ public sealed class WorkspaceWriteLeases : IDisposable
         }
     }
 
-    /// <summary>Release all three leases in reverse acquisition order (history → content → indexer).</summary>
+    /// <summary>Release all four leases in reverse acquisition order (ct → history → content → indexer).</summary>
     public void Dispose()
     {
+        _ct.Dispose();
         _history.Dispose();
         _content.Dispose();
         _indexer.Dispose();
+    }
+
+    private static FileStream AcquireExclusiveSidecar(string lockFilePath, TimeSpan timeout)
+    {
+        string? dir = Path.GetDirectoryName(lockFilePath);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        var stopwatch = Stopwatch.StartNew();
+        while (true)
+        {
+            try
+            {
+                return new FileStream(
+                    lockFilePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException ex) when (stopwatch.Elapsed >= timeout)
+            {
+                throw new TimeoutException(
+                    $"Could not acquire CT write lock at '{lockFilePath}' within {timeout}.", ex);
+            }
+            catch (IOException)
+            {
+                TimeSpan remaining = timeout - stopwatch.Elapsed;
+                if (remaining <= TimeSpan.Zero)
+                    continue;
+                Thread.Sleep(remaining < SidecarPollInterval ? remaining : SidecarPollInterval);
+            }
+        }
     }
 }
