@@ -414,11 +414,11 @@ Commit mode: `serial-worker-commit` for serial tasks (1, 9–14); `parallel-lead
 **What to build:** The tool wrapper plus every registration point Codex flagged: `Program.cs` tools chain, binding filter, guidance gates, AOT JSON source-gen.
 
 **Acceptance criteria:**
-- [ ] `AgentInstructionsTests` green with the tenth tool and all budgets.
-- [ ] Tool tests prove `status` never starts the daemon and `start` is the only starting operation; unbound behavior matches the binding-filter contract.
-- [ ] Native AOT publish smoke succeeds (exact command read from `.github/workflows/release.yml`).
-- [ ] Fast suite passes (escalation: `Program.cs` touched).
-- [ ] Worker commit created and SHA recorded.
+- [x] `AgentInstructionsTests` green with the tenth tool and all budgets.
+- [x] Tool tests prove `status` never starts the daemon and `start` is the only starting operation; unbound behavior matches the binding-filter contract.
+- [x] Native AOT publish smoke succeeds (exact command read from `.github/workflows/release.yml`).
+- [x] Fast suite passes (escalation: `Program.cs` touched).
+- [x] Worker commit created and SHA recorded. (`ad99819d`)
 
 ### Task 14: Docs, guards, working notes
 
