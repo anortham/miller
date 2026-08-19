@@ -2832,6 +2832,40 @@ public sealed class InspectToolTests
         Assert.Contains("Gets a user by id.", output);
     }
 
+    [Fact]
+    public void Inspect_ExplicitWorkspaceId_EmitsWorkspaceBannerOnce()
+    {
+        using var current = EmptyFixture("current-ws");
+        using var target = JulieDbFixture.CreateForInspect();
+        var (currentIndex, _) = Build(current);
+        var (targetIndex, _) = Build(target);
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        string targetRoot = Path.Combine(Path.GetTempPath(), "miller-target-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(currentIndex, current.DbPath, "current-ws", currentRoot),
+            ("target-ws", ReadToolRoutingTestSupport.ContextFor(
+                targetIndex,
+                target.DbPath,
+                "target-ws",
+                targetRoot,
+                indexFresh: false,
+                freshnessStatus: "unconfirmed_lock_busy")));
+        var tool = new InspectTool(provider);
+
+        string symbolOutput = tool.Inspect(
+            "GetUser", depth: "summary", workspace_id: "target-ws", ensure_fresh: false);
+        string fileOutput = tool.Inspect(
+            "auth/UserService.cs", workspace_id: "target-ws", ensure_fresh: false);
+
+        Assert.Equal(1, Occurrences(symbolOutput, "workspace: target-ws"));
+        Assert.Equal(1, Occurrences(symbolOutput, "freshness: unconfirmed_lock_busy"));
+        Assert.Equal(1, Occurrences(fileOutput, "workspace: target-ws"));
+        Assert.Equal(1, Occurrences(fileOutput, "freshness: unconfirmed_lock_busy"));
+    }
+
+    private static int Occurrences(string text, string token) =>
+        text.Split(token, StringSplitOptions.None).Length - 1;
+
     [Theory]
     [InlineData("missing")]
     [InlineData("stale")]

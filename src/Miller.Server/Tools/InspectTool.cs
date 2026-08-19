@@ -95,7 +95,6 @@ public sealed class InspectTool
                 out ToolDiagnostic? diagnostic,
                 compactBanner,
                 boundAgentOutput: true);
-            output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
 
             if (telemetry is not null)
                 ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
