@@ -92,10 +92,10 @@ Commit mode: `parallel-lead-commit`. Workers hand a verified diff to the lead. T
 **Approach:** Wrap the body of `Write` — including `Directory.CreateDirectory` and both `AppendLine` calls — in `catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }`. Do not swallow anything else; an `ArgumentException` from a bad workspace root is a caller bug and must still throw. Keep the two argument guards at the top outside the try.
 
 **Acceptance criteria:**
-- [ ] `Write` returns normally when the log path cannot be created or opened.
-- [ ] `Write` still throws `ArgumentException` for a null, empty, or whitespace `workspaceRoot` or `message`.
-- [ ] A test proves a caller loop survives a failing append.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] `Write` returns normally when the log path cannot be created or opened.
+- [x] `Write` still throws `ArgumentException` for a null, empty, or whitespace `workspaceRoot` or `message`.
+- [x] A test proves a caller loop survives a failing append.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ---
 

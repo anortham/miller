@@ -26,32 +26,48 @@ public static class CtDaemonLog
             Path.Combine(logsDir, "miller-" + stamp + ".jsonl"));
     }
 
+    /// <summary>
+    /// Appends one CT daemon line to the shared daily pair. Never throws for an I/O reason.
+    ///
+    /// The daemon calls this from the last-resort catch blocks of its <c>RunAsync</c> loop, so an
+    /// escaping exception here would end the loop while the lease still holds the daemon lock —
+    /// the same failure the guarded status writes in <c>ContinuousTestDaemonHost</c> exist to
+    /// prevent. A log line is an observable signal, not the liveness path, so a failed append
+    /// degrades to no log and nothing else. The two argument guards stay outside the try: a null,
+    /// empty, or whitespace root or message is a caller bug and must still reach the caller.
+    /// </summary>
     public static void Write(string workspaceRoot, string message, DateTimeOffset? utcNow = null, int? pid = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
 
-        DateTimeOffset when = utcNow ?? DateTimeOffset.UtcNow;
-        int processId = pid ?? Environment.ProcessId;
-        string logsDir = LogsDirectory(workspaceRoot);
-        Directory.CreateDirectory(logsDir);
-        (string humanPath, string jsonPath) = LogFilePaths(logsDir, when);
-
-        string human =
-            when.UtcDateTime.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture)
-            + " [INF] (role:" + Role + " pid:" + processId.ToString(CultureInfo.InvariantCulture)
-            + " cid:) CtDaemon: " + message;
-        AppendLine(humanPath, human);
-
-        var payload = new Dictionary<string, object?>
+        try
         {
-            ["@t"] = when.UtcDateTime.ToString("o", CultureInfo.InvariantCulture),
-            ["@l"] = "Information",
-            ["@m"] = message,
-            ["role"] = Role,
-            ["pid"] = processId,
-        };
-        AppendLine(jsonPath, TestingJson.Value(payload));
+            DateTimeOffset when = utcNow ?? DateTimeOffset.UtcNow;
+            int processId = pid ?? Environment.ProcessId;
+            string logsDir = LogsDirectory(workspaceRoot);
+            Directory.CreateDirectory(logsDir);
+            (string humanPath, string jsonPath) = LogFilePaths(logsDir, when);
+
+            string human =
+                when.UtcDateTime.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture)
+                + " [INF] (role:" + Role + " pid:" + processId.ToString(CultureInfo.InvariantCulture)
+                + " cid:) CtDaemon: " + message;
+            AppendLine(humanPath, human);
+
+            var payload = new Dictionary<string, object?>
+            {
+                ["@t"] = when.UtcDateTime.ToString("o", CultureInfo.InvariantCulture),
+                ["@l"] = "Information",
+                ["@m"] = message,
+                ["role"] = Role,
+                ["pid"] = processId,
+            };
+            AppendLine(jsonPath, TestingJson.Value(payload));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     private static void AppendLine(string path, string line)
