@@ -391,7 +391,10 @@ scripts/test.ps1 all
   `miller tests serve`, the dashboard, or MCP `tests operation=start`. Status reads never create `ct.db`,
   never create `.miller/ct/`, and never start the daemon. On start the daemon is status-only: it reports
   staleness but executes nothing until a new change or an explicit `run`. Delta-unavailable or degraded
-  index never falls back to a full-suite run. User-global execution budget: at most one workspace executes
+  index never falls back to a full-suite run. A test process that goes SILENT for 10 minutes is treated as
+  wedged: Miller kills its process tree and FAILS the run. The bound is on silence, not total duration, so a
+  slow suite survives and a wedged one does not (`MILLER_CT_STALL_TIMEOUT` overrides it; `off` disables it).
+  User-global execution budget: at most one workspace executes
   tests at a time. `MILLER_CT=off` (also `0`/`false`/`no`) is a permanent zero-work guarantee: no daemon,
   no `ct.db` writes, honest status. Green requires complete results at the selected composite key.
   The tenth MCP tool is `tests` (approved 2026-08-18): `status|failures|start|stop|enable|disable|run`.

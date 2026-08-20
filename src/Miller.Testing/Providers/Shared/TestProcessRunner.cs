@@ -17,6 +17,24 @@ public sealed class TestProcessRunnerOptions
     public TimeSpan StreamDrainGracePeriod { get; init; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
+    /// How long a run tolerates COMPLETE SILENCE from the child before it treats the run as wedged, kills the
+    /// process tree, and fails the run.
+    ///
+    /// <para>Without this there is no bound at all. A wedged provider - a test waiting on a lock nobody
+    /// releases, a prompt on a console nobody reads, a testhost that never reports - held the CT daemon for 36
+    /// minutes in one dogfood run, and would have held it forever. Cancellation did not help: nothing was
+    /// cancelling.</para>
+    ///
+    /// <para>The bound is on SILENCE, not on total duration. A legitimate suite may run for an hour and is
+    /// killed by a total-duration cap; the same suite prints something far more often than every ten minutes.
+    /// Silence is the signal that separates slow from wedged.</para>
+    ///
+    /// <para><see cref="Timeout.InfiniteTimeSpan"/> or any non-positive value disables the guard and restores
+    /// the unbounded wait.</para>
+    /// </summary>
+    public TimeSpan OutputStallTimeout { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
     /// Where a run reports containment or shutdown that DEGRADED without failing: a job object that could not be
     /// attached, a priority that could not be lowered, a child that outlived its exit grace period. Every one of
     /// those used to be swallowed or thrown. Swallowed, an uncontained provider looked exactly like a contained
@@ -64,6 +82,13 @@ internal sealed record TestProcessContainment(IDisposable? Job, string? FailureR
 
 public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProcessRunner
 {
+    /// <summary>
+    /// The exit code a run reports when it was killed for going silent. Any non-zero value fails the run in
+    /// every provider; this one is distinctive enough to recognise in a log without being mistaken for a real
+    /// exit code from dotnet, cargo, node, or pytest.
+    /// </summary>
+    public const int StallExitCode = -4109;
+
     private readonly TestProcessRunnerOptions _options;
     private readonly Func<Process, TestProcessContainment> _attachContainmentJob;
 
@@ -115,7 +140,10 @@ public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProce
 
         try
         {
-            return await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            Task<TestProcessResult> exit = process.WaitForExitAsync(cancellationToken);
+            if (await StalledAsync(process, exit, cancellationToken).ConfigureAwait(false))
+                return await StallOutcomeAsync(process, exit, executable).ConfigureAwait(false);
+            return await exit.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -265,7 +293,91 @@ public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProce
         }
     }
 
-    private static async Task DrainAsync(StreamReader reader, StringBuilder buffer)
+    /// <summary>
+    /// Wait for <paramref name="exit"/>, and answer whether the child went silent for longer than
+    /// <see cref="TestProcessRunnerOptions.OutputStallTimeout"/> first.
+    ///
+    /// <para>The wait re-arms rather than sleeping for the whole timeout once: output that arrives resets the
+    /// clock, so the delay is always "the time still owed from the LAST thing the child said". A single
+    /// fixed sleep would fire a stall on a child that had been talking the entire time.</para>
+    /// </summary>
+    private async Task<bool> StalledAsync(
+        ITestBackgroundProcess process,
+        Task<TestProcessResult> exit,
+        CancellationToken cancellationToken)
+    {
+        TimeSpan timeout = _options.OutputStallTimeout;
+        if (timeout <= TimeSpan.Zero || timeout == Timeout.InfiniteTimeSpan)
+        {
+            await exit.ConfigureAwait(false);
+            return false;
+        }
+
+        while (true)
+        {
+            TimeSpan remaining = timeout - process.SinceLastOutput;
+            if (remaining <= TimeSpan.Zero)
+                return !exit.IsCompleted;
+
+            Task finished = await Task.WhenAny(exit, Task.Delay(remaining, cancellationToken))
+                .ConfigureAwait(false);
+            if (finished == exit)
+                return false;
+
+            // A cancelled delay is NOT a stall. Hand the run back so `await exit` raises the caller's
+            // cancellation and the existing cleanup path runs. Looping instead would re-arm an
+            // already-cancelled delay that completes instantly, forever.
+            if (cancellationToken.IsCancellationRequested)
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// End a wedged run: say why, kill the tree, and return a result that CANNOT read as success.
+    ///
+    /// <para>The exit code is forced rather than read from the child. A kill normally leaves a non-zero code,
+    /// but a child that exits cleanly in the same instant as the kill would leave zero - and every provider
+    /// reads a zero exit as a run that worked. A wedged run must fail, so the code is set here, not observed.
+    /// The reason is appended to stderr as well as reported to the diagnostic sink, because the providers put
+    /// stderr into the failure message an operator actually sees.</para>
+    ///
+    /// <para>The collected output is still returned when the killed process reports back inside the grace
+    /// period. It is the only record of what the child was doing when it stopped, and discarding it would
+    /// leave a stall with no evidence.</para>
+    /// </summary>
+    private async Task<TestProcessResult> StallOutcomeAsync(
+        ITestBackgroundProcess process,
+        Task<TestProcessResult> exit,
+        string executable)
+    {
+        string reason =
+            $"Test process '{executable}' PID {process.ProcessId} produced no output for "
+            + $"{_options.OutputStallTimeout}, so the run was treated as wedged and its process tree was "
+            + "terminated.";
+        _options.OnDiagnostic?.Invoke(reason);
+        process.TerminateProcessTree();
+
+        TestProcessResult? collected = null;
+        try
+        {
+            collected = await exit.WaitAsync(_options.CancellationExitGracePeriod).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        string standardError = collected is null
+            ? reason
+            : string.IsNullOrEmpty(collected.StandardError)
+                ? reason
+                : collected.StandardError + Environment.NewLine + reason;
+        return new TestProcessResult(StallExitCode, collected?.StandardOutput ?? string.Empty, standardError);
+    }
+
+    private static async Task DrainAsync(StreamReader reader, StringBuilder buffer, Action onOutput)
     {
         var chunk = new char[4096];
         while (true)
@@ -292,6 +404,9 @@ public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProce
             if (read <= 0)
                 return;
 
+            // Stamp BEFORE appending. The stall clock must advance the moment the child speaks, not after this
+            // loop wins a lock that a slow reader of the same buffer may hold.
+            onOutput();
             lock (buffer)
                 buffer.Append(chunk, 0, read);
         }
@@ -394,6 +509,7 @@ public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProce
         private readonly Task _standardOutput;
         private readonly Task _standardError;
         private readonly object _containmentGate = new();
+        private long _lastOutputTicks;
         private IDisposable? _containment;
         private bool _terminateAttempted;
         private bool _disposed;
@@ -411,11 +527,26 @@ public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProce
             _processId = process.Id;
             _options = options;
             _containment = containment;
-            _standardOutput = DrainAsync(process.StandardOutput, _standardOutputBuffer);
-            _standardError = DrainAsync(process.StandardError, _standardErrorBuffer);
+            _lastOutputTicks = Stopwatch.GetTimestamp();
+            _standardOutput = DrainAsync(process.StandardOutput, _standardOutputBuffer, StampOutput);
+            _standardError = DrainAsync(process.StandardError, _standardErrorBuffer, StampOutput);
         }
 
         public int ProcessId => _processId;
+
+        /// <summary>
+        /// Time since the child last wrote to stdout or stderr, seeded at construction so a child that has not
+        /// spoken yet reads as "just started" rather than "silent since the epoch".
+        /// </summary>
+        public TimeSpan SinceLastOutput =>
+            Stopwatch.GetElapsedTime(Interlocked.Read(ref _lastOutputTicks));
+
+        /// <summary>
+        /// Both drain loops call this, so the write is interlocked. A torn 64-bit read on a 32-bit runtime
+        /// would report a nonsense elapsed time, and the only thing this value decides is whether to kill the
+        /// run.
+        /// </summary>
+        private void StampOutput() => Interlocked.Exchange(ref _lastOutputTicks, Stopwatch.GetTimestamp());
 
         public async Task<TestProcessResult> WaitForExitAsync(CancellationToken cancellationToken = default)
         {

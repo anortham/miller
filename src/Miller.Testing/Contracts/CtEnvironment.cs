@@ -24,7 +24,41 @@ public static class CtEnvironment
         return readVariable(DaemonWorkspaceRoot) ?? contextRoot;
     }
 
+    /// <summary>
+    /// Overrides how long a test process may stay SILENT before the run is treated as wedged and killed.
+    /// Accepts whole seconds (<c>900</c>) or a TimeSpan (<c>00:15:00</c>). <c>off</c>/<c>0</c>/<c>false</c>/
+    /// <c>no</c> disables the guard and restores the unbounded wait.
+    /// </summary>
+    public const string StallTimeout = "MILLER_CT_STALL_TIMEOUT";
+
     public static bool IsOff() => IsOff(Environment.GetEnvironmentVariable(KillSwitch));
+
+    /// <summary>
+    /// The stall bound to use, or <paramref name="fallback"/> when the variable is unset or unreadable.
+    ///
+    /// <para>An unparseable value falls back rather than throwing. This variable decides only whether a
+    /// SILENT run is killed; a typo in it must not stop CT from running at all, and the default it falls back
+    /// to is the safe one.</para>
+    /// </summary>
+    public static TimeSpan ResolveStallTimeout(string? raw, TimeSpan fallback)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return fallback;
+        if (IsOff(raw))
+            return Timeout.InfiniteTimeSpan;
+
+        string trimmed = raw.Trim();
+        if (int.TryParse(trimmed, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out int seconds))
+        {
+            return seconds <= 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(seconds);
+        }
+
+        if (TimeSpan.TryParse(trimmed, System.Globalization.CultureInfo.InvariantCulture, out TimeSpan parsed))
+            return parsed <= TimeSpan.Zero ? Timeout.InfiniteTimeSpan : parsed;
+
+        return fallback;
+    }
 
     /// <summary>
     /// True only for an explicit falsy token (<c>off/0/false/no</c>, any case). Unset or blank stays on.

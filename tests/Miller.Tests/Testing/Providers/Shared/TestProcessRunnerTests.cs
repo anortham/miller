@@ -488,6 +488,12 @@ public sealed class TestProcessRunnerTests
 
         public int ProcessId => 4242;
 
+        /// <summary>
+        /// Zero by default: this stub's existing tests are about cancellation, and a child that "just spoke"
+        /// can never trip the stall guard, so they keep measuring only what they were written to measure.
+        /// </summary>
+        public TimeSpan SinceLastOutput { get; set; } = TimeSpan.Zero;
+
         public async Task<TestProcessResult> WaitForExitAsync(CancellationToken cancellationToken = default)
         {
             if (TerminateCalls > 0)

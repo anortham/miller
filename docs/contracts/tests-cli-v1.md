@@ -134,6 +134,22 @@ runs `ContinuousTestDaemonHost.RunAsync`. It refuses when the workspace is not e
 `MILLER_CT=off`. `stop` signals the leased daemon, waits, then kills that process tree. No daemon
 returns `already_stopped` and creates nothing.
 
+## Run stall bound
+
+A test process that goes SILENT is treated as wedged: Miller kills its process tree and fails the run.
+The bound is on silence, not on total duration — a suite may legitimately run for an hour, but it prints
+something far more often than every ten minutes. A wedged provider previously held the CT daemon
+indefinitely (36 minutes in one dogfood run) because nothing was cancelling it.
+
+- Default: **10 minutes** without output on stdout or stderr.
+- Override with `MILLER_CT_STALL_TIMEOUT`: whole seconds (`900`) or a TimeSpan (`00:15:00`).
+- `off` / `0` / `false` / `no` disables the bound and restores the unbounded wait.
+- An unparseable value falls back to the default rather than failing the run.
+
+A killed run reports a non-zero exit code, and the reason appears both in the run's stderr and in the CT
+daemon log. The exit code is forced, never read from the killed child: a child that exits cleanly in the
+same instant as the kill would otherwise report success for a run that never finished.
+
 ## Exit codes
 
 Same process-level contract as [`cli-eros-v1.md`](cli-eros-v1.md): `0` success, `2` usage, `3`

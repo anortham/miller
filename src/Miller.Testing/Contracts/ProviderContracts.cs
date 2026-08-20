@@ -86,6 +86,21 @@ public interface ITestBackgroundProcess : IAsyncDisposable
 {
     int ProcessId { get; }
 
+    /// <summary>
+    /// How long ago this process last produced output on stdout or stderr. It starts at zero when the
+    /// process starts, so a child that has not spoken YET is not mistaken for one that has stopped
+    /// speaking.
+    ///
+    /// <para>This is the stall signal, and it is deliberately not total elapsed time. A test suite is
+    /// allowed to take an hour; it is not allowed to go silent for ten minutes. A total-duration cap would
+    /// kill the slow suite and miss the wedged one.</para>
+    ///
+    /// <para>It is on the interface, not private to the owned process, so the stall POLICY can live in
+    /// <c>TestProcessRunner.RunCoreAsync</c> beside the cancellation policy and be driven by the same test
+    /// stub. A real child cannot be asked to wedge on demand.</para>
+    /// </summary>
+    TimeSpan SinceLastOutput { get; }
+
     Task<TestProcessResult> WaitForExitAsync(CancellationToken cancellationToken = default);
 
     void TerminateProcessTree();

@@ -68,8 +68,14 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
         ITestProcessRunner? runner = null,
         Action<string>? onDiagnostic = null)
     {
-        ITestProcessRunner process = runner
-            ?? new TestProcessRunner(new TestProcessRunnerOptions { OnDiagnostic = onDiagnostic });
+        var options = new TestProcessRunnerOptions
+        {
+            OnDiagnostic = onDiagnostic,
+            OutputStallTimeout = CtEnvironment.ResolveStallTimeout(
+                Environment.GetEnvironmentVariable(CtEnvironment.StallTimeout),
+                new TestProcessRunnerOptions().OutputStallTimeout),
+        };
+        ITestProcessRunner process = runner ?? new TestProcessRunner(options);
         var rust = new RustTestProvider(process);
         var javascript = new JavaScriptTestProvider(process);
         var python = new PythonTestProvider(process);

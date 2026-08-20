@@ -1726,6 +1726,9 @@ public sealed class DotnetTestProviderTests : IDisposable
         {
             public int ProcessId => 1;
 
+            // Already exited with its output collected, so it has never been silent.
+            public TimeSpan SinceLastOutput => TimeSpan.Zero;
+
             public Task<TestProcessResult> WaitForExitAsync(CancellationToken cancellationToken = default) =>
                 Task.FromResult(result);
 
