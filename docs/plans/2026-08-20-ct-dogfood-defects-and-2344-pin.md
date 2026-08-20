@@ -259,10 +259,15 @@ The runner's own `ID` is not usable — the comment at `DotnetTestProvider.cs:15
 **Approach:** Follow the existing finding's headings: pin moved, upstream, tag provenance, release state, what changed, compatibility, verification. Repoint `docs/README.md:37` from the 2.34.1 finding to the new one. **Leave `docs/README.md:170` alone** — it describes the v1.20.0 release's pin as history and is correct. `README.md` carries no julie-extract version, so it needs no edit. Add a standing note: for the next pin bump, prove safety with a producer diff on real sources, not with an argument about consumer robustness.
 
 **Acceptance criteria:**
-- [ ] The finding records all four checksums and the measured contract constants.
-- [ ] The finding records the producer diff result and its method.
-- [ ] `docs/README.md:37` points at the new finding and names 2.34.4 as the current pin.
-- [ ] No historical release note or earlier finding is edited.
+- [x] The finding records all four checksums and the measured contract constants.
+- [x] The finding records the producer diff result and its method.
+- [x] `docs/README.md:37` points at the new finding and names 2.34.4 as the current pin.
+- [x] No historical release note or earlier finding is edited.
+
+**Correction found during execution:** the contract input "`README.md` carries no julie-extract
+version" is WRONG. `README.md:170` reads "`julie-extract` 2.23.1 ships hand-written extractors for
+38 languages". That is stale drift against the 2.34.4 pin, it predates this task, and it sits
+outside Task 5's file ownership. Deferred, not fixed here.
 
 ---
 
