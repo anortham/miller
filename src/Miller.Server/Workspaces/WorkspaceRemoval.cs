@@ -1,5 +1,6 @@
 using Miller.Indexing;
 using Miller.Server.Tools;
+using Miller.Testing;
 
 namespace Miller.Server.Workspaces;
 
@@ -127,27 +128,122 @@ public static class WorkspaceRemoval
             return WorkspaceRemoveResult.Removed(millerDir, workspaceId, root, indexDirDeleted: false);
         }
 
-        // Delete the index data while HOLDING all four workspace-local write leases (indexer → content →
-        // history → ct.lock), so no Miller process can start writing this index — nor a CLI content import,
-        // history append, or CT store write, which hold those sidecar locks WITHOUT the indexer lock — mid-delete.
-        // Any lease unavailable ⇒ refuse, delete nothing. Only the held lock files are skipped (an open
-        // FileShare.None handle cannot be deleted on Windows); after release, the leftover lock files + empty dir
-        // are removed best-effort — a writer that sneaks in after release finds an already-empty index and does a
-        // clean rebuild.
-        using (WorkspaceWriteLeases? leases =
-            WorkspaceWriteLeases.TryAcquireForRemove(
-                millerDir,
-                acquireWriterLock ?? SingleWriterLock.TryAcquire))
+        // The CT daemon is a FIFTH live holder, and the only one the lease bundle CANNOT hold. Its lease sits
+        // one level down, at <.miller>/ct/daemon-v1.lock: an open FileShare.None handle inside a directory
+        // blocks that directory's recursive delete on Windows, and the skip-set below cannot spare it because
+        // that set is top-level file NAMES. So a live daemon made the delete throw PARTWAY THROUGH and left the
+        // workspace neither removed nor intact — some sidecars gone, the registry row still there.
+        //
+        // The daemon lease is therefore TAKEN AND HELD across the delete, exactly like the other four holders.
+        // Probing it and letting go again was check-then-act: a daemon that started in the window between the
+        // probe and the delete reproduced the very half-deleted workspace the refusal exists to prevent.
+        FileStream? ctDaemonLease = TryHoldContinuousTestDaemonLease(millerDir, out bool ctDaemonLive);
+        try
         {
-            if (leases is null)
+            if (ctDaemonLive)
                 return WorkspaceRemoveResult.RefusedInUse(millerDir, workspaceId, root);
-            SingleWriterLock.DeleteContentsExceptLock(millerDir, WorkspaceWriteLeases.SidecarLockFileNames);
+
+            // Delete the index data while HOLDING all four workspace-local write leases (indexer → content →
+            // history → ct.lock) plus the CT daemon lease, so no Miller process can start writing this index —
+            // nor a CLI content import, history append, or CT store write, which hold those sidecar locks
+            // WITHOUT the indexer lock — mid-delete. Any lease unavailable ⇒ refuse, delete nothing. Only the
+            // held lock files and the CT control-plane dir are skipped (an open FileShare.None handle cannot be
+            // deleted on Windows); after release, the leftovers + empty dir are removed best-effort — a writer
+            // that sneaks in after release finds an already-empty index and does a clean rebuild.
+            using (WorkspaceWriteLeases? leases =
+                WorkspaceWriteLeases.TryAcquireForRemove(
+                    millerDir,
+                    acquireWriterLock ?? SingleWriterLock.TryAcquire))
+            {
+                if (leases is null)
+                    return WorkspaceRemoveResult.RefusedInUse(millerDir, workspaceId, root);
+                SingleWriterLock.DeleteContentsExceptLock(millerDir, DeleteSkipNames);
+            }
+        }
+        finally
+        {
+            ctDaemonLease?.Dispose();
         }
 
         SingleWriterLock.TryDeleteEmptiedDir(millerDir);
         if (workspaceId is not null)
             registry.Remove(workspaceId);
         return WorkspaceRemoveResult.Removed(millerDir, workspaceId, root);
+    }
+
+    /// <summary>
+    /// The entry names inside a <c>.miller</c> dir that the guarded delete must NOT touch: the sidecar
+    /// write-lock files this remove holds, plus the CT control-plane directory <c>ct/</c>.
+    ///
+    /// <para><c>ct/</c> is spared for the same reason the held lock files are. This remove holds
+    /// <c>ct/daemon-v1.lock</c> open with <see cref="FileShare.None"/> across the delete, and on Windows an open
+    /// exclusive handle makes the recursive delete of its PARENT directory throw — half-way through, after the
+    /// index data is already gone. Skipping the directory keeps the destructive step total, and
+    /// <see cref="SingleWriterLock.TryDeleteEmptiedDir"/> removes <c>ct/</c> once the handle is released.</para>
+    ///
+    /// <para>The skip is unconditional, not "only when the handle is held", because that is what makes the
+    /// never-ran-CT case safe too: there is no handle to take when <c>ct/</c> does not exist yet, so a daemon
+    /// that starts mid-delete would otherwise create the directory under the delete and break it the same way.
+    /// The worst case then is a leftover <c>.miller/ct/</c>, never a half-deleted index.</para>
+    /// </summary>
+    private static readonly IReadOnlySet<string> DeleteSkipNames =
+        new HashSet<string>(WorkspaceWriteLeases.SidecarLockFileNames, StringComparer.OrdinalIgnoreCase)
+        {
+            CtDaemonProtocol.DirectoryName,
+        };
+
+    /// <summary>
+    /// Take the CT daemon's lease inside <paramref name="millerDir"/> and HOLD it (the returned stream), or set
+    /// <paramref name="liveDaemon"/> because a live daemon already owns it.
+    ///
+    /// <para>The daemon's lease is an open <see cref="FileShare.None"/> handle on <c>ct/daemon-v1.lock</c>,
+    /// exactly like every other Miller lease, so this is the same acquisition every other holder gets. The lock
+    /// FILE outlives its daemon, so file existence alone is not the signal — a workspace that ever ran CT would
+    /// then be unremovable forever. The handle is also the ONLY signal: reading <c>daemon.lease.json</c> as well
+    /// would add a second, WEAKER one, because <c>CtDaemonLease.IsIdentityLive</c> collapses a denied process
+    /// probe to "live", so a crashed daemon's leftover JSON plus a reused PID would refuse forever.</para>
+    ///
+    /// <para>Only a real sharing/lock violation counts as a live holder — the one shared Windows 32/33 /
+    /// POSIX 11/35 table in <see cref="SingleWriterLock.IsLockContention"/>, which
+    /// <c>CtDaemonLease.TryAcquire</c> already mirrors. Any OTHER denial is NOT proof of a holder: a
+    /// <see cref="FileShare.None"/> holder produces ERROR_SHARING_VIOLATION, never ERROR_ACCESS_DENIED. A lock
+    /// file carrying FILE_ATTRIBUTE_READONLY (restored from a ZIP, stamped by a sync client), an ACL that denies
+    /// this user, or a directory sitting where the file belongs all raise
+    /// <see cref="UnauthorizedAccessException"/> with no daemon anywhere — and reading those as "held" made
+    /// <c>workspace remove</c> refuse forever, naming a writer that does not exist and giving the user nothing
+    /// to stop. They are reported as no holder and the delete proceeds, which is safe because
+    /// <see cref="DeleteSkipNames"/> spares the whole <c>ct/</c> directory either way.</para>
+    ///
+    /// <para>The path is built from <paramref name="millerDir"/> (the delete target) rather than from the
+    /// registry root, so this can only ever ask about the directory this call is about to delete.</para>
+    ///
+    /// <para><see cref="FileMode.Open"/>, never <c>OpenOrCreate</c>: CT is opt-in, and the existence of
+    /// <c>.miller/ct/</c> means "a daemon was started here". A remove must not manufacture that.</para>
+    /// </summary>
+    private static FileStream? TryHoldContinuousTestDaemonLease(string millerDir, out bool liveDaemon)
+    {
+        liveDaemon = false;
+        string lockPath = Path.Combine(
+            millerDir, CtDaemonProtocol.DirectoryName, CtDaemonProtocol.LockFileName);
+        try
+        {
+            return new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null; // no CT daemon has ever run in this workspace: there is no lease to hold.
+        }
+        catch (Exception ex) when (
+            ex is IOException contention &&
+            SingleWriterLock.IsLockContention(contention, OperatingSystem.IsWindows()))
+        {
+            liveDaemon = true; // another process holds the lease: the daemon is live.
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null; // unprobeable, which is not the same fact as held. See the remarks above.
+        }
     }
 
     internal static bool TryRegisteredMillerDir(WorkspaceRegistryRow row, out string millerDir)

@@ -59,21 +59,35 @@ public sealed class ContinuousTestCoordinator
     private readonly ContinuousTestStoreApplier _applier;
     private readonly Func<string> _runIdFactory;
     private readonly ContinuousTestCoordinatorOptions _options;
+    private readonly Action<string>? _lifecycleLog;
 
     public ContinuousTestCoordinator(
         IContinuousTestProvider provider,
         ContinuousTestStore store,
         Func<string>? runIdFactory = null,
-        ContinuousTestCoordinatorOptions? options = null)
-        : this(new FixedContinuousTestProviderResolver(provider), store, runIdFactory, options)
+        ContinuousTestCoordinatorOptions? options = null,
+        Action<string>? onDiagnostic = null)
+        : this(new FixedContinuousTestProviderResolver(provider), store, runIdFactory, options, onDiagnostic)
     {
     }
 
+    /// <summary>
+    /// <paramref name="onDiagnostic"/> receives the maintenance degradations a run survives rather than fails
+    /// on: a build generation directory the reap could not remove, and generation disk over its budget. Left
+    /// unwired they are silent, and a surviving test host that still holds a generation directory reads exactly
+    /// like a clean workspace - the reap fails on every cycle and the operator sees no cause anywhere. Callers
+    /// that know the workspace root pass <see cref="CtDaemonLog.Write"/>, the same sink
+    /// <see cref="ContinuousTestProviderFactory.CreateDefault"/> takes, so CT reports through one channel; a
+    /// caller that does not (a unit test, a preview) passes nothing and keeps today's silence. An explicit
+    /// argument BEATS <see cref="ContinuousTestCoordinatorOptions.LifecycleLog"/>, which stays the seam for a
+    /// caller that already builds an options object.
+    /// </summary>
     public ContinuousTestCoordinator(
         IContinuousTestProviderResolver providerResolver,
         ContinuousTestStore store,
         Func<string>? runIdFactory = null,
-        ContinuousTestCoordinatorOptions? options = null)
+        ContinuousTestCoordinatorOptions? options = null,
+        Action<string>? onDiagnostic = null)
     {
         _providerResolver = providerResolver ?? throw new ArgumentNullException(nameof(providerResolver));
         _store = store ?? throw new ArgumentNullException(nameof(store));
@@ -81,6 +95,7 @@ public sealed class ContinuousTestCoordinator
         _runIdFactory = runIdFactory ?? NewRunId;
         _options = options ?? new ContinuousTestCoordinatorOptions();
         _options.Validate();
+        _lifecycleLog = onDiagnostic ?? _options.LifecycleLog;
     }
 
     public async Task<ContinuousTestDiscoveryResult> DiscoverAsync(
@@ -419,7 +434,7 @@ public sealed class ContinuousTestCoordinator
             return true;
         }
 
-        _options.LifecycleLog?.Invoke($"generation_reap_failed root={workspace.BuildOutputRoot} gen={generationId}");
+        _lifecycleLog?.Invoke($"generation_reap_failed root={workspace.BuildOutputRoot} gen={generationId}");
         ledger.Debts.Add(new ReapDebt(generationId, BestEffortTreeBytes(generationRoot)));
         return false;
     }
@@ -515,7 +530,7 @@ public sealed class ContinuousTestCoordinator
             return;
         }
 
-        _options.LifecycleLog?.Invoke(
+        _lifecycleLog?.Invoke(
             $"generation_disk_over_budget bytes={accounting.TotalBytes} budget={_options.GenerationDiskBudgetBytes}");
     }
 

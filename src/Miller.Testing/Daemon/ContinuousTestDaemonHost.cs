@@ -45,6 +45,13 @@ public sealed class ContinuousTestDaemonHostOptions
 
     public Action<ContinuousTestDaemonSnapshot>? StatusSink { get; init; }
 
+    /// <summary>
+    /// Test seam for the control-plane status write. Production leaves this null and the loop
+    /// publishes through its own lease. A test sets it to fail the write on purpose, which is the
+    /// only way to prove the loop survives a sharing violation without a second live process.
+    /// </summary>
+    public Action<CtDaemonLifecycleState, string>? StatusWriter { get; init; }
+
     public IContinuousTestDaemonEnqueuer? Enqueuer { get; init; }
 }
 
@@ -64,6 +71,15 @@ public sealed class ContinuousTestDaemonHost
     private readonly CtDegradationBackoff _backoff = new();
     private readonly IReadOnlyList<ContinuousTestProject> _projects;
     private readonly string _workspaceId;
+
+    /// <summary>
+    /// Command ids this loop has already handled. The ack FILE is the durable record, but the write
+    /// of that file is now guarded, so a workspace whose ack directory cannot be written would
+    /// otherwise replay every request on every poll — and a replayed <c>run</c> re-enqueues and
+    /// re-executes the suite forever. Pruned each pass to the requests still on disk, so it stays
+    /// bounded by the command directory.
+    /// </summary>
+    private readonly HashSet<string> _acknowledged = new(StringComparer.Ordinal);
     private CtFreshnessKey? _startedAt;
     private DateTimeOffset _runStartedAtUtc;
 
@@ -162,20 +178,33 @@ public sealed class ContinuousTestDaemonHost
             return;
         }
 
-        lease?.WriteStatus(CtDaemonLifecycleState.Running, "status-only");
+        TryWriteStatus(lease, CtDaemonLifecycleState.Running, "status-only");
         Publish(Evaluate("status-only", CtDaemonLifecycleState.Running, executing: false));
 
         IContinuousTestDaemonEnqueuer enqueuer = _options.Enqueuer ?? _queue
             ?? throw new InvalidOperationException("CT daemon host requires a queue or enqueuer");
 
+        // The pulse loop exits only on cancellation, and a stop COMMAND does not cancel the caller's
+        // token. Its own source lets the shutdown tail stop the pulse and then observe it, instead of
+        // blocking the exit for a whole heartbeat interval or leaving the task unobserved.
+        using var heartbeatCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task heartbeat = lease is null
             ? Task.CompletedTask
-            : PulseHeartbeatAsync(lease, cancellationToken);
+            : PulseHeartbeatAsync(lease, heartbeatCancellation.Token);
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            ProcessCommands(lease, cancellationToken);
-            if (cancellationToken.IsCancellationRequested)
+            bool stopRequested;
+            try
+            {
+                stopRequested = ProcessCommands(lease, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            if (stopRequested || cancellationToken.IsCancellationRequested)
                 break;
 
             if (_poller is not null && _backoff.CanPoll)
@@ -234,12 +263,12 @@ public sealed class ContinuousTestDaemonHost
                 if (budget is null)
                 {
                     Publish(Evaluate("execution budget held", CtDaemonLifecycleState.Paused, executing: false));
-                    lease?.WriteStatus(CtDaemonLifecycleState.Paused, "execution budget held");
+                    TryWriteStatus(lease, CtDaemonLifecycleState.Paused, "execution budget held");
                 }
                 else
                 {
                     executing = true;
-                    lease?.WriteStatus(CtDaemonLifecycleState.Running, "executing");
+                    TryWriteStatus(lease, CtDaemonLifecycleState.Running, "executing");
                     try
                     {
                         await _queue.DrainReadyAsync(now, cancellationToken).ConfigureAwait(false);
@@ -253,7 +282,7 @@ public sealed class ContinuousTestDaemonHost
             else
             {
                 string reason = _startedAt is null ? "status-only" : "idle";
-                lease?.WriteStatus(CtDaemonLifecycleState.Running, reason);
+                TryWriteStatus(lease, CtDaemonLifecycleState.Running, reason);
                 Publish(Evaluate(reason, CtDaemonLifecycleState.Running, executing: false));
             }
 
@@ -270,8 +299,13 @@ public sealed class ContinuousTestDaemonHost
             }
         }
 
-        lease?.WriteStatus(CtDaemonLifecycleState.Stopped, "stopped");
+        TryWriteStatus(lease, CtDaemonLifecycleState.Stopped, "stopped");
         Publish(Evaluate("stopped", CtDaemonLifecycleState.Stopped, executing: false));
+
+        // Stop the pulse first, then await it. Awaiting an uncancelled pulse would hang the exit,
+        // and abandoning it would leave both an unobserved exception and a heartbeat that can still
+        // land after the lease below is released.
+        await heartbeatCancellation.CancelAsync().ConfigureAwait(false);
         await heartbeat.ConfigureAwait(false);
     }
 
@@ -303,16 +337,56 @@ public sealed class ContinuousTestDaemonHost
         }
     }
 
-    private void ProcessCommands(CtDaemonLease? lease, CancellationToken cancellationToken)
+    /// <summary>
+    /// The single guarded path for every status write in this loop. Never throws, for the same
+    /// reason <see cref="PulseHeartbeatAsync"/> never throws.
+    ///
+    /// The loop republishes <c>daemon.status.json</c> on every poll interval (250 ms by default)
+    /// while a waiting <c>tests run --wait</c> reads it every 50 ms, so a read and a publish
+    /// overlap constantly. <see cref="CtDaemonJson.WriteAtomic"/> retries the replace a bounded
+    /// number of times and then rethrows, so the sharing violation still reaches this loop. An
+    /// unguarded write would kill the loop while the lease still holds <c>daemon-v1.lock</c>,
+    /// which leaves the workspace with a live lock and no daemon behind it. Liveness rides that
+    /// OS lock, not this file: the status record is an observable signal, so one lost write costs
+    /// a stale reason string for one interval, where an escaped exception costs the daemon.
+    /// </summary>
+    private void TryWriteStatus(CtDaemonLease? lease, CtDaemonLifecycleState state, string reason)
+    {
+        try
+        {
+            if (_options.StatusWriter is { } writer)
+                writer(state, reason);
+            else
+                lease?.WriteStatus(state, reason);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Drains the file command channel. Returns <c>true</c> when a live stop request asked this
+    /// daemon to exit.
+    ///
+    /// A stop used to leave through <c>throw new OperationCanceledException()</c>. Production never
+    /// cancels the loop token, so that throw was the daemon's only exit, and it jumped over the whole
+    /// shutdown tail: the final <c>Stopped</c> status, the final snapshot, and the heartbeat await
+    /// were unreachable, and every requested stop reached the CLI as an error and exit code 1. A
+    /// returned flag ends the loop at the top instead, so the tail runs on the normal, requested path
+    /// and a real cancellation keeps its own separate route out.
+    /// </summary>
+    private bool ProcessCommands(CtDaemonLease? lease, CancellationToken cancellationToken)
     {
         string commandDir = CtDaemonProtocol.CommandDirectory(_workspaceRoot);
         if (!Directory.Exists(commandDir))
-            return;
+            return false;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (string path in Directory.EnumerateFiles(commandDir, "*.request.json"))
         {
             cancellationToken.ThrowIfCancellationRequested();
             string id = Path.GetFileName(path)[..^".request.json".Length];
-            if (CtCommandChannel.TryReadAck(_workspaceRoot, id) is not null)
+            seen.Add(id);
+            if (_acknowledged.Contains(id) || CtCommandChannel.TryReadAck(_workspaceRoot, id) is not null)
                 continue;
             CtDaemonCommandRequest? request = CtCommandChannel.TryReadRequest(_workspaceRoot, id);
             if (request is null)
@@ -323,17 +397,13 @@ public sealed class ContinuousTestDaemonHost
                 // unacknowledged by a dead predecessor must not kill this instance at startup.
                 if (request.RequestedAtUtc < _runStartedAtUtc)
                 {
-                    CtCommandChannel.WriteAck(
-                        _workspaceRoot,
-                        new CtDaemonCommandAck(id, CtDaemonCommandState.Acknowledged, DateTimeOffset.UtcNow, "stale-stop-ignored"));
+                    TryWriteAck(id, "stale-stop-ignored");
                     continue;
                 }
 
-                CtCommandChannel.WriteAck(
-                    _workspaceRoot,
-                    new CtDaemonCommandAck(id, CtDaemonCommandState.Acknowledged, DateTimeOffset.UtcNow, "stopping"));
-                lease?.WriteStatus(CtDaemonLifecycleState.Stopped, "stop");
-                throw new OperationCanceledException();
+                TryWriteAck(id, "stopping");
+                TryWriteStatus(lease, CtDaemonLifecycleState.Stopped, "stop");
+                return true;
             }
 
             if (request.Kind == CtDaemonCommandKind.Run && _queue is not null && _projects.Count > 0)
@@ -355,9 +425,41 @@ public sealed class ContinuousTestDaemonHost
                 }
             }
 
+            TryWriteAck(id, "run");
+        }
+
+        _acknowledged.IntersectWith(seen);
+        return false;
+    }
+
+    /// <summary>
+    /// The single guarded path for every command acknowledgement, for the same reason
+    /// <see cref="TryWriteStatus"/> exists. <see cref="CtCommandChannel.WriteAck"/> reaches
+    /// <see cref="CtDaemonJson.WriteAtomic"/>, which retries the replace a bounded number of times
+    /// and then rethrows, so a Defender scan holding the staged temp file — or an ACL that denies the
+    /// daemon's user — used to escape this loop and kill the daemon while its lease still held
+    /// <c>daemon-v1.lock</c>. A lost ack degrades to the client's existing unacknowledged-command
+    /// timeout: <c>stop</c> still stops (the caller falls through to its own wait and kill) and
+    /// <c>run</c> still enqueued the work, which costs one command its confirmation instead of
+    /// costing the workspace its daemon.
+    /// </summary>
+    private void TryWriteAck(string commandId, string reason)
+    {
+        // Remembered whether or not the file lands, so an unwritable ack directory cannot make the
+        // loop treat the same request as new on every poll.
+        _acknowledged.Add(commandId);
+        try
+        {
             CtCommandChannel.WriteAck(
                 _workspaceRoot,
-                new CtDaemonCommandAck(id, CtDaemonCommandState.Acknowledged, DateTimeOffset.UtcNow, "run"));
+                new CtDaemonCommandAck(
+                    commandId,
+                    CtDaemonCommandState.Acknowledged,
+                    DateTimeOffset.UtcNow,
+                    reason));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
         }
     }
 

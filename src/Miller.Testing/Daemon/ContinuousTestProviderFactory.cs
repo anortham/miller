@@ -55,9 +55,21 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
         _frameworkProviders = NormalizeFrameworkProviders(frameworkProviders);
     }
 
-    public static ContinuousTestProviderFactory CreateDefault(ITestProcessRunner? runner = null)
+    /// <summary>
+    /// The five providers over one shared process runner.
+    /// <paramref name="onDiagnostic"/> receives the degradations a run survives rather than fails on: a
+    /// containment job the kernel refused, a priority that would not apply, a child that outlived its exit
+    /// grace period. Left unwired they are silent, and an UNCONTAINED provider reads exactly like a contained
+    /// one - which is how a surviving grandchild holding the build output directory looks like nothing at all.
+    /// Callers that know the workspace root pass <see cref="CtDaemonLog.Write"/>; a caller that does not (a
+    /// unit test, a preview) passes nothing and keeps today's silence.
+    /// </summary>
+    public static ContinuousTestProviderFactory CreateDefault(
+        ITestProcessRunner? runner = null,
+        Action<string>? onDiagnostic = null)
     {
-        ITestProcessRunner process = runner ?? new TestProcessRunner();
+        ITestProcessRunner process = runner
+            ?? new TestProcessRunner(new TestProcessRunnerOptions { OnDiagnostic = onDiagnostic });
         var rust = new RustTestProvider(process);
         var javascript = new JavaScriptTestProvider(process);
         var python = new PythonTestProvider(process);
@@ -72,8 +84,17 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
                 ["node-test"] = new(javascript, "ct-provider:javascript"),
                 ["pytest"] = new(python, "ct-provider:python"),
                 ["python"] = new(python, "ct-provider:python"),
-            });
+            })
+        {
+            DefaultProcessRunner = process,
+        };
     }
+
+    /// <summary>
+    /// Test seam: the runner <see cref="CreateDefault"/> built and shared across the five providers. Null for a
+    /// factory built through the public constructor, which is handed providers rather than a runner.
+    /// </summary>
+    internal ITestProcessRunner? DefaultProcessRunner { get; private init; }
 
     public ContinuousTestProviderResolution Resolve(ContinuousTestWorkspace workspace)
     {

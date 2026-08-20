@@ -77,31 +77,123 @@ public sealed class PythonTestProvider : IContinuousTestProvider
         CtGenerationPaths paths,
         CancellationToken cancellationToken)
     {
-        var command = BuildRunCommand(request, paths);
-        var result = await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
-        var artifactPath = ResultArtifactPath(request, paths);
-        var caseResults = File.Exists(artifactPath)
-            ? ParsePytestJunit(request, artifactPath)
-            : [];
+        // Resolved once and threaded through: the report path the command is TOLD to write and the
+        // path the parser reads back must be the same string, and NewRunId is time-based.
+        var runId = request.RunId ?? NewRunId(request);
+        var invocations = BuildRunInvocations(request, paths, runId);
+        var results = new List<TestProcessResult>(invocations.Count);
 
-        if (result.ExitCode != 0 && caseResults.Count == 0)
-        {
-            if (request.TestCaseIds.Count == 0)
-                throw new ContinuousTestProviderException(
-                    $"Python test run failed with exit code {result.ExitCode}: {FailureSummary(result)}");
+        // Sequential on purpose. The invocations share one project root, one generation directory and
+        // one pytest cache, so running them at once would have them overwrite each other's output.
+        // The CT execution budget already says a workspace runs one thing at a time.
+        foreach (var invocation in invocations)
+            results.Add(await _runner.RunAsync(invocation.Command, cancellationToken).ConfigureAwait(false));
 
-            caseResults = FailedSelectedCaseResults(request, result, artifactPath);
-        }
+        var caseResults = MergeRuns(request, invocations, results);
 
         return new ProviderRunResult(
-            RunId: request.RunId ?? NewRunId(request),
+            RunId: runId,
             Status: RunStatus(caseResults),
             CaseResults: caseResults,
-            ResultArtifactPath: File.Exists(artifactPath) ? artifactPath : null,
+            // The first part that actually reached disk, never part 0 by position. A chunked run whose
+            // first part dies before pytest writes its report leaves that path missing, and naming it
+            // would report a run with no evidence at all while the surviving parts' junit reports sit
+            // in the generation directory. Same rule as JavaScriptTestProvider.
+            ResultArtifactPath: invocations
+                .Select(static invocation => invocation.ResultArtifactPath)
+                .FirstOrDefault(File.Exists),
             CoverageArtifacts: DiscoverCoverageArtifacts(request.Workspace))
         {
             GenerationId = paths.GenerationId,
         };
+    }
+
+    /// <summary>
+    /// pytest's exit code for "no tests were collected". It is not a test failure: the session ran to
+    /// the end and found nothing to run. See <see cref="MergeRuns"/>.
+    /// </summary>
+    private const int PytestNoTestsCollectedExitCode = 5;
+
+    /// <summary>
+    /// Folds the invocations of one chunked run back into the single result set the caller asked for.
+    /// A one-invocation run parses exactly as it did before chunking existed.
+    ///
+    /// Every part's report is read, so no chunk's verdicts are lost, and the worst status wins: the
+    /// run status is aggregated over the union of the case results, so a green chunk can never mask a
+    /// red sibling.
+    ///
+    /// Two events look alike from a distance and must NOT be judged alike:
+    ///
+    /// <list type="bullet">
+    /// <item>A chunk whose process wrote NO report answered for nothing it selected, so ITS test case
+    /// ids are recorded failed - never the whole selection, which the healthy chunks already answered
+    /// for.</item>
+    /// <item>A chunk that RAN and collected nothing wrote its report and exited
+    /// <see cref="PytestNoTestsCollectedExitCode"/>. A repo with a fixture tree of <c>test_*.py</c>
+    /// input files holds no test functions, and ordinal chunking puts those files together, so a whole
+    /// chunk can legitimately collect nothing. Failing its ids would turn dozens of tests red on a
+    /// commit that changed nothing, and every later run would repeat it. Those ids get NO verdict
+    /// here, so the store marks them stale - which is what the one unchunked pytest process produced
+    /// for the same files before chunking existed.</item>
+    /// </list>
+    ///
+    /// The discriminator is the report on disk plus the exit code, never the exit code alone: pytest's
+    /// junitxml plugin writes the report in <c>pytest_sessionfinish</c>, so a report means the session
+    /// finished.
+    ///
+    /// The no-verdicts case is judged ACROSS THE RUN, as <c>DotnetTestProvider</c> does, never per
+    /// chunk: a chunk that finished, failed, and named no test this run selected records nothing and
+    /// lets its siblings stand, but a run where NO chunk produced a single verdict and at least one
+    /// chunk failed for a reason other than "collected nothing" throws, so an unexplained run can
+    /// never be committed as a silent empty pass.
+    /// </summary>
+    private static IReadOnlyList<ProviderCaseResult> MergeRuns(
+        ContinuousTestProviderRunRequest request,
+        IReadOnlyList<PytestInvocation> invocations,
+        IReadOnlyList<TestProcessResult> results)
+    {
+        var caseResults = new List<ProviderCaseResult>();
+        TestProcessResult? unexplainedFailure = null;
+        for (var index = 0; index < invocations.Count; index++)
+        {
+            var invocation = invocations[index];
+            var result = results[index];
+            bool reported = File.Exists(invocation.ResultArtifactPath);
+            IReadOnlyList<ProviderCaseResult> parsed = reported
+                ? ParsePytestJunit(request, invocation.ResultArtifactPath)
+                : [];
+
+            caseResults.AddRange(parsed);
+            if (parsed.Count > 0 || result.ExitCode == 0)
+                continue;
+
+            if (reported)
+            {
+                // The session finished and produced no verdict for anything this chunk selected.
+                // "Collected nothing" is the ordinary fixture-tree shape and says nothing at all;
+                // any other failing exit code is unexplained and is judged across the run below.
+                if (result.ExitCode != PytestNoTestsCollectedExitCode)
+                    unexplainedFailure ??= result;
+                continue;
+            }
+
+            if (invocation.SelectedTestCaseIds.Count == 0)
+                throw new ContinuousTestProviderException(
+                    $"Python test run failed with exit code {result.ExitCode}: {FailureSummary(result)}");
+
+            caseResults.AddRange(FailedSelectedCaseResults(
+                request,
+                invocation.SelectedTestCaseIds,
+                result,
+                invocation.ResultArtifactPath));
+        }
+
+        if (caseResults.Count == 0 && unexplainedFailure is not null)
+            throw new ContinuousTestProviderException(
+                $"Python test run failed with exit code {unexplainedFailure.ExitCode}: " +
+                FailureSummary(unexplainedFailure));
+
+        return caseResults;
     }
 
     /// <summary>
@@ -113,39 +205,178 @@ public sealed class PythonTestProvider : IContinuousTestProvider
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        return BuildRunCommand(request, CtGenerationPaths.ResolveLatestOrFirst(request.Workspace));
+        return BuildRunCommands(request)[0];
     }
 
-    private TestProcessCommand BuildRunCommand(
+    /// <summary>
+    /// Preview/test seam: every invocation the request would run, in order. A selection that fits one
+    /// command line yields exactly one, so this is the same command <see cref="BuildRunCommand"/>
+    /// returns; a wider selection yields the chunks it is split into. Production runs never use it —
+    /// <see cref="RunAsync"/> allocates its own generation and builds every command from that handle.
+    /// </summary>
+    public IReadOnlyList<TestProcessCommand> BuildRunCommands(ContinuousTestProviderRunRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return BuildRunInvocations(
+                request,
+                CtGenerationPaths.ResolveLatestOrFirst(request.Workspace),
+                request.RunId ?? NewRunId(request))
+            .Select(static invocation => invocation.Command)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// One pytest invocation: the command, the <c>--junitxml</c> report it writes, and the request's
+    /// test case ids it answers for. The three travel together because a chunked run gives each part
+    /// its own report path, and a part that dies before writing one must be reported failed against
+    /// its own ids only.
+    /// </summary>
+    private sealed record PytestInvocation(
+        TestProcessCommand Command,
+        string ResultArtifactPath,
+        IReadOnlyList<string> SelectedTestCaseIds);
+
+    /// <summary>
+    /// One chunkable unit of the selection: the argv elements that must travel together, plus the
+    /// request ids that resolved to them.
+    /// </summary>
+    private sealed record PytestSelectionUnit(
+        IReadOnlyList<string> Argv,
+        IReadOnlyList<string> TestCaseIds);
+
+    /// <summary>
+    /// Builds the invocations for one run. A selection that fits the platform command-line cap is a
+    /// single command with the unchanged single report path — byte-identical to what this provider
+    /// sent before chunking existed; a wider selection is split across several pytest invocations.
+    ///
+    /// pytest takes one argv element per selected node id and has no response-file option, so a wide
+    /// selection has nowhere to go but across processes. Windows caps a command line at 32,767
+    /// characters, and this provider's executable is the caller's own first token — a workspace that
+    /// names a <c>.cmd</c>/<c>.bat</c> wrapper is routed through <c>cmd.exe</c> and capped at 8,191
+    /// instead. Neither cap truncates: the over-long launch throws at <c>Process.Start</c>, the
+    /// coordinator records a failed run, marks the tests stale, and retries the identical selection
+    /// forever. <see cref="CtArgvChunking"/>'s default byte budget already assumes the lower cap.
+    /// </summary>
+    private static IReadOnlyList<PytestInvocation> BuildRunInvocations(
         ContinuousTestProviderRunRequest request,
-        CtGenerationPaths paths)
+        CtGenerationPaths paths,
+        string runKey)
     {
         var framework = RequiredFramework(request.Workspace);
         if (framework != "pytest")
             throw UnsupportedFramework(framework, request.Workspace.ProjectPath);
 
-        var projectRoot = ProjectRoot(request.Workspace);
         paths.EnsureDirectories();
         Directory.CreateDirectory(CacheDirectory(paths));
-        var artifactPath = ResultArtifactPath(request, paths);
+
+        IReadOnlyList<PytestSelectionUnit> units = SelectionUnits(request);
+        if (units.Count == 0)
+        {
+            // Nothing selectable: pytest runs whatever the project configures, exactly as before. The
+            // request's ids still ride along so an outright launch failure is reported against them.
+            return [BuildInvocation(request, paths, runKey, [], request.TestCaseIds, part: null)];
+        }
+
+        IReadOnlyList<IReadOnlyList<PytestSelectionUnit>> chunks =
+            CtArgvChunking.Chunk(units, static unit => CtArgvChunking.ArgvCost(unit.Argv));
+        var invocations = new List<PytestInvocation>(chunks.Count);
+        for (var index = 0; index < chunks.Count; index++)
+        {
+            var chunk = chunks[index];
+            var attributed = chunk
+                .SelectMany(static unit => unit.TestCaseIds)
+                .ToHashSet(StringComparer.Ordinal);
+
+            // The FIRST invocation also answers for ids that name no test file. They never reached the
+            // argv, so no chunk selected them, and dropping them would lose them from a failed run.
+            if (index == 0)
+            {
+                foreach (var testCaseId in UnselectableTestCaseIds(request))
+                    attributed.Add(testCaseId);
+            }
+
+            invocations.Add(BuildInvocation(
+                request,
+                paths,
+                runKey,
+                chunk.SelectMany(static unit => unit.Argv).ToArray(),
+                // Request order with duplicates intact: a one-invocation run must report exactly the
+                // rows it reported before chunking existed.
+                request.TestCaseIds.Where(attributed.Contains).ToArray(),
+                part: chunks.Count == 1 ? null : index));
+        }
+
+        return invocations;
+    }
+
+    /// <summary>
+    /// The selection as chunkable units, one per distinct test file in ordinal order — the same argv
+    /// the provider built before chunking existed. pytest selects by path, so a unit is a single argv
+    /// element, but it still carries every request id that resolved to that file, because two ids can
+    /// name one file and a failed chunk must report both.
+    /// </summary>
+    private static IReadOnlyList<PytestSelectionUnit> SelectionUnits(
+        ContinuousTestProviderRunRequest request)
+    {
+        var byFile = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var testCaseId in request.TestCaseIds)
+        {
+            var file = TestFileFromId(testCaseId);
+            if (string.IsNullOrWhiteSpace(file))
+                continue;
+
+            if (!byFile.TryGetValue(file, out var testCaseIds))
+            {
+                testCaseIds = [];
+                byFile[file] = testCaseIds;
+            }
+
+            testCaseIds.Add(testCaseId);
+        }
+
+        return byFile
+            .OrderBy(row => row.Key, StringComparer.Ordinal)
+            .Select(row => new PytestSelectionUnit([row.Key], row.Value))
+            .ToArray();
+    }
+
+    private static IEnumerable<string> UnselectableTestCaseIds(ContinuousTestProviderRunRequest request) =>
+        request.TestCaseIds.Where(static testCaseId => string.IsNullOrWhiteSpace(TestFileFromId(testCaseId)));
+
+    private static PytestInvocation BuildInvocation(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        string runKey,
+        IReadOnlyList<string> selection,
+        IReadOnlyList<string> selectedTestCaseIds,
+        int? part)
+    {
+        var projectRoot = ProjectRoot(request.Workspace);
+        var artifactPath = ResultArtifactPath(paths, runKey, part);
         Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
 
-        var selectedFiles = request.TestCaseIds
-            .Select(TestFileFromId)
-            .OfType<string>()
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
         var pytestArgs = new[]
             {
                 $"--junitxml={artifactPath}",
                 "-o",
                 $"cache_dir={CacheDirectory(paths)}",
             }
-            .Concat(selectedFiles)
+            .Concat(selection)
             .ToArray();
 
+        return new PytestInvocation(
+            BuildCommand(request, paths, projectRoot, pytestArgs),
+            artifactPath,
+            selectedTestCaseIds);
+    }
+
+    private static TestProcessCommand BuildCommand(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        string projectRoot,
+        IReadOnlyList<string> pytestArgs)
+    {
         if (!string.IsNullOrWhiteSpace(request.Command))
         {
             var tokens = SplitCommand(request.Command);
@@ -262,13 +493,19 @@ public sealed class PythonTestProvider : IContinuousTestProvider
         return null;
     }
 
+    /// <summary>
+    /// The verdict for an invocation that failed without writing a report: every test case id THAT
+    /// invocation selected is failed, because the run proved nothing about any of them. A chunked run
+    /// passes only the failing chunk's ids, so a healthy sibling's parsed verdicts stand.
+    /// </summary>
     private static IReadOnlyList<ProviderCaseResult> FailedSelectedCaseResults(
         ContinuousTestProviderRunRequest request,
+        IReadOnlyList<string> testCaseIds,
         TestProcessResult result,
         string artifactPath)
     {
         var summary = FailureSummary(result);
-        return request.TestCaseIds
+        return testCaseIds
             .Select(testCaseId => new ProviderCaseResult(
                 Id: StableId("test_result", request.Workspace.WorkspaceId, testCaseId, request.RunId),
                 TestCaseId: testCaseId,
@@ -355,11 +592,17 @@ public sealed class PythonTestProvider : IContinuousTestProvider
                 : Path.GetDirectoryName(projectPath)!;
     }
 
-    private static string ResultArtifactPath(ContinuousTestProviderRunRequest request, CtGenerationPaths paths)
+    /// <summary>
+    /// The junit report for one invocation. <paramref name="part"/> is null for a run that fits a
+    /// single command line — which keeps the filename byte-identical to the pre-chunking one — and is
+    /// the zero-based invocation index when a run is split, so chunk N cannot overwrite chunk N-1's
+    /// report and every part stays on disk as evidence.
+    /// </summary>
+    private static string ResultArtifactPath(CtGenerationPaths paths, string runKey, int? part)
     {
-        var runKey = request.RunId ?? NewRunId(request);
         var runHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(runKey))).ToLowerInvariant();
-        return Path.Combine(paths.ResultsDirectory, $"run-{runHash}.xml");
+        var suffix = part is null ? string.Empty : $".part{part.Value.ToString("D3", CultureInfo.InvariantCulture)}";
+        return Path.Combine(paths.ResultsDirectory, $"run-{runHash}{suffix}.xml");
     }
 
     private static ContinuousTestProviderException StampGeneration(

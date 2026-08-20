@@ -116,7 +116,7 @@ public sealed class QueryTimeResolutionReaderTests
     public void FamilyModeEvidenceWorksWithNoAttachedResolutionBase()
     {
         using ResolutionStoreFixture fixture = PopulateStore();
-        var session = new FixtureReadSession(fixture, WorkspaceReadMode.FamilyStore);
+        using var session = new FixtureReadSession(fixture, WorkspaceReadMode.FamilyStore);
         var bounds = new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10);
 
         ReferenceEvidenceBundle bundle = ReferenceEvidenceReader.ReadForSymbol(

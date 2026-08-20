@@ -18,9 +18,12 @@
   </ItemGroup>
 
   <!-- The contract gate (JulieSchemaGate) and version constants are internal; the contract test suite
-       drives them directly. -->
+       drives them directly. Miller.Testing needs WindowsKillOnCloseJob: CT provider processes are contained
+       in the same kill-on-close job object as julie-extract scans, because Kill(entireProcessTree: true)
+       walks only the LIVE child list and cannot see a grandchild whose own parent already exited. -->
   <ItemGroup>
     <InternalsVisibleTo Include="Miller.Tests" />
+    <InternalsVisibleTo Include="Miller.Testing" />
     <InternalsVisibleTo Include="miller" />
   </ItemGroup>
 

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Data.Sqlite;
 using Miller.Testing;
 using Miller.Tests.Testing.Daemon.Engine;
@@ -47,6 +48,355 @@ public sealed class ContinuousTestDaemonHostHeartbeatTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// The daemon republishes its status every poll interval while a waiting client reads the same
+    /// file far faster, so the two collide constantly and Windows raises a sharing failure. An
+    /// unguarded write turned that collision into a dead daemon that still held its lease.
+    /// </summary>
+    [Fact]
+    public async Task Run_survives_a_status_write_that_throws_a_sharing_violation()
+    {
+        var writer = new RecordingStatusWriter(new IOException("the status file is open for reading"));
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            StatusWriterOptions(writer),
+            cts.Token);
+
+        await WaitForAsync(() => writer.Count >= 3 || run.IsCompleted);
+
+        Assert.False(run.IsCompleted, "a failed status write ended the daemon loop");
+        Assert.True(writer.Count >= 3, $"the loop wrote status only {writer.Count} times before it stalled");
+
+        await cts.CancelAsync();
+        ContinuousTestDaemonSnapshot snapshot = await run;
+        Assert.Equal(CtDaemonLifecycleState.Stopped, snapshot.State);
+        Assert.Equal("stopped", snapshot.Reason);
+    }
+
+    /// <summary>
+    /// Pins the START status write specifically.
+    ///
+    /// The earlier version of this test only asserted that the tuple (Running, "status-only") was
+    /// somewhere in the recording, which the loop's own idle branch also emits, so reverting the
+    /// start write to the unguarded form left it green. The park-after-one-pass delay plus a queue
+    /// that already holds ready work makes the whole recorded sequence exact: the first write can
+    /// only come from the start, the second only from the budget-held branch, and the third only
+    /// from the shutdown tail.
+    /// </summary>
+    [Fact]
+    public async Task The_start_write_the_paused_write_and_the_shutdown_write_all_go_through_the_guarded_path()
+    {
+        ContinuousTestWorkspace workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        var provider = new FakeContinuousTestProvider();
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(provider, store));
+        queue.Enqueue(EngineTestSupport.Change(workspace));
+
+        // A second holder of the user-global capacity-1 lease is what puts the loop on its paused
+        // branch, which is the branch no earlier test reached.
+        var budget = CtExecutionBudget.ForMillerHome(Path.Combine(_root, "budget-home"));
+        using CtExecutionBudgetLease? held = budget.TryAcquire(
+            new CtExecutionBudgetRequest(_root, "run"),
+            TimeSpan.Zero,
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(held);
+
+        var writer = new RecordingStatusWriter(new IOException("the status file is open for reading"));
+        var delay = new ParkingDelay();
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                WorkspaceId = EngineTestSupport.WorkspaceId,
+                AcquireLease = false,
+                Store = store,
+                Queue = queue,
+                Budget = budget,
+                StatusWriter = writer.Write,
+                Delay = delay.DelayAsync,
+            },
+            cts.Token);
+
+        await WaitForAsync(() => delay.Count >= 1 || run.IsCompleted);
+        Assert.False(run.IsCompleted, "a failed status write ended the daemon loop");
+
+        await cts.CancelAsync();
+        ContinuousTestDaemonSnapshot snapshot = await run;
+
+        StatusWrite[] expected =
+        [
+            new(CtDaemonLifecycleState.Running, "status-only"),
+            new(CtDaemonLifecycleState.Paused, "execution budget held"),
+            new(CtDaemonLifecycleState.Stopped, "stopped"),
+        ];
+        Assert.Equal(expected, writer.Written);
+        Assert.Equal(CtDaemonLifecycleState.Stopped, snapshot.State);
+        Assert.Empty(provider.RunRequests);
+    }
+
+    /// <summary>
+    /// Covers the remaining guarded write: the one the loop makes on every execution start, which
+    /// in production fires against <c>daemon.status.json</c> while a <c>tests run --wait</c> client
+    /// polls the same file. No earlier test gave the host a queue with ready work, so this branch
+    /// was never executed at all.
+    /// </summary>
+    [Fact]
+    public async Task The_execution_start_write_goes_through_the_guarded_path()
+    {
+        ContinuousTestWorkspace workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        var provider = new FakeContinuousTestProvider { RunResult = Passed("test:app", "2") };
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(provider, store));
+        queue.Enqueue(EngineTestSupport.Change(workspace));
+
+        var writer = new RecordingStatusWriter(new UnauthorizedAccessException("the status file is locked"));
+        var delay = new ParkingDelay();
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                WorkspaceId = EngineTestSupport.WorkspaceId,
+                AcquireLease = false,
+                Store = store,
+                Queue = queue,
+                Budget = CtExecutionBudget.Disabled(),
+                StatusWriter = writer.Write,
+                Delay = delay.DelayAsync,
+            },
+            cts.Token);
+
+        await WaitForAsync(() => delay.Count >= 1 || run.IsCompleted);
+        Assert.False(run.IsCompleted, "a failed status write ended the daemon loop");
+
+        await cts.CancelAsync();
+        await run;
+
+        StatusWrite[] expected =
+        [
+            new(CtDaemonLifecycleState.Running, "status-only"),
+            new(CtDaemonLifecycleState.Running, "executing"),
+            new(CtDaemonLifecycleState.Stopped, "stopped"),
+        ];
+        Assert.Equal(expected, writer.Written);
+        Assert.Single(provider.RunRequests);
+    }
+
+    /// <summary>
+    /// A requested stop is the daemon's normal exit, so it must leave through the shutdown tail.
+    /// It used to leave by throwing, which skipped the final status write, skipped the final
+    /// snapshot, left the heartbeat task unobserved, and reached the CLI as "ct-daemon failed: The
+    /// operation was canceled" with exit code 1. Nothing cancels the token here: if the loop still
+    /// throws, the await below reports the exception, and if the heartbeat is awaited without being
+    /// cancelled first the 15-second pulse interval blocks the exit past the wait.
+    /// </summary>
+    [Fact]
+    public async Task A_live_stop_request_runs_the_shutdown_tail_and_exits_cleanly()
+    {
+        var writer = new RecordingStatusWriter();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                AcquireLease = true,
+                Enqueuer = new RecordingEnqueuer(),
+                StatusWriter = writer.Write,
+                PollInterval = TimeSpan.FromMilliseconds(5),
+                HeartbeatInterval = TimeSpan.FromSeconds(30),
+            },
+            TestContext.Current.CancellationToken);
+
+        await WaitForAsync(() => writer.Count >= 1 || run.IsCompleted);
+        CtDaemonCommandRequest request = CtCommandChannel.WriteRequest(
+            _root,
+            CtDaemonCommandKind.Stop,
+            reason: "stop",
+            freshness: null);
+
+        ContinuousTestDaemonSnapshot snapshot = await run.WaitAsync(
+            TimeSpan.FromSeconds(10),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(CtDaemonLifecycleState.Stopped, snapshot.State);
+        Assert.Equal("stopped", snapshot.Reason);
+
+        StatusWrite[] written = writer.Written;
+        Assert.Equal(new StatusWrite(CtDaemonLifecycleState.Stopped, "stop"), written[^2]);
+        Assert.Equal(new StatusWrite(CtDaemonLifecycleState.Stopped, "stopped"), written[^1]);
+        Assert.Equal("stopping", CtCommandChannel.TryReadAck(_root, request.CommandId)?.Reason);
+    }
+
+    /// <summary>
+    /// The ack write reaches the same atomic-replace path the status write does, and it used to be
+    /// unguarded, so a sharing violation or a denied ACL on the command directory killed the daemon
+    /// on the very command that asked it to stop. A directory standing where the ack file belongs
+    /// makes that write fail on every platform without a second process.
+    /// </summary>
+    [Fact]
+    public async Task A_stop_whose_ack_cannot_be_written_still_stops_the_daemon_cleanly()
+    {
+        const string commandId = "stop-ack-blocked";
+        Directory.CreateDirectory(CtDaemonProtocol.CommandAckPath(_root, commandId));
+
+        var writer = new RecordingStatusWriter();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                AcquireLease = false,
+                Enqueuer = new RecordingEnqueuer(),
+                StatusWriter = writer.Write,
+                PollInterval = TimeSpan.FromMilliseconds(5),
+            },
+            TestContext.Current.CancellationToken);
+
+        await WaitForAsync(() => writer.Count >= 1 || run.IsCompleted);
+        CtCommandChannel.WriteRequest(
+            _root,
+            CtDaemonCommandKind.Stop,
+            reason: "stop",
+            freshness: null,
+            commandId: commandId);
+
+        ContinuousTestDaemonSnapshot snapshot = await run.WaitAsync(
+            TimeSpan.FromSeconds(10),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(CtDaemonLifecycleState.Stopped, snapshot.State);
+        Assert.Equal("stopped", snapshot.Reason);
+        Assert.Null(CtCommandChannel.TryReadAck(_root, commandId));
+    }
+
+    /// <summary>
+    /// The run ack has the same exposure, plus one of its own: the ack FILE is what stops the loop
+    /// re-reading a request it already handled, so guarding the write alone would make an unwritable
+    /// ack directory re-enqueue and re-execute the whole suite on every poll. The daemon must
+    /// survive the failed write AND enqueue the request exactly once.
+    /// </summary>
+    [Fact]
+    public async Task A_run_whose_ack_cannot_be_written_survives_and_enqueues_the_request_once()
+    {
+        const string commandId = "run-ack-blocked";
+        Directory.CreateDirectory(CtDaemonProtocol.CommandAckPath(_root, commandId));
+
+        ContinuousTestWorkspace workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        var enqueueLog = new ConcurrentQueue<string>();
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(new FakeContinuousTestProvider(), store),
+            lifecycleLog: enqueueLog.Enqueue);
+
+        // Holding the budget parks the queue on the paused branch, so the request is observed
+        // through the enqueue log rather than through a provider run.
+        var budget = CtExecutionBudget.ForMillerHome(Path.Combine(_root, "budget-home"));
+        using CtExecutionBudgetLease? held = budget.TryAcquire(
+            new CtExecutionBudgetRequest(_root, "run"),
+            TimeSpan.Zero,
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(held);
+
+        var writer = new RecordingStatusWriter();
+        var delay = new CountingDelay();
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                WorkspaceId = EngineTestSupport.WorkspaceId,
+                AcquireLease = false,
+                Store = store,
+                Queue = queue,
+                Projects =
+                [
+                    new ContinuousTestProject(
+                        "proj:1",
+                        EngineTestSupport.WorkspaceId,
+                        workspace.ProjectPath,
+                        Framework: "xunit"),
+                ],
+                Budget = budget,
+                StatusWriter = writer.Write,
+                PollInterval = TimeSpan.FromMilliseconds(5),
+                Delay = delay.DelayAsync,
+            },
+            cts.Token);
+
+        CtCommandChannel.WriteRequest(
+            _root,
+            CtDaemonCommandKind.Run,
+            reason: "run",
+            freshness: new CtFreshnessKey(EngineTestSupport.Identity, 2),
+            commandId: commandId);
+
+        await WaitForAsync(() => EnqueueCount(enqueueLog) > 0 || run.IsCompleted);
+        int passesWhenEnqueued = delay.Count;
+        await WaitForAsync(() => delay.Count >= passesWhenEnqueued + 8 || run.IsCompleted);
+
+        await cts.CancelAsync();
+        await run;
+
+        Assert.True(
+            delay.Count >= passesWhenEnqueued + 8,
+            $"the loop completed only {delay.Count - passesWhenEnqueued} passes over the unacked request");
+        Assert.Equal(1, EnqueueCount(enqueueLog));
+        Assert.Null(CtCommandChannel.TryReadAck(_root, commandId));
+        Assert.Contains(new StatusWrite(CtDaemonLifecycleState.Paused, "execution budget held"), writer.Written);
+    }
+
+    /// <summary>
+    /// No lease and no queue: the loop needs neither to reach its status writes, and leaving both
+    /// out keeps the test pure — no lock file, no SQLite, no second process.
+    /// </summary>
+    private static ContinuousTestDaemonHostOptions StatusWriterOptions(RecordingStatusWriter writer) =>
+        new()
+        {
+            Enabled = true,
+            AcquireLease = false,
+            Enqueuer = new RecordingEnqueuer(),
+            StatusWriter = writer.Write,
+            PollInterval = TimeSpan.FromMilliseconds(5),
+        };
+
+    private static int EnqueueCount(IEnumerable<string> lifecycleLog) =>
+        lifecycleLog.Count(line => line.StartsWith("ct enqueue", StringComparison.Ordinal));
+
+    private static ProviderRunResult Passed(string testCaseId, string revision) =>
+        new(
+            "run:1",
+            "passed",
+            CaseResults:
+            [
+                new ProviderCaseResult("r1", testCaseId, "passed", revision, EngineTestSupport.Identity),
+            ]);
+
+    private static async Task WaitForAsync(Func<bool> predicate)
+    {
+        for (int attempt = 0; attempt < 400; attempt++)
+        {
+            if (predicate())
+                return;
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+    }
+
     private async Task<CtDaemonHeartbeatRecord> WaitForHeartbeatAsync(DateTimeOffset? after)
     {
         for (int attempt = 0; attempt < 400; attempt++)
@@ -58,5 +408,59 @@ public sealed class ContinuousTestDaemonHostHeartbeatTests : IDisposable
         }
 
         throw new TimeoutException("the daemon heartbeat file did not refresh");
+    }
+
+    private sealed record StatusWrite(CtDaemonLifecycleState State, string Reason);
+
+    /// <summary>
+    /// Stands in for the daemon's own status write: it records the call, then throws the failure a
+    /// concurrent reader causes on Windows. A null failure records without throwing, for the tests
+    /// that read the recorded sequence rather than the guard.
+    /// </summary>
+    private sealed class RecordingStatusWriter(Exception? failure = null)
+    {
+        private readonly ConcurrentQueue<StatusWrite> _written = new();
+
+        public int Count => _written.Count;
+
+        public StatusWrite[] Written => [.. _written];
+
+        public void Write(CtDaemonLifecycleState state, string reason)
+        {
+            _written.Enqueue(new StatusWrite(state, reason));
+            if (failure is not null)
+                throw failure;
+        }
+    }
+
+    /// <summary>
+    /// Counts loop passes and then parks the loop for good, so a test can assert the EXACT sequence
+    /// of status writes one pass produces instead of whatever a racing timer happened to add.
+    /// </summary>
+    private sealed class ParkingDelay
+    {
+        private int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public Task DelayAsync(TimeSpan _, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _count);
+            return Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+    }
+
+    /// <summary>Counts loop passes while letting the loop keep running.</summary>
+    private sealed class CountingDelay
+    {
+        private int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public Task DelayAsync(TimeSpan duration, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _count);
+            return Task.Delay(duration, cancellationToken);
+        }
     }
 }

@@ -117,6 +117,243 @@ public sealed class WorkspaceRemovalTests : IDisposable
         Assert.NotNull(registry.Get("ws-ct-locked-000001"));
     }
 
+    /// <summary>
+    /// A running CT daemon holds <c>.miller/ct/daemon-v1.lock</c> one level below the write leases the remove
+    /// bundle can hold, so before the daemon joined the refuse-before-delete contract the recursive delete of
+    /// <c>.miller</c> threw PARTWAY THROUGH: sidecars gone, registry row still there. The refusal must be clean.
+    /// </summary>
+    [Fact]
+    public void RemoveById_WhenCtDaemonLeaseHeld_RefusedInUse_NothingDeleted()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-ct-daemon");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-ct-daemon-000001", "ct-daemon-disp", root);
+
+        using CtDaemonLease? daemon = CtDaemonLease.TryAcquire(root, "1.20.1-test");
+        Assert.NotNull(daemon); // this test IS the running daemon
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "ct-daemon-disp", liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedInUse, result.Result);
+        Assert.True(File.Exists(Path.Combine(millerDir, "symbols.db")));
+        Assert.True(File.Exists(CtDaemonProtocol.LockPath(root)));
+        Assert.True(File.Exists(CtDaemonProtocol.LeasePath(root)));
+        Assert.NotNull(registry.Get("ws-ct-daemon-000001"));
+
+        // The reason must reach the user through the SAME two channels as every other refusal.
+        Assert.Contains("in use", WorkspaceRender.Remove(result, json: false), StringComparison.Ordinal);
+        Assert.Contains("\"refused_in_use\"", WorkspaceRender.Remove(result, json: true), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The lock FILE outlives the daemon that held it, so the probe must test the HANDLE. If it tested file
+    /// existence, every workspace that ever started CT would be unremovable forever.
+    /// </summary>
+    [Fact]
+    public void RemoveById_StaleCtDaemonLockFileWithNoHolder_StillRemoves()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-ct-daemon-stale");
+        string ctDir = Path.Combine(millerDir, CtDaemonProtocol.DirectoryName);
+        Directory.CreateDirectory(ctDir);
+        File.WriteAllText(Path.Combine(ctDir, CtDaemonProtocol.LockFileName), "");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-ct-stale-000001", "ct-stale-disp", root);
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "ct-stale-disp", liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.True(result.IndexDirDeleted);
+        Assert.False(Directory.Exists(millerDir));
+        Assert.Null(registry.Get("ws-ct-stale-000001"));
+    }
+
+    /// <summary>
+    /// The OS handle is the signal and <c>daemon.lease.json</c> is NOT authoritative. A daemon killed without
+    /// releasing (kill -9, power loss) leaves that JSON behind, and <c>CtDaemonLease.IsIdentityLive</c> answers
+    /// "live" for any PID it cannot probe. Here the leftover JSON names THIS process, so a lease-JSON probe
+    /// reads a live daemon — asserted directly, so the test discriminates rather than assumes. No handle is
+    /// held, so the remove must go through.
+    /// </summary>
+    [Fact]
+    public void RemoveById_StaleCtDaemonLeaseJsonWithNoHeldHandle_StillRemoves()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-ct-stale-json");
+        string ctDir = Path.Combine(millerDir, CtDaemonProtocol.DirectoryName);
+        Directory.CreateDirectory(ctDir);
+        File.WriteAllText(Path.Combine(ctDir, CtDaemonProtocol.LockFileName), "");
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        var leftover = new CtDaemonLeaseRecord(CtDaemonLease.CurrentIdentity(), now, now, root, "1.20.1-test");
+        File.WriteAllText(CtDaemonProtocol.LeasePath(root), CtDaemonJson.Serialize(leftover));
+        Assert.NotNull(CtDaemonLease.TryReadLive(root)); // the weaker probe WOULD see a live daemon here
+
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-ct-json-0000001", "ct-json-disp", root);
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "ct-json-disp", liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.False(Directory.Exists(millerDir));
+        Assert.Null(registry.Get("ws-ct-json-0000001"));
+    }
+
+    /// <summary>
+    /// The mirror of the test above: a held handle and NO lease JSON at all. Together the pair pins the handle
+    /// as the signal and the JSON as non-authoritative — neither test alone can tell the two probes apart,
+    /// because <c>CtDaemonLease.TryAcquire</c> takes the handle AND writes the JSON in one call.
+    /// </summary>
+    [Fact]
+    public void RemoveById_HeldCtDaemonLockWithNoLeaseJson_RefusedInUse()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-ct-bare-handle");
+        Directory.CreateDirectory(Path.Combine(millerDir, CtDaemonProtocol.DirectoryName));
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-ct-bare-0000001", "ct-bare-disp", root);
+
+        using var held = new FileStream(
+            CtDaemonProtocol.LockPath(root), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        Assert.Null(CtDaemonLease.TryRead(root)); // the weaker probe has NOTHING to see here
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "ct-bare-disp", liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedInUse, result.Result);
+        Assert.True(File.Exists(Path.Combine(millerDir, "symbols.db")));
+        Assert.NotNull(registry.Get("ws-ct-bare-0000001"));
+    }
+
+    /// <summary>
+    /// A lease that cannot be opened AT ALL is not the same fact as a lease somebody holds. A
+    /// <see cref="FileShare.None"/> holder produces a sharing violation; a read-only attribute, a denying ACL,
+    /// or a directory where the file belongs produces an access denial with no daemon anywhere. Reading the
+    /// second as "held" refused every future remove with a reason naming a writer that does not exist.
+    /// The test asserts the denial is real and is NOT contention, so it discriminates the two paths.
+    /// </summary>
+    [Fact]
+    public void RemoveById_CtDaemonLockThatCannotBeProbedAndNobodyHolds_StillRemoves()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-ct-unprobeable");
+        string lockPath = CtDaemonProtocol.LockPath(root);
+        Directory.CreateDirectory(lockPath); // a directory sitting where the lock file belongs
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-ct-denied-000001", "ct-denied-disp", root);
+
+        Exception? denial = null;
+        try
+        {
+            using (new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            denial = ex;
+        }
+
+        Assert.NotNull(denial); // the probe genuinely cannot open this path
+        Assert.False(
+            denial is IOException io && SingleWriterLock.IsLockContention(io, OperatingSystem.IsWindows()),
+            "this test only discriminates while the denial is something OTHER than a sharing violation");
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "ct-denied-disp", liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.False(File.Exists(Path.Combine(millerDir, "symbols.db")));
+        Assert.Null(registry.Get("ws-ct-denied-000001"));
+    }
+
+    /// <summary>
+    /// The daemon lease is HELD across the delete, exactly like the other four holders — not probed and let go.
+    /// The injected writer-lock acquisition runs INSIDE the remove, after the daemon lease is taken and before
+    /// anything is deleted, so a daemon that tries to start in that window must be refused.
+    /// </summary>
+    [Fact]
+    public void RemoveById_HoldsTheCtDaemonLeaseAcrossTheDelete_SoNoDaemonCanStartMidDelete()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-ct-hold");
+        Directory.CreateDirectory(Path.Combine(millerDir, CtDaemonProtocol.DirectoryName));
+        File.WriteAllText(CtDaemonProtocol.LockPath(root), "");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-ct-hold-0000001", "ct-hold-disp", root);
+
+        CtDaemonLease? startedMidDelete = null;
+        var reachedTheDelete = false;
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "ct-hold-disp",
+            liveRoot: null,
+            protectedMillerDir: null,
+            acquireWriterLock: dir =>
+            {
+                reachedTheDelete = true;
+                startedMidDelete = CtDaemonLease.TryAcquire(root, "1.20.1-test");
+                return SingleWriterLock.TryAcquire(dir);
+            });
+
+        startedMidDelete?.Dispose();
+        Assert.True(reachedTheDelete, "the seam never ran, so the test proves nothing");
+        Assert.Null(startedMidDelete); // the lease was NOT free while the delete ran
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.Null(registry.Get("ws-ct-hold-0000001"));
+    }
+
+    /// <summary>
+    /// The never-ran-CT case has no handle to hold, so a daemon really can start mid-delete. The guarded delete
+    /// must therefore leave <c>.miller/ct</c> alone: on Windows the daemon's open <see cref="FileShare.None"/>
+    /// handle makes a recursive delete of that directory throw, and the throw used to escape
+    /// <c>RemoveById</c> with the index already half gone and the registry row still present.
+    ///
+    /// <para>The release hook observes the directory at the moment the write leases are released — after the
+    /// guarded delete has run and before the best-effort <c>TryDeleteEmptiedDir</c>. That is the only instant at
+    /// which "the guarded delete spared <c>ct/</c>" is visible, and it is visible on every platform: POSIX
+    /// unlink ignores the daemon's advisory lock, so without the observation this case could only ever go red
+    /// on Windows.</para>
+    /// </summary>
+    [Fact]
+    public void RemoveById_WhenACtDaemonStartsMidDelete_CompletesCleanlyAndStillRemovesTheIndex()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-ct-mid-delete"); // no .miller/ct at all
+        string ctDir = Path.Combine(millerDir, CtDaemonProtocol.DirectoryName);
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-ct-mid-0000001", "ct-mid-disp", root);
+
+        CtDaemonLease? startedMidDelete = null;
+        bool? ctDirSurvivedTheGuardedDelete = null;
+        try
+        {
+            WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+                registry,
+                "ct-mid-disp",
+                liveRoot: null,
+                protectedMillerDir: null,
+                acquireWriterLock: dir =>
+                {
+                    startedMidDelete = CtDaemonLease.TryAcquire(root, "1.20.1-test");
+                    SingleWriterLock? acquired = SingleWriterLock.TryAcquire(dir);
+                    if (acquired is null)
+                        return null;
+
+                    SingleWriterLock indexer = acquired;
+                    return new ReleaseHook(() =>
+                    {
+                        ctDirSurvivedTheGuardedDelete = Directory.Exists(ctDir);
+                        indexer.Dispose();
+                    });
+                });
+
+            Assert.NotNull(startedMidDelete); // nothing held it, so the daemon really did start
+            Assert.True(
+                ctDirSurvivedTheGuardedDelete is true,
+                "the guarded delete must skip .miller/ct while a daemon owns a handle inside it");
+            Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+            Assert.False(File.Exists(Path.Combine(millerDir, "symbols.db")));
+            Assert.Null(registry.Get("ws-ct-mid-0000001"));
+        }
+        finally
+        {
+            startedMidDelete?.Dispose();
+        }
+    }
+
     [Fact]
     public void RemoveById_WriterLockHeld_RefusedInUse_NothingDeleted()
     {
@@ -321,6 +558,20 @@ public sealed class WorkspaceRemovalTests : IDisposable
         WorkspaceRemoveResult result = WorkspaceRemoval.RemoveByPath(registry, goneRoot, liveRoot: null);
 
         Assert.Equal(WorkspaceRemoveResult.Outcome.NotFound, result.Result);
+    }
+
+    /// <summary>
+    /// A stand-in for the removal's injected indexer lease that runs an observation at RELEASE time. The lease
+    /// bundle disposes indexer-last, so this fires after the guarded delete and before the best-effort dir
+    /// delete — the one instant at which what the guarded delete spared is observable.
+    /// </summary>
+    private sealed class ReleaseHook : IDisposable
+    {
+        private readonly Action _onRelease;
+
+        public ReleaseHook(Action onRelease) => _onRelease = onRelease;
+
+        public void Dispose() => _onRelease();
     }
 
     private static bool TryCreateDirectoryLink(string linkPath, string targetPath)

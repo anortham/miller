@@ -29,11 +29,23 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
     private const string CoverageReadinessFileName = "readiness.coverage";
     private const int CoverageSnapshotKeyLength = 24;
     private static readonly TimeSpan DefaultCoverageShutdownTimeout = TimeSpan.FromSeconds(10);
+
+    /// <remarks>
+    /// Deliberately short. The race a CT artifact delete loses is an antivirus scan window or a handle
+    /// a just-exited collector has not released yet — both tens of milliseconds — and every one of
+    /// these deletes is cleanup, where a long stall only delays the real error.
+    /// </remarks>
+    private static readonly TimeSpan DeleteRetryBudget = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan DeleteRetryInitialDelay = TimeSpan.FromMilliseconds(10);
+    private static readonly TimeSpan DeleteRetryMaxDelay = TimeSpan.FromMilliseconds(100);
+
     private readonly ITestProcessRunner _runner;
     private readonly ITestBackgroundProcessRunner? _backgroundRunner;
     private readonly string _dotnetPath;
     private readonly string _dotnetCoveragePath;
     private readonly TimeSpan _coverageShutdownTimeout;
+    private readonly Action<string> _deleteFile;
+    private readonly Action<TimeSpan> _deleteRetrySleep;
 
     public DotnetTestProvider(
         ITestProcessRunner runner,
@@ -43,11 +55,21 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
     {
     }
 
+    /// <remarks>
+    /// <c>deleteFile</c> and <c>deleteRetrySleep</c> are test seams for every CT artifact delete;
+    /// production passes <c>File.Delete</c> and <c>Thread.Sleep</c>. The delete seam exists because a
+    /// cleanup delete is only best effort on paper unless a test can MAKE it fail: on Windows a held
+    /// handle blocks the delete, but on Linux and macOS <c>FileShare</c> is advisory and <c>unlink</c>
+    /// ignores it, so a test built on a real file lock proves nothing off Windows. The sleep seam lets a
+    /// test drive the whole retry loop without spending the half-second budget.
+    /// </remarks>
     internal DotnetTestProvider(
         ITestProcessRunner runner,
         string dotnetPath,
         string dotnetCoveragePath,
-        TimeSpan coverageShutdownTimeout)
+        TimeSpan coverageShutdownTimeout,
+        Action<string>? deleteFile = null,
+        Action<TimeSpan>? deleteRetrySleep = null)
     {
         _runner = runner ?? throw new ArgumentNullException(nameof(runner));
         _backgroundRunner = runner as ITestBackgroundProcessRunner;
@@ -59,6 +81,8 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         _dotnetPath = dotnetPath;
         _dotnetCoveragePath = dotnetCoveragePath;
         _coverageShutdownTimeout = coverageShutdownTimeout;
+        _deleteFile = deleteFile ?? File.Delete;
+        _deleteRetrySleep = deleteRetrySleep ?? Thread.Sleep;
     }
 
     public async Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
@@ -109,8 +133,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             var targetPath = await ResolveGenericTargetPathAsync(workspace, paths, cancellationToken)
                 .ConfigureAwait(false);
             diagnosticPath = DiscoveryDiagnosticPath(paths);
-            if (File.Exists(diagnosticPath))
-                File.Delete(diagnosticPath);
+            DeleteWithRetry(diagnosticPath);
             command = BuildGenericDiscoverCommand(workspace, paths, targetPath, diagnosticPath);
         }
         else
@@ -154,13 +177,18 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         var coverage = request.CoverageMode == ContinuousTestCoverageMode.PerTest
             ? await StartCoverageSessionAsync(request.Workspace, paths, cancellationToken).ConfigureAwait(false)
             : null;
-        var resultArtifactPath = XunitResultArtifactPath(request, paths);
-        var command = BuildRunCommand(request, paths, coverage);
-        TestProcessResult? result = null;
+        var commands = BuildRunCommands(request, paths, coverage);
+        var resultArtifactPath = XunitResultArtifactPath(request, paths, commands.Count == 1 ? null : 0);
+        var results = new List<TestProcessResult>(commands.Count);
         Exception? runFailure = null;
         try
         {
-            result = await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
+            // Sequential on purpose. The invocations share one test executable, one generation
+            // directory, and - under per-test coverage - one collector session, so running them
+            // concurrently would have them overwrite each other's output and attribute each other's
+            // coverage. The whole point of the CT budget is that a workspace runs one thing at a time.
+            foreach (var command in commands)
+                results.Add(await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false));
         }
         catch (Exception exception)
         {
@@ -187,11 +215,16 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         if (runFailure is not null)
             ExceptionDispatchInfo.Capture(runFailure).Throw();
 
-        var runResult = ParseRun(result!.StandardOutput, request.SelectedRevision, request.IndexIdentity);
-        if (result.ExitCode != 0 && runResult.CaseResults.Count == 0)
+        var runResult = MergeRuns(results, request.SelectedRevision, request.IndexIdentity);
+
+        // Judged across the whole run, not per invocation: a chunked selection is ONE logical run, and
+        // a single failing chunk beside several that parsed results is a test failure, not a harness
+        // crash. Only a run that produced no case results at all is unparseable.
+        var failedInvocation = results.FirstOrDefault(static invocation => invocation.ExitCode != 0);
+        if (failedInvocation is not null && runResult.CaseResults.Count == 0)
             throw new ContinuousTestProviderException(
-                $"Dotnet test run failed with exit code {result.ExitCode}: {FailureSummary(result)}");
-        if (result.ExitCode == 0 && runResult.CaseResults.Count == 0 && request.TestCaseIds.Count > 0)
+                $"Dotnet test run failed with exit code {failedInvocation.ExitCode}: {FailureSummary(failedInvocation)}");
+        if (failedInvocation is null && runResult.CaseResults.Count == 0 && request.TestCaseIds.Count > 0)
             throw new ContinuousTestProviderException(
                 "xUnit run selected " + request.TestCaseIds.Count + " test case(s) but executed none: " +
                 string.Join(", ", request.TestCaseIds) + ".");
@@ -247,6 +280,22 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         return BuildRunCommand(request, CtGenerationPaths.ResolveLatestOrFirst(request.Workspace));
     }
 
+    /// <summary>
+    /// Preview/test seam: every invocation the request would run, in order. A selection that fits one
+    /// command line yields exactly one, so this is the same command <see cref="BuildRunCommand"/>
+    /// returns; a wider selection yields the chunks it is split into. Production runs never use it -
+    /// <see cref="RunAsync"/> allocates its own generation and builds every command from that handle.
+    /// </summary>
+    public IReadOnlyList<TestProcessCommand> BuildRunCommands(ContinuousTestProviderRunRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return BuildRunCommands(
+            request,
+            CtGenerationPaths.ResolveLatestOrFirst(request.Workspace),
+            coverage: null);
+    }
+
     private TestProcessCommand BuildRunCommand(
         ContinuousTestProviderRunRequest request,
         CtGenerationPaths paths)
@@ -256,44 +305,107 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         ContinuousTestProviderRunRequest request,
         CtGenerationPaths paths,
         CoverageSession? coverage)
+        => BuildRunCommands(request, paths, coverage)[0];
+
+    /// <summary>
+    /// Builds the invocations for one run. A selection that fits the platform command-line cap is a
+    /// single command, byte-identical to what this provider sent before chunking existed; a wider one
+    /// is split across several invocations of the same test executable.
+    ///
+    /// xunit v3 emits two argv elements per selected method (<c>-method &lt;FQN&gt;</c>) and has NO
+    /// response-file option, so a wide selection has nowhere to go but across processes. Miller's own
+    /// suite is ~6,000 methods averaging ~100-character names: a 644 KB command line against a 32,767
+    /// Windows cap, where only ~300 methods fit a single invocation.
+    ///
+    /// mstest/nunit spend the selection differently — one <c>--filter</c> expression rather than a pair
+    /// of elements per test — so they are chunked by <see cref="BuildGenericRunCommands"/> on the
+    /// composed expression's byte length instead.
+    /// </summary>
+    private IReadOnlyList<TestProcessCommand> BuildRunCommands(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        CoverageSession? coverage)
     {
         if (GenericFramework(request.Framework ?? request.Workspace.Framework) is not null)
-            return BuildGenericRunCommand(request, paths);
+            return BuildGenericRunCommands(request, paths, TestAssemblyPath(request.Workspace, paths))
+                .Select(static invocation => invocation.Command)
+                .ToArray();
 
+        // An explicit FilterArguments override is opaque argv: Miller does not know which elements are
+        // flags and which are their values, so there is no boundary it can split on safely. It travels
+        // as one invocation - splitting it blind could separate a flag from its value and silently run
+        // the wrong tests.
+        if (request.FilterArguments.Count > 0)
+            return [BuildXunitRunCommand(request, paths, coverage, request.FilterArguments, part: null)];
+
+        IReadOnlyList<IReadOnlyList<string>> units = XunitSelectionUnits(request);
+        if (units.Count == 0)
+            return [BuildXunitRunCommand(request, paths, coverage, [], part: null)];
+
+        IReadOnlyList<IReadOnlyList<IReadOnlyList<string>>> chunks =
+            CtArgvChunking.Chunk(units, CtArgvChunking.ArgvCost);
+        var commands = new List<TestProcessCommand>(chunks.Count);
+        for (var index = 0; index < chunks.Count; index++)
+        {
+            var selection = chunks[index].SelectMany(static unit => unit).ToArray();
+            commands.Add(BuildXunitRunCommand(
+                request,
+                paths,
+                coverage,
+                selection,
+                part: chunks.Count == 1 ? null : index));
+        }
+
+        return commands;
+    }
+
+    /// <summary>
+    /// The selection as chunkable units. Each unit is the argv elements that must travel together, so
+    /// a chunk boundary can never fall between a flag and its value.
+    /// </summary>
+    private static IReadOnlyList<IReadOnlyList<string>> XunitSelectionUnits(
+        ContinuousTestProviderRunRequest request)
+    {
+        var units = new List<IReadOnlyList<string>>();
+        var selectedMethods = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var testCaseId in request.TestCaseIds)
+        {
+            if (XunitMethodFromTestCaseId(testCaseId) is not { } method)
+            {
+                units.Add(["-id", testCaseId]);
+                continue;
+            }
+
+            if (!selectedMethods.Add(method))
+                continue;
+
+            units.Add(["-method", method]);
+        }
+
+        return units;
+    }
+
+    private TestProcessCommand BuildXunitRunCommand(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        CoverageSession? coverage,
+        IReadOnlyList<string> selection,
+        int? part)
+    {
         var args = new List<string> { "-noLogo", "-noColor", "-reporter", "json" };
-        if (XunitResultArtifactPath(request, paths) is { } resultArtifactPath)
+        if (XunitResultArtifactPath(request, paths, part) is { } resultArtifactPath)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(resultArtifactPath)!);
             args.Add("-jUnit");
             args.Add(resultArtifactPath);
         }
-        if (request.FilterArguments.Count > 0)
-        {
-            args.AddRange(request.FilterArguments);
-        }
-        else
-        {
-            var selectedMethods = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var testCaseId in request.TestCaseIds)
-            {
-                if (XunitMethodFromTestCaseId(testCaseId) is not { } method)
-                {
-                    args.Add("-id");
-                    args.Add(testCaseId);
-                    continue;
-                }
 
-                if (!selectedMethods.Add(method))
-                    continue;
-
-                args.Add("-method");
-                args.Add(method);
-            }
-        }
+        args.AddRange(selection);
 
         // Trait exclusions intersect with (never replace) per-test-ID selection: the xunit v3 runner
         // treats -trait- flags as an AND-filter, so they are appended alongside -id args regardless of
-        // the FilterArguments override above.
+        // the FilterArguments override above. They ride on EVERY chunk, because each chunk is a whole
+        // run of the same executable and would otherwise filter differently than its siblings.
         AppendXunitTraitExclusions(args, request.ExcludeTraits);
 
         if (coverage is not null)
@@ -386,29 +498,111 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         string targetPath,
         CancellationToken cancellationToken)
     {
-        var resultArtifactPath = TrxResultArtifactPath(request, paths);
-        var command = BuildGenericRunCommand(request, paths, targetPath, resultArtifactPath);
-        var result = await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
-        if (!File.Exists(resultArtifactPath))
-        {
-            if (result.ExitCode != 0)
-                throw new ContinuousTestProviderException(
-                    $"Dotnet test run failed with exit code {result.ExitCode}: {FailureSummary(result)}");
+        var invocations = BuildGenericRunCommands(request, paths, targetPath);
+        var parsed = new List<ProviderRunResult>(invocations.Count);
+        var diagnostics = new List<string>();
 
-            throw new ContinuousTestProviderException(
-                $"Dotnet test run did not produce TRX result artifact '{resultArtifactPath}'.");
+        // Sequential on purpose, exactly as the xunit path: the invocations share one built test
+        // assembly and one generation directory, and the CT budget lets one workspace run at a time.
+        foreach (var invocation in invocations)
+        {
+            var result = await _runner.RunAsync(invocation.Command, cancellationToken).ConfigureAwait(false);
+
+            // An empty or missing artifact is LOCAL to the chunk that produced it. vstest writes the TRX
+            // for every invocation that started, so a missing one means THAT chunk never ran: its own
+            // selected ids are recorded FAILED against the exit code — never left absent, because a
+            // chunk that never ran must not read as "no failures" — and every sibling keeps the verdicts
+            // it earned. Failing the whole run here discarded the parts already on disk, skipped the
+            // parts not yet started, and the retry reproduced it forever.
+            if (!File.Exists(invocation.ResultArtifactPath))
+            {
+                var diagnostic = result.ExitCode != 0
+                    ? $"Dotnet test run failed with exit code {result.ExitCode}: {FailureSummary(result)}"
+                    : $"Dotnet test run did not produce TRX result artifact '{invocation.ResultArtifactPath}'.";
+                diagnostics.Add(diagnostic);
+
+                // An invocation that selected nothing answers for no ids, so there is no honest row to
+                // write for it and its failure stands only for the run as a whole.
+                if (invocation.SelectedTestCaseIds.Count > 0)
+                    parsed.Add(UnrunPartResult(request, invocation, result, diagnostic));
+                continue;
+            }
+
+            var part = ParseTrxRun(invocation.ResultArtifactPath, request);
+
+            // A part whose filter matched nothing says nothing about its own ids: they stay unreported,
+            // and the store flips an unreported id to stale when the run completes — which is exactly
+            // what an unchunked run did with the ids vstest did not match. The diagnostic is kept for
+            // the case where NO part produced a single verdict, which is still a run failure.
+            if (part.Run.CaseResults.Count == 0 && invocation.SelectedTestCaseIds.Count > 0)
+                diagnostics.Add(part.RunError ?? NoSelectedResultsMessage);
+
+            parsed.Add(part.Run);
         }
 
-        var runResult = ParseTrxRun(resultArtifactPath, request);
+        if (parsed.Count == 0)
+            throw new ContinuousTestProviderException(diagnostics.FirstOrDefault() ?? NoSelectedResultsMessage);
+
+        var runResult = MergeRunResults(parsed);
+
+        // Judged across the whole run, exactly as the xunit path judges its invocations: only a run that
+        // produced no case result at all is unparseable.
+        if (runResult.CaseResults.Count == 0 && request.TestCaseIds.Count > 0)
+            throw new ContinuousTestProviderException(diagnostics.FirstOrDefault() ?? NoSelectedResultsMessage);
+
         if (request.RunId is not null && !string.Equals(runResult.RunId, request.RunId, StringComparison.Ordinal))
             runResult = runResult with { RunId = request.RunId };
 
         return runResult with
         {
-            ResultArtifactPath = resultArtifactPath,
+            // The first part that actually wrote an artifact, which is the unsuffixed single path when
+            // the selection fit one command line. Every other part stays on disk beside it, and each
+            // case result carries the artifact it came from in its metadata. Naming part 000
+            // unconditionally would report a path that does not exist whenever part 000 is the chunk
+            // that died, and the coordinator would record no evidence for a run that has plenty.
+            ResultArtifactPath = invocations
+                .Select(static invocation => invocation.ResultArtifactPath)
+                .FirstOrDefault(File.Exists),
             CoverageArtifacts = DiscoverCoverageArtifacts(paths),
             GenerationId = paths.GenerationId,
         };
+    }
+
+    private const string NoSelectedResultsMessage =
+        "Dotnet test run produced no results for the selected test cases.";
+
+    /// <summary>
+    /// The verdicts for a chunk that produced no TRX at all. Its own selected ids are recorded FAILED
+    /// with the exit code and the failure text, so a chunk that never ran can neither read as "no
+    /// failures" nor vanish from the run — and its siblings keep the verdicts they earned.
+    /// </summary>
+    private static ProviderRunResult UnrunPartResult(
+        ContinuousTestProviderRunRequest request,
+        GenericInvocation invocation,
+        TestProcessResult result,
+        string failureSummary)
+    {
+        var framework = GenericFramework(request.Framework ?? request.Workspace.Framework) ?? "dotnet";
+        var caseResults = invocation.SelectedTestCaseIds
+            .Select(testCaseId => new ProviderCaseResult(
+                Id: CanonicalTrxResultId(request.Workspace.WorkspaceId, testCaseId, request.RunId),
+                TestCaseId: testCaseId,
+                Status: "failed",
+                ResultRevision: request.SelectedRevision,
+                IndexIdentity: request.IndexIdentity,
+                FailureSummary: failureSummary,
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["artifact_path"] = invocation.ResultArtifactPath,
+                    ["framework"] = framework,
+                    ["exit_code"] = result.ExitCode,
+                }))
+            .ToArray();
+
+        return new ProviderRunResult(
+            RunId: request.RunId ?? $"trx:{Path.GetFileNameWithoutExtension(invocation.ResultArtifactPath)}",
+            Status: "failed",
+            CaseResults: caseResults);
     }
 
     private TestProcessCommand BuildGenericDiscoverCommand(
@@ -416,8 +610,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         CtGenerationPaths paths)
     {
         var diagnosticPath = DiscoveryDiagnosticPath(paths);
-        if (File.Exists(diagnosticPath))
-            File.Delete(diagnosticPath);
+        DeleteWithRetry(diagnosticPath);
         return BuildGenericDiscoverCommand(workspace, paths, TestAssemblyPath(workspace, paths), diagnosticPath);
     }
 
@@ -451,19 +644,136 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             WorkspaceEnvironment(workspace, paths));
     }
 
-    private TestProcessCommand BuildGenericRunCommand(
-        ContinuousTestProviderRunRequest request,
-        CtGenerationPaths paths)
-        => BuildGenericRunCommand(request, paths, TestAssemblyPath(request.Workspace, paths));
+    /// <summary>
+    /// One <c>dotnet test</c> invocation together with the TRX artifact it writes and the request test
+    /// case ids it answers for. All three travel together because a chunked run gives each part its own
+    /// artifact and its own slice of the selection: recomputing the path at the call site would read one
+    /// that has drifted from the command, and a part that dies before writing a TRX must be reported
+    /// against ITS OWN ids only — never the whole selection, which its healthy siblings already
+    /// answered for.
+    /// </summary>
+    private readonly record struct GenericInvocation(
+        TestProcessCommand Command,
+        string ResultArtifactPath,
+        IReadOnlyList<string> SelectedTestCaseIds);
 
-    private TestProcessCommand BuildGenericRunCommand(
+    /// <summary>
+    /// One chunkable unit of the selection: the filter term a request id composed, plus every request id
+    /// that resolved to it. Terms are deduplicated in request order, exactly as the single-expression
+    /// composition did, so a selection that fits one command line still composes the string it always
+    /// did — but a term two ids share still answers for both, because a dead chunk must report every id
+    /// it carried.
+    /// </summary>
+    private readonly record struct GenericSelectionUnit(string Term, IReadOnlyList<string> TestCaseIds);
+
+    /// <summary>
+    /// Builds the invocations for one mstest/nunit run.
+    ///
+    /// vstest spends a selection differently from xunit v3: the whole selection is ONE conjunctive
+    /// <c>--filter</c> expression in a single argv element, so a wide selection makes that one element
+    /// carry the entire command-line budget. Miller's own suite is ~6,000 tests averaging ~100-character
+    /// names, which composes a ~600 KB filter string — a single argument twenty times the 32,767
+    /// Windows cap. A bound on the number of selected tests cannot see that, so the chunk boundary here
+    /// is the composed expression's UTF-8 BYTE length, charged per term including the <c>|</c> that
+    /// joins it and net of the fixed argv the expression shares the command line with.
+    ///
+    /// A selection that already fits stays exactly one invocation, with the same filter string and the
+    /// same unsuffixed artifact path it had before chunking existed.
+    /// </summary>
+    private IReadOnlyList<GenericInvocation> BuildGenericRunCommands(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        string targetPath)
+    {
+        paths.EnsureDirectories();
+
+        // Resolved ONCE for the whole run: without a RunId the key is seeded from the wall clock, so
+        // recomputing it per part would scatter the parts across unrelated artifact names.
+        var runHash = TrxRunHash(request);
+
+        // An explicit FilterArguments override is opaque argv, the same rule the xunit path applies:
+        // Miller does not know which elements are flags and which are their values, so there is no
+        // boundary it can split on safely and the override travels as one invocation.
+        if (request.FilterArguments.Count > 0)
+            return
+            [
+                BuildGenericInvocation(
+                    request,
+                    paths,
+                    targetPath,
+                    runHash,
+                    part: null,
+                    filter: null,
+                    selectedTestCaseIds: request.TestCaseIds),
+            ];
+
+        var exclusionExpression = GenericExclusionFilter(
+            request.Framework ?? request.Workspace.Framework,
+            request.ExcludeTraits);
+        var units = GenericSelectionUnits(request);
+        if (units.Count == 0)
+        {
+            // Nothing selectable: vstest runs whatever the exclusion filter leaves, exactly as before.
+            // The request's ids still ride along so an outright launch failure is reported against them.
+            return
+            [
+                BuildGenericInvocation(
+                    request,
+                    paths,
+                    targetPath,
+                    runHash,
+                    part: null,
+                    filter: exclusionExpression,
+                    selectedTestCaseIds: request.TestCaseIds),
+            ];
+        }
+
+        var chunks = CtArgvChunking.Chunk(
+            units,
+            static unit => GenericFilterTermCost(unit.Term),
+            maxUnits: GenericMaxTermsPerInvocation,
+            maxBytes: GenericSelectionBudget(paths, targetPath, runHash, exclusionExpression));
+        var invocations = new List<GenericInvocation>(chunks.Count);
+        for (var index = 0; index < chunks.Count; index++)
+        {
+            var chunk = chunks[index];
+            var attributed = chunk
+                .SelectMany(static unit => unit.TestCaseIds)
+                .ToHashSet(StringComparer.Ordinal);
+
+            // The FIRST invocation also answers for ids that composed no filter term. They never reached
+            // an argv, so no chunk selected them, and dropping them would lose them from a failed run.
+            if (index == 0)
+            {
+                foreach (var testCaseId in UnselectableTestCaseIds(request))
+                    attributed.Add(testCaseId);
+            }
+
+            invocations.Add(BuildGenericInvocation(
+                request,
+                paths,
+                targetPath,
+                runHash,
+                part: chunks.Count == 1 ? null : index,
+                filter: ComposeGenericFilter(chunk, exclusionExpression),
+                // Request order with duplicates intact: a one-invocation run must report exactly the
+                // rows it reported before chunking existed.
+                selectedTestCaseIds: request.TestCaseIds.Where(attributed.Contains).ToArray()));
+        }
+
+        return invocations;
+    }
+
+    private GenericInvocation BuildGenericInvocation(
         ContinuousTestProviderRunRequest request,
         CtGenerationPaths paths,
         string targetPath,
-        string? resultArtifactPath = null)
+        string runHash,
+        int? part,
+        string? filter,
+        IReadOnlyList<string> selectedTestCaseIds)
     {
-        paths.EnsureDirectories();
-        resultArtifactPath ??= TrxResultArtifactPath(request, paths);
+        var resultArtifactPath = TrxResultArtifactPath(paths, runHash, part);
         var args = new List<string>
         {
             "test",
@@ -480,37 +790,139 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             // are NOT merged into user-supplied filter arguments on the generic path.
             args.AddRange(request.FilterArguments);
         }
-        else if (ComposeGenericFilter(request) is { } filter)
+        else if (filter is not null)
         {
             args.Add("--filter");
             args.Add(filter);
         }
 
-        return new TestProcessCommand(
-            _dotnetPath,
-            args,
-            request.Workspace.WorkspaceRoot,
-            WorkspaceEnvironment(request.Workspace, paths));
+        return new GenericInvocation(
+            new TestProcessCommand(
+                _dotnetPath,
+                args,
+                request.Workspace.WorkspaceRoot,
+                WorkspaceEnvironment(request.Workspace, paths)),
+            resultArtifactPath,
+            selectedTestCaseIds);
     }
 
-    private static string? ComposeGenericFilter(ContinuousTestProviderRunRequest request)
+    /// <summary>
+    /// The selection as chunkable units, in request order and deduplicated by term exactly as the
+    /// single-expression composition did, so a selection that fits one command line still composes the
+    /// same string it always did.
+    /// </summary>
+    private static IReadOnlyList<GenericSelectionUnit> GenericSelectionUnits(
+        ContinuousTestProviderRunRequest request)
     {
         var framework = GenericFramework(request.Framework ?? request.Workspace.Framework);
-        var selectors = request.TestCaseIds
-            .Select(GenericSelectorFromTestCaseId)
-            .Where(selector => !string.IsNullOrWhiteSpace(selector))
-            .Select(selector => GenericFilterTerm(framework, selector))
-            .Distinct(StringComparer.Ordinal)
+        var idsByTerm = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var termsInRequestOrder = new List<string>();
+        foreach (var testCaseId in request.TestCaseIds)
+        {
+            var selector = GenericSelectorFromTestCaseId(testCaseId);
+            if (string.IsNullOrWhiteSpace(selector))
+                continue;
+
+            var term = GenericFilterTerm(framework, selector);
+            if (!idsByTerm.TryGetValue(term, out var testCaseIds))
+            {
+                testCaseIds = [];
+                idsByTerm.Add(term, testCaseIds);
+                termsInRequestOrder.Add(term);
+            }
+
+            testCaseIds.Add(testCaseId);
+        }
+
+        return termsInRequestOrder
+            .Select(term => new GenericSelectionUnit(term, idsByTerm[term]))
             .ToArray();
-        var selectionExpression = selectors.Length > 0 ? string.Join("|", selectors) : null;
-        var exclusionExpression = GenericExclusionFilter(
-            request.Framework ?? request.Workspace.Framework,
-            request.ExcludeTraits);
+    }
 
-        if (selectionExpression is not null && exclusionExpression is not null)
-            return $"({selectionExpression})&{exclusionExpression}";
+    /// <summary>
+    /// Request ids that compose no filter term, because their selector names nothing vstest can match.
+    /// They never reach an argv, so no chunk selects them; the first invocation answers for them so a
+    /// failed run still reports them instead of dropping them.
+    /// </summary>
+    private static IEnumerable<string> UnselectableTestCaseIds(ContinuousTestProviderRunRequest request) =>
+        request.TestCaseIds.Where(static testCaseId =>
+            string.IsNullOrWhiteSpace(GenericSelectorFromTestCaseId(testCaseId)));
 
-        return selectionExpression ?? exclusionExpression;
+    /// <summary>
+    /// What one more term costs the composed expression: its UTF-8 bytes plus the single <c>|</c> that
+    /// joins it to the previous term. Charging the separator to every term rather than to all but the
+    /// first overstates a chunk by one byte, which is the safe direction to be wrong in.
+    /// </summary>
+    private static int GenericFilterTermCost(string term) => Encoding.UTF8.GetByteCount(term) + 1;
+
+    /// <summary>
+    /// Bytes one invocation may spend on its WHOLE command line. This provider launches a real
+    /// executable — <c>dotnet</c>, never a <c>.cmd</c> shim — so the bound is the 32,767-character
+    /// Windows cap, not the 8,191 <c>cmd.exe</c> cap that <see cref="CtArgvChunking"/>'s shared default
+    /// holds back for shim-launched runners. The headroom under the cap covers the quoting the launcher
+    /// adds around an argument that carries spaces or quotes, and the byte count is measured in UTF-8,
+    /// which is never shorter than the character count the cap applies to.
+    ///
+    /// Spending the shim-sized default here split a workspace-scope selection of Miller's own ~7,400
+    /// tests into ~155 invocations. vstest re-discovers the WHOLE assembly on every invocation before it
+    /// applies the filter, so that run breached the coordinator's 30-minute provider timeout and threw
+    /// away every finished chunk's verdicts.
+    /// </summary>
+    private const int GenericCommandLineBudget = 30_000;
+
+    /// <summary>
+    /// Terms per invocation. The generic runner spends the whole selection in ONE argv element, so a
+    /// count of terms says nothing about how much command line an invocation uses: the byte budget above
+    /// is the only bound that can see a 600 KB single argument, and a unit count must not bind before it.
+    /// </summary>
+    private const int GenericMaxTermsPerInvocation = int.MaxValue;
+
+    /// <summary>
+    /// Bytes one invocation may spend on the selection expression: the per-invocation command-line
+    /// budget minus everything else riding on the same command line — the <c>dotnet</c> path, the target
+    /// assembly, the results directory, the TRX logger, the <c>--filter</c> flag itself, and the
+    /// exclusion clause plus the <c>(…)&amp;</c> wrapper that every chunk repeats. Measuring the bound
+    /// against the selection alone would let a long generation path push the finished command line back
+    /// over the cap the chunking exists to respect.
+    /// </summary>
+    private int GenericSelectionBudget(
+        CtGenerationPaths paths,
+        string targetPath,
+        string runHash,
+        string? exclusionExpression)
+    {
+        // Part 0's name, which is the LONGER form: a chunked run adds the ".partNNN" suffix that a
+        // single-invocation run does not carry.
+        var resultArtifactPath = TrxResultArtifactPath(paths, runHash, part: 0);
+        var fixedArgv = new List<string>
+        {
+            _dotnetPath,
+            "test",
+            targetPath,
+            "--nologo",
+            "--results-directory",
+            paths.ResultsDirectory,
+            "--logger",
+            $"trx;LogFileName={Path.GetFileName(resultArtifactPath)}",
+            "--filter",
+        };
+        if (exclusionExpression is not null)
+            fixedArgv.Add("()&" + exclusionExpression);
+
+        // Chunk() rejects a non-positive bound, and a single over-long term still gets its own
+        // invocation rather than being dropped, so clamping here degrades to one term per command
+        // instead of failing a run outright.
+        return Math.Max(1, GenericCommandLineBudget - CtArgvChunking.ArgvCost(fixedArgv));
+    }
+
+    private static string ComposeGenericFilter(
+        IReadOnlyList<GenericSelectionUnit> units,
+        string? exclusionExpression)
+    {
+        var selectionExpression = string.Join("|", units.Select(static unit => unit.Term));
+        return exclusionExpression is null
+            ? selectionExpression
+            : $"({selectionExpression})&{exclusionExpression}";
     }
 
     private static string GenericFilterTerm(string? framework, string selector)
@@ -577,24 +989,45 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         return separator >= 0 ? trait[(separator + 1)..] : trait;
     }
 
+    /// <summary>
+    /// The jUnit artifact for one invocation. <paramref name="part"/> is null for a run that fits a
+    /// single command line - which keeps the filename byte-identical to the pre-chunking one - and is
+    /// the zero-based invocation index when a run is split, so chunk N cannot overwrite chunk N-1's
+    /// results and every part stays on disk as evidence.
+    /// </summary>
     private static string? XunitResultArtifactPath(
         ContinuousTestProviderRunRequest request,
-        CtGenerationPaths paths)
+        CtGenerationPaths paths,
+        int? part = null)
     {
         if (string.IsNullOrWhiteSpace(request.RunId))
             return null;
 
         var runHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.RunId))).ToLowerInvariant();
-        return Path.Combine(paths.ResultsDirectory, $"run-{runHash}.junit.xml");
+        var suffix = part is null ? string.Empty : $".part{part.Value.ToString("D3", CultureInfo.InvariantCulture)}";
+        return Path.Combine(paths.ResultsDirectory, $"run-{runHash}{suffix}.junit.xml");
     }
 
-    private static string TrxResultArtifactPath(
-        ContinuousTestProviderRunRequest request,
-        CtGenerationPaths paths)
+    /// <summary>
+    /// Identifies the run one set of TRX artifacts belongs to. Without a <c>RunId</c> the key carries
+    /// the current tick, so every caller must hash it ONCE and derive each part's name from that hash.
+    /// </summary>
+    private static string TrxRunHash(ContinuousTestProviderRunRequest request)
     {
         var runKey = request.RunId ?? CanonicalRunKey(request);
-        var runHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(runKey))).ToLowerInvariant();
-        return Path.Combine(paths.ResultsDirectory, $"run-{runHash}.trx");
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(runKey))).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// The TRX artifact for one invocation. <paramref name="part"/> is null for a run that fits a
+    /// single command line — which keeps the filename byte-identical to the pre-chunking one — and is
+    /// the zero-based invocation index when a run is split, so chunk N cannot overwrite chunk N-1's
+    /// results and every part stays on disk as evidence.
+    /// </summary>
+    private static string TrxResultArtifactPath(CtGenerationPaths paths, string runHash, int? part)
+    {
+        var suffix = part is null ? string.Empty : $".part{part.Value.ToString("D3", CultureInfo.InvariantCulture)}";
+        return Path.Combine(paths.ResultsDirectory, $"run-{runHash}{suffix}.trx");
     }
 
     private static string CanonicalRunKey(ContinuousTestProviderRunRequest request) =>
@@ -858,7 +1291,14 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         return SplitQualifiedName(fullyQualifiedName);
     }
 
-    private static ProviderRunResult ParseTrxRun(
+    /// <summary>
+    /// One part's parsed TRX: the verdicts it produced, and the run-level error vstest recorded when it
+    /// produced none. The caller decides what an empty part means, because only the caller knows whether
+    /// its sibling parts answered for the rest of the selection.
+    /// </summary>
+    private readonly record struct TrxParseResult(ProviderRunResult Run, string? RunError);
+
+    private static TrxParseResult ParseTrxRun(
         string artifactPath,
         ContinuousTestProviderRunRequest request)
     {
@@ -928,26 +1368,27 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
                 }));
         }
 
-        if (caseResults.Count == 0 && request.TestCaseIds.Count > 0)
-        {
-            var runError = root
+        // Reported, never thrown. A part that matched nothing is a fact about THAT part's slice of the
+        // selection; whether it fails the run depends on what the other parts produced.
+        var runError = caseResults.Count > 0
+            ? null
+            : root
                 .Descendants(ns + "RunInfo")
                 .Select(row => row.Element(ns + "Text")?.Value.Trim())
                 .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-            throw new ContinuousTestProviderException(
-                runError ?? "Dotnet test run produced no results for the selected test cases.");
-        }
 
         var times = root.Element(ns + "Times");
         var startedAt = TrxDateTimeOffset(times?.Attribute("start")?.Value);
         var endedAt = TrxDateTimeOffset(times?.Attribute("finish")?.Value);
         var runId = request.RunId ?? $"trx:{root.Attribute("id")?.Value ?? Path.GetFileNameWithoutExtension(artifactPath)}";
-        return new ProviderRunResult(
-            RunId: runId,
-            Status: AggregateStatus(caseResults.Select(row => row.Status)),
-            StartedAt: startedAt,
-            EndedAt: endedAt,
-            CaseResults: caseResults);
+        return new TrxParseResult(
+            new ProviderRunResult(
+                RunId: runId,
+                Status: AggregateStatus(caseResults.Select(row => row.Status)),
+                StartedAt: startedAt,
+                EndedAt: endedAt,
+                CaseResults: caseResults),
+            runError);
     }
 
     private static IReadOnlyList<ProviderTestCase> ParseDiscovery(string output)
@@ -977,6 +1418,65 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         }
 
         return cases;
+    }
+
+    /// <summary>
+    /// Parses the invocations of one chunked xunit run and folds them back into the single result the
+    /// caller asked for. A one-invocation run parses exactly as it did before chunking existed.
+    /// </summary>
+    private static ProviderRunResult MergeRuns(
+        IReadOnlyList<TestProcessResult> results,
+        string selectedRevision,
+        string indexIdentity)
+    {
+        if (results.Count == 1)
+            return ParseRun(results[0].StandardOutput, selectedRevision, indexIdentity);
+
+        return MergeRunResults(results
+            .Select(invocation => ParseRun(invocation.StandardOutput, selectedRevision, indexIdentity))
+            .ToArray());
+    }
+
+    /// <summary>
+    /// Folds the parsed invocations of one chunked run into the single result the caller asked for.
+    /// Shared by both runners: xunit chunks arrive as parsed stdout, mstest/nunit chunks as parsed TRX
+    /// artifacts, and one merge policy keeps the two verdicts comparable.
+    ///
+    /// Status takes the worst outcome across invocations - a green chunk must never mask a red sibling,
+    /// so a failed or errored part, or a single failed row inside one, fails the run. "skipped" is NOT
+    /// folded the same way: it is the run's verdict only when NO part ran a test that did anything else.
+    /// Treating it as worse than "passed" let one chunk of all-skipped methods report a whole run as
+    /// skipped while its siblings really ran and passed, which is a chunking artefact - the unchunked
+    /// run of the same selection reported "passed". The window spans min start to max end, because the
+    /// run really did last that long.
+    /// </summary>
+    private static ProviderRunResult MergeRunResults(IReadOnlyList<ProviderRunResult> parsed)
+    {
+        if (parsed.Count == 1)
+            return parsed[0];
+
+        var caseResults = parsed.SelectMany(static run => run.CaseResults).ToArray();
+        var displayNames = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var run in parsed)
+        {
+            foreach (var displayName in run.TestDisplayNames)
+                displayNames.Add(displayName);
+        }
+
+        var status =
+            parsed.Any(static run => run.Status is "failed" or "errored")
+                || caseResults.Any(static row => row.Status is "failed" or "errored") ? "failed"
+            : caseResults.Any(static row => row.Status != "skipped") ? "passed"
+            : parsed.Any(static run => run.Status == "skipped") ? "skipped"
+            : parsed[0].Status;
+
+        return new ProviderRunResult(
+            parsed[0].RunId,
+            status,
+            parsed.Select(static run => run.StartedAt).Where(static at => at is not null).Min(),
+            parsed.Select(static run => run.EndedAt).Where(static at => at is not null).Max(),
+            caseResults,
+            TestDisplayNames: displayNames.ToArray());
     }
 
     private static ProviderRunResult ParseRun(string output, string selectedRevision, string indexIdentity)
@@ -1399,8 +1899,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         CancellationToken cancellationToken)
     {
         var readinessPath = Path.Combine(paths.ResultsDirectory, CoverageReadinessFileName);
-        if (File.Exists(readinessPath))
-            File.Delete(readinessPath);
+        DeleteWithRetry(readinessPath);
         var timeoutMilliseconds = Math.Max(1, (long)Math.Ceiling(_coverageShutdownTimeout.TotalMilliseconds));
         var command = new TestProcessCommand(
             _dotnetCoveragePath,
@@ -1430,8 +1929,70 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         }
         finally
         {
-            if (File.Exists(readinessPath))
-                File.Delete(readinessPath);
+            // Best effort, and it must STAY best effort: this delete runs while a readiness failure is
+            // in flight, and a throw here would replace the coverage error the caller needs with an
+            // IOException about a temp file. On Windows whether the handle is still held is decided by
+            // an antivirus scan window, so the swap would happen on some runs and not others.
+            TryDeleteWithRetry(readinessPath);
+        }
+    }
+
+    /// <summary>
+    /// Deletes a CT artifact, retrying the sharing races a delete loses on Windows: an antivirus scan
+    /// or a not-yet-closed collector handle keeps the file open for a few milliseconds and the delete
+    /// fails with an IOException that the same call a moment later does not see. Miller.Indexing runs
+    /// the same loop for the rebuild promote, but it is private to that assembly and unreachable here.
+    /// A delete that never succeeds still throws — a caller that needs the file gone must hear it.
+    /// </summary>
+    private void DeleteWithRetry(string path) => DeleteWithRetry(path, _deleteFile, _deleteRetrySleep);
+
+    /// <summary>
+    /// A delete that CANNOT throw, for a <c>finally</c> block: it swallows the sharing failures
+    /// <c>DeleteWithRetry</c> gives up on, and only those, so a leftover temp file never replaces the
+    /// failure that sent control through the block.
+    /// </summary>
+    private void TryDeleteWithRetry(string path) => TryDeleteWithRetry(path, _deleteFile, _deleteRetrySleep);
+
+    internal static void TryDeleteWithRetry(string path, Action<string> deleteFile, Action<TimeSpan> sleep)
+    {
+        try
+        {
+            DeleteWithRetry(path, deleteFile, sleep);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    internal static void DeleteWithRetry(string path, Action<string> deleteFile, Action<TimeSpan> sleep)
+    {
+        ArgumentNullException.ThrowIfNull(deleteFile);
+        ArgumentNullException.ThrowIfNull(sleep);
+
+        if (!File.Exists(path))
+            return;
+
+        // The budget is spent in the injected sleep, not read from a clock, so the number of attempts
+        // is the same on a loaded machine as on an idle one - and a test can drive the whole loop
+        // without waiting half a second.
+        var waited = TimeSpan.Zero;
+        var delay = DeleteRetryInitialDelay;
+        for (;;)
+        {
+            try
+            {
+                deleteFile(path);
+                return;
+            }
+            catch (Exception exception) when (
+                (exception is IOException or UnauthorizedAccessException)
+                && waited + delay <= DeleteRetryBudget)
+            {
+                sleep(delay);
+                waited += delay;
+                delay = TimeSpan.FromMilliseconds(
+                    Math.Min(delay.TotalMilliseconds * 2, DeleteRetryMaxDelay.TotalMilliseconds));
+            }
         }
     }
 
@@ -1556,7 +2117,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             runFailure.Message + " Coverage collector cleanup also failed: " + cleanupFailure.Message,
             new AggregateException(runFailure, cleanupFailure));
 
-    private static IReadOnlyList<ProviderCoverageArtifact> CompactCoverageSnapshots(
+    private IReadOnlyList<ProviderCoverageArtifact> CompactCoverageSnapshots(
         ContinuousTestProviderRunRequest request,
         CtGenerationPaths paths,
         CoverageSession coverage,
@@ -1591,7 +2152,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
 
             files.UnionWith(filePaths);
             completeByTestCaseId[testCaseId] &= complete;
-            File.Delete(snapshotPath);
+            DeleteWithRetry(snapshotPath);
         }
 
         foreach (var (testCaseId, files) in filesByTestCaseId)
@@ -1605,8 +2166,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         foreach (var testCaseId in testCaseIdsByKey.Values.Where(id => !filesByTestCaseId.ContainsKey(id)))
             artifacts.Add(WriteCoverageFileList(coverage, paths, testCaseId, [], complete: false));
 
-        if (File.Exists(coverage.SessionArtifactPath))
-            File.Delete(coverage.SessionArtifactPath);
+        DeleteWithRetry(coverage.SessionArtifactPath);
 
         return artifacts
             .OrderBy(artifact => artifact.TestCaseId, StringComparer.Ordinal)

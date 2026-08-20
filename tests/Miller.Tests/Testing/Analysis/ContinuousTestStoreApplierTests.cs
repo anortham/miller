@@ -418,3 +418,255 @@ public sealed class ContinuousTestStoreApplierTests : IDisposable
                     IndexIdentity: Identity),
             ]);
 }
+
+/// <summary>
+/// The coordinator's maintenance tail reports two degradations that a run SURVIVES rather than fails on: a
+/// build generation directory the reap could not remove, and generation disk over its budget. Both leave the
+/// coordinator only through the lifecycle sink, so an unwired sink makes a generation directory held by a
+/// surviving test host look exactly like a clean workspace. These tests drive the real maintenance tail and
+/// assert on what the sink receives, so removing either report - or dropping the sink at the constructor -
+/// turns them red.
+/// </summary>
+public sealed class ContinuousTestCoordinatorLifecycleLogTests : IDisposable
+{
+    private const string WorkspaceId = "ws:lifecycle";
+    private const string Identity = "gen-1";
+    private const string OwnerToken = "owner:lifecycle";
+
+    // 'g' plus twelve lowercase hex characters is what CtGenerationPaths.IsGenerationId accepts.
+    private const string GenerationId = "gabcdef012345";
+
+    private readonly string _root =
+        Directory.CreateTempSubdirectory("miller-ct-lifecycle-").FullName;
+
+    public void Dispose()
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
+    }
+
+    [Fact]
+    public async Task A_reap_that_fails_is_reported_through_the_constructor_sink()
+    {
+        var reported = new List<string>();
+        ContinuousTestWorkspace workspace = Workspace("project-a");
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+        SeedReapEligibleGeneration(store, workspace);
+
+        var coordinator = new ContinuousTestCoordinator(
+            new StubContinuousTestProvider(),
+            store,
+            runIdFactory: static () => "run:1",
+            options: new ContinuousTestCoordinatorOptions
+            {
+                OwnerToken = OwnerToken,
+                // A surviving test host still holds the generation directory, so the rename fails.
+                ReapGenerationDirectory = static _ => false,
+            },
+            onDiagnostic: reported.Add);
+
+        await coordinator.RunSelectedAsync(RunRequest(workspace), TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            $"generation_reap_failed root={workspace.BuildOutputRoot} gen={GenerationId}",
+            Assert.Single(reported));
+    }
+
+    [Fact]
+    public async Task A_reap_that_succeeds_reports_nothing()
+    {
+        var reported = new List<string>();
+        ContinuousTestWorkspace workspace = Workspace("project-b");
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+        SeedReapEligibleGeneration(store, workspace);
+
+        var coordinator = new ContinuousTestCoordinator(
+            new StubContinuousTestProvider(),
+            store,
+            runIdFactory: static () => "run:1",
+            options: new ContinuousTestCoordinatorOptions
+            {
+                OwnerToken = OwnerToken,
+                ReapGenerationDirectory = static _ => true,
+            },
+            onDiagnostic: reported.Add);
+
+        await coordinator.RunSelectedAsync(RunRequest(workspace), TestContext.Current.CancellationToken);
+
+        // The report names a failure. A sink that receives it on the success path would cry wolf on every run.
+        Assert.Empty(reported);
+    }
+
+    [Fact]
+    public async Task Generation_disk_over_budget_is_reported_through_the_options_sink()
+    {
+        var reported = new List<string>();
+        ContinuousTestWorkspace workspace = Workspace("project-c");
+        Directory.CreateDirectory(Path.Combine(workspace.BuildOutputRoot, GenerationId));
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+
+        var coordinator = new ContinuousTestCoordinator(
+            new StubContinuousTestProvider(),
+            store,
+            runIdFactory: static () => "run:1",
+            options: new ContinuousTestCoordinatorOptions
+            {
+                OwnerToken = OwnerToken,
+                GenerationDiskBudgetBytes = 1024,
+                MeasureDirectoryBytes = static _ => 4096,
+                LifecycleLog = reported.Add,
+            });
+
+        await coordinator.RunSelectedAsync(RunRequest(workspace), TestContext.Current.CancellationToken);
+
+        Assert.Equal("generation_disk_over_budget bytes=4096 budget=1024", Assert.Single(reported));
+    }
+
+    [Fact]
+    public async Task Generation_disk_inside_the_budget_reports_nothing()
+    {
+        var reported = new List<string>();
+        ContinuousTestWorkspace workspace = Workspace("project-d");
+        Directory.CreateDirectory(Path.Combine(workspace.BuildOutputRoot, GenerationId));
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+
+        var coordinator = new ContinuousTestCoordinator(
+            new StubContinuousTestProvider(),
+            store,
+            runIdFactory: static () => "run:1",
+            options: new ContinuousTestCoordinatorOptions
+            {
+                OwnerToken = OwnerToken,
+                GenerationDiskBudgetBytes = 8192,
+                MeasureDirectoryBytes = static _ => 4096,
+                LifecycleLog = reported.Add,
+            });
+
+        await coordinator.RunSelectedAsync(RunRequest(workspace), TestContext.Current.CancellationToken);
+
+        Assert.Empty(reported);
+    }
+
+    [Fact]
+    public async Task The_constructor_sink_beats_the_options_sink()
+    {
+        var fromConstructor = new List<string>();
+        var fromOptions = new List<string>();
+        ContinuousTestWorkspace workspace = Workspace("project-e");
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+        SeedReapEligibleGeneration(store, workspace);
+
+        var coordinator = new ContinuousTestCoordinator(
+            new StubContinuousTestProvider(),
+            store,
+            runIdFactory: static () => "run:1",
+            options: new ContinuousTestCoordinatorOptions
+            {
+                OwnerToken = OwnerToken,
+                ReapGenerationDirectory = static _ => false,
+                LifecycleLog = fromOptions.Add,
+            },
+            onDiagnostic: fromConstructor.Add);
+
+        await coordinator.RunSelectedAsync(RunRequest(workspace), TestContext.Current.CancellationToken);
+
+        Assert.Single(fromConstructor);
+        Assert.Empty(fromOptions);
+    }
+
+    [Fact]
+    public async Task A_coordinator_without_a_sink_still_runs_the_maintenance_tail()
+    {
+        ContinuousTestWorkspace workspace = Workspace("project-f");
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+        SeedReapEligibleGeneration(store, workspace);
+
+        // The production shape before the sink was wired: no sink at either seam. The reap still fails and the
+        // debt is still recorded, so the run does not break - the only thing missing is the report, which is
+        // what made a held generation directory invisible.
+        var coordinator = new ContinuousTestCoordinator(
+            new StubContinuousTestProvider(),
+            store,
+            runIdFactory: static () => "run:1",
+            options: new ContinuousTestCoordinatorOptions
+            {
+                OwnerToken = OwnerToken,
+                ReapGenerationDirectory = static _ => false,
+            });
+
+        await coordinator.RunSelectedAsync(RunRequest(workspace), TestContext.Current.CancellationToken);
+
+        CtGenerationReapDebtRecord debt = Assert.Single(store.ListCtGenerationReapDebt());
+        Assert.Equal(GenerationId, debt.DirectoryName);
+        Assert.Equal(workspace.BuildOutputRoot, debt.BuildOutputRoot);
+    }
+
+    private ContinuousTestWorkspace Workspace(string buildOutputName)
+    {
+        string project = Path.Combine(_root, "src", "App.Tests.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        File.WriteAllText(project, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        return new ContinuousTestWorkspace(
+            WorkspaceId,
+            _root,
+            project,
+            Path.Combine(_root, "ct-build", buildOutputName));
+    }
+
+    private static ContinuousTestCoordinatorRunRequest RunRequest(ContinuousTestWorkspace workspace) =>
+        new(
+            Workspace: workspace,
+            SelectedRevision: "2",
+            CurrentRevision: "2",
+            IndexIdentity: Identity,
+            TestCaseIds: ["test:app"]);
+
+    private static void SeedTestCase(ContinuousTestStore store, ContinuousTestWorkspace workspace) =>
+        store.PutTestCase(new ContinuousTestCase(
+            Id: "test:app",
+            WorkspaceId: WorkspaceId,
+            Name: "AppTests",
+            QualifiedName: "App.Tests.AppTests",
+            Selector: "App.Tests.AppTests",
+            FilePath: "tests/AppTests.cs",
+            Framework: "xunit",
+            Role: ContinuousTestRole.TestCase,
+            Source: "ct-provider:dotnet",
+            Confidence: 1.0,
+            Metadata: new Dictionary<string, object?> { ["ct_project_path"] = workspace.ProjectPath }));
+
+    /// <summary>
+    /// One generation the maintenance tail must reap: not the active one, and not the newest complete one, so
+    /// neither retention rule keeps it.
+    /// </summary>
+    private static void SeedReapEligibleGeneration(ContinuousTestStore store, ContinuousTestWorkspace workspace)
+    {
+        store.PutCtGenerationAllocated(new CtGenerationRecord(
+            GenerationId: GenerationId,
+            BuildOutputRoot: workspace.BuildOutputRoot,
+            State: CtGenerationStates.Allocated,
+            OwnerToken: OwnerToken,
+            AllocatedAt: DateTimeOffset.UtcNow,
+            CompletedAt: null));
+        Assert.True(store.MarkCtGenerationReapEligible(workspace.BuildOutputRoot, GenerationId, OwnerToken));
+    }
+
+    private sealed class StubContinuousTestProvider : IContinuousTestProvider
+    {
+        public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
+            ContinuousTestWorkspace workspace,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ProviderTestCase>>([]);
+
+        public Task<ProviderRunResult> RunAsync(
+            ContinuousTestProviderRunRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ProviderRunResult(request.RunId ?? "run:1", "passed"));
+    }
+}

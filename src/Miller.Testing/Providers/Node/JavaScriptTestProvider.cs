@@ -10,10 +10,27 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
 {
     private const string TestCaseIdPrefix = "js-test:";
     private readonly ITestProcessRunner _runner;
+    private readonly Func<string, string?> _findPackageManagerOnPath;
 
     public JavaScriptTestProvider(ITestProcessRunner runner)
+        : this(runner, FindPackageManagerOnSystemPath)
+    {
+    }
+
+    /// <summary>
+    /// Test seam for the package-manager probe. <paramref name="findPackageManagerOnPath"/> takes a bare
+    /// manager name ("npm", "pnpm", "yarn") and returns the launchable file PATH really holds, or null
+    /// when it holds none. A test injects it because the real answer depends on what the developer's
+    /// machine installed - npm's own <c>.cmd</c> shim, a Volta or Chocolatey <c>.exe</c> shim, or
+    /// nothing at all - and a provider that guessed one of those broke the others.
+    /// </summary>
+    internal JavaScriptTestProvider(
+        ITestProcessRunner runner,
+        Func<string, string?> findPackageManagerOnPath)
     {
         _runner = runner ?? throw new ArgumentNullException(nameof(runner));
+        _findPackageManagerOnPath = findPackageManagerOnPath
+            ?? throw new ArgumentNullException(nameof(findPackageManagerOnPath));
     }
 
     public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
@@ -69,27 +86,65 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         CtGenerationPaths paths,
         CancellationToken cancellationToken)
     {
-        var command = BuildRunCommand(request, paths);
-        var result = await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
-        var artifactPath = ResultArtifactPath(request, paths);
-        var caseResults = File.Exists(artifactPath)
-            ? ParseResultArtifact(request, artifactPath)
-            : [];
+        var invocations = BuildRunInvocations(request, paths);
+        var results = new List<TestProcessResult>(invocations.Count);
 
-        if (result.ExitCode != 0 && caseResults.Count == 0)
+        // Sequential on purpose. The invocations share one package root, one generation directory and
+        // one compile cache, so running them together would have them overwrite each other's output.
+        // The CT execution budget already runs one workspace at a time.
+        foreach (var invocation in invocations)
+            results.Add(await _runner.RunAsync(invocation.Command, cancellationToken).ConfigureAwait(false));
+
+        return MergeRuns(request, paths, invocations, results);
+    }
+
+    /// <summary>
+    /// Folds the invocations of one chunked run back into the single result the caller asked for. A
+    /// one-invocation run parses exactly as it did before chunking existed.
+    ///
+    /// The worst status wins: every chunk's case results are aggregated together by
+    /// <see cref="RunStatus"/>, so a green chunk can never mask a red sibling. The exit code is judged
+    /// PER invocation, because each chunk is a separate process with its own report - a chunk that
+    /// produced no verdicts must report its own selection as failed rather than borrow a sibling's.
+    /// </summary>
+    private static ProviderRunResult MergeRuns(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        IReadOnlyList<RunInvocation> invocations,
+        IReadOnlyList<TestProcessResult> results)
+    {
+        var caseResults = new List<ProviderCaseResult>();
+        for (var index = 0; index < invocations.Count; index++)
         {
-            if (request.TestCaseIds.Count == 0)
-                throw new ContinuousTestProviderException(
-                    $"JavaScript test run failed with exit code {result.ExitCode}: {FailureSummary(result)}");
+            var invocation = invocations[index];
+            var result = results[index];
+            IReadOnlyList<ProviderCaseResult> parsed = File.Exists(invocation.ArtifactPath)
+                ? ParseResultArtifact(request, invocation.TestCaseIds, invocation.ArtifactPath)
+                : [];
 
-            caseResults = FailedSelectedCaseResults(request, result, artifactPath);
+            if (result.ExitCode != 0 && parsed.Count == 0)
+            {
+                if (invocation.TestCaseIds.Count == 0)
+                    throw new ContinuousTestProviderException(
+                        $"JavaScript test run failed with exit code {result.ExitCode}: {FailureSummary(result)}");
+
+                parsed = FailedSelectedCaseResults(
+                    request,
+                    invocation.TestCaseIds,
+                    result,
+                    invocation.ArtifactPath);
+            }
+
+            caseResults.AddRange(parsed);
         }
 
         return new ProviderRunResult(
             RunId: request.RunId ?? NewRunId(request),
             Status: RunStatus(caseResults),
             CaseResults: caseResults,
-            ResultArtifactPath: File.Exists(artifactPath) ? artifactPath : null,
+            ResultArtifactPath: invocations
+                .Select(static run => run.ArtifactPath)
+                .FirstOrDefault(File.Exists),
             CoverageArtifacts: DiscoverCoverageArtifacts(request.Workspace))
         {
             GenerationId = paths.GenerationId,
@@ -108,16 +163,58 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         return BuildRunCommand(request, CtGenerationPaths.ResolveLatestOrFirst(request.Workspace));
     }
 
+    /// <summary>
+    /// Preview/test seam: every invocation the request would run, in order. A selection that fits one
+    /// command line yields exactly one, so this is the same command <see cref="BuildRunCommand"/>
+    /// returns; a wider selection yields the chunks it is split into. Production runs never use it —
+    /// <see cref="RunAsync"/> allocates its own generation and builds every command from that handle.
+    /// </summary>
+    public IReadOnlyList<TestProcessCommand> BuildRunCommands(ContinuousTestProviderRunRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return BuildRunInvocations(request, CtGenerationPaths.ResolveLatestOrFirst(request.Workspace))
+            .Select(static invocation => invocation.Command)
+            .ToArray();
+    }
+
     private TestProcessCommand BuildRunCommand(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths)
+        => BuildRunInvocations(request, paths)[0].Command;
+
+    /// <summary>
+    /// One invocation of a run: the command to launch, the result artifact it writes, and the selected
+    /// test case ids that invocation alone is answerable for.
+    /// </summary>
+    private sealed record RunInvocation(
+        TestProcessCommand Command,
+        string ArtifactPath,
+        IReadOnlyList<string> TestCaseIds);
+
+    /// <summary>
+    /// Builds the invocations for one run. A selection that fits the command-line cap is a single
+    /// command — same argv and same artifact filename as this provider sent before chunking existed —
+    /// and a wider one is split across several invocations of the same runner.
+    ///
+    /// The cap that matters here is 8,191, not the 32,767 Windows allows: npm, pnpm and yarn ship as
+    /// <c>.cmd</c> shims, and cmd.exe applies its own much lower limit. It neither truncates nor
+    /// throws — the shim exits 1 with "The command line is too long." on stderr and writes no report
+    /// at all, which this provider would otherwise read as every selected test having failed.
+    /// <see cref="CtArgvChunking.MaxSelectionBytesPerInvocation"/> is already sized under that cap.
+    /// A machine whose manager resolves to an <c>.exe</c> shim instead (see
+    /// <see cref="PackageManager"/>) gets the larger CreateProcessW cap, so the same budget is merely
+    /// conservative there — the budget deliberately does NOT depend on which kind the probe found.
+    /// </summary>
+    private IReadOnlyList<RunInvocation> BuildRunInvocations(
         ContinuousTestProviderRunRequest request,
         CtGenerationPaths paths)
     {
         var framework = RequiredFramework(request.Workspace);
         var packageRoot = PackageRoot(request.Workspace);
         paths.EnsureDirectories();
-        Directory.CreateDirectory(CacheDirectory(paths));
-        var artifactPath = ResultArtifactPath(request, paths);
-        Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+        var cacheDirectory = CacheDirectory(paths);
+        Directory.CreateDirectory(cacheDirectory);
 
         var selectedFiles = request.TestCaseIds
             .Select(TestFileFromId)
@@ -126,11 +223,97 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
-        var reporterArgs = IsolationArguments(framework, CacheDirectory(paths))
+
+        // An empty file selection is the unfiltered whole-suite run. It carries no selection argv, so
+        // there is nothing to chunk and it keeps the whole request's ids.
+        if (selectedFiles.Length == 0)
+        {
+            return [BuildInvocation(
+                request, paths, framework, packageRoot, cacheDirectory, [], request.TestCaseIds, part: null)];
+        }
+
+        // Each unit is a single argv element — a bare file path with no flag beside it — so the
+        // primitive's whole-unit rule costs nothing here. What it buys is the byte budget, shared with
+        // every other provider so one bound governs them all.
+        IReadOnlyList<IReadOnlyList<string>> chunks = CtArgvChunking.Chunk(
+            selectedFiles,
+            static file => CtArgvChunking.ArgvCost([file]));
+        if (chunks.Count == 1)
+        {
+            return [BuildInvocation(
+                request, paths, framework, packageRoot, cacheDirectory, chunks[0], request.TestCaseIds, part: null)];
+        }
+
+        var placedFiles = new HashSet<string>(selectedFiles, StringComparer.Ordinal);
+        var invocations = new List<RunInvocation>(chunks.Count);
+        for (var index = 0; index < chunks.Count; index++)
+        {
+            invocations.Add(BuildInvocation(
+                request,
+                paths,
+                framework,
+                packageRoot,
+                cacheDirectory,
+                chunks[index],
+                InvocationTestCaseIds(request, chunks[index], placedFiles, isFirstInvocation: index == 0),
+                part: index));
+        }
+
+        return invocations;
+    }
+
+    /// <summary>
+    /// The selected ids one invocation of a split run is answerable for. Each id follows its own file,
+    /// so a chunk that fails reports only the tests it tried to run, and the single-selected-id parse
+    /// fallback cannot attribute one chunk's output to another chunk's test. An id that names no file
+    /// in the selection cannot be placed by path, so it rides with the first invocation rather than
+    /// being dropped from the report.
+    /// </summary>
+    private static IReadOnlyList<string> InvocationTestCaseIds(
+        ContinuousTestProviderRunRequest request,
+        IReadOnlyList<string> chunkFiles,
+        IReadOnlySet<string> placedFiles,
+        bool isFirstInvocation)
+    {
+        var files = new HashSet<string>(chunkFiles, StringComparer.Ordinal);
+        return request.TestCaseIds
+            .Where(testCaseId => TestFileFromId(testCaseId) is { } file && placedFiles.Contains(file)
+                ? files.Contains(file)
+                : isFirstInvocation)
+            .ToArray();
+    }
+
+    private RunInvocation BuildInvocation(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        string framework,
+        string packageRoot,
+        string cacheDirectory,
+        IReadOnlyList<string> selectedFiles,
+        IReadOnlyList<string> testCaseIds,
+        int? part)
+    {
+        var artifactPath = ResultArtifactPath(request, paths, part);
+        Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+
+        var reporterArgs = IsolationArguments(framework, cacheDirectory)
             .Concat(ReporterArguments(framework, artifactPath))
             .Concat(selectedFiles)
             .ToArray();
 
+        return new RunInvocation(
+            BuildCommand(request, paths, framework, packageRoot, reporterArgs),
+            artifactPath,
+            testCaseIds);
+    }
+
+    private TestProcessCommand BuildCommand(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        string framework,
+        string packageRoot,
+        string[] reporterArgs)
+    {
         if (!string.IsNullOrWhiteSpace(request.Command))
         {
             var tokens = SplitCommand(request.Command);
@@ -182,21 +365,27 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         return TestCaseIdPrefix + NormalizeRelativePath(relativePath);
     }
 
+    /// <summary>
+    /// Parses one invocation's report. <paramref name="testCaseIds"/> is the selection THAT invocation
+    /// ran, not the whole request's: a chunk must only ever claim its own tests.
+    /// </summary>
     private static IReadOnlyList<ProviderCaseResult> ParseResultArtifact(
         ContinuousTestProviderRunRequest request,
+        IReadOnlyList<string> testCaseIds,
         string artifactPath)
     {
         var framework = RequiredFramework(request.Workspace);
         return framework switch
         {
-            "vitest" or "jest" => ParseJestCompatibleJson(request, artifactPath),
-            "node-test" => ParseNodeJunit(request, artifactPath),
+            "vitest" or "jest" => ParseJestCompatibleJson(request, testCaseIds, artifactPath),
+            "node-test" => ParseNodeJunit(request, testCaseIds, artifactPath),
             _ => throw UnsupportedFramework(framework, request.Workspace.ProjectPath),
         };
     }
 
     private static IReadOnlyList<ProviderCaseResult> ParseJestCompatibleJson(
         ContinuousTestProviderRunRequest request,
+        IReadOnlyList<string> testCaseIds,
         string artifactPath)
     {
         using var document = JsonDocument.Parse(File.ReadAllText(artifactPath));
@@ -209,8 +398,8 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         foreach (var fileResult in testResults.EnumerateArray())
         {
             var relativePath = RelativePathFromJsonResult(packageRoot, fileResult);
-            var testCaseId = relativePath is null && request.TestCaseIds.Count == 1
-                ? request.TestCaseIds[0]
+            var testCaseId = relativePath is null && testCaseIds.Count == 1
+                ? testCaseIds[0]
                 : relativePath is null
                     ? null
                     : TestCaseId(relativePath);
@@ -239,10 +428,11 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
 
     private static IReadOnlyList<ProviderCaseResult> ParseNodeJunit(
         ContinuousTestProviderRunRequest request,
+        IReadOnlyList<string> testCaseIds,
         string artifactPath)
     {
         var parsed = JunitTestResultParser.Parse(artifactPath);
-        if (request.TestCaseIds.Count == 0)
+        if (testCaseIds.Count == 0)
             return [];
 
         var status = AggregateStatus(parsed.Cases.Select(row => row.Status));
@@ -253,7 +443,7 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         var failureSummary = parsed.Cases
             .Select(row => row.FailureText)
             .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text));
-        return request.TestCaseIds
+        return testCaseIds
             .Select(testCaseId => new ProviderCaseResult(
                 Id: StableId("test_result", request.Workspace.WorkspaceId, testCaseId, request.RunId),
                 TestCaseId: testCaseId,
@@ -390,14 +580,24 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
             _ => [],
         };
 
-    private static string ResultArtifactPath(ContinuousTestProviderRunRequest request, CtGenerationPaths paths)
+    /// <summary>
+    /// The result artifact for one invocation. <paramref name="part"/> is null for a run that fits a
+    /// single command line — which keeps the filename byte-identical to the pre-chunking one — and is
+    /// the zero-based invocation index when a run is split, so chunk N cannot overwrite chunk N-1's
+    /// report and every part stays on disk as evidence.
+    /// </summary>
+    private static string ResultArtifactPath(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        int? part = null)
     {
         var framework = RequiredFramework(request.Workspace);
         var runKey = request.RunId ?? NewRunId(request);
         var runHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(runKey))).ToLowerInvariant();
+        var suffix = part is null ? string.Empty : $".part{part.Value.ToString("D3", CultureInfo.InvariantCulture)}";
         return Path.Combine(
             paths.ResultsDirectory,
-            $"run-{runHash}.{(framework == "node-test" ? "xml" : "json")}");
+            $"run-{runHash}{suffix}.{(framework == "node-test" ? "xml" : "json")}");
     }
 
     private static ContinuousTestProviderException StampGeneration(
@@ -511,14 +711,84 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
             _ => 10,
         };
 
-    private static string PackageManager(string packageRoot)
+    /// <summary>
+    /// The package manager to run the test script through, as a launchable file name.
+    ///
+    /// On Windows a bare <c>"npm"</c> reaches <c>Process.Start</c> with <c>UseShellExecute=false</c>,
+    /// which searches PATH for that exact name and for <c>npm.exe</c> - and the extensionless file the
+    /// Node MSI installs beside <c>npm.cmd</c> is a shell script for MSYS/Git Bash, not a Windows
+    /// executable. So the bare name found nothing and every script-based Node CT run failed to start
+    /// with <c>Win32Exception: The system cannot find the file specified</c>.
+    ///
+    /// A hard-coded <c>.cmd</c> suffix does not fix that; it only moves the failure. A machine that
+    /// manages Node with Volta or Chocolatey has <c>npm.exe</c> on PATH and no <c>npm.cmd</c> anywhere,
+    /// and a name that already carries an extension stops CreateProcessW appending <c>.exe</c> - so the
+    /// suffix breaks the installs that used to work. Probe PATH for what is really there instead, and
+    /// fall back to the bare name, which is exactly the pre-suffix behaviour, when nothing is found.
+    /// <see cref="LocalBin"/> keeps its unconditional <c>.cmd</c>: it names a file inside
+    /// node_modules/.bin, where npm always writes a <c>.cmd</c> shim, so there is nothing to probe.
+    /// </summary>
+    private string PackageManager(string packageRoot)
     {
-        if (File.Exists(Path.Combine(packageRoot, "pnpm-lock.yaml")))
-            return "pnpm";
-        if (File.Exists(Path.Combine(packageRoot, "yarn.lock")))
-            return "yarn";
-        return "npm";
+        string manager =
+            File.Exists(Path.Combine(packageRoot, "pnpm-lock.yaml")) ? "pnpm"
+            : File.Exists(Path.Combine(packageRoot, "yarn.lock")) ? "yarn"
+            : "npm";
+        return _findPackageManagerOnPath(manager) ?? manager;
     }
+
+    /// <summary>
+    /// Extensions a Windows package-manager shim can carry, in probe order. <c>.cmd</c> comes first
+    /// because npm, pnpm and yarn author their own <c>.cmd</c> shims, and because the chunk budget this
+    /// provider splits selections under assumes the 8,191-character cmd.exe cap. Resolving an
+    /// <c>.exe</c> shim instead only leaves that budget conservative, which is safe.
+    /// </summary>
+    private static readonly string[] WindowsPackageManagerExtensions = [".cmd", ".exe", ".bat"];
+
+    /// <summary>
+    /// The default probe: on Windows, the launchable package-manager file PATH really holds; elsewhere
+    /// null, because a bare name is resolved through PATH by the platform itself.
+    /// </summary>
+    private static string? FindPackageManagerOnSystemPath(string manager) =>
+        OperatingSystem.IsWindows()
+            ? FindPackageManagerOnPath(manager, SystemPathDirectories(), File.Exists)
+            : null;
+
+    /// <summary>
+    /// Finds the launchable file for a bare package-manager name in <paramref name="searchDirectories"/>,
+    /// or null when none of them holds one. Pure and injectable so a test can state the PATH and the
+    /// files on it rather than depend on the developer's Node install.
+    /// </summary>
+    internal static string? FindPackageManagerOnPath(
+        string manager,
+        IReadOnlyList<string> searchDirectories,
+        Func<string, bool> fileExists)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(manager);
+        ArgumentNullException.ThrowIfNull(searchDirectories);
+        ArgumentNullException.ThrowIfNull(fileExists);
+
+        foreach (var extension in WindowsPackageManagerExtensions)
+        {
+            foreach (var directory in searchDirectories)
+            {
+                if (string.IsNullOrWhiteSpace(directory))
+                    continue;
+
+                // Path.Join, not Path.Combine: it never validates and never throws, so one malformed
+                // PATH entry cannot take down every Node run.
+                var candidate = Path.Join(directory.Trim('"'), manager + extension);
+                if (fileExists(candidate))
+                    return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<string> SystemPathDirectories() =>
+        (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private static bool HasPackage(JsonElement root, string packageName)
     {
@@ -649,11 +919,12 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
 
     private static IReadOnlyList<ProviderCaseResult> FailedSelectedCaseResults(
         ContinuousTestProviderRunRequest request,
+        IReadOnlyList<string> testCaseIds,
         TestProcessResult result,
         string artifactPath)
     {
         var summary = FailureSummary(result);
-        return request.TestCaseIds
+        return testCaseIds
             .Select(testCaseId => new ProviderCaseResult(
                 Id: StableId("test_result", request.Workspace.WorkspaceId, testCaseId, request.RunId),
                 TestCaseId: testCaseId,

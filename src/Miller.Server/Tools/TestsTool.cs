@@ -129,9 +129,15 @@ public sealed class TestsTool
                 {
                     TestsRunResult result = TestsCore.Run(request);
                     output = result.Render(json);
-                    hint = result.ExitCode == 0
-                        ? NextStepHint.Render("tests operation=status", "read the verdict")
-                        : null;
+                    // A paused run executed nothing, so there is no verdict to read - pointing the agent at
+                    // `status` would hand it the PREVIOUS revision's verdict as if it answered this request.
+                    // The useful next step is to retry once the workspace holding the user-global execution
+                    // budget finishes.
+                    hint = result.ExitCode != 0
+                        ? null
+                        : result.Paused
+                            ? NextStepHint.Render("tests operation=run", "retry once the other workspace finishes")
+                            : NextStepHint.Render("tests operation=status", "read the verdict");
                     break;
                 }
                 default:

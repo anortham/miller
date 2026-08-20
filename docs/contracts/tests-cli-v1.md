@@ -113,11 +113,19 @@ Enable and disable do not start the daemon.
 | `verdict` | string | `green`, `red`, `partial`, or `unknown`. |
 | `reason` | string \| null | Channel or one-shot reason. |
 | `waited` | bool | `true` when `--wait` was supplied. |
+| `paused` | bool | `true` when another workspace held the user-global execution budget, so this run executed nothing. |
 | `selected` | object \| null | Same shape as status `selected`. |
 
 A live daemon receives `run` on the file command channel. With no daemon, Miller runs a foreground
 one-shot in the calling process. `--wait` waits for a terminal verdict (`green` / `red` / `partial`)
 either way.
+
+At most one workspace executes tests at a time. When another workspace already holds that budget,
+this run executes NOTHING and reports `paused: true`, `verdict: "unknown"`, `waited: false`, and
+exit code `0` — a held budget is a deferral, not a failure. The verdict is `unknown` rather than the
+stored one because a run that executed nothing holds no results at the selected key, and green
+requires complete results at that key. `selected` still names the key the stored rows carry, so the
+caller can still see what CT knows. Retry the run once the holding workspace finishes.
 
 ## `tests serve` / `tests stop`
 

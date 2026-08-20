@@ -12,9 +12,26 @@ using Miller.Testing;
 
 namespace Miller.Server.Tools;
 
+/// <summary>
+/// Seams for the CT verbs. <c>Budget</c> overrides the user-global execution budget a foreground
+/// run takes, the same way <see cref="ContinuousTestDaemonHostOptions.Budget"/> overrides the
+/// daemon's: null resolves from the environment, so production behavior is unchanged, while a test
+/// binds its own miller home instead of contending on the caller's real one.
+/// <para>
+/// <c>OpenFacts</c> and <c>Providers</c> are the two seams a foreground drain needs when there is no
+/// live index and no test toolchain. <c>OpenFacts</c> replaces <c>OpenLiveFacts</c>; it is called
+/// with the workspace root and the workspace id, ONCE PER READ, and each source it returns is
+/// disposed as soon as that read ends - which is the property that keeps a minutes-long suite from
+/// pinning the served generation. <c>Providers</c> replaces the default five-provider factory, so a
+/// drain can be observed without spawning <c>dotnet test</c>. Both are null in production.
+/// </para>
+/// </summary>
 public sealed record TestsCoreHooks(
     Func<ProcessStartInfo, Process?>? StartProcess = null,
-    Func<TestsForegroundRunRequest, TestsRunOutcome>? ForegroundRun = null);
+    Func<TestsForegroundRunRequest, TestsRunOutcome>? ForegroundRun = null,
+    CtExecutionBudget? Budget = null,
+    Func<string, string, IMillerFactSource>? OpenFacts = null,
+    IContinuousTestProviderResolver? Providers = null);
 
 public sealed record TestsForegroundRunRequest(
     string WorkspaceRoot,
@@ -26,7 +43,8 @@ public sealed record TestsRunOutcome(
     CtRunExecution Execution,
     ContinuousTestVerdict Verdict,
     string? Reason,
-    bool Waited);
+    bool Waited,
+    bool Paused = false);
 
 public sealed record TestsCoreRequest(
     string WorkspaceRoot,
@@ -96,7 +114,8 @@ public sealed record TestsRunResult(
     ContinuousTestVerdict Verdict,
     string? Reason,
     bool Waited,
-    CtFreshnessKey? Selected)
+    CtFreshnessKey? Selected,
+    bool Paused = false)
 {
     public string Render(bool json) => json ? TestsCore.RenderRunJson(this) : TestsCore.RenderRunCompact(this);
 }
@@ -117,6 +136,14 @@ public static class TestsCore
     public const string StatusContractDoc = "docs/contracts/tests-cli-v1.md";
     private const string TestsUsage =
         "miller tests <status|serve|run|enable|disable|stop> [--json] [--wait] [--project PATH] [--workspace-id SELECTOR] [--workspace DIR]";
+
+    // Same request reason the daemon records, so `budget_holder.reason` reads the same whether the
+    // suite runs in a daemon or in the foreground.
+    private const string ExecutionBudgetReason = "run";
+
+    // Same wording the daemon publishes when it pauses on a held budget. The paused vocabulary is
+    // shared on purpose: one held lease, one explanation, whichever path reports it.
+    private const string ExecutionBudgetHeldReason = "execution budget held";
 
     public static string Usage => TestsUsage;
 
@@ -280,7 +307,11 @@ public static class TestsCore
         var selector = new ContinuousTestImpactSelector(
             store,
             new ReopeningMillerFactSource(() => OpenLiveFacts(root, workspaceId)));
-        var coordinator = new ContinuousTestCoordinator(ContinuousTestProviderFactory.CreateDefault(), store);
+        var coordinator = new ContinuousTestCoordinator(
+            ContinuousTestProviderFactory.CreateDefault(
+                onDiagnostic: message => CtDaemonLog.Write(root, message)),
+            store,
+            onDiagnostic: message => CtDaemonLog.Write(root, message));
         var queue = new ContinuousTestDaemonQueue(store, selector, coordinator);
         var poller = new ContinuousTestRevisionPoller(
             new MillerArtifactRevisionSource(),
@@ -344,25 +375,55 @@ public static class TestsCore
         TestsRunOutcome outcome;
         if (request.Hooks?.ForegroundRun is { } hook)
         {
-            outcome = hook(new TestsForegroundRunRequest(root, workspaceId, projects, request.Wait));
+            outcome = WithExecutionBudget(
+                request,
+                root,
+                () => hook(new TestsForegroundRunRequest(root, workspaceId, projects, request.Wait)));
         }
         else if (projects.Count == 0)
         {
+            // Nothing executes, so nothing takes the user-global budget.
             outcome = new TestsRunOutcome(CtRunExecution.ForegroundOneShot, ContinuousTestVerdict.Unknown, "no enabled projects", request.Wait);
         }
         else
         {
-            outcome = RunForeground(request, root, workspaceId, store, projects);
+            outcome = WithExecutionBudget(
+                request,
+                root,
+                () => RunForeground(request, root, workspaceId, store, projects));
         }
 
         TestsStatusResult after = Status(request);
+
+        // A paused run executed NOTHING, so it holds no results at the selected key and must not
+        // report the verdict an earlier revision stored. CLAUDE.md states the CT invariant plainly:
+        // "Green requires complete results at the selected composite key." Zero results is not
+        // green. A consumer of `tests run --json` reads the exit code and `verdict` - the two fields
+        // docs/contracts/tests-cli-v1.md lists for this verb - so a stored green here passes a
+        // change that no test ever saw. `paused` and the reason stay in the payload, and `selected`
+        // still names the key the stored rows carry, so a person still sees what CT knows. `waited`
+        // is false because nothing waited: the budget was already held when the request arrived.
+        // The exit code stays 0 - a held budget is a deferral, not a failure.
+        if (outcome.Paused)
+        {
+            return new TestsRunResult(
+                ExitCode: 0,
+                Execution: outcome.Execution,
+                Verdict: ContinuousTestVerdict.Unknown,
+                Reason: outcome.Reason,
+                Waited: false,
+                Selected: after.Selected,
+                Paused: true);
+        }
+
         return new TestsRunResult(
             0,
             outcome.Execution,
             after.Selected is null ? outcome.Verdict : after.Verdict,
             outcome.Reason,
             outcome.Waited || request.Wait,
-            after.Selected);
+            after.Selected,
+            outcome.Paused);
     }
 
     internal static string RenderStatusJson(TestsStatusResult result)
@@ -519,6 +580,7 @@ public static class TestsCore
             else
                 writer.WriteString("reason", result.Reason);
             writer.WriteBoolean("waited", result.Waited);
+            writer.WriteBoolean("paused", result.Paused);
             writer.WritePropertyName("selected");
             WriteSelected(writer, result.Selected);
             writer.WriteEndObject();
@@ -530,7 +592,8 @@ public static class TestsCore
     internal static string RenderRunCompact(TestsRunResult result)
     {
         string execution = result.Execution == CtRunExecution.Daemon ? "daemon" : "foreground";
-        return $"tests run {execution} verdict={Snake(result.Verdict.ToString())} {(result.Reason ?? string.Empty)}".TrimEnd();
+        string state = result.Paused ? " paused" : string.Empty;
+        return $"tests run {execution}{state} verdict={Snake(result.Verdict.ToString())} {(result.Reason ?? string.Empty)}".TrimEnd();
     }
 
     internal static string RenderFailuresJson(TestsFailuresResult result)
@@ -574,6 +637,38 @@ public static class TestsCore
         return sb.ToString().TrimEnd();
     }
 
+    /// <summary>
+    /// Admission for a foreground one-shot. CLAUDE.md's CT safety spec allows at most one workspace
+    /// to execute tests at a time, and the daemon already honors it; a foreground run executes the
+    /// same suites, so it must take the same user-global lease or two workspaces thrash one machine.
+    /// A held lease reports paused instead of running anyway or failing. The <c>using</c> scope is
+    /// the release path the daemon uses: it releases on a normal return and on a throw alike.
+    /// <c>MILLER_CT_EXEC_BUDGET=off</c> yields a disabled budget whose acquire is a no-op.
+    /// </summary>
+    private static TestsRunOutcome WithExecutionBudget(
+        TestsCoreRequest request,
+        string root,
+        Func<TestsRunOutcome> execute)
+    {
+        CtExecutionBudget budget = request.Hooks?.Budget
+            ?? CtExecutionBudget.FromEnvironment(ResolveMillerHome(request));
+        using CtExecutionBudgetLease? admission = budget.TryAcquire(
+            new CtExecutionBudgetRequest(root, ExecutionBudgetReason),
+            TimeSpan.Zero,
+            CancellationToken.None);
+        if (admission is null)
+        {
+            return new TestsRunOutcome(
+                CtRunExecution.ForegroundOneShot,
+                ContinuousTestVerdict.Unknown,
+                ExecutionBudgetHeldReason,
+                request.Wait,
+                Paused: true);
+        }
+
+        return execute();
+    }
+
     private static TestsRunOutcome RunForeground(
         TestsCoreRequest request,
         string root,
@@ -581,14 +676,30 @@ public static class TestsCore
         ContinuousTestStore store,
         IReadOnlyList<ContinuousTestProject> projects)
     {
-        using IOwnedFactSource facts = OpenLiveFacts(root, workspaceId);
+        // A suite runs for minutes. One family-store connection held open across the drain pins the
+        // served generation for that whole time, so a rebuild cannot promote until the run ends.
+        // Read through the same reopening source the daemon uses: each read opens and closes its own
+        // handle, so nothing is pinned while tests execute.
+        Func<string, string, IMillerFactSource>? openFacts = request.Hooks?.OpenFacts;
+        var facts = new ReopeningMillerFactSource(() => openFacts is null
+            ? OpenLiveFacts(root, workspaceId)
+            : openFacts(root, workspaceId));
         var selector = new ContinuousTestImpactSelector(store, facts);
-        var coordinator = new ContinuousTestCoordinator(ContinuousTestProviderFactory.CreateDefault(), store);
+        IContinuousTestProviderResolver providers = request.Hooks?.Providers
+            ?? ContinuousTestProviderFactory.CreateDefault(
+                onDiagnostic: message => CtDaemonLog.Write(root, message));
+        var coordinator = new ContinuousTestCoordinator(
+            providers,
+            store,
+            onDiagnostic: message => CtDaemonLog.Write(root, message));
         var queue = new ContinuousTestDaemonQueue(store, selector, coordinator);
         DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        // Read the freshness key ONCE: every work item in this one-shot is enqueued at the same
+        // generation, and a reopening source would otherwise open the store once per project.
+        CtFreshnessKey freshness = facts.Freshness;
         foreach (ContinuousTestProjectWorkItem item in ContinuousTestProjectInventory.MaterializeProjectWorkItems(projects, root))
         {
-            CtFreshnessKey freshness = facts.Freshness;
             queue.EnqueueExplicit(new ContinuousTestDaemonChange(
                 item.Workspace,
                 freshness.Revision.ToString(CultureInfo.InvariantCulture),
@@ -603,7 +714,7 @@ public static class TestsCore
             queue.DrainReadyAsync(now, CancellationToken.None).GetAwaiter().GetResult();
 
         IReadOnlyList<ContinuousTestStatus> statuses = store.ListContinuousTestStatuses(workspaceId);
-        CtFreshnessKey? selected = SelectedFrom(statuses) ?? facts.Freshness;
+        CtFreshnessKey? selected = SelectedFrom(statuses) ?? freshness;
         ContinuousTestVerdict verdict = selected is { } key
             ? ContinuousTestFreshness.Evaluate(statuses, key, watchHealthy: true)
             : ContinuousTestVerdict.Unknown;
