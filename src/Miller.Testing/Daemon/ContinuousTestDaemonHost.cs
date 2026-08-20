@@ -67,6 +67,20 @@ public sealed class ContinuousTestDaemonHostOptions
     /// alone, exactly as before.
     /// </summary>
     public CtRunActivityCell? RunActivity { get; init; }
+
+    /// <summary>
+    /// Where the loop reports a failure it would otherwise discard. Production points this at
+    /// <see cref="CtDaemonLog.Write"/>, so a poll error lands in the shared daily log instead of
+    /// being swallowed; a unit test leaves it null and the loop stays silent.
+    ///
+    /// <para>The loop invokes this only on the LIVE branch. Both disabled branches return before the
+    /// loop starts, so a workspace under <c>MILLER_CT=off</c> writes no line and creates no
+    /// <c>.miller/logs</c> directory even when the caller supplies a real sink. That is the
+    /// permanent zero-work guarantee, and
+    /// <c>ForbiddenEnqueueTests.A_disabled_daemon_writes_no_log_line_and_creates_no_logs_directory</c>
+    /// holds it.</para>
+    /// </summary>
+    public Action<string>? Diagnostic { get; init; }
 }
 
 /// <summary>
@@ -270,10 +284,15 @@ public sealed class ContinuousTestDaemonHost
                 {
                     break;
                 }
-                catch (Exception)
+                catch (Exception exception)
                 {
                     _backoff.RecordDegraded();
                     _watch.RecordError("poll_error");
+
+                    // The exception used to be discarded here, so a daemon that degraded on every poll
+                    // reported only the word "poll_error" and never the reason. Safe inside this
+                    // last-resort catch because CtDaemonLog.Write never throws for an I/O reason.
+                    Diagnostic($"ct poll error workspace={_workspaceId} {CtDaemonLog.FailureDetail(exception)}");
                 }
             }
 
@@ -564,6 +583,12 @@ public sealed class ContinuousTestDaemonHost
 
     private ContinuousTestDaemonSnapshot DisabledSnapshot() =>
         new(CtDaemonLifecycleState.Stopped, "disabled", ContinuousTestVerdict.Unknown, null, 0, 0, false, false);
+
+    /// <summary>
+    /// Reports a failure the loop would otherwise discard. Called only from the LIVE loop, never from a
+    /// disabled branch, so <c>MILLER_CT=off</c> stays zero-work even when a sink is supplied.
+    /// </summary>
+    private void Diagnostic(string message) => _options.Diagnostic?.Invoke(message);
 
     private void Publish(ContinuousTestDaemonSnapshot snapshot)
     {

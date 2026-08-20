@@ -134,12 +134,18 @@ Commit mode: `parallel-lead-commit`. Workers hand a verified diff to the lead. T
 **Known and out of scope, record but do not fix here:** `CtDaemonLog` stamps the file name and timestamp in UTC while Serilog uses local time, so a CT line written after 19:00 local lands in the next day's file. Serilog also rolls the daily file at 32 MiB and `CtDaemonLog` always writes the un-suffixed name. Raise both as follow-ups.
 
 **Acceptance criteria:**
-- [ ] Both production queue constructions pass a `lifecycleLog`.
-- [ ] A discovery failure writes one log line carrying the exception type, the full message, and a stack.
-- [ ] A poll error writes one log line instead of being discarded.
-- [ ] A test proves a disabled daemon (`MILLER_CT=off`) writes no log file and creates no directory.
-- [ ] `CtDiagnosticSinkConventionTests` fails if any of the three sinks is dropped.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] Both production queue constructions pass a `lifecycleLog`.
+- [x] A discovery failure writes one log line carrying the exception type, the full message, and a stack.
+- [x] A poll error writes one log line instead of being discarded.
+- [x] A test proves a disabled daemon (`MILLER_CT=off`) writes no log file and creates no directory.
+- [x] `CtDiagnosticSinkConventionTests` fails if any of the three sinks is dropped.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
+
+**Lead notes.** The disabled branch is wired with a live sink on purpose: the zero-work guarantee now
+rests on the branch returning before the loop starts, not on a caller remembering to pass null, and
+`ForbiddenEnqueueTests.A_disabled_daemon_writes_no_log_line_and_creates_no_logs_directory` holds it.
+Fix round 1 moved the duplicated `FailureDetail`/`Flatten` helpers into `CtDaemonLog` so both failure
+lines share one format.
 
 ---
 

@@ -632,6 +632,14 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     private void RecordDiscoveryFailure(ContinuousTestDaemonPendingRun pending, Exception exception)
     {
         ContinuousTestWorkspace workspace = pending.Workspace;
+
+        // Logged BEFORE the store write, and with the FULL detail. The `ct.db` row below keeps only
+        // FailureSummary's first line, which is right for a status column and useless for a diagnosis:
+        // finding the last discovery failure of a dogfood run meant querying the database. This line
+        // carries the type, the whole message, and the stack, so the shared daily log answers it.
+        Log($"ct discovery failed workspace={workspace.WorkspaceId} project={workspace.ProjectPath} "
+            + CtDaemonLog.FailureDetail(exception));
+
         string testCaseId = DiscoveryFailureTestCaseId(workspace);
         string runId = CtStableIds.StableId(
             "ct_discovery_failure_run",
@@ -691,6 +699,10 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     private static string DiscoveryFailureTestCaseId(ContinuousTestWorkspace workspace) =>
         CtStableIds.StableId("ct-discovery-failure", workspace.WorkspaceId, workspace.ProjectPath);
 
+    /// <summary>
+    /// The one-line summary the <c>ct.db</c> status column keeps. Deliberately the FIRST line only: a
+    /// status column has to stay short. Use <see cref="CtDaemonLog.FailureDetail"/> for a log line.
+    /// </summary>
     private static string FailureSummary(Exception exception)
     {
         string text = exception.Message.Trim();

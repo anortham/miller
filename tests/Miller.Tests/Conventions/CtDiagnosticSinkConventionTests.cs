@@ -21,22 +21,45 @@ namespace Miller.Tests.Conventions;
 /// <para>The scan runs on COMMENT-STRIPPED source, so a doc-comment mention of <c>onDiagnostic</c>
 /// cannot satisfy it. Each construction site is checked on its own, and the count is asserted, so
 /// deleting the last call site cannot turn this guard vacuously green.</para>
+///
+/// <para>THREE sinks are guarded, not one. The daemon queue's <c>lifecycleLog</c> and the daemon host
+/// options' <c>Diagnostic</c> failed exactly the same way: the seam existed, both production call sites
+/// omitted the argument, and every enqueue, drain error, discovery failure, and poll error the daemon
+/// produced was discarded. A guard hard-coded to <c>onDiagnostic:</c> stayed green through all of it,
+/// so the check is now a (construction, sink token, expected site count) triple per sink.</para>
 /// </summary>
 public sealed class CtDiagnosticSinkConventionTests
 {
     private const string CoordinatorConstruction = "newContinuousTestCoordinator(";
     private const string FactoryConstruction = "ContinuousTestProviderFactory.CreateDefault(";
-    private const string Sink = "onDiagnostic:";
+    private const string QueueConstruction = "newContinuousTestDaemonQueue(";
+
+    // An object initializer, so the delimiter is a brace. The two `new ContinuousTestDaemonHostOptions()`
+    // fallbacks inside the host itself open a PAREN and are correctly not scanned: they are the
+    // "caller passed nothing" default, not a production wiring site.
+    private const string HostOptionsConstruction = "newContinuousTestDaemonHostOptions{";
+
+    private const string OnDiagnosticSink = "onDiagnostic:";
+    private const string LifecycleLogSink = "lifecycleLog:";
+    private const string HostDiagnosticSink = "Diagnostic=";
 
     [Fact]
     public void Every_production_coordinator_construction_passes_a_diagnostic_sink() =>
-        AssertEveryConstructionPassesTheSink(CoordinatorConstruction, expectedSites: 2);
+        AssertEveryConstructionPassesTheSink(CoordinatorConstruction, OnDiagnosticSink, expectedSites: 2);
 
     [Fact]
     public void Every_production_provider_factory_construction_passes_a_diagnostic_sink() =>
-        AssertEveryConstructionPassesTheSink(FactoryConstruction, expectedSites: 2);
+        AssertEveryConstructionPassesTheSink(FactoryConstruction, OnDiagnosticSink, expectedSites: 2);
 
-    private static void AssertEveryConstructionPassesTheSink(string construction, int expectedSites)
+    [Fact]
+    public void Every_production_daemon_queue_construction_passes_a_lifecycle_log() =>
+        AssertEveryConstructionPassesTheSink(QueueConstruction, LifecycleLogSink, expectedSites: 2);
+
+    [Fact]
+    public void Every_production_daemon_host_options_passes_a_diagnostic_sink() =>
+        AssertEveryConstructionPassesTheSink(HostOptionsConstruction, HostDiagnosticSink, expectedSites: 2);
+
+    private static void AssertEveryConstructionPassesTheSink(string construction, string sink, int expectedSites)
     {
         var unwired = new List<string>();
         var sites = 0;
@@ -53,36 +76,53 @@ public sealed class CtDiagnosticSinkConventionTests
 
                 sites++;
                 searchFrom = start + construction.Length;
-                if (!ArgumentList(code, start + construction.Length).Contains(Sink, StringComparison.Ordinal))
+                if (!ArgumentList(code, start + construction.Length, construction[^1])
+                        .Contains(sink, StringComparison.Ordinal))
+                {
                     unwired.Add($"{Path.GetFileName(path)} (offset {start})");
+                }
             }
         }
 
         Assert.True(
             unwired.Count == 0,
-            $"these production `{construction}` sites pass no `{Sink}` sink, so every degradation they "
-            + $"report is discarded: {string.Join(", ", unwired)}. Pass "
-            + "`onDiagnostic: message => CtDaemonLog.Write(root, message)` so CT reports through one channel.");
+            $"these production `{construction}` sites pass no `{sink}` sink, so every degradation they "
+            + $"report is discarded: {string.Join(", ", unwired)}. Add "
+            + $"`{sink} message => CtDaemonLog.Write(root, message)` so CT reports through one channel.");
 
         // Non-vacuity: a guard that scans zero sites passes for the wrong reason.
         Assert.Equal(expectedSites, sites);
     }
 
     /// <summary>
-    /// The argument list that opens at <paramref name="openIndex"/>, to its matching close paren. Nested
-    /// parens are tracked so an inner call's arguments still count as part of this list - the factory is
-    /// constructed INSIDE the coordinator's argument list at one site, and a scan that stopped at the first
-    /// close paren would read only half of it.
+    /// The argument or initializer list that opens at <paramref name="openIndex"/>, to its matching
+    /// close delimiter. Nested delimiters are tracked so an inner call's arguments still count as part
+    /// of this list - the factory is constructed INSIDE the coordinator's argument list at one site, and
+    /// a scan that stopped at the first close paren would read only half of it.
     /// </summary>
-    private static string ArgumentList(string code, int openIndex)
+    /// <param name="open">
+    /// The opening delimiter, taken from the last character of the construction token: <c>(</c> for a
+    /// constructor call, <c>{</c> for an object initializer.
+    /// </param>
+    private static string ArgumentList(string code, int openIndex, char open)
     {
+        char close = open switch
+        {
+            '(' => ')',
+            '{' => '}',
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(open),
+                open,
+                "a construction token must end with `(` or `{`"),
+        };
+
         var depth = 1;
         for (int i = openIndex; i < code.Length; i++)
         {
             char c = code[i];
-            if (c == '(')
+            if (c == open)
                 depth++;
-            else if (c == ')' && --depth == 0)
+            else if (c == close && --depth == 0)
                 return code[openIndex..i];
         }
 

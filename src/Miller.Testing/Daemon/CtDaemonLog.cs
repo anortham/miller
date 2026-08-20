@@ -70,6 +70,32 @@ public static class CtDaemonLog
         }
     }
 
+    /// <summary>
+    /// The whole failure on ONE log line: type, full message, flattened stack. Nothing is truncated -
+    /// newlines become spaces so the line stays greppable in the shared daily log.
+    ///
+    /// <para>ONE copy, shared by the daemon's two failure lines: the queue's discovery failure and the
+    /// host's poll error. It started as a private copy in each file, and nothing kept the two in step -
+    /// teaching one of them to unwrap an InnerException or to cap the stack would have split the single
+    /// format a reader greps for.</para>
+    ///
+    /// <para>This is NOT the <c>ct.db</c> status summary. That column deliberately keeps the first line
+    /// only, and its own helper stays private in <c>ContinuousTestDaemonQueue</c>.</para>
+    /// </summary>
+    internal static string FailureDetail(Exception exception)
+    {
+        string message = Flatten(exception.Message);
+        string stack = Flatten(exception.StackTrace ?? string.Empty);
+        return stack.Length == 0
+            ? $"type={exception.GetType().FullName} message={message}"
+            : $"type={exception.GetType().FullName} message={message} stack={stack}";
+    }
+
+    private static string Flatten(string text) =>
+        string.Join(
+            " ",
+            text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
     private static void AppendLine(string path, string line)
     {
         using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);

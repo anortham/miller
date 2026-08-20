@@ -358,6 +358,11 @@ public static class TestsCore
                     Enabled = false,
                     AcquireLease = false,
                     MillerVersion = request.MillerVersion ?? MillerVersion.Current,
+
+                    // Wired on the DISABLED branch too, and deliberately. The zero-work guarantee must
+                    // hold because the branch returns before the loop starts, not because this caller
+                    // remembered to leave the sink null. The host never invokes it here.
+                    Diagnostic = message => CtDaemonLog.Write(root, message),
                 }).GetAwaiter().GetResult();
             return new TestsServeResult(0, disabled.State.ToString().ToLowerInvariant(), disabled.Reason, null);
         }
@@ -378,7 +383,12 @@ public static class TestsCore
             providers,
             store,
             onDiagnostic: message => CtDaemonLog.Write(root, message));
-        var queue = new ContinuousTestDaemonQueue(store, selector, coordinator, runActivity: runActivity);
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            selector,
+            coordinator,
+            lifecycleLog: message => CtDaemonLog.Write(root, message),
+            runActivity: runActivity);
         var poller = new ContinuousTestRevisionPoller(
             new MillerArtifactRevisionSource(),
             new MillerFactImpactSource(workspace => OpenLiveFacts(workspace, workspaceId)));
@@ -396,6 +406,7 @@ public static class TestsCore
                 Projects = projects,
                 Budget = CtExecutionBudget.FromEnvironment(ResolveMillerHome(request)),
                 RunActivity = runActivity,
+                Diagnostic = message => CtDaemonLog.Write(root, message),
             }).GetAwaiter().GetResult();
         return new TestsServeResult(
             0,
@@ -801,7 +812,11 @@ public static class TestsCore
             providers,
             store,
             onDiagnostic: message => CtDaemonLog.Write(root, message));
-        var queue = new ContinuousTestDaemonQueue(store, selector, coordinator);
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            selector,
+            coordinator,
+            lifecycleLog: message => CtDaemonLog.Write(root, message));
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
         // Read the freshness key ONCE: every work item in this one-shot is enqueued at the same
