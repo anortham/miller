@@ -57,6 +57,49 @@ public sealed class CtDaemonLogTests : IDisposable
     }
 
     /// <summary>
+    /// One call must write exactly ONE record. Callers interpolate values they do not control — a project
+    /// path, a provider's own output — and on any filesystem that permits a newline in a name an
+    /// un-flattened value writes EXTRA lines that read like genuine records. Both files are checked: the
+    /// human log because a forged line there misleads a reader, and the JSONL because one object per line
+    /// is the format's whole contract.
+    /// </summary>
+    [Fact]
+    public void Write_KeepsAMultiLineMessageOnOneRecordInBothFiles()
+    {
+        var when = new DateTimeOffset(2026, 8, 19, 16, 0, 0, TimeSpan.Zero);
+        CtDaemonLog.Write(
+            _root,
+            "ct discovery failed project=/tmp/a" + (char)10
+                + "16:00:00.000 [INF] (role:ct pid:1 cid:) CtDaemon: all green",
+            when);
+
+        (string human, string json) = CtDaemonLog.LogFilePaths(CtDaemonLog.LogsDirectory(_root), when);
+        string[] humanLines = File.ReadAllLines(human);
+        string[] jsonLines = File.ReadAllLines(json);
+
+        Assert.Single(humanLines);
+        Assert.Single(jsonLines);
+        Assert.Contains("all green", humanLines[0], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A wedged provider that emits megabytes on every poll must not fill the disk one record at a time.
+    /// The bound is far above any real stack trace, and the marker says plainly that something was cut.
+    /// </summary>
+    [Fact]
+    public void Write_BoundsAnEnormousRecord()
+    {
+        var when = new DateTimeOffset(2026, 8, 19, 16, 0, 0, TimeSpan.Zero);
+        CtDaemonLog.Write(_root, new string('x', 5_000_000), when);
+
+        (string human, _) = CtDaemonLog.LogFilePaths(CtDaemonLog.LogsDirectory(_root), when);
+        string line = Assert.Single(File.ReadAllLines(human));
+
+        Assert.EndsWith("...[truncated]", line, StringComparison.Ordinal);
+        Assert.True(line.Length < 10_000, $"the record was {line.Length} characters");
+    }
+
+    /// <summary>
     /// A file parked at the logs-directory path makes <c>Directory.CreateDirectory</c> throw
     /// <see cref="IOException"/>, so the log path can never be created. The write must degrade to
     /// no log and must leave the blocking file untouched.

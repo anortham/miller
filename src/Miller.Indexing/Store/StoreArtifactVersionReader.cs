@@ -83,6 +83,21 @@ public static class StoreArtifactVersionReader
         try
         {
             familyVersion = FamilyStoreReadSession.ReadFamilyBinaryVersion(binding);
+            if (LeadershipEligibility.TryParseTriple(familyVersion) is null)
+            {
+                // LeadershipEligibility deliberately reads an unparseable ARTIFACT version as eligible: a
+                // downgrade cannot be proven, and a lenient read path is right for display and for a legacy
+                // artifact whose version string predates the contract. A WRITER gate into a SHARED family is
+                // the opposite case — an unparseable floor there would silently remove the floor. Refuse, and
+                // leave every read path lenient.
+                unreadable = new FamilyStoreReadException(
+                    FamilyStoreReadFailure.Corrupt,
+                    $"The family store reports binary_version '{familyVersion}', which is not a version this "
+                    + "Miller can compare. Refusing to import rather than write without a floor.");
+                familyVersion = null;
+                return false;
+            }
+
             return true;
         }
         catch (FamilyStoreReadException ex) when (

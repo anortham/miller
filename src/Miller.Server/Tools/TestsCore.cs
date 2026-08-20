@@ -294,6 +294,14 @@ public static class TestsCore
     {
         ArgumentNullException.ThrowIfNull(request);
         string root = RequireRoot(request);
+        // MILLER_CT=off is a permanent ZERO-WORK guarantee, and it binds this verb like every other one.
+        // Opening the store CREATES ct.db when none exists, and the loop below writes rows into it, so a
+        // disable request under the kill switch used to create and modify the very file the switch promises
+        // Miller never touches. Nothing is lost by refusing: the switch already disables continuous testing
+        // everywhere, so the caller's intent is satisfied before this method runs.
+        if (ContinuousTestPolicy.IsKillSwitchOff(request.KillSwitch))
+            return MutationError("disable", "continuous testing is disabled (MILLER_CT=off)");
+
         string workspaceId = ResolveWorkspaceId(request, root);
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
         if (!string.IsNullOrWhiteSpace(request.ProjectPath))

@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Server.Tools;
 using Miller.Testing;
 using Xunit;
 
@@ -179,6 +180,53 @@ public sealed class ForbiddenEnqueueTests : IDisposable
         Assert.False(Directory.Exists(CtDaemonProtocol.RootDirectory(_root)));
         Assert.False(Directory.Exists(Path.Combine(_root, ".miller")));
         Assert.Equal(snapshot, Assert.Single(snapshots));
+    }
+
+    /// <summary>
+    /// The kill switch binds every VERB, not only the daemon. <c>tests disable</c> opened the store before
+    /// it checked the switch, and opening the store CREATES <c>ct.db</c> — so a disable request under
+    /// MILLER_CT=off created and wrote the one file the switch promises Miller never touches. A seeded file
+    /// proves the stronger property: not one byte changes.
+    /// </summary>
+    [Fact]
+    public void Disable_under_the_kill_switch_writes_nothing_and_creates_nothing()
+    {
+        // A workspace with NO ct.db at all: the verb must not bring one into existence.
+        TestsMutationResult refused = TestsCore.Disable(new TestsCoreRequest(_root)
+        {
+            KillSwitch = "off",
+        });
+
+        Assert.Equal(3, refused.ExitCode);
+        Assert.Equal("continuous testing is disabled (MILLER_CT=off)", refused.Error);
+        Assert.False(File.Exists(CtSchema.DbPathFor(_root)));
+        Assert.False(Directory.Exists(Path.Combine(_root, ".miller")));
+
+        // And a workspace that ALREADY has a ct.db: the file must be byte-for-byte unchanged.
+        Directory.CreateDirectory(Path.Combine(_root, ".miller"));
+        string dbPath = CtSchema.DbPathFor(_root);
+        using (var seed = new ContinuousTestStore(dbPath))
+        {
+            seed.PutContinuousTestProject(new ContinuousTestProject(
+                Id: "project:seed",
+                WorkspaceId: "ws:1",
+                ProjectPath: Path.Combine(_root, "Some.csproj"),
+                Framework: "xunit",
+                Command: null,
+                Enabled: true));
+        }
+
+        SqliteConnection.ClearAllPools();
+        byte[] before = File.ReadAllBytes(dbPath);
+
+        TestsMutationResult refusedAgain = TestsCore.Disable(new TestsCoreRequest(_root)
+        {
+            KillSwitch = "off",
+        });
+
+        SqliteConnection.ClearAllPools();
+        Assert.Equal(3, refusedAgain.ExitCode);
+        Assert.Equal(before, File.ReadAllBytes(dbPath));
     }
 
     /// <summary>

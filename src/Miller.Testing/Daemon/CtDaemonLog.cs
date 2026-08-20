@@ -49,6 +49,14 @@ public static class CtDaemonLog
             Directory.CreateDirectory(logsDir);
             (string humanPath, string jsonPath) = LogFilePaths(logsDir, when);
 
+            // ONE record per call, whatever the caller passed. Flattening here rather than at each call site
+            // is what makes that true: a caller interpolates values it does not control - a project path, a
+            // provider's own output - and on any filesystem that permits a newline in a name, an un-flattened
+            // value writes EXTRA lines that read exactly like genuine records. The cap bounds one wedged poll
+            // loop from filling the disk with repeated stack traces; it is far above any real record, and the
+            // marker says plainly that something was cut rather than letting the line end mid-word.
+            message = Bound(Flatten(message));
+
             string human =
                 when.UtcDateTime.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture)
                 + " [INF] (role:" + Role + " pid:" + processId.ToString(CultureInfo.InvariantCulture)
@@ -71,8 +79,9 @@ public static class CtDaemonLog
     }
 
     /// <summary>
-    /// The whole failure on ONE log line: type, full message, flattened stack. Nothing is truncated -
-    /// newlines become spaces so the line stays greppable in the shared daily log.
+    /// The whole failure on ONE log line: type, full message, flattened stack. Newlines become spaces so the
+    /// line stays greppable in the shared daily log. <see cref="Write"/> applies the same flattening plus a
+    /// length bound to every record, so a caller that interpolates an untrusted value cannot forge a record.
     ///
     /// <para>ONE copy, shared by the daemon's two failure lines: the queue's discovery failure and the
     /// host's poll error. It started as a private copy in each file, and nothing kept the two in step -
@@ -90,6 +99,17 @@ public static class CtDaemonLog
             ? $"type={exception.GetType().FullName} message={message}"
             : $"type={exception.GetType().FullName} message={message} stack={stack}";
     }
+
+    /// <summary>
+    /// The longest record written to the daily log. A .NET stack trace runs a few thousand characters, so
+    /// this holds every real failure whole; what it stops is a provider that emits megabytes on every poll.
+    /// </summary>
+    private const int MaxRecordLength = 8192;
+
+    private static string Bound(string text) =>
+        text.Length <= MaxRecordLength
+            ? text
+            : text[..MaxRecordLength] + " ...[truncated]";
 
     private static string Flatten(string text) =>
         string.Join(

@@ -192,6 +192,33 @@ public sealed class StoreArtifactVersionReaderTests
     }
 
     /// <summary>
+    /// Proves: a family version the comparison cannot parse fails the WRITER gate closed.
+    /// <c>LeadershipEligibility.Evaluate</c> deliberately calls an unparseable artifact version eligible —
+    /// a downgrade cannot be proven — which is right for display and for legacy artifacts, and wrong for a
+    /// gate that decides whether to write into a shared family. A corrupt or foreign value there would
+    /// remove the floor entirely and let any extractor write.
+    /// </summary>
+    [Theory]
+    [InlineData("garbage")]
+    [InlineData("v-next")]
+    [InlineData("   ")]
+    public void TryReadFamilyWriterFloorRefusesAVersionItCannotCompare(string version)
+    {
+        using var fixture = StorePointerFixture.Create(binaryVersion: version);
+
+        bool comparable = StoreArtifactVersionReader.TryReadFamilyWriterFloor(
+            fixture.Binding,
+            out string? familyVersion,
+            out FamilyStoreReadException? unreadable);
+
+        Assert.False(comparable);
+        Assert.Null(familyVersion);
+        Assert.NotNull(unreadable);
+        // And the leniency it corrects is real: the shared matrix WOULD have let this through.
+        Assert.True(LeadershipEligibility.Evaluate("2.30.0", version, allowDowngrade: false).Eligible);
+    }
+
+    /// <summary>
     /// Proves: an EMPTY family root is still a first import. The resolver creates the store directory when
     /// it plans a view, so the ordinary first import reaches the gate with a root that exists and holds
     /// nothing. Failing closed there would wedge every new workspace.
