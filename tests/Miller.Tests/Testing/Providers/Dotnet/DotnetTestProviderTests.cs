@@ -61,7 +61,7 @@ public sealed class DotnetTestProviderTests : IDisposable
             listCommand.FileName);
         Assert.Equal(DotnetTestProvider.TestExecutablePath(workspace), listCommand.FileName);
         Assert.Equal(workspace.WorkspaceRoot, listCommand.WorkingDirectory);
-        Assert.Equal(["-list", "full/json", "-noLogo", "-noColor"], listCommand.Arguments);
+        Assert.Equal(["-list", "full/json", "-noLogo", "-noColor", "-preEnumerateTheories"], listCommand.Arguments);
         Assert.Equal(workspace.WorkspaceRoot, listCommand.Environment[CtEnvironment.WorkspaceRoot]);
         AssertUsesGenerationTempDirectory(listCommand.Environment, generation);
     }
@@ -256,6 +256,115 @@ public sealed class DotnetTestProviderTests : IDisposable
         Assert.Contains("does not exist", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(FirstGeneration(workspace).GenerationId, exception.GenerationId);
         Assert.Equal(2, runner.Calls.Count);
+    }
+
+    /// <summary>
+    /// Discovery and the run that follows it build the SAME source state. Each used to allocate its own
+    /// generation, and the generation directory is the build's <c>OutDir</c>, so the second build found an
+    /// empty output directory and repeated the whole copy step. Every project in a CT run was built twice for
+    /// bytes that were already there.
+    /// </summary>
+    [Fact]
+    public async Task A_run_after_a_discovery_reuses_the_generation_the_discovery_built()
+    {
+        var runner = new FakeTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue(
+            """
+            [{"Assembly":"/tmp/Sample.Tests.dll","DisplayName":"Sample.Tests.Passes","ID":"xunit-id-1","Class":"Sample.Tests","Method":"Passes"}]
+            """);
+        runner.Enqueue();
+        runner.Enqueue(XunitPassedRun, exitCode: 0);
+        var provider = new DotnetTestProvider(runner);
+        var workspace = Workspace();
+
+        await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        await provider.RunAsync(Request(workspace), TestContext.Current.CancellationToken);
+
+        string[] outDirs = runner.Calls
+            .Where(call => call.Arguments.FirstOrDefault() == "build")
+            .Select(call => call.Arguments.Single(argument => argument.StartsWith("-p:OutDir=", StringComparison.Ordinal)))
+            .ToArray();
+
+        Assert.Equal(2, outDirs.Length);
+        Assert.Equal(outDirs[0], outDirs[1]);
+        Assert.Equal(FirstGeneration(workspace).GenerationId, Assert.Single(GenerationDirectories(workspace)));
+    }
+
+    /// <summary>
+    /// The handoff is one-shot. Two runs must never share a generation, because a generation is the immutable
+    /// build a run executes against and its results directory.
+    /// </summary>
+    [Fact]
+    public async Task A_second_run_with_no_discovery_between_them_allocates_its_own_generation()
+    {
+        var runner = new FakeTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue(
+            """
+            [{"Assembly":"/tmp/Sample.Tests.dll","DisplayName":"Sample.Tests.Passes","ID":"xunit-id-1","Class":"Sample.Tests","Method":"Passes"}]
+            """);
+        runner.Enqueue();
+        runner.Enqueue(XunitPassedRun, exitCode: 0);
+        runner.Enqueue();
+        runner.Enqueue(XunitPassedRun, exitCode: 0);
+        var provider = new DotnetTestProvider(runner);
+        var workspace = Workspace();
+
+        await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        await provider.RunAsync(Request(workspace), TestContext.Current.CancellationToken);
+        await provider.RunAsync(Request(workspace), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, GenerationDirectories(workspace).Count);
+    }
+
+    /// <summary>
+    /// The invariant behind <c>-preEnumerateTheories</c>: a case id that discovery records must be an id a
+    /// run can report a result for.
+    ///
+    /// <para>Delay-enumerated theories broke it in both directions. <c>-list</c> reported one entry per
+    /// METHOD, so twelve rows counted as one case — measured on Miller's own suite, 6,233 discovered against
+    /// 7,723 run. And a run emitted ONE <c>test-case-starting</c> whose display name carried no arguments,
+    /// with one <c>TestCaseUniqueID</c> shared by every row, so twelve rows folded into one verdict.</para>
+    ///
+    /// <para>Setting the flag on only ONE command is worse than neither: discovery would record row ids that
+    /// no run could ever prove, and every row would stay unproven forever. This test fails if either command
+    /// loses the flag, because then the two id sets stop matching.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_discovered_theory_row_is_an_id_the_run_reports_a_result_for()
+    {
+        var runner = new FakeTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue(
+            """
+            [{"Assembly":"/tmp/Sample.Tests.dll","DisplayName":"Sample.Tests.Cases(value: 1)","ID":"x1","Class":"Sample.Tests","Method":"Cases"},
+             {"Assembly":"/tmp/Sample.Tests.dll","DisplayName":"Sample.Tests.Cases(value: 2)","ID":"x2","Class":"Sample.Tests","Method":"Cases"}]
+            """);
+        runner.Enqueue();
+        runner.Enqueue(XunitPreEnumeratedTheoryRun, exitCode: 0);
+        var provider = new DotnetTestProvider(runner);
+        var workspace = Workspace();
+
+        IReadOnlyList<ProviderTestCase> discovered =
+            await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        ProviderRunResult run = await provider.RunAsync(
+            Request(workspace, discovered.Select(row => row.Id).ToArray()),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ["xunit:Sample.Tests.Cases(value: 1)", "xunit:Sample.Tests.Cases(value: 2)"],
+            discovered.Select(row => row.Id).OrderBy(id => id, StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            discovered.Select(row => row.Id).OrderBy(id => id, StringComparer.Ordinal).ToArray(),
+            run.CaseResults.Select(row => row.TestCaseId).OrderBy(id => id, StringComparer.Ordinal).ToArray());
+
+        // One -method unit for the two rows: the selection collapses, so the argv does not grow with rows.
+        TestProcessCommand runCommand = runner.Calls[3];
+        Assert.Equal(["-method", "Sample.Tests.Cases"], runCommand.Arguments.Where(
+            argument => argument == "-method" || argument == "Sample.Tests.Cases").ToArray());
+        Assert.Contains("-preEnumerateTheories", runCommand.Arguments);
+        Assert.Contains("-preEnumerateTheories", runner.Calls[1].Arguments);
     }
 
     [Fact]
@@ -502,7 +611,9 @@ public sealed class DotnetTestProviderTests : IDisposable
 
         var command = provider.BuildDiscoverCommand(workspace);
 
-        Assert.Equal(["-list", "full/json", "-noLogo", "-noColor"], command.Arguments.Take(4).ToArray());
+        Assert.Equal(
+            ["-list", "full/json", "-noLogo", "-noColor", "-preEnumerateTheories"],
+            command.Arguments.Take(5).ToArray());
         AssertContainsAdjacentPair(command.Arguments, "-trait-", "Category=Scale");
     }
 
@@ -524,7 +635,7 @@ public sealed class DotnetTestProviderTests : IDisposable
 
         Assert.Equal(
             [
-                "-noLogo", "-noColor", "-reporter", "json",
+                "-noLogo", "-noColor", "-reporter", "json", "-preEnumerateTheories",
                 "-method", "Sample.Tests.Cases",
                 "-method", "Sample.Tests.Passes",
             ],
@@ -745,7 +856,7 @@ public sealed class DotnetTestProviderTests : IDisposable
             single.FileName);
         Assert.Equal(
             [
-                "-noLogo", "-noColor", "-reporter", "json",
+                "-noLogo", "-noColor", "-reporter", "json", "-preEnumerateTheories",
                 "-method", "Sample.Tests.Passes",
                 "-method", "Sample.Tests.Fails",
             ],
@@ -1572,6 +1683,69 @@ public sealed class DotnetTestProviderTests : IDisposable
         Assert.Contains("collector is not listening", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// CT runs the built test executable, not <c>dotnet test</c>, so nothing applied a project's
+    /// <c>RunSettingsFilePath</c> environment block and every test that needed one failed. CT's own
+    /// variables still win: TMP/TEMP/TMPDIR are a containment guarantee, and the daemon's workspace root
+    /// must be REMOVED rather than inherited, or a `miller` CLI verb run inside a test binds the daemon's
+    /// workspace instead of the test's own root.
+    /// </summary>
+    [Fact]
+    public void Discover_command_environment_applies_run_settings_and_drops_the_daemon_variable()
+    {
+        var workspace = Workspace();
+        var projectDirectory = Path.GetDirectoryName(workspace.ProjectPath)!;
+        Directory.CreateDirectory(projectDirectory);
+        File.WriteAllText(
+            workspace.ProjectPath,
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>"
+            + "<RunSettingsFilePath>$(MSBuildProjectDirectory)/test.runsettings</RunSettingsFilePath>"
+            + "</PropertyGroup></Project>");
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "test.runsettings"),
+            "<RunSettings><RunConfiguration><EnvironmentVariables>"
+            + "<MILLER_INDEX_STORE>off</MILLER_INDEX_STORE>"
+            + "<TEMP>the-project-must-not-win</TEMP>"
+            + "</EnvironmentVariables></RunConfiguration></RunSettings>");
+
+        var command = new DotnetTestProvider(new FakeTestProcessRunner()).BuildDiscoverCommand(workspace);
+
+        Assert.Equal("off", command.Environment["MILLER_INDEX_STORE"]);
+        Assert.NotEqual("the-project-must-not-win", command.Environment["TEMP"]);
+        Assert.Equal(workspace.WorkspaceRoot, command.Environment[CtEnvironment.WorkspaceRoot]);
+        Assert.True(command.Environment.TryGetValue(CtEnvironment.DaemonWorkspaceRoot, out var daemonRoot));
+        Assert.Null(daemonRoot);
+    }
+
+    /// <summary>
+    /// A run the stall guard killed must never be recorded "passed". The xUnit parser takes the run status
+    /// from the <c>test-assembly-finished</c> event, which a killed child never emits, so a wedged assembly
+    /// whose executed tests all passed was stored as a clean run. CLAUDE.md is explicit that green needs
+    /// COMPLETE results at the selected key.
+    /// </summary>
+    [Fact]
+    public async Task Run_for_a_killed_assembly_is_failed_even_though_every_executed_test_passed()
+    {
+        var runner = new FakeTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue(XunitKilledRun, exitCode: -4109);
+        runner.OnRun = WriteEmptyJunitArtifact;
+        var provider = new DotnetTestProvider(runner);
+        var workspace = Workspace();
+
+        var result = await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: workspace,
+                SelectedRevision: "rev-1",
+                IndexIdentity: IndexIdentity,
+                RunId: "run:killed",
+                TestCaseIds: ["xunit:Sample.Tests.Passes"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("failed", result.Status);
+        Assert.Equal("passed", Assert.Single(result.CaseResults).Status);
+    }
+
     private ContinuousTestWorkspace Workspace(
         string? framework = null,
         IReadOnlyList<string>? excludeTraits = null)
@@ -1591,12 +1765,17 @@ public sealed class DotnetTestProviderTests : IDisposable
     }
 
     private static ContinuousTestProviderRunRequest Request(ContinuousTestWorkspace workspace) =>
+        Request(workspace, ["xunit:Sample.Tests.Passes"]);
+
+    private static ContinuousTestProviderRunRequest Request(
+        ContinuousTestWorkspace workspace,
+        IReadOnlyList<string> testCaseIds) =>
         new(
             Workspace: workspace,
             SelectedRevision: "rev-1",
             IndexIdentity: IndexIdentity,
             RunId: "run:generation",
-            TestCaseIds: ["xunit:Sample.Tests.Passes"]);
+            TestCaseIds: testCaseIds);
 
     private static void WriteEmptyJunitArtifact(TestProcessCommand command)
     {
@@ -1665,7 +1844,42 @@ public sealed class DotnetTestProviderTests : IDisposable
     private static CtGenerationPaths FirstGeneration(ContinuousTestWorkspace workspace) =>
         CtGenerationPaths.For(workspace, CtGenerationPaths.IdForOrdinal(workspace, 1));
 
+    private static IReadOnlyList<string> GenerationDirectories(ContinuousTestWorkspace workspace) =>
+        Directory.Exists(workspace.BuildOutputRoot)
+            ? Directory.GetDirectories(workspace.BuildOutputRoot)
+                .Select(Path.GetFileName)
+                .Where(name => name is not null && CtGenerationPaths.IsGenerationId(name))
+                .Select(name => name!)
+                .ToArray()
+            : [];
+
     private static string ExecutableExtension() => OperatingSystem.IsWindows() ? ".exe" : "";
+
+    /// <summary>
+    /// What the stall guard leaves behind: the assembly started, cases reported, and then the process tree
+    /// was killed, so there is no <c>test-assembly-finished</c> line and the exit code is non-zero.
+    /// </summary>
+    private const string XunitKilledRun =
+        """
+        {"$type":"test-assembly-starting","AssemblyUniqueID":"asm-1","StartTime":"2026-06-14T01:00:00Z"}
+        {"$type":"test-case-starting","AssemblyUniqueID":"asm-1","TestCaseUniqueID":"generation-hash-1","TestCaseDisplayName":"Sample.Tests.Passes"}
+        {"$type":"test-passed","TestCaseUniqueID":"generation-hash-1","TestUniqueID":"result-1","ExecutionTime":0.125,"FinishTime":"2026-06-14T01:00:01Z"}
+        """;
+
+    /// <summary>
+    /// What a PRE-ENUMERATED theory looks like on the wire: one test-case per row, each with the row's
+    /// arguments in its display name and its own TestCaseUniqueID. Without the flag there is a single
+    /// test-case named "Sample.Tests.Cases" and both rows report under it.
+    /// </summary>
+    private const string XunitPreEnumeratedTheoryRun =
+        """
+        {"$type":"test-assembly-starting","AssemblyUniqueID":"asm-1","StartTime":"2026-06-14T01:00:00Z"}
+        {"$type":"test-case-starting","AssemblyUniqueID":"asm-1","TestCaseUniqueID":"row-1","TestCaseDisplayName":"Sample.Tests.Cases(value: 1)"}
+        {"$type":"test-passed","TestCaseUniqueID":"row-1","TestUniqueID":"t-1","ExecutionTime":0.1,"FinishTime":"2026-06-14T01:00:01Z"}
+        {"$type":"test-case-starting","AssemblyUniqueID":"asm-1","TestCaseUniqueID":"row-2","TestCaseDisplayName":"Sample.Tests.Cases(value: 2)"}
+        {"$type":"test-passed","TestCaseUniqueID":"row-2","TestUniqueID":"t-2","ExecutionTime":0.1,"FinishTime":"2026-06-14T01:00:01Z"}
+        {"$type":"test-assembly-finished","AssemblyUniqueID":"asm-1","FinishTime":"2026-06-14T01:00:02Z","TestsFailed":0,"TestsTotal":2}
+        """;
 
     private const string XunitPassedRun =
         """

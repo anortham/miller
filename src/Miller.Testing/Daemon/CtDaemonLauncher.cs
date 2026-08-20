@@ -1,8 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using Microsoft.Win32.SafeHandles;
 using Miller.Indexing;
 
 namespace Miller.Testing;
@@ -89,10 +87,8 @@ public static class CtDaemonLauncher
         try
         {
             // Both branches hand the daemon the two log FILES as its own stdout and stderr. Windows needs
-            // the extra step because it has no /bin/sh to redirect through; see StartWithFileBackedStreams.
-            process = OperatingSystem.IsWindows()
-                ? StartWithFileBackedStreams(startInfo, stdoutPath, stderrPath, starter)
-                : starter(startInfo);
+            // the extra step because it has no /bin/sh to redirect through; see DetachedProcessStreams.
+            process = DetachedProcessStreams.Start(startInfo, stdoutPath, stderrPath, starter);
         }
         // Win32Exception is the shape a real spawn failure takes (missing image, denied by policy). Without it
         // the exception escaped to the CLI catch-all and reported exit 1 "unexpected", while tests-cli-v1 calls
@@ -176,6 +172,12 @@ public static class CtDaemonLauncher
             : UnixDetachedStartInfo(fileName, dllArgument, stdoutPath, stderrPath);
         startInfo.Environment[CtEnvironment.DaemonWorkspaceRoot] = workspaceRoot;
 
+        // The PROVIDER-facing variable must not survive into the daemon. `tests serve` can be run from
+        // inside a CT test process, which carries the workspace under test, and a daemon that inherited it
+        // would bind the wrong root. ResolveDaemonWorkspaceRoot already refuses to READ it; removing it here
+        // means the daemon's own children cannot see a stale one either.
+        startInfo.Environment.Remove(CtEnvironment.WorkspaceRoot);
+
         // A live process holds its working directory open, and on Windows that handle refuses a rename or a
         // delete of the directory — so a daemon started in the workspace root pins the very tree Miller
         // indexes for its whole life. The daemon never needs that root as its cwd: DaemonWorkspaceRoot above
@@ -189,7 +191,7 @@ public static class CtDaemonLauncher
 
     // stdout and stderr are deliberately NOT redirected. .NET only builds pipes for the streams the caller
     // asks for; for the others it passes the launcher's CURRENT standard handles to CreateProcess under
-    // STARTF_USESTDHANDLES. StartWithFileBackedStreams swaps those two handles to the log files for the
+    // STARTF_USESTDHANDLES. DetachedProcessStreams swaps those two handles to the log files for the
     // length of the spawn, so the daemon is born writing straight into daemon.out.log / daemon.err.log.
     //
     // Redirecting them instead would put the capture in a pipe that only the LAUNCHER can drain, which is
@@ -252,101 +254,6 @@ public static class CtDaemonLauncher
         // ObjectDisposedException is an InvalidOperationException, so both shapes land here.
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
-        }
-    }
-
-    /// <summary>
-    /// Starts the daemon with the two log FILES as its own stdout and stderr, so the capture belongs to the
-    /// files and survives a launcher that exits at once. This is the Windows equivalent of the Unix branch's
-    /// <c>&gt;&gt;"$stdout_path" 2&gt;&gt;"$stderr_path"</c>, and it replaces a pump thread that ran in the
-    /// LAUNCHER: <c>miller tests serve</c> prints one line and exits about a millisecond after the spawn, so
-    /// the pump and the pipe read handles died before the daemon had finished starting and the documented
-    /// start path produced no diagnostic at all.
-    ///
-    /// <para><b>How the handles reach the child.</b> .NET builds a pipe only for a stream the caller asked to
-    /// redirect; for the rest it copies the launcher's current <c>GetStdHandle</c> values into
-    /// <c>STARTUPINFO</c> under <c>STARTF_USESTDHANDLES</c> and creates the process with handle inheritance
-    /// on. Swapping this process's stdout/stderr to the log files across that one call therefore hands the
-    /// child duplicated FILE handles. The launcher closes its own copies on the way out; the child keeps
-    /// writing for its whole life. The handles must be marked inheritable for CreateProcess to duplicate
-    /// them, which is what <see cref="OpenInheritableLog"/> does.</para>
-    ///
-    /// <para><b>Why it cannot hang the daemon.</b> There is no pipe on the output side at all — a write to a
-    /// file never blocks waiting for a reader, so no unread buffer can ever fill. stdin IS a pipe, and
-    /// <see cref="ReleaseDaemonStandardInput"/> closes the launcher's write end immediately, so a read
-    /// returns EOF rather than blocking.</para>
-    ///
-    /// <para><b>The swap window.</b> <c>SetStdHandle</c> is process-wide, so the swap is held for the single
-    /// <c>Process.Start</c> call, restored in a <c>finally</c>, and serialized by a lock. It does not disturb
-    /// <c>Console.Out</c>/<c>Console.Error</c>, which cache their own handle on first use — an MCP server has
-    /// long since bound its stdio transport. A failed swap is reported as a failed spawn rather than ignored:
-    /// starting the daemon on the launcher's real stdout is exactly how stray daemon text would corrupt an
-    /// MCP protocol channel.</para>
-    /// </summary>
-    [SupportedOSPlatform("windows")]
-    private static Process? StartWithFileBackedStreams(
-        ProcessStartInfo startInfo,
-        string stdoutPath,
-        string stderrPath,
-        Func<ProcessStartInfo, Process?> starter)
-    {
-        using FileStream stdout = OpenInheritableLog(stdoutPath);
-        using FileStream stderr = OpenInheritableLog(stderrPath);
-
-        lock (StandardHandleGate)
-        {
-            IntPtr savedOutput = NativeMethods.GetStdHandle(StdOutputHandle);
-            IntPtr savedError = NativeMethods.GetStdHandle(StdErrorHandle);
-            bool swappedOutput = false;
-            bool swappedError = false;
-            try
-            {
-                swappedOutput = NativeMethods.SetStdHandle(
-                    StdOutputHandle, stdout.SafeFileHandle.DangerousGetHandle());
-                if (!swappedOutput)
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
-
-                swappedError = NativeMethods.SetStdHandle(
-                    StdErrorHandle, stderr.SafeFileHandle.DangerousGetHandle());
-                if (!swappedError)
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
-
-                return starter(startInfo);
-            }
-            finally
-            {
-                if (swappedOutput)
-                    _ = NativeMethods.SetStdHandle(StdOutputHandle, savedOutput);
-                if (swappedError)
-                    _ = NativeMethods.SetStdHandle(StdErrorHandle, savedError);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Opens one daemon log file for append with a handle CreateProcess is allowed to duplicate into the
-    /// child. Sharing stays wide (<c>ReadWrite | Delete</c>) so `tests status`, an editor, or a log reader
-    /// can read the file — and delete or rename it — while the daemon holds it.
-    /// </summary>
-    [SupportedOSPlatform("windows")]
-    private static FileStream OpenInheritableLog(string path)
-    {
-        var stream = new FileStream(
-            path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
-        try
-        {
-            if (!NativeMethods.SetHandleInformation(
-                    stream.SafeFileHandle, HandleFlagInherit, HandleFlagInherit))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error());
-            }
-
-            return stream;
-        }
-        catch
-        {
-            stream.Dispose();
-            throw;
         }
     }
 
@@ -461,33 +368,6 @@ public static class CtDaemonLauncher
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-
-    // STD_OUTPUT_HANDLE / STD_ERROR_HANDLE / HANDLE_FLAG_INHERIT from winbase.h.
-    private const int StdOutputHandle = -11;
-    private const int StdErrorHandle = -12;
-    private const int HandleFlagInherit = 0x00000001;
-
-    /// <summary>
-    /// Serializes the process-wide standard-handle swap in <see cref="StartWithFileBackedStreams"/>. Two
-    /// concurrent spawns from one MCP server would otherwise interleave save and restore and leave the
-    /// launcher's stdout pointed at a daemon log.
-    /// </summary>
-    private static readonly object StandardHandleGate = new();
-
-    [SupportedOSPlatform("windows")]
-    private static class NativeMethods
-    {
-        [DllImport("kernel32.dll", SetLastError = true)]
-        internal static extern IntPtr GetStdHandle(int stdHandle);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool SetStdHandle(int stdHandle, IntPtr handle);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool SetHandleInformation(SafeFileHandle handle, int mask, int flags);
-    }
 
     private const string UnixLaunchScript = """
 exe="$1"

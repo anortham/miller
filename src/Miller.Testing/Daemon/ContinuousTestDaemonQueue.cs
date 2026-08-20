@@ -14,6 +14,12 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     private readonly ContinuousTestStoreApplier _storeApplier;
     private readonly Action<string>? _ctStateChanged;
     private readonly Action<string>? _lifecycleLog;
+
+    /// <summary>
+    /// Where this queue reports that a provider run started and ended, so the daemon can publish it. Null in
+    /// a unit test that does not care; the drain path works the same either way.
+    /// </summary>
+    private readonly CtRunActivityCell? _runActivity;
     private readonly ContinuousTestCoverageNarrowingMode _coverageNarrowingMode;
     private readonly Dictionary<PendingKey, ContinuousTestDaemonPendingRun> _pending = [];
     private readonly Dictionary<RetryKey, int> _retryAttempts = [];
@@ -28,7 +34,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         ContinuousTestCoordinator coordinator,
         Action<string>? ctStateChanged = null,
         Action<string>? lifecycleLog = null,
-        ContinuousTestCoverageNarrowingMode coverageNarrowingMode = ContinuousTestCoverageNarrowingMode.Off)
+        ContinuousTestCoverageNarrowingMode coverageNarrowingMode = ContinuousTestCoverageNarrowingMode.Off,
+        CtRunActivityCell? runActivity = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _selector = selector ?? throw new ArgumentNullException(nameof(selector));
@@ -39,6 +46,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         _ctStateChanged = ctStateChanged;
         _lifecycleLog = lifecycleLog;
         _coverageNarrowingMode = coverageNarrowingMode;
+        _runActivity = runActivity;
     }
 
     public bool HasReadyWork(DateTimeOffset now)
@@ -205,6 +213,13 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 }
 
                 string runId = NewRunId();
+
+                // The daemon blocks here for the whole run. Without this the published status froze at the
+                // reason "executing" until the run ended, so nothing could name the project it was on.
+                _runActivity?.BeginRun(
+                    readyPending.Workspace.ProjectPath,
+                    runId,
+                    readyPending.TestCaseIds.Count);
                 try
                 {
                     ContinuousTestCoordinatorRunResult coordinatorResult = await _coordinator.RunSelectedAsync(
@@ -256,6 +271,12 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                     }
 
                     throw;
+                }
+                finally
+                {
+                    // Every exit from the run clears it, including the two cancellation paths and the retry
+                    // path that rethrows. A missed clear would leave the status claiming a run forever.
+                    _runActivity?.EndRun();
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

@@ -28,6 +28,12 @@ public sealed class RustTestProvider : IContinuousTestProvider
 
     private readonly ITestProcessRunner _runner;
 
+    /// <summary>
+    /// Lets the run reuse the generation the discovery before it built, instead of building the same source
+    /// state into a second empty output directory. One per provider instance, keyed by project build root.
+    /// </summary>
+    private readonly CtGenerationHandoff _generations = new();
+
     public RustTestProvider(ITestProcessRunner runner)
     {
         ArgumentNullException.ThrowIfNull(runner);
@@ -43,7 +49,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         ArgumentNullException.ThrowIfNull(workspace);
         EnsureCargo(workspace);
 
-        var paths = CtGenerationPaths.Allocate(workspace);
+        var paths = _generations.AllocateForDiscovery(workspace);
         try
         {
             return await DiscoverInGenerationAsync(workspace, paths, cancellationToken).ConfigureAwait(false);
@@ -187,7 +193,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         ArgumentNullException.ThrowIfNull(request);
         EnsureCargo(request.Workspace);
 
-        var paths = CtGenerationPaths.Allocate(request.Workspace);
+        var paths = _generations.TakeForRun(request.Workspace);
         try
         {
             return await RunInGenerationAsync(request, paths, cancellationToken).ConfigureAwait(false);
@@ -1276,6 +1282,9 @@ public sealed class RustTestProvider : IContinuousTestProvider
         return new Dictionary<string, string?>
         {
             [CtEnvironment.WorkspaceRoot] = workspace.WorkspaceRoot,
+            // Removed, not merely unset: the test process inherits it from the daemon, and a `miller` CLI
+            // verb run inside a test would bind the DAEMON's workspace. See DotnetTestProvider for the note.
+            [CtEnvironment.DaemonWorkspaceRoot] = null,
             ["CARGO_TARGET_DIR"] = TargetDir(paths),
             // Parseable libtest lines must never be ANSI-wrapped.
             ["CARGO_TERM_COLOR"] = "never",

@@ -68,12 +68,17 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
         ITestProcessRunner? runner = null,
         Action<string>? onDiagnostic = null)
     {
+        TimeSpan stallTimeout = ResolveStallTimeout();
+        var activity = new CtRunActivityCell(stallTimeout);
         var options = new TestProcessRunnerOptions
         {
             OnDiagnostic = onDiagnostic,
-            OutputStallTimeout = CtEnvironment.ResolveStallTimeout(
-                Environment.GetEnvironmentVariable(CtEnvironment.StallTimeout),
-                new TestProcessRunnerOptions().OutputStallTimeout),
+            OutputStallTimeout = stallTimeout,
+
+            // Every provider shares this runner, so one hook carries the liveness of whichever child is
+            // running. A caller that supplies its OWN runner keeps its own options and therefore its own
+            // (or no) hook — the same rule OnDiagnostic already follows.
+            OnOutput = activity.StampOutput,
         };
         ITestProcessRunner process = runner ?? new TestProcessRunner(options);
         var rust = new RustTestProvider(process);
@@ -93,6 +98,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
             })
         {
             DefaultProcessRunner = process,
+            RunActivity = activity,
         };
     }
 
@@ -101,6 +107,19 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
     /// factory built through the public constructor, which is handed providers rather than a runner.
     /// </summary>
     internal ITestProcessRunner? DefaultProcessRunner { get; private init; }
+
+    /// <summary>
+    /// The liveness cell the shared runner stamps on every line the child writes. The daemon publishes it in
+    /// <c>daemon.status.json</c>; the queue marks a run's start and end on it. It is created here because
+    /// this is where the stall bound is resolved, and the reported words must agree with the bound that will
+    /// actually kill the run.
+    /// </summary>
+    public CtRunActivityCell RunActivity { get; private init; } = new(ResolveStallTimeout());
+
+    private static TimeSpan ResolveStallTimeout() =>
+        CtEnvironment.ResolveStallTimeout(
+            Environment.GetEnvironmentVariable(CtEnvironment.StallTimeout),
+            new TestProcessRunnerOptions().OutputStallTimeout);
 
     public ContinuousTestProviderResolution Resolve(ContinuousTestWorkspace workspace)
     {

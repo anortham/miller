@@ -44,7 +44,11 @@ public sealed class TestsTool
         [Description("Test project path for enable/disable, relative to the workspace or absolute. Optional.")]
         string? project = null,
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
-        string? workspace_id = null)
+        string? workspace_id = null,
+        [Description("For operation=failures, rows per page. 1-200, default 20.")]
+        int limit = TestsCore.FailuresDefaultLimit,
+        [Description("For operation=failures, red cases to skip. Page with the offset the output names. Default 0.")]
+        int offset = 0)
     {
         var telemetry = TelemetryContext.Current;
         bool json = string.Equals(format?.Trim(), "json", StringComparison.OrdinalIgnoreCase);
@@ -82,7 +86,7 @@ public sealed class TestsTool
                 }
                 case "failures":
                 {
-                    TestsFailuresResult result = TestsCore.Failures(request);
+                    TestsFailuresResult result = TestsCore.Failures(request, limit, offset);
                     output = result.Render(json);
                     hint = result.Failures.Count == 0
                         ? NextStepHint.Render("tests operation=status", "re-check verdict")

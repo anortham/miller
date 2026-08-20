@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using Miller.Indexing.Semantic;
+using Miller.Testing;
 using Microsoft.Data.Sqlite;
 using Xunit;
 
@@ -27,20 +28,41 @@ public static class ScaleTestSupport
     /// <summary>
     /// The repo root (the dir holding <c>Miller.slnx</c>), resolved through a three-step fallback chain:
     /// walk up from the test assembly, then from the process's current working directory, then from the
-    /// <c>EROS_WORKSPACE_ROOT</c> environment variable. Each step exists for Eros CT, which runs Miller's
-    /// test binary from an out-of-repo sandbox: the assembly-based walk starts outside the repo and never
-    /// finds <c>Miller.slnx</c>. The cwd walk cannot be relied on either, because xunit v3 resets the
-    /// process current directory to the test-assembly directory (the out-of-repo sandbox) before tests
+    /// <see cref="CtEnvironment.WorkspaceRoot"/> environment variable. Each step exists for continuous
+    /// testing, which runs Miller's test binary from an out-of-repo build directory: the assembly-based walk
+    /// starts outside the repo and never finds <c>Miller.slnx</c>. The cwd walk cannot be relied on either,
+    /// because xunit v3 resets the process current directory to the test-assembly directory before tests
     /// execute, so <c>Directory.GetCurrentDirectory()</c> no longer points at CT's launch cwd. The
-    /// <c>EROS_WORKSPACE_ROOT</c> variable, which CT always sets to the repo root, survives that reset and
-    /// is therefore the reliable channel under CT. This mirrors Miller's own multi-fallback
-    /// workspace-resolution idiom.
+    /// environment variable, which CT sets to the workspace root in
+    /// <c>DotnetTestProvider.WorkspaceEnvironment</c>, survives that reset and is therefore the reliable
+    /// channel under CT. This mirrors Miller's own multi-fallback workspace-resolution idiom.
+    ///
+    /// <para><b>The name is load-bearing.</b> This step read the retired <c>EROS_WORKSPACE_ROOT</c> while CT
+    /// set <c>MILLER_CT_WORKSPACE_ROOT</c>, so the channel was broken on the consumer side and every test
+    /// that needs the repo root failed under CT — about 50 of them. The rename was required by
+    /// <c>docs/plans/2026-08-18-ct-sidecar-migration.md</c>; the producer side landed and this side did not.
+    /// Read the constant, never a literal, and see
+    /// <c>ScaleTestSupportTests.RepoRootFrom_ReadsTheWorkspaceRootVariableCtActuallySets</c>.</para>
     /// </summary>
     public static string RepoRoot() =>
-        LocateRepoRoot(AppContext.BaseDirectory)
-        ?? LocateRepoRoot(Directory.GetCurrentDirectory())
-        ?? LocateRepoRootFromWorkspaceRoot(Environment.GetEnvironmentVariable("EROS_WORKSPACE_ROOT"))
+        RepoRootFrom(AppContext.BaseDirectory, Directory.GetCurrentDirectory(), Environment.GetEnvironmentVariable)
         ?? throw new InvalidOperationException("Could not locate repo root (Miller.slnx).");
+
+    /// <summary>
+    /// The resolution chain with every input supplied, so a test can drive the env-var step — the step that
+    /// only fires when BOTH walks miss, which never happens in an ordinary in-repo <c>dotnet test</c> run.
+    /// Returns <c>null</c> rather than throwing so the caller owns the error message.
+    /// </summary>
+    internal static string? RepoRootFrom(
+        string assemblyDirectory,
+        string currentDirectory,
+        Func<string, string?> readVariable)
+    {
+        ArgumentNullException.ThrowIfNull(readVariable);
+        return LocateRepoRoot(assemblyDirectory)
+            ?? LocateRepoRoot(currentDirectory)
+            ?? LocateRepoRootFromWorkspaceRoot(readVariable(CtEnvironment.WorkspaceRoot));
+    }
 
     /// <summary>
     /// Walk up from <paramref name="startDirectory"/> looking for the directory containing

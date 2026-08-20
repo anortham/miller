@@ -49,6 +49,15 @@ public sealed partial class ContinuousTestStore
     {
         ArgumentNullException.ThrowIfNull(completion);
 
+        // A TERMINAL run always has an end time. The provider's own time wins when it reported one, but a
+        // truncated run reports none: the xUnit parser assigns an end time only from the
+        // `test-assembly-finished` event, and a stall kill means the child never emits it. The row then read
+        // as a run that had not stopped — `status=failed` beside `ended_at=NULL` — long after the process
+        // tree was gone. This is the single writer of a terminal status, so one stamp here covers every
+        // provider and every importer.
+        if (completion.EndedAt is null)
+            completion = completion with { EndedAt = DateTimeOffset.UtcNow };
+
         Transaction(() =>
         {
             UpsertContinuousTestRun(new ContinuousTestRun(

@@ -1,14 +1,16 @@
+using Miller.Testing;
 using Xunit;
 
 namespace Miller.Tests;
 
 /// <summary>
 /// Unit coverage for <see cref="ScaleTestSupport.RepoRoot"/>'s repo-root resolution, in particular the
-/// fallback chain added for Eros CT. CT runs Miller's test binary from an out-of-repo sandbox, so the
+/// fallback chain added for continuous testing. CT runs Miller's test binary from an out-of-repo build
+/// directory, so the
 /// assembly-based walk (which starts from <c>AppContext.BaseDirectory</c>, outside the repo in that
 /// scenario) fails. The cwd walk is also defeated under CT because xunit v3 resets the process working
 /// directory to the test-assembly directory before tests execute, so the reliable channel is the
-/// <c>EROS_WORKSPACE_ROOT</c> environment variable CT always sets.
+/// <see cref="CtEnvironment.WorkspaceRoot"/> environment variable every CT provider sets.
 ///
 /// These tests exercise the pure helpers <see cref="ScaleTestSupport.LocateRepoRoot"/> and
 /// <see cref="ScaleTestSupport.LocateRepoRootFromWorkspaceRoot"/> directly — the pieces <c>RepoRoot()</c>
@@ -64,7 +66,7 @@ public sealed class ScaleTestSupportTests
     [InlineData("   ")]
     public void LocateRepoRootFromWorkspaceRoot_ReturnsNull_WhenValueBlank(string? workspaceRoot)
     {
-        // The env-var fallback must no-op when EROS_WORKSPACE_ROOT is unset or blank, so RepoRoot() falls
+        // The env-var fallback must no-op when the variable is unset or blank, so RepoRoot() falls
         // through to its final throw rather than walking up from an empty/garbage path.
         Assert.Null(ScaleTestSupport.LocateRepoRootFromWorkspaceRoot(workspaceRoot));
     }
@@ -72,7 +74,7 @@ public sealed class ScaleTestSupportTests
     [Fact]
     public void LocateRepoRootFromWorkspaceRoot_ReturnsNull_WhenValueIsNotUnderRepo()
     {
-        // A non-repo EROS_WORKSPACE_ROOT (e.g. pointing at an unrelated tree) resolves nothing.
+        // A non-repo workspace root (e.g. pointing at an unrelated tree) resolves nothing.
         string outside = Path.Combine(
             Path.GetTempPath(), "miller-workspace-root-test-" + Guid.NewGuid().ToString("N"), "nested");
 
@@ -82,11 +84,44 @@ public sealed class ScaleTestSupportTests
     [Fact]
     public void LocateRepoRootFromWorkspaceRoot_FindsRepoRoot_WhenValuePointsIntoRepo()
     {
-        // This is the CT path xunit v3's cwd reset defeats: EROS_WORKSPACE_ROOT points into the repo, and
+        // This is the CT path xunit v3's cwd reset defeats: the variable points into the repo, and
         // the env-var walk must resolve the repo root even though the assembly and cwd walks both miss.
         string expectedRepoRoot = ScaleTestSupport.RepoRoot();
         string workspaceRoot = Path.Combine(expectedRepoRoot, "some", "nested", "workspace");
 
         Assert.Equal(expectedRepoRoot, ScaleTestSupport.LocateRepoRootFromWorkspaceRoot(workspaceRoot));
+    }
+
+    /// <summary>
+    /// The variable NAME is the contract, and getting it wrong is exactly what broke CT. Every provider sets
+    /// <see cref="CtEnvironment.WorkspaceRoot"/> (<c>DotnetTestProvider.WorkspaceEnvironment</c>), while this
+    /// helper read the retired <c>EROS_WORKSPACE_ROOT</c>. The two names never met, so the third fallback
+    /// always returned null and roughly 50 tests threw "Could not locate repo root" under CT while passing
+    /// everywhere else. The rename was required by docs/plans/2026-08-18-ct-sidecar-migration.md; only the
+    /// producer side landed.
+    /// </summary>
+    [Fact]
+    public void RepoRootFrom_ReadsTheWorkspaceRootVariableThatCtActuallySets()
+    {
+        string repoRoot = ScaleTestSupport.RepoRoot();
+        string outsideTheRepo = Path.Combine(Path.GetTempPath(), "miller-oop-" + Guid.NewGuid().ToString("N"));
+        var namesRead = new List<string>();
+
+        string? resolved = ScaleTestSupport.RepoRootFrom(outsideTheRepo, outsideTheRepo, name =>
+        {
+            namesRead.Add(name);
+            return string.Equals(name, CtEnvironment.WorkspaceRoot, StringComparison.Ordinal) ? repoRoot : null;
+        });
+
+        Assert.Equal(repoRoot, resolved);
+        Assert.Equal([CtEnvironment.WorkspaceRoot], namesRead);
+    }
+
+    [Fact]
+    public void RepoRootFrom_ReturnsNull_WhenBothWalksMissAndTheVariableIsUnset()
+    {
+        string outsideTheRepo = Path.Combine(Path.GetTempPath(), "miller-oop-" + Guid.NewGuid().ToString("N"));
+
+        Assert.Null(ScaleTestSupport.RepoRootFrom(outsideTheRepo, outsideTheRepo, static _ => null));
     }
 }

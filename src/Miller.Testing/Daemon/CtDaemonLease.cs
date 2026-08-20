@@ -139,12 +139,25 @@ public sealed class CtDaemonLease : IDisposable
         WriteHeartbeat(Record.WorkspaceRoot, new CtDaemonHeartbeatRecord(Record.Identity, now));
     }
 
-    public void WriteStatus(CtDaemonLifecycleState state, string reason, TimeProvider? time = null)
+    public void WriteStatus(CtDaemonLifecycleState state, string reason, TimeProvider? time = null) =>
+        WriteStatus(state, reason, CtDaemonActivity.Idle, run: null, time);
+
+    /// <summary>
+    /// Publishes the status with the daemon's current activity and, while a provider run is in flight, the
+    /// run it is executing. A reader compares <see cref="CtDaemonStatusRecord.UpdatedAtUtc"/> with nothing:
+    /// the activity words already say whether the daemon is busy and whether its child is still talking.
+    /// </summary>
+    public void WriteStatus(
+        CtDaemonLifecycleState state,
+        string reason,
+        CtDaemonActivity activity,
+        CtDaemonRunProgress? run,
+        TimeProvider? time = null)
     {
         DateTimeOffset now = (time ?? TimeProvider.System).GetUtcNow();
         WriteStatus(
             Record.WorkspaceRoot,
-            new CtDaemonStatusRecord(state, reason, Record.Identity, now));
+            new CtDaemonStatusRecord(state, reason, Record.Identity, now, activity, run));
     }
 
     public void Dispose()
@@ -447,6 +460,9 @@ internal sealed class CtFreshnessKeyJsonConverter : JsonConverter<CtFreshnessKey
 [JsonSerializable(typeof(CtDaemonCommandRequest))]
 [JsonSerializable(typeof(CtDaemonCommandAck))]
 [JsonSerializable(typeof(CtDaemonStatusRecord))]
+// Nested inside CtDaemonStatusRecord. The published binary is Native AOT, where a type the source
+// generator was never told about fails when a run is in flight, not at build time.
+[JsonSerializable(typeof(CtDaemonRunProgress))]
 [JsonSerializable(typeof(CtDaemonLeaseIdentity))]
 [JsonSerializable(typeof(CtFreshnessKey))]
 internal sealed partial class CtDaemonJsonContext : JsonSerializerContext;

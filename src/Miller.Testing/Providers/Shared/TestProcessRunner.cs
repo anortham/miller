@@ -44,6 +44,17 @@ public sealed class TestProcessRunnerOptions
     /// sink; unwired, the degradation stays silent as before.
     /// </summary>
     public Action<string>? OnDiagnostic { get; init; }
+
+    /// <summary>
+    /// Called every time the child writes to stdout or stderr. The runner already stamps that moment for its
+    /// own stall guard; this hook lets the daemon publish the same liveness signal in
+    /// <c>daemon.status.json</c>, so a reader can separate a slow suite from a wedged one without opening a
+    /// second file and subtracting timestamps.
+    ///
+    /// <para>Called from BOTH stream drain loops, so an implementation must be thread-safe and cheap. It must
+    /// not throw: a hook that threw would take down a drain loop and with it the run's output.</para>
+    /// </summary>
+    public Action? OnOutput { get; init; }
 }
 
 /// <summary>
@@ -546,7 +557,21 @@ public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProce
         /// would report a nonsense elapsed time, and the only thing this value decides is whether to kill the
         /// run.
         /// </summary>
-        private void StampOutput() => Interlocked.Exchange(ref _lastOutputTicks, Stopwatch.GetTimestamp());
+        private void StampOutput()
+        {
+            Interlocked.Exchange(ref _lastOutputTicks, Stopwatch.GetTimestamp());
+
+            // Guarded: this hook belongs to the caller, and a throw here would end the drain loop that is
+            // collecting the run's output. The stall guard above already has what it needs.
+            try
+            {
+                _options.OnOutput?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                _options.OnDiagnostic?.Invoke($"Output activity hook failed: {ex.Message}");
+            }
+        }
 
         public async Task<TestProcessResult> WaitForExitAsync(CancellationToken cancellationToken = default)
         {

@@ -875,6 +875,9 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         return new Dictionary<string, string?>(StringComparer.Ordinal)
         {
             [CtEnvironment.WorkspaceRoot] = workspace.WorkspaceRoot,
+            // Removed, not merely unset: the test process inherits it from the daemon, and a `miller` CLI
+            // verb run inside a test would bind the DAEMON's workspace. See DotnetTestProvider for the note.
+            [CtEnvironment.DaemonWorkspaceRoot] = null,
             ["TMPDIR"] = paths.TempDirectory,
             ["TMP"] = paths.TempDirectory,
             ["TEMP"] = paths.TempDirectory,

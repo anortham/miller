@@ -3,6 +3,11 @@ using Miller.Indexing;
 
 namespace Miller.Testing;
 
+/// <summary>
+/// <paramref name="Activity"/> and <paramref name="Run"/> are trailing optionals so every existing positional
+/// construction keeps compiling. <paramref name="Executing"/> stays because callers read it; it answers "is a
+/// drain in flight", while <paramref name="Run"/> names the project that drain is on.
+/// </summary>
 public sealed record ContinuousTestDaemonSnapshot(
     CtDaemonLifecycleState State,
     string Reason,
@@ -11,7 +16,9 @@ public sealed record ContinuousTestDaemonSnapshot(
     int StaleCount,
     int SelectedCount,
     bool Enabled,
-    bool Executing);
+    bool Executing,
+    CtDaemonActivity Activity = CtDaemonActivity.Idle,
+    CtDaemonRunProgress? Run = null);
 
 public sealed class ContinuousTestDaemonHostOptions
 {
@@ -53,6 +60,13 @@ public sealed class ContinuousTestDaemonHostOptions
     public Action<CtDaemonLifecycleState, string>? StatusWriter { get; init; }
 
     public IContinuousTestDaemonEnqueuer? Enqueuer { get; init; }
+
+    /// <summary>
+    /// The liveness cell shared with the provider factory and the queue. Supplied, the loop publishes what the
+    /// daemon is doing and how lively its child is; left null, the status file carries the lifecycle state
+    /// alone, exactly as before.
+    /// </summary>
+    public CtRunActivityCell? RunActivity { get; init; }
 }
 
 /// <summary>
@@ -71,6 +85,7 @@ public sealed class ContinuousTestDaemonHost
     private readonly CtDegradationBackoff _backoff = new();
     private readonly IReadOnlyList<ContinuousTestProject> _projects;
     private readonly string _workspaceId;
+    private readonly CtRunActivityCell? _runActivity;
 
     /// <summary>
     /// Command ids this loop has already handled. The ack FILE is the durable record, but the write
@@ -83,6 +98,11 @@ public sealed class ContinuousTestDaemonHost
     private CtFreshnessKey? _startedAt;
     private DateTimeOffset _runStartedAtUtc;
 
+    // Read by the pulse task while the main loop writes them. Volatile rather than locked: a republish that
+    // reads a state one poll old costs nothing, where a lock would put the pulse behind the main loop.
+    private volatile CtDaemonLifecycleState _publishedState = CtDaemonLifecycleState.Running;
+    private volatile string _publishedReason = "starting";
+
     public ContinuousTestDaemonHost(string workspaceRoot, ContinuousTestDaemonHostOptions? options = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -94,6 +114,7 @@ public sealed class ContinuousTestDaemonHost
         _poller = _options.Poller;
         _budget = _options.Budget ?? CtExecutionBudget.FromEnvironment(MillerHome.ResolveMillerDirectory());
         _projects = _options.Projects ?? [];
+        _runActivity = _options.RunActivity;
     }
 
     public ContinuousTestDaemonSnapshot? LastSnapshot { get; private set; }
@@ -123,7 +144,11 @@ public sealed class ContinuousTestDaemonHost
             0,
             0,
             Enabled: true,
-            Executing: false);
+            // Executing used to be hardcoded false here, so an out-of-process reader could never tell a busy
+            // daemon from an idle one. It now comes from the published record.
+            Executing: record?.Activity == CtDaemonActivity.Executing,
+            Activity: record?.Activity ?? CtDaemonActivity.Idle,
+            Run: record?.Run);
     }
 
     public static async Task<ContinuousTestDaemonSnapshot> RunAsync(
@@ -262,12 +287,19 @@ public sealed class ContinuousTestDaemonHost
                     cancellationToken);
                 if (budget is null)
                 {
+                    // Work is ready and accepted; another workspace holds the one execution slot. A caller
+                    // waiting for this daemon to settle must keep waiting, so this is not idle.
+                    _runActivity?.EnterQueued();
                     Publish(Evaluate("execution budget held", CtDaemonLifecycleState.Paused, executing: false));
                     TryWriteStatus(lease, CtDaemonLifecycleState.Paused, "execution budget held");
                 }
                 else
                 {
                     executing = true;
+
+                    // Marked BEFORE the status write, so the record this poll publishes already says
+                    // "executing" rather than inheriting the previous poll's activity.
+                    _runActivity?.BeginDrain();
                     TryWriteStatus(lease, CtDaemonLifecycleState.Running, "executing");
                     try
                     {
@@ -277,10 +309,17 @@ public sealed class ContinuousTestDaemonHost
                     {
                         break;
                     }
+                    finally
+                    {
+                        // One drain runs every ready project. Cleared only when the whole drain returns, so a
+                        // waiting caller cannot slip through the gap between two of its projects.
+                        _runActivity?.EndDrain();
+                    }
                 }
             }
             else
             {
+                _runActivity?.EnterIdle();
                 string reason = _startedAt is null ? "status-only" : "idle";
                 TryWriteStatus(lease, CtDaemonLifecycleState.Running, reason);
                 Publish(Evaluate(reason, CtDaemonLifecycleState.Running, executing: false));
@@ -322,6 +361,12 @@ public sealed class ContinuousTestDaemonHost
             {
                 await _options.Delay(_options.HeartbeatInterval, cancellationToken).ConfigureAwait(false);
                 lease.Heartbeat();
+
+                // Republish the status too. The main loop is BLOCKED for the whole drain, so without this the
+                // status file froze at "executing" until the run ended - which is exactly how a 12-minute run
+                // and a wedged one looked identical. The lifecycle state and reason are the last ones the main
+                // loop chose; only the activity and the child's liveness are refreshed here.
+                PublishStatus(lease, _publishedState, _publishedReason);
             }
             catch (OperationCanceledException)
             {
@@ -352,12 +397,33 @@ public sealed class ContinuousTestDaemonHost
     /// </summary>
     private void TryWriteStatus(CtDaemonLease? lease, CtDaemonLifecycleState state, string reason)
     {
+        // Remembered so the pulse task can republish the SAME lifecycle state with fresh activity. The pulse
+        // must never invent a state of its own.
+        _publishedState = state;
+        _publishedReason = reason;
+        PublishStatus(lease, state, reason);
+    }
+
+    /// <summary>
+    /// Writes one status record, attaching whatever the activity cell currently reports. Called by the main
+    /// loop on every poll and by the pulse task while a drain blocks that loop.
+    /// </summary>
+    private void PublishStatus(CtDaemonLease? lease, CtDaemonLifecycleState state, string reason)
+    {
         try
         {
             if (_options.StatusWriter is { } writer)
+            {
                 writer(state, reason);
-            else
-                lease?.WriteStatus(state, reason);
+                return;
+            }
+
+            if (lease is null)
+                return;
+
+            (CtDaemonActivity activity, CtDaemonRunProgress? run) =
+                _runActivity?.Read() ?? (CtDaemonActivity.Idle, null);
+            lease.WriteStatus(state, reason, activity, run);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -481,6 +547,8 @@ public sealed class ContinuousTestDaemonHost
             ? ContinuousTestFreshness.Evaluate(statuses, key, _watch.IsHealthy)
             : ContinuousTestVerdict.Unknown;
         int stale = statuses.Count(row => row.State == ContinuousTestState.Stale);
+        (CtDaemonActivity activity, CtDaemonRunProgress? run) =
+            _runActivity?.Read() ?? (CtDaemonActivity.Idle, null);
         return new ContinuousTestDaemonSnapshot(
             state,
             reason,
@@ -489,7 +557,9 @@ public sealed class ContinuousTestDaemonHost
             stale,
             statuses.Count,
             Enabled: true,
-            Executing: executing);
+            Executing: executing,
+            Activity: activity,
+            Run: run);
     }
 
     private ContinuousTestDaemonSnapshot DisabledSnapshot() =>

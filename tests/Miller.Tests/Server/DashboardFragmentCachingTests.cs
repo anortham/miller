@@ -384,16 +384,13 @@ public sealed class DashboardFragmentCachingTests : IDisposable
             DateTimeOffset.Parse("2026-07-08T10:00:00Z"));
     }
 
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Miller.slnx")))
-        {
-            dir = dir.Parent;
-        }
-        Assert.NotNull(dir);
-        return dir!.FullName;
-    }
+    /// <summary>
+    /// The shared helper, not a private walk up from <c>AppContext.BaseDirectory</c>. Continuous testing
+    /// builds this assembly into an out-of-repo directory, so that walk starts outside the repo and never
+    /// finds <c>Miller.slnx</c>. <see cref="ScaleTestSupport.RepoRoot"/> falls back to the workspace-root
+    /// variable CT sets, which is the only channel that survives xunit resetting the current directory.
+    /// </summary>
+    private static string RepoRoot() => ScaleTestSupport.RepoRoot();
 
     private static async Task<string> RenderComponentAsync<TComponent>(Dictionary<string, object?> parameters)
         where TComponent : IComponent

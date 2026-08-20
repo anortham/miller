@@ -305,6 +305,99 @@ public sealed class TestsCliTests : IDisposable
             WorkspaceId: WorkspaceId.FromCanonicalRoot(_root),
             CanonicalRoot: _root);
 
+    /// <summary>
+    /// <c>failures</c> was reachable only from the MCP tool. An operator who could see "verdict: red" in
+    /// <c>miller tests status</c> had no CLI verb that would name the red cases.
+    /// </summary>
+    [Fact]
+    public void Failures_is_a_cli_verb_and_pages_with_limit_and_offset()
+    {
+        SeedRedCases(30);
+
+        var (code, outText, errText) = Run("tests", "failures", "--limit", "5", "--offset", "20", "--json");
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument document = JsonDocument.Parse(outText);
+        JsonElement root = document.RootElement;
+        Assert.Equal(5, root.GetProperty("failures").GetArrayLength());
+        Assert.Equal(30, root.GetProperty("total").GetInt32());
+        Assert.Equal(20, root.GetProperty("offset").GetInt32());
+        Assert.Equal(5, root.GetProperty("truncated").GetInt32());
+    }
+
+    [Fact]
+    public void Failures_compact_output_names_the_next_offset()
+    {
+        SeedRedCases(30);
+
+        var (code, outText, _) = Run("tests", "failures");
+
+        Assert.Equal(0, code);
+        Assert.Contains("# tests failures (20 of 30)", outText, StringComparison.Ordinal);
+        Assert.Contains("truncated: 10 (next: offset=20)", outText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_unknown_tests_operation_reports_the_verb_list_and_exits_non_zero()
+    {
+        var (code, _, errText) = Run("tests", "bogus");
+
+        Assert.Equal(2, code);
+        Assert.Contains("unknown tests operation 'bogus'", errText, StringComparison.Ordinal);
+        Assert.Contains("failures", errText, StringComparison.Ordinal);
+    }
+
+    private void SeedRedCases(int count)
+    {
+        const string identity = "store:failures";
+        string workspaceId = WorkspaceId.FromCanonicalRoot(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        for (int index = 0; index < count; index++)
+        {
+            string caseId = $"test:{index:D3}";
+            string runId = $"run:{index:D3}";
+            store.PutTestCase(new ContinuousTestCase(
+                Id: caseId,
+                WorkspaceId: workspaceId,
+                Name: caseId,
+                QualifiedName: caseId,
+                Selector: caseId,
+                FilePath: "tests/Suite.cs",
+                Framework: "xunit"));
+            store.StartContinuousTestRun(
+                new ContinuousTestRun(
+                    Id: runId,
+                    WorkspaceId: workspaceId,
+                    Status: "running",
+                    SelectedRevision: "1",
+                    IndexIdentity: identity,
+                    Revision: 1),
+                [caseId]);
+            store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
+                WorkspaceId: workspaceId,
+                TestRunId: runId,
+                SelectedRevision: "1",
+                CurrentRevision: "1",
+                IndexIdentity: identity,
+                Revision: 1,
+                Status: "failed",
+                Results:
+                [
+                    new ContinuousTestResult(
+                        Id: runId + ":" + caseId,
+                        WorkspaceId: workspaceId,
+                        TestCaseId: caseId,
+                        TestRunId: runId,
+                        Status: "failed",
+                        ResultRevision: "1",
+                        IndexIdentity: identity,
+                        Revision: 1,
+                        FailureSummary: "boom " + caseId),
+                ]));
+        }
+    }
+
     private (int Code, string Out, string Err) Run(params string[] args) => Run(hooks: null, args);
 
     private (int Code, string Out, string Err) Run(TestsCoreHooks? hooks, params string[] args)

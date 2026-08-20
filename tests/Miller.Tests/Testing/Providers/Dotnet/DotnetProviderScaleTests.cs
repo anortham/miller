@@ -19,6 +19,100 @@ public sealed class DotnetProviderScaleTests : IDisposable
             BestEffortDelete(temp);
     }
 
+    /// <summary>
+    /// The real-runner proof for <c>-preEnumerateTheories</c>, which a fake runner cannot give: without the
+    /// flag xunit v3 reports one entry per test METHOD at discovery and folds every row of a theory onto one
+    /// <c>TestCaseUniqueID</c> at run time. Measured on Miller's own suite, that was 6,233 discovered against
+    /// 7,723 run.
+    ///
+    /// <para>This test builds a project whose test COUNT and METHOD count differ, so the two numbers cannot
+    /// be confused. It fails if either command loses the flag: without it at discovery there are two cases
+    /// instead of four; without it at run time the run reports ids the discovery never recorded.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_real_theory_is_discovered_and_run_as_one_case_per_row()
+    {
+        CtProviderTestSupport.RequireDotnet();
+
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        string workspaceRoot = Path.Combine(_dir, "theory-repo");
+        string projectDir = Path.Combine(workspaceRoot, "tests", "Sample.Tests");
+        Directory.CreateDirectory(projectDir);
+        await File.WriteAllTextAsync(
+            Path.Combine(projectDir, "Sample.Tests.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
+                <OutputType>Exe</OutputType>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="xunit.v3" Version="3.2.2" />
+              </ItemGroup>
+            </Project>
+            """,
+            ct);
+        await File.WriteAllTextAsync(
+            Path.Combine(projectDir, "CalculatorTests.cs"),
+            """
+            using Xunit;
+
+            namespace Sample.Tests;
+
+            public sealed class CalculatorTests
+            {
+                [Fact]
+                public void Adds() => Assert.Equal(2, 1 + 1);
+
+                [Theory]
+                [InlineData(1)]
+                [InlineData(2)]
+                [InlineData(3)]
+                public void Positive(int value) => Assert.True(value > 0);
+            }
+            """,
+            ct);
+
+        var workspace = new ContinuousTestWorkspace(
+            "ws:theory",
+            workspaceRoot,
+            Path.Combine(projectDir, "Sample.Tests.csproj"),
+            Path.Combine(_dir, "theory-ct-build"));
+        _ctTemps.Add(CtTempPaths.ForWorkspace(workspace));
+        var provider = new DotnetTestProvider(new TestProcessRunner());
+
+        IReadOnlyList<ProviderTestCase> discovered = await provider.DiscoverAsync(workspace, ct);
+        string[] discoveredIds = discovered
+            .Select(row => row.Id)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+
+        // Two methods, four tests. The theory's three rows are three cases, each carrying its argument.
+        Assert.Equal(
+            [
+                "xunit:Sample.Tests.CalculatorTests.Adds",
+                "xunit:Sample.Tests.CalculatorTests.Positive(value: 1)",
+                "xunit:Sample.Tests.CalculatorTests.Positive(value: 2)",
+                "xunit:Sample.Tests.CalculatorTests.Positive(value: 3)",
+            ],
+            discoveredIds);
+
+        ProviderRunResult run = await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: workspace,
+                SelectedRevision: "rev-1",
+                IndexIdentity: "store:theory",
+                RunId: "run:theory",
+                TestCaseIds: discoveredIds),
+            ct);
+
+        Assert.Equal(
+            discoveredIds,
+            run.CaseResults.Select(row => row.TestCaseId).OrderBy(id => id, StringComparer.Ordinal).ToArray());
+        Assert.All(run.CaseResults, row => Assert.Equal("passed", row.Status));
+    }
+
     [Fact]
     public async Task Runner_cancel_kills_the_entire_process_tree()
     {

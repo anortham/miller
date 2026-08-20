@@ -437,20 +437,16 @@ public sealed class TestProcessRunnerTests
     private static string ReadRunnerSource() =>
         File.ReadAllText(
             Path.Combine(
-                FindRepoRoot(),
+                // ScaleTestSupport, not a private walk up from AppContext.BaseDirectory. Continuous
+                // testing builds this assembly into an out-of-repo directory, so that walk starts
+                // outside the repo and never finds Miller.slnx. The shared helper falls back to the
+                // workspace-root variable CT sets, which is the only channel that survives.
+                ScaleTestSupport.RepoRoot(),
                 "src",
                 "Miller.Testing",
                 "Providers",
                 "Shared",
                 "TestProcessRunner.cs"));
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Miller.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("Could not locate Miller.slnx.");
-    }
 
     /// <summary>
     /// A containment handle the test owns and counts. The production handle is a Windows job object with a

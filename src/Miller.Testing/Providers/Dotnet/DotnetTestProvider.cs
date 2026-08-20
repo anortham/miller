@@ -40,6 +40,12 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
     private static readonly TimeSpan DeleteRetryMaxDelay = TimeSpan.FromMilliseconds(100);
 
     private readonly ITestProcessRunner _runner;
+
+    /// <summary>
+    /// Lets the run reuse the generation the discovery before it built, instead of building the same source
+    /// state into a second empty output directory. One per provider instance, keyed by project build root.
+    /// </summary>
+    private readonly CtGenerationHandoff _generations = new();
     private readonly ITestBackgroundProcessRunner? _backgroundRunner;
     private readonly string _dotnetPath;
     private readonly string _dotnetCoveragePath;
@@ -91,7 +97,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
-        var paths = CtGenerationPaths.Allocate(workspace);
+        var paths = _generations.AllocateForDiscovery(workspace);
         try
         {
             return await DiscoverInGenerationAsync(workspace, paths, cancellationToken).ConfigureAwait(false);
@@ -108,7 +114,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var paths = CtGenerationPaths.Allocate(request.Workspace);
+        var paths = _generations.TakeForRun(request.Workspace);
         try
         {
             return await RunInGenerationAsync(request, paths, cancellationToken).ConfigureAwait(false);
@@ -229,6 +235,13 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
                 "xUnit run selected " + request.TestCaseIds.Count + " test case(s) but executed none: " +
                 string.Join(", ", request.TestCaseIds) + ".");
 
+        // A non-zero exit is a FAILED run even when cases parsed. The xUnit parser takes the run status from
+        // the `test-assembly-finished` event, so a killed or truncated assembly whose executed tests all
+        // passed was recorded "passed" — a wedged run that the stall guard shot looked like a clean one.
+        // CLAUDE.md is explicit that green needs COMPLETE results at the selected key.
+        if (failedInvocation is not null)
+            runResult = runResult with { Status = "failed" };
+
         if (request.RunId is not null)
             runResult = runResult with { RunId = request.RunId };
         if (resultArtifactPath is not null && File.Exists(resultArtifactPath))
@@ -259,7 +272,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         if (GenericFramework(workspace.Framework) is not null)
             return BuildGenericDiscoverCommand(workspace, paths);
 
-        var args = new List<string> { "-list", "full/json", "-noLogo", "-noColor" };
+        var args = new List<string> { "-list", "full/json", "-noLogo", "-noColor", PreEnumerateTheories };
         AppendXunitTraitExclusions(args, workspace.ExcludeTraits);
         return new TestProcessCommand(
             TestExecutablePath(workspace, paths),
@@ -392,7 +405,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         IReadOnlyList<string> selection,
         int? part)
     {
-        var args = new List<string> { "-noLogo", "-noColor", "-reporter", "json" };
+        var args = new List<string> { "-noLogo", "-noColor", "-reporter", "json", PreEnumerateTheories };
         if (XunitResultArtifactPath(request, paths, part) is { } resultArtifactPath)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(resultArtifactPath)!);
@@ -475,13 +488,28 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         CtGenerationPaths paths,
         CoverageSession? coverage = null)
     {
-        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
-        {
-            [CtEnvironment.WorkspaceRoot] = workspace.WorkspaceRoot,
-            ["TMPDIR"] = paths.TempDirectory,
-            ["TMP"] = paths.TempDirectory,
-            ["TEMP"] = paths.TempDirectory,
-        };
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        // The project's OWN run-settings environment block goes in first, so CT's operational variables
+        // below overwrite it. CT runs the built test executable rather than `dotnet test`, so nothing else
+        // applies that block: a project that declared one ran WITHOUT it, which was the single largest cause
+        // of CT calling a green suite red. See RunSettingsEnvironment.
+        foreach ((string name, string value) in RunSettingsEnvironment.ForProject(workspace.ProjectPath))
+            environment[name] = value;
+
+        // The daemon's own workspace variable must not reach a test process: a `miller` CLI verb run inside
+        // a test would bind the DAEMON's workspace instead of the test's own root. The test process inherits
+        // it from the daemon, so it has to be removed rather than merely left unset — a null value is how
+        // TestProcessRunner.BuildStartInfo spells "remove".
+        environment[CtEnvironment.DaemonWorkspaceRoot] = null;
+
+        // CT's own variables win over anything the project declared. TMP/TEMP/TMPDIR are a containment
+        // guarantee (every temp file lands under this generation), and the workspace root is how a test
+        // finds the repo it is testing.
+        environment[CtEnvironment.WorkspaceRoot] = workspace.WorkspaceRoot;
+        environment["TMPDIR"] = paths.TempDirectory;
+        environment["TMP"] = paths.TempDirectory;
+        environment["TEMP"] = paths.TempDirectory;
         if (coverage is not null)
         {
             environment["MILLER_CT_COVERAGE_SESSION"] = coverage.SessionId;
@@ -1567,6 +1595,27 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
 
         return cases;
     }
+
+    /// <summary>
+    /// Makes xunit v3 enumerate every theory ROW, in discovery AND in a run.
+    ///
+    /// <para><b>Why both.</b> Without it, <c>-list</c> reports one entry per test METHOD, so a theory with
+    /// twelve rows counted as one case. Measured on Miller's own suite: 6,233 discovered against 7,723 run —
+    /// a gap of 1,490 that looked like tests CT could not see. It also collapses results: a delay-enumerated
+    /// theory emits ONE <c>test-case-starting</c> whose display name has no arguments and one
+    /// <c>TestCaseUniqueID</c> shared by every row, so twelve rows folded into one verdict. Pre-enumerated,
+    /// each row gets its own case with its arguments in the display name, which is exactly the identity
+    /// <see cref="XunitTestCaseId"/> already derives.</para>
+    ///
+    /// <para>Setting it on only ONE of the two commands would be worse than neither: discovery would record
+    /// row ids that a run could never report a result for, and every row would stay unproven forever.</para>
+    ///
+    /// <para>Cost measured on that same suite: about 100 ms on a 400 ms discovery. The argv does not grow —
+    /// <see cref="XunitSelectionUnits"/> already collapses a method's rows to one <c>-method</c> unit. A
+    /// theory whose data cannot be enumerated up front stays delay-enumerated, and therefore stays one case
+    /// in both commands, which is consistent rather than wrong.</para>
+    /// </summary>
+    private const string PreEnumerateTheories = "-preEnumerateTheories";
 
     private static string XunitTestCaseId(string displayName) => $"{XunitIdPrefix}{displayName}";
 

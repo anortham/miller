@@ -186,6 +186,26 @@ public sealed class TestProcessStallTests
         // report about 2s here and about 4s below. A stamped clock stays inside the print interval no matter
         // how long the run goes on. The bound is on the interval, not on the difference between the samples,
         // because where each sample lands inside the child's 1s cycle is not something a test can control.
+        TimeSpan interval = TimeSpan.FromSeconds(1.4);
+
+        // Sampling starts at the child's FIRST line, not when Start returns. Starting a process is not
+        // instant: on a loaded machine cmd.exe and ping together need longer than the print interval just
+        // to reach their first line, and a sample taken before then reported startup latency as a stalled
+        // clock. This wait cannot hide the defect the test hunts, because a clock that is never stamped
+        // only ever GROWS - it would never come back under the interval, and the wait would fail instead.
+        //
+        // The budget is well inside the child's own run length, because the four seconds of sampling below
+        // still have to fit before the child finishes and its clock starts growing for an honest reason.
+        var startup = Stopwatch.StartNew();
+        while (process.SinceLastOutput >= interval)
+        {
+            Assert.True(
+                startup.Elapsed < TimeSpan.FromSeconds(10),
+                "the child never produced a line the drain loop stamped: the stall clock only grew, "
+                + $"reaching {process.SinceLastOutput} in {startup.Elapsed}.");
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+
         var elapsed = Stopwatch.StartNew();
         await Task.Delay(2000, TestContext.Current.CancellationToken);
         TimeSpan first = process.SinceLastOutput;
@@ -197,7 +217,6 @@ public sealed class TestProcessStallTests
 
         // Guard the guard: if the child stopped printing early, neither sample proves anything.
         Assert.True(total >= TimeSpan.FromSeconds(3.5), $"the samples only spanned {total}");
-        TimeSpan interval = TimeSpan.FromSeconds(1.4);
         Assert.True(
             first < interval && second < interval,
             $"the stall clock read {first} and then {second} while the child printed every second across "

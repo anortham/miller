@@ -433,6 +433,39 @@ public sealed class RustTestProviderTests : IDisposable
             result.ResultArtifactPath);
     }
 
+    /// <summary>
+    /// Discovery and the run after it compile the same source. Each used to allocate its own generation, and
+    /// the generation holds cargo's <c>--target-dir</c>, so the run compiled the whole crate graph a second
+    /// time into an empty directory.
+    /// </summary>
+    [Fact]
+    public async Task A_run_after_a_discovery_reuses_the_generation_the_discovery_built()
+    {
+        var runner = new ScriptedTestProcessRunner(command =>
+        {
+            if (ScriptedTestProcessRunner.Has(command, "metadata"))
+                return new TestProcessResult(0, MetadataJson(), string.Empty);
+            if (ScriptedTestProcessRunner.Has(command, "--no-run"))
+                return new TestProcessResult(0, string.Empty, "    Finished `test` profile in 0.20s\n");
+            if (ScriptedTestProcessRunner.Has(command, "--list"))
+                return new TestProcessResult(0, "tests::add_works: test\n", string.Empty);
+            return new TestProcessResult(0,
+                "running 1 test\ntest tests::add_works ... ok\n\n"
+                + "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n",
+                string.Empty);
+        });
+        var provider = new RustTestProvider(runner);
+        var workspace = Workspace(null);
+
+        await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        ProviderRunResult result = await provider.RunAsync(
+            Request(workspace, "rust-test:adder::lib/adder::tests::add_works"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(FirstGeneration(workspace).GenerationId, result.GenerationId);
+        Assert.Equal(FirstGeneration(workspace).GenerationId, Assert.Single(GenerationDirectories(workspace)));
+    }
+
     [Fact]
     public async Task Discover_pins_one_generation_across_metadata_gate_and_list_commands()
     {
@@ -1045,6 +1078,15 @@ public sealed class RustTestProviderTests : IDisposable
 
     private static CtGenerationPaths FirstGeneration(ContinuousTestWorkspace workspace) =>
         CtGenerationPaths.For(workspace, CtGenerationPaths.IdForOrdinal(workspace, 1));
+
+    private static IReadOnlyList<string> GenerationDirectories(ContinuousTestWorkspace workspace) =>
+        Directory.Exists(workspace.BuildOutputRoot)
+            ? Directory.GetDirectories(workspace.BuildOutputRoot)
+                .Select(Path.GetFileName)
+                .Where(name => name is not null && CtGenerationPaths.IsGenerationId(name))
+                .Select(name => name!)
+                .ToArray()
+            : [];
 
     private string CratePath(string name) => Path.Combine(ProjectRoot, "crates", name);
 

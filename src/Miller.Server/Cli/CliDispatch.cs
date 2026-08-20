@@ -2538,6 +2538,13 @@ public static class CliDispatch
             case "status":
                 outw.WriteLine(TestsCore.Status(request).Render(request.Json));
                 return 0;
+            case "failures":
+                outw.WriteLine(TestsCore.Failures(
+                        request,
+                        o.Int("limit", TestsCore.FailuresDefaultLimit),
+                        o.Int("offset", 0))
+                    .Render(request.Json));
+                return 0;
             case "serve":
             {
                 TestsServeResult result = TestsCore.Start(request);
@@ -4230,6 +4237,7 @@ public static class CliDispatch
 
         Operations:
           status   Cheap honest status. Creates nothing. Default when no op is given. [--json]
+          failures One page of red test cases, newest verdict per case. [--limit N] [--offset N] [--json]
           serve    Start the detached CT daemon. Explicit start only.
           run      Live daemon: command channel. No daemon: foreground one-shot. [--wait] [--json]
           enable   Discover test projects and persist rows in ct.db. [--project PATH]
@@ -4237,6 +4245,7 @@ public static class CliDispatch
           stop     Graceful daemon stop.
 
         Selectors / flags: [--workspace-id SELECTOR] [--workspace DIR] [--json] [--wait] [--project PATH]
+                           [--limit N] [--offset N]
         """;
 }
 

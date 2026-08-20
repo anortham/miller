@@ -126,7 +126,16 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
         Process? process;
         try
         {
-            process = _startProcess(startInfo);
+            // Windows: hand the dashboard the two log FILES as its stdout and stderr, and clear the
+            // inheritable flag on this process's own handles first. Without that the dashboard inherited the
+            // caller's stdout — so `miller dashboard | anything` never returned, because the pipe stayed open
+            // for the dashboard's whole life even after miller exited. Unix already redirects inside its
+            // /bin/sh launch script, and DetachedProcessStreams passes that branch straight through.
+            process = DetachedProcessStreams.Start(
+                startInfo,
+                DashboardCommand.StdoutLogPath(machineMillerDir),
+                DashboardCommand.StderrLogPath(machineMillerDir),
+                _startProcess);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
         {
@@ -362,6 +371,16 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
 
     private sealed record DashboardCommand(string FileName, string? Argument)
     {
+        /// <summary>
+        /// The dashboard's stdout log. One pair of names for both platforms: Unix redirects into them from
+        /// its launch script, Windows hands the same files to the child as its standard handles.
+        /// </summary>
+        public static string StdoutLogPath(string machineMillerDir) =>
+            Path.Combine(machineMillerDir, "dashboard.out.log");
+
+        public static string StderrLogPath(string machineMillerDir) =>
+            Path.Combine(machineMillerDir, "dashboard.err.log");
+
         public static DashboardCommand ForPath(string path)
         {
             if (string.Equals(Path.GetExtension(path), ".dll", StringComparison.OrdinalIgnoreCase))
@@ -408,8 +427,8 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
         // append to the machine log files. nohup exec-replaces itself, so the recorded $! is the dashboard's pid.
         private ProcessStartInfo UnixDetachedStartInfo(string machineMillerDir, string pidPath)
         {
-            string stdoutPath = Path.Combine(machineMillerDir, "dashboard.out.log");
-            string stderrPath = Path.Combine(machineMillerDir, "dashboard.err.log");
+            string stdoutPath = StdoutLogPath(machineMillerDir);
+            string stderrPath = StderrLogPath(machineMillerDir);
             var startInfo = new ProcessStartInfo
             {
                 FileName = "/bin/sh",

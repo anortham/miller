@@ -512,6 +512,42 @@ public sealed class ContinuousTestStoreTests : IDisposable
 
     private static CtFreshnessKey Key(long revision) => new(Identity, revision);
 
+    /// <summary>
+    /// A terminal run always has an end time. The xUnit parser assigns one only from the
+    /// <c>test-assembly-finished</c> event, and a stall kill truncates the child's output before it, so a
+    /// killed run stored <c>status=failed</c> beside <c>ended_at=NULL</c> — a row that read as a run still
+    /// going, long after the process tree was gone. Observed live in .miller/ct.db on
+    /// <c>ct-run:a37c9ec6df1d442785b671caeadfa026</c>.
+    /// </summary>
+    [Fact]
+    public void Completing_a_run_with_no_provider_end_time_still_stamps_ended_at()
+    {
+        using var store = CreateStoreWithTests("test:1");
+        store.StartContinuousTestRun(Running("run:1", 1), ["test:1"]);
+        DateTimeOffset before = DateTimeOffset.UtcNow.AddSeconds(-1);
+
+        store.CompleteContinuousTestRun(
+            Completion("run:1", 1, 1, Result("result:1", "test:1", "run:1", 1, "failed")));
+
+        ContinuousTestRun row = Assert.Single(store.ListTestRuns(Workspace));
+        Assert.Equal("failed", row.Status);
+        Assert.NotNull(row.EndedAt);
+        Assert.True(row.EndedAt >= before, $"stamped {row.EndedAt:O}, which predates the call at {before:O}");
+    }
+
+    [Fact]
+    public void A_provider_end_time_wins_over_the_stamped_fallback()
+    {
+        using var store = CreateStoreWithTests("test:1");
+        store.StartContinuousTestRun(Running("run:1", 1), ["test:1"]);
+        var reported = new DateTimeOffset(2026, 6, 14, 1, 0, 2, TimeSpan.Zero);
+
+        store.CompleteContinuousTestRun(
+            Completion("run:1", 1, 1, reported, Result("result:1", "test:1", "run:1", 1, "passed")));
+
+        Assert.Equal(reported, Assert.Single(store.ListTestRuns(Workspace)).EndedAt);
+    }
+
     private static ContinuousTestRun Running(string id, long revision) =>
         new(
             Id: id,

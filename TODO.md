@@ -2,6 +2,8 @@
 
 ## Active
 
+- On windows memory usage seems high, investigate.
+- Docs will need updating for CT and should list supported langs/frameworks and state that support for more is ongoing
 - Semantic activation after `miller semantic prepare` requires a session restart (found 2026-08-02 fresh-machine
   dogfood; evidence `.memories/2026-08-02/224155_d317.md`). Two latches: the broker stats the model cache only at
   spawn, and Miller's embedding session opens its circuit permanently on `model_not_prepared`. Fix:
@@ -10,7 +12,7 @@
      sidecar — the no-restart-loop invariant stays.
   3. `semantic prepare`: after download, send one health probe to a live broker and print the outcome; surface the
      reason + prepare hint in compact `workspace status`; fix the misleading health recommended-action.
-  Miller side ships first and is safe with old sidecars; the broker fix rides the next sidecar pin bump.
+     Miller side ships first and is safe with old sidecars; the broker fix rides the next sidecar pin bump.
 
 - JSON diagnostics during family-store resolution convergence: `inspect`, `trace`, and `impact` with
   `format=json` pass an empty result into `ToolDiagnosticRenderer.AttachJson` and return

@@ -159,6 +159,54 @@ public sealed class DashboardCliLauncherTests : IDisposable
         Assert.Equal("http://127.0.0.1:5002", metadata.Url);
     }
 
+    /// <summary>
+    /// The Windows launch used to leave the dashboard on the caller's own stdout: no redirection, and .NET
+    /// creates every child with handle inheritance on. A shell that piped the command
+    /// (<c>miller dashboard | anything</c>) had its pipe duplicated into the dashboard, which held it for the
+    /// dashboard's whole life — miller printed the URL, exited, and the pipeline still hung.
+    ///
+    /// <para>The spawn now goes through <c>DetachedProcessStreams</c>, which opens both log files and swaps
+    /// them in as the child's standard handles. Their existence after a launch is the observable half; the
+    /// inheritance half is guarded by <c>DetachedSpawnHandleConventionTests</c> and
+    /// <c>StandardHandleInheritanceTests</c>, because only a shell that CAPTURES output can see it.</para>
+    /// </summary>
+    [Fact]
+    public void EnsureRunning_OnWindows_GivesTheDashboardItsOwnLogFilesRatherThanTheCallersStdout()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Unix redirects inside its /bin/sh launch script.");
+
+        Environment.SetEnvironmentVariable("MILLER_DASHBOARD_DLL", _dashboardDll);
+        string machineMillerDir = Path.GetDirectoryName(_registryDb)!;
+        Directory.CreateDirectory(machineMillerDir);
+        string stdoutLog = Path.Combine(machineMillerDir, "dashboard.out.log");
+        string stderrLog = Path.Combine(machineMillerDir, "dashboard.err.log");
+        Assert.False(File.Exists(stdoutLog), "the log must not exist before the launch");
+
+        bool started = false;
+        var launcher = new DashboardCliLauncher(
+            startProcess: info =>
+            {
+                started = true;
+
+                // Asking for no redirection is exactly the shape that inherited the caller's handles, so the
+                // launch must NOT have switched to pipes to solve this.
+                Assert.False(info.RedirectStandardOutput);
+                Assert.False(info.RedirectStandardError);
+                return Process.GetCurrentProcess();
+            },
+            isHealthy: _ => started,
+            tryAcquireLaunchLock: _ => new NoopDisposable(),
+            writeMetadata: (_, _) => { },
+            sleep: _ => { });
+
+        DashboardLaunchResult result = launcher.EnsureRunning(new DashboardLaunchRequest(
+            Context(), 5009, TimeSpan.FromSeconds(1)));
+
+        Assert.Equal(DashboardLaunchOutcome.Started, result.Outcome);
+        Assert.True(File.Exists(stdoutLog), $"{stdoutLog} was not opened for the dashboard");
+        Assert.True(File.Exists(stderrLog), $"{stderrLog} was not opened for the dashboard");
+    }
+
     [Fact]
     public void EnsureRunning_UsesPackagedDashboardExecutable()
     {

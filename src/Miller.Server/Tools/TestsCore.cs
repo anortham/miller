@@ -79,7 +79,9 @@ public sealed record TestsStatusResult(
     int StaleCount,
     int SelectedCount,
     string? LastRun,
-    TestsBudgetHolder? BudgetHolder)
+    TestsBudgetHolder? BudgetHolder,
+    CtDaemonActivity DaemonActivity = CtDaemonActivity.Idle,
+    CtDaemonRunProgress? DaemonRun = null)
 {
     public string Render(bool json) => json ? TestsCore.RenderStatusJson(this) : TestsCore.RenderStatusCompact(this);
 }
@@ -120,7 +122,16 @@ public sealed record TestsRunResult(
     public string Render(bool json) => json ? TestsCore.RenderRunJson(this) : TestsCore.RenderRunCompact(this);
 }
 
-public sealed record TestsFailuresResult(IReadOnlyList<ContinuousTestStatus> Failures, int Truncated)
+/// <summary>
+/// <paramref name="Truncated"/> is how many red cases are left AFTER this page. <paramref name="Total"/> and
+/// <paramref name="Offset"/> are what make the page navigable: without them a caller who sees "truncated: 340"
+/// cannot ask for the next page, which is how this surface used to strand a reader after five rows.
+/// </summary>
+public sealed record TestsFailuresResult(
+    IReadOnlyList<ContinuousTestStatus> Failures,
+    int Truncated,
+    int Total = 0,
+    int Offset = 0)
 {
     public string Render(bool json) => json ? TestsCore.RenderFailuresJson(this) : TestsCore.RenderFailuresCompact(this);
 }
@@ -135,7 +146,18 @@ public static class TestsCore
     public const string StatusContractName = "tests_status";
     public const string StatusContractDoc = "docs/contracts/tests-cli-v1.md";
     private const string TestsUsage =
-        "miller tests <status|serve|run|enable|disable|stop> [--json] [--wait] [--project PATH] [--workspace-id SELECTOR] [--workspace DIR]";
+        "miller tests <status|failures|serve|run|enable|disable|stop> [--json] [--wait] [--limit N] [--offset N] "
+        + "[--project PATH] [--workspace-id SELECTOR] [--workspace DIR]";
+
+    /// <summary>Rows one <c>failures</c> page returns when the caller names no limit.</summary>
+    public const int FailuresDefaultLimit = 20;
+
+    /// <summary>
+    /// The most rows one <c>failures</c> page returns. A ceiling still exists so a single call cannot dump a
+    /// thousand rows into an agent's context, but it is now a page size rather than the end of the list:
+    /// <c>offset</c> reaches everything past it.
+    /// </summary>
+    public const int FailuresMaxLimit = 200;
 
     // Same request reason the daemon records, so `budget_holder.reason` reads the same whether the
     // suite runs in a daemon or in the foreground.
@@ -144,6 +166,26 @@ public static class TestsCore
     // Same wording the daemon publishes when it pauses on a held budget. The paused vocabulary is
     // shared on purpose: one held lease, one explanation, whichever path reports it.
     private const string ExecutionBudgetHeldReason = "execution budget held";
+
+    /// <summary>How often <c>--wait</c> re-reads the daemon status.</summary>
+    private static readonly TimeSpan WaitPollInterval = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>
+    /// How long <c>--wait</c> lets an accepted run stay unstarted before it believes an idle reading. The
+    /// daemon publishes its status once per poll (250 ms by default) and a run command is acknowledged before
+    /// the work becomes ready, so a wait that trusted the first reading would return before anything ran.
+    /// </summary>
+    private static readonly TimeSpan RunPickupGrace = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// How long <c>--wait</c> stays blocked on another workspace holding the single execution slot. The
+    /// holder may keep it for as long as its own suite takes, so the caller gets an honest "still queued"
+    /// instead of the full wait timeout.
+    /// </summary>
+    private static readonly TimeSpan QueuedWaitLimit = TimeSpan.FromSeconds(30);
+
+    /// <summary>How often <c>--wait</c> checks that the daemon it is waiting on is still alive.</summary>
+    private static readonly TimeSpan LivenessProbeInterval = TimeSpan.FromSeconds(2);
 
     public static string Usage => TestsUsage;
 
@@ -175,21 +217,39 @@ public static class TestsCore
             StaleCount: statuses.Count(row => row.State == ContinuousTestState.Stale),
             SelectedCount: statuses.Count,
             LastRun: store.LatestTestRunAt(workspaceId),
-            BudgetHolder: budget);
+            BudgetHolder: budget,
+            DaemonActivity: killSwitchOff ? CtDaemonActivity.Idle : snapshot.Activity,
+            DaemonRun: killSwitchOff ? null : snapshot.Run);
     }
 
-    public static TestsFailuresResult Failures(TestsCoreRequest request, int maxItems = 5)
+    /// <summary>
+    /// One page of the red cases, ordered by test-case id so paging is stable between calls.
+    ///
+    /// <para>The page used to be five rows with a hard ceiling of twenty and no way to ask for the rest. A
+    /// suite with hundreds of failures reported five of them and the count of the ones it would not show,
+    /// which is not enough to act on. <paramref name="offset"/> pages through the rest.</para>
+    /// </summary>
+    public static TestsFailuresResult Failures(
+        TestsCoreRequest request,
+        int maxItems = FailuresDefaultLimit,
+        int offset = 0)
     {
         ArgumentNullException.ThrowIfNull(request);
         string root = RequireRoot(request);
         string workspaceId = ResolveWorkspaceId(request, root);
-        int limit = Math.Clamp(maxItems, 1, 20);
+        int limit = Math.Clamp(maxItems, 1, FailuresMaxLimit);
+        int skip = Math.Max(0, offset);
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
         ContinuousTestStatus[] red = store.ListContinuousTestStatuses(workspaceId)
             .Where(row => row.State == ContinuousTestState.Red)
             .OrderBy(row => row.TestCaseId, StringComparer.Ordinal)
             .ToArray();
-        return new TestsFailuresResult(red.Take(limit).ToArray(), Math.Max(0, red.Length - limit));
+        ContinuousTestStatus[] page = red.Skip(skip).Take(limit).ToArray();
+        return new TestsFailuresResult(
+            page,
+            Math.Max(0, red.Length - skip - page.Length),
+            red.Length,
+            skip);
     }
 
     public static TestsMutationResult Enable(TestsCoreRequest request)
@@ -307,12 +367,18 @@ public static class TestsCore
         var selector = new ContinuousTestImpactSelector(
             store,
             new ReopeningMillerFactSource(() => OpenLiveFacts(root, workspaceId)));
+        ContinuousTestProviderFactory providers = ContinuousTestProviderFactory.CreateDefault(
+            onDiagnostic: message => CtDaemonLog.Write(root, message));
+
+        // One activity cell, three holders: the provider factory's shared runner stamps every line the child
+        // writes, the queue marks each run's start and end, and the daemon loop publishes both in
+        // daemon.status.json. Built by the factory because that is where the stall bound is resolved.
+        CtRunActivityCell runActivity = providers.RunActivity;
         var coordinator = new ContinuousTestCoordinator(
-            ContinuousTestProviderFactory.CreateDefault(
-                onDiagnostic: message => CtDaemonLog.Write(root, message)),
+            providers,
             store,
             onDiagnostic: message => CtDaemonLog.Write(root, message));
-        var queue = new ContinuousTestDaemonQueue(store, selector, coordinator);
+        var queue = new ContinuousTestDaemonQueue(store, selector, coordinator, runActivity: runActivity);
         var poller = new ContinuousTestRevisionPoller(
             new MillerArtifactRevisionSource(),
             new MillerFactImpactSource(workspace => OpenLiveFacts(workspace, workspaceId)));
@@ -329,6 +395,7 @@ public static class TestsCore
                 Poller = poller,
                 Projects = projects,
                 Budget = CtExecutionBudget.FromEnvironment(ResolveMillerHome(request)),
+                RunActivity = runActivity,
             }).GetAwaiter().GetResult();
         return new TestsServeResult(
             0,
@@ -361,7 +428,7 @@ public static class TestsCore
         {
             CtRunResult submitted = CtCommandChannel.Run(root, "run");
             TestsStatusResult status = request.Wait
-                ? WaitForVerdict(request, root)
+                ? WaitForDaemonToSettle(request, root)
                 : Status(request);
             return new TestsRunResult(
                 submitted.Ack is { State: CtDaemonCommandState.Rejected } ? 3 : 0,
@@ -426,6 +493,27 @@ public static class TestsCore
             outcome.Paused);
     }
 
+    /// <summary>
+    /// The run the daemon is executing, or JSON null. <c>child</c> is the daemon's own reading of how lively
+    /// the test process is, so a reader never has to subtract timestamps to tell slow from wedged.
+    /// </summary>
+    private static void WriteDaemonRun(Utf8JsonWriter writer, CtDaemonRunProgress? run)
+    {
+        if (run is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        writer.WriteStartObject();
+        writer.WriteString("project_path", run.ProjectPath);
+        writer.WriteString("run_id", run.RunId);
+        writer.WriteNumber("selected_case_count", run.SelectedCaseCount);
+        writer.WriteString("started_at", run.RunStartedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+        writer.WriteString("child", Snake(run.Activity.ToString()));
+        writer.WriteEndObject();
+    }
+
     internal static string RenderStatusJson(TestsStatusResult result)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -443,6 +531,9 @@ public static class TestsCore
             writer.WriteString("reason", result.DaemonReason);
             writer.WriteBoolean("running", result.DaemonState == CtDaemonLifecycleState.Running);
             writer.WriteBoolean("paused", result.DaemonState == CtDaemonLifecycleState.Paused);
+            writer.WriteString("activity", Snake(result.DaemonActivity.ToString()));
+            writer.WritePropertyName("run");
+            WriteDaemonRun(writer, result.DaemonRun);
             writer.WriteEndObject();
             writer.WriteString("verdict", Snake(result.Verdict.ToString()));
             writer.WritePropertyName("selected");
@@ -481,6 +572,13 @@ public static class TestsCore
         sb.AppendLine("# tests");
         sb.AppendLine("enabled: " + (result.Enabled ? "true" : "false"));
         sb.AppendLine($"daemon: {Snake(result.DaemonState.ToString())} ({result.DaemonReason})");
+        sb.AppendLine("activity: " + Snake(result.DaemonActivity.ToString()));
+        if (result.DaemonRun is { } running)
+        {
+            sb.AppendLine($"  run: {running.ProjectPath} cases="
+                + running.SelectedCaseCount.ToString(CultureInfo.InvariantCulture)
+                + $" started={running.RunStartedAtUtc:O} child={Snake(running.Activity.ToString())}");
+        }
         sb.AppendLine("verdict: " + Snake(result.Verdict.ToString()));
         sb.AppendLine("selected: " + (result.Selected is { } selectedKey ? CompactFreshness(selectedKey) : "-"));
         sb.AppendLine($"stale: {result.StaleCount.ToString(CultureInfo.InvariantCulture)}");
@@ -620,6 +718,8 @@ public static class TestsCore
 
             writer.WriteEndArray();
             writer.WriteNumber("truncated", result.Truncated);
+            writer.WriteNumber("total", result.Total);
+            writer.WriteNumber("offset", result.Offset);
             writer.WriteEndObject();
         }
 
@@ -629,11 +729,20 @@ public static class TestsCore
     internal static string RenderFailuresCompact(TestsFailuresResult result)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"# tests failures ({result.Failures.Count.ToString(CultureInfo.InvariantCulture)})");
+        string shown = result.Failures.Count.ToString(CultureInfo.InvariantCulture);
+        sb.AppendLine(result.Total > result.Failures.Count
+            ? $"# tests failures ({shown} of {result.Total.ToString(CultureInfo.InvariantCulture)})"
+            : $"# tests failures ({shown})");
         foreach (ContinuousTestStatus row in result.Failures)
             sb.AppendLine($"  - {row.TestCaseId}: {row.FailureSummary ?? row.State.ToString()}");
         if (result.Truncated > 0)
-            sb.AppendLine($"truncated: {result.Truncated.ToString(CultureInfo.InvariantCulture)}");
+        {
+            // Names the next offset, so the reader can ask for the rest instead of only learning it exists.
+            int next = result.Offset + result.Failures.Count;
+            sb.AppendLine($"truncated: {result.Truncated.ToString(CultureInfo.InvariantCulture)}"
+                + $" (next: offset={next.ToString(CultureInfo.InvariantCulture)})");
+        }
+
         return sb.ToString().TrimEnd();
     }
 
@@ -721,23 +830,89 @@ public static class TestsCore
         return new TestsRunOutcome(CtRunExecution.ForegroundOneShot, verdict, "foreground", request.Wait);
     }
 
-    private static TestsStatusResult WaitForVerdict(TestsCoreRequest request, string root)
+    /// <summary>
+    /// Waits for the daemon to FINISH the accepted run, then reports whatever verdict is true at that moment.
+    ///
+    /// <para><b>Why it does not wait for a verdict.</b> It used to return as soon as the verdict was Green,
+    /// Red, or Partial. Accepting a run marks the selected cases stale, which makes the verdict Partial
+    /// immediately — so <c>--wait</c> returned within milliseconds, before a single test had run, and reported
+    /// a mid-run answer as the result. A verdict is a description of the store, not a completion signal.
+    /// This wait tests daemon ACTIVITY instead, so a run that is genuinely partial at rest still returns
+    /// partial, and one that is partial because it just started does not.</para>
+    ///
+    /// <para>Four ways out, all bounded: the daemon goes idle, it stops, its lease dies, or a limit expires.
+    /// It never waits on a value that the work itself might never produce.</para>
+    /// </summary>
+    private static TestsStatusResult WaitForDaemonToSettle(TestsCoreRequest request, string root)
     {
         TimeSpan timeout = request.WaitTimeout ?? TimeSpan.FromMinutes(10);
         var clock = Stopwatch.StartNew();
+        var queued = new Stopwatch();
+        var sinceLivenessProbe = Stopwatch.StartNew();
         TestsStatusResult status = Status(request);
-        while (clock.Elapsed < timeout)
+        bool sawExecuting = false;
+
+        while (true)
         {
-            if (status.Verdict is ContinuousTestVerdict.Green or ContinuousTestVerdict.Red or ContinuousTestVerdict.Partial)
+            if (IsExecuting(status))
+            {
+                sawExecuting = true;
+                queued.Reset();
+            }
+            else if (IsQueued(status))
+            {
+                // Ready work that another workspace's budget lease is blocking. Bounded on its own, because
+                // the holder may keep the slot for as long as its own suite takes, and reporting
+                // "still queued" now beats stalling the caller for the whole timeout.
+                if (!queued.IsRunning)
+                    queued.Restart();
+                if (queued.Elapsed >= QueuedWaitLimit)
+                    return status;
+            }
+            else if (sawExecuting || clock.Elapsed >= RunPickupGrace)
+            {
+                // Settled. Before the grace expires an idle reading means the daemon has not picked the run
+                // up yet, not that it finished — the daemon publishes its status once per poll interval.
                 return status;
+            }
+
             if (status.DaemonState == CtDaemonLifecycleState.Stopped)
                 return status;
-            Thread.Sleep(50);
+            if (clock.Elapsed >= timeout)
+                return status;
+
+            // A daemon that died mid-run leaves its last status file behind. Without this the wait would read
+            // "executing" from a dead process until the whole timeout expired.
+            //
+            // Probed on its own slower clock: it reads the lease file and asks the OS about a process, and a
+            // dead daemon stays dead, so doing it on every 50 ms poll would cost twelve thousand process
+            // lookups across a full wait to learn the same thing.
+            if (sinceLivenessProbe.Elapsed >= LivenessProbeInterval)
+            {
+                sinceLivenessProbe.Restart();
+                if (CtDaemonLease.TryReadLive(root) is null)
+                    return status;
+            }
+
+            Thread.Sleep(WaitPollInterval);
             status = Status(request with { WorkspaceRoot = root });
         }
-
-        return status;
     }
+
+    /// <summary>
+    /// A run is in flight. The activity field is authoritative; the reason string is the fallback for a
+    /// status file written by an older daemon that has no activity field.
+    /// </summary>
+    private static bool IsExecuting(TestsStatusResult status) =>
+        status.DaemonActivity == CtDaemonActivity.Executing
+        || (status.DaemonActivity == CtDaemonActivity.Idle
+            && status.DaemonState == CtDaemonLifecycleState.Running
+            && string.Equals(status.DaemonReason, "executing", StringComparison.Ordinal));
+
+    private static bool IsQueued(TestsStatusResult status) =>
+        status.DaemonActivity == CtDaemonActivity.Queued
+        || (status.DaemonActivity == CtDaemonActivity.Idle
+            && string.Equals(status.DaemonReason, ExecutionBudgetHeldReason, StringComparison.Ordinal));
 
     private static IOwnedFactSource OpenLiveFacts(string workspaceRoot, string workspaceId)
     {
