@@ -17,6 +17,12 @@ namespace Miller.Tests.Testing.Providers.Shared;
 /// </summary>
 public sealed class TestProcessStallTests
 {
+    /// <summary>
+    /// How long the chatty-child test watches the stall clock. It must stay well inside the child's own run
+    /// length, because once the child finishes its clock grows for an honest reason.
+    /// </summary>
+    private static readonly TimeSpan SamplingWindow = TimeSpan.FromSeconds(6);
+
     [Fact]
     public async Task A_silent_process_is_killed_once_its_stall_timeout_elapses()
     {
@@ -206,22 +212,34 @@ public sealed class TestProcessStallTests
             await Task.Delay(50, TestContext.Current.CancellationToken);
         }
 
+        // The discriminator is GROWTH against elapsed time, not where any single read lands in the child's
+        // print cycle. A clock that is never re-stamped reads the whole time since the process started, so it
+        // tracks the sampling window 1:1; a stamped clock stays inside the print interval no matter how long
+        // the run goes on. Comparing the HIGHEST read against half the window says exactly that, and says it
+        // without depending on sampling granularity - which is what made two point reads flaky here. A loaded
+        // machine starves this loop badly enough to turn 100ms delays into whole seconds, so any rule that
+        // needs a specific read to land at a specific moment will fail on a busy build agent.
         var elapsed = Stopwatch.StartNew();
-        await Task.Delay(2000, TestContext.Current.CancellationToken);
-        TimeSpan first = process.SinceLastOutput;
-        await Task.Delay(2000, TestContext.Current.CancellationToken);
-        TimeSpan second = process.SinceLastOutput;
+        var samples = new List<TimeSpan>();
+        while (elapsed.Elapsed < SamplingWindow)
+        {
+            samples.Add(process.SinceLastOutput);
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+        }
+
         TimeSpan total = elapsed.Elapsed;
+        TimeSpan highest = samples.Max();
 
         process.TerminateProcessTree();
 
-        // Guard the guard: if the child stopped printing early, neither sample proves anything.
-        Assert.True(total >= TimeSpan.FromSeconds(3.5), $"the samples only spanned {total}");
+        // Guard the guard: if the child stopped printing early, no sample proves anything.
+        Assert.True(total >= SamplingWindow, $"the samples only spanned {total}");
         Assert.True(
-            first < interval && second < interval,
-            $"the stall clock read {first} and then {second} while the child printed every second across "
-            + $"{total}. It is tracking total elapsed time, not the last output, so the drain loop is not "
-            + "stamping it - and the guard would kill healthy long runs.");
+            highest < total / 2,
+            $"the stall clock climbed to {highest} across a {total} window while the child printed every "
+            + $"second ({samples.Count} reads, lowest {samples.Min()}). It is tracking total elapsed time, not "
+            + "the last output, so the drain loop is not stamping it - and the guard would kill healthy long "
+            + "runs.");
     }
 
     /// <summary>
