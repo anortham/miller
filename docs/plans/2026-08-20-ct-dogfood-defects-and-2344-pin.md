@@ -178,10 +178,22 @@ lines share one format.
 This task is verifiable on its own even before Task 4, because the mapping is exercised by fixtures, not by a live inventory.
 
 **Acceptance criteria:**
-- [ ] A JUnit artifact holding three rows of one theory resolves to three distinct case ids.
-- [ ] A red data row is not overwritten by a green sibling of the same theory.
-- [ ] A provider row that carries no per-row display name still resolves through the selector fallback.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] A JUnit artifact holding three rows of one theory resolves to three distinct case ids.
+- [x] A red data row is not overwritten by a green sibling of the same theory.
+- [x] A provider row that carries no per-row display name still resolves through the selector fallback.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
+
+**Second defect found and closed here.** On the real xUnit artifact path `SelectorWithoutArguments`
+yields `<classPath>::<class>.<method>`, which never matched the map's `<classPath>::<method>` key. So
+before this change those rows resolved to NOTHING and minted a duplicate artifact case per row. That
+explains the inventory gap better than this plan's account did. Registering the
+`<classPath>::<QualifiedName>` key closes it.
+
+**Interaction with Task 4 (verify in live experiment 2).** Once Task 4 removes the unique index, N
+theory rows legitimately share one selector, so BOTH collapsed keys become ambiguous and resolve to
+nothing by design. Resolution then depends entirely on the per-row `<classPath>::<QualifiedName>` key
+added here. That is intended, and `Import_maps_a_real_xunit_junit_artifact_row_to_its_own_theory_case`
+proves it against a real artifact.
 
 ---
 
@@ -274,6 +286,57 @@ The runner's own `ID` is not usable — the comment at `DotnetTestProvider.cs:15
 version" is WRONG. `README.md:170` reads "`julie-extract` 2.23.1 ships hand-written extractors for
 38 languages". That is stale drift against the 2.34.4 pin, it predates this task, and it sits
 outside Task 5's file ownership. Deferred, not fixed here.
+
+---
+
+### Task 6: Let a planned-but-unpublished store view recover itself
+
+**Added after approval, at the user's direction (2026-08-20).** Not part of the original five tasks.
+Found while executing this plan, and confirmed live.
+
+**The defect.** A workspace whose view is PLANNED in the registry but never PUBLISHED in the family
+store is permanently wedged. It cannot index, and no ordinary path recovers it. The only escape found
+was `workspace remove` followed by `workspace open`.
+
+**How it was hit.** A git worktree root was entered — and so became the MCP server's current
+workspace — before it was registered. Bootstrap threw, `workspace open` then recorded a planned view
+id, and nothing published it.
+
+**Worktrees are NOT the defect.** A linked worktree normally joins the parent's family with its own
+view. Family `ae07681c` holds members for both `C:\source\julie-extractors` and
+`…\razorback\worktrees\julie-extractors\fix-resolution-per-version-index`, the latter at revision
+7434, state ready. After clearing the stale row, the Miller worktree indexed on the first try:
+`family=9f173abc… view=b3c53663… generation=1 symbols=121597`, `members=` both roots.
+
+**The chain (verified in code, then re-verified adversarially before implementation):**
+
+1. `StoreFamilyResolver.ReconcileCatalog` (`:242`) throws `StoreBindingMismatchException` when no view
+   matches and `recoverUnpublishedView` is false.
+2. `recoverUnpublishedView: true` is passed in ONE place — `CrossWorkspaceRefreshService.cs:688-694`
+   — and only when the intent is `RootRebind` AND `MILLER_ALLOW_EXTRACTOR_DOWNGRADE=1`.
+   `IndexBootstrapService.cs:964` and `:1061` never pass it.
+3. `StoreArtifactVersionReader.ReadForLeadership` (`:47`) rebuilds the binding as
+   `StoreBindingState.Ready` (`:106`), probes, the probe fails on the missing view, and it throws
+   "The active family-store version is unreadable; refusing to claim leadership."
+4. `LeadershipEligibility.Evaluate` therefore never runs — and given a blank artifact version it
+   returns Eligible, its doc comment saying blank means "no artifact exists yet".
+5. `StoreWorkspacePointerDocument` has no state field, so a PLANNED view is indistinguishable on disk
+   from a CORRUPT one. `ReadCore` already special-cases `missingStoreRoot`; the planned case is absent.
+
+**Load-bearing constraints the fix must keep:**
+- Version-aware leadership: `binary_version` never goes backwards. `store_meta` is FAMILY-wide, so a
+  fix that treats "view not found" as "no artifact, go ahead" may let an older extractor write into a
+  family written by a newer one. That must not happen.
+- A genuinely vanished view must stay loud, not be silently recovered.
+- Same-version swarms must not thrash. Root rebind must still work.
+  `MILLER_ALLOW_EXTRACTOR_DOWNGRADE` must keep its meaning.
+
+**Acceptance criteria:**
+- [ ] A workspace with a planned-but-unpublished view indexes without `workspace remove`.
+- [ ] An instance with an older bundled extractor still refuses leadership into a newer family store.
+- [ ] A view that was published and then vanished is still reported, not silently recovered.
+- [ ] `StoreFamilyResolverTests` still passes unchanged, or every change to it is justified.
+- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ---
 

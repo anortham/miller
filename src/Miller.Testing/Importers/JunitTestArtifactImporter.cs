@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using Miller.Testing.Parsing;
 
 namespace Miller.Testing;
@@ -161,21 +162,82 @@ public static class JunitTestArtifactImporter
             Counts: counts);
     }
 
+    /// <summary>
+    /// Resolves one artifact row to the test case it reports on.
+    ///
+    /// <para>Order matters. The EXACT selector is tried first, because it carries a theory data row's
+    /// arguments and therefore names one row. Only when no exact key matches does the row fall back to
+    /// the selector without its arguments, which every row of one theory shares. The mapping has already
+    /// dropped the keys that more than one case claims, so an ambiguous fallback resolves to nothing and
+    /// the row gets its own artifact case instead of an arbitrary sibling's id.</para>
+    /// </summary>
     private static bool TryResolveTestCaseId(
         IReadOnlyDictionary<string, string> testCaseIdsBySelector,
         string selector,
         out string? testCaseId)
     {
-        if (testCaseIdsBySelector.TryGetValue(selector, out testCaseId)
-            && !string.IsNullOrWhiteSpace(testCaseId))
+        if (TryLookupTestCaseId(testCaseIdsBySelector, selector, out testCaseId))
+            return true;
+
+        // Still exact: xUnit v3's jUnit reporter backslash-escapes the quotes and backslashes inside a
+        // display name, so a string-argument row reads `Method(kind: \"bin\")` in the artifact while the
+        // inventory holds `Method(kind: "bin")`. This undoes that reporter's own escape, so it
+        // reconstructs the display name rather than guessing at one.
+        string unescaped = UnescapedSelector(selector);
+        if (!string.Equals(unescaped, selector, StringComparison.Ordinal)
+            && TryLookupTestCaseId(testCaseIdsBySelector, unescaped, out testCaseId))
         {
             return true;
         }
 
         string normalized = SelectorWithoutArguments(selector);
         return !string.Equals(normalized, selector, StringComparison.Ordinal)
-            && testCaseIdsBySelector.TryGetValue(normalized, out testCaseId)
-            && !string.IsNullOrWhiteSpace(testCaseId);
+            && TryLookupTestCaseId(testCaseIdsBySelector, normalized, out testCaseId);
+    }
+
+    private static bool TryLookupTestCaseId(
+        IReadOnlyDictionary<string, string> testCaseIdsBySelector,
+        string key,
+        out string? testCaseId)
+    {
+        if (testCaseIdsBySelector.TryGetValue(key, out testCaseId)
+            && !string.IsNullOrWhiteSpace(testCaseId))
+        {
+            return true;
+        }
+
+        testCaseId = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Undoes a reporter's backslash escape of the quotes and backslashes in a display name. Anything
+    /// else that follows a backslash is left alone, so a Windows path inside an argument survives.
+    /// </summary>
+    private static string UnescapedSelector(string selector)
+    {
+        int firstEscape = selector.IndexOf('\\');
+        if (firstEscape < 0)
+            return selector;
+
+        var unescaped = new StringBuilder(selector.Length);
+        unescaped.Append(selector, 0, firstEscape);
+        for (int index = firstEscape; index < selector.Length; index++)
+        {
+            char current = selector[index];
+            if (current == '\\'
+                && index + 1 < selector.Length
+                && (selector[index + 1] == '"' || selector[index + 1] == '\\'))
+            {
+                unescaped.Append(selector[index + 1]);
+                index++;
+                continue;
+            }
+
+            unescaped.Append(current);
+        }
+
+        return unescaped.ToString();
     }
 
     private static string SelectorWithoutArguments(string selector)

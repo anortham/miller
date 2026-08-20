@@ -973,19 +973,82 @@ public sealed class ContinuousTestCoordinator
             && !Path.IsPathRooted(relative);
     }
 
-    private IReadOnlyDictionary<string, string> TestCaseIdsByArtifactSelector(string workspaceId)
+    private IReadOnlyDictionary<string, string> TestCaseIdsByArtifactSelector(string workspaceId) =>
+        TestCaseIdsByArtifactSelector(_store.ListTestCases(workspaceId));
+
+    /// <summary>
+    /// Maps every selector a result artifact can carry to the test case that owns it.
+    ///
+    /// <para>Keys come in two shapes. A PER-ROW key carries the case's full display name, which holds a
+    /// theory data row's arguments, so each row of a pre-enumerated theory resolves to its own case. A
+    /// COLLAPSED key - the provider selector, and <c>class::method</c> - drops the arguments, so every
+    /// row of one theory claims the same one.</para>
+    ///
+    /// <para><b>A key that more than one case claims resolves to NOTHING.</b> Both collapsed keys used to
+    /// be plain assignments, so the last case written won the key and every result in the run was
+    /// attributed to one arbitrary sibling. Results upsert on (workspace, case, run), so N rows then left
+    /// ONE row and a red data row could be published as its green sibling's verdict - which breaks the
+    /// rule that green needs COMPLETE results.</para>
+    ///
+    /// <para>A key exactly one case claims is kept, because that is the legitimate fallback: a provider
+    /// that does not pre-enumerate, and a theory whose data cannot be enumerated up front, produce one
+    /// case for one selector in both discovery and the run.</para>
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> TestCaseIdsByArtifactSelector(
+        IReadOnlyList<ContinuousTestCase> cases)
     {
-        var result = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (ContinuousTestCase row in _store.ListTestCases(workspaceId))
+        // A null value marks a key more than one case claims.
+        var claims = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (ContinuousTestCase row in cases)
         {
-            result[row.Selector] = row.Id;
+            Claim(claims, row.Selector, row.Id);
             string? className = MetadataString(row.Metadata, "class");
+            if (string.IsNullOrWhiteSpace(className))
+                continue;
+
+            string classPath = className.Replace('.', '/');
+
+            // The per-row keys. A JUnit artifact names a row either by the full display name
+            // ("Ns.Class.Method(x: 1)", which is what xUnit v3's -jUnit reporter writes) or by the
+            // method part alone ("Method(x: 1)"), so the display name is registered in both shapes.
+            // QualifiedName is the provider-neutral field that holds it; the case id is not, because
+            // its prefix belongs to whichever provider minted it.
+            Claim(claims, $"{classPath}::{row.QualifiedName}", row.Id);
+            string classPrefix = className + ".";
+            if (row.QualifiedName.StartsWith(classPrefix, StringComparison.Ordinal))
+                Claim(claims, $"{classPath}::{row.QualifiedName[classPrefix.Length..]}", row.Id);
+
             string? methodName = MetadataString(row.Metadata, "method");
-            if (!string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName))
-                result[$"{className.Replace('.', '/')}::{methodName}"] = row.Id;
+            if (!string.IsNullOrWhiteSpace(methodName))
+                Claim(claims, $"{classPath}::{methodName}", row.Id);
+        }
+
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach ((string key, string? testCaseId) in claims)
+        {
+            if (testCaseId is not null)
+                result[key] = testCaseId;
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Records one case's claim on a key. A second, different claimant makes the key ambiguous, and an
+    /// ambiguous key resolves to nothing rather than to an arbitrary one of its claimants.
+    /// </summary>
+    private static void Claim(Dictionary<string, string?> claims, string key, string testCaseId)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return;
+        if (!claims.TryGetValue(key, out string? owner))
+        {
+            claims[key] = testCaseId;
+            return;
+        }
+
+        if (!string.Equals(owner, testCaseId, StringComparison.Ordinal))
+            claims[key] = null;
     }
 
     private static string? MetadataString(IReadOnlyDictionary<string, object?> metadata, string name)
