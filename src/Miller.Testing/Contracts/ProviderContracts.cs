@@ -240,6 +240,27 @@ public sealed record ContinuousTestCoordinatorRunRequest
     public string? RunId { get; init; }
     public ContinuousTestCoverageMode CoverageMode { get; init; }
 
+    /// <summary>
+    /// This run covers EVERY test case the store knows for the project, so the provider is told to run the
+    /// whole assembly instead of being handed the case list.
+    ///
+    /// <para>Both express the same run. The difference is cost. A per-case selection becomes one
+    /// <c>-method</c> pair per id, and Miller's own ~6,000 cases then exceed the command-line limit and split
+    /// into roughly 50 processes, each paying host startup and discovery again: 6+ minutes for a subset that
+    /// <c>dotnet test</c> runs in 25 seconds. Handing the provider an empty selection runs the same tests once,
+    /// under the seeded trait exclusions.</para>
+    ///
+    /// <para><see cref="TestCaseIds"/> STILL carries the full list, because that is what the run intends to
+    /// cover and what the verdict rows must record. Only the provider's argv changes. Losing the list here
+    /// would make a whole-suite run claim to have selected nothing, and freshness at the composite key would
+    /// go quietly wrong.</para>
+    ///
+    /// <para>It is set only when the selection covers everything. A workspace-scope run whose already-fresh
+    /// cases were dropped may be down to a handful of ids, and running a whole assembly for three tests is the
+    /// same mistake in the other direction.</para>
+    /// </summary>
+    public bool WholeSuite { get; init; }
+
     public ContinuousTestCoordinatorRunRequest(
         ContinuousTestWorkspace Workspace,
         string SelectedRevision,
@@ -253,7 +274,8 @@ public sealed record ContinuousTestCoordinatorRunRequest
         DateTimeOffset? StartedAt = null,
         Func<string>? CurrentRevisionResolver = null,
         string? RunId = null,
-        ContinuousTestCoverageMode CoverageMode = ContinuousTestCoverageMode.None)
+        ContinuousTestCoverageMode CoverageMode = ContinuousTestCoverageMode.None,
+        bool WholeSuite = false)
     {
         ArgumentNullException.ThrowIfNull(Workspace);
         if (string.IsNullOrWhiteSpace(SelectedRevision))
@@ -281,6 +303,7 @@ public sealed record ContinuousTestCoordinatorRunRequest
         this.CurrentRevisionResolver = CurrentRevisionResolver;
         this.RunId = RunId;
         this.CoverageMode = CoverageMode;
+        this.WholeSuite = WholeSuite;
     }
 }
 

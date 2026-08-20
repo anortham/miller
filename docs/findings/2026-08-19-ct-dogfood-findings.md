@@ -55,15 +55,22 @@ now prints `rev N (24-char-prefix…)`. JSON is unchanged.
 
 ## Open findings (design decisions, not fixed)
 
-7. **No run-level stall policy.** A hung suite wedges the daemon indefinitely: the drain blocks
-   the loop, stop commands are not processed until the run ends, and nothing times the run out.
-   The hung run above sat 36 minutes and only broke loose when a debugger attached.
+7. ~~**No run-level stall policy.**~~ **FIXED 2026-08-20.** A test process that produces no output
+   for 10 minutes is now treated as wedged: its process tree is killed and the run FAILS with a forced
+   non-zero exit code. The bound is on SILENCE rather than total duration, so a slow suite survives and
+   a wedged one does not. `MILLER_CT_STALL_TIMEOUT` overrides the bound; `off` disables it. See
+   [`contracts/tests-cli-v1.md`](../contracts/tests-cli-v1.md#run-stall-bound).
 
-8. **Unbounded per-method argv.** A full-suite selection passes one `-method` per case —
-   5,889 args / ~500KB observed. Windows caps a command line at 32KB, so a full run of a large
-   suite would fail there. The explicit method list also appears to slow the xunit runner
-   dramatically versus an assembly-level run with trait filters (25s under `dotnet test` versus
-   6+ min under CT on the same fast subset; needs a controlled measurement).
+   Still open in this area: the drain blocks the loop, so a stop command is not processed until the run
+   ends. The stall bound now caps how long that can last, but it does not make stop responsive.
+
+8. ~~**Unbounded per-method argv.**~~ **FIXED 2026-08-20**, in two parts. `CtArgvChunking` bounds every
+   selection so no invocation can exceed the command-line limit (the `.cmd` shim used by npm/pnpm/yarn
+   caps far lower — a measured ~8,331 characters exits 1 with "The command line is too long" and no
+   output, which a provider reads as a failed run). And a run that covers every known case now sends an
+   EMPTY selection, so the whole assembly runs once under its seeded trait exclusions instead of
+   chunking ~6,000 `-method` pairs across ~50 processes. See
+   [`2026-08-19-ct-checkin-workspace-scope-selection.md`](2026-08-19-ct-checkin-workspace-scope-selection.md).
 
 9. **Enable does not reconcile stored rows.** Projects that discovery no longer returns stay in
    `ct_test_projects` (this session left them disabled by hand). Rows carry no provenance, so an

@@ -206,7 +206,11 @@ public sealed class ContinuousTestCoordinator
                         SelectedRevision: request.SelectedRevision,
                         IndexIdentity: request.IndexIdentity,
                         RunId: runId,
-                        TestCaseIds: request.TestCaseIds,
+                        // The ONLY place the whole-suite flag changes anything. An empty selection is how every
+                        // provider already says "run the whole assembly under the seeded exclusions", so this
+                        // needs no provider change - and the applier above still recorded the full id list, so
+                        // the run's intent and its verdict rows stay in step.
+                        TestCaseIds: request.WholeSuite ? [] : request.TestCaseIds,
                         FilterArguments: request.FilterArguments,
                         Command: request.Command,
                         ExcludeTraits: request.ExcludeTraits,

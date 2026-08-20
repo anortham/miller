@@ -220,7 +220,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                             StartedAt: now,
                             CurrentRevisionResolver: () => LatestRevisionStringFor(key, readyPending.CurrentRevision),
                             RunId: runId,
-                            CoverageMode: readyPending.CoverageMode),
+                            CoverageMode: readyPending.CoverageMode,
+                            WholeSuite: CoversEveryKnownCase(readyPending)),
                         drainToken).ConfigureAwait(false);
 
                     ClearRunFailureRetry(key);
@@ -300,6 +301,50 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             return ContinuousTestImpactPriority.WorkspaceScope;
         double maxConfidence = selection.Evidence.Count == 0 ? 0.0 : selection.Evidence.Max(row => row.Confidence);
         return ContinuousTestImpactPriority.ForConfidence(maxConfidence);
+    }
+
+    /// <summary>
+    /// True when this run's selection covers EVERY test case the store knows for the project, which is what
+    /// lets the coordinator hand the provider an empty selection and run the whole assembly once instead of
+    /// chunking ~6,000 <c>-method</c> pairs across ~50 processes.
+    ///
+    /// <para>The comparison is on the SET, not on counts. Equal counts can mean two different sets when the
+    /// inventory has drifted mid-run, and "run everything" is the wrong instruction for a selection that is
+    /// merely the same SIZE as everything.</para>
+    ///
+    /// <para>The backfill lane is excluded by construction: it deliberately takes a bounded batch, so its
+    /// selection is never the whole inventory, and treating it as one would defeat the batching.</para>
+    ///
+    /// <para>An empty inventory is NOT a whole-suite run. Nothing known means nothing to cover, and telling a
+    /// provider to run the whole assembly on that basis would execute an entire suite that no selection
+    /// asked for.</para>
+    /// </summary>
+    private bool CoversEveryKnownCase(ContinuousTestDaemonPendingRun pending)
+    {
+        if (pending.Lane == ContinuousTestRunLane.Backfill)
+            return false;
+
+        HashSet<string> known;
+        try
+        {
+            known = _store.ListTestCases(pending.Workspace.WorkspaceId)
+                .Where(row => ContinuousTestImpactSelector.IsProviderManagedTestCaseForProject(
+                    row, pending.Workspace.ProjectPath))
+                .Select(row => row.Id)
+                .ToHashSet(StringComparer.Ordinal);
+        }
+        catch (Exception)
+        {
+            // Unreadable inventory is not proof of coverage. Fall back to the per-case selection, which is
+            // slower and always correct.
+            return false;
+        }
+
+        if (known.Count == 0)
+            return false;
+
+        var selected = pending.TestCaseIds.ToHashSet(StringComparer.Ordinal);
+        return selected.IsSupersetOf(known);
     }
 
     private IReadOnlyList<string> SelectForegroundTestCaseIds(

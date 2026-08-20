@@ -6,6 +6,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 ## Current docs
 
 - [`contracts/tests-cli-v1.md`](contracts/tests-cli-v1.md) - active continuous-testing CLI JSON contract: `tests status|run|enable|disable|serve|stop`.
+- [`findings/2026-08-20-ct-test-evidence-gap-verification.md`](findings/2026-08-20-ct-test-evidence-gap-verification.md) - verified: CT still receives only `bool IsTest`, so test containers, lifecycle hooks, and unknown/stale evidence all collapse into `testcase`. `ContinuousTestClassifier` is not wired into production.
 - [`findings/2026-08-19-ct-checkin-workspace-scope-selection.md`](findings/2026-08-19-ct-checkin-workspace-scope-selection.md) - CT check-in verdict plus one design finding: workspace-scope runs should send an empty selection (assembly-level run with trait exclusions), not enumerate every `-method`.
 - [`findings/2026-08-19-ct-dogfood-findings.md`](findings/2026-08-19-ct-dogfood-findings.md) - first CT dogfood on the Miller repo: six fixed defects (discovery over-match, missing Scale exclusion, per-row discovery commits, dead heartbeat, stale-stop startup kill, CT-env poisoning of CT CLI tests) and three open design questions (run stall policy, per-method argv limits, enable-row reconcile).
 - [`plans/2026-08-18-ct-sidecar-migration-design.md`](plans/2026-08-18-ct-sidecar-migration-design.md) - CT sidecar migration design: `ct.db`, explicit-start daemon, MCP `tests` tool, `MILLER_CT=off`. Release notes deferred to release prep on main.

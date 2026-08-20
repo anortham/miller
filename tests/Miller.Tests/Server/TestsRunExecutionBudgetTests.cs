@@ -407,7 +407,16 @@ public sealed class TestsRunExecutionBudgetTests : IDisposable
         {
             LiveFactSourcesAtRun = _ledger.Live;
             RunRequest = request;
-            ProviderCaseResult[] results = request.TestCaseIds
+
+            // An EMPTY selection means "run the whole assembly", which is how a run covering every known
+            // case is expressed. A real provider then reports whatever the assembly ran, parsed out of its
+            // TRX or stdout - it does not echo the selection back. Modelling that matters: a double that
+            // derives its results FROM the selection reports nothing for a whole-suite run, and the verdict
+            // reads Partial for a run that actually passed everything.
+            IReadOnlyList<string> reported = request.TestCaseIds.Count > 0
+                ? request.TestCaseIds
+                : [SampleTestCaseId];
+            ProviderCaseResult[] results = reported
                 .Select(id => new ProviderCaseResult(
                     Id: "ct-result:" + id,
                     TestCaseId: id,
