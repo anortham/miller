@@ -116,7 +116,7 @@ public sealed class StoreArtifactVersionReaderTests
     public void TryReadFamilyWriterFloorSeparatesFirstImportFromAnUnreadableStore()
     {
         using var firstImport = StorePointerFixture.Create(binaryVersion: "2.34.4");
-        File.Delete(Path.Combine(firstImport.StoreRoot, "CURRENT"));
+        System.IO.Directory.Delete(firstImport.StoreRoot, recursive: true);
 
         bool comparable = StoreArtifactVersionReader.TryReadFamilyWriterFloor(
             firstImport.Binding,
@@ -163,6 +163,54 @@ public sealed class StoreArtifactVersionReaderTests
         Assert.Null(unreadable);
         // And the verdict that follows must be eligible, whatever this Miller bundles.
         Assert.True(LeadershipEligibility.Evaluate("2.30.0", familyVersion, allowDowngrade: false).Eligible);
+    }
+
+    /// <summary>
+    /// Proves: a family that HAS a store.db but cannot report its version fails CLOSED. A lost CURRENT
+    /// pointer, a deleted serving generation, or a missing coord.db all say "the serving generation is
+    /// unreadable", never "nothing was ever written here" — and a store.db a NEWER extractor produced may
+    /// still sit under the root. Granting a blank floor there would let an older extractor write into the
+    /// family and take store_meta.binary_version backwards for every member view.
+    /// </summary>
+    [Theory]
+    [InlineData("CURRENT")]
+    [InlineData("coord.db")]
+    public void TryReadFamilyWriterFloorFailsClosedWhenAStoreDatabaseSurvivesTheDamage(string removed)
+    {
+        using var damaged = StorePointerFixture.Create(binaryVersion: "2.34.4");
+        File.Delete(Path.Combine(damaged.StoreRoot, removed));
+        Assert.True(File.Exists(Path.Combine(damaged.StoreRoot, "gen-001", "store.db")));
+
+        bool comparable = StoreArtifactVersionReader.TryReadFamilyWriterFloor(
+            damaged.Binding,
+            out string? familyVersion,
+            out FamilyStoreReadException? unreadable);
+
+        Assert.False(comparable);
+        Assert.Null(familyVersion);
+        Assert.NotNull(unreadable);
+    }
+
+    /// <summary>
+    /// Proves: an EMPTY family root is still a first import. The resolver creates the store directory when
+    /// it plans a view, so the ordinary first import reaches the gate with a root that exists and holds
+    /// nothing. Failing closed there would wedge every new workspace.
+    /// </summary>
+    [Fact]
+    public void TryReadFamilyWriterFloorTreatsAnEmptyStoreRootAsAFirstImport()
+    {
+        using var fixture = StorePointerFixture.Create(binaryVersion: "2.34.4");
+        System.IO.Directory.Delete(fixture.StoreRoot, recursive: true);
+        System.IO.Directory.CreateDirectory(fixture.StoreRoot);
+
+        bool comparable = StoreArtifactVersionReader.TryReadFamilyWriterFloor(
+            fixture.Binding,
+            out string? familyVersion,
+            out FamilyStoreReadException? unreadable);
+
+        Assert.True(comparable);
+        Assert.Null(familyVersion);
+        Assert.Null(unreadable);
     }
 
     /// <summary>

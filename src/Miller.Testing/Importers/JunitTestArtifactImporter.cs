@@ -124,33 +124,34 @@ public static class JunitTestArtifactImporter
             IndexIdentity: request.IndexIdentity,
             Revision: request.Revision,
             Status: state,
-            Results: parsed.Cases.Select(parsedCase =>
-            {
-                bool usesExistingTestCase = TryResolveTestCaseId(
-                    testCaseIdsBySelector,
-                    parsedCase.Selector,
-                    out string? mappedTestCaseId);
-                string testCaseId = usesExistingTestCase
-                    ? mappedTestCaseId!
-                    : CtStableIds.StableId("test_case", request.WorkspaceId, parsedCase.Selector, "artifact");
-                return new ContinuousTestResult(
-                    Id: CtStableIds.StableId("test_result", request.WorkspaceId, testCaseId, runId),
-                    WorkspaceId: request.WorkspaceId,
-                    TestCaseId: testCaseId,
-                    TestRunId: runId,
-                    Status: parsedCase.Status,
-                    ResultRevision: request.SelectedRevision,
-                    IndexIdentity: request.IndexIdentity,
-                    Revision: request.Revision,
-                    DurationSeconds: parsedCase.DurationSeconds,
-                    FailureSummary: parsedCase.FailureText,
-                    SourceArtifactId: artifactId,
-                    Metadata: new Dictionary<string, object?>
-                    {
-                        ["failure_text"] = parsedCase.FailureText,
-                        ["selector"] = parsedCase.Selector,
-                    });
-            }).ToArray()));
+            Results: MergeWorstWins(
+                parsed.Cases.Select(parsedCase =>
+                {
+                    bool usesExistingTestCase = TryResolveTestCaseId(
+                        testCaseIdsBySelector,
+                        parsedCase.Selector,
+                        out string? mappedTestCaseId);
+                    string testCaseId = usesExistingTestCase
+                        ? mappedTestCaseId!
+                        : CtStableIds.StableId("test_case", request.WorkspaceId, parsedCase.Selector, "artifact");
+                    return new ContinuousTestResult(
+                        Id: CtStableIds.StableId("test_result", request.WorkspaceId, testCaseId, runId),
+                        WorkspaceId: request.WorkspaceId,
+                        TestCaseId: testCaseId,
+                        TestRunId: runId,
+                        Status: parsedCase.Status,
+                        ResultRevision: request.SelectedRevision,
+                        IndexIdentity: request.IndexIdentity,
+                        Revision: request.Revision,
+                        DurationSeconds: parsedCase.DurationSeconds,
+                        FailureSummary: parsedCase.FailureText,
+                        SourceArtifactId: artifactId,
+                        Metadata: new Dictionary<string, object?>
+                        {
+                            ["failure_text"] = parsedCase.FailureText,
+                            ["selector"] = parsedCase.Selector,
+                        });
+                }))));
 
         return new JunitTestArtifactImportReport(
             Kind: Kind,
@@ -297,6 +298,61 @@ public static class JunitTestArtifactImporter
         byte[] hash = SHA256.HashData(File.ReadAllBytes(path));
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
+
+    /// <summary>
+    /// Folds artifact rows that land on ONE result id, keeping the WORST status. Several rows can share a
+    /// result id whenever they share a test case id — xUnit truncates long theory display names, so two data
+    /// rows of one theory arrive under one name, discovery mints one case for them, and the id derived from
+    /// (workspace, case, run) is then identical. Without this fold the LAST row written wins, so a green data
+    /// row silently overwrites a red sibling and the run reports a false green.
+    ///
+    /// <para>The fold is per RUN, never across runs: <c>ScheduleFlakyRetries</c> re-enqueues into a NEW run id
+    /// rather than reusing this one, so a retry that passes is a separate row and worst-wins here cannot pin a
+    /// flaky test red forever.</para>
+    ///
+    /// <para>The kept row carries the losing row's failure text when the winner has none, because the failure
+    /// text is the only thing that tells a person WHICH data row broke.</para>
+    /// </summary>
+    internal static IReadOnlyList<ContinuousTestResult> MergeWorstWins(IEnumerable<ContinuousTestResult> results)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        var merged = new Dictionary<string, ContinuousTestResult>(StringComparer.Ordinal);
+        var order = new List<string>();
+        foreach (ContinuousTestResult result in results)
+        {
+            if (!merged.TryGetValue(result.Id, out ContinuousTestResult? kept))
+            {
+                merged[result.Id] = result;
+                order.Add(result.Id);
+                continue;
+            }
+
+            merged[result.Id] = Worse(kept, result);
+        }
+
+        return order.Select(id => merged[id]).ToArray();
+    }
+
+    /// <summary>
+    /// Ranks the two rows by how bad they are, using the same ordering <see cref="RunStatus"/> applies to a
+    /// whole run: a failure beats a skip, and a skip beats a pass. Ties keep the row already held, so the fold
+    /// is stable.
+    /// </summary>
+    private static ContinuousTestResult Worse(ContinuousTestResult kept, ContinuousTestResult candidate)
+    {
+        ContinuousTestResult winner = StatusRank(candidate.Status) > StatusRank(kept.Status) ? candidate : kept;
+        ContinuousTestResult loser = ReferenceEquals(winner, kept) ? candidate : kept;
+        if (!string.IsNullOrWhiteSpace(winner.FailureSummary) || string.IsNullOrWhiteSpace(loser.FailureSummary))
+            return winner;
+        return winner with { FailureSummary = loser.FailureSummary };
+    }
+
+    private static int StatusRank(string status) => status switch
+    {
+        "failed" or "errored" => 3,
+        "skipped" => 2,
+        _ => 1,
+    };
 
     private static string RunStatus(ParsedTestArtifactRun run)
     {

@@ -408,17 +408,20 @@ public static class CtSchema
 
         Migrate(connection);
 
-        using var meta = connection.CreateCommand();
-        // Advance-only. A file written by a NEWER Miller keeps its own number, because that number is
-        // what tells this binary to refuse the file instead of writing an older shape into it.
-        meta.CommandText = """
-            INSERT INTO meta(key, value) VALUES ('schema_version', $v)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                WHERE CAST(excluded.value AS INTEGER) > CAST(meta.value AS INTEGER);
-            """;
-        meta.Parameters.AddWithValue("$v", SchemaVersion.ToString(CultureInfo.InvariantCulture));
-        meta.ExecuteNonQuery();
+        // The migration already stamped this inside its own transaction when it ran. This covers the file
+        // it did NOT touch: a fresh file the DDL just built, and one already at the current shape.
+        WriteMetaSchemaVersion(connection);
     }
+
+    /// <summary>
+    /// Advance-only. A file written by a NEWER Miller keeps its own number, because that number is what
+    /// tells this binary to refuse the file instead of writing an older shape into it.
+    /// </summary>
+    private const string MetaSchemaVersionUpsert = """
+        INSERT INTO meta(key, value) VALUES ('schema_version', $v)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            WHERE CAST(excluded.value AS INTEGER) > CAST(meta.value AS INTEGER);
+        """;
 
     /// <summary>
     /// Brings a file built by an older schema up to <see cref="SchemaVersion"/>.
@@ -458,7 +461,7 @@ public static class CtSchema
         if (!HasSelectorUniqueIndex(connection))
         {
             // A fresh file, or one an earlier run already rebuilt. Only the stamp is owed.
-            WriteUserVersion(connection);
+            StampSchemaVersion(connection);
             return;
         }
 
@@ -511,7 +514,7 @@ public static class CtSchema
                 CREATE INDEX IF NOT EXISTS idx_test_cases_file_path ON test_cases(file_path);
                 """);
 
-            WriteUserVersion(connection);
+            StampSchemaVersion(connection);
 
             long casesAfter = RowCount(connection, "test_cases");
             if (casesAfter != casesBefore)
@@ -621,6 +624,28 @@ public static class CtSchema
     /// a newer Miller must keep its own number. <c>PRAGMA user_version</c> takes no parameter, so the
     /// value is a compile-time constant rather than user input.
     /// </summary>
+    /// <summary>
+    /// Stamps BOTH version markers together: <c>PRAGMA user_version</c>, which decides whether this
+    /// binary re-runs the migration, and <c>meta.schema_version</c>, which is what an older binary reads
+    /// to decide whether it may write the file at all. They must land in the same transaction as the shape
+    /// change. Stamping the pragma at commit and <c>meta</c> afterwards left a crash window in which a
+    /// schema-2 file still advertised schema 1, and an older Miller would then write the constraint-free
+    /// shape instead of refusing it. Both writes are advance-only, so a newer file keeps its own numbers.
+    /// </summary>
+    private static void StampSchemaVersion(SqliteConnection connection)
+    {
+        WriteUserVersion(connection);
+        WriteMetaSchemaVersion(connection);
+    }
+
+    private static void WriteMetaSchemaVersion(SqliteConnection connection)
+    {
+        using var meta = connection.CreateCommand();
+        meta.CommandText = MetaSchemaVersionUpsert;
+        meta.Parameters.AddWithValue("$v", SchemaVersion.ToString(CultureInfo.InvariantCulture));
+        meta.ExecuteNonQuery();
+    }
+
     private static void WriteUserVersion(SqliteConnection connection)
     {
         if (ReadUserVersion(connection) >= SchemaVersion)

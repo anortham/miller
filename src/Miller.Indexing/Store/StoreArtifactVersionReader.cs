@@ -91,6 +91,20 @@ public static class StoreArtifactVersionReader
                 or FamilyStoreReadFailure.StoreMissing
                 or FamilyStoreReadFailure.CoordinatorMissing)
         {
+            // These say "the serving generation is not readable", which is NOT the same as "nothing was ever
+            // written here". A family whose CURRENT was lost, or whose serving generation was deleted, can
+            // still hold a store.db a NEWER extractor produced. Reading that as a blank floor would let an
+            // older extractor write into it and take store_meta.binary_version backwards for every member
+            // view. So prove it: a blank floor is granted only when no store.db exists anywhere under the
+            // family root. That keeps a genuine first import working — it has no store.db to find — without
+            // granting one to a damaged family.
+            if (AnyStoreDatabaseExists(binding.StoreRoot))
+            {
+                familyVersion = null;
+                unreadable = ex;
+                return false;
+            }
+
             familyVersion = null;
             return true;
         }
@@ -101,6 +115,27 @@ public static class StoreArtifactVersionReader
             familyVersion = null;
             unreadable = ex;
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Does the family root hold ANY generation database? A missing root, an empty root, or a root that
+    /// holds only planning state answers no, and that is what makes a first import safe. Any I/O failure
+    /// answers YES: the writer gate must fail closed when it cannot see what is there.
+    /// </summary>
+    private static bool AnyStoreDatabaseExists(string storeRoot)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(storeRoot, "store.db", SearchOption.AllDirectories).Any();
+        }
+        catch (Exception ex) when (ex is DirectoryNotFoundException or FileNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return true;
         }
     }
 

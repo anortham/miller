@@ -203,6 +203,51 @@ public sealed class CtSchemaTests : IDisposable
     }
 
     /// <summary>
+    /// The two version markers must land in ONE transaction. <c>PRAGMA user_version</c> tells THIS binary
+    /// whether to re-run the migration; <c>meta.schema_version</c> is what an OLDER binary reads to decide
+    /// whether it may write the file at all. Stamping the pragma at commit and <c>meta</c> afterwards left a
+    /// window in which a schema-2 file still advertised schema 1, and an older Miller would then write the
+    /// constraint-free shape instead of refusing it.
+    ///
+    /// <para>The trigger below makes the <c>meta</c> write fail at exactly that moment. With both stamps in
+    /// one transaction the whole rebuild rolls back and the file stays wholly at version 1. With the stamps
+    /// split, the rebuild commits first and the file is left at the mismatched state this test forbids.</para>
+    /// </summary>
+    [Fact]
+    public void A_failed_schema_version_stamp_rolls_the_whole_migration_back()
+    {
+        using (var connection = OpenWrite())
+        {
+            CreateLegacySchema(connection);
+            SeedReferencingRows(connection);
+            Execute(
+                connection,
+                """
+                CREATE TRIGGER refuse_schema_version BEFORE UPDATE ON meta
+                WHEN NEW.key = 'schema_version'
+                BEGIN
+                    SELECT RAISE(ABORT, 'simulated failure while stamping schema_version');
+                END;
+                """);
+        }
+
+        using (var connection = OpenWrite())
+        {
+            Assert.Throws<SqliteException>(() => CtSchema.Apply(connection));
+        }
+
+        using (var connection = OpenWrite())
+        {
+            // Nothing may have moved: not the shape, not either stamp, not one row.
+            Assert.True(HasSelectorUniqueIndex(connection), "the rebuild committed without its version stamp");
+            Assert.Equal(0L, UserVersion(connection));
+            Assert.Equal(1, CtSchema.ReadSchemaVersion(connection));
+            foreach (string table in CascadingTables)
+                Assert.Equal(RowsPerTable[table], RowCount(connection, table));
+        }
+    }
+
+    /// <summary>
     /// The one way this migration could still destroy data: <c>PRAGMA foreign_keys=OFF</c> is a NO-OP
     /// inside a transaction, so a caller that opened one first would run the rebuild with cascades live.
     /// The migration reads the switch back and refuses. Proven here by opening a transaction and

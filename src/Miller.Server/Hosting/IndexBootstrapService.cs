@@ -1044,10 +1044,25 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                         binding.StoreRoot, binding.ViewId, canonicalRoot);
                 }
 
+                using ScanGovernorAdmission? admission =
+                    AcquireBootstrapScanAdmission(canonicalRoot, "store-bootstrap");
+                if (admission is null)
+                {
+                    throw new ScanAdmissionTimeoutException(
+                        $"Timed out waiting for machine-wide scan admission to initialize family store " +
+                        $"'{binding.StoreRoot}'. {_governor.DescribeHolder()}");
+                }
+
                 // A store import writes into a SHARED family. store_meta.binary_version is family-wide, so an
                 // older bundled extractor importing here would take the family backwards for every member view.
                 // Gate the write the same way IndexerService gates the lease. Skip the gate when the family
                 // carries no version yet: that is a genuine first import and nothing can go backwards from it.
+                //
+                // Read the floor AFTER admission, never before. Admission can wait minutes, and a sibling
+                // worktree publishing a newer generation inside that wait would leave this process importing on
+                // a stale approval. This narrows the window to the import itself; it cannot close it, because
+                // the invariant is family-wide while every lock Miller holds here is workspace-wide. Closing it
+                // fully needs the comparison inside julie-extract under the family writer lease.
                 if (!StoreArtifactVersionReader.TryReadFamilyWriterFloor(
                         binding, out string? familyVersion, out FamilyStoreReadException? unreadableFamily))
                 {
@@ -1070,15 +1085,6 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                             $"'{binding.StoreRoot}': {writerVerdict.Reason}. Upgrade Miller, or set " +
                             $"MILLER_ALLOW_EXTRACTOR_DOWNGRADE=1 to override.");
                     }
-                }
-
-                using ScanGovernorAdmission? admission =
-                    AcquireBootstrapScanAdmission(canonicalRoot, "store-bootstrap");
-                if (admission is null)
-                {
-                    throw new ScanAdmissionTimeoutException(
-                        $"Timed out waiting for machine-wide scan admission to initialize family store " +
-                        $"'{binding.StoreRoot}'. {_governor.DescribeHolder()}");
                 }
 
                 PersistedScanFailurePolicy failurePolicy =

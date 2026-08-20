@@ -531,6 +531,72 @@ public sealed class JunitTestArtifactImporterTests : IDisposable
     /// A theory whose data cannot be enumerated up front: ONE case for the whole method, so its display
     /// name carries no arguments and its collapsed key has exactly one claimant.
     /// </summary>
+    /// <summary>
+    /// The remaining false-green path, closed. When xUnit truncates several theory rows to ONE display name,
+    /// discovery mints one case for all of them, so every row lands on the same result id. Writing them in
+    /// order let the LAST row win, and a green row after a red one published a false green. The rows are now
+    /// folded worst-wins before they reach the store.
+    /// </summary>
+    [Fact]
+    public void A_green_row_cannot_overwrite_a_red_sibling_that_shares_its_result_id()
+    {
+        ContinuousTestResult Row(string status, string? failure) => new(
+            Id: "result:shared",
+            WorkspaceId: "ws:1",
+            TestCaseId: "case:truncated-theory",
+            TestRunId: "run:1",
+            Status: status,
+            ResultRevision: "1",
+            IndexIdentity: "gen-1",
+            Revision: 1,
+            DurationSeconds: 0.1,
+            FailureSummary: failure,
+            SourceArtifactId: "artifact:1",
+            Metadata: new Dictionary<string, object?>());
+
+        IReadOnlyList<ContinuousTestResult> redThenGreen = JunitTestArtifactImporter.MergeWorstWins(
+            [Row("failed", "row 2 expected 4"), Row("passed", null)]);
+        IReadOnlyList<ContinuousTestResult> greenThenRed = JunitTestArtifactImporter.MergeWorstWins(
+            [Row("passed", null), Row("failed", "row 2 expected 4")]);
+
+        // One row survives, it is the red one, and it keeps the text that names the failing data row —
+        // whichever order the artifact listed them in.
+        ContinuousTestResult first = Assert.Single(redThenGreen);
+        ContinuousTestResult second = Assert.Single(greenThenRed);
+        Assert.Equal("failed", first.Status);
+        Assert.Equal("failed", second.Status);
+        Assert.Equal("row 2 expected 4", first.FailureSummary);
+        Assert.Equal("row 2 expected 4", second.FailureSummary);
+    }
+
+    /// <summary>
+    /// The fold must not collapse rows that legitimately differ: distinct result ids stay distinct, and their
+    /// order is preserved so the stored run reads the way the artifact listed it.
+    /// </summary>
+    [Fact]
+    public void Rows_with_distinct_result_ids_are_left_alone_and_keep_their_order()
+    {
+        ContinuousTestResult Row(string id, string status) => new(
+            Id: id,
+            WorkspaceId: "ws:1",
+            TestCaseId: "case:" + id,
+            TestRunId: "run:1",
+            Status: status,
+            ResultRevision: "1",
+            IndexIdentity: "gen-1",
+            Revision: 1,
+            DurationSeconds: 0.1,
+            FailureSummary: null,
+            SourceArtifactId: "artifact:1",
+            Metadata: new Dictionary<string, object?>());
+
+        IReadOnlyList<ContinuousTestResult> merged = JunitTestArtifactImporter.MergeWorstWins(
+            [Row("result:a", "passed"), Row("result:b", "failed"), Row("result:c", "skipped")]);
+
+        Assert.Equal(["result:a", "result:b", "result:c"], merged.Select(row => row.Id));
+        Assert.Equal(["passed", "failed", "skipped"], merged.Select(row => row.Status));
+    }
+
     private static ContinuousTestCase DelayEnumeratedTheoryCase() =>
         new(
             Id: "xunit:" + TheoryClass + "." + TheoryMethod,
