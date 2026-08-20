@@ -180,6 +180,8 @@ This task is verifiable on its own even before Task 4, because the mapping is ex
 **Acceptance criteria:**
 - [x] A JUnit artifact holding three rows of one theory resolves to three distinct case ids.
 - [x] A red data row is not overwritten by a green sibling of the same theory.
+      (Held only after the codex review: xUnit truncates long theory display names, so several rows can
+      still land on ONE case id. Artifact rows are now folded worst-wins per run — commit bd9900ef.)
 - [x] A provider row that carries no per-row display name still resolves through the selector fallback.
 - [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
