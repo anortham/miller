@@ -141,6 +141,31 @@ public sealed class StoreArtifactVersionReaderTests
     }
 
     /// <summary>
+    /// Proves: a family whose store root does not exist YET is a first import, not a corruption. This is the
+    /// ordinary path for every brand-new workspace, and for the legacy-artifact migration. The store root is
+    /// canonicalized before any typed check runs, so a missing directory arrives as a raw
+    /// DirectoryNotFoundException; reading that as unreadable made bootstrap refuse to create any family at
+    /// all, which broke four store scale tests that had nothing to do with unpublished views.
+    /// </summary>
+    [Fact]
+    public void TryReadFamilyWriterFloorTreatsAnAbsentStoreRootAsAFirstImport()
+    {
+        using var fixture = StorePointerFixture.Create(binaryVersion: "2.34.4");
+        System.IO.Directory.Delete(fixture.StoreRoot, recursive: true);
+
+        bool comparable = StoreArtifactVersionReader.TryReadFamilyWriterFloor(
+            fixture.Binding,
+            out string? familyVersion,
+            out FamilyStoreReadException? unreadable);
+
+        Assert.True(comparable);
+        Assert.Null(familyVersion);
+        Assert.Null(unreadable);
+        // And the verdict that follows must be eligible, whatever this Miller bundles.
+        Assert.True(LeadershipEligibility.Evaluate("2.30.0", familyVersion, allowDowngrade: false).Eligible);
+    }
+
+    /// <summary>
     /// A serving family store whose <c>views</c> table omits the pointer's view id, plus the matching
     /// <c>.miller/store.json</c>. This is the reported wedge: a view PLANNED in the registry and never
     /// PUBLISHED in the family store.

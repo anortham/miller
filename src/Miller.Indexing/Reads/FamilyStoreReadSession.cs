@@ -269,6 +269,17 @@ public sealed class FamilyStoreReadSession :
         {
             throw;
         }
+        catch (Exception ex) when (ex is DirectoryNotFoundException or FileNotFoundException)
+        {
+            // The store root itself is not there. PathCanonicalizer.CanonicalizeRoot raises this before any
+            // of the typed checks below it run, so a family that has never been written reaches here rather
+            // than as StoreMissing. It is NOT corruption: a first import creates the store root, and the
+            // writer gate must let that through or no workspace could ever create its family.
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.StoreMissing,
+                "The family store root does not exist yet.",
+                ex);
+        }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or SqliteException or FormatException)
         {
