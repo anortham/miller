@@ -133,7 +133,7 @@ public sealed class RevisionFactCacheMemoryTests(ITestOutputHelper output)
             null,
             generation,
             "full",
-            "2.34.1",
+            "2.34.4",
             "snapshot",
             "1",
             "2",

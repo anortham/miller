@@ -107,7 +107,7 @@ internal static class QueryTimeResolutionParity
         reader.Close();
 
         string familyId = ReadMeta(connection, "family_id") ?? "snapshot";
-        string binary = ReadMeta(connection, "binary_version") ?? "2.34.1";
+        string binary = ReadMeta(connection, "binary_version") ?? "2.34.4";
         string storeDir = Path.GetDirectoryName(storePath) ?? storePath;
         return new StoreVisibility(
             familyId,
