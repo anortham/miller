@@ -10,7 +10,13 @@ namespace Miller.Testing;
 /// </summary>
 public static class CtSchema
 {
-    public const int SchemaVersion = 1;
+    /// <summary>
+    /// Version 2 dropped <c>UNIQUE (workspace_id, selector, source)</c> from <c>test_cases</c>.
+    /// The number is stamped in TWO places that must always agree: <c>meta.schema_version</c>, which
+    /// this class has always written, and <c>PRAGMA user_version</c>, which it did not write before
+    /// version 2 and which therefore reads 0 on every file built by version 1.
+    /// </summary>
+    public const int SchemaVersion = 2;
     public const string DbFileName = "ct.db";
     public const string MillerDirectoryName = ".miller";
 
@@ -30,6 +36,8 @@ public static class CtSchema
             UNIQUE (workspace_id, name, source)
         );
 
+        -- No UNIQUE over (workspace_id, selector, source): one xUnit `-method` selector legitimately
+        -- runs every data row of a theory, so many cases share it. Row identity is the primary key.
         CREATE TABLE IF NOT EXISTS test_cases (
             id TEXT PRIMARY KEY,
             workspace_id TEXT NOT NULL,
@@ -46,8 +54,7 @@ public static class CtSchema
             source TEXT NOT NULL,
             confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            provenance_json TEXT NOT NULL DEFAULT '{}',
-            UNIQUE (workspace_id, selector, source)
+            provenance_json TEXT NOT NULL DEFAULT '{}'
         );
 
         CREATE TABLE IF NOT EXISTS run_artifacts (
@@ -399,10 +406,233 @@ public static class CtSchema
             ddl.ExecuteNonQuery();
         }
 
+        Migrate(connection);
+
         using var meta = connection.CreateCommand();
-        meta.CommandText = "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', $v);";
+        // Advance-only. A file written by a NEWER Miller keeps its own number, because that number is
+        // what tells this binary to refuse the file instead of writing an older shape into it.
+        meta.CommandText = """
+            INSERT INTO meta(key, value) VALUES ('schema_version', $v)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                WHERE CAST(excluded.value AS INTEGER) > CAST(meta.value AS INTEGER);
+            """;
         meta.Parameters.AddWithValue("$v", SchemaVersion.ToString(CultureInfo.InvariantCulture));
         meta.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Brings a file built by an older schema up to <see cref="SchemaVersion"/>.
+    ///
+    /// <para>Runs after the DDL, so <c>test_cases</c> is guaranteed to exist: on a fresh file the DDL
+    /// just built the current shape, and on an existing file <c>CREATE TABLE IF NOT EXISTS</c> left the
+    /// old shape alone. Each step is gated on the file's own <c>PRAGMA user_version</c>, so a repeat
+    /// call does nothing.</para>
+    /// </summary>
+    private static void Migrate(SqliteConnection connection)
+    {
+        if (ReadUserVersion(connection) >= SchemaVersion)
+            return;
+
+        DropTestCasesSelectorUniqueness(connection);
+    }
+
+    /// <summary>
+    /// Rebuilds <c>test_cases</c> without <c>UNIQUE (workspace_id, selector, source)</c>, following
+    /// SQLite's documented table-rebuild procedure.
+    ///
+    /// <para><b>Foreign keys must be OFF before the transaction opens.</b> SIX tables reference
+    /// <c>test_cases(id)</c> — <c>test_results</c>, <c>test_links</c>, <c>test_quality_findings</c>,
+    /// <c>ct_test_states</c>, <c>ct_case_fresh_watermarks</c>, <c>ct_coverage_maps</c> — and every one
+    /// of them declares <c>ON DELETE CASCADE</c>. With keys enabled the <c>DROP TABLE</c> empties all
+    /// six, silently, in a migration that then reports success. <see cref="Apply"/> turns keys ON as
+    /// its first statement, and <c>PRAGMA foreign_keys</c> is a NO-OP inside a transaction, so the
+    /// switch has to happen out here.</para>
+    ///
+    /// <para>The <c>DROP</c> leaves those six schemas naming a table that does not exist for the width
+    /// of the transaction. That is what the rename immediately repairs, and what
+    /// <c>PRAGMA foreign_key_check</c> confirms before the commit. A non-empty check ABORTS the
+    /// migration rather than committing a file whose references no longer resolve.</para>
+    /// </summary>
+    private static void DropTestCasesSelectorUniqueness(SqliteConnection connection)
+    {
+        if (!HasSelectorUniqueIndex(connection))
+        {
+            // A fresh file, or one an earlier run already rebuilt. Only the stamp is owed.
+            WriteUserVersion(connection);
+            return;
+        }
+
+        Execute(connection, "PRAGMA foreign_keys=OFF;");
+        try
+        {
+            // Read the switch back. PRAGMA foreign_keys is a NO-OP inside a transaction, so a caller
+            // that opened one before calling Apply would leave keys ON and the DROP below would
+            // cascade-delete every referencing row. Fail loudly instead of losing the data quietly.
+            if (ForeignKeysEnabled(connection))
+            {
+                throw new InvalidOperationException(
+                    "ct.db migration needs foreign keys OFF, and the switch did not take. Apply must " +
+                    "not be called while a transaction is open on the connection: the test_cases " +
+                    "rebuild would cascade-delete every row that references it.");
+            }
+
+            long casesBefore = RowCount(connection, "test_cases");
+
+            using SqliteTransaction transaction = connection.BeginTransaction();
+            Execute(connection, $$"""
+                DROP TABLE IF EXISTS {{RebuildTableName}};
+
+                CREATE TABLE {{RebuildTableName}} (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    file_path TEXT,
+                    content_hash TEXT,
+                    symbol_name TEXT,
+                    symbol_path TEXT,
+                    suite_id TEXT REFERENCES test_suites(id) ON DELETE SET NULL,
+                    name TEXT NOT NULL,
+                    qualified_name TEXT NOT NULL,
+                    selector TEXT NOT NULL,
+                    framework TEXT,
+                    role TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    provenance_json TEXT NOT NULL DEFAULT '{}'
+                );
+
+                INSERT INTO {{RebuildTableName}} ({{TestCaseColumns}})
+                SELECT {{TestCaseColumns}} FROM test_cases;
+
+                DROP TABLE test_cases;
+                ALTER TABLE {{RebuildTableName}} RENAME TO test_cases;
+
+                CREATE INDEX IF NOT EXISTS idx_test_cases_workspace_id ON test_cases(workspace_id);
+                CREATE INDEX IF NOT EXISTS idx_test_cases_file_path ON test_cases(file_path);
+                """);
+
+            WriteUserVersion(connection);
+
+            long casesAfter = RowCount(connection, "test_cases");
+            if (casesAfter != casesBefore)
+            {
+                transaction.Rollback();
+                throw new InvalidOperationException(
+                    $"ct.db migration copied {casesAfter.ToString(CultureInfo.InvariantCulture)} of " +
+                    $"{casesBefore.ToString(CultureInfo.InvariantCulture)} test cases; the file was not changed.");
+            }
+
+            if (HasForeignKeyViolation(connection))
+            {
+                transaction.Rollback();
+                throw new InvalidOperationException(
+                    "ct.db migration to schema version " + SchemaVersion.ToString(CultureInfo.InvariantCulture) +
+                    " left unresolved references; the file was not changed.");
+            }
+
+            transaction.Commit();
+        }
+        finally
+        {
+            Execute(connection, "PRAGMA foreign_keys=ON;");
+        }
+    }
+
+    private const string RebuildTableName = "test_cases_migration_new";
+
+    /// <summary>
+    /// Named on purpose. A <c>SELECT *</c> copy would silently reorder or drop a column if the two
+    /// table definitions ever drifted.
+    /// </summary>
+    private const string TestCaseColumns =
+        "id, workspace_id, file_path, content_hash, symbol_name, symbol_path, suite_id, name, " +
+        "qualified_name, selector, framework, role, source, confidence, metadata_json, provenance_json";
+
+    /// <summary>
+    /// True when <c>test_cases</c> still carries a UNIQUE index over
+    /// (<c>workspace_id</c>, <c>selector</c>, <c>source</c>). Read from the index catalogue rather than
+    /// by matching the table's SQL text, because <c>ALTER TABLE ... RENAME</c> rewrites that text.
+    /// </summary>
+    private static bool HasSelectorUniqueIndex(SqliteConnection connection)
+    {
+        var uniqueIndexes = new List<string>();
+        using (var list = connection.CreateCommand())
+        {
+            list.CommandText = "PRAGMA index_list(test_cases);";
+            using var reader = list.ExecuteReader();
+            int nameOrdinal = reader.GetOrdinal("name");
+            int uniqueOrdinal = reader.GetOrdinal("unique");
+            while (reader.Read())
+            {
+                if (reader.GetInt64(uniqueOrdinal) != 0)
+                    uniqueIndexes.Add(reader.GetString(nameOrdinal));
+            }
+        }
+
+        foreach (string indexName in uniqueIndexes)
+        {
+            using var info = connection.CreateCommand();
+            info.CommandText = "SELECT name FROM pragma_index_info($index) ORDER BY seqno;";
+            info.Parameters.AddWithValue("$index", indexName);
+            using var reader = info.ExecuteReader();
+            var columns = new List<string>();
+            while (reader.Read())
+                columns.Add(reader.IsDBNull(0) ? string.Empty : reader.GetString(0));
+            if (columns is ["workspace_id", "selector", "source"])
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ForeignKeysEnabled(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA foreign_keys;";
+        object? raw = command.ExecuteScalar();
+        return raw is not (null or DBNull) && Convert.ToInt64(raw, CultureInfo.InvariantCulture) != 0L;
+    }
+
+    private static long RowCount(SqliteConnection connection, string table)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {table};";
+        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private static bool HasForeignKeyViolation(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA foreign_key_check;";
+        using var reader = command.ExecuteReader();
+        return reader.Read();
+    }
+
+    private static long ReadUserVersion(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA user_version;";
+        object? raw = command.ExecuteScalar();
+        return raw is null or DBNull ? 0L : Convert.ToInt64(raw, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Advance-only, for the same reason <see cref="Apply"/>'s <c>meta</c> stamp is: a file written by
+    /// a newer Miller must keep its own number. <c>PRAGMA user_version</c> takes no parameter, so the
+    /// value is a compile-time constant rather than user input.
+    /// </summary>
+    private static void WriteUserVersion(SqliteConnection connection)
+    {
+        if (ReadUserVersion(connection) >= SchemaVersion)
+            return;
+        Execute(connection, $"PRAGMA user_version = {SchemaVersion.ToString(CultureInfo.InvariantCulture)};");
+    }
+
+    private static void Execute(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
     }
 
     public static int? ReadSchemaVersion(SqliteConnection connection)

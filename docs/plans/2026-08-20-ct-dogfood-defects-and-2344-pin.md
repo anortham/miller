@@ -233,12 +233,43 @@ proves it against a real artifact.
 The runner's own `ID` is not usable — the comment at `DotnetTestProvider.cs:1580-1581` records that it hashes the assembly path and changes with every build generation. **This sub-task needs judgment, so state the choice in the handoff rather than picking silently.** The plan-consistent option is to disambiguate a repeated display name with a stable ordinal, assigned by position among the rows that share that display name, after sorting the discovery output deterministically. That keeps the id stable across builds as long as the theory's data rows keep their order and count. Record the weakness plainly: adding or removing a data row in the middle of a truncated-name theory renumbers the rows after it, and those cases lose their history.
 
 **Acceptance criteria:**
-- [ ] Storing an inventory in which two cases share one selector succeeds, and both rows are present afterwards.
-- [ ] An existing `ct.db` built with the old schema is migrated in place, and its `test_results`, `ct_test_states`, and `ct_case_fresh_watermarks` rows survive.
-- [ ] `CtSchemaTests` asserts the new `user_version` and the absence of the selector unique index.
-- [ ] Two cases whose display names are identical after xUnit truncation both survive storage.
-- [ ] The migration is proven on a **copy** of the real `C:\source\miller\.miller\ct.db`, not only on a fixture.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] Storing an inventory in which two cases share one selector succeeds, and both rows are present afterwards.
+- [x] An existing `ct.db` built with the old schema is migrated in place, and its `test_results`, `ct_test_states`, and `ct_case_fresh_watermarks` rows survive.
+- [x] `CtSchemaTests` asserts the new `user_version` and the absence of the selector unique index.
+- [ ] ~~Two cases whose display names are identical after xUnit truncation both survive storage.~~
+      **NOT met, deliberately. See 4c below.**
+- [x] The migration is proven on a **copy** of the real `C:\source\miller\.miller\ct.db`, not only on a fixture.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
+
+**Live migration result**, on a copy of the real file, through the real `CtSchema.Apply`:
+`test_cases` 6,108 -> 6,108; `test_results` 5,754 -> 5,754; `ct_test_states` 6,108 -> 6,108;
+`test_links`, `test_quality_findings`, `ct_case_fresh_watermarks`, `ct_coverage_maps` all 0 -> 0.
+`user_version` 0 -> 2, `meta.schema_version` 1 -> 2, `foreign_key_check` 0 rows, `integrity_check` ok,
+112 ms. **Negative control: the same rebuild with foreign keys ON destroyed 5,754 + 6,108 rows.**
+
+**4c was NOT implemented, and the plan's prescription for it is WRONG.** Verified by the lead, not
+just asserted by the worker:
+
+- The RUN mints its case id from the display name — `DotnetTestProvider.cs:1734`,
+  `var testCaseId = XunitTestCaseId(displayName);`. An ordinal added to the INVENTORY id therefore
+  matches nothing the run emits.
+- Those inventory cases would then never resolve, so they stay `Unknown`.
+- `ContinuousTestStatusSummary.ResolveVerdict` returns `Unknown` whenever `counts.Unknown > 0`
+  (`:145`). Two unresolvable cases would pin the WHOLE workspace verdict at Unknown, permanently.
+
+So the ordinal buys inventory completeness and costs result attribution. Measured scale: 4a unblocks
+**1,464** rows; the 4c defect is **2** rows. Trading a working verdict for two rows is a bad deal.
+
+**Follow-up, not scheduled here: a worst-wins result merge.** When several artifact rows resolve to
+one case id in one run, keep the WORST status rather than the last writer's. That closes the real
+harm — a red row masked by a green sibling — for truncation-identical names. The lead verified it is
+safe: `ScheduleFlakyRetries` marks cases stale and re-enqueues them into a NEW run rather than
+reusing the run id, so a worst-wins rule on `(workspace, case, run)` cannot pin a flaky test red.
+
+**Two post-conditions the worker added beyond the plan, both kept.** The migration reads
+`PRAGMA foreign_keys` BACK after turning it off — a silent no-op there (which is what happens if
+`Apply` is ever called with a transaction already open) means total data loss — and it re-counts rows
+and rolls back on mismatch.
 
 ---
 

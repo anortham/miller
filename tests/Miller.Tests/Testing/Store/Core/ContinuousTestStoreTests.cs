@@ -472,6 +472,34 @@ public sealed class ContinuousTestStoreTests : IDisposable
         Assert.Contains(names, name => name.Contains("Watermark", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// One xUnit <c>-method</c> selector runs every data row of a theory, so many cases legitimately
+    /// share one selector. <c>test_cases</c> used to declare <c>UNIQUE (workspace_id, selector, source)</c>,
+    /// so the second row raised SQLite error 19. Discovery stores the whole inventory in ONE transaction,
+    /// so that one collision rolled back every case, not just the colliding one.
+    /// </summary>
+    [Fact]
+    public void One_transaction_stores_every_case_of_a_theory_that_shares_one_selector()
+    {
+        const string selector = "-method Suite.Theory";
+        using var store = new ContinuousTestStore(_dbPath);
+
+        store.Transaction(() =>
+        {
+            store.PutTestCase(Case("test:row-1") with { Selector = selector });
+            store.PutTestCase(Case("test:row-2") with { Selector = selector });
+            store.PutTestCase(Case("test:row-3") with { Selector = selector });
+            store.PutTestCase(Case("test:solo"));
+        });
+
+        IReadOnlyList<ContinuousTestCase> rows = store.ListTestCases(Workspace);
+        Assert.Equal(4, rows.Count);
+        Assert.Equal(
+            ["test:row-1", "test:row-2", "test:row-3", "test:solo"],
+            rows.Select(row => row.Id).OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Equal(3, rows.Count(row => string.Equals(row.Selector, selector, StringComparison.Ordinal)));
+    }
+
     private ContinuousTestStore CreateStoreWithTests(params string[] testCaseIds)
     {
         var store = new ContinuousTestStore(_dbPath);
