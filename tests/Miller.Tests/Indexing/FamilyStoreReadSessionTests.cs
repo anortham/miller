@@ -157,6 +157,60 @@ public sealed class FamilyStoreReadSessionTests
         Assert.Equal(FamilyStoreReadFailure.FamilyMismatch, error.Failure);
     }
 
+    /// <summary>
+    /// Proves: the family-scope version read is not a validation bypass. It runs every check Probe runs —
+    /// family id, schema, format epoch, serving state, reader floor — and stops only before the per-view
+    /// manifest lookup, so it returns the byte-identical string a healthy Probe returns.
+    /// </summary>
+    [Fact]
+    public void ReadFamilyBinaryVersionAppliesTheSameStoreIntegrityGateAsProbe()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreFamilyBinding unpublished = fixture.Binding with { ViewId = "view-never-published" };
+
+        Assert.Equal("2.31.0", FamilyStoreReadSession.ReadFamilyBinaryVersion(unpublished));
+        Assert.Equal(
+            FamilyStoreReadSession.Probe(fixture.Binding).BinaryVersion,
+            FamilyStoreReadSession.ReadFamilyBinaryVersion(unpublished));
+
+        FamilyStoreReadException mismatch = Assert.Throws<FamilyStoreReadException>(() =>
+            FamilyStoreReadSession.ReadFamilyBinaryVersion(
+                unpublished with { FamilyId = Guid.Parse("22222222-2222-4222-8222-222222222222") }));
+        Assert.Equal(FamilyStoreReadFailure.FamilyMismatch, mismatch.Failure);
+
+        UpdateStoreMetadata(fixture, "store_sqlite_schema_version", "99");
+        FamilyStoreReadException schema = Assert.Throws<FamilyStoreReadException>(() =>
+            FamilyStoreReadSession.ReadFamilyBinaryVersion(unpublished));
+        Assert.Equal(FamilyStoreReadFailure.SchemaIncompatible, schema.Failure);
+    }
+
+    /// <summary>
+    /// Proves: recovering a planned view never lets a READ serve a view the store has not published. A
+    /// Planned binding is refused outright, and a Ready binding on an absent view id still raises the typed
+    /// ViewNotFound.
+    /// </summary>
+    [Fact]
+    public void AnUnpublishedViewIsStillUnreadable()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreFamilyBinding unpublished = fixture.Binding with { ViewId = "view-never-published" };
+
+        FamilyStoreReadException planned = Assert.Throws<FamilyStoreReadException>(() =>
+            FamilyStoreReadSession.Open(
+                unpublished with { State = StoreBindingState.Planned },
+                "workspace-a"));
+        Assert.Equal(FamilyStoreReadFailure.BindingNotReady, planned.Failure);
+
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, unpublished);
+        FamilyStoreReadException absent = Assert.Throws<FamilyStoreReadException>(() =>
+            WorkspaceReadSessionFactory.Probe(
+                Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"),
+                fixture.Binding.WorkspaceRoot,
+                "workspace-a",
+                storeEnabled: true));
+        Assert.Equal(FamilyStoreReadFailure.ViewNotFound, absent.Failure);
+    }
+
     [Fact]
     public void MissingExtractionIdentityEpochRefusesBeforeBuildingCompatibilityViews()
     {

@@ -328,8 +328,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         WorkspaceRegistry registry,
         string workspaceId,
         string canonicalRoot,
-        bool rootReplacementObserved = false,
-        bool recoverUnpublishedView = false)
+        bool rootReplacementObserved = false)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
@@ -344,8 +343,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             rootReplacementObserved,
             git,
             WorkspaceRootIdentity.CaptureDirectoryCreationTime(git?.CommonDir),
-            millerHome,
-            recoverUnpublishedView);
+            millerHome);
     }
 
     private static StoreFamilyBinding ResolveBinding(
@@ -355,8 +353,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         bool rootReplacementObserved,
         GitWorktreeLayout? git,
         DateTimeOffset? commonDirCreatedAt,
-        string millerHome,
-        bool recoverUnpublishedView = false)
+        string millerHome)
     {
         var resolver = new StoreFamilyResolver(registry, Path.Combine(millerHome, "stores"));
         StoreFamilyBinding binding = resolver.ResolveOrCreate(new WorkspaceRootFacts(
@@ -365,8 +362,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             git?.CommonDir,
             commonDirCreatedAt,
             WorkspaceRootIdentity.Capture(canonicalRoot),
-            rootReplacementObserved),
-            recoverUnpublishedView: recoverUnpublishedView);
+            rootReplacementObserved));
         return binding;
     }
 
@@ -430,7 +426,12 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             return ApplyIncrementalFileDelta(before, level, delta, jobs);
         }
 
-        string? fromArtifact = before is null
+        // A vanished view must NOT be republished from the workspace's legacy symbols.db. A seeded import emits
+        // --from-artifact with no --level and no scan controls (JulieStoreClient.BuildArguments), so it is a
+        // pure artifact ingest with zero tree extraction — a months-old artifact would come back reporting
+        // itself fresh. A lost view owes a full re-extract, and this branch already runs one. A never-published
+        // view keeps the legacy-to-store seed, which is what that seed exists for.
+        string? fromArtifact = before is null && _binding.Replan != StoreViewReplan.VanishedFromCatalog
             ? SelectCompatibleSeedArtifact(_fromArtifact)
             : null;
         StoreRequestControls controls = Controls(ImportFingerprint(level, fromArtifact), StoreOperation.Import);

@@ -688,10 +688,19 @@ public sealed class CrossWorkspaceRefreshService
         StoreFamilyBinding binding = StoreWorkspaceCoordinator.ResolveBinding(
             _registry,
             row.WorkspaceId,
-            row.CanonicalRoot,
-            recoverUnpublishedView:
-                attempt.EffectiveIntent == ScanIntent.RootRebind &&
-                Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1");
+            row.CanonicalRoot);
+        // This is the dominant recovery path: miller refresh, the MCP workspace tool, the dashboard, and every
+        // cross-workspace read. It has no logger, so the recovery is recorded as a phase instead.
+        if (binding.Replan != StoreViewReplan.None)
+        {
+            _phaseSink.RecordSafely(
+                IndexerPhaseNames.StoreViewRecovery,
+                TimeSpan.Zero,
+                outcome: binding.Replan == StoreViewReplan.VanishedFromCatalog ? "vanished" : "never_published",
+                storeSequence: null,
+                didWork: false);
+        }
+
         StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.CreateWithPhaseSink(
             binding,
             row.WorkspaceId,

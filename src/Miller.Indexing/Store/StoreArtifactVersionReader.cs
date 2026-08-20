@@ -9,6 +9,12 @@ public sealed class StoreArtifactVersionReadException(string message, Exception?
 /// <summary>Reads the producer version from the serving family store for leadership eligibility.</summary>
 public static class StoreArtifactVersionReader
 {
+    private readonly record struct StoreVersionRead(
+        string? Version,
+        bool PointerPresent,
+        Exception? Failure,
+        bool MissingStoreRoot);
+
     public static string? TryRead(string? legacyDatabasePath)
     {
         return TryRead(legacyDatabasePath, out _);
@@ -38,42 +44,78 @@ public static class StoreArtifactVersionReader
         Func<string?, string?> legacyVersionReader)
     {
         ArgumentNullException.ThrowIfNull(legacyVersionReader);
-        (string? storeVersion, bool pointerPresent, Exception? failure, bool missingStoreRoot) =
-            ReadCore(legacyDatabasePath);
-        if (pointerPresent && failure is not null)
+        StoreVersionRead read = ReadCore(legacyDatabasePath);
+        if (read.PointerPresent && read.Failure is not null)
         {
-            if (missingStoreRoot)
+            if (read.MissingStoreRoot)
                 return legacyVersionReader(legacyDatabasePath);
             throw new StoreArtifactVersionReadException(
                 "The active family-store version is unreadable; refusing to claim leadership.",
-                failure);
+                read.Failure);
         }
 
-        return pointerPresent ? storeVersion : legacyVersionReader(legacyDatabasePath);
+        return read.PointerPresent ? read.Version : legacyVersionReader(legacyDatabasePath);
     }
 
     public static bool RequiresRootRebind(
         string? legacyDatabasePath,
         bool unreadableStoreRecoveryAllowed = false)
     {
-        (_, bool pointerPresent, Exception? failure, bool missingStoreRoot) = ReadCore(legacyDatabasePath);
-        return pointerPresent
-            && (missingStoreRoot || (unreadableStoreRecoveryAllowed && failure is not null));
+        StoreVersionRead read = ReadCore(legacyDatabasePath);
+        return read.PointerPresent
+            && (read.MissingStoreRoot || (unreadableStoreRecoveryAllowed && read.Failure is not null));
+    }
+
+    /// <summary>
+    /// The family producer version to compare BEFORE an import into an existing family. Returns false when the
+    /// store is unreadable for a reason that is NOT "no serving generation yet" — the caller must then refuse.
+    /// Returns true with a null <paramref name="familyVersion"/> when the family carries no comparable version
+    /// at all (no CURRENT, no generation, no store.db, no coord.db): that is a genuine first import, and
+    /// nothing can go backwards from it.
+    /// </summary>
+    public static bool TryReadFamilyWriterFloor(
+        StoreFamilyBinding binding,
+        out string? familyVersion,
+        out FamilyStoreReadException? unreadable)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        unreadable = null;
+        try
+        {
+            familyVersion = FamilyStoreReadSession.ReadFamilyBinaryVersion(binding);
+            return true;
+        }
+        catch (FamilyStoreReadException ex) when (
+            ex.Failure is FamilyStoreReadFailure.CurrentMissing
+                or FamilyStoreReadFailure.GenerationMissing
+                or FamilyStoreReadFailure.StoreMissing
+                or FamilyStoreReadFailure.CoordinatorMissing)
+        {
+            familyVersion = null;
+            return true;
+        }
+        catch (FamilyStoreReadException ex)
+        {
+            // SchemaIncompatible, ReaderFloorIncompatible, FamilyMismatch, CurrentMalformed, Corrupt. Each one
+            // says the store is beyond this Miller or is damaged. Do NOT read them as "no version".
+            familyVersion = null;
+            unreadable = ex;
+            return false;
+        }
     }
 
     public static string? TryRead(string? legacyDatabasePath, out bool pointerPresent)
     {
-        (string? version, bool foundPointer, _, _) = ReadCore(legacyDatabasePath);
-        pointerPresent = foundPointer;
-        return version;
+        StoreVersionRead read = ReadCore(legacyDatabasePath);
+        pointerPresent = read.PointerPresent;
+        return read.Version;
     }
 
-    private static (string? Version, bool PointerPresent, Exception? Failure, bool MissingStoreRoot) ReadCore(
-        string? legacyDatabasePath)
+    private static StoreVersionRead ReadCore(string? legacyDatabasePath)
     {
         bool pointerPresent = false;
         if (string.IsNullOrWhiteSpace(legacyDatabasePath))
-            return (null, false, null, false);
+            return new StoreVersionRead(null, false, null, false);
 
         try
         {
@@ -85,35 +127,61 @@ public static class StoreArtifactVersionReader
             if (!StoreWorkspacePointer.Exists(workspaceRoot))
             {
                 pointerPresent = false;
-                return (null, false, null, false);
+                return new StoreVersionRead(null, false, null, false);
             }
             StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(workspaceRoot);
             if (pointer is null)
             {
                 return pointerPresent
-                    ? (null, true, new IOException("The active family-store pointer disappeared while it was read."), false)
-                    : (null, false, null, false);
+                    ? new StoreVersionRead(
+                        null,
+                        true,
+                        new IOException("The active family-store pointer disappeared while it was read."),
+                        false)
+                    : new StoreVersionRead(null, false, null, false);
             }
 
             if (StoreRootIsMissing(pointer.StoreRoot))
-                return (null, true, new DirectoryNotFoundException(pointer.StoreRoot), true);
+                return new StoreVersionRead(null, true, new DirectoryNotFoundException(pointer.StoreRoot), true);
 
+            // The pointer round trip is lossy: it records no binding state, so every rebuild here hard-codes
+            // Ready. That stays honest because the per-view read is TRIED first and only the typed
+            // ViewNotFound falls back below.
             var binding = new StoreFamilyBinding(
                 pointer.FamilyId,
                 pointer.StoreRoot,
                 pointer.ViewId,
                 pointer.WorkspaceRoot,
                 StoreBindingState.Ready);
-            WorkspaceFreshnessProbe probe = FamilyStoreReadSession.Probe(binding);
-            return (probe.BinaryVersion ?? throw new FamilyStoreReadException(
-                FamilyStoreReadFailure.Corrupt,
-                "The family-store freshness probe omitted binary_version."), true, null, false);
+            try
+            {
+                WorkspaceFreshnessProbe probe = FamilyStoreReadSession.Probe(binding);
+                return new StoreVersionRead(
+                    probe.BinaryVersion ?? throw new FamilyStoreReadException(
+                        FamilyStoreReadFailure.Corrupt,
+                        "The family-store freshness probe omitted binary_version."),
+                    PointerPresent: true,
+                    Failure: null,
+                    MissingStoreRoot: false);
+            }
+            catch (FamilyStoreReadException ex) when (ex.Failure == FamilyStoreReadFailure.ViewNotFound)
+            {
+                // The pointer names a view the serving generation does not carry: never imported, or lost. Do
+                // NOT report "no artifact version" — that would let an OLDER extractor claim leadership and
+                // write into a family whose store was produced by a NEWER one. store_meta.binary_version is
+                // family-wide, so the family's version is the correct comparison target here.
+                return new StoreVersionRead(
+                    FamilyStoreReadSession.ReadFamilyBinaryVersion(binding),
+                    PointerPresent: true,
+                    Failure: null,
+                    MissingStoreRoot: false);
+            }
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException
                 or NotSupportedException or FormatException or SqliteException)
         {
-            return (null, pointerPresent, ex, false);
+            return new StoreVersionRead(null, pointerPresent, ex, false);
         }
     }
 

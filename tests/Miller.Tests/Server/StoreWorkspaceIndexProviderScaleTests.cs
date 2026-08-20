@@ -21,11 +21,17 @@ namespace Miller.Tests.Server;
 [Collection(Miller.Tests.Indexing.SqliteVecEnvironment.Name)]
 public sealed class StoreWorkspaceIndexProviderScaleTests
 {
+    /// <summary>
+    /// Proves end to end that the planned-but-unpublished wedge is gone on the one-shot CLI path, with NO
+    /// environment override. The store here is written by the same pinned binary, so the family version equals
+    /// the pin and the verdict is eligible; before this change the version was unreadable, the gate returned
+    /// IneligibleExtractor, and MILLER_ALLOW_EXTRACTOR_DOWNGRADE=1 was the only escape.
+    /// </summary>
     [Fact]
-    public void ExplicitDowngradeOverrideRecoversAnUnreadableUnpublishedStore()
+    public void UnpublishedViewRecoversWithoutTheDowngradeOverride()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
-        string directory = Path.Combine(Path.GetTempPath(), "miller-store-override-recovery-" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), "miller-store-unpublished-recovery-" + Guid.NewGuid().ToString("N"));
         string root = Path.Combine(directory, "root");
         string home = Path.Combine(directory, "home");
         string artifact = Path.Combine(root, ".miller", "symbols.db");
@@ -68,9 +74,11 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
             Directory.EnumerateFiles(binding.StoreRoot, "store.db", SearchOption.AllDirectories),
             File.Exists);
         Assert.False(StoreArtifactVersionReader.RequiresRootRebind(artifact));
-        StoreArtifactVersionReadException unreadable = Assert.Throws<StoreArtifactVersionReadException>(() =>
+        // The pointer names a view the serving catalog does not carry. The leadership version is still
+        // readable, because store_meta.binary_version is FAMILY-scoped.
+        Assert.Equal(
+            MillerExtractContract.PinnedJulieExtractVersion,
             StoreArtifactVersionReader.ReadForLeadership(artifact, ExtractBinaryVersionReader.TryRead));
-        Assert.Contains("no view", unreadable.InnerException?.Message, StringComparison.OrdinalIgnoreCase);
 
         string? priorStoreMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
         string? priorOverride = Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE");
@@ -85,13 +93,6 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 ScanGovernor.Disabled(),
                 storeEnabled: static () => true);
 
-            WorkspaceRefreshResult refused = refresh.Refresh(workspaceId, bypassBackoff: true);
-
-            Assert.Equal(WorkspaceRefreshStatus.IneligibleExtractor, refused.Status);
-            Assert.Throws<StoreArtifactVersionReadException>(() =>
-                StoreArtifactVersionReader.ReadForLeadership(artifact, ExtractBinaryVersionReader.TryRead));
-
-            Environment.SetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE", "1");
             WorkspaceRefreshResult recovered = refresh.Refresh(workspaceId, bypassBackoff: true);
 
             Assert.True(WorkspaceRefreshStatus.Refreshed == recovered.Status, recovered.Error);
@@ -114,6 +115,263 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
             SqliteConnection.ClearAllPools();
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Proves end to end that the daemon recovers a view PLANNED in the registry and never PUBLISHED in the
+    /// family store. Bootstrap scans, the view reaches the serving catalog, and the binding becomes Ready —
+    /// so "workspace remove plus workspace open" is no longer the only escape. This is the only test that
+    /// covers the ResolveBinding call inside RunStoreBootstrap.
+    /// </summary>
+    [Fact]
+    public async Task BootstrapImportsAViewThatTheStoreNeverPublished()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "miller-store-bootstrap-unpublished-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(directory, "root");
+        string home = Path.Combine(directory, "home");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(home);
+        File.WriteAllText(
+            Path.Combine(root, "WedgedWorktree.cs"),
+            "namespace Example; public static class WedgedWorktree { public static int Value => 11; }");
+
+        using UnpublishedViewEnvironment environment = UnpublishedViewEnvironment.Enter();
+        try
+        {
+            StoreFamilyBinding planned = PlanAnUnpublishedView(binary, directory, root, home, "bootstrap-unpublished");
+            Assert.DoesNotContain(planned.ViewId, ReadCatalogViewIds(planned.StoreRoot));
+
+            // Scoped, not a `using` declaration: the service holds workspaces.db open for the whole method
+            // otherwise, and the teardown delete then throws IOException on Windows.
+            using (var bootstrap = new IndexBootstrapService(
+                NullLogger<IndexBootstrapService>.Instance,
+                storeEnabled: static () => true))
+            {
+                bootstrap.TestHomeDirectoryOverride = home;
+                Assert.Equal(
+                    BindOutcome.Started,
+                    bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
+                await bootstrap.WaitForRunAsync(
+                    bootstrap.Snapshot.RunGeneration,
+                    TestContext.Current.CancellationToken);
+
+                Assert.True(bootstrap.IsBound, bootstrap.Snapshot.FailureMessage);
+            }
+
+            StoreWorkspacePointerDocument pointer = Assert.IsType<StoreWorkspacePointerDocument>(
+                StoreWorkspacePointer.Read(root));
+            Assert.Equal(planned.ViewId, pointer.ViewId);
+            Assert.Contains(planned.ViewId, ReadCatalogViewIds(planned.StoreRoot));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TryDeleteDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// Proves that recovering an unpublished view did not open a version hole. A store import writes into a
+    /// SHARED family, and store_meta.binary_version is family-wide, so an older bundled extractor must refuse
+    /// rather than take the family backwards for every member view. Bootstrap fails with the version reason and
+    /// the view NEVER reaches the catalog.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderExtractorRefusesToImportIntoANewerFamily()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "miller-store-bootstrap-newer-family-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(directory, "root");
+        string home = Path.Combine(directory, "home");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(home);
+        File.WriteAllText(
+            Path.Combine(root, "NewerFamily.cs"),
+            "namespace Example; public static class NewerFamily { public static int Value => 13; }");
+
+        using UnpublishedViewEnvironment environment = UnpublishedViewEnvironment.Enter();
+        try
+        {
+            StoreFamilyBinding planned = PlanAnUnpublishedView(binary, directory, root, home, "newer-family");
+            SetFamilyBinaryVersion(planned.StoreRoot, "9.99.9");
+
+            // Scoped, not a `using` declaration: the service holds workspaces.db open for the whole method
+            // otherwise, and the teardown delete then throws IOException on Windows.
+            using (var bootstrap = new IndexBootstrapService(
+                NullLogger<IndexBootstrapService>.Instance,
+                storeEnabled: static () => true))
+            {
+                bootstrap.TestHomeDirectoryOverride = home;
+                Assert.Equal(
+                    BindOutcome.Started,
+                    bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
+                await bootstrap.WaitForRunAsync(
+                    bootstrap.Snapshot.RunGeneration,
+                    TestContext.Current.CancellationToken);
+
+                Assert.False(bootstrap.IsBound);
+                string failure = Assert.IsType<string>(bootstrap.Snapshot.FailureMessage);
+                Assert.Contains("Refusing to import view", failure, StringComparison.Ordinal);
+                Assert.Contains("9.99.9", failure, StringComparison.Ordinal);
+                Assert.Contains("MILLER_ALLOW_EXTRACTOR_DOWNGRADE", failure, StringComparison.Ordinal);
+            }
+
+            Assert.DoesNotContain(planned.ViewId, ReadCatalogViewIds(planned.StoreRoot));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TryDeleteDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// Registers the workspace, plans its store view, then publishes a SIBLING view into the same family. The
+    /// family therefore has a serving catalog that does NOT carry this workspace's view — the reported wedge.
+    /// </summary>
+    private static StoreFamilyBinding PlanAnUnpublishedView(
+        string binary,
+        string directory,
+        string root,
+        string home,
+        string displayId)
+    {
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
+        string workspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+        // WorkspaceContext.Create puts the registry and the stores root under <home>/.miller, so a plant that
+        // writes to <home> directly leaves bootstrap memberless and it takes the pointer-adoption path instead.
+        string millerHome = Path.Combine(home, ".miller");
+        Directory.CreateDirectory(millerHome);
+        StoreFamilyBinding planned;
+        using (var registry = WorkspaceRegistry.Open(Path.Combine(millerHome, "workspaces.db")))
+        {
+            registry.UpsertSeen(
+                workspaceId,
+                displayId,
+                canonicalRoot,
+                Path.Combine(canonicalRoot, ".miller", "symbols.db"));
+            planned = new StoreFamilyResolver(registry, Path.Combine(millerHome, "stores")).ResolveOrCreate(
+                new WorkspaceRootFacts(
+                    workspaceId,
+                    canonicalRoot,
+                    CanonicalGitCommonDir: null,
+                    GitCommonDirCreatedAtUtc: null,
+                    WorkspaceRootIdentity.Capture(canonicalRoot)));
+        }
+
+        Assert.Equal(StoreBindingState.Planned, planned.State);
+        string otherRoot = Path.Combine(directory, "other-root");
+        Directory.CreateDirectory(otherRoot);
+        File.WriteAllText(
+            Path.Combine(otherRoot, "PublishedSibling.cs"),
+            "namespace Example; public static class PublishedSibling { public static int Value => 7; }");
+        ScaleTestSupport.RunJulie(
+            binary,
+            "store", "import", "--store", planned.StoreRoot,
+            "--family", planned.FamilyId.ToString("D"),
+            "--root", otherRoot, "--view", "published-sibling",
+            "--level", "full", "--jobs", "1", "--json");
+        SqliteConnection.ClearAllPools();
+        return planned;
+    }
+
+    private static IReadOnlyList<string> ReadCatalogViewIds(string storeRoot)
+    {
+        string currentPath = Path.Combine(storeRoot, "CURRENT");
+        if (!File.Exists(currentPath))
+            return [];
+        string storeDatabasePath = Path.Combine(storeRoot, File.ReadAllText(currentPath).Trim(), "store.db");
+        if (!File.Exists(storeDatabasePath))
+            return [];
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = storeDatabasePath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT view_id FROM views";
+        using SqliteDataReader reader = command.ExecuteReader();
+        var views = new List<string>();
+        while (reader.Read())
+            views.Add(reader.GetString(0));
+        return views;
+    }
+
+    /// <summary>
+    /// Best effort, so a held handle in teardown cannot REPLACE the real assertion failure with an IOException
+    /// and hide why the test failed.
+    /// </summary>
+    private static void TryDeleteDirectory(string directory)
+    {
+        try
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void SetFamilyBinaryVersion(string storeRoot, string version)
+    {
+        string generation = File.ReadAllText(Path.Combine(storeRoot, "CURRENT")).Trim();
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(storeRoot, generation, "store.db"),
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "UPDATE store_meta SET value=$value WHERE key='binary_version';";
+        command.Parameters.AddWithValue("$value", version);
+        Assert.Equal(1, command.ExecuteNonQuery());
+        SqliteConnection.ClearAllPools();
+    }
+
+    /// <summary>Store mode on, derived sidecars off, and NO downgrade override — the plain default install.</summary>
+    private sealed class UnpublishedViewEnvironment : IDisposable
+    {
+        private readonly string? _storeMode;
+        private readonly string? _searchSidecar;
+        private readonly string? _semantic;
+        private readonly string? _downgrade;
+
+        private UnpublishedViewEnvironment()
+        {
+            _storeMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
+            _searchSidecar = Environment.GetEnvironmentVariable(SymbolSearchSidecar.EnvVar);
+            _semantic = Environment.GetEnvironmentVariable("MILLER_SEMANTIC");
+            _downgrade = Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE");
+        }
+
+        public static UnpublishedViewEnvironment Enter()
+        {
+            var scope = new UnpublishedViewEnvironment();
+            Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
+            Environment.SetEnvironmentVariable(SymbolSearchSidecar.EnvVar, "off");
+            Environment.SetEnvironmentVariable("MILLER_SEMANTIC", "off");
+            Environment.SetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE", null);
+            return scope;
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, _storeMode);
+            Environment.SetEnvironmentVariable(SymbolSearchSidecar.EnvVar, _searchSidecar);
+            Environment.SetEnvironmentVariable("MILLER_SEMANTIC", _semantic);
+            Environment.SetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE", _downgrade);
         }
     }
 

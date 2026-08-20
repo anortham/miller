@@ -1029,6 +1029,49 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             bool didScan = false;
             if (binding.State == StoreBindingState.Planned || rootReplaced)
             {
+                if (binding.Replan == StoreViewReplan.VanishedFromCatalog)
+                {
+                    _logger.LogError(
+                        "The family store {StoreRoot} no longer carries view {ViewId} for {Root}, but this " +
+                        "workspace recorded a completed scan before. Rebuilding the view by full import.",
+                        binding.StoreRoot, binding.ViewId, canonicalRoot);
+                }
+                else if (binding.Replan == StoreViewReplan.NeverPublished)
+                {
+                    _logger.LogWarning(
+                        "The family store {StoreRoot} has no view {ViewId} for {Root} and this workspace never " +
+                        "completed a scan. Importing the view for the first time.",
+                        binding.StoreRoot, binding.ViewId, canonicalRoot);
+                }
+
+                // A store import writes into a SHARED family. store_meta.binary_version is family-wide, so an
+                // older bundled extractor importing here would take the family backwards for every member view.
+                // Gate the write the same way IndexerService gates the lease. Skip the gate when the family
+                // carries no version yet: that is a genuine first import and nothing can go backwards from it.
+                if (!StoreArtifactVersionReader.TryReadFamilyWriterFloor(
+                        binding, out string? familyVersion, out FamilyStoreReadException? unreadableFamily))
+                {
+                    throw new InvalidOperationException(
+                        $"The family store '{binding.StoreRoot}' is unreadable, so Miller cannot prove that " +
+                        $"importing view '{binding.ViewId}' is safe. {unreadableFamily!.Message}",
+                        unreadableFamily);
+                }
+
+                if (familyVersion is not null)
+                {
+                    LeadershipVerdict writerVerdict = LeadershipEligibility.Evaluate(
+                        ProbeBundledExtractorVersion(workspace.ToolsRoot),
+                        familyVersion,
+                        Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1");
+                    if (!writerVerdict.Eligible)
+                    {
+                        throw new InvalidOperationException(
+                            $"Refusing to import view '{binding.ViewId}' into family store " +
+                            $"'{binding.StoreRoot}': {writerVerdict.Reason}. Upgrade Miller, or set " +
+                            $"MILLER_ALLOW_EXTRACTOR_DOWNGRADE=1 to override.");
+                    }
+                }
+
                 using ScanGovernorAdmission? admission =
                     AcquireBootstrapScanAdmission(canonicalRoot, "store-bootstrap");
                 if (admission is null)
@@ -1645,6 +1688,26 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
     private static readonly TimeSpan AutoRebuildLockWait = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan AutoRebuildLockPollInterval = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Own-version probe for the store writer gate, mirroring <c>IndexerService.ProbeBundledExtractorVersion</c>.
+    /// Null on ANY failure: the eligibility matrix then reads a null own version against a non-null family
+    /// version as INELIGIBLE, which is correct — Miller cannot prove it is not older. A null family version
+    /// never reaches the gate, so a transient probe failure cannot block a genuine first import.
+    /// </summary>
+    private string? ProbeBundledExtractorVersion(string toolsRoot)
+    {
+        try
+        {
+            return JulieExtractRunner.Locate(toolsRoot).QueryVersion();
+        }
+        catch (Exception ex) when (ex is IOException or ArgumentException or InvalidOperationException
+            or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Could not probe the bundled julie-extract version before a store import.");
+            return null;
+        }
+    }
 
     /// <summary>
     /// Machine-wide admission for a bootstrap scan, on the SAME budget as the workspace lock wait: both are one

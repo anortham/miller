@@ -16,6 +16,18 @@ public enum StoreBindingState
     Ready,
 }
 
+/// <summary>
+/// Why a store view had to be re-planned instead of found in the serving catalog. This value chooses only
+/// how LOUD Miller is, never whether it recovers — both causes need the same full import, so a wrong reading
+/// is cheap in both directions.
+/// </summary>
+public enum StoreViewReplan
+{
+    None,
+    NeverPublished,
+    VanishedFromCatalog,
+}
+
 public sealed record WorkspaceRootFacts(
     string WorkspaceId,
     string WorkspaceRoot,
@@ -29,7 +41,8 @@ public sealed record StoreFamilyBinding(
     string StoreRoot,
     string ViewId,
     string WorkspaceRoot,
-    StoreBindingState State);
+    StoreBindingState State,
+    StoreViewReplan Replan = StoreViewReplan.None);
 
 public sealed class StoreBindingMismatchException(string message) : IOException(message);
 
@@ -53,8 +66,7 @@ public sealed class StoreFamilyResolver
 
     public StoreFamilyBinding ResolveOrCreate(
         WorkspaceRootFacts facts,
-        StoreMode mode = StoreMode.Enabled,
-        bool recoverUnpublishedView = false)
+        StoreMode mode = StoreMode.Enabled)
     {
         ArgumentNullException.ThrowIfNull(facts);
         if (mode == StoreMode.Disabled)
@@ -79,7 +91,7 @@ public sealed class StoreFamilyResolver
             if (catalog is not null)
             {
                 if (!IsPositiveFamilyReplacement(family, member, facts))
-                    return ReconcileCatalog(facts, family, member, catalog, recoverUnpublishedView);
+                    return ReconcileCatalog(facts, family, member, catalog, workspace);
                 family = ResolveFamily(facts);
                 viewId = MintViewId();
             }
@@ -228,18 +240,36 @@ public sealed class StoreFamilyResolver
         StoreFamilyRegistryRow family,
         StoreMemberRegistryRow member,
         StoreCatalog catalog,
-        bool recoverUnpublishedView)
+        WorkspaceRegistryRow workspace)
     {
         StoreCatalogView? expected = catalog.Views.FirstOrDefault(view =>
             string.Equals(view.ViewId, member.ViewId, StringComparison.Ordinal));
+        // The catalog knows this view id under a DIFFERENT root: one tree would be served under another
+        // tree's view. Never auto-recover from that; refuse before any registry mutation.
         if (expected is not null && !ArtifactRootIdentity.Matches(expected.Root, facts.WorkspaceRoot))
             throw new StoreBindingMismatchException("The store view root does not match the workspace root.");
         StoreCatalogView? selected = expected ?? catalog.Views.SingleOrDefault(view =>
             ArtifactRootIdentity.Matches(view.Root, facts.WorkspaceRoot));
+
+        // The serving catalog is authoritative for family identity, and BOTH branches below persist a family
+        // id into the member row and the pointer. Adopt the catalog's id before either one writes, or the
+        // recovery branch would persist the registry's contradicted id and every later family-scoped read
+        // would raise FamilyMismatch. This sits BELOW the throw above, so a refusal still mutates nothing.
+        if (catalog.FamilyId != family.FamilyId)
+            family = _registry.ReplaceStoreFamilyIdentity(family.FamilyId, catalog.FamilyId, family.StoreRoot);
+
         if (selected is null)
         {
-            if (!recoverUnpublishedView)
-                throw new StoreBindingMismatchException("The store has no view for the workspace root.");
+            // The serving catalog does not carry this view id at all. Two causes: the first import never
+            // completed, or the view was published and then lost. Both recover the same way — re-plan THIS
+            // view id and let the caller import it. A Planned binding grants no reads (FamilyStoreReadSession
+            // .Open and .Probe both refuse a non-Ready binding), so re-planning can never serve a wrong tree.
+            // The registry decides only how LOUD Miller is, never whether it recovers.
+            // Do NOT use freshness-stamp-<view>.json as a publication witness: StoreFreshnessStamp.Invalidate
+            // and InvalidateAll delete those files as routine cache work, so absence proves nothing.
+            StoreViewReplan replan = workspace.LastRevision is null && workspace.LastScanAt is null
+                ? StoreViewReplan.NeverPublished
+                : StoreViewReplan.VanishedFromCatalog;
 
             StoreMemberRegistryRow planned = _registry.UpsertStoreMember(
                 facts.WorkspaceId,
@@ -252,13 +282,12 @@ public sealed class StoreFamilyResolver
                 family.StoreRoot,
                 planned.ViewId,
                 facts.WorkspaceRoot,
-                StoreBindingState.Planned);
+                StoreBindingState.Planned,
+                replan);
             StoreWorkspacePointer.Write(facts.WorkspaceRoot, plannedBinding);
             return plannedBinding;
         }
 
-        if (catalog.FamilyId != family.FamilyId)
-            family = _registry.ReplaceStoreFamilyIdentity(family.FamilyId, catalog.FamilyId, family.StoreRoot);
         StoreMemberRegistryRow reconciled = _registry.UpsertStoreMember(
             facts.WorkspaceId,
             family.FamilyId,

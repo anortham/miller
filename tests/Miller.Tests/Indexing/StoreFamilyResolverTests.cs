@@ -355,6 +355,144 @@ public sealed class StoreFamilyResolverTests : IDisposable
 
         Assert.Equal(planned, recovered);
         Assert.Equal(StoreBindingState.Planned, recovered.State);
+        Assert.Equal(StoreViewReplan.None, planned.Replan);
+        Assert.Equal(StoreViewReplan.None, recovered.Replan);
+    }
+
+    /// <summary>
+    /// Proves: a view the store never published is recoverable even when a SIBLING view in the same family
+    /// has published. Before this, the resolver threw "The store has no view for the workspace root." and the
+    /// workspace was wedged until someone ran workspace remove plus workspace open.
+    /// </summary>
+    [Fact]
+    public void PlannedViewMissingFromASiblingPublishedCatalogReplansInsteadOfThrowing()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a", "ws-b", "root-b");
+        var ids = new Queue<Guid>(
+        [
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+            Guid.Parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        ]);
+        var resolver = Resolver(registry, ids);
+        WorkspaceRootFacts factsA = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        WorkspaceRootFacts factsB = Facts("ws-b", "root-b", "/repo/.git", Utc(1));
+        StoreFamilyBinding plannedA = resolver.ResolveOrCreate(factsA);
+        StoreFamilyBinding plannedB = resolver.ResolveOrCreate(factsB);
+        Assert.Equal(plannedA.FamilyId, plannedB.FamilyId);
+        // Only workspace A's view was ever published into the serving catalog.
+        WriteStoreCatalog(plannedA.StoreRoot, plannedA.FamilyId, plannedA.ViewId, factsA.WorkspaceRoot);
+
+        StoreFamilyBinding recovered = resolver.ResolveOrCreate(factsB);
+
+        Assert.Equal(StoreBindingState.Planned, recovered.State);
+        Assert.Equal(plannedB.ViewId, recovered.ViewId);
+        Assert.Equal(plannedB.FamilyId, recovered.FamilyId);
+        Assert.Equal(StoreViewReplan.NeverPublished, recovered.Replan);
+        Assert.Equal(plannedB.ViewId, registry.GetStoreMember("ws-b")?.ViewId);
+        StoreWorkspacePointerDocument pointer = Assert.IsType<StoreWorkspacePointerDocument>(
+            StoreWorkspacePointer.Read(factsB.WorkspaceRoot));
+        Assert.Equal(plannedB.ViewId, pointer.ViewId);
+        Assert.Equal(plannedB.FamilyId, pointer.FamilyId);
+    }
+
+    /// <summary>
+    /// Proves: the cross-tree throw survives the recovery change, so one tree is never served under another
+    /// tree's view. The message assertion discriminates it from the replan branch's former throw — both raise
+    /// the same exception type.
+    /// </summary>
+    [Fact]
+    public void AViewIdKnownToTheCatalogUnderAnotherRootStillRefuses()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
+        var ids = new Queue<Guid>(
+        [
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ]);
+        var resolver = Resolver(registry, ids);
+        WorkspaceRootFacts facts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        StoreFamilyBinding planned = resolver.ResolveOrCreate(facts);
+        WriteStoreCatalog(planned.StoreRoot, planned.FamilyId, planned.ViewId, Path.Combine(_directory, "other"));
+        StoreMemberRegistryRow before = Assert.IsType<StoreMemberRegistryRow>(registry.GetStoreMember("ws-a"));
+
+        StoreBindingMismatchException refused = Assert.Throws<StoreBindingMismatchException>(
+            () => resolver.ResolveOrCreate(facts));
+
+        Assert.Equal("The store view root does not match the workspace root.", refused.Message);
+        Assert.Equal(before, registry.GetStoreMember("ws-a"));
+    }
+
+    /// <summary>
+    /// Proves: a genuine corruption — a view that WAS published and then vanished — stays distinguishable from
+    /// a view that was never published. Both recover, but only this one is loud and is barred from the stale
+    /// legacy seed.
+    /// </summary>
+    [Fact]
+    public void AVanishedViewRecoversButIsRecordedAsVanished()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a", "ws-b", "root-b");
+        var ids = new Queue<Guid>(
+        [
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+            Guid.Parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        ]);
+        var resolver = Resolver(registry, ids);
+        WorkspaceRootFacts factsA = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        WorkspaceRootFacts factsB = Facts("ws-b", "root-b", "/repo/.git", Utc(1));
+        StoreFamilyBinding plannedA = resolver.ResolveOrCreate(factsA);
+        StoreFamilyBinding plannedB = resolver.ResolveOrCreate(factsB);
+        WriteStoreCatalog(plannedA.StoreRoot, plannedA.FamilyId, plannedA.ViewId, factsA.WorkspaceRoot);
+        // Workspace B completed a scan before, so a catalog that no longer carries its view is a LOSS.
+        registry.MarkScanned("ws-b", revision: 7, Utc(2));
+
+        StoreFamilyBinding recovered = resolver.ResolveOrCreate(factsB);
+
+        Assert.Equal(StoreBindingState.Planned, recovered.State);
+        Assert.Equal(StoreViewReplan.VanishedFromCatalog, recovered.Replan);
+        Assert.Equal(plannedB.ViewId, recovered.ViewId);
+    }
+
+    /// <summary>
+    /// Proves: the family-identity reconciliation runs BEFORE the view is re-planned, so the recovered member
+    /// row and pointer never persist a family id the serving catalog contradicts.
+    /// </summary>
+    [Fact]
+    public void ADivergentCatalogFamilyIsAdoptedBeforeTheViewIsReplanned()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
+        var ids = new Queue<Guid>(
+        [
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ]);
+        var resolver = Resolver(registry, ids);
+        WorkspaceRootFacts facts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        StoreFamilyBinding planned = resolver.ResolveOrCreate(facts);
+        Guid catalogFamily = Guid.Parse("99999999-9999-4999-8999-999999999999");
+        Assert.NotEqual(catalogFamily, planned.FamilyId);
+        // The catalog carries neither this view id nor this root, and it names a different family.
+        WriteStoreCatalog(
+            planned.StoreRoot,
+            catalogFamily,
+            "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            Path.Combine(_directory, "other"));
+
+        StoreFamilyBinding recovered = resolver.ResolveOrCreate(facts);
+
+        Assert.Equal(StoreBindingState.Planned, recovered.State);
+        Assert.Equal(catalogFamily, recovered.FamilyId);
+        Assert.Equal(planned.ViewId, recovered.ViewId);
+        Assert.Equal(catalogFamily, registry.GetStoreMember("ws-a")?.FamilyId);
+        StoreWorkspacePointerDocument pointer = Assert.IsType<StoreWorkspacePointerDocument>(
+            StoreWorkspacePointer.Read(facts.WorkspaceRoot));
+        Assert.Equal(catalogFamily, pointer.FamilyId);
+        Assert.Equal(planned.ViewId, pointer.ViewId);
     }
 
     [Fact]

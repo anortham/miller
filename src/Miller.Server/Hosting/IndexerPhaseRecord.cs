@@ -13,6 +13,13 @@ internal static class IndexerPhaseNames
     public const string Vector = "vector";
     public const string SidecarTotal = "sidecar_total";
     public const string StartupTotal = "startup_total";
+
+    /// <summary>
+    /// A store view had to be re-planned because the serving catalog does not carry it. Outcome is
+    /// <c>vanished</c> (published, then lost — a corruption) or <c>never_published</c> (the first import never
+    /// completed). Recorded on the one-shot refresh path, which has no logger of its own.
+    /// </summary>
+    public const string StoreViewRecovery = "store_view_recovery";
 }
 
 internal static class IndexerPhaseOutcomes

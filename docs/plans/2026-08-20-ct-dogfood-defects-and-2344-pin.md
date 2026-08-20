@@ -363,11 +363,11 @@ view. Family `ae07681c` holds members for both `C:\source\julie-extractors` and
   `MILLER_ALLOW_EXTRACTOR_DOWNGRADE` must keep its meaning.
 
 **Acceptance criteria:**
-- [ ] A workspace with a planned-but-unpublished view indexes without `workspace remove`.
-- [ ] An instance with an older bundled extractor still refuses leadership into a newer family store.
-- [ ] A view that was published and then vanished is still reported, not silently recovered.
-- [ ] `StoreFamilyResolverTests` still passes unchanged, or every change to it is justified.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] A workspace with a planned-but-unpublished view indexes without `workspace remove`.
+- [x] An instance with an older bundled extractor still refuses leadership into a newer family store.
+- [x] A view that was published and then vanished is still reported, not silently recovered.
+- [x] `StoreFamilyResolverTests` still passes unchanged, or every change to it is justified.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ---
 

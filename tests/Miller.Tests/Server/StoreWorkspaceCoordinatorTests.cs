@@ -854,6 +854,77 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.DoesNotContain(client.Requests, static request => request.Operation == StoreOperation.Resolve);
     }
 
+    /// <summary>
+    /// Proves: a re-planned view recovers through the ORDINARY refresh path. An IncrementalReconcile against a
+    /// Planned binding submits a full import, never a file delta, so RequiresRootRebind returning false for a
+    /// planned view costs nothing.
+    /// </summary>
+    [Fact]
+    public void PlannedBindingScanSubmitsAFullImport()
+    {
+        var client = new RecordingStoreClient(StoreOperation.Import);
+        var snapshots = new Queue<StoreWorkspaceState?>(
+        [
+            null,
+            new StoreWorkspaceState(1, "l1"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding with { State = StoreBindingState.Planned },
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => snapshots.Dequeue(),
+            () => "request-import");
+
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+
+        Assert.IsType<StoreImportRequest>(Assert.Single(client.Requests));
+        Assert.DoesNotContain(client.Requests, static request => request is StoreUpdateRequest);
+        Assert.DoesNotContain(client.Requests, static request => request is StoreDeleteRequest);
+    }
+
+    /// <summary>
+    /// Proves: a view that was published and then LOST is rebuilt by real extraction, never republished from
+    /// the workspace's legacy symbols.db. A seeded import emits --from-artifact with no --level and no scan
+    /// controls, so a months-old artifact would come back reporting itself fresh. The legacy-to-store migration
+    /// seed for a never-published view is untouched.
+    /// </summary>
+    [Fact]
+    public void AVanishedViewNeverSeedsFromTheLegacyArtifact()
+    {
+        using var artifact = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>());
+
+        StoreImportRequest vanished = RunReplannedImport(artifact.DbPath, StoreViewReplan.VanishedFromCatalog);
+        StoreImportRequest neverPublished = RunReplannedImport(artifact.DbPath, StoreViewReplan.NeverPublished);
+
+        Assert.Null(vanished.FromArtifact);
+        Assert.Equal(artifact.DbPath, neverPublished.FromArtifact);
+        Assert.True(File.Exists(artifact.DbPath));
+    }
+
+    private static StoreImportRequest RunReplannedImport(string fromArtifact, StoreViewReplan replan)
+    {
+        var client = new RecordingStoreClient(StoreOperation.Import);
+        var snapshots = new Queue<StoreWorkspaceState?>(
+        [
+            null,
+            new StoreWorkspaceState(1, "l1"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding with { State = StoreBindingState.Planned, Replan = replan },
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => snapshots.Dequeue(),
+            () => "request-import",
+            fromArtifact);
+
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+
+        return Assert.IsType<StoreImportRequest>(client.SingleRequest);
+    }
+
     [Fact]
     public void IncompatibleLegacyArtifactFallsBackToSourceImport()
     {

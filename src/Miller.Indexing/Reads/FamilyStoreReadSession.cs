@@ -246,6 +246,39 @@ public sealed class FamilyStoreReadSession :
         }
     }
 
+    /// <summary>
+    /// The FAMILY-scope producer version from <c>store_meta</c>, with the SAME integrity gate <see cref="Probe"/>
+    /// applies (family id, schema, format epoch, serving state, <c>min_reader_version</c> floor) but WITHOUT the
+    /// per-view manifest lookup. <c>store_meta.binary_version</c> is family-wide — <see cref="Probe"/> itself
+    /// reads it from <c>store_meta</c>, never from the <c>views</c> row — so this returns the byte-identical
+    /// string a healthy probe returns. It is the version that governs leadership for a view the store does not
+    /// carry. No <c>State</c> precondition, because nothing view-scoped is read.
+    /// </summary>
+    public static string ReadFamilyBinaryVersion(StoreFamilyBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        try
+        {
+            ServingStorePaths paths = ResolveServingStorePaths(binding);
+            using SqliteConnection connection = OpenReadOnly(paths.StoreDatabasePath);
+            Dictionary<string, string> metadata = ReadStoreMetadata(connection);
+            _ = ValidateStoreMetadata(metadata, binding);
+            return Required(metadata, "binary_version");
+        }
+        catch (FamilyStoreReadException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or SqliteException or FormatException)
+        {
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.Corrupt,
+                "The family store could not be read for its producer version.",
+                ex);
+        }
+    }
+
     public TResult Read<TResult>(Func<SqliteConnection, TResult> query)
     {
         ArgumentNullException.ThrowIfNull(query);
