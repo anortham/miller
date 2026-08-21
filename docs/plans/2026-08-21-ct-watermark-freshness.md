@@ -242,11 +242,11 @@ All tasks are serial: the freshness cursor (Task 1) feeds everything, `TestsCore
 **What to build:** The NCrunch loop: edit → quiet period → impacted tests run → verdict updates. Coalesce save bursts (timer resets on each new change).
 
 **Acceptance criteria:**
-- [ ] The root cause of the missing auto-run is identified and stated in the task report.
-- [ ] A change triggers exactly one run after the quiet period; a burst triggers one run.
-- [ ] A change during execution queues a follow-up; the running suite is not killed.
-- [ ] `MILLER_CT_DEBOUNCE` honored (0 = immediate); auto-run governed by CT enablement, not the debounce.
-- [ ] Worker-scope verification passes; commit per commit mode.
+- [x] The root cause of the missing auto-run is identified and stated in the task report. (old per-write identity made every save read as a rebuild; the rebuild branch returned before the enqueue)
+- [x] A change triggers exactly one run after the quiet period; a burst triggers one run.
+- [x] A change during execution queues a follow-up; the running suite is not killed.
+- [x] `MILLER_CT_DEBOUNCE` honored (0 = immediate); auto-run governed by CT enablement, not the debounce.
+- [x] Worker-scope verification passes; commit per commit mode. (b29e2bbc; 238 tests green; default debounce 2s = eight 250ms poll ticks; poller truncation → Unavailable)
 
 ### Task 7: Daemon adopts family worktrees
 
