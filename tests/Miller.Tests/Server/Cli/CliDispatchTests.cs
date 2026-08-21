@@ -5520,27 +5520,8 @@ public sealed class CliDispatchTests : IDisposable
         }
     }
 
-    private static string RequireBrokerHostExecutable()
-    {
-        string configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
-        string executable = OperatingSystem.IsWindows()
-            ? "Miller.SharedBrokerTestHost.exe"
-            : "Miller.SharedBrokerTestHost";
-        string hostRoot = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..",
-            "..",
-            "..",
-            "..",
-            "Miller.SharedBrokerTestHost",
-            "bin"));
-        string? candidate = new[] { configuration, "Release", "Debug" }
-            .Distinct(StringComparer.Ordinal)
-            .Select(value => Path.Combine(hostRoot, value, "net10.0", executable))
-            .FirstOrDefault(File.Exists);
-        Assert.True(candidate is not null, $"The shared broker test host was not built under {hostRoot}.");
-        return candidate!;
-    }
+    private static string RequireBrokerHostExecutable() =>
+        Testing.SharedBrokerHostTestSupport.RequireBrokerHostExecutable();
 
     private static StubSymbolLookupIndex TwoSymbolIndex() =>
         new(
