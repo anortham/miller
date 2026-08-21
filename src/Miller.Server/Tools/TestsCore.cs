@@ -203,9 +203,13 @@ public static class TestsCore
         // The selected key comes from the LIVE index cursor, never from the stored rows. A key
         // derived from the rows it judges reads uniformly stale rows as green forever, and flips
         // between consecutive reads when rows carry mixed keys (observed live 2026-08-20).
+        CtFreshnessKey? liveKey = TryReadLiveFreshness(request, root, workspaceId);
         ContinuousTestProjectedStatus projected = ContinuousTestStatusProjection.Project(
-            TryReadLiveFreshness(request, root, workspaceId),
-            statuses);
+            liveKey,
+            statuses,
+            liveKey is { } live
+                ? store.ListContinuousTestFreshWatermarks(workspaceId, live.IndexIdentity)
+                : null);
         TestsBudgetHolder? budget = ReadBudgetHolder(request.MillerHome);
         bool enabled = !killSwitchOff && (optedIn || stored.Count > 0);
         return new TestsStatusResult(
@@ -880,7 +884,10 @@ public static class TestsCore
         IReadOnlyList<ContinuousTestStatus> statuses = store.ListContinuousTestStatuses(workspaceId);
         // Judge at the key this one-shot ran at. The caller (`Run`) re-reads a live status right
         // after and prefers ITS verdict, so a generation that moved mid-run is reported there.
-        ContinuousTestProjectedStatus projected = ContinuousTestStatusProjection.Project(freshness, statuses);
+        ContinuousTestProjectedStatus projected = ContinuousTestStatusProjection.Project(
+            freshness,
+            statuses,
+            store.ListContinuousTestFreshWatermarks(workspaceId, freshness.IndexIdentity));
         return new TestsRunOutcome(CtRunExecution.ForegroundOneShot, projected.Verdict, "foreground", request.Wait);
     }
 

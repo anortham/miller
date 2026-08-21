@@ -28,6 +28,26 @@ public static class ContinuousTestDurableFreshness
         string.Equals(watermark.IndexIdentity, selected.IndexIdentity, StringComparison.Ordinal)
         && watermark.Revision >= selected.Revision;
 
+    /// <summary>
+    /// THE per-row freshness rule: committed at the selected key, or GREEN with a watermark that
+    /// covers it. Only greens ride the watermark — a red or skipped row stays where it ran until
+    /// its test reruns. Every consumer (the status projection, the queue's fresh-case trim) must
+    /// use this one rule instead of re-deriving it.
+    /// </summary>
+    public static bool IsFreshAt(
+        ContinuousTestStatus status,
+        CtFreshnessKey selected,
+        IReadOnlyDictionary<string, CtFreshnessKey>? watermarks)
+    {
+        if (IsCommittedFreshAt(status, selected))
+            return true;
+
+        return status.State == ContinuousTestState.Green
+            && watermarks is not null
+            && watermarks.TryGetValue(status.TestCaseId, out CtFreshnessKey watermark)
+            && IsWatermarkFreshAt(watermark, selected);
+    }
+
     public static IReadOnlyList<string> NormalizeDeltaPaths(IReadOnlyList<string> changedPaths)
     {
         ArgumentNullException.ThrowIfNull(changedPaths);

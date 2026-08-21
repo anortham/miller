@@ -833,19 +833,67 @@ public sealed partial class ContinuousTestStore
             });
     }
 
-    public void AdvanceContinuousTestFreshWatermark(
+    /// <summary>
+    /// Test-only fault hook, invoked inside the <see cref="ApplyRevisionAdvance"/> transaction
+    /// between the staleness half and the watermark half. A throw here proves the two halves are
+    /// one atomic unit: the abort must leave every case stale, never fresh.
+    /// </summary>
+    internal Action? RevisionAdvanceFaultInjection { get; set; }
+
+    /// <summary>
+    /// THE one production write for a revision advance: marks the impacted set stale AND advances
+    /// the fresh watermarks of the keep-set (currently fresh GREEN cases the change cannot reach)
+    /// from <paramref name="from"/> to <paramref name="to"/> — in a SINGLE transaction. Staleness
+    /// lands before any advance, so no committed or aborted state exists in which an impacted case
+    /// reads fresh at <paramref name="to"/>.
+    ///
+    /// <para>Outcome semantics: <see cref="ContinuousTestSelectionOutcome.Impacted"/> stales the
+    /// named set and advances the rest; <see cref="ContinuousTestSelectionOutcome.KnownEmpty"/>
+    /// advances every currently fresh green; <see cref="ContinuousTestSelectionOutcome.Unknown"/>
+    /// and <see cref="ContinuousTestSelectionOutcome.WorkspaceScope"/> (and any future outcome)
+    /// advance NOTHING — with the cursor moved and no advance, everything previously fresh reads
+    /// stale at the new key. Fail closed.</para>
+    /// </summary>
+    public void ApplyRevisionAdvance(
         string workspaceId,
         string projectPath,
         CtFreshnessKey from,
-        CtFreshnessKey to)
+        CtFreshnessKey to,
+        IReadOnlyList<string> impactedTestCaseIds,
+        ContinuousTestSelectionOutcome outcome)
     {
         if (string.IsNullOrEmpty(workspaceId))
             throw new ArgumentException("must not be empty", nameof(workspaceId));
         if (string.IsNullOrEmpty(projectPath))
             throw new ArgumentException("must not be empty", nameof(projectPath));
+        ArgumentNullException.ThrowIfNull(impactedTestCaseIds);
         if (!string.Equals(from.IndexIdentity, to.IndexIdentity, StringComparison.Ordinal))
-            throw new ArgumentException("watermark endpoints must share an index identity", nameof(to));
+            throw new ArgumentException("advance endpoints must share an index identity", nameof(to));
+        if (!CanWriteExistingFile())
+            return;
 
+        Transaction(() =>
+        {
+            // Staleness FIRST. It also deletes the impacted cases' watermark rows, so the advance
+            // below (green-only, and blind to rows now marked stale) can never re-freshen them.
+            MarkContinuousTestsStale(workspaceId, impactedTestCaseIds, to);
+            RevisionAdvanceFaultInjection?.Invoke();
+            if (outcome is ContinuousTestSelectionOutcome.Impacted or ContinuousTestSelectionOutcome.KnownEmpty)
+                AdvanceContinuousTestFreshWatermark(workspaceId, projectPath, from, to);
+        });
+    }
+
+    /// <summary>
+    /// The watermark write. Private on purpose: <see cref="ApplyRevisionAdvance"/> is the only
+    /// path that may advance watermarks, so staleness and advance stay one atomic unit. The keep
+    /// predicate is GREEN-ONLY — a red or skipped row never rides the watermark.
+    /// </summary>
+    private void AdvanceContinuousTestFreshWatermark(
+        string workspaceId,
+        string projectPath,
+        CtFreshnessKey from,
+        CtFreshnessKey to)
+    {
         string normalizedProjectPath = Path.GetFullPath(projectPath);
         WithWrite(connection =>
         {
@@ -863,9 +911,9 @@ public sealed partial class ContinuousTestStore
                 WHERE tc.workspace_id = $ws
                   AND tc.source LIKE 'ct-provider:%'
                   AND json_extract(tc.metadata_json, '$.ct_project_path') = $project
+                  AND s.state = 'green'
                   AND (
-                        (s.state IN ('green', 'red', 'skipped')
-                            AND s.index_identity = $identity
+                        (s.index_identity = $identity
                             AND s.last_run_revision IS NOT NULL
                             AND CAST(s.last_run_revision AS INTEGER) >= $from)
                         OR (w.revision IS NOT NULL AND w.revision >= $from)

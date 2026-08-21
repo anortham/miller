@@ -32,7 +32,7 @@ public sealed class DurableFreshnessTests : IDisposable
     }
 
     [Fact]
-    public void Advance_fresh_watermark_marks_committed_provider_cases_at_the_composite_key()
+    public void Known_empty_advance_watermarks_committed_greens_in_project_scope()
     {
         using var store = new ContinuousTestStore(DbPath);
         SeedProviderCase(store, "a:1", ProjectA());
@@ -42,7 +42,8 @@ public sealed class DurableFreshnessTests : IDisposable
         CommitGreen(store, "a:2", Identity, 267);
         CommitGreen(store, "b:1", Identity, 267);
 
-        store.AdvanceContinuousTestFreshWatermark(Workspace, ProjectA(), Key(267), Key(273));
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(267), Key(273), [], ContinuousTestSelectionOutcome.KnownEmpty);
 
         IReadOnlyDictionary<string, CtFreshnessKey> watermarks = store.ListContinuousTestFreshWatermarks(Workspace, Identity);
         Assert.Equal(new CtFreshnessKey(Identity, 273), watermarks["a:1"]);
@@ -51,7 +52,7 @@ public sealed class DurableFreshnessTests : IDisposable
     }
 
     [Fact]
-    public void Advance_fresh_watermark_skips_cases_not_fresh_at_the_from_key()
+    public void Advance_skips_cases_not_fresh_at_the_from_key()
     {
         using var store = new ContinuousTestStore(DbPath);
         SeedProviderCase(store, "committed-at-from", ProjectA());
@@ -70,7 +71,8 @@ public sealed class DurableFreshnessTests : IDisposable
                 Revision: 267),
             ["running"]);
 
-        store.AdvanceContinuousTestFreshWatermark(Workspace, ProjectA(), Key(267), Key(273));
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(267), Key(273), [], ContinuousTestSelectionOutcome.KnownEmpty);
 
         IReadOnlyDictionary<string, CtFreshnessKey> watermarks = store.ListContinuousTestFreshWatermarks(Workspace, Identity);
         Assert.Equal(273, watermarks["committed-at-from"].Revision);
@@ -80,16 +82,50 @@ public sealed class DurableFreshnessTests : IDisposable
     }
 
     [Fact]
-    public void Advance_fresh_watermark_never_lowers_and_chains_forward()
+    public void Red_and_skipped_rows_never_ride_the_watermark()
+    {
+        using var store = new ContinuousTestStore(DbPath);
+        SeedProviderCase(store, "green", ProjectA());
+        SeedProviderCase(store, "red", ProjectA());
+        SeedProviderCase(store, "skipped", ProjectA());
+        CommitGreen(store, "green", Identity, 267);
+        CommitResult(store, "red", Identity, 267, "failed");
+        CommitResult(store, "skipped", Identity, 267, "skipped");
+
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(267), Key(273), [], ContinuousTestSelectionOutcome.KnownEmpty);
+
+        IReadOnlyDictionary<string, CtFreshnessKey> watermarks = store.ListContinuousTestFreshWatermarks(Workspace, Identity);
+        Assert.Equal(273, watermarks["green"].Revision);
+        Assert.False(watermarks.ContainsKey("red"));
+        Assert.False(watermarks.ContainsKey("skipped"));
+
+        // The red stays red and stale at the new key until its test reruns.
+        ContinuousTestProjectedStatus projected = ProjectedAt(store, Key(273));
+        Assert.Equal(2, projected.StaleCount);
+        Assert.Equal(ContinuousTestVerdict.Partial, projected.Verdict);
+    }
+
+    [Fact]
+    public void Advance_never_lowers_and_chains_forward_via_watermark_alone()
     {
         using var store = CreateStoreWithProviderCase("test:1", ProjectA());
         CommitGreen(store, "test:1", Identity, 9);
-        store.AdvanceContinuousTestFreshWatermark(Workspace, ProjectA(), Key(9), Key(273));
-        store.AdvanceContinuousTestFreshWatermark(Workspace, ProjectA(), Key(9), Key(100));
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(9), Key(273), [], ContinuousTestSelectionOutcome.KnownEmpty);
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(9), Key(100), [], ContinuousTestSelectionOutcome.KnownEmpty);
         Assert.Equal(273, store.ListContinuousTestFreshWatermarks(Workspace, Identity)["test:1"].Revision);
 
-        store.AdvanceContinuousTestFreshWatermark(Workspace, ProjectA(), Key(273), Key(281));
+        // The committed row still sits at revision 9; the second hop rides the watermark alone.
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(273), Key(281), [], ContinuousTestSelectionOutcome.KnownEmpty);
         Assert.Equal(281, store.ListContinuousTestFreshWatermarks(Workspace, Identity)["test:1"].Revision);
+        ContinuousTestStatus status = Assert.Single(store.ListContinuousTestStatuses(Workspace));
+        Assert.Equal(9, status.Revision);
+        ContinuousTestProjectedStatus projected = ProjectedAt(store, Key(281));
+        Assert.Equal(ContinuousTestVerdict.Green, projected.Verdict);
+        Assert.Equal(0, projected.StaleCount);
         Assert.True(ContinuousTestDurableFreshness.IsWatermarkFreshAt(
             new CtFreshnessKey(Identity, 281),
             new CtFreshnessKey(Identity, 281)));
@@ -99,11 +135,94 @@ public sealed class DurableFreshnessTests : IDisposable
     }
 
     [Fact]
+    public void Impacted_advance_stales_the_impacted_set_and_advances_the_keep_set()
+    {
+        using var store = new ContinuousTestStore(DbPath);
+        SeedProviderCase(store, "impacted", ProjectA());
+        SeedProviderCase(store, "kept", ProjectA());
+        CommitGreen(store, "impacted", Identity, 267);
+        CommitGreen(store, "kept", Identity, 267);
+
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(267), Key(273), ["impacted"], ContinuousTestSelectionOutcome.Impacted);
+
+        IReadOnlyDictionary<string, CtFreshnessKey> watermarks = store.ListContinuousTestFreshWatermarks(Workspace, Identity);
+        Assert.False(watermarks.ContainsKey("impacted"));
+        Assert.Equal(273, watermarks["kept"].Revision);
+        ContinuousTestStatus impacted = Assert.Single(
+            store.ListContinuousTestStatuses(Workspace), row => row.TestCaseId == "impacted");
+        Assert.Equal(ContinuousTestState.Stale, impacted.State);
+        ContinuousTestProjectedStatus projected = ProjectedAt(store, Key(273));
+        Assert.Equal(1, projected.StaleCount);
+        Assert.Equal(ContinuousTestVerdict.Partial, projected.Verdict);
+    }
+
+    [Fact]
+    public void Unknown_advance_stales_everything_and_advances_nothing()
+    {
+        using var store = new ContinuousTestStore(DbPath);
+        SeedProviderCase(store, "a:1", ProjectA());
+        SeedProviderCase(store, "a:2", ProjectA());
+        CommitGreen(store, "a:1", Identity, 267);
+        CommitGreen(store, "a:2", Identity, 267);
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(267), Key(273), [], ContinuousTestSelectionOutcome.KnownEmpty);
+
+        // The selector's Unknown result names every case in scope as stale.
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(273), Key(280), ["a:1", "a:2"], ContinuousTestSelectionOutcome.Unknown);
+
+        Assert.Empty(store.ListContinuousTestFreshWatermarks(Workspace, Identity));
+        Assert.All(
+            store.ListContinuousTestStatuses(Workspace),
+            row => Assert.Equal(ContinuousTestState.Stale, row.State));
+        ContinuousTestProjectedStatus projected = ProjectedAt(store, Key(280));
+        Assert.Equal(2, projected.StaleCount);
+    }
+
+    [Fact]
+    public void Unknown_advance_with_no_named_cases_still_advances_nothing()
+    {
+        using var store = CreateStoreWithProviderCase("test:1", ProjectA());
+        CommitGreen(store, "test:1", Identity, 267);
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(267), Key(273), [], ContinuousTestSelectionOutcome.KnownEmpty);
+
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(273), Key(280), [], ContinuousTestSelectionOutcome.Unknown);
+
+        // The watermark stays behind the new key, so the case reads stale at 280 — fail closed.
+        Assert.Equal(273, store.ListContinuousTestFreshWatermarks(Workspace, Identity)["test:1"].Revision);
+        ContinuousTestProjectedStatus projected = ProjectedAt(store, Key(280));
+        Assert.Equal(1, projected.StaleCount);
+        Assert.Equal(ContinuousTestVerdict.Partial, projected.Verdict);
+    }
+
+    [Fact]
+    public void Workspace_scope_advance_stales_the_named_set_and_advances_nothing()
+    {
+        using var store = new ContinuousTestStore(DbPath);
+        SeedProviderCase(store, "a:1", ProjectA());
+        SeedProviderCase(store, "a:2", ProjectA());
+        CommitGreen(store, "a:1", Identity, 267);
+        CommitGreen(store, "a:2", Identity, 267);
+
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(273), Key(273), ["a:1", "a:2"], ContinuousTestSelectionOutcome.WorkspaceScope);
+
+        Assert.Empty(store.ListContinuousTestFreshWatermarks(Workspace, Identity));
+        Assert.All(
+            store.ListContinuousTestStatuses(Workspace),
+            row => Assert.Equal(ContinuousTestState.Stale, row.State));
+    }
+
+    [Fact]
     public void Changed_index_identity_invalidates_stored_freshness()
     {
         using var store = CreateStoreWithProviderCase("test:1", ProjectA());
         CommitGreen(store, "test:1", Identity, 12);
-        store.AdvanceContinuousTestFreshWatermark(Workspace, ProjectA(), Key(12), Key(20));
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(12), Key(20), [], ContinuousTestSelectionOutcome.KnownEmpty);
 
         IReadOnlyDictionary<string, CtFreshnessKey> oldIdentity =
             store.ListContinuousTestFreshWatermarks(Workspace, Identity);
@@ -118,11 +237,13 @@ public sealed class DurableFreshnessTests : IDisposable
             oldIdentity["test:1"],
             new CtFreshnessKey("gen-2", 20)));
 
-        store.AdvanceContinuousTestFreshWatermark(
+        store.ApplyRevisionAdvance(
             Workspace,
             ProjectA(),
             new CtFreshnessKey("gen-2", 12),
-            new CtFreshnessKey("gen-2", 20));
+            new CtFreshnessKey("gen-2", 20),
+            [],
+            ContinuousTestSelectionOutcome.KnownEmpty);
         Assert.Empty(store.ListContinuousTestFreshWatermarks(Workspace, "gen-2"));
         Assert.Equal(20, store.ListContinuousTestFreshWatermarks(Workspace, Identity)["test:1"].Revision);
     }
@@ -135,13 +256,71 @@ public sealed class DurableFreshnessTests : IDisposable
         SeedProviderCase(store, "test:2", ProjectA());
         CommitGreen(store, "test:1", Identity, 267);
         CommitGreen(store, "test:2", Identity, 267);
-        store.AdvanceContinuousTestFreshWatermark(Workspace, ProjectA(), Key(267), Key(273));
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(267), Key(273), [], ContinuousTestSelectionOutcome.KnownEmpty);
 
         store.MarkContinuousTestsStale(Workspace, ["test:1"], Key(274));
 
         IReadOnlyDictionary<string, CtFreshnessKey> watermarks = store.ListContinuousTestFreshWatermarks(Workspace, Identity);
         Assert.False(watermarks.ContainsKey("test:1"));
         Assert.Equal(273, watermarks["test:2"].Revision);
+    }
+
+    [Fact]
+    public void Aborted_advance_between_staleness_and_watermark_leaves_no_fresh_impacted_case()
+    {
+        using var store = new ContinuousTestStore(DbPath);
+        SeedProviderCase(store, "impacted", ProjectA());
+        SeedProviderCase(store, "kept", ProjectA());
+        CommitGreen(store, "impacted", Identity, 267);
+        CommitGreen(store, "kept", Identity, 267);
+        bool fired = false;
+        store.RevisionAdvanceFaultInjection = () =>
+        {
+            fired = true;
+            throw new InvalidOperationException("crash between staleness and advance");
+        };
+
+        Assert.Throws<InvalidOperationException>(() => store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(267), Key(273), ["impacted"], ContinuousTestSelectionOutcome.Impacted));
+        store.RevisionAdvanceFaultInjection = null;
+
+        Assert.True(fired);
+
+        // The whole operation rolled back: no watermark reached 273, so nothing — impacted or
+        // kept — reads fresh at the new key. Stale, never wrongly fresh.
+        Assert.Empty(store.ListContinuousTestFreshWatermarks(Workspace, Identity));
+        ContinuousTestProjectedStatus projected = ProjectedAt(store, Key(273));
+        Assert.Equal(2, projected.StaleCount);
+        Assert.NotEqual(ContinuousTestVerdict.Green, projected.Verdict);
+    }
+
+    [Fact]
+    public void Aborted_transaction_after_both_halves_rolls_the_whole_operation_back()
+    {
+        using var store = new ContinuousTestStore(DbPath);
+        SeedProviderCase(store, "impacted", ProjectA());
+        SeedProviderCase(store, "kept", ProjectA());
+        CommitGreen(store, "impacted", Identity, 267);
+        CommitGreen(store, "kept", Identity, 267);
+
+        Assert.Throws<InvalidOperationException>(() => store.Transaction(() =>
+        {
+            store.ApplyRevisionAdvance(
+                Workspace, ProjectA(), Key(267), Key(273), ["impacted"], ContinuousTestSelectionOutcome.Impacted);
+            throw new InvalidOperationException("crash after both halves, before commit");
+        }));
+
+        // Staleness and advance are one unit: neither survived the abort, so the impacted case
+        // still reads stale at 273 and no case reads fresh there.
+        Assert.Empty(store.ListContinuousTestFreshWatermarks(Workspace, Identity));
+        ContinuousTestStatus impacted = Assert.Single(
+            store.ListContinuousTestStatuses(Workspace), row => row.TestCaseId == "impacted");
+        Assert.Equal(ContinuousTestState.Green, impacted.State);
+        Assert.Equal(267, impacted.Revision);
+        ContinuousTestProjectedStatus projected = ProjectedAt(store, Key(273));
+        Assert.Equal(2, projected.StaleCount);
+        Assert.NotEqual(ContinuousTestVerdict.Green, projected.Verdict);
     }
 
     [Fact]
@@ -208,6 +387,15 @@ public sealed class DurableFreshnessTests : IDisposable
         Assert.False(File.Exists(DbPath));
     }
 
+    [Fact]
+    public void Missing_db_advance_creates_nothing()
+    {
+        using var store = new ContinuousTestStore(DbPath);
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(1), Key(2), [], ContinuousTestSelectionOutcome.KnownEmpty);
+        Assert.False(File.Exists(DbPath));
+    }
+
     private ContinuousTestStore CreateStoreWithProviderCase(string id, string projectPath)
     {
         var store = new ContinuousTestStore(DbPath);
@@ -225,7 +413,15 @@ public sealed class DurableFreshnessTests : IDisposable
             Source: "ct-provider:dotnet",
             Metadata: new Dictionary<string, object?> { ["ct_project_path"] = projectPath }));
 
-    private static void CommitGreen(ContinuousTestStore store, string testCaseId, string identity, long revision)
+    private static void CommitGreen(ContinuousTestStore store, string testCaseId, string identity, long revision) =>
+        CommitResult(store, testCaseId, identity, revision, "passed");
+
+    private static void CommitResult(
+        ContinuousTestStore store,
+        string testCaseId,
+        string identity,
+        long revision,
+        string status)
     {
         string runId = "run:" + testCaseId + ":" + revision;
         store.StartContinuousTestRun(
@@ -244,7 +440,7 @@ public sealed class DurableFreshnessTests : IDisposable
             CurrentRevision: revision.ToString(),
             IndexIdentity: identity,
             Revision: revision,
-            Status: "passed",
+            Status: status == "passed" ? "passed" : "completed",
             Results:
             [
                 new ContinuousTestResult(
@@ -252,12 +448,18 @@ public sealed class DurableFreshnessTests : IDisposable
                     WorkspaceId: Workspace,
                     TestCaseId: testCaseId,
                     TestRunId: runId,
-                    Status: "passed",
+                    Status: status,
                     ResultRevision: revision.ToString(),
                     IndexIdentity: identity,
                     Revision: revision),
             ]));
     }
+
+    private static ContinuousTestProjectedStatus ProjectedAt(ContinuousTestStore store, CtFreshnessKey key) =>
+        ContinuousTestStatusProjection.Project(
+            key,
+            store.ListContinuousTestStatuses(Workspace),
+            store.ListContinuousTestFreshWatermarks(Workspace, key.IndexIdentity));
 
     private string ProjectA() => Path.GetFullPath(Path.Combine(_dir, "repo", "A.Tests", "A.Tests.csproj"));
 

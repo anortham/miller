@@ -122,7 +122,9 @@ public static class ContinuousTestStatusProjection
     /// per-case watermark covers the live key
     /// (<see cref="ContinuousTestDurableFreshness.IsWatermarkFreshAt"/>). Only green results ride
     /// the watermark; a red stays where it ran until its test reruns. <paramref name="watermarks"/>
-    /// maps a test-case id to its fresh watermark and is empty until the watermark writer lands.</para>
+    /// maps a test-case id to its fresh watermark, written by
+    /// <c>ContinuousTestStore.ApplyRevisionAdvance</c> and read per index identity via
+    /// <c>ListContinuousTestFreshWatermarks</c>.</para>
     ///
     /// <para>No live cursor means the verdict is honest <see cref="ContinuousTestVerdict.Unknown"/>
     /// with no key, and the stale count falls back to the rows the store itself marked stale.</para>
@@ -177,16 +179,8 @@ public static class ContinuousTestStatusProjection
     private static bool IsFreshAt(
         ContinuousTestStatus row,
         CtFreshnessKey selected,
-        IReadOnlyDictionary<string, CtFreshnessKey>? watermarks)
-    {
-        if (ContinuousTestDurableFreshness.IsCommittedFreshAt(row, selected))
-            return true;
-
-        return row.State == ContinuousTestState.Green
-            && watermarks is not null
-            && watermarks.TryGetValue(row.TestCaseId, out CtFreshnessKey watermark)
-            && ContinuousTestDurableFreshness.IsWatermarkFreshAt(watermark, selected);
-    }
+        IReadOnlyDictionary<string, CtFreshnessKey>? watermarks) =>
+        ContinuousTestDurableFreshness.IsFreshAt(row, selected, watermarks);
 }
 
 public sealed record ContinuousTestOutcome(string Status, DateTimeOffset ObservedAt);

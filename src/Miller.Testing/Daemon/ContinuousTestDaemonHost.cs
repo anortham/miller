@@ -110,6 +110,10 @@ public sealed class ContinuousTestDaemonHost
     /// </summary>
     private readonly HashSet<string> _acknowledged = new(StringComparer.Ordinal);
     private CtFreshnessKey? _startedAt;
+
+    /// <summary>The most recent freshness key the poller observed: the daemon's live cursor.
+    /// <see cref="Evaluate"/> judges at it so the snapshot agrees with foreground status.</summary>
+    private CtFreshnessKey? _latestFreshness;
     private DateTimeOffset _runStartedAtUtc;
 
     // Read by the pulse task while the main loop writes them. Volatile rather than locked: a republish that
@@ -262,6 +266,7 @@ public sealed class ContinuousTestDaemonHost
                     if (poll.Freshness is { } freshness)
                     {
                         _startedAt ??= freshness;
+                        _latestFreshness = freshness;
                         _queue?.ObserveFreshRevision(_workspaceId, freshness);
                         if (string.Equals(poll.Reason, "degraded", StringComparison.Ordinal))
                         {
@@ -561,19 +566,27 @@ public sealed class ContinuousTestDaemonHost
     private ContinuousTestDaemonSnapshot Evaluate(string reason, CtDaemonLifecycleState state, bool executing)
     {
         IReadOnlyList<ContinuousTestStatus> statuses = _store?.ListContinuousTestStatuses(_workspaceId) ?? [];
-        CtFreshnessKey? selected = _startedAt;
-        ContinuousTestVerdict verdict = selected is { } key
-            ? ContinuousTestFreshness.Evaluate(statuses, key, _watch.IsHealthy)
-            : ContinuousTestVerdict.Unknown;
-        int stale = statuses.Count(row => row.State == ContinuousTestState.Stale);
+
+        // Judge at the LATEST observed cursor — the same live key foreground status judges at —
+        // and through the SAME projection, with the per-case watermarks threaded in, so the daemon
+        // snapshot and `tests status` cannot disagree about the identical store state.
+        CtFreshnessKey? selected = _latestFreshness ?? _startedAt;
+        IReadOnlyDictionary<string, CtFreshnessKey>? watermarks = selected is { } key && _store is not null
+            ? _store.ListContinuousTestFreshWatermarks(_workspaceId, key.IndexIdentity)
+            : null;
+        ContinuousTestProjectedStatus projected = ContinuousTestStatusProjection.Project(
+            selected,
+            statuses,
+            watermarks,
+            watchHealthy: _watch.IsHealthy);
         (CtDaemonActivity activity, CtDaemonRunProgress? run) =
             _runActivity?.Read() ?? (CtDaemonActivity.Idle, null);
         return new ContinuousTestDaemonSnapshot(
             state,
             reason,
-            verdict,
+            projected.Verdict,
             selected,
-            stale,
+            projected.StaleCount,
             statuses.Count,
             Enabled: true,
             Executing: executing,

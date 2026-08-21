@@ -122,6 +122,174 @@ public sealed class ContinuousTestVerdictTests : IDisposable
                 watchHealthy: health.IsHealthy));
     }
 
+    /// <summary>
+    /// The daemon snapshot consumes watermark freshness through the SAME projection foreground
+    /// status uses: a green committed at an older revision whose watermark covers the live key
+    /// reads green with stale 0, not partial.
+    /// </summary>
+    [Fact]
+    public async Task Daemon_snapshot_treats_watermark_fresh_greens_as_green()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        CommitGreen(store, "test:app", EngineTestSupport.Identity, 2);
+        store.ApplyRevisionAdvance(
+            EngineTestSupport.WorkspaceId,
+            workspace.ProjectPath,
+            new CtFreshnessKey(EngineTestSupport.Identity, 2),
+            new CtFreshnessKey(EngineTestSupport.Identity, 3),
+            [],
+            ContinuousTestSelectionOutcome.KnownEmpty);
+        var source = new ScriptedRevisionSource();
+        source.Observations.Enqueue(new ContinuousTestRevisionObservation(
+            EngineTestSupport.WorkspaceId,
+            new CtFreshnessKey(EngineTestSupport.Identity, 3),
+            IndexFresh: true,
+            Status: "fresh",
+            ObservedAt: DateTimeOffset.UtcNow));
+        var host = new ContinuousTestDaemonHost(
+            workspace.WorkspaceRoot,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                WorkspaceId = EngineTestSupport.WorkspaceId,
+                Store = store,
+                Queue = QueueFor(store),
+                Poller = new ContinuousTestRevisionPoller(source),
+                Projects = [new ContinuousTestProject("proj:1", EngineTestSupport.WorkspaceId, workspace.ProjectPath, Framework: "xunit")],
+                Budget = CtExecutionBudget.Disabled(),
+                AcquireLease = false,
+                Clock = () => DateTimeOffset.UtcNow,
+                Delay = (_, token) => Task.Delay(Timeout.Infinite, token),
+            });
+
+        using var cancellation = new CancellationTokenSource();
+        Task run = host.RunAsync(cancellation.Token);
+        await WaitUntil(
+            () => host.LastSnapshot is { Verdict: ContinuousTestVerdict.Green } snapshot
+                && snapshot.Selected == new CtFreshnessKey(EngineTestSupport.Identity, 3),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, host.LastSnapshot!.StaleCount);
+
+        cancellation.Cancel();
+        try { await run; } catch (OperationCanceledException) { }
+    }
+
+    /// <summary>
+    /// The daemon judges at the LATEST observed cursor, not the key it started at. A green
+    /// committed at the newer revision must read green, exactly as foreground status reads it.
+    /// </summary>
+    [Fact]
+    public async Task Daemon_snapshot_judges_at_the_latest_observed_key()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+
+        // Committed at revision 4 with no watermark: green at the latest key (4), stale at the
+        // started key (3). The snapshot must read green.
+        CommitGreen(store, "test:app", EngineTestSupport.Identity, 4);
+        var source = new ScriptedRevisionSource();
+        source.Observations.Enqueue(Observation(3));
+        source.Observations.Enqueue(Observation(4));
+        var delay = new ManualDelay();
+        var host = new ContinuousTestDaemonHost(
+            workspace.WorkspaceRoot,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                WorkspaceId = EngineTestSupport.WorkspaceId,
+                Store = store,
+                Queue = QueueFor(store),
+                Poller = new ContinuousTestRevisionPoller(source),
+                Projects = [new ContinuousTestProject("proj:1", EngineTestSupport.WorkspaceId, workspace.ProjectPath, Framework: "xunit")],
+                Budget = CtExecutionBudget.Disabled(),
+                AcquireLease = false,
+                Clock = () => DateTimeOffset.UtcNow,
+                Delay = delay.DelayAsync,
+            });
+
+        using var cancellation = new CancellationTokenSource();
+        Task run = host.RunAsync(cancellation.Token);
+        await delay.WaitForDelayCountAsync(1, TestContext.Current.CancellationToken);
+        delay.CompleteNext();
+        await WaitUntil(
+            () => host.LastSnapshot is { Verdict: ContinuousTestVerdict.Green } snapshot
+                && snapshot.Selected == new CtFreshnessKey(EngineTestSupport.Identity, 4),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, host.LastSnapshot!.StaleCount);
+
+        cancellation.Cancel();
+        try { await run; } catch (OperationCanceledException) { }
+    }
+
+    private static ContinuousTestDaemonQueue QueueFor(ContinuousTestStore store) =>
+        new(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(new FakeContinuousTestProvider(), store));
+
+    private static ContinuousTestRevisionObservation Observation(long revision) =>
+        new(
+            EngineTestSupport.WorkspaceId,
+            new CtFreshnessKey(EngineTestSupport.Identity, revision),
+            IndexFresh: true,
+            Status: "fresh",
+            ObservedAt: DateTimeOffset.UtcNow);
+
+    private static void CommitGreen(
+        ContinuousTestStore store,
+        string testCaseId,
+        string identity,
+        long revision)
+    {
+        string revisionText = revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string runId = "seed-run:" + testCaseId;
+        store.StartContinuousTestRun(
+            new ContinuousTestRun(
+                Id: runId,
+                WorkspaceId: EngineTestSupport.WorkspaceId,
+                Status: "running",
+                SelectedRevision: revisionText,
+                IndexIdentity: identity,
+                Revision: revision),
+            [testCaseId]);
+        store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
+            WorkspaceId: EngineTestSupport.WorkspaceId,
+            TestRunId: runId,
+            SelectedRevision: revisionText,
+            CurrentRevision: revisionText,
+            IndexIdentity: identity,
+            Revision: revision,
+            Status: "passed",
+            Results:
+            [
+                new ContinuousTestResult(
+                    Id: runId + ":result",
+                    WorkspaceId: EngineTestSupport.WorkspaceId,
+                    TestCaseId: testCaseId,
+                    TestRunId: runId,
+                    Status: "passed",
+                    ResultRevision: revisionText,
+                    IndexIdentity: identity,
+                    Revision: revision),
+            ]));
+    }
+
+    private static async Task WaitUntil(Func<bool> condition, CancellationToken cancellationToken)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition())
+        {
+            if (stopwatch.Elapsed > TimeSpan.FromSeconds(5))
+                throw new TimeoutException("condition was not met");
+            await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     private static ContinuousTestStatus Status(
         string id,
         ContinuousTestState state,

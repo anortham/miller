@@ -72,9 +72,9 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
 
     /// <summary>
     /// An explicit run request (<c>tests run</c>, the daemon run command). A workspace-scope
-    /// explicit run executes exactly the CURRENT stale set: cases committed fresh at the request's
-    /// key are neither re-marked stale nor re-run, so a green result survives an explicit run that
-    /// has nothing to prove about it.
+    /// explicit run executes exactly the CURRENT stale set: cases fresh at the request's key —
+    /// committed there or green under a covering watermark — are neither re-marked stale nor
+    /// re-run, so a green result survives an explicit run that has nothing to prove about it.
     /// </summary>
     public ContinuousTestDaemonEnqueueResult EnqueueExplicit(ContinuousTestDaemonChange change) =>
         EnqueueCore(change, requireCompleteDelta: false, explicitRun: true);
@@ -115,16 +115,16 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         IReadOnlyList<string> foregroundTestCaseIds = SelectForegroundTestCaseIds(change, selection);
         if (explicitRun && change.WorkspaceScope)
         {
-            // The explicit run executes the current stale set, so trim committed-fresh cases
-            // BEFORE the stale marking below would overwrite their rows.
+            // The explicit run executes the current stale set, so trim fresh cases (committed or
+            // watermark-fresh) BEFORE the stale marking below would overwrite their rows.
             selection = selection with
             {
-                SelectedTestCaseIds = DropCommittedFreshAt(
+                SelectedTestCaseIds = DropFreshAt(
                     change.Workspace.WorkspaceId,
                     change.Workspace.ProjectPath,
                     selection.SelectedTestCaseIds,
                     change.Freshness),
-                StaleTestCaseIds = DropCommittedFreshAt(
+                StaleTestCaseIds = DropFreshAt(
                     change.Workspace.WorkspaceId,
                     change.Workspace.ProjectPath,
                     selection.StaleTestCaseIds,
@@ -133,10 +133,21 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             foregroundTestCaseIds = selection.SelectedTestCaseIds;
         }
 
-        _store.MarkContinuousTestsStale(
+        // ONE crash-atomic store write per observed revision: the impacted set goes stale AND the
+        // keep-set's fresh watermarks advance to the new key. A complete delta names the interval;
+        // without one the advance is anchored at the new key itself, which can only confirm cases
+        // already fresh there (the outcome then advances nothing anyway).
+        CtFreshnessKey advanceFrom = ContinuousTestDurableFreshness.TryGetCompleteDelta(
+            change, out long deltaFromRevision, out _, out _)
+            ? new CtFreshnessKey(change.IndexIdentity, deltaFromRevision)
+            : change.Freshness;
+        _store.ApplyRevisionAdvance(
             change.Workspace.WorkspaceId,
+            change.Workspace.ProjectPath,
+            advanceFrom,
+            change.Freshness,
             selection.StaleTestCaseIds,
-            change.Freshness);
+            selection.Outcome);
         NotifyCtStateChanged(change.Workspace.WorkspaceId);
 
         if (!selection.MayExecute)
@@ -240,7 +251,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 if (readyPending.TestCaseIds.Count == 0)
                     continue;
 
-                IReadOnlyList<string> survivors = DropCommittedFreshAt(
+                IReadOnlyList<string> survivors = DropFreshAt(
                     readyPending.Workspace.WorkspaceId,
                     readyPending.Workspace.ProjectPath,
                     readyPending.TestCaseIds,
@@ -646,14 +657,14 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             WorkspaceId: pending.Workspace.WorkspaceId,
             WorkspaceScope: true,
             ProjectPath: pending.Workspace.ProjectPath));
-        IReadOnlyList<string> selectedTestCaseIds = DropCommittedFreshAt(
+        IReadOnlyList<string> selectedTestCaseIds = DropFreshAt(
             pending.Workspace.WorkspaceId,
             pending.Workspace.ProjectPath,
             selection.SelectedTestCaseIds,
             pending.Freshness);
         _store.MarkContinuousTestsStale(
             pending.Workspace.WorkspaceId,
-            DropCommittedFreshAt(
+            DropFreshAt(
                 pending.Workspace.WorkspaceId,
                 pending.Workspace.ProjectPath,
                 selection.StaleTestCaseIds,
@@ -667,7 +678,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         };
     }
 
-    private IReadOnlyList<string> DropCommittedFreshAt(
+    private IReadOnlyList<string> DropFreshAt(
         string workspaceId,
         string projectPath,
         IReadOnlyList<string> testCaseIds,
@@ -679,9 +690,13 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             return testCaseIds;
         var statusesById = _store.ListContinuousTestStatuses(workspaceId)
             .ToDictionary(status => status.TestCaseId, StringComparer.Ordinal);
+        // Fresh-by-watermark counts as fresh: a green the last change could not reach has nothing
+        // to prove, so it is neither re-marked stale nor re-run. Same rule as the status projection.
+        IReadOnlyDictionary<string, CtFreshnessKey> watermarks =
+            _store.ListContinuousTestFreshWatermarks(workspaceId, selected.IndexIdentity);
         string[] survivors = testCaseIds
             .Where(id => !(statusesById.TryGetValue(id, out ContinuousTestStatus? status)
-                && ContinuousTestDurableFreshness.IsCommittedFreshAt(status, selected)))
+                && ContinuousTestDurableFreshness.IsFreshAt(status, selected, watermarks)))
             .ToArray();
         return survivors.Length == testCaseIds.Count ? testCaseIds : survivors;
     }
