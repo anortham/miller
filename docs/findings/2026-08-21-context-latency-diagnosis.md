@@ -161,6 +161,31 @@ cross-workspace). Instrumentation is the prerequisite for diagnosing that tail.
 **Deferred on purpose:** skipping test-subject promotion when `reference_mode=off` — it
 changes ranking; fix 4 may make it moot. Measure after fix 4, then decide.
 
+## Known exposure accepted with serve-then-refresh (recorded 2026-08-21)
+
+A cross-workspace read with an explicit `workspace_id` now serves the pinned view and refreshes
+behind it (`WorkspaceRefreshMode.Background`). That keeps the read session OPEN while the refresh
+it started runs, **in the same process**. If that refresh promotes a full rebuild,
+`FullRebuildPromotion` replaces `symbols.db` against this process's own open SQLite handle, and
+Windows does not open with `FILE_SHARE_DELETE` — so the promote falls back on its retry loop
+against a reader it cannot see as remote. The blocking arm could not produce this shape: the
+refresh always finished before the read opened anything.
+
+Why it is accepted rather than fixed:
+
+- The automatic path runs a DELTA (`bypassBackoff: false`, no force intent), which promotes
+  nothing. A promote needs a force intent — extractor upgrade, schema/corruption heal, or a user
+  rebuild — which is rare behind a cross-workspace read.
+- Deferring the background work while a read session is open would defer nearly every refresh,
+  since the session is open for exactly the call that starts it.
+- The promote retry loop already exists for held handles, and `MILLER_PROMOTE_RETRY_TIMEOUT`
+  raises its budget (seconds, or a `TimeSpan`).
+
+**If a promote-failure report on Windows traces back to a cross-workspace read, this is the
+mechanism** — raise `MILLER_PROMOTE_RETRY_TIMEOUT` first, and consider raising the default rather
+than re-diagnosing it from scratch. The same note is on
+`WorkspaceIndexProvider.StartBackgroundRefresh`.
+
 ## Open questions (with discriminating experiments)
 
 1. ~~Does julie-extract ever emit `test_linkage`/`test_coverage`?~~ **ANSWERED: no.** Zero

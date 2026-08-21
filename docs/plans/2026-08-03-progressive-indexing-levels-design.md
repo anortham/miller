@@ -147,9 +147,9 @@ consensus).** The `LevelUpgrade` latch is armed by a session that LEADS the work
 post-drain hooks in `IndexerService`); a workspace only ever served cross-workspace — opened from
 another session's root and read via `workspace_id` selectors — builds at symbols level and stays
 there until a Miller session leads that root or someone runs `workspace full` against it. This is
-deliberate for now: the cross-workspace refresh path is refresh-first behind reads and must never
-spawn a multi-minute force rebuild behind a search (the same reasoning that keeps `bypassBackoff`
-false there). The degradation surfaces stay honest — converging diagnostics name the state and
+deliberate for now: the cross-workspace refresh path runs a background refresh behind reads and must
+never spawn a multi-minute force rebuild behind a search (the same reasoning that keeps
+`bypassBackoff` false there). The degradation surfaces stay honest — converging diagnostics name the state and
 both next actions (`workspace status` / `workspace full`) without promising background
 convergence, and `index_level`/`upgrade owed` render in status/health. Follow-up if dogfood shows
 leaderless workspaces are common: a governed background upgrade owner (scan-governor admission,

@@ -66,6 +66,42 @@ public sealed class HostStartupRegistrationTests : IDisposable
     }
 
     [Fact]
+    public void BackgroundRefreshGate_IsOneProcessSingletonBehindTransientProviders()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices();
+
+        using var provider = services.BuildServiceProvider();
+
+        // The coalescing guard for serve-then-refresh cross-workspace reads must be process-wide. Every provider
+        // registration below is TRANSIENT — one tool call builds several instances, and SearchTool alone injects two
+        // of them — so a guard living on the provider instance would coalesce nothing while a single-instance test
+        // stayed green. Ten cross-workspace reads would then start ten refreshes, which is the exact failure
+        // CLAUDE.md and docs/contracts/cli-eros-v1.md promise cannot happen.
+        Assert.Same(
+            provider.GetRequiredService<BackgroundRefreshGate>(),
+            provider.GetRequiredService<BackgroundRefreshGate>());
+        Assert.Equal(
+            ServiceLifetime.Singleton,
+            services.Single(d => d.ServiceType == typeof(BackgroundRefreshGate)).Lifetime);
+
+        // The provider lifetimes are asserted from the descriptors, not by resolving: these services read bootstrap
+        // getters and cannot be constructed before the bootstrap binds — which is the very invariant this file pins.
+        Type[] transientProviders =
+        [
+            typeof(WorkspaceIndexProvider),
+            typeof(IWorkspaceSearchProvider),
+            typeof(IWorkspaceContentSearchProvider),
+        ];
+        Assert.All(
+            transientProviders,
+            type => Assert.Equal(
+                ServiceLifetime.Transient,
+                services.Single(d => d.ServiceType == type).Lifetime));
+    }
+
+    [Fact]
     public void SemanticSessionBroker_IsOneProcessSingletonInTheProductionGraph()
     {
         var services = new ServiceCollection();

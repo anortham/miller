@@ -3256,6 +3256,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         int refreshCalls = 0;
         var scheduled = new List<Action>();
+        long now = 1_000;
+        var gate = new BackgroundRefreshGate(TimeSpan.FromSeconds(5), () => now);
         var provider = NewProvider(
             new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
             CurrentWorkspace(current.DbPath, "current-ws"),
@@ -3266,11 +3268,12 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return new WorkspaceRefreshResult(
                     WorkspaceRefreshStatus.Unchanged, workspaceId, root, target.DbPath, Revision: 3, Scanned: true);
             },
-            scheduleBackgroundRefresh: scheduled.Add);
+            scheduleBackgroundRefresh: scheduled.Add,
+            backgroundRefreshGate: gate);
 
         // Ten cross-workspace reads must not spawn ten extractors: while the first refresh is still in flight the
         // next nine join it. The blocking arm throttled itself because every caller queued behind the same scan;
-        // a fire-and-forget arm has no such queue, so the in-flight set IS the guard.
+        // a fire-and-forget arm has no such queue, so the gate IS the guard.
         for (int i = 0; i < 10; i++)
             provider.Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
 
@@ -3279,9 +3282,46 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         scheduled[0]();
         Assert.Equal(1, refreshCalls);
 
-        // The in-flight entry is released when the refresh returns, so a later read starts the next one.
+        // A completed refresh holds the gate for its cooldown, so the very next read still starts nothing: one tool
+        // call resolves several read contexts and must not turn a finished refresh into a second scan.
+        provider.Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
+        Assert.Single(scheduled);
+
+        // Past the cooldown the next read starts the next refresh.
+        now += 5_000;
         provider.Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
         Assert.Equal(2, scheduled.Count);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredBackground_CoalescesAcrossProviderInstances()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-background-coalesce-instances");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        var scheduled = new List<Action>();
+        var gate = new BackgroundRefreshGate(TimeSpan.Zero);
+
+        // Production registers this provider AND all seven provider interfaces as TRANSIENT, so one tool call builds
+        // several instances — SearchTool alone injects two. A guard living on the instance would coalesce nothing
+        // there while a single-instance test looked green, so drive the shape production actually produces.
+        WorkspaceIndexProvider NewOne() => NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Unchanged, workspaceId, root, target.DbPath, Revision: 3, Scanned: true),
+            scheduleBackgroundRefresh: scheduled.Add,
+            backgroundRefreshGate: gate);
+
+        for (int i = 0; i < 10; i++)
+            NewOne().Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
+
+        Assert.Single(scheduled);
     }
 
     [Fact]
@@ -3295,16 +3335,20 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         registry.MarkScanned("target-ws", revision: 3);
 
         var scheduled = new List<Action>();
+        long now = 1_000;
         var provider = NewProvider(
             new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry,
             refresh: _ => throw new InvalidOperationException("extractor is wedged"),
-            scheduleBackgroundRefresh: scheduled.Add);
+            scheduleBackgroundRefresh: scheduled.Add,
+            backgroundRefreshGate: new BackgroundRefreshGate(TimeSpan.FromSeconds(5), () => now));
 
         provider.Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
         scheduled[0]();
 
+        // A failed refresh still releases the gate — it just serves out its cooldown first, like a successful one.
+        now += 5_000;
         provider.Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
         Assert.Equal(2, scheduled.Count);
     }
@@ -3367,6 +3411,106 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         Assert.Throws<FileNotFoundException>(
             () => provider.Resolve("target-ws", WorkspaceRefreshMode.Background));
+    }
+
+    [Fact]
+    public void HasReadableIndex_WithAReadableLegacyArtifact_IsReadable()
+    {
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        string root = NewRoot("probe-readable");
+
+        Assert.True(WorkspaceIndexProvider.HasReadableIndex(Row(root, target.DbPath), storeEnabled: false));
+    }
+
+    [Fact]
+    public void HasReadableIndex_WithAMissingArtifact_IsNotReadable()
+    {
+        string root = NewRoot("probe-missing");
+
+        Assert.False(WorkspaceIndexProvider.HasReadableIndex(
+            Row(root, Path.Combine(root, ".miller", "symbols.db")), storeEnabled: false));
+    }
+
+    [Fact]
+    public void HasReadableIndex_WithACorruptArtifact_IsNotReadable()
+    {
+        string root = NewRoot("probe-corrupt");
+        string dbPath = Path.Combine(root, "symbols.db");
+        File.WriteAllBytes(dbPath, []);
+
+        // A present-but-unreadable artifact used to pass a File.Exists probe, which sent the read down the serve
+        // arm and surfaced the open failure to the caller. The blocking default healed it by refreshing first.
+        Assert.False(WorkspaceIndexProvider.HasReadableIndex(Row(root, dbPath), storeEnabled: false));
+    }
+
+    [Fact]
+    public void HasReadableIndex_StoreDisabledWithALeftoverStorePointer_IsNotReadable()
+    {
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        string root = NewRoot("probe-leftover-pointer");
+        WriteStorePointer(root);
+
+        // MILLER_INDEX_STORE=off with a live pointer is exactly the state WorkspaceReadSessionFactory.Open refuses
+        // with BindingNotReady, so the probe must not call it readable: the refresh is what exports the view and
+        // clears the pointer.
+        Assert.False(WorkspaceIndexProvider.HasReadableIndex(Row(root, target.DbPath), storeEnabled: false));
+    }
+
+    [Fact]
+    public void Resolve_RegisteredBackgroundWithALeftoverStorePointer_RefreshesInTheForeground()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-leftover-pointer");
+        WriteStorePointer(root);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        int refreshCalls = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId =>
+            {
+                refreshCalls++;
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.Refreshed, workspaceId, root, target.DbPath, Revision: 3, Scanned: true);
+            },
+            scheduleBackgroundRefresh: _ => throw new InvalidOperationException("must not go to the background"),
+            hasReadableIndex: row => WorkspaceIndexProvider.HasReadableIndex(row, storeEnabled: false));
+
+        using WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.Background);
+
+        Assert.Equal(1, refreshCalls);
+        Assert.NotEqual("refresh_pending", context.FreshnessStatus);
+    }
+
+    private static WorkspaceRegistryRow Row(string root, string dbPath) =>
+        new(
+            "target-ws",
+            "target-111111111111",
+            root,
+            dbPath,
+            DateTimeOffset.UnixEpoch,
+            LastScanAt: null,
+            LastRevision: 3,
+            WorkspaceRegistryState.Ready,
+            LastError: null);
+
+    private static void WriteStorePointer(string root)
+    {
+        string storeRoot = Path.Combine(root, "store");
+        Directory.CreateDirectory(storeRoot);
+        StoreWorkspacePointer.Write(
+            root,
+            new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-4111-8111-111111111111"),
+                PathCanonicalizer.CanonicalizeRoot(storeRoot),
+                "view-a",
+                PathCanonicalizer.CanonicalizeRoot(root),
+                StoreBindingState.Ready));
     }
 
     [Fact]
@@ -3445,7 +3589,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Func<WorkspaceReadHandle, IReadOnlyList<GraphEdge>>? loadSupplementalEdges = null,
         SupplementalEdgeCache? supplementalEdgesCache = null,
         Action<Action>? scheduleBackgroundRefresh = null,
-        Func<WorkspaceRegistryRow, bool>? hasReadableIndex = null) =>
+        Func<WorkspaceRegistryRow, bool>? hasReadableIndex = null,
+        BackgroundRefreshGate? backgroundRefreshGate = null) =>
         new(
             holder,
             workspace,
@@ -3473,7 +3618,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             // Tests drive the background arm by hand so no assertion races a thread pool item; the fixtures use the
             // legacy read-session seam, so readability is the legacy artifact's existence.
             scheduleBackgroundRefresh: scheduleBackgroundRefresh,
-            hasReadableIndex: hasReadableIndex ?? (row => File.Exists(row.IndexDbPath)));
+            hasReadableIndex: hasReadableIndex ?? (row => File.Exists(row.IndexDbPath)),
+            backgroundRefreshGate: backgroundRefreshGate);
 
     private static WorkspaceReadSnapshot StoreSnapshot(
         string root,

@@ -219,11 +219,14 @@ public sealed class CrossWorkspaceRefreshService
     ///
     /// <para><paramref name="bypassBackoff"/> also belongs to the caller, and defaults to false because most
     /// traffic through here is NOT a person asking. Pass true only for a direct request — CLI
-    /// <c>workspace refresh/full/open</c>, the MCP <c>workspace</c> tool, the dashboard. The automatic
-    /// refresh-first path behind every cross-workspace read (<see cref="WorkspaceIndexProvider"/>, which
-    /// <c>ReadToolWorkspaceRouting.ResolveEnsureFresh</c> turns on for ANY explicit <c>workspace_id</c>) must
-    /// leave it false: ten cross-workspace searches against a workspace whose extractor is being OOM-killed would
-    /// otherwise spawn ten more extractor processes. A deferred attempt serves the existing artifact with a
+    /// <c>workspace refresh/full/open</c>, the MCP <c>workspace</c> tool, the dashboard. The automatic path behind
+    /// every cross-workspace read (<see cref="WorkspaceIndexProvider"/>, which
+    /// <c>ReadToolWorkspaceRouting.ResolveRefreshMode</c> puts on the BACKGROUND arm for a plain explicit
+    /// <c>workspace_id</c> and on the blocking arm only for <c>ensure_fresh=true</c>) must leave it false: ten
+    /// cross-workspace searches against a workspace whose extractor is being OOM-killed would otherwise spawn ten
+    /// more extractor processes. The background arm makes that MORE load-bearing, not less — the read no longer
+    /// waits for the answer, so nothing throttles the caller except this backoff and the
+    /// <see cref="BackgroundRefreshGate"/>. A deferred attempt serves the existing artifact with a
     /// <see cref="WorkspaceRefreshStatus.LockBusy"/>-shaped result rather than failing the read.</para>
     /// </summary>
     public WorkspaceRefreshResult Refresh(

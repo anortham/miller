@@ -43,9 +43,9 @@ public sealed class WorkspaceIndexProvider
     private readonly Action<Action> _scheduleBackgroundRefresh;
     private readonly Func<WorkspaceRegistryRow, bool> _hasReadableIndex;
 
-    // One background refresh per workspace at a time. See StartBackgroundRefresh.
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _backgroundRefreshes =
-        new(StringComparer.Ordinal);
+    // One background refresh per workspace at a time. See StartBackgroundRefresh. This provider is TRANSIENT, so
+    // the gate must be the injected singleton and never an instance field.
+    private readonly BackgroundRefreshGate _backgroundRefreshGate;
 
     public WorkspaceIndexProvider(
         IndexHolder holder,
@@ -54,7 +54,8 @@ public sealed class WorkspaceIndexProvider
         CrossWorkspaceRefreshService refreshService,
         SymbolSearchSidecar sidecar,
         SupplementalEdgeCache supplementalEdgesCache,
-        RevisionFactCacheStore factCacheStore)
+        RevisionFactCacheStore factCacheStore,
+        BackgroundRefreshGate backgroundRefreshGate)
         : this(
             holder,
             currentWorkspace,
@@ -74,7 +75,8 @@ public sealed class WorkspaceIndexProvider
             openReadSession: (databasePath, root, workspaceId) =>
                 WorkspaceReadSessionFactory.Open(databasePath, root, workspaceId, storeEnabled: null, factCacheStore),
             supplementalEdgesCache: supplementalEdgesCache,
-            factCacheStore: factCacheStore)
+            factCacheStore: factCacheStore,
+            backgroundRefreshGate: backgroundRefreshGate)
     {
     }
 
@@ -101,7 +103,8 @@ public sealed class WorkspaceIndexProvider
         SupplementalEdgeCache? supplementalEdgesCache = null,
         RevisionFactCacheStore? factCacheStore = null,
         Action<Action>? scheduleBackgroundRefresh = null,
-        Func<WorkspaceRegistryRow, bool>? hasReadableIndex = null)
+        Func<WorkspaceRegistryRow, bool>? hasReadableIndex = null,
+        BackgroundRefreshGate? backgroundRefreshGate = null)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(currentWorkspace);
@@ -147,7 +150,8 @@ public sealed class WorkspaceIndexProvider
         _graphStatementObserver = graphStatementObserver ?? ObserveGraphStatement;
         _scheduleBackgroundRefresh = scheduleBackgroundRefresh
             ?? (work => ThreadPool.QueueUserWorkItem(static state => ((Action)state!)(), work));
-        _hasReadableIndex = hasReadableIndex ?? HasReadableIndex;
+        _hasReadableIndex = hasReadableIndex ?? (row => HasReadableIndex(row, storeEnabled: null));
+        _backgroundRefreshGate = backgroundRefreshGate ?? new BackgroundRefreshGate();
     }
 
     public WorkspaceReadContext Resolve(string? workspaceId, WorkspaceRefreshMode refresh)
@@ -1047,20 +1051,29 @@ public sealed class WorkspaceIndexProvider
     /// <summary>
     /// Start ONE background refresh for this workspace, or join the one already running.
     ///
-    /// <para>The in-flight set is the coalescing guard the serve-then-refresh default needs: the blocking arm used
-    /// to throttle itself because every caller queued behind the same scan, and a fire-and-forget arm has no such
-    /// queue. Ten cross-workspace reads in a row therefore start ONE refresh, not ten. The persisted scan-failure
-    /// backoff (<c>bypassBackoff: false</c>, see <see cref="AutomaticRefresh"/>) still governs whether that one
-    /// refresh is allowed to scan at all.</para>
+    /// <para>The <see cref="BackgroundRefreshGate"/> singleton is the coalescing guard the serve-then-refresh default
+    /// needs: the blocking arm used to throttle itself because every caller queued behind the same scan, and a
+    /// fire-and-forget arm has no such queue. Ten cross-workspace reads in a row therefore start ONE refresh, not
+    /// ten. The guard must NOT live on this instance — the provider is registered transient and one tool call builds
+    /// several of them. The persisted scan-failure backoff (<c>bypassBackoff: false</c>, see
+    /// <see cref="AutomaticRefresh"/>) still governs whether that one refresh is allowed to scan at all.</para>
     ///
     /// <para>The work item never throws into the thread pool: a background refresh that fails must degrade the NEXT
     /// read's freshness, never take down the process or the read that started it.</para>
+    ///
+    /// <para>KNOWN EXPOSURE (Windows promote retries): the read session this arm serves from stays open while the
+    /// refresh runs, in the SAME process. If that refresh promotes a full rebuild,
+    /// <c>FullRebuildPromotion</c> replaces <c>symbols.db</c> against this process's own open SQLite handle — Windows
+    /// does not open with <c>FILE_SHARE_DELETE</c> — so the promote falls back on its retry loop. Raise
+    /// <c>MILLER_PROMOTE_RETRY_TIMEOUT</c> if a promote-failure report traces back to here; recorded in
+    /// <c>docs/findings/2026-08-21-context-latency-diagnosis.md</c> so it is not re-diagnosed from scratch. A routine
+    /// automatic refresh runs a delta and promotes nothing.</para>
     /// </summary>
     private void StartBackgroundRefresh(WorkspaceRegistryRow row)
     {
         string workspaceId = row.WorkspaceId;
         long revisionBeforeRefresh = row.LastRevision ?? 0;
-        if (!_backgroundRefreshes.TryAdd(workspaceId, 0))
+        if (!_backgroundRefreshGate.TryEnter(workspaceId))
             return;
 
         bool scheduled = false;
@@ -1074,7 +1087,10 @@ public sealed class WorkspaceIndexProvider
 
                     // Same from-scratch-rebuild eviction the blocking arm does: a Refreshed scan whose revision did
                     // not advance replaced the file under cache keys that still name it, so the entries describe a
-                    // file that no longer exists.
+                    // file that no longer exists. The caches are INSTANCE state and this provider is transient, so
+                    // today this only bites for a provider that outlives the call that built it; it stays here as
+                    // the faithful twin of the blocking arm, and it becomes load-bearing the day these caches are
+                    // shared across calls.
                     if (result.Status == WorkspaceRefreshStatus.Refreshed &&
                         (result.Revision ?? 0) <= revisionBeforeRefresh)
                     {
@@ -1087,7 +1103,7 @@ public sealed class WorkspaceIndexProvider
                 }
                 finally
                 {
-                    _backgroundRefreshes.TryRemove(workspaceId, out _);
+                    _backgroundRefreshGate.Release(workspaceId);
                 }
             });
             scheduled = true;
@@ -1095,24 +1111,45 @@ public sealed class WorkspaceIndexProvider
         finally
         {
             if (!scheduled)
-                _backgroundRefreshes.TryRemove(workspaceId, out _);
+                _backgroundRefreshGate.Release(workspaceId);
         }
     }
 
     /// <summary>
-    /// Cheap "is there anything to serve?" probe for the serve-then-refresh arm. Unknown counts as NOT readable, so
-    /// an unreadable workspace takes the foreground path and gets an honest answer instead of a promised stale one.
+    /// "Does this workspace's view actually OPEN?" — the probe the serve-then-refresh arm asks before it promises a
+    /// pinned view. Anything other than a clean open counts as NOT readable, so the workspace takes the foreground
+    /// path and gets an honest answer (or a healed index) instead of a promised stale one.
+    ///
+    /// <para>It runs <see cref="WorkspaceReadSessionFactory.Probe"/> because that shares its branch with
+    /// <see cref="WorkspaceReadSessionFactory.Open"/>, which is what the read itself calls. A file-existence check
+    /// was not enough twice over: <c>MILLER_INDEX_STORE=off</c> with a leftover store pointer is a state where the
+    /// file exists and <c>Open</c> throws <c>BindingNotReady</c>, and a zero-byte or corrupt artifact is a state
+    /// where the file exists and the read fails. The blocking default healed both by refreshing first; a probe that
+    /// answers from the directory entry would turn each into one hard error per workspace instead.</para>
+    ///
+    /// <para>In store mode the probe usually answers from the freshness stamp with no database open at all; the
+    /// legacy branch opens the artifact read-only, runs the same schema gate every reader runs, and closes it.</para>
     /// </summary>
-    private static bool HasReadableIndex(WorkspaceRegistryRow row)
+    /// <param name="row">The registry row to probe.</param>
+    /// <param name="storeEnabled">Null reads <c>MILLER_INDEX_STORE</c>, exactly as the read path does.</param>
+    internal static bool HasReadableIndex(WorkspaceRegistryRow row, bool? storeEnabled)
     {
+        ArgumentNullException.ThrowIfNull(row);
         try
         {
-            return WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
-                ? Directory.Exists(row.CanonicalRoot) && StoreWorkspacePointer.Read(row.CanonicalRoot) is not null
-                : File.Exists(row.IndexDbPath);
+            bool storeMode = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
+            _ = WorkspaceReadSessionFactory.Probe(
+                row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, storeMode);
+
+            // Opening a legacy artifact is not proof it can serve a read: SQLite opens a zero-byte or truncated file
+            // happily and the failure lands later, inside whichever reader the tool call reaches. The schema gate is
+            // the same check those readers run, so run it here instead of promising a view that cannot answer.
+            if (!storeMode)
+                LegacyArtifactReadSession.Validate(row.IndexDbPath);
+
+            return true;
         }
-        catch (Exception ex) when (
-            ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             return false;
         }

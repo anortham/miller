@@ -307,8 +307,11 @@ scripts/test.ps1 all
   records — pass `bypassBackoff: true` at those call sites only; the automatic path behind every
   cross-workspace read (`WorkspaceIndexProvider`) must leave it false or ten cross-workspace searches spawn ten
   extractors. That path now runs in the BACKGROUND, which makes the posture more load-bearing, not less: no
-  caller waits for it, so nothing else throttles it. `WorkspaceIndexProvider` keeps one in-flight background
-  refresh per workspace as the coalescing guard. The record names the STRONGEST scan still owed (`ScanFailurePolicy.RecordFailure` folds via
+  caller waits for it, so nothing else throttles it. The coalescing guard is the SINGLETON
+  `BackgroundRefreshGate` — one in-flight refresh per workspace, plus a short cooldown after it finishes. It must
+  never move onto `WorkspaceIndexProvider`: that provider and all seven of its interfaces are registered
+  `AddTransient`, so one tool call builds several instances (`SearchTool` alone injects two) and an instance field
+  would coalesce nothing while a single-instance test stayed green. The record names the STRONGEST scan still owed (`ScanFailurePolicy.RecordFailure` folds via
   `Strongest`), because a downgraded retry that also fails runs as a delta and recording that verbatim would let
   the next routine refresh clear a force throttle in two steps. Clearing uses
   `ScanIntentPolicy.ClearsFailureRecord`, NOT the latch rule `Satisfies`: a delta clears only a delta-intent

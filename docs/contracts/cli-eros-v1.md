@@ -536,6 +536,11 @@ Telemetry JSONL fields:
 | `target_hash` | no | SHA-256 hash of the target/query; raw target text is not stored. |
 | `metadata_json` | yes | Tool-specific metadata as a JSON string. |
 
+`index_fresh` records whether freshness was CONFIRMED, not index health. A cross-workspace read with an explicit
+`workspace_id` and no `ensure_fresh=true` serves the pinned view now and refreshes behind it, so it never confirms
+freshness and records `index_fresh: false` (and `index_state` follows it). That is the default shape of such a read
+and is not a degraded index; `ensure_fresh=true` is the arm that waits for the refresh and can record `true`.
+
 Content export lines include raw chunk text. Eros owns embeddings, semantic ranking, deletion/reconciliation of
 stale semantic chunks, and commercial dashboard/history views. Telemetry export does not include raw queries; it
 exports the stored target hash and tool metadata only.

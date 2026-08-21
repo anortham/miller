@@ -208,6 +208,10 @@ public static class MillerServiceRegistration
         services.AddHostedService(sp => sp.GetRequiredService<WorkspaceOpenPrimeService>());
         services.AddSingleton<SupplementalEdgeCache>();
         services.AddSingleton<RevisionFactCacheStore>();
+        // The coalescing guard for serve-then-refresh cross-workspace reads. It is a SINGLETON on purpose: the
+        // provider below is transient (one tool call builds several instances), so a guard living on the instance
+        // would coalesce nothing.
+        services.AddSingleton<BackgroundRefreshGate>();
         services.AddTransient<WorkspaceIndexProvider>();
         services.AddTransient<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceArtifactProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
