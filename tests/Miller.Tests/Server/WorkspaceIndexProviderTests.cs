@@ -1085,8 +1085,14 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal(2, lookupLoads);
     }
 
+    /// <summary>
+    /// Inspect accepts the same readable sidecar search already accepts. The exact-stamp test folds the store log
+    /// sequence and the manifest hash, so ONE converged file change failed it and sent every named read through a
+    /// whole-generation <see cref="SymbolSearchProjection"/> rebuild — the measured 1-4s inspect peak. A readable
+    /// last-good sidecar answers the same lookups without that rebuild.
+    /// </summary>
     [Fact]
-    public void ResolveSymbolRead_FamilyStoreLastGood_UsesGenerationProjection()
+    public void ResolveSymbolRead_FamilyStoreLastGood_ServesTheReadableSidecarWithoutRebuildingTheProjection()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
         using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
@@ -1095,15 +1101,93 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
         registry.MarkScanned("target-ws", revision: 1);
         WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
-        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-a", storeLogSequence: 21) with
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-b", storeLogSequence: 21) with
         {
             ResolutionState = "exact",
         };
-        string searchPath = StoreSidecarCatalog.PathFor(root, StoreSidecarKind.Search, lastGood.ViewId);
-        WriteEmptySqlite(searchPath);
-        StoreSidecarCatalog.Stamp(
-            searchPath,
-            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGood));
+        WriteLastGoodSearchSidecar(root, target, lastGood);
+
+        int storeOpens = 0;
+        int generationLoads = 0;
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: sidecar,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            loadSessionSymbolSearch: _ =>
+            {
+                generationLoads++;
+                return SymbolSearchProjectionLoader.Load(target.DbPath);
+            },
+            openStoreSymbolSearch: session =>
+            {
+                storeOpens++;
+                return sidecar.OpenStoreRequired(root, session.Snapshot);
+            });
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+
+        Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.Equal(1, storeOpens);
+        Assert.Equal(0, generationLoads);
+    }
+
+    /// <summary>
+    /// The gating question for the accepting path: the index level travels on the LIVE snapshot, never on the
+    /// served sidecar, so a lagging sidecar cannot talk inspect out of its reference-layer guard. The sidecar here
+    /// is stamped at full level while the live snapshot is at symbols level — the context must still report
+    /// symbols, which is what arms the guard.
+    /// </summary>
+    [Fact]
+    public void ResolveSymbolRead_FamilyStoreLastGood_KeepsTheIndexLevelOnTheLiveSnapshot()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("inspect-lvl");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
+        WorkspaceReadSnapshot live = SymbolsLevelSnapshot(
+            StoreSnapshot(root, "manifest-b", storeLogSequence: 21));
+        WriteLastGoodSearchSidecar(root, target, lastGood);
+
+        int generationLoads = 0;
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: sidecar,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            loadSessionSymbolSearch: _ =>
+            {
+                generationLoads++;
+                return SymbolSearchProjectionLoader.Load(target.DbPath);
+            },
+            openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+
+        Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.Equal(0, generationLoads);
+        Assert.Equal(IndexLevels.FullMetadataValue, lastGood.IndexLevel);
+        Assert.Equal(IndexLevels.SymbolsMetadataValue, context.IndexLevel);
+        Assert.True(IndexLevels.IsSymbolsLevel(context.IndexLevel));
+    }
+
+    [Fact]
+    public void ResolveSymbolRead_FamilyStoreMissingSidecar_RebuildsTheGenerationProjection()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("inspect-miss");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-b", storeLogSequence: 21);
 
         int storeOpens = 0;
         int generationLoads = 0;
@@ -1111,7 +1195,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry,
-            sidecar: new SymbolSearchSidecar(enabled: true),
+            sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled),
             openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
             loadSessionSymbolSearch: _ =>
             {
@@ -1121,7 +1205,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             openStoreSymbolSearch: _ =>
             {
                 storeOpens++;
-                throw new InvalidOperationException("named inspect must not open last-good search");
+                throw new InvalidOperationException("a missing sidecar must not be opened");
             });
 
         using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
@@ -1129,6 +1213,161 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Single(context.Index.FindByName("TargetType"));
         Assert.Equal(0, storeOpens);
         Assert.Equal(1, generationLoads);
+    }
+
+    [Fact]
+    public void ResolveSymbolRead_FamilyStoreUnstampedSidecar_RebuildsTheGenerationProjection()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("inspect-bad");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-b", storeLogSequence: 21);
+        string searchPath = StoreSidecarCatalog.PathFor(root, StoreSidecarKind.Search, live.ViewId);
+        WriteEmptySqlite(searchPath);
+
+        int storeOpens = 0;
+        int generationLoads = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled),
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            loadSessionSymbolSearch: _ =>
+            {
+                generationLoads++;
+                return SymbolSearchProjectionLoader.Load(target.DbPath);
+            },
+            openStoreSymbolSearch: _ =>
+            {
+                storeOpens++;
+                throw new InvalidOperationException("an unstamped sidecar must not be opened");
+            });
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+
+        Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.Equal(0, storeOpens);
+        Assert.Equal(1, generationLoads);
+    }
+
+    [Fact]
+    public void ResolveSymbolRead_FamilyStoreSidecarOptOut_RebuildsTheGenerationProjection()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("inspect-off");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-b", storeLogSequence: 21);
+        WriteLastGoodSearchSidecar(root, target, lastGood);
+
+        int storeOpens = 0;
+        int generationLoads = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: SymbolSearchSidecar.Disabled,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            loadSessionSymbolSearch: _ =>
+            {
+                generationLoads++;
+                return SymbolSearchProjectionLoader.Load(target.DbPath);
+            },
+            openStoreSymbolSearch: _ =>
+            {
+                storeOpens++;
+                throw new InvalidOperationException("the opt-out path must not open the sidecar");
+            });
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+
+        Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.Equal(0, storeOpens);
+        Assert.Equal(1, generationLoads);
+    }
+
+    /// <summary>context and impact share the lookup route, so they take the same accepting path.</summary>
+    [Fact]
+    public void Resolve_FamilyStoreLastGood_ServesTheReadableSidecarForContextAndImpact()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("ctx-lg");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-b", storeLogSequence: 21);
+        WriteLastGoodSearchSidecar(root, target, lastGood);
+
+        int generationLoads = 0;
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: sidecar,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(live, target.DbPath)),
+            loadSessionSymbolSearch: _ =>
+            {
+                generationLoads++;
+                return SymbolSearchProjectionLoader.Load(target.DbPath);
+            },
+            openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
+
+        using WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: false);
+
+        Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.Equal(0, generationLoads);
+    }
+
+    [Fact]
+    public void ResolveSymbolRead_FamilyStoreLastGood_ReopensWhenTheSidecarStampCatchesUp()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("inspect-cu");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-b", storeLogSequence: 21);
+        string searchPath = WriteLastGoodSearchSidecar(root, target, lastGood);
+
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: sidecar,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            loadSessionSymbolSearch: _ =>
+                throw new InvalidOperationException("the generation projection was not expected"),
+            openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
+
+        using WorkspaceSymbolReadContext first = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        Assert.Single(first.Index.FindByName("TargetType"));
+        Assert.Empty(first.Index.FindByName("FreshType"));
+
+        using var fresh = DbWithSymbol("target-ws", revision: 1, "FreshType");
+        SearchIndexWriter.Write(searchPath, SqliteSymbolReader.Read(fresh.DbPath), revision: 21);
+        StoreSidecarCatalog.Stamp(
+            searchPath,
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, live));
+
+        using WorkspaceSymbolReadContext second = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+
+        Assert.NotSame(first.Index, second.Index);
+        Assert.Empty(second.Index.FindByName("TargetType"));
+        Assert.Single(second.Index.FindByName("FreshType"));
     }
 
     [Fact]
@@ -2863,6 +3102,38 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             WorkspaceReadMode.FamilyStore,
             GenerationName: "gen-001",
             ManifestGeneration: 7);
+
+    // A real FTS sidecar carrying the fixture's symbols, stamped one store sequence BEHIND the live snapshot —
+    // the lagging-but-readable shape TryLastGood accepts.
+    private static string WriteLastGoodSearchSidecar(
+        string root,
+        JulieDbFixture fixture,
+        WorkspaceReadSnapshot lastGood)
+    {
+        string searchPath = StoreSidecarCatalog.PathFor(root, StoreSidecarKind.Search, lastGood.ViewId);
+        Directory.CreateDirectory(Path.GetDirectoryName(searchPath)!);
+        SearchIndexWriter.Write(
+            searchPath,
+            SqliteSymbolReader.Read(fixture.DbPath),
+            lastGood.Freshness.StoreLogSequence!.Value);
+        StoreSidecarCatalog.Stamp(
+            searchPath,
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGood));
+        return searchPath;
+    }
+
+    // StoreSnapshot leaves LevelStampL3 null at symbols level; production always records all three stamps, and a
+    // null one makes the sidecar stamp unbuildable, which would hide the level question instead of asking it.
+    private static WorkspaceReadSnapshot SymbolsLevelSnapshot(WorkspaceReadSnapshot snapshot) =>
+        snapshot with
+        {
+            IndexLevel = IndexLevels.SymbolsMetadataValue,
+            Freshness = snapshot.Freshness with
+            {
+                IndexLevel = IndexLevels.SymbolsMetadataValue,
+                LevelStampL3 = "l3-symbols",
+            },
+        };
 
     private sealed class StubReadSession(WorkspaceReadSnapshot snapshot) : IWorkspaceReadSession
     {

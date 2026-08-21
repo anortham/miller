@@ -406,9 +406,12 @@ public sealed class WorkspaceIndexProvider
     }
 
     // Current workspace symbol routing. Explicit sidecar opt-out: the holder's already-built full index serves
-    // search. Sidecar enabled: require a revision-fresh on-disk sidecar so stale/missing artifacts are visible
-    // instead of hidden behind a memory fallback. The chosen backend is cached keyed on (workspace, dbPath,
-    // revision) so a freshness Swap (revision bump) rebuilds it and the sidecar is not re-opened per query.
+    // search. Sidecar enabled on the legacy route: require a revision-fresh on-disk sidecar so stale/missing
+    // artifacts are visible instead of hidden behind a memory fallback. On the family-store route the acceptance
+    // is TryServedSearchStamp's — current, or the same view's readable last-good — and ResolveFamilyStoreLookup
+    // now applies the same rule to the named-read route. The chosen backend is cached keyed on (workspace,
+    // dbPath/served stamp, revision), so the sidecar is not opened per query, and a sidecar that converges
+    // changes the key and is opened again on the next read.
     private ISymbolLookupIndex ResolveCurrentSymbolSearchIndex(
         MillerRepositoryIndex? holderIndex,
         long revision,
@@ -510,16 +513,34 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
+    /// <summary>
+    /// The named-read route (inspect, and the context/impact/trace lookup behind <see cref="ResolveCurrent"/>)
+    /// accepts whatever sidecar <see cref="TryServedSearchStamp"/> reports readable — the SAME acceptance
+    /// <see cref="ResolveCurrentSymbolSearchIndex"/> already applies to search. It used to demand a byte-equal
+    /// stamp, and <c>StoreSidecarStamp</c> equality folds the store log sequence and the manifest hash, so ONE
+    /// converged file change failed it and sent the read through a whole-generation
+    /// <see cref="SymbolSearchProjection"/> rebuild over every visible symbol. That rebuild, not the lookup, was
+    /// the measured multi-second inspect peak.
+    ///
+    /// <para>A lagging sidecar can answer with a stale definition row, exactly as search can, and neither surface
+    /// says so — the honest bound is that it never turns into a stale BODY: inspect and context re-read the span
+    /// from the LIVE session by symbol id (<c>ExtractReader.ReadDetail</c>), so a symbol the lag window changed
+    /// reads as body-unavailable rather than as the wrong bytes. The index level travels on the live snapshot
+    /// too, so the reference-layer guard is unaffected by which sidecar answered.</para>
+    ///
+    /// <para>The served stamp is folded into the cache key, so a sidecar that catches up produces a different
+    /// key and the next read reopens it instead of serving the lagging generation forever.</para>
+    /// </summary>
     private ISymbolLookupIndex ResolveFamilyStoreLookup(
         string? workspaceId,
         WorkspaceReadHandle readSession)
     {
-        StoreSidecarStamp? currentStamp = TryCurrentSearchStamp(readSession);
-        if (_sidecar.Enabled && currentStamp is not null)
+        StoreSidecarStamp? served = TryServedSearchStamp(readSession);
+        if (_sidecar.Enabled && served is not null)
         {
-            CacheKey currentKey = KeyFor(workspaceId, readSession.Snapshot, currentStamp);
+            CacheKey servedKey = KeyFor(workspaceId, readSession.Snapshot, served);
             return GetOrAddSymbolSearchCache(
-                currentKey,
+                servedKey,
                 () => new CachedSymbolSearch(
                     MeasureFamilyLookup(_openStoreSymbolSearch(readSession)),
                     IsSidecar: true)).Index;
@@ -529,18 +550,6 @@ public sealed class WorkspaceIndexProvider
         return GetOrAddSymbolReadCache(
             key,
             () => new CachedSymbolRead(MeasureFamilyLookup(_loadSessionSymbolSearch(readSession)))).Index;
-    }
-
-    private static StoreSidecarStamp? TryCurrentSearchStamp(WorkspaceReadHandle readSession)
-    {
-        StoreSidecarStamp? served = TryServedSearchStamp(readSession);
-        if (served is null)
-            return null;
-
-        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(
-            StoreSidecarKind.Search,
-            readSession.Snapshot);
-        return served == expected ? served : null;
     }
 
     private static StoreSidecarStamp? TryServedSearchStamp(WorkspaceReadHandle readSession)

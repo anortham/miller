@@ -2944,8 +2944,13 @@ public sealed class InspectToolTests
         }
     }
 
+    /// <summary>
+    /// A readable but lagging search sidecar answers a named inspect, exactly as it already answers a search. The
+    /// old rule demanded a byte-equal stamp, and one converged file change failed it, so every named read paid a
+    /// whole-generation symbol projection rebuild.
+    /// </summary>
     [Fact]
-    public void Inspect_Summary_FamilyStore_UsesSymbolsWhenSearchSidecarIsNotCurrent()
+    public void Inspect_Summary_FamilyStore_ServesTheLastGoodSearchSidecarWithoutAProjectionRebuild()
     {
         using var current = EmptyFixture("current-ws");
         using var target = JulieDbFixture.CreateForInspect();
@@ -3001,6 +3006,7 @@ public sealed class InspectToolTests
             StoreSidecarCatalog.Stamp(
                 searchPath,
                 StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGoodSnapshot));
+            var lastGoodSidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
             var workspace = new WorkspaceContext(
                 currentRoot,
                 current.DbPath,
@@ -3028,7 +3034,7 @@ public sealed class InspectToolTests
                 loadRegionSearch: (_, _) =>
                     throw new InvalidOperationException("region loader was not expected"),
                 currentIndexFresh: _ => true,
-                sidecar: new SymbolSearchSidecar(enabled: true),
+                sidecar: lastGoodSidecar,
                 openReadSession: (_, _, _) => new WorkspaceReadHandle(
                     new SnapshotOverrideSession(
                         LegacyArtifactReadSession.Open(target.DbPath),
@@ -3038,12 +3044,10 @@ public sealed class InspectToolTests
                     symbolLoadCount++;
                     return SymbolSearchProjectionLoader.Load(target.DbPath);
                 },
-                openStoreSymbolSearch: _ =>
+                openStoreSymbolSearch: session =>
                 {
                     storeSearchOpenCount++;
-                    throw new InvalidOperationException(
-                        "Search sidecar for view 'view-a' is missing or stale. " +
-                        "Run `miller workspace refresh` to converge it.");
+                    return lastGoodSidecar.OpenStoreRequired(target.WorkspaceRoot, session.Snapshot);
                 });
             var tool = new InspectTool(provider);
 
@@ -3054,10 +3058,10 @@ public sealed class InspectToolTests
                 ensure_fresh: false);
 
             Assert.DoesNotContain("inspect failed", output);
-            Assert.Contains("Gets a user by id.", output);
+            Assert.Contains("GetUser", output);
             Assert.Equal(0, fullLoadCount);
-            Assert.Equal(0, storeSearchOpenCount);
-            Assert.Equal(1, symbolLoadCount);
+            Assert.Equal(1, storeSearchOpenCount);
+            Assert.Equal(0, symbolLoadCount);
         }
         finally
         {
