@@ -109,8 +109,10 @@ public sealed record ContinuousTestRevisionPollResult(
 }
 
 /// <summary>
-/// Polls the live artifact (reopen per poll) and enqueues only a complete changed delta.
-/// Unavailable impact never enqueues and never falls back to workspace scope.
+/// Polls the live artifact (reopen per poll) and enqueues only a complete delta: a changed delta
+/// selects impacted tests, an empty delta becomes a pure watermark advance (known-empty in the
+/// queue — nothing stales, nothing executes). Unavailable impact never enqueues and never falls
+/// back to workspace scope.
 /// </summary>
 public sealed class ContinuousTestRevisionPoller
 {
@@ -206,25 +208,27 @@ public sealed class ContinuousTestRevisionPoller
         ContinuousTestImpactResult? impact = await ResolveImpactAsync(request, freshness, cancellationToken)
             .ConfigureAwait(false);
         ContinuousTestImpactOutcome outcome = impact?.Outcome ?? ContinuousTestImpactOutcome.Unavailable;
-        if (outcome != ContinuousTestImpactOutcome.Changed)
+        if (outcome == ContinuousTestImpactOutcome.Unavailable)
         {
-            string reason = outcome == ContinuousTestImpactOutcome.Empty ? "no_source_delta" : "unavailable_delta";
-            if (outcome == ContinuousTestImpactOutcome.Empty)
-                _lastFresh = freshness;
-            return Result(request.WorkspaceId, freshness, observation.Status, 0, reason) with
+            return Result(request.WorkspaceId, freshness, observation.Status, 0, "unavailable_delta") with
             {
-                DeltaReason = impact?.Reason ?? (outcome == ContinuousTestImpactOutcome.Empty ? "no_source_delta" : impact?.Reason),
+                DeltaReason = impact?.Reason,
                 DeltaFromRevision = impact?.FromRevision,
                 DeltaToRevision = impact?.ToRevision,
             };
         }
 
+        // An EMPTY outcome flows through the enqueuer like a known-empty change (defect D3): the
+        // queue's ApplyRevisionAdvance is the ONE watermark writer, so absorbing the advance here
+        // would strand every green watermark at the old revision. A changed outcome must name at
+        // least one path; an empty one must name none.
+        bool empty = outcome == ContinuousTestImpactOutcome.Empty;
         if (impact is null
             || impact.FromRevision is not { } from
             || impact.ToRevision is not { } to
             || to != freshness.Revision
             || from >= to
-            || impact.ChangedPaths.Count == 0)
+            || (impact.ChangedPaths.Count == 0) != empty)
         {
             return Result(request.WorkspaceId, freshness, observation.Status, 0, "unavailable_delta") with
             {
@@ -264,9 +268,10 @@ public sealed class ContinuousTestRevisionPoller
             freshness,
             observation.Status,
             enqueued,
-            enqueued > 0 ? "enqueued" : "no_projects")
+            empty ? "no_source_delta" : enqueued > 0 ? "enqueued" : "no_projects")
         {
             SelectedTests = selected,
+            DeltaReason = empty ? impact.Reason ?? "no_source_delta" : null,
             DeltaFromRevision = from,
             DeltaToRevision = to,
         };

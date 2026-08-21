@@ -86,7 +86,11 @@ public static class ContinuousTestDurableFreshness
         fromRevision = from;
         toRevision = to;
         changedPaths = NormalizeDeltaPaths(change.ChangedPaths);
-        return changedPaths.Count > 0;
+
+        // Empty is still complete: a proven no-change interval names its endpoints so the
+        // watermark advance anchors at the from-revision. Returning false here would anchor the
+        // advance at the new key itself, where it can confirm nothing (defect D3).
+        return true;
     }
 
     public static bool HasActiveDiscoveryFailure(

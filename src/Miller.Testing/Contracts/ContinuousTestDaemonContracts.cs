@@ -62,11 +62,15 @@ public sealed record ContinuousTestDaemonChange
             throw new ArgumentException("must be a non-negative integer", nameof(CurrentRevision));
         }
 
+        // A complete delta with ZERO changed paths is legal: it is a proven-empty interval (the
+        // index advanced, no file changed), which the queue turns into a pure watermark advance
+        // that stales nothing and executes nothing. Defect D3 (2026-08-21): forbidding it forced
+        // the poller to absorb empty advances without the enqueuer, stranding green watermarks.
         var changedPaths = ChangedPaths ?? [];
         if (DeltaCompleteness == ContinuousTestDeltaCompleteness.Complete
-            && (WorkspaceScope || changedPaths.Count == 0 || DeltaFromRevision is null || DeltaToRevision is null))
+            && (WorkspaceScope || DeltaFromRevision is null || DeltaToRevision is null))
         {
-            throw new ArgumentException("a complete delta requires changed paths, both revision endpoints, and project scope");
+            throw new ArgumentException("a complete delta requires both revision endpoints and project scope");
         }
 
         if (DeltaCompleteness == ContinuousTestDeltaCompleteness.Complete

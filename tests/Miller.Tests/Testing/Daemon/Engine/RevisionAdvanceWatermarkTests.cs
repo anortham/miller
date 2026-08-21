@@ -74,6 +74,56 @@ public sealed class RevisionAdvanceWatermarkTests : IDisposable
         Assert.Equal(0, projected.StaleCount);
     }
 
+    /// <summary>
+    /// Defect D3 (2026-08-21 live validation): a revision advance whose file delta is EMPTY (a
+    /// no-op <c>workspace full</c>, a trailing store-log span after a refresh) used to bypass the
+    /// enqueuer, so no watermark moved and every green read stale at the live revision. End to
+    /// end through the REAL queue: the poller's empty advance carries every fresh green to the
+    /// new revision, stales nothing, schedules nothing, and executes nothing.
+    /// </summary>
+    [Fact]
+    public async Task Empty_revision_delta_advances_watermarks_and_executes_nothing()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        CommitGreen(store, "test:app", 2);
+        ContinuousTestDaemonQueue queue = UnreachableChangeQueue(store, revision: 3);
+
+        var source = new ScriptedRevisionSource();
+        source.Observations.Enqueue(Observation(2));
+        var impact = new ScriptedImpactSource
+        {
+            Result = new ContinuousTestImpactResult(EngineTestSupport.WorkspaceId, [], [], [])
+            {
+                Outcome = ContinuousTestImpactOutcome.Empty,
+                Reason = "no_source_delta",
+                FromRevision = 2,
+                ToRevision = 3,
+            },
+        };
+        var poller = new ContinuousTestRevisionPoller(source, impact);
+        await poller.PollAsync(PollRequest(workspace, queue, armed: false), TestContext.Current.CancellationToken);
+        source.Observations.Enqueue(Observation(3));
+        ContinuousTestRevisionPollResult result = await poller.PollAsync(
+            PollRequest(workspace, queue, armed: true),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("no_source_delta", result.Reason);
+        Assert.Equal(1, result.EnqueuedProjects);
+        Assert.Equal(
+            3,
+            store.ListContinuousTestFreshWatermarks(
+                EngineTestSupport.WorkspaceId, EngineTestSupport.Identity)["test:app"].Revision);
+        ContinuousTestProjectedStatus projected = ProjectedAt(store, new CtFreshnessKey(EngineTestSupport.Identity, 3));
+        Assert.Equal(ContinuousTestVerdict.Green, projected.Verdict);
+        Assert.Equal(0, projected.StaleCount);
+
+        // No debounced execution: the empty advance only moves watermarks.
+        Assert.False(queue.HasReadyWork(DateTimeOffset.UtcNow.AddMinutes(1)));
+        Assert.Single(store.ListTestRuns(EngineTestSupport.WorkspaceId));
+    }
+
     [Fact]
     public void Unknown_change_clears_watermarks_and_advances_nothing()
     {
@@ -110,6 +160,27 @@ public sealed class RevisionAdvanceWatermarkTests : IDisposable
             new ContinuousTestImpactSelector(store, facts),
             new ContinuousTestCoordinator(new FakeContinuousTestProvider(), store));
     }
+
+    private static ContinuousTestRevisionObservation Observation(long revision) =>
+        new(
+            EngineTestSupport.WorkspaceId,
+            new CtFreshnessKey(EngineTestSupport.Identity, revision),
+            IndexFresh: true,
+            Status: "fresh",
+            ObservedAt: DateTimeOffset.UtcNow);
+
+    private static ContinuousTestRevisionPollRequest PollRequest(
+        ContinuousTestWorkspace workspace,
+        IContinuousTestDaemonEnqueuer enqueuer,
+        bool armed) =>
+        new(
+            EngineTestSupport.WorkspaceId,
+            workspace.WorkspaceRoot,
+            [
+                new ContinuousTestProject("proj:1", EngineTestSupport.WorkspaceId, workspace.ProjectPath),
+            ],
+            enqueuer,
+            EnqueueArmed: armed);
 
     private static ContinuousTestProjectedStatus ProjectedAt(ContinuousTestStore store, CtFreshnessKey key) =>
         ContinuousTestStatusProjection.Project(

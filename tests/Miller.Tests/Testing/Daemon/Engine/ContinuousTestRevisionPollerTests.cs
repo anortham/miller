@@ -119,8 +119,16 @@ public sealed class ContinuousTestRevisionPollerTests
         }
     }
 
+    /// <summary>
+    /// Defect D3 (2026-08-21 live validation): the poller used to absorb an EMPTY revision delta
+    /// without calling the enqueuer, so <c>ApplyRevisionAdvance</c> never ran and every green
+    /// watermark stranded at the old revision — a routine refresh read stale forever. An empty
+    /// complete delta must reach the queue exactly like a known-empty change: one change per
+    /// project with NO paths and NO impact, carrying the proven interval, so the store can carry
+    /// every currently fresh green to the new revision while nothing executes.
+    /// </summary>
     [Fact]
-    public async Task Empty_complete_delta_absorbs_without_enqueue()
+    public async Task Empty_complete_delta_enqueues_an_empty_advance()
     {
         string root = Directory.CreateTempSubdirectory("miller-ct-empty-").FullName;
         try
@@ -133,6 +141,7 @@ public sealed class ContinuousTestRevisionPollerTests
                 Result = new ContinuousTestImpactResult(EngineTestSupport.WorkspaceId, [], [], [])
                 {
                     Outcome = ContinuousTestImpactOutcome.Empty,
+                    Reason = "no_source_delta",
                     FromRevision = 2,
                     ToRevision = 3,
                 },
@@ -144,8 +153,59 @@ public sealed class ContinuousTestRevisionPollerTests
             ContinuousTestRevisionPollResult result = await poller.PollAsync(
                 Request(workspace, enqueuer, armed: true),
                 TestContext.Current.CancellationToken);
-            Assert.Empty(enqueuer.Changes);
+
+            ContinuousTestDaemonChange change = Assert.Single(enqueuer.Changes);
+            Assert.False(change.WorkspaceScope);
+            Assert.Equal(ContinuousTestDeltaCompleteness.Complete, change.DeltaCompleteness);
+            Assert.Empty(change.ChangedPaths);
+            Assert.Empty(change.ImpactedSymbols);
+            Assert.Empty(change.ImpactedTests);
+            Assert.Equal(2, change.DeltaFromRevision);
+            Assert.Equal(3, change.DeltaToRevision);
+            Assert.Equal(1, result.EnqueuedProjects);
             Assert.Equal("no_source_delta", result.Reason);
+            Assert.Equal(2, result.DeltaFromRevision);
+            Assert.Equal(3, result.DeltaToRevision);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>
+    /// Fail closed: an EMPTY claim without a trustworthy interval cannot anchor a watermark
+    /// advance, so the poller treats it as unavailable — no enqueue, and the span is retried on
+    /// the next poll instead of being absorbed.
+    /// </summary>
+    [Fact]
+    public async Task Empty_delta_without_interval_is_unavailable_and_does_not_enqueue()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-empty-noiv-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(Observation(2));
+            var impact = new ScriptedImpactSource
+            {
+                Result = new ContinuousTestImpactResult(EngineTestSupport.WorkspaceId, [], [], [])
+                {
+                    Outcome = ContinuousTestImpactOutcome.Empty,
+                    Reason = "no_source_delta",
+                },
+            };
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(source, impact);
+            await poller.PollAsync(Request(workspace, enqueuer, armed: false), TestContext.Current.CancellationToken);
+            source.Observations.Enqueue(Observation(3));
+            ContinuousTestRevisionPollResult result = await poller.PollAsync(
+                Request(workspace, enqueuer, armed: true),
+                TestContext.Current.CancellationToken);
+
+            Assert.Empty(enqueuer.Changes);
+            Assert.Equal(0, result.EnqueuedProjects);
+            Assert.Equal("unavailable_delta", result.Reason);
         }
         finally
         {

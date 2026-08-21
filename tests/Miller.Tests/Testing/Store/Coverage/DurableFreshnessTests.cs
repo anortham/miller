@@ -354,6 +354,25 @@ public sealed class DurableFreshnessTests : IDisposable
         Assert.Equal(12, to);
         Assert.Equal(["src/Bar.cs", "src/Foo.cs"], paths);
         Assert.False(ContinuousTestDurableFreshness.TryGetCompleteDelta(unavailable, out _, out _, out _));
+
+        // Defect D3: an EMPTY complete delta (a proven no-change interval) is still a complete
+        // delta — it must name its interval so the queue anchors the watermark advance at the
+        // from-revision instead of the new key (where it could confirm nothing).
+        var emptyDelta = new ContinuousTestDaemonChange(
+            Workspace: workspace,
+            CurrentRevision: "12",
+            IndexIdentity: Identity,
+            DeltaCompleteness: ContinuousTestDeltaCompleteness.Complete,
+            DeltaFromRevision: 11,
+            DeltaToRevision: 12);
+        Assert.True(ContinuousTestDurableFreshness.TryGetCompleteDelta(
+            emptyDelta,
+            out long emptyFrom,
+            out long emptyTo,
+            out IReadOnlyList<string> emptyPaths));
+        Assert.Equal(11, emptyFrom);
+        Assert.Equal(12, emptyTo);
+        Assert.Empty(emptyPaths);
     }
 
     [Fact]
