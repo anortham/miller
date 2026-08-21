@@ -45,7 +45,7 @@ public sealed class CtDiagnosticSinkConventionTests
 
     [Fact]
     public void Every_production_coordinator_construction_passes_a_diagnostic_sink() =>
-        AssertEveryConstructionPassesTheSink(CoordinatorConstruction, OnDiagnosticSink, expectedSites: 2);
+        AssertEveryConstructionPassesTheSink(CoordinatorConstruction, OnDiagnosticSink, expectedSites: 3);
 
     [Fact]
     public void Every_production_provider_factory_construction_passes_a_diagnostic_sink() =>
@@ -53,7 +53,7 @@ public sealed class CtDiagnosticSinkConventionTests
 
     [Fact]
     public void Every_production_daemon_queue_construction_passes_a_lifecycle_log() =>
-        AssertEveryConstructionPassesTheSink(QueueConstruction, LifecycleLogSink, expectedSites: 2);
+        AssertEveryConstructionPassesTheSink(QueueConstruction, LifecycleLogSink, expectedSites: 3);
 
     [Fact]
     public void Every_production_daemon_host_options_passes_a_diagnostic_sink() =>
