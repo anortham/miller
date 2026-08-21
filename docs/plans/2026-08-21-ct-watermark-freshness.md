@@ -302,9 +302,9 @@ All tasks are serial: the freshness cursor (Task 1) feeds everything, `TestsCore
 **What to build:** The contract update the Codex review flagged as missing entirely.
 
 **Acceptance criteria:**
-- [ ] `CLAUDE.md` CT section states the new freshness key, watermark, debounce, and adoption semantics; `AGENTS.md` regenerated and identical.
-- [ ] `docs/contracts/tests-cli-v1.md` matches the shipped JSON.
-- [ ] Worker-scope verification passes; commit per commit mode.
+- [x] `CLAUDE.md` CT section states the new freshness key, watermark, debounce, and adoption semantics; `AGENTS.md` regenerated and identical.
+- [x] `docs/contracts/tests-cli-v1.md` matches the shipped JSON.
+- [x] Worker-scope verification passes; commit per commit mode.
 
 ### Task 9: Live acceptance validation
 
