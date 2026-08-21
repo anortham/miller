@@ -150,11 +150,11 @@ All tasks are serial: the freshness cursor (Task 1) feeds everything, `TestsCore
 **What to build:** A worktree of a CT-enabled repo counts as enabled, with a working local opt-out. The Codex review caught that a tombstone without `tests enable`/`disable` wiring is dead policy: disable would delete a marker the worktree doesn't have, and inheritance would re-enable it on the next check.
 
 **Acceptance criteria:**
-- [ ] Worktree of an enabled repo → opted in with zero manual calls.
-- [ ] Worktree of a never-enabled repo → off.
-- [ ] `MILLER_CT=off` → off everywhere.
-- [ ] `tests disable` on an inherited-enabled worktree → that worktree stays off (tombstone), main checkout unaffected; `tests enable` reverses it.
-- [ ] Worker-scope verification passes; commit per commit mode.
+- [x] Worktree of an enabled repo → opted in with zero manual calls.
+- [x] Worktree of a never-enabled repo → off.
+- [x] `MILLER_CT=off` → off everywhere.
+- [x] `tests disable` on an inherited-enabled worktree → that worktree stays off (tombstone), main checkout unaffected; `tests enable` reverses it.
+- [x] Worker-scope verification passes; commit per commit mode. (d5f838e2, 83 tests green across 7 classes)
 
 ### Task 4: Impacted/stale contract
 
