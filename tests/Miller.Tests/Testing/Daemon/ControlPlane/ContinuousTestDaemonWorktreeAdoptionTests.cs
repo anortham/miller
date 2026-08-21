@@ -492,9 +492,10 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
 
             Assert.True(disposed.Disposed, "the unregistered worktree stayed adopted");
             Assert.False(run.IsCompleted, "an unregistered worktree ended the daemon loop");
-            CtDaemonStatusRecord? record = CtDaemonLease.TryReadStatus(WorktreeRoot);
-            Assert.Equal(CtDaemonLifecycleState.Stopped, record?.State);
-            Assert.Equal("detached", record?.Reason);
+            // DetachWorktree disposes the context BEFORE it writes the Stopped record, so the
+            // dispose flag alone does not prove the record landed - poll for the state too.
+            CtDaemonStatusRecord record = await WaitForWorktreeStatusAsync(CtDaemonLifecycleState.Stopped);
+            Assert.Equal("detached", record.Reason);
         }
         finally
         {
