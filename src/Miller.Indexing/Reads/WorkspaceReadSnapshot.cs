@@ -57,11 +57,16 @@ public sealed record WorkspaceReadSnapshot(
         : Freshness.Revision;
 
     /// <summary>
-    /// CT freshness identity: changes only when the served generation really changes (a rebuild or
-    /// promote, a store view or family change), never on a routine write. By specification
-    /// (docs/plans/2026-08-21-ct-watermark-freshness-design.md step 2) it excludes
-    /// <c>store_log_sequence</c>, the revision counter, the freshness level, and resolution state.
-    /// The <c>ctgen1:</c> prefix guarantees no legacy-format identity can ever equal a new-format one.
+    /// CT freshness identity: changes only on a generation-scale event, never on a routine import.
+    /// Family mode composes only the components that stay stable across delta AND full imports
+    /// (a routine import advances the manifest generation, the manifest hash, and the log sequence,
+    /// so none of those may appear here): the family id, the view id, and the store generation name
+    /// from the CURRENT pointer. Each event that can restart or reuse the revision counter changes
+    /// one of them — a generation promotion flips CURRENT to gen-&lt;n+1&gt; (store contract §12), a
+    /// replanned recovery mints a new view id (StoreFamilyResolver), a recreated store mints a new
+    /// family id — while in-place imports keep the counter monotonic ("sequence continuity across
+    /// promotion", docs/plans/2026-08-07-index-store-v4-contract.md). The <c>ctgen1:</c> prefix
+    /// guarantees no legacy-format identity can ever equal a new-format one.
     /// </summary>
     public string IndexGenerationIdentity => Mode == WorkspaceReadMode.FamilyStore
         ? string.Join(
@@ -70,8 +75,7 @@ public sealed record WorkspaceReadSnapshot(
             "store",
             ArtifactOrStoreId,
             Freshness.ViewId ?? ViewId,
-            Freshness.GenerationName ?? GenerationName,
-            Freshness.ManifestHash)
+            Freshness.GenerationName ?? GenerationName)
         : string.Join(
             ':',
             "ctgen1",

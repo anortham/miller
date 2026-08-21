@@ -58,12 +58,16 @@ public sealed class CtFactAdapterTests
     }
 
     [Fact]
-    public void FromSnapshot_RoutineStoreWriteKeepsTheIdentityWhileTheRevisionAdvances()
+    public void FromSnapshot_RoutineDeltaImportKeepsTheIdentityWhileTheRevisionAdvances()
     {
+        // A routine delta import moves the revision, the log sequence, the manifest generation,
+        // and the manifest hash. The cursor identity must not move with them.
         CtIndexCursor before = CtIndexCursor.FromSnapshot(
-            WorkspaceReadSnapshotTests.StoreSnapshot(revision: 42, storeLogSequence: 42));
+            WorkspaceReadSnapshotTests.StoreSnapshot(
+                revision: 42, storeLogSequence: 42, manifestGeneration: 736, manifestHash: "mh-a"));
         CtIndexCursor after = CtIndexCursor.FromSnapshot(
-            WorkspaceReadSnapshotTests.StoreSnapshot(revision: 48, storeLogSequence: 48));
+            WorkspaceReadSnapshotTests.StoreSnapshot(
+                revision: 48, storeLogSequence: 48, manifestGeneration: 750, manifestHash: "mh-b"));
 
         Assert.Equal(before.IndexIdentity, after.IndexIdentity);
         Assert.Equal(before.FamilyId, after.FamilyId);
@@ -75,9 +79,9 @@ public sealed class CtFactAdapterTests
     public void FromSnapshot_SameRevisionUnderTwoGenerationsNeverComparesFresh()
     {
         CtIndexCursor genA = CtIndexCursor.FromSnapshot(
-            WorkspaceReadSnapshotTests.StoreSnapshot(revision: 5, generationName: "gen-000002", manifestHash: "mh-1"));
+            WorkspaceReadSnapshotTests.StoreSnapshot(revision: 5, generationName: "gen-000002"));
         CtIndexCursor genB = CtIndexCursor.FromSnapshot(
-            WorkspaceReadSnapshotTests.StoreSnapshot(revision: 5, generationName: "gen-000003", manifestHash: "mh-2"));
+            WorkspaceReadSnapshotTests.StoreSnapshot(revision: 5, generationName: "gen-000003"));
 
         Assert.Equal(genA.Revision, genB.Revision);
         Assert.NotEqual(genA.IndexIdentity, genB.IndexIdentity);

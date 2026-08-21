@@ -10,15 +10,25 @@ public sealed class WorkspaceReadSnapshotTests
     {
         WorkspaceReadSnapshot snapshot = StoreSnapshot();
 
-        Assert.Equal("ctgen1:store:fam-1:view-1:gen-000002:mh-1", snapshot.IndexGenerationIdentity);
+        Assert.Equal("ctgen1:store:fam-1:view-1:gen-000002", snapshot.IndexGenerationIdentity);
     }
 
     [Fact]
-    public void FamilyStore_RoutineStoreWriteDoesNotChangeTheGenerationIdentity()
+    public void FamilyStore_RoutineDeltaImportDoesNotChangeTheGenerationIdentity()
     {
-        WorkspaceReadSnapshot before = StoreSnapshot(revision: 42, storeLogSequence: 42);
-        // One file save moves the store log by several counts; the generation stays the same.
-        WorkspaceReadSnapshot after = StoreSnapshot(revision: 48, storeLogSequence: 48);
+        // Live-store reality (2026-08-21 evidence): a routine delta import moves the manifest
+        // generation, the manifest hash, and the store log sequence. Family, view, and the
+        // generation name stay. The identity must stay byte-identical across such an import.
+        WorkspaceReadSnapshot before = StoreSnapshot(
+            revision: 32161,
+            storeLogSequence: 32161,
+            manifestGeneration: 736,
+            manifestHash: "8db774a379ec7c56");
+        WorkspaceReadSnapshot after = StoreSnapshot(
+            revision: 32459,
+            storeLogSequence: 32459,
+            manifestGeneration: 750,
+            manifestHash: "071acf8182e55c97");
 
         Assert.Equal(before.IndexGenerationIdentity, after.IndexGenerationIdentity);
         // The full identity still moves — that is the old key the generation identity replaces.
@@ -32,6 +42,8 @@ public sealed class WorkspaceReadSnapshotTests
         WorkspaceReadSnapshot decorated = StoreSnapshot(
             revision: 99,
             storeLogSequence: 250,
+            manifestGeneration: 750,
+            manifestHash: "mh-9",
             resolutionStamp: "res-9",
             indexLevel: "l1",
             levelStampL1: "stamp-a",
@@ -44,18 +56,19 @@ public sealed class WorkspaceReadSnapshotTests
     }
 
     [Fact]
-    public void FamilyStore_GenerationChangeChangesTheGenerationIdentity()
+    public void FamilyStore_GenerationScaleEventsChangeTheGenerationIdentity()
     {
         WorkspaceReadSnapshot current = StoreSnapshot();
 
-        WorkspaceReadSnapshot promoted = StoreSnapshot(generationName: "gen-000003", manifestHash: "mh-2");
-        WorkspaceReadSnapshot manifestOnly = StoreSnapshot(manifestHash: "mh-2");
-        WorkspaceReadSnapshot otherView = StoreSnapshot(viewId: "view-2");
+        // A store generation promotion flips the CURRENT pointer to gen-<n+1> (contract §12).
+        WorkspaceReadSnapshot promoted = StoreSnapshot(generationName: "gen-000003");
+        // A replanned recovery mints a new view id (StoreFamilyResolver / StoreViewReplan).
+        WorkspaceReadSnapshot mintedView = StoreSnapshot(viewId: "view-2");
+        // A recreated store mints a new family id.
         WorkspaceReadSnapshot otherFamily = StoreSnapshot(familyId: "fam-2");
 
         Assert.NotEqual(current.IndexGenerationIdentity, promoted.IndexGenerationIdentity);
-        Assert.NotEqual(current.IndexGenerationIdentity, manifestOnly.IndexGenerationIdentity);
-        Assert.NotEqual(current.IndexGenerationIdentity, otherView.IndexGenerationIdentity);
+        Assert.NotEqual(current.IndexGenerationIdentity, mintedView.IndexGenerationIdentity);
         Assert.NotEqual(current.IndexGenerationIdentity, otherFamily.IndexGenerationIdentity);
     }
 
