@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Testing;
@@ -359,12 +360,23 @@ public static class TestsCore
         if (!ContinuousTestPolicy.IsWorkspaceOptedIn(root))
             return new TestsServeResult(3, "refused", "not enabled; run miller tests enable first", null);
 
-        CtDaemonSpawnResult spawned = CtDaemonLauncher.SpawnDetached(root, request.Hooks?.StartProcess);
+        // A worktree start anchors the FAMILY daemon at the repo's main checkout: one daemon per
+        // repo adopts every family worktree, so a worktree must not mint a sibling-blind second one.
+        string anchor = CtDaemonLauncher.ResolveSpawnRoot(root);
+        CtDaemonSpawnResult spawned = CtDaemonLauncher.SpawnDetached(anchor, request.Hooks?.StartProcess);
         int exit = spawned.Status is CtDaemonSpawnStatus.Started or CtDaemonSpawnStatus.AlreadyRunning ? 0 : 3;
+        string? reason = spawned.Reason;
+        if (!string.Equals(anchor, root, StringComparison.Ordinal))
+        {
+            reason = reason is null
+                ? $"family daemon at {anchor}"
+                : $"{reason} (family daemon at {anchor})";
+        }
+
         return new TestsServeResult(
             exit,
             spawned.Status.ToString().ToLowerInvariant(),
-            spawned.Reason,
+            reason,
             spawned.ProcessId);
     }
 
@@ -418,6 +430,17 @@ public static class TestsCore
         var poller = new ContinuousTestRevisionPoller(
             new MillerArtifactRevisionSource(),
             new MillerFactImpactSource(workspace => OpenLiveFacts(workspace, workspaceId)));
+
+        // Family-worktree adoption: the daemon scans the machine-global registry through its
+        // NON-CREATING read path and serves every registered, opted-in worktree of this repo
+        // through a context bound to that worktree's own index and ct.db.
+        string millerHome = ResolveMillerHome(request);
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            DiscoverRegisteredRoots = () =>
+                ReadRegisteredWorkspaceRoots(Path.Combine(millerHome, "workspaces.db")),
+            CreateContext = worktreeRoot => CreateWorktreeContext(worktreeRoot, providers, runActivity),
+        };
         ContinuousTestDaemonSnapshot snapshot = ContinuousTestDaemonHost.RunAsync(
             root,
             new ContinuousTestDaemonHostOptions
@@ -430,9 +453,10 @@ public static class TestsCore
                 Queue = queue,
                 Poller = poller,
                 Projects = projects,
-                Budget = CtExecutionBudget.FromEnvironment(ResolveMillerHome(request)),
+                Budget = CtExecutionBudget.FromEnvironment(millerHome),
                 RunActivity = runActivity,
                 Diagnostic = message => CtDaemonLog.Write(root, message),
+                WorktreeAdoption = adoption,
             }).GetAwaiter().GetResult();
         return new TestsServeResult(
             0,
@@ -445,6 +469,27 @@ public static class TestsCore
     {
         ArgumentNullException.ThrowIfNull(request);
         string root = RequireRoot(request);
+
+        // A worktree served by the FAMILY daemon detaches its own context only. Stopping the whole
+        // daemon from a worktree would take down the main root and every sibling; a root with its
+        // own live daemon (Adopting is false) keeps the full-stop semantics below.
+        if (CtDaemonRouting.ResolveLiveEndpoint(root) is { Adopting: true } endpoint)
+        {
+            CtDaemonCommandAck? ack = CtDaemonRouting.RequestDetach(endpoint.EndpointRoot, root);
+            return ack switch
+            {
+                null => new TestsStopResult(3, "failed", "detach request not acknowledged"),
+                { State: CtDaemonCommandState.Rejected } => new TestsStopResult(
+                    0,
+                    "not_adopted",
+                    $"daemon at {endpoint.EndpointRoot} does not serve this worktree"),
+                _ => new TestsStopResult(
+                    0,
+                    "detached",
+                    $"detached from family daemon at {endpoint.EndpointRoot}"),
+            };
+        }
+
         CtDaemonStopResult stopped = CtCommandChannel.Stop(root);
         int exit = stopped.Status == CtDaemonStopStatus.Failed ? 3 : 0;
         return new TestsStopResult(exit, Snake(stopped.Status.ToString()), stopped.Reason);
@@ -463,9 +508,13 @@ public static class TestsCore
         CtRunDisposition disposition = CtDaemonLauncher.ResolveRun(root);
         if (disposition.Execution == CtRunExecution.Daemon)
         {
-            CtRunResult submitted = CtCommandChannel.Run(root, "run");
+            // The endpoint may be the repo's main checkout: a worktree served by the FAMILY daemon
+            // submits there, with its own root in the payload, and its command reaches its own
+            // context's queue and ct.db.
+            string endpointRoot = disposition.EndpointRoot ?? root;
+            CtRunResult submitted = CtDaemonRouting.SubmitRun(endpointRoot, root, "run");
             TestsStatusResult status = request.Wait
-                ? WaitForDaemonToSettle(request, root)
+                ? WaitForDaemonToSettle(request, endpointRoot)
                 : Status(request);
             return new TestsRunResult(
                 submitted.Ack is { State: CtDaemonCommandState.Rejected } ? 3 : 0,
@@ -904,23 +953,28 @@ public static class TestsCore
     /// <para>Four ways out, all bounded: the daemon goes idle, it stops, its lease dies, or a limit expires.
     /// It never waits on a value that the work itself might never produce.</para>
     /// </summary>
-    private static TestsStatusResult WaitForDaemonToSettle(TestsCoreRequest request, string root)
+    /// <summary>
+    /// The daemon state is read from the ENDPOINT root - for a worktree served by the family
+    /// daemon, that is the repo's main checkout, whose status file carries the live per-poll
+    /// activity. The returned verdict always comes from the requested workspace's own store.
+    /// </summary>
+    private static TestsStatusResult WaitForDaemonToSettle(TestsCoreRequest request, string endpointRoot)
     {
         TimeSpan timeout = request.WaitTimeout ?? TimeSpan.FromMinutes(10);
         var clock = Stopwatch.StartNew();
         var queued = new Stopwatch();
         var sinceLivenessProbe = Stopwatch.StartNew();
-        TestsStatusResult status = Status(request);
+        ContinuousTestDaemonSnapshot snapshot = ContinuousTestDaemonHost.ReadStatus(endpointRoot);
         bool sawExecuting = false;
 
         while (true)
         {
-            if (IsExecuting(status))
+            if (IsExecuting(snapshot))
             {
                 sawExecuting = true;
                 queued.Reset();
             }
-            else if (IsQueued(status))
+            else if (IsQueued(snapshot))
             {
                 // Ready work that another workspace's budget lease is blocking. Bounded on its own, because
                 // the holder may keep the slot for as long as its own suite takes, and reporting
@@ -928,19 +982,19 @@ public static class TestsCore
                 if (!queued.IsRunning)
                     queued.Restart();
                 if (queued.Elapsed >= QueuedWaitLimit)
-                    return status;
+                    return Status(request);
             }
             else if (sawExecuting || clock.Elapsed >= RunPickupGrace)
             {
                 // Settled. Before the grace expires an idle reading means the daemon has not picked the run
                 // up yet, not that it finished — the daemon publishes its status once per poll interval.
-                return status;
+                return Status(request);
             }
 
-            if (status.DaemonState == CtDaemonLifecycleState.Stopped)
-                return status;
+            if (snapshot.State == CtDaemonLifecycleState.Stopped)
+                return Status(request);
             if (clock.Elapsed >= timeout)
-                return status;
+                return Status(request);
 
             // A daemon that died mid-run leaves its last status file behind. Without this the wait would read
             // "executing" from a dead process until the whole timeout expired.
@@ -951,12 +1005,12 @@ public static class TestsCore
             if (sinceLivenessProbe.Elapsed >= LivenessProbeInterval)
             {
                 sinceLivenessProbe.Restart();
-                if (CtDaemonLease.TryReadLive(root) is null)
-                    return status;
+                if (CtDaemonLease.TryReadLive(endpointRoot) is null)
+                    return Status(request);
             }
 
             Thread.Sleep(WaitPollInterval);
-            status = Status(request with { WorkspaceRoot = root });
+            snapshot = ContinuousTestDaemonHost.ReadStatus(endpointRoot);
         }
     }
 
@@ -964,16 +1018,93 @@ public static class TestsCore
     /// A run is in flight. The activity field is authoritative; the reason string is the fallback for a
     /// status file written by an older daemon that has no activity field.
     /// </summary>
-    private static bool IsExecuting(TestsStatusResult status) =>
-        status.DaemonActivity == CtDaemonActivity.Executing
-        || (status.DaemonActivity == CtDaemonActivity.Idle
-            && status.DaemonState == CtDaemonLifecycleState.Running
-            && string.Equals(status.DaemonReason, "executing", StringComparison.Ordinal));
+    private static bool IsExecuting(ContinuousTestDaemonSnapshot snapshot) =>
+        snapshot.Activity == CtDaemonActivity.Executing
+        || (snapshot.Activity == CtDaemonActivity.Idle
+            && snapshot.State == CtDaemonLifecycleState.Running
+            && string.Equals(snapshot.Reason, "executing", StringComparison.Ordinal));
 
-    private static bool IsQueued(TestsStatusResult status) =>
-        status.DaemonActivity == CtDaemonActivity.Queued
-        || (status.DaemonActivity == CtDaemonActivity.Idle
-            && string.Equals(status.DaemonReason, ExecutionBudgetHeldReason, StringComparison.Ordinal));
+    private static bool IsQueued(ContinuousTestDaemonSnapshot snapshot) =>
+        snapshot.Activity == CtDaemonActivity.Queued
+        || (snapshot.Activity == CtDaemonActivity.Idle
+            && string.Equals(snapshot.Reason, ExecutionBudgetHeldReason, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Registered workspace roots from the machine-global registry, through the NON-CREATING read
+    /// path. Any failure - absent file, foreign schema, a locked database - degrades to an empty
+    /// list: the adoption scan must never repair, create, or crash over the registry.
+    /// </summary>
+    private static IReadOnlyList<string> ReadRegisteredWorkspaceRoots(string registryDbPath)
+    {
+        try
+        {
+            using WorkspaceRegistry? registry = WorkspaceRegistry.TryOpenReadOnly(registryDbPath);
+            return registry is null
+                ? []
+                : registry.List().Select(row => row.CanonicalRoot).ToArray();
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or UnauthorizedAccessException
+                or InvalidOperationException or InvalidDataException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// The per-worktree machinery, mirroring the primary wiring in <see cref="ServeHost"/>: the
+    /// worktree's OWN ct.db, a selector and poller bound to the worktree's OWN index, and the
+    /// SHARED provider resolver and run-activity cell (one child runs at a time under the global
+    /// budget). Projects come from the worktree's stored inventory when it has one, else from a
+    /// fresh read-only discovery - a new worktree of an enabled repo must run with zero manual
+    /// calls, and discovery persists nothing.
+    /// </summary>
+    private static ContinuousTestWorkspaceContext? CreateWorktreeContext(
+        string worktreeRoot,
+        IContinuousTestProviderResolver providers,
+        CtRunActivityCell runActivity)
+    {
+        string root = Path.GetFullPath(worktreeRoot);
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+        var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        try
+        {
+            IReadOnlyList<ContinuousTestProject> projects = store.ListContinuousTestProjects(workspaceId);
+            if (projects.Count == 0)
+                projects = ContinuousTestProjectInventory.Discover(root, workspaceId);
+            var selector = new ContinuousTestImpactSelector(
+                store,
+                new ReopeningMillerFactSource(() => OpenLiveFacts(root, workspaceId)));
+            var coordinator = new ContinuousTestCoordinator(
+                providers,
+                store,
+                onDiagnostic: message => CtDaemonLog.Write(root, message));
+            var queue = new ContinuousTestDaemonQueue(
+                store,
+                selector,
+                coordinator,
+                lifecycleLog: message => CtDaemonLog.Write(root, message),
+                runActivity: runActivity);
+            var poller = new ContinuousTestRevisionPoller(
+                new MillerArtifactRevisionSource(),
+                new MillerFactImpactSource(workspace => OpenLiveFacts(workspace, workspaceId)));
+            return new ContinuousTestWorkspaceContext
+            {
+                WorkspaceRoot = root,
+                WorkspaceId = workspaceId,
+                Store = store,
+                Queue = queue,
+                Poller = poller,
+                Projects = projects,
+                Owned = store,
+            };
+        }
+        catch
+        {
+            store.Dispose();
+            throw;
+        }
+    }
 
     /// <summary>
     /// Opens the live index for CT facts. Throws when no readable index exists; callers that can

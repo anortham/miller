@@ -25,7 +25,16 @@ public enum CtRunExecution
     Daemon,
 }
 
-public sealed record CtRunDisposition(CtRunExecution Execution, CtDaemonLeaseRecord? Lease);
+/// <summary>
+/// <paramref name="EndpointRoot"/> is a trailing optional so existing constructions keep compiling.
+/// When the disposition is <see cref="CtRunExecution.Daemon"/>, it names the root whose control
+/// plane carries the command files - the workspace's own root, or the repo's main checkout when
+/// the FAMILY daemon serves this worktree by adoption.
+/// </summary>
+public sealed record CtRunDisposition(
+    CtRunExecution Execution,
+    CtDaemonLeaseRecord? Lease,
+    string? EndpointRoot = null);
 
 /// <summary>
 /// Starts at most one detached CT daemon per workspace. A <c>run</c> with no live daemon is a
@@ -38,10 +47,27 @@ public static class CtDaemonLauncher
 
     public static CtRunDisposition ResolveRun(string workspaceRoot)
     {
-        CtDaemonLeaseRecord? live = CtDaemonLease.TryReadLive(workspaceRoot);
-        return live is null
+        CtDaemonEndpoint? endpoint = CtDaemonRouting.ResolveLiveEndpoint(workspaceRoot);
+        return endpoint is null
             ? new CtRunDisposition(CtRunExecution.ForegroundOneShot, null)
-            : new CtRunDisposition(CtRunExecution.Daemon, live);
+            : new CtRunDisposition(CtRunExecution.Daemon, endpoint.Lease, endpoint.EndpointRoot);
+    }
+
+    /// <summary>
+    /// Where <c>tests serve</c> anchors the daemon for this root. A linked worktree whose main
+    /// checkout is opted in starts the FAMILY daemon on the main checkout - one daemon adopts every
+    /// family worktree, so a worktree start must not mint a second, sibling-blind daemon. Everything
+    /// else (a main checkout, a non-git root, a worktree whose main never opted in) serves itself.
+    /// </summary>
+    public static string ResolveSpawnRoot(string workspaceRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        string root = Path.GetFullPath(workspaceRoot);
+        GitWorktreeLayout? layout = GitWorktreeLayout.Resolve(root);
+        return layout is { IsLinkedWorktree: true, MainCheckoutRoot: { } main }
+            && ContinuousTestPolicy.IsWorkspaceOptedIn(main)
+            ? Path.GetFullPath(main)
+            : root;
     }
 
     public static string ResolveCurrentExecutable()

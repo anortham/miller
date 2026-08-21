@@ -81,6 +81,90 @@ public sealed class ContinuousTestDaemonHostOptions
     /// holds it.</para>
     /// </summary>
     public Action<string>? Diagnostic { get; init; }
+
+    /// <summary>
+    /// Family-worktree adoption. Null (the default) keeps the host single-workspace, exactly as
+    /// before. Supplied, the live loop scans for registered, opted-in linked worktrees of ITS OWN
+    /// repo and serves each through a per-worktree <see cref="ContinuousTestWorkspaceContext"/> -
+    /// one loop, one lease, N contexts sharing only the execution budget.
+    /// </summary>
+    public ContinuousTestWorktreeAdoptionOptions? WorktreeAdoption { get; init; }
+}
+
+/// <summary>
+/// One workspace the daemon serves: the machinery bound to that workspace's OWN index and
+/// <c>ct.db</c>. The host's primary workspace is a context, and every adopted worktree is another;
+/// the single loop iterates them as data. Nothing here is shared across workspaces - the shared
+/// pieces (the process, the lease on the main root, the execution budget, the run-activity cell)
+/// live on the host.
+/// </summary>
+public sealed class ContinuousTestWorkspaceContext : IDisposable
+{
+    public required string WorkspaceRoot { get; init; }
+
+    public required string WorkspaceId { get; init; }
+
+    public ContinuousTestStore? Store { get; init; }
+
+    public ContinuousTestDaemonQueue? Queue { get; init; }
+
+    public ContinuousTestRevisionPoller? Poller { get; init; }
+
+    public IReadOnlyList<ContinuousTestProject> Projects { get; init; } = [];
+
+    public IContinuousTestDaemonEnqueuer? Enqueuer { get; init; }
+
+    /// <summary>
+    /// What the host disposes when this context detaches - usually the context's own store. After
+    /// detach the daemon never writes that workspace's <c>ct.db</c> again.
+    /// </summary>
+    public IDisposable? Owned { get; init; }
+
+    internal CtWatchHealth Watch { get; } = new();
+
+    internal CtDegradationBackoff Backoff { get; } = new();
+
+    internal CtFreshnessKey? StartedAt;
+
+    internal CtFreshnessKey? LatestFreshness;
+
+    internal CtDaemonLifecycleState? PublishedState;
+
+    internal string? PublishedReason;
+
+    public void Dispose() => Owned?.Dispose();
+}
+
+/// <summary>
+/// How the host discovers and builds family-worktree contexts. Discovery MUST read the workspace
+/// registry through a non-creating path (<c>WorkspaceRegistry.TryOpenReadOnly</c>): a scan that
+/// runs four times a second must never mint directories or schema as a side effect. The host
+/// applies the adoption predicate itself - registered AND root present AND a linked worktree of
+/// the daemon's own repo AND opted in AND not running its own daemon - so the discovery function
+/// only enumerates candidates.
+/// </summary>
+public sealed class ContinuousTestWorktreeAdoptionOptions
+{
+    /// <summary>Registered workspace roots, from the registry's non-creating read path.</summary>
+    public required Func<IReadOnlyList<string>> DiscoverRegisteredRoots { get; init; }
+
+    /// <summary>
+    /// Builds the per-worktree machinery for a qualifying root: its own store, queue bound to that
+    /// store, and poller bound to that worktree's index. Null refuses the adoption this cycle.
+    /// </summary>
+    public required Func<string, ContinuousTestWorkspaceContext?> CreateContext { get; init; }
+
+    /// <summary>How often the live loop re-scans for attach/detach. Zero scans every pass.</summary>
+    public TimeSpan ScanInterval { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>Seam for the non-acquiring own-daemon probe. Null uses the live lease file.</summary>
+    public Func<string, bool>? HasOwnLiveDaemon { get; init; }
+
+    /// <summary>Seam for the opt-in probe. Null uses <see cref="ContinuousTestPolicy"/>.</summary>
+    public Func<string, bool>? IsOptedIn { get; init; }
+
+    /// <summary>Seam for git-layout resolution. Null uses <see cref="GitWorktreeLayout.Resolve"/>.</summary>
+    public Func<string, GitWorktreeLayout?>? ResolveLayout { get; init; }
 }
 
 /// <summary>
@@ -91,15 +175,29 @@ public sealed class ContinuousTestDaemonHost
 {
     private readonly string _workspaceRoot;
     private readonly ContinuousTestDaemonHostOptions _options;
-    private readonly ContinuousTestStore? _store;
-    private readonly ContinuousTestDaemonQueue? _queue;
-    private readonly ContinuousTestRevisionPoller? _poller;
     private readonly CtExecutionBudget _budget;
-    private readonly CtWatchHealth _watch = new();
-    private readonly CtDegradationBackoff _backoff = new();
-    private readonly IReadOnlyList<ContinuousTestProject> _projects;
     private readonly string _workspaceId;
     private readonly CtRunActivityCell? _runActivity;
+
+    /// <summary>The daemon's own workspace. Always present, always first in the iteration.</summary>
+    private readonly ContinuousTestWorkspaceContext _primary;
+
+    /// <summary>Adopted family-worktree contexts, keyed by full root path.</summary>
+    private readonly Dictionary<string, ContinuousTestWorkspaceContext> _adopted;
+
+    /// <summary>
+    /// Roots an explicit worktree <c>stop</c> detached. The scan must not silently re-adopt them -
+    /// that would make the stop a five-second pause - but an explicit routed <c>run</c> clears the
+    /// suppression, because it is the user asking for that worktree again.
+    /// </summary>
+    private readonly HashSet<string> _stopDetached;
+
+    private readonly ContinuousTestWorktreeAdoptionOptions? _adoption;
+    private readonly Func<string, bool> _hasOwnLiveDaemon;
+    private readonly Func<string, bool> _isOptedIn;
+    private readonly Func<string, GitWorktreeLayout?> _resolveLayout;
+    private DateTimeOffset? _lastWorktreeScanAt;
+    private CtDaemonLeaseIdentity? _leaseIdentity;
 
     /// <summary>
     /// Command ids this loop has already handled. The ack FILE is the durable record, but the write
@@ -109,11 +207,6 @@ public sealed class ContinuousTestDaemonHost
     /// bounded by the command directory.
     /// </summary>
     private readonly HashSet<string> _acknowledged = new(StringComparer.Ordinal);
-    private CtFreshnessKey? _startedAt;
-
-    /// <summary>The most recent freshness key the poller observed: the daemon's live cursor.
-    /// <see cref="Evaluate"/> judges at it so the snapshot agrees with foreground status.</summary>
-    private CtFreshnessKey? _latestFreshness;
     private DateTimeOffset _runStartedAtUtc;
 
     // Read by the pulse task while the main loop writes them. Volatile rather than locked: a republish that
@@ -127,12 +220,25 @@ public sealed class ContinuousTestDaemonHost
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _options = options ?? new ContinuousTestDaemonHostOptions();
         _workspaceId = _options.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(_workspaceRoot);
-        _store = _options.Store;
-        _queue = _options.Queue;
-        _poller = _options.Poller;
         _budget = _options.Budget ?? CtExecutionBudget.FromEnvironment(MillerHome.ResolveMillerDirectory());
-        _projects = _options.Projects ?? [];
         _runActivity = _options.RunActivity;
+        _primary = new ContinuousTestWorkspaceContext
+        {
+            WorkspaceRoot = _workspaceRoot,
+            WorkspaceId = _workspaceId,
+            Store = _options.Store,
+            Queue = _options.Queue,
+            Poller = _options.Poller,
+            Projects = _options.Projects ?? [],
+            Enqueuer = _options.Enqueuer,
+        };
+        _adoption = _options.WorktreeAdoption;
+        _hasOwnLiveDaemon = _adoption?.HasOwnLiveDaemon
+            ?? (root => CtDaemonLease.TryReadLive(root) is not null);
+        _isOptedIn = _adoption?.IsOptedIn ?? (root => ContinuousTestPolicy.IsWorkspaceOptedIn(root));
+        _resolveLayout = _adoption?.ResolveLayout ?? GitWorktreeLayout.Resolve;
+        _adopted = new Dictionary<string, ContinuousTestWorkspaceContext>(PathKeyComparer);
+        _stopDetached = new HashSet<string>(PathKeyComparer);
     }
 
     public ContinuousTestDaemonSnapshot? LastSnapshot { get; private set; }
@@ -221,11 +327,12 @@ public sealed class ContinuousTestDaemonHost
             return;
         }
 
+        _leaseIdentity = lease?.Record.Identity;
         TryWriteStatus(lease, CtDaemonLifecycleState.Running, "status-only");
         Publish(Evaluate("status-only", CtDaemonLifecycleState.Running, executing: false));
 
-        IContinuousTestDaemonEnqueuer enqueuer = _options.Enqueuer ?? _queue
-            ?? throw new InvalidOperationException("CT daemon host requires a queue or enqueuer");
+        if (_primary.Enqueuer is null && _primary.Queue is null)
+            throw new InvalidOperationException("CT daemon host requires a queue or enqueuer");
 
         // The pulse loop exits only on cancellation, and a stop COMMAND does not cancel the caller's
         // token. Its own source lets the shutdown tail stop the pulse and then observe it, instead of
@@ -250,65 +357,48 @@ public sealed class ContinuousTestDaemonHost
             if (stopRequested || cancellationToken.IsCancellationRequested)
                 break;
 
-            if (_poller is not null && _backoff.CanPoll)
-            {
-                try
-                {
-                    ContinuousTestRevisionPollResult poll = await _poller.PollAsync(
-                        new ContinuousTestRevisionPollRequest(
-                            _workspaceId,
-                            _workspaceRoot,
-                            _projects,
-                            enqueuer,
-                            EnqueueArmed: _startedAt is not null && _backoff.CanEnqueue,
-                            OnRebuild: DemotePriorGreen),
-                        cancellationToken).ConfigureAwait(false);
-                    if (poll.Freshness is { } freshness)
-                    {
-                        _startedAt ??= freshness;
-                        _latestFreshness = freshness;
-                        _queue?.ObserveFreshRevision(_workspaceId, freshness);
-                        if (string.Equals(poll.Reason, "degraded", StringComparison.Ordinal))
-                        {
-                            _backoff.RecordDegraded();
-                            _watch.RecordError("degraded");
-                        }
-                        else
-                        {
-                            _backoff.RecordHealthy();
-                            _watch.RecordSuccess(freshness.ToString());
-                        }
-                    }
-                    else
-                    {
-                        _backoff.RecordDegraded();
-                        _watch.RecordError(poll.Reason);
-                    }
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (Exception exception)
-                {
-                    _backoff.RecordDegraded();
-                    _watch.RecordError("poll_error");
+            ScanWorktrees();
 
-                    // The exception used to be discarded here, so a daemon that degraded on every poll
-                    // reported only the word "poll_error" and never the reason. Safe inside this
-                    // last-resort catch because CtDaemonLog.Write never throws for an I/O reason.
-                    Diagnostic($"ct poll error workspace={_workspaceId} {CtDaemonLog.FailureDetail(exception)}");
+            bool pollCancelled = false;
+            foreach (ContinuousTestWorkspaceContext context in EnumerateContexts())
+            {
+                if (!await PollContextAsync(context, cancellationToken).ConfigureAwait(false))
+                {
+                    pollCancelled = true;
+                    break;
                 }
             }
 
+            if (pollCancelled)
+                break;
+
             DateTimeOffset now = _options.Clock();
             bool executing = false;
-            if (_queue is not null && _queue.HasReadyWork(now) && _backoff.CanEnqueue)
+            List<ContinuousTestWorkspaceContext>? ready = null;
+            foreach (ContinuousTestWorkspaceContext context in EnumerateContexts())
             {
-                using CtExecutionBudgetLease? budget = _budget.TryAcquire(
-                    new CtExecutionBudgetRequest(_workspaceRoot, "run"),
-                    TimeSpan.Zero,
-                    cancellationToken);
+                if (context.Queue is not null && context.Backoff.CanEnqueue && context.Queue.HasReadyWork(now))
+                    (ready ??= []).Add(context);
+            }
+
+            if (ready is not null)
+            {
+                CtExecutionBudgetLease? acquired;
+                try
+                {
+                    acquired = _budget.TryAcquire(
+                        new CtExecutionBudgetRequest(_workspaceRoot, "run"),
+                        TimeSpan.Zero,
+                        cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // A cancellation that lands inside the acquire must leave through the shutdown
+                    // tail like every other one, not escape the loop as an exception.
+                    break;
+                }
+
+                using CtExecutionBudgetLease? budget = acquired;
                 if (budget is null)
                 {
                     // Work is ready and accepted; another workspace holds the one execution slot. A caller
@@ -327,7 +417,10 @@ public sealed class ContinuousTestDaemonHost
                     TryWriteStatus(lease, CtDaemonLifecycleState.Running, "executing");
                     try
                     {
-                        await _queue.DrainReadyAsync(now, cancellationToken).ConfigureAwait(false);
+                        // Every ready context drains under the ONE budget lease taken above: N family
+                        // worktrees never mean N concurrent suites.
+                        foreach (ContinuousTestWorkspaceContext context in ready)
+                            await context.Queue!.DrainReadyAsync(now, cancellationToken).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
@@ -344,7 +437,7 @@ public sealed class ContinuousTestDaemonHost
             else
             {
                 _runActivity?.EnterIdle();
-                string reason = _startedAt is null ? "status-only" : "idle";
+                string reason = _primary.StartedAt is null ? "status-only" : "idle";
                 TryWriteStatus(lease, CtDaemonLifecycleState.Running, reason);
                 Publish(Evaluate(reason, CtDaemonLifecycleState.Running, executing: false));
             }
@@ -364,6 +457,7 @@ public sealed class ContinuousTestDaemonHost
 
         TryWriteStatus(lease, CtDaemonLifecycleState.Stopped, "stopped");
         Publish(Evaluate("stopped", CtDaemonLifecycleState.Stopped, executing: false));
+        ReleaseAdoptedContexts();
 
         // Stop the pulse first, then await it. Awaiting an uncancelled pulse would hang the exit,
         // and abandoning it would leave both an unobserved exception and a heartbeat that can still
@@ -481,6 +575,10 @@ public sealed class ContinuousTestDaemonHost
             CtDaemonCommandRequest? request = CtCommandChannel.TryReadRequest(_workspaceRoot, id);
             if (request is null)
                 continue;
+            string? targetRoot = string.IsNullOrWhiteSpace(request.WorkspaceRoot)
+                ? null
+                : Path.GetFullPath(request.WorkspaceRoot);
+            bool targetsPrimary = targetRoot is null || PathsEqual(targetRoot, _workspaceRoot);
             if (request.Kind == CtDaemonCommandKind.Stop)
             {
                 // A stop request targets the daemon that was alive when it was written. One left
@@ -491,27 +589,58 @@ public sealed class ContinuousTestDaemonHost
                     continue;
                 }
 
+                if (!targetsPrimary)
+                {
+                    // A worktree stop detaches THAT context only. It never stops the family daemon:
+                    // the daemon belongs to the main root, and every other adopted worktree still
+                    // depends on it.
+                    if (_adopted.TryGetValue(targetRoot!, out ContinuousTestWorkspaceContext? adopted))
+                    {
+                        DetachWorktree(targetRoot!, adopted, "detached");
+                        _stopDetached.Add(targetRoot!);
+                        TryWriteAck(id, "detached");
+                    }
+                    else
+                    {
+                        TryWriteAck(id, "not-adopted", CtDaemonCommandState.Rejected);
+                    }
+
+                    continue;
+                }
+
                 TryWriteAck(id, "stopping");
                 TryWriteStatus(lease, CtDaemonLifecycleState.Stopped, "stop");
                 return true;
             }
 
-            if (request.Kind == CtDaemonCommandKind.Run && _queue is not null && _projects.Count > 0)
+            if (request.Kind == CtDaemonCommandKind.Run)
             {
-                foreach (ContinuousTestProjectWorkItem item in ContinuousTestProjectInventory.MaterializeProjectWorkItems(
-                             _projects, _workspaceRoot))
+                ContinuousTestWorkspaceContext? target = targetsPrimary
+                    ? _primary
+                    : ResolveRoutedRunTarget(targetRoot!);
+                if (target is null)
                 {
-                    CtFreshnessKey freshness = request.Freshness
-                        ?? _startedAt
-                        ?? new CtFreshnessKey("unspecified", 0);
-                    _queue.EnqueueExplicit(new ContinuousTestDaemonChange(
-                        item.Workspace,
-                        freshness.Revision.ToString(CultureInfo.InvariantCulture),
-                        freshness.IndexIdentity,
-                        WorkspaceScope: true,
-                        ObservedAt: DateTimeOffset.UtcNow,
-                        Command: item.Project.Command,
-                        Framework: item.Project.Framework));
+                    TryWriteAck(id, "not-adopted", CtDaemonCommandState.Rejected);
+                    continue;
+                }
+
+                if (target.Queue is not null && target.Projects.Count > 0)
+                {
+                    foreach (ContinuousTestProjectWorkItem item in ContinuousTestProjectInventory.MaterializeProjectWorkItems(
+                                 target.Projects, target.WorkspaceRoot))
+                    {
+                        CtFreshnessKey freshness = request.Freshness
+                            ?? target.StartedAt
+                            ?? new CtFreshnessKey("unspecified", 0);
+                        target.Queue.EnqueueExplicit(new ContinuousTestDaemonChange(
+                            item.Workspace,
+                            freshness.Revision.ToString(CultureInfo.InvariantCulture),
+                            freshness.IndexIdentity,
+                            WorkspaceScope: true,
+                            ObservedAt: DateTimeOffset.UtcNow,
+                            Command: item.Project.Command,
+                            Framework: item.Project.Framework));
+                    }
                 }
             }
 
@@ -533,7 +662,10 @@ public sealed class ContinuousTestDaemonHost
     /// <c>run</c> still enqueued the work, which costs one command its confirmation instead of
     /// costing the workspace its daemon.
     /// </summary>
-    private void TryWriteAck(string commandId, string reason)
+    private void TryWriteAck(
+        string commandId,
+        string reason,
+        CtDaemonCommandState state = CtDaemonCommandState.Acknowledged)
     {
         // Remembered whether or not the file lands, so an unwritable ack directory cannot make the
         // loop treat the same request as new on every poll.
@@ -544,7 +676,7 @@ public sealed class ContinuousTestDaemonHost
                 _workspaceRoot,
                 new CtDaemonCommandAck(
                     commandId,
-                    CtDaemonCommandState.Acknowledged,
+                    state,
                     DateTimeOffset.UtcNow,
                     reason));
         }
@@ -553,32 +685,33 @@ public sealed class ContinuousTestDaemonHost
         }
     }
 
-    private void DemotePriorGreen(CtFreshnessKey rebuilt)
+    private static void DemotePriorGreen(ContinuousTestWorkspaceContext context, CtFreshnessKey rebuilt)
     {
-        if (_store is null)
+        if (context.Store is null)
             return;
-        string[] ids = _store.ListTestCases(_workspaceId).Select(row => row.Id).ToArray();
+        string[] ids = context.Store.ListTestCases(context.WorkspaceId).Select(row => row.Id).ToArray();
         if (ids.Length == 0)
             return;
-        _store.MarkContinuousTestsStale(_workspaceId, ids, rebuilt);
+        context.Store.MarkContinuousTestsStale(context.WorkspaceId, ids, rebuilt);
     }
 
     private ContinuousTestDaemonSnapshot Evaluate(string reason, CtDaemonLifecycleState state, bool executing)
     {
-        IReadOnlyList<ContinuousTestStatus> statuses = _store?.ListContinuousTestStatuses(_workspaceId) ?? [];
+        ContinuousTestStore? store = _primary.Store;
+        IReadOnlyList<ContinuousTestStatus> statuses = store?.ListContinuousTestStatuses(_workspaceId) ?? [];
 
         // Judge at the LATEST observed cursor — the same live key foreground status judges at —
         // and through the SAME projection, with the per-case watermarks threaded in, so the daemon
         // snapshot and `tests status` cannot disagree about the identical store state.
-        CtFreshnessKey? selected = _latestFreshness ?? _startedAt;
-        IReadOnlyDictionary<string, CtFreshnessKey>? watermarks = selected is { } key && _store is not null
-            ? _store.ListContinuousTestFreshWatermarks(_workspaceId, key.IndexIdentity)
+        CtFreshnessKey? selected = _primary.LatestFreshness ?? _primary.StartedAt;
+        IReadOnlyDictionary<string, CtFreshnessKey>? watermarks = selected is { } key && store is not null
+            ? store.ListContinuousTestFreshWatermarks(_workspaceId, key.IndexIdentity)
             : null;
         ContinuousTestProjectedStatus projected = ContinuousTestStatusProjection.Project(
             selected,
             statuses,
             watermarks,
-            watchHealthy: _watch.IsHealthy);
+            watchHealthy: _primary.Watch.IsHealthy);
         (CtDaemonActivity activity, CtDaemonRunProgress? run) =
             _runActivity?.Read() ?? (CtDaemonActivity.Idle, null);
         return new ContinuousTestDaemonSnapshot(
@@ -596,6 +729,261 @@ public sealed class ContinuousTestDaemonHost
 
     private ContinuousTestDaemonSnapshot DisabledSnapshot() =>
         new(CtDaemonLifecycleState.Stopped, "disabled", ContinuousTestVerdict.Unknown, null, 0, 0, false, false);
+
+    /// <summary>The primary context first, then a snapshot of the adopted ones.</summary>
+    private IEnumerable<ContinuousTestWorkspaceContext> EnumerateContexts()
+    {
+        yield return _primary;
+        if (_adopted.Count == 0)
+            yield break;
+        foreach (ContinuousTestWorkspaceContext context in _adopted.Values.ToArray())
+            yield return context;
+    }
+
+    /// <summary>
+    /// One context's poll pass: the same freshness/backoff/watch bookkeeping the single-workspace
+    /// loop always did, against THIS context's poller, queue, and cursor. Returns false only when
+    /// the loop's own token cancelled mid-poll.
+    /// </summary>
+    private async Task<bool> PollContextAsync(
+        ContinuousTestWorkspaceContext context,
+        CancellationToken cancellationToken)
+    {
+        if (context.Poller is null || !context.Backoff.CanPoll)
+            return true;
+        IContinuousTestDaemonEnqueuer? enqueuer = context.Enqueuer ?? context.Queue;
+        if (enqueuer is null)
+            return true;
+        try
+        {
+            ContinuousTestRevisionPollResult poll = await context.Poller.PollAsync(
+                new ContinuousTestRevisionPollRequest(
+                    context.WorkspaceId,
+                    context.WorkspaceRoot,
+                    context.Projects,
+                    enqueuer,
+                    EnqueueArmed: context.StartedAt is not null && context.Backoff.CanEnqueue,
+                    OnRebuild: rebuilt => DemotePriorGreen(context, rebuilt)),
+                cancellationToken).ConfigureAwait(false);
+            if (poll.Freshness is { } freshness)
+            {
+                context.StartedAt ??= freshness;
+                context.LatestFreshness = freshness;
+                context.Queue?.ObserveFreshRevision(context.WorkspaceId, freshness);
+                if (string.Equals(poll.Reason, "degraded", StringComparison.Ordinal))
+                {
+                    context.Backoff.RecordDegraded();
+                    context.Watch.RecordError("degraded");
+                }
+                else
+                {
+                    context.Backoff.RecordHealthy();
+                    context.Watch.RecordSuccess(freshness.ToString());
+                }
+            }
+            else
+            {
+                context.Backoff.RecordDegraded();
+                context.Watch.RecordError(poll.Reason);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception exception)
+        {
+            context.Backoff.RecordDegraded();
+            context.Watch.RecordError("poll_error");
+
+            // The exception used to be discarded here, so a daemon that degraded on every poll
+            // reported only the word "poll_error" and never the reason. Safe inside this
+            // last-resort catch because CtDaemonLog.Write never throws for an I/O reason.
+            Diagnostic($"ct poll error workspace={context.WorkspaceId} {CtDaemonLog.FailureDetail(exception)}");
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// One attach/detach pass over the family. Runs only from the LIVE loop - the kill switch and
+    /// the disabled branch return before the loop starts, so <c>MILLER_CT=off</c> performs zero
+    /// registry or filesystem reads here - and skips while the daemon is paused on a held budget.
+    /// </summary>
+    private void ScanWorktrees()
+    {
+        if (_adoption is null)
+            return;
+        if (_publishedState == CtDaemonLifecycleState.Paused)
+            return;
+        DateTimeOffset now = _options.Clock();
+        if (_lastWorktreeScanAt is { } last && now - last < _adoption.ScanInterval)
+            return;
+        _lastWorktreeScanAt = now;
+
+        // Detach pass: a root that disappeared or stopped qualifying releases its context. A
+        // MISSING root is a detach, never an error loop - the registry row may simply be stale.
+        foreach ((string key, ContinuousTestWorkspaceContext context) in _adopted.ToArray())
+        {
+            if (!QualifiesForAdoption(context.WorkspaceRoot))
+                DetachWorktree(key, context, "detached");
+        }
+
+        IReadOnlyList<string> roots;
+        try
+        {
+            roots = _adoption.DiscoverRegisteredRoots();
+        }
+        catch (Exception exception)
+        {
+            Diagnostic($"ct worktree discovery error {CtDaemonLog.FailureDetail(exception)}");
+            return;
+        }
+
+        foreach (string candidate in roots)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+                continue;
+            string root = Path.GetFullPath(candidate);
+            if (PathsEqual(root, _workspaceRoot) || _adopted.ContainsKey(root) || _stopDetached.Contains(root))
+                continue;
+            if (!QualifiesForAdoption(root))
+                continue;
+            if (AttachWorktree(root) is { } context)
+                TryWriteAdoptedStatus(context, CtDaemonLifecycleState.Running, AdoptedReason());
+        }
+    }
+
+    /// <summary>
+    /// The adoption predicate, every clause required: the root exists, it is a linked worktree of
+    /// THIS daemon's repo, it is opted in (inheritance and tombstone included), and it does not run
+    /// its own daemon. Every probe is a read; nothing is created.
+    /// </summary>
+    private bool QualifiesForAdoption(string root)
+    {
+        if (!Directory.Exists(root))
+            return false;
+        GitWorktreeLayout? layout = _resolveLayout(root);
+        if (layout is not { IsLinkedWorktree: true, MainCheckoutRoot: { } main })
+            return false;
+        if (!PathsEqual(Path.GetFullPath(main), _workspaceRoot))
+            return false;
+        if (!_isOptedIn(root))
+            return false;
+        return !_hasOwnLiveDaemon(root);
+    }
+
+    private ContinuousTestWorkspaceContext? AttachWorktree(string root)
+    {
+        if (_adoption is null)
+            return null;
+        ContinuousTestWorkspaceContext? context;
+        try
+        {
+            context = _adoption.CreateContext(root);
+        }
+        catch (Exception exception)
+        {
+            Diagnostic($"ct worktree attach error root={root} {CtDaemonLog.FailureDetail(exception)}");
+            return null;
+        }
+
+        if (context is null)
+            return null;
+        _adopted[root] = context;
+        return context;
+    }
+
+    private void DetachWorktree(string key, ContinuousTestWorkspaceContext context, string reason)
+    {
+        _adopted.Remove(key);
+        try
+        {
+            context.Dispose();
+        }
+        catch (Exception exception)
+        {
+            // A detach must never kill the daemon; the remaining contexts still depend on it.
+            Diagnostic($"ct worktree detach error root={context.WorkspaceRoot} {CtDaemonLog.FailureDetail(exception)}");
+        }
+
+        TryWriteAdoptedStatus(context, CtDaemonLifecycleState.Stopped, reason);
+    }
+
+    /// <summary>
+    /// A routed <c>run</c> may name a worktree the scan has not attached yet - or one an earlier
+    /// stop detached. It is the user asking for that worktree explicitly, so it clears the stop
+    /// suppression and attaches on the spot when the root qualifies.
+    /// </summary>
+    private ContinuousTestWorkspaceContext? ResolveRoutedRunTarget(string root)
+    {
+        _stopDetached.Remove(root);
+        if (_adopted.TryGetValue(root, out ContinuousTestWorkspaceContext? adopted))
+            return adopted;
+        if (_adoption is null || !QualifiesForAdoption(root))
+            return null;
+        if (AttachWorktree(root) is not { } context)
+            return null;
+        TryWriteAdoptedStatus(context, CtDaemonLifecycleState.Running, AdoptedReason());
+        return context;
+    }
+
+    /// <summary>
+    /// The per-worktree status record: state plus a reason NAMING the serving daemon's root, so a
+    /// foreground <c>tests status</c> on the worktree reads an honest answer from its own
+    /// <c>.miller/ct/</c>. Written on transitions only (attach, detach, shutdown), guarded like
+    /// every other control-plane write, and skipped entirely when the root is gone.
+    /// </summary>
+    private void TryWriteAdoptedStatus(
+        ContinuousTestWorkspaceContext context,
+        CtDaemonLifecycleState state,
+        string reason)
+    {
+        if (context.PublishedState == state
+            && string.Equals(context.PublishedReason, reason, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        context.PublishedState = state;
+        context.PublishedReason = reason;
+        try
+        {
+            if (!Directory.Exists(context.WorkspaceRoot))
+                return;
+            CtDaemonLease.WriteStatus(
+                context.WorkspaceRoot,
+                new CtDaemonStatusRecord(state, reason, _leaseIdentity, _options.Clock()));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private string AdoptedReason() => $"adopted by {_workspaceRoot}";
+
+    /// <summary>The shutdown tail's half of adoption: every context released, every record honest.</summary>
+    private void ReleaseAdoptedContexts()
+    {
+        foreach ((string key, ContinuousTestWorkspaceContext context) in _adopted.ToArray())
+            DetachWorktree(key, context, "stopped");
+    }
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            Path.TrimEndingDirectorySeparator(left),
+            Path.TrimEndingDirectorySeparator(right),
+            PathComparison);
+
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+    private static StringComparer PathKeyComparer =>
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
 
     /// <summary>
     /// Reports a failure the loop would otherwise discard. Called only from the LIVE loop, never from a

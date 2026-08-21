@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Miller.Indexing;
 
 namespace Miller.Testing;
 
@@ -38,12 +39,20 @@ public sealed record CtDaemonHeartbeatRecord(
     CtDaemonLeaseIdentity Identity,
     DateTimeOffset HeartbeatUtc);
 
+/// <summary>
+/// <paramref name="WorkspaceRoot"/> is a trailing optional so an older request file still
+/// deserializes (it reads as null) and every existing positional construction keeps compiling.
+/// Null or the daemon's own root targets the daemon's primary workspace; any other value names an
+/// ADOPTED worktree the family daemon serves, so <c>run</c> reaches that worktree's own queue and
+/// <c>stop</c> detaches only that worktree's context.
+/// </summary>
 public sealed record CtDaemonCommandRequest(
     string CommandId,
     CtDaemonCommandKind Kind,
     DateTimeOffset RequestedAtUtc,
     string? Reason,
-    CtFreshnessKey? Freshness);
+    CtFreshnessKey? Freshness,
+    string? WorkspaceRoot = null);
 
 public sealed record CtDaemonCommandAck(
     string CommandId,
@@ -172,5 +181,123 @@ public static class CtDaemonProtocol
         if (string.IsNullOrWhiteSpace(commandId) || !CommandIdPattern.IsMatch(commandId))
             throw new ArgumentException("must be a file-safe token", nameof(commandId));
         return commandId;
+    }
+}
+
+/// <summary>
+/// Where <c>tests</c> verbs for a workspace find a live daemon. <see cref="EndpointRoot"/> is the
+/// root whose control plane (<c>.miller/ct/</c>) carries the command files; <see cref="Adopting"/>
+/// is true when that daemon lives on the repo's MAIN checkout and serves the asked-about worktree
+/// by adoption rather than by holding a lease on it.
+/// </summary>
+public sealed record CtDaemonEndpoint(string EndpointRoot, CtDaemonLeaseRecord Lease, bool Adopting);
+
+/// <summary>
+/// Command routing for the family daemon. A linked worktree has no daemon of its own in the adopted
+/// arrangement, so a command written into ITS command directory would sit unread forever; these
+/// helpers resolve the live endpoint (own lease first, then the main checkout's) and write requests
+/// that carry the target worktree's identity in the payload.
+/// </summary>
+public static class CtDaemonRouting
+{
+    /// <summary>
+    /// The live daemon endpoint for <paramref name="workspaceRoot"/>, or null when no live daemon
+    /// serves it. The root's OWN live lease always wins - a worktree running its own daemon is
+    /// never routed away from it. Only then does a linked worktree fall through to the repo's main
+    /// checkout. Resolution reads lease files and the two git pointer files; it creates nothing.
+    /// </summary>
+    public static CtDaemonEndpoint? ResolveLiveEndpoint(
+        string workspaceRoot,
+        Func<string, CtDaemonLeaseRecord?>? readLiveLease = null,
+        Func<string, GitWorktreeLayout?>? resolveLayout = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        string root = Path.GetFullPath(workspaceRoot);
+        Func<string, CtDaemonLeaseRecord?> probe =
+            readLiveLease ?? (candidate => CtDaemonLease.TryReadLive(candidate));
+        if (probe(root) is { } own)
+            return new CtDaemonEndpoint(root, own, Adopting: false);
+
+        GitWorktreeLayout? layout = (resolveLayout ?? GitWorktreeLayout.Resolve)(root);
+        if (layout is { IsLinkedWorktree: true, MainCheckoutRoot: { } mainRoot })
+        {
+            string main = Path.GetFullPath(mainRoot);
+            if (probe(main) is { } family)
+                return new CtDaemonEndpoint(main, family, Adopting: true);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Writes one command request into <paramref name="endpointRoot"/>'s command directory with the
+    /// TARGET workspace in the payload, so the family daemon routes it to the right context. The
+    /// same shape serves the endpoint's own workspace too: a target equal to the endpoint resolves
+    /// to the daemon's primary context.
+    /// </summary>
+    public static CtDaemonCommandRequest WriteRoutedRequest(
+        string endpointRoot,
+        CtDaemonCommandKind kind,
+        string? reason,
+        CtFreshnessKey? freshness,
+        string targetWorkspaceRoot,
+        string? commandId = null,
+        TimeProvider? time = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(endpointRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetWorkspaceRoot);
+        string id = string.IsNullOrWhiteSpace(commandId)
+            ? Guid.NewGuid().ToString("N")
+            : commandId;
+        var request = new CtDaemonCommandRequest(
+            id,
+            kind,
+            (time ?? TimeProvider.System).GetUtcNow(),
+            reason,
+            freshness,
+            Path.GetFullPath(targetWorkspaceRoot));
+        CtDaemonJson.WriteAtomic(
+            CtDaemonProtocol.CommandRequestPath(endpointRoot, id),
+            request,
+            CtDaemonJsonContext.Default.CtDaemonCommandRequest);
+        return request;
+    }
+
+    /// <summary>
+    /// Submits a <c>run</c> for <paramref name="targetWorkspaceRoot"/> to the daemon at
+    /// <paramref name="endpointRoot"/> and waits for the acknowledgement. Mirrors
+    /// <see cref="CtCommandChannel.Run"/>, plus the routed workspace payload.
+    /// </summary>
+    public static CtRunResult SubmitRun(
+        string endpointRoot,
+        string targetWorkspaceRoot,
+        string? reason = null,
+        CtFreshnessKey? freshness = null,
+        TimeSpan? ackTimeout = null)
+    {
+        if (CtDaemonLease.TryReadLive(endpointRoot) is null)
+            return new CtRunResult(CtRunExecution.ForegroundOneShot, null, "no daemon");
+
+        CtDaemonCommandRequest request = WriteRoutedRequest(
+            endpointRoot, CtDaemonCommandKind.Run, reason, freshness, targetWorkspaceRoot);
+        CtDaemonCommandAck? ack = CtCommandChannel.WaitForAck(
+            endpointRoot, request.CommandId, ackTimeout ?? CtCommandChannel.DefaultAckTimeout);
+        return new CtRunResult(CtRunExecution.Daemon, ack, ack is null ? "unacked" : null);
+    }
+
+    /// <summary>
+    /// Asks the family daemon at <paramref name="endpointRoot"/> to detach the adopted worktree
+    /// <paramref name="worktreeRoot"/>. The daemon itself keeps running - this is the worktree
+    /// shape of <c>tests stop</c>, and it must never kill the family daemon.
+    /// </summary>
+    public static CtDaemonCommandAck? RequestDetach(
+        string endpointRoot,
+        string worktreeRoot,
+        TimeSpan? ackTimeout = null)
+    {
+        CtDaemonCommandRequest request = WriteRoutedRequest(
+            endpointRoot, CtDaemonCommandKind.Stop, "detach", freshness: null, worktreeRoot);
+        return CtCommandChannel.WaitForAck(
+            endpointRoot, request.CommandId, ackTimeout ?? CtCommandChannel.DefaultAckTimeout);
     }
 }

@@ -129,6 +129,52 @@ public sealed class WorkspaceRegistry : IDisposable
     }
 
     /// <summary>
+    /// Opens an EXISTING registry database for reading, or returns null when no readable registry is
+    /// there. Unlike <see cref="Open"/>, this never creates the directory, the file, or the schema -
+    /// it is the probe surface for callers that must leave no footprint, such as the CT daemon's
+    /// worktree-adoption scan. An unreadable or foreign file also returns null: a scan that cannot
+    /// read the registry must degrade to "no registered workspaces", never repair or replace it.
+    /// </summary>
+    public static WorkspaceRegistry? TryOpenReadOnly(string dbPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+
+        string absDbPath = Path.GetFullPath(dbPath);
+        if (!File.Exists(absDbPath))
+            return null;
+
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = absDbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString();
+
+        var connection = new SqliteConnection(connectionString);
+        try
+        {
+            connection.Open();
+            using (var pragma = connection.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA busy_timeout=3000;";
+                pragma.ExecuteNonQuery();
+            }
+
+            return new WorkspaceRegistry(connection, absDbPath);
+        }
+        catch (SqliteException)
+        {
+            connection.Dispose();
+            return null;
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Record that a workspace was seen, inserting its row or refreshing the mutable facts of an existing one.
     /// </summary>
     /// <param name="lineage">

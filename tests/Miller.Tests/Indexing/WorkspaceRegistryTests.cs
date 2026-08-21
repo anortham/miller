@@ -34,6 +34,42 @@ public sealed class WorkspaceRegistryTests : IDisposable
         new(2026, 5, 31, 12, minute, 0, TimeSpan.Zero);
 
     [Fact]
+    public void TryOpenReadOnly_WhenTheFileIsAbsent_ReturnsNullAndCreatesNothing()
+    {
+        string dbPath = Path.Combine(_dir, "not-yet", "workspaces.db");
+
+        using WorkspaceRegistry? registry = WorkspaceRegistry.TryOpenReadOnly(dbPath);
+
+        Assert.Null(registry);
+        Assert.False(File.Exists(dbPath));
+        Assert.False(Directory.Exists(Path.Combine(_dir, "not-yet")));
+    }
+
+    [Fact]
+    public void TryOpenReadOnly_ReadsRowsAnExistingRegistryHolds()
+    {
+        using (var writer = WorkspaceRegistry.Open(_dbPath))
+        {
+            writer.UpsertSeen(
+                "ws1",
+                "alpha-11111111",
+                "/work/alpha",
+                "/work/alpha/.miller/symbols.db",
+                WorkspaceRegistryState.Current,
+                Utc(1));
+        }
+
+        SqliteConnection.ClearAllPools();
+        using WorkspaceRegistry? registry = WorkspaceRegistry.TryOpenReadOnly(_dbPath);
+
+        Assert.NotNull(registry);
+        IReadOnlyList<WorkspaceRegistryRow> rows = registry.List();
+        WorkspaceRegistryRow row = Assert.Single(rows);
+        Assert.Equal("ws1", row.WorkspaceId);
+        Assert.Equal("/work/alpha", row.CanonicalRoot);
+    }
+
+    [Fact]
     public void Open_CreatesSchemaAndConfiguresWalNormalSyncAndBusyTimeout()
     {
         using var registry = WorkspaceRegistry.Open(_dbPath);
