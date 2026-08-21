@@ -142,13 +142,23 @@ public sealed class CtDaemonLease : IDisposable
         CtDaemonRunProgress? run,
         DateTimeOffset? loopTickAtUtc = null,
         TimeProvider? time = null) =>
-        WriteStatus(state, reason, activity, run, loopTickAtUtc, (time ?? TimeProvider.System).GetUtcNow());
+        WriteStatus(
+            state,
+            reason,
+            activity,
+            run,
+            loopTickAtUtc,
+            loopAgeSeconds: null,
+            (time ?? TimeProvider.System).GetUtcNow());
 
     /// <summary>
     /// The same publish with the write's timestamp supplied outright, so a caller that stamps
     /// <paramref name="loopTickAtUtc"/> from its own clock can stamp <paramref name="nowUtc"/> from that SAME
     /// clock. The lag a reader measures is the difference between the two, and a pair taken from two clocks
     /// measures nothing.
+    ///
+    /// <para><paramref name="loopAgeSeconds"/> is the same lag measured by the caller on a MONOTONIC clock,
+    /// which no wall-clock correction can move. It is written verbatim too, and a null stays null.</para>
     /// </summary>
     public void WriteStatus(
         CtDaemonLifecycleState state,
@@ -156,10 +166,19 @@ public sealed class CtDaemonLease : IDisposable
         CtDaemonActivity activity,
         CtDaemonRunProgress? run,
         DateTimeOffset? loopTickAtUtc,
+        double? loopAgeSeconds,
         DateTimeOffset nowUtc) =>
         WriteStatus(
             Record.WorkspaceRoot,
-            new CtDaemonStatusRecord(state, reason, Record.Identity, nowUtc, activity, run, loopTickAtUtc));
+            new CtDaemonStatusRecord(
+                state,
+                reason,
+                Record.Identity,
+                nowUtc,
+                activity,
+                run,
+                loopTickAtUtc,
+                loopAgeSeconds));
 
     public void Dispose()
     {

@@ -22,8 +22,9 @@ public enum CtLoopHealth
 }
 
 /// <param name="LagSeconds">
-/// Whole seconds between the record's write and the loop's last tick, or null when the record does not
-/// carry a tick to subtract.
+/// Whole seconds the loop has stood still: the daemon's published monotonic age, or — for a record from a
+/// build that carried none — the record's write stamp minus its loop tick. Null when the record carries no
+/// tick at all, so nothing can be subtracted.
 /// </param>
 public sealed record CtLoopHealthVerdict(CtLoopHealth Health, int? LagSeconds, string Reason)
 {
@@ -40,11 +41,17 @@ public sealed record CtLoopHealthVerdict(CtLoopHealth Health, int? LagSeconds, s
 /// keeps the file moving. A pid probe proves only that the process is there. So a daemon whose loop had
 /// stopped scanning read as <c>running</c> for as long as the process lived.</para>
 ///
-/// <para><b>The measurement uses two stamps from the same clock in the same file</b> —
+/// <para><b>The measurement comes from the DAEMON, never from the reader's clock.</b> The daemon subtracts its
+/// own monotonic clock at write time and publishes <see cref="CtDaemonStatusRecord.LoopAgeSeconds"/>; that is
+/// the number this rule uses. Only the pulse can keep writing while the tick stands still, so a large age is
+/// proof the loop stalled, and a loaded machine slows both writers together and cannot fake one.</para>
+///
+/// <para><b>The two wall-clock stamps are the fallback</b> —
 /// <see cref="CtDaemonStatusRecord.UpdatedAtUtc"/> minus <see cref="CtDaemonStatusRecord.LoopTickAtUtc"/> —
-/// and never the reader's own clock. Only the pulse can advance <c>updated_at</c> while the tick stands
-/// still, so a large gap is proof the loop stalled. A loaded machine slows both writers together, which
-/// moves both stamps and cannot fake a stall.</para>
+/// for a record from a build that published no age. Both stamps come from the daemon's WALL clock, so a
+/// forward correction landing between them (an NTP step, a laptop waking) fabricates a lag the loop never
+/// had, and a backward one hides a real stall. A monotonic clock has neither failure, which is why the
+/// published age wins wherever it exists.</para>
 ///
 /// <para><b>Report only.</b> Nothing here kills a daemon or starts a watchdog. A wedged loop is reported and
 /// the operator decides: <c>tests stop</c> then <c>tests start</c>.</para>
@@ -128,12 +135,13 @@ public static class CtDaemonLoopHealth
         if (!IsBounded(loopStallTimeout))
             return Unknown("loop-stall detection is off");
 
-        int lag = WholeSeconds(record.UpdatedAtUtc - tick);
+        TimeSpan age = LoopAge(record, tick);
+        int lag = WholeSeconds(age);
 
         if (record.Activity == CtDaemonActivity.Executing)
             return Executing(record, lag, childStallTimeout);
 
-        return record.UpdatedAtUtc - tick > loopStallTimeout
+        return age > loopStallTimeout
             ? new CtLoopHealthVerdict(
                 CtLoopHealth.LoopStalled,
                 lag,
@@ -188,6 +196,18 @@ public static class CtDaemonLoopHealth
                     + $"holds the loop after {Seconds(lag)}")
             : executing;
     }
+
+    /// <summary>
+    /// How long the loop has stood still. The daemon's own MONOTONIC measurement when the record carries one;
+    /// otherwise the two wall-clock stamps subtracted, which is all a record from an older build offers.
+    ///
+    /// <para>A negative published age is impossible from a monotonic clock, so one can only come from a
+    /// corrupt or hand-edited file; it reads as no age, exactly as a backwards wall-clock pair does.</para>
+    /// </summary>
+    private static TimeSpan LoopAge(CtDaemonStatusRecord record, DateTimeOffset tick) =>
+        record.LoopAgeSeconds is { } seconds && seconds >= 0 && double.IsFinite(seconds)
+            ? TimeSpan.FromSeconds(seconds)
+            : record.UpdatedAtUtc - tick;
 
     private static bool IsBounded(TimeSpan bound) =>
         bound > TimeSpan.Zero && bound != Timeout.InfiniteTimeSpan;

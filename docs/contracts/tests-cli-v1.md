@@ -77,7 +77,7 @@ explicit (`tests serve` / MCP `start`).
 | `daemon.run.selected_case_count` | number | Cases this run selected. |
 | `daemon.run.started_at` | string | ISO-8601 UTC start time of the run. |
 | `daemon.loop_stalled` | bool | `true` only when the daemon's MAIN LOOP is provably wedged — see "Daemon loop-stall detection" below. `false` covers healthy, unproven, and no-daemon alike; a reader that needs the difference reads `loop_stall_seconds` too. |
-| `daemon.loop_stall_seconds` | number \| null | The loop's lag in whole seconds: the record's own `updated_at_utc` minus its `loop_tick_at_utc`. `null` when the lag cannot be measured — no live daemon, no status record, or a record from a build that predates the field. Never `0` for an unmeasurable lag. |
+| `daemon.loop_stall_seconds` | number \| null | How long the loop has stood still, in whole seconds, as the DAEMON measured it on its own monotonic clock (`loop_age_seconds` in the status record). For a record from a build that published no age it falls back to `updated_at_utc` minus `loop_tick_at_utc`. `null` when the lag cannot be measured — no live daemon, no status record, or a record with no `loop_tick_at_utc`. Never `0` for an unmeasurable lag. |
 | `daemon.run.child` | string | `starting`, `active`, `quiet`, or `stalled` — the daemon's own reading of how lively the test process is, so a reader can separate a slow suite from a wedged one without comparing timestamps. `stalled` means the silence bound has passed and the kill is due; it is never reported when `MILLER_CT_STALL_TIMEOUT=off`, because nothing will act on it. |
 | `verdict` | string | Aggregate verdict: `green`, `red`, `partial`, or `unknown`. |
 | `selected` | object \| null | The LIVE index freshness key the verdict was judged at, or `null` when no readable index exists. It is never derived from stored `ct.db` rows. |
@@ -163,9 +163,16 @@ there. A daemon whose loop had stopped scanning therefore read as `running` for 
 lived.
 
 The loop stamps `loop_tick_at_utc` every time it moves — at the top of each pass and when a drain returns —
-and the pulse copies that value verbatim; it never stamps one of its own. One record then carries two stamps
-from the same clock, and their difference is the loop's lag. The reader's own clock never enters the
-comparison, and a loaded machine slows both writers together, so load cannot fake a stall.
+and the pulse copies that value verbatim; it never stamps one of its own. The writer also subtracts that
+stamp on its own MONOTONIC clock and publishes the result as `loop_age_seconds`. That age is the number the
+rule uses. The reader's own clock never enters the comparison, and a loaded machine slows both writers
+together, so load cannot fake a stall.
+
+The daemon subtracts rather than publishing a raw monotonic count because the reader is a different process,
+and monotonic counts are not comparable across processes — an age is. The two wall-clock stamps stay in the
+record and remain the fallback for a build that published no age, but they are only a fallback: both come
+from the daemon's WALL clock, so a forward correction landing between them (an NTP step, a laptop waking)
+fabricates a lag the loop never had, and a backward one hides a real stall.
 
 - Judged only when `daemon.activity` is `idle` or `queued`. Default bound: **90 seconds**.
 - Override with `MILLER_CT_LOOP_STALL_TIMEOUT`: whole seconds (`120`) or a TimeSpan (`00:02:00`).
@@ -180,7 +187,15 @@ comparison, and a loaded machine slows both writers together, so load cannot fak
   `stalled` the instant its silence passes the bound, which is the same instant the kill fires — without it
   the report named a fault while the daemon was correctly handling it. The drain's own elapsed time is not
   used: one drain runs every ready project, so a chatty 40-minute suite that has only just gone quiet has a
-  long drain and a kill that is not late. `executing` with `run: null` reports as executing, never as hung.
+  long drain and a kill that is not late.
+- `executing` with `run: null` reports as executing, never as hung — an ACCEPTED gap, not an oversight. A
+  drain names no run while it is discovering a project's test inventory, and discovery spawns a real provider
+  process whose duration is legitimate and unbounded (a large solution's list-tests pass takes minutes). No
+  bound over that window could separate slow from wedged, so none is applied. The window is not unsupervised:
+  every provider process, discovery included, runs through the one shared runner that kills a child which
+  passes `MILLER_CT_STALL_TIMEOUT` in silence. What stays unreported is a daemon wedged in its OWN code
+  between two projects of one drain; `daemon.activity` still reads `executing` there, so the state is honest
+  even though the loop cannot be judged.
 - Absence proves nothing. A record with no `loop_tick_at_utc` — a build that predates the field, or the
   transition record a family daemon writes for an adopted worktree — reports `loop_stalled: false` with
   `loop_stall_seconds: null`, never a stall. A `stalled` child on a record that carries no silence

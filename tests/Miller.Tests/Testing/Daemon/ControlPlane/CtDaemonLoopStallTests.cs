@@ -285,6 +285,60 @@ public sealed class CtDaemonLoopStallTests : IDisposable
         Assert.Equal(0, verdict.LagSeconds);
     }
 
+    /// <summary>
+    /// Both wall-clock stamps come from the daemon, but a forward correction landing BETWEEN them — an NTP
+    /// step, a laptop waking — moves only the later one. The pair then shows a lag the loop never had, and
+    /// the reader would nudge the operator to stop a working daemon. The daemon's own monotonic age cannot be
+    /// corrected, so it decides.
+    /// </summary>
+    [Fact]
+    public void A_forward_clock_jump_between_the_two_stamps_does_not_fabricate_a_stall()
+    {
+        CtLoopHealthVerdict verdict = Evaluate(
+            Record(lag: TimeSpan.FromMinutes(5), loopAge: TimeSpan.FromSeconds(2)));
+
+        Assert.Equal(CtLoopHealth.Healthy, verdict.Health);
+        Assert.False(verdict.Stalled);
+        Assert.Equal(2, verdict.LagSeconds);
+    }
+
+    /// <summary>The same correction the other way round: a backward step must not hide a wedged loop.</summary>
+    [Fact]
+    public void A_backward_clock_jump_cannot_conceal_a_wedged_loop()
+    {
+        CtLoopHealthVerdict verdict = Evaluate(
+            Record(lag: TimeSpan.FromSeconds(-30), loopAge: TimeSpan.FromMinutes(5)));
+
+        Assert.Equal(CtLoopHealth.LoopStalled, verdict.Health);
+        Assert.True(verdict.Stalled);
+        Assert.Equal(300, verdict.LagSeconds);
+    }
+
+    /// <summary>
+    /// A record from a build that published no age still has its two stamps, and they are all it has. The
+    /// fallback keeps that build readable rather than reporting every one of its records as unproven.
+    /// </summary>
+    [Fact]
+    public void A_record_with_no_published_age_falls_back_to_its_two_stamps()
+    {
+        CtDaemonStatusRecord old = Record(lag: TimeSpan.FromMinutes(5));
+
+        Assert.Null(old.LoopAgeSeconds);
+        Assert.Equal(CtLoopHealth.LoopStalled, Evaluate(old).Health);
+        Assert.Equal(300, Evaluate(old).LagSeconds);
+    }
+
+    /// <summary>A monotonic clock cannot run backwards, so a negative age is a corrupt file, not evidence.</summary>
+    [Fact]
+    public void A_negative_published_age_is_ignored_like_a_backwards_stamp_pair()
+    {
+        CtLoopHealthVerdict verdict = Evaluate(
+            Record(lag: TimeSpan.FromMinutes(5), loopAge: TimeSpan.FromSeconds(-10)));
+
+        Assert.Equal(CtLoopHealth.LoopStalled, verdict.Health);
+        Assert.Equal(300, verdict.LagSeconds);
+    }
+
     [Fact]
     public void The_default_loop_stall_bound_is_ninety_seconds()
     {
@@ -443,6 +497,26 @@ public sealed class CtDaemonLoopStallTests : IDisposable
     }
 
     /// <summary>
+    /// The age the rule now prefers rides the same file, so it must survive the same round trip under the
+    /// documented key. A field the serializer dropped would send every reader back to the wall-clock pair
+    /// this change exists to stop trusting.
+    /// </summary>
+    [Fact]
+    public void The_published_loop_age_survives_the_status_file()
+    {
+        WriteRecord(_root, Record(lag: TimeSpan.FromMinutes(5), loopAge: TimeSpan.FromSeconds(2.5)));
+
+        CtDaemonStatusRecord? read = CtDaemonLease.TryReadStatus(_root);
+
+        Assert.Equal(2.5, read?.LoopAgeSeconds);
+        Assert.Equal(CtLoopHealth.Healthy, Evaluate(read).Health);
+        Assert.Contains(
+            "\"loop_age_seconds\"",
+            File.ReadAllText(CtDaemonProtocol.StatusPath(_root)),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The whole feature is one subtraction, so both stamps must come from ONE clock. The tick used the
     /// host's clock while the record's timestamp came from <see cref="TimeProvider.System"/>, and they
     /// agreed only because both default to UtcNow — a host given a clock of its own wrote a tick from one
@@ -540,6 +614,111 @@ public sealed class CtDaemonLoopStallTests : IDisposable
         }
         finally
         {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>
+    /// The live half of the clock-jump proof. The daemon's WALL clock is frozen here, so its two stamps are
+    /// identical and their difference proves nothing — the shape a backward correction leaves behind. The
+    /// published age comes from a monotonic clock instead, so it keeps growing and the rule still reads the
+    /// wedge. The reader cannot hold a monotonic stamp of the daemon's, so the daemon subtracts and publishes
+    /// the age; this proves the number in the file is that measurement and not the frozen pair.
+    /// </summary>
+    [Fact]
+    public async Task The_published_loop_age_comes_from_a_clock_the_wall_clock_cannot_move()
+    {
+        var pollInterval = TimeSpan.FromSeconds(30);
+        var delay = new WedgeTheMainLoop(pollInterval);
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                AcquireLease = true,
+                Enqueuer = new RecordingEnqueuer(),
+                Clock = () => Now,
+                PollInterval = pollInterval,
+                HeartbeatInterval = TimeSpan.FromMilliseconds(5),
+                Delay = delay.DelayAsync,
+            },
+            cts.Token);
+
+        try
+        {
+            CtDaemonStatusRecord record = await WaitForStatusAsync(
+                status => status.LoopAgeSeconds >= 0.1);
+
+            // The frozen pair says the loop ticked at the same instant the record was written.
+            Assert.Equal(Now, record.UpdatedAtUtc);
+            Assert.Equal(Now, record.LoopTickAtUtc);
+            Assert.Equal(
+                CtLoopHealth.LoopStalled,
+                CtDaemonLoopHealth.Evaluate(record, TimeSpan.FromTicks(1), ChildBound).Health);
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>
+    /// A host without a <see cref="ContinuousTestDaemonHostOptions.RunActivity"/> cell is a documented
+    /// configuration — the option's own summary says the status file then carries the lifecycle state alone.
+    /// It published <c>idle</c> for the whole drain, and idle IS judged by loop lag, so a healthy drain
+    /// longer than the bound read as a wedged loop. The loop knows it is draining whether or not a cell was
+    /// supplied, so it says so.
+    /// </summary>
+    [Fact]
+    public async Task A_daemon_with_no_activity_cell_publishes_executing_while_it_drains()
+    {
+        DateTimeOffset start = DateTimeOffset.UtcNow;
+        ContinuousTestWorkspace workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(new GatedProvider(gate.Task), store));
+        queue.Enqueue(EngineTestSupport.Change(workspace, observedAt: start));
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                AcquireLease = true,
+                WorkspaceId = EngineTestSupport.WorkspaceId,
+                Store = store,
+                Queue = queue,
+                Budget = CtExecutionBudget.Disabled(),
+
+                // No RunActivity: the whole point of this test.
+                PollInterval = TimeSpan.FromMilliseconds(5),
+                HeartbeatInterval = TimeSpan.FromMilliseconds(5),
+            },
+            cts.Token);
+
+        try
+        {
+            CtDaemonStatusRecord record = await WaitForStatusAsync(
+                status => status.Activity == CtDaemonActivity.Executing);
+
+            // No cell means no run details to publish; the ACTIVITY is still honest, and that is what
+            // decides whether the record is judged by loop lag at all.
+            Assert.Null(record.Run);
+            Assert.Equal(
+                CtLoopHealth.Healthy,
+                CtDaemonLoopHealth.Evaluate(record, TimeSpan.FromTicks(1), ChildBound).Health);
+        }
+        finally
+        {
+            gate.TrySetResult();
             await cts.CancelAsync();
             await run;
         }
@@ -716,12 +895,17 @@ public sealed class CtDaemonLoopStallTests : IDisposable
     /// One record whose two stamps are <paramref name="lag"/> apart — the pulse republished at
     /// <c>Now</c>, the loop last ticked <paramref name="lag"/> earlier.
     /// </summary>
+    /// <param name="loopAge">
+    /// The age the DAEMON measured on its own monotonic clock. Null stands for a record from a build that
+    /// published none, which is the only case where the two stamps above are used.
+    /// </param>
     private static CtDaemonStatusRecord Record(
         TimeSpan lag,
         CtDaemonActivity activity = CtDaemonActivity.Idle,
         CtDaemonRunProgress? run = null,
         CtDaemonLifecycleState state = CtDaemonLifecycleState.Running,
-        CtDaemonLeaseIdentity? identity = null) =>
+        CtDaemonLeaseIdentity? identity = null,
+        TimeSpan? loopAge = null) =>
         new(
             state,
             "idle",
@@ -729,7 +913,8 @@ public sealed class CtDaemonLoopStallTests : IDisposable
             Now,
             activity,
             run,
-            Now - lag);
+            Now - lag,
+            loopAge?.TotalSeconds);
 
     private static TestsStatusResult StatusWith(CtLoopHealthVerdict loop) =>
         new(
@@ -829,6 +1014,26 @@ public sealed class CtDaemonLoopStallTests : IDisposable
         public DateTimeOffset Read() => new(Interlocked.Read(ref _ticks), TimeSpan.Zero);
 
         public void Advance(TimeSpan amount) => Interlocked.Add(ref _ticks, amount.Ticks);
+    }
+
+    /// <summary>
+    /// A provider whose run holds the drain until the test lets go, which is how a long suite looks to the
+    /// daemon loop: one blocked call, one pulse still publishing.
+    /// </summary>
+    private sealed class GatedProvider(Task gate) : IContinuousTestProvider
+    {
+        public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
+            ContinuousTestWorkspace workspace,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ProviderTestCase>>([]);
+
+        public async Task<ProviderRunResult> RunAsync(
+            ContinuousTestProviderRunRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            await gate.ConfigureAwait(false);
+            return new ProviderRunResult(request.RunId ?? "run:1", "passed");
+        }
     }
 
     /// <summary>A provider whose run takes time on the daemon's clock and then succeeds.</summary>

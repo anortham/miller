@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using Miller.Indexing;
 
@@ -267,6 +268,22 @@ public sealed class ContinuousTestDaemonHost
     /// tick forever.
     /// </summary>
     private long _loopTickTicks;
+
+    /// <summary>
+    /// The SAME stamp on a monotonic clock, which no wall-clock correction can move. The published age is
+    /// this subtracted at write time; see <see cref="CtDaemonStatusRecord.LoopAgeSeconds"/> for why the
+    /// daemon subtracts rather than publishing the raw count.
+    /// </summary>
+    private long _loopTickTimestamp;
+
+    /// <summary>
+    /// Whether the main loop is inside a drain right now. A FALLBACK for the activity a host without a
+    /// <see cref="ContinuousTestDaemonHostOptions.RunActivity"/> cell would otherwise publish — a documented,
+    /// legal configuration that used to publish <c>idle</c> for the whole drain, so a reader measured the
+    /// run's elapsed time as loop lag and called a working daemon wedged. A host WITH a cell reads the cell,
+    /// which is authoritative and also names the run.
+    /// </summary>
+    private volatile bool _drainInFlight;
 
     public ContinuousTestDaemonHost(string workspaceRoot, ContinuousTestDaemonHostOptions? options = null)
     {
@@ -543,6 +560,7 @@ public sealed class ContinuousTestDaemonHost
 
                     // Marked BEFORE the status write, so the record this poll publishes already says
                     // "executing" rather than inheriting the previous poll's activity.
+                    _drainInFlight = true;
                     _runActivity?.BeginDrain();
                     TryWriteStatus(lease, CtDaemonLifecycleState.Running, "executing");
                     try
@@ -565,6 +583,7 @@ public sealed class ContinuousTestDaemonHost
 
                         // One drain runs every ready project. Cleared only when the whole drain returns, so a
                         // waiting caller cannot slip through the gap between two of its projects.
+                        _drainInFlight = false;
                         _runActivity?.EndDrain();
                     }
                 }
@@ -671,8 +690,15 @@ public sealed class ContinuousTestDaemonHost
     /// poll delay for a long time after a run, so a tick that tracked the WRITES read as lag the moment the
     /// pulse republished the idle that followed a long run.
     /// </summary>
-    private void StampLoopTick() =>
+    /// <remarks>
+    /// The monotonic stamp is written FIRST, so a reader that finds a non-zero wall stamp always finds the
+    /// monotonic one that goes with it.
+    /// </remarks>
+    private void StampLoopTick()
+    {
+        Volatile.Write(ref _loopTickTimestamp, Stopwatch.GetTimestamp());
         Volatile.Write(ref _loopTickTicks, _options.Clock().UtcTicks);
+    }
 
     /// <summary>
     /// Writes one status record, attaching whatever the activity cell currently reports and the main loop's
@@ -692,13 +718,12 @@ public sealed class ContinuousTestDaemonHost
             if (lease is null)
                 return;
 
-            (CtDaemonActivity activity, CtDaemonRunProgress? run) =
-                _runActivity?.Read() ?? (CtDaemonActivity.Idle, null);
+            (CtDaemonActivity activity, CtDaemonRunProgress? run) = ReadActivity();
 
             // ONE clock stamps both halves of the pair a reader subtracts. The tick came from this clock
             // while the record's timestamp came from TimeProvider.System, and they agreed only because both
             // default to UtcNow.
-            lease.WriteStatus(state, reason, activity, run, LoopTick(), _options.Clock());
+            lease.WriteStatus(state, reason, activity, run, LoopTick(), LoopAgeSeconds(), _options.Clock());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -714,6 +739,33 @@ public sealed class ContinuousTestDaemonHost
         long ticks = Volatile.Read(ref _loopTickTicks);
         return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
     }
+
+    /// <summary>
+    /// How long the loop has been standing still, measured on the MONOTONIC clock and rounded to the
+    /// millisecond. Null before the loop's first stamp, exactly as <see cref="LoopTick"/> is: the two are
+    /// published together and a reader that finds one finds the other.
+    ///
+    /// <para>The daemon subtracts here rather than publishing its raw tick count because the reader is a
+    /// different process: monotonic counts are not comparable across processes, but an AGE is. The wall-clock
+    /// pair stays in the record for a reader from an older build.</para>
+    /// </summary>
+    private double? LoopAgeSeconds()
+    {
+        if (Volatile.Read(ref _loopTickTicks) == 0)
+            return null;
+        long elapsed = Stopwatch.GetTimestamp() - Volatile.Read(ref _loopTickTimestamp);
+        return elapsed <= 0 ? 0 : Math.Round(elapsed / (double)Stopwatch.Frequency, 3);
+    }
+
+    /// <summary>
+    /// What the daemon is doing, from the activity cell when there is one and from the loop's own drain flag
+    /// when there is not. A cell-less host is a documented configuration, and it must still say "executing"
+    /// while it is blocked in a drain — an idle record with a frozen loop tick is exactly the shape a reader
+    /// judges as a wedged loop.
+    /// </summary>
+    private (CtDaemonActivity Activity, CtDaemonRunProgress? Run) ReadActivity() =>
+        _runActivity?.Read()
+            ?? (_drainInFlight ? CtDaemonActivity.Executing : CtDaemonActivity.Idle, null);
 
     /// <summary>
     /// Drains the file command channel. Returns <c>true</c> when a live stop request asked this
@@ -926,8 +978,7 @@ public sealed class ContinuousTestDaemonHost
             statuses,
             watermarks,
             watchHealthy: _primary.Watch.IsHealthy);
-        (CtDaemonActivity activity, CtDaemonRunProgress? run) =
-            _runActivity?.Read() ?? (CtDaemonActivity.Idle, null);
+        (CtDaemonActivity activity, CtDaemonRunProgress? run) = ReadActivity();
         return new ContinuousTestDaemonSnapshot(
             state,
             reason,

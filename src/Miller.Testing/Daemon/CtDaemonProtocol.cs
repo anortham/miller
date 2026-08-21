@@ -149,6 +149,20 @@ public sealed record CtDaemonRunProgress(
 /// the transition records a family daemon writes for an adopted worktree; absence means unknown, never a
 /// stall.
 /// </param>
+/// <param name="LoopAgeSeconds">
+/// How long the main loop had been standing still when this record was written, in seconds, measured by the
+/// DAEMON on its own MONOTONIC clock — the same kind of measurement <see cref="CtDaemonRunProgress.SilenceSeconds"/>
+/// already carries for the child.
+///
+/// <para>Why it exists beside the two wall-clock stamps: both of those come from the daemon's wall clock, so a
+/// forward correction landing between the loop's tick and the pulse's write — an NTP step, a laptop waking —
+/// fabricated a lag the loop never had, and a backward one hid a real stall. A monotonic clock cannot be
+/// corrected. The reader cannot hold a monotonic stamp of the daemon's (the two are different processes, and
+/// the tick counts are not comparable across them), so the daemon subtracts and publishes the AGE.</para>
+///
+/// <para>Null on a record from a build that predates the field, and whenever <see cref="LoopTickAtUtc"/> is
+/// null — there is no tick to measure from. A reader falls back to the two stamps then.</para>
+/// </param>
 public sealed record CtDaemonStatusRecord(
     CtDaemonLifecycleState State,
     string Reason,
@@ -156,7 +170,8 @@ public sealed record CtDaemonStatusRecord(
     DateTimeOffset UpdatedAtUtc,
     CtDaemonActivity Activity = CtDaemonActivity.Idle,
     CtDaemonRunProgress? Run = null,
-    DateTimeOffset? LoopTickAtUtc = null);
+    DateTimeOffset? LoopTickAtUtc = null,
+    double? LoopAgeSeconds = null);
 
 /// <summary>
 /// File layout for the detached CT control plane under <c>&lt;workspace&gt;/.miller/ct/</c>.

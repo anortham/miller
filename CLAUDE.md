@@ -434,13 +434,20 @@ scripts/test.ps1 all
   family daemon reading as `daemon gone` from that worktree, permanently.
   **Loop-stall detection (report only).** The status record carries `loop_tick_at_utc`, stamped by the MAIN
   LOOP every time it moves (top of each pass, and when a drain returns) and copied VERBATIM by the pulse —
-  the pulse survives a wedged loop by design, so a reader compares `updated_at_utc` with `loop_tick_at_utc`,
-  two stamps of ONE clock in one file, and never its own clock. Lag over 90s
+  the pulse survives a wedged loop by design. The writer also subtracts that stamp on its own MONOTONIC clock
+  and publishes `loop_age_seconds`; that age is what the reader judges, and the reader's own clock never
+  enters it. The daemon subtracts because the reader is another process: monotonic counts do not compare
+  across processes, an age does. The `updated_at_utc` minus `loop_tick_at_utc` pair stays as the FALLBACK for
+  a record that carries no age, and it is only a fallback — both stamps come from the daemon's WALL clock, so
+  a forward correction between them fabricates a lag and a backward one hides a real one. Lag over 90s
   (`MILLER_CT_LOOP_STALL_TIMEOUT`, `off` disables the WHOLE detection) is a wedge while idle/queued;
   `executing` is judged only by the separate hung-supervision rule (child `stalled` plus a silence longer
   than the DAEMON's own kill bound and a 60s grace — both numbers come from the record, never from the
   reader's environment, and the drain's elapsed time is never used because one drain runs every ready
-  project). Absence of the field is unknown, never a stall; a worktree judges the FAMILY daemon's record.
+  project). `executing` with no run is an ACCEPTED gap: a drain names no run while it discovers a project's
+  inventory, that discovery spawns a real provider process of legitimate unbounded duration, and the child is
+  already supervised by the silence kill. Absence of the field is unknown, never a stall; a worktree judges
+  the FAMILY daemon's record.
   Miller REPORTS it (`loop_stalled`, `loop_stall_seconds`, a compact line, a `tests stop` nudge) and never
   kills or watchdogs. The lease's never-renewed `heartbeat_utc` and the write-only `daemon.heartbeat.json`
   were REMOVED with it: one honest periodic record beats two dead ones.
