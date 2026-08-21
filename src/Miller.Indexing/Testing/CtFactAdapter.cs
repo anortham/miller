@@ -42,11 +42,7 @@ public sealed class CtFactAdapter : ICtFactSource, IDisposable
         get
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            WorkspaceReadSnapshot snapshot = _session.Snapshot;
-            long revision = snapshot.Mode == WorkspaceReadMode.FamilyStore
-                ? snapshot.Freshness.StoreLogSequence ?? snapshot.Freshness.Revision
-                : snapshot.Freshness.Revision;
-            return new CtIndexCursor(snapshot.IndexIdentity, revision);
+            return CtIndexCursor.FromSnapshot(_session.Snapshot);
         }
     }
 

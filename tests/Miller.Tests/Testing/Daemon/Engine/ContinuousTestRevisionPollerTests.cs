@@ -1,4 +1,7 @@
+using Microsoft.Data.Sqlite;
+using Miller.Indexing.Testing;
 using Miller.Testing;
+using Miller.Tests.Indexing.Resolution;
 using Xunit;
 
 namespace Miller.Tests.Testing.Daemon.Engine;
@@ -148,6 +151,131 @@ public sealed class ContinuousTestRevisionPollerTests
         {
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
+    }
+
+    [Fact]
+    public async Task Miller_source_keeps_identity_on_a_revision_advance_and_flags_only_a_rebuild()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        string root = CreateWorkspaceRoot(fixture, out string dbPath);
+        try
+        {
+            var source = new MillerArtifactRevisionSource();
+            ContinuousTestRevisionObservation? first = await source.RefreshAsync(
+                EngineTestSupport.WorkspaceId, root, TestContext.Current.CancellationToken);
+            Assert.NotNull(first);
+            CtFreshnessKey firstKey = first!.Freshness!.Value;
+            Assert.Equal("ctgen1:artifact:art-1:blake3", firstKey.IndexIdentity);
+            Assert.Equal(1, firstKey.Revision);
+            Assert.False(first.Rebuild);
+
+            // A file-change delta: the revision advances, the identity does not, no rebuild.
+            Execute(dbPath, "INSERT INTO extraction_revisions VALUES (2);");
+            ContinuousTestRevisionObservation? second = await source.RefreshAsync(
+                EngineTestSupport.WorkspaceId, root, TestContext.Current.CancellationToken);
+            CtFreshnessKey secondKey = second!.Freshness!.Value;
+            Assert.Equal(firstKey.IndexIdentity, secondKey.IndexIdentity);
+            Assert.Equal(2, secondKey.Revision);
+            Assert.False(second.Rebuild);
+
+            // A promoted rebuild: the artifact id changes, so the identity changes.
+            Execute(dbPath, "UPDATE artifact_metadata SET value = 'art-2' WHERE key = 'artifact_id';");
+            ContinuousTestRevisionObservation? third = await source.RefreshAsync(
+                EngineTestSupport.WorkspaceId, root, TestContext.Current.CancellationToken);
+            Assert.NotEqual(firstKey.IndexIdentity, third!.Freshness!.Value.IndexIdentity);
+            Assert.True(third.Rebuild);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Both_intakes_produce_the_same_cursor_for_the_same_artifact()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        string root = CreateWorkspaceRoot(fixture, out _);
+        try
+        {
+            ContinuousTestRevisionObservation? observation = await new MillerArtifactRevisionSource().RefreshAsync(
+                EngineTestSupport.WorkspaceId, root, TestContext.Current.CancellationToken);
+            using var adapter = CtFactAdapter.OpenArtifact(Path.Combine(root, ".miller", "symbols.db"));
+
+            CtFreshnessKey pollerKey = observation!.Freshness!.Value;
+            Assert.Equal(adapter.Current.IndexIdentity, pollerKey.IndexIdentity);
+            Assert.Equal(adapter.Current.Revision, pollerKey.Revision);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Miller_impact_source_passes_the_family_id_to_the_delta_reader()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        fixture.AddFile("file-service", "src/Service.cs");
+        fixture.AddSymbol("file-service", "cls-service", "Service", "class", "src/Service.cs");
+        string root = CreateWorkspaceRoot(fixture, out string dbPath);
+        try
+        {
+            Execute(
+                dbPath,
+                """
+                CREATE TABLE revision_file_changes (path TEXT, revision_id INTEGER, change_kind TEXT);
+                INSERT INTO revision_file_changes VALUES ('src/Service.cs', 2, 'updated');
+                INSERT INTO extraction_revisions VALUES (2);
+                """);
+            ContinuousTestRevisionObservation? observation = await new MillerArtifactRevisionSource().RefreshAsync(
+                EngineTestSupport.WorkspaceId, root, TestContext.Current.CancellationToken);
+            CtFreshnessKey current = observation!.Freshness!.Value;
+            var from = new CtFreshnessKey(current.IndexIdentity, 1);
+
+            ContinuousTestImpactResult? impact = await new MillerFactImpactSource().ImpactAsync(
+                root, current, from, TestContext.Current.CancellationToken);
+
+            // The delta reader compares its from-artifact id with artifact_metadata.artifact_id.
+            // Passing the generation identity instead would report "artifact_changed".
+            Assert.NotNull(impact);
+            Assert.Equal(ContinuousTestImpactOutcome.Changed, impact!.Outcome);
+            Assert.Equal(["src/Service.cs"], impact.ChangedPaths);
+            Assert.Equal(1, impact.FromRevision);
+            Assert.Equal(2, impact.ToRevision);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    private static string CreateWorkspaceRoot(ResolutionArtifactFixture fixture, out string dbPath)
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-source-").FullName;
+        string millerDir = Path.Combine(root, ".miller");
+        Directory.CreateDirectory(millerDir);
+        dbPath = Path.Combine(millerDir, "symbols.db");
+        SqliteConnection.ClearAllPools();
+        File.Copy(fixture.DbPath, dbPath);
+        return root;
+    }
+
+    private static void Execute(string dbPath, string sql)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
     }
 
     private static ContinuousTestRevisionObservation Observation(long revision) =>

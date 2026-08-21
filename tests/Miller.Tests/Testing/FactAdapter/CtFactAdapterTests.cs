@@ -4,6 +4,7 @@ using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Testing;
 using Miller.Testing;
+using Miller.Tests.Indexing;
 using Miller.Tests.Indexing.Resolution;
 using Xunit;
 
@@ -20,16 +21,81 @@ public sealed class CtFactAdapterTests
     private const string ProcessWorksId = "fn-test";
 
     [Fact]
-    public void Current_UsesSnapshotIndexIdentityAndRevision()
+    public void Current_UsesTheSharedGenerationIdentityCursor()
     {
         using ResolutionArtifactFixture fixture = CreateFixture();
         using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(fixture.DbPath);
         using var adapter = new CtFactAdapter(session);
 
-        Assert.Equal(session.Snapshot.IndexIdentity, adapter.Current.IndexIdentity);
-        Assert.Equal(session.Snapshot.Freshness.Revision, adapter.Current.Revision);
-        Assert.Equal("art-1", adapter.Current.IndexIdentity);
+        Assert.Equal(CtIndexCursor.FromSnapshot(session.Snapshot), adapter.Current);
+        Assert.Equal("ctgen1:artifact:art-1:blake3", adapter.Current.IndexIdentity);
         Assert.Equal(1, adapter.Current.Revision);
+        Assert.Equal("art-1", adapter.Current.FamilyId);
+    }
+
+    [Fact]
+    public void Current_StoreMode_UsesTheSharedGenerationIdentityCursor()
+    {
+        WorkspaceReadSnapshot snapshot = WorkspaceReadSnapshotTests.StoreSnapshot();
+        using var adapter = new CtFactAdapter(new SnapshotOnlyReadSession(snapshot));
+
+        Assert.Equal(CtIndexCursor.FromSnapshot(snapshot), adapter.Current);
+        Assert.Equal(snapshot.IndexGenerationIdentity, adapter.Current.IndexIdentity);
+        Assert.Equal("fam-1", adapter.Current.FamilyId);
+    }
+
+    [Fact]
+    public void FromSnapshot_StoreMode_UsesFreshnessRevisionNeverTheStoreLogSequence()
+    {
+        WorkspaceReadSnapshot snapshot = WorkspaceReadSnapshotTests.StoreSnapshot(
+            revision: 42, storeLogSequence: 200);
+
+        CtIndexCursor cursor = CtIndexCursor.FromSnapshot(snapshot);
+
+        Assert.Equal(snapshot.IndexGenerationIdentity, cursor.IndexIdentity);
+        Assert.Equal(42, cursor.Revision);
+        Assert.Equal("fam-1", cursor.FamilyId);
+    }
+
+    [Fact]
+    public void FromSnapshot_RoutineStoreWriteKeepsTheIdentityWhileTheRevisionAdvances()
+    {
+        CtIndexCursor before = CtIndexCursor.FromSnapshot(
+            WorkspaceReadSnapshotTests.StoreSnapshot(revision: 42, storeLogSequence: 42));
+        CtIndexCursor after = CtIndexCursor.FromSnapshot(
+            WorkspaceReadSnapshotTests.StoreSnapshot(revision: 48, storeLogSequence: 48));
+
+        Assert.Equal(before.IndexIdentity, after.IndexIdentity);
+        Assert.Equal(before.FamilyId, after.FamilyId);
+        Assert.Equal(42, before.Revision);
+        Assert.Equal(48, after.Revision);
+    }
+
+    [Fact]
+    public void FromSnapshot_SameRevisionUnderTwoGenerationsNeverComparesFresh()
+    {
+        CtIndexCursor genA = CtIndexCursor.FromSnapshot(
+            WorkspaceReadSnapshotTests.StoreSnapshot(revision: 5, generationName: "gen-000002", manifestHash: "mh-1"));
+        CtIndexCursor genB = CtIndexCursor.FromSnapshot(
+            WorkspaceReadSnapshotTests.StoreSnapshot(revision: 5, generationName: "gen-000003", manifestHash: "mh-2"));
+
+        Assert.Equal(genA.Revision, genB.Revision);
+        Assert.NotEqual(genA.IndexIdentity, genB.IndexIdentity);
+        Assert.NotEqual(
+            new CtFreshnessKey(genA.IndexIdentity, genA.Revision),
+            new CtFreshnessKey(genB.IndexIdentity, genB.Revision));
+    }
+
+    private sealed class SnapshotOnlyReadSession(WorkspaceReadSnapshot snapshot) : IWorkspaceReadSession
+    {
+        public WorkspaceReadSnapshot Snapshot { get; } = snapshot;
+
+        public TResult Read<TResult>(Func<SqliteConnection, TResult> query) =>
+            throw new NotSupportedException("Cursor reads never open the database.");
+
+        public void Dispose()
+        {
+        }
     }
 
     [Fact]

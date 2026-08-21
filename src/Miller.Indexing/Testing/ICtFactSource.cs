@@ -1,14 +1,21 @@
 using Miller.Core.References;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing.Testing;
 
-/// <summary>Pinned store cursor or legacy artifact id, plus the integer revision for that generation.</summary>
+/// <summary>
+/// CT freshness cursor: the generation identity (changes only when the served generation really
+/// changes), the index revision for per-test watermarks, and the family/artifact id the
+/// revision-delta reader compares. <see cref="FromSnapshot"/> is the single construction path
+/// for every identity intake — do not hand-roll a cursor from a snapshot.
+/// </summary>
 public readonly record struct CtIndexCursor
 {
     public string IndexIdentity { get; }
     public long Revision { get; }
+    public string? FamilyId { get; }
 
-    public CtIndexCursor(string IndexIdentity, long Revision)
+    public CtIndexCursor(string IndexIdentity, long Revision, string? FamilyId = null)
     {
         if (string.IsNullOrWhiteSpace(IndexIdentity))
             throw new ArgumentException("must not be empty", nameof(IndexIdentity));
@@ -16,6 +23,16 @@ public readonly record struct CtIndexCursor
             throw new ArgumentOutOfRangeException(nameof(Revision), "must not be negative");
         this.IndexIdentity = IndexIdentity;
         this.Revision = Revision;
+        this.FamilyId = FamilyId;
+    }
+
+    public static CtIndexCursor FromSnapshot(WorkspaceReadSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return new CtIndexCursor(
+            snapshot.IndexGenerationIdentity,
+            snapshot.Freshness.Revision,
+            snapshot.ArtifactOrStoreId);
     }
 }
 

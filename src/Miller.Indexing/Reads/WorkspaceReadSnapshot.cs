@@ -56,6 +56,29 @@ public sealed record WorkspaceReadSnapshot(
         ? Freshness.StoreLogSequence ?? Freshness.Revision
         : Freshness.Revision;
 
+    /// <summary>
+    /// CT freshness identity: changes only when the served generation really changes (a rebuild or
+    /// promote, a store view or family change), never on a routine write. By specification
+    /// (docs/plans/2026-08-21-ct-watermark-freshness-design.md step 2) it excludes
+    /// <c>store_log_sequence</c>, the revision counter, the freshness level, and resolution state.
+    /// The <c>ctgen1:</c> prefix guarantees no legacy-format identity can ever equal a new-format one.
+    /// </summary>
+    public string IndexGenerationIdentity => Mode == WorkspaceReadMode.FamilyStore
+        ? string.Join(
+            ':',
+            "ctgen1",
+            "store",
+            ArtifactOrStoreId,
+            Freshness.ViewId ?? ViewId,
+            Freshness.GenerationName ?? GenerationName,
+            Freshness.ManifestHash)
+        : string.Join(
+            ':',
+            "ctgen1",
+            "artifact",
+            ArtifactOrStoreId,
+            MillerExtractContract.ExpectedHashAlgorithm);
+
     public string IndexIdentity => Mode == WorkspaceReadMode.FamilyStore
         ? string.Join(
             ':',

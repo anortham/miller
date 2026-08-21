@@ -285,8 +285,8 @@ public sealed class ContinuousTestRevisionPoller
 }
 
 /// <summary>
-/// Reopens the live Miller artifact each poll. A new index identity is a rebuild, never a
-/// revision-only advance.
+/// Reopens the live Miller artifact each poll. A new generation identity is a rebuild; a routine
+/// write or a revision-only advance never is.
 /// </summary>
 public sealed class MillerArtifactRevisionSource : IContinuousTestRevisionSource
 {
@@ -303,11 +303,8 @@ public sealed class MillerArtifactRevisionSource : IContinuousTestRevisionSource
         {
             using WorkspaceReadHandle handle = WorkspaceReadSessionFactory.Open(
                 dbPath, workspaceRoot, workspaceId);
-            WorkspaceReadSnapshot snapshot = handle.Snapshot;
-            long revision = snapshot.Mode == WorkspaceReadMode.FamilyStore
-                ? snapshot.Freshness.StoreLogSequence ?? snapshot.Freshness.Revision
-                : snapshot.Freshness.Revision;
-            var freshness = new CtFreshnessKey(snapshot.IndexIdentity, revision);
+            CtIndexCursor cursor = CtIndexCursor.FromSnapshot(handle.Snapshot);
+            var freshness = new CtFreshnessKey(cursor.IndexIdentity, cursor.Revision);
             bool rebuild = _lastIdentity is not null
                 && !string.Equals(_lastIdentity, freshness.IndexIdentity, StringComparison.Ordinal);
             _lastIdentity = freshness.IndexIdentity;
@@ -374,7 +371,20 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
         try
         {
             using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId: null);
-            RevisionDeltaResult delta = RevisionDeltaReader.Read(session, fromKey.Revision, fromKey.IndexIdentity);
+            CtIndexCursor cursor = CtIndexCursor.FromSnapshot(session.Snapshot);
+            if (!string.Equals(cursor.IndexIdentity, fromKey.IndexIdentity, StringComparison.Ordinal))
+            {
+                // The live artifact moved to a new generation between the poll and this read.
+                return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult("", [], [], [])
+                {
+                    Outcome = ContinuousTestImpactOutcome.Unavailable,
+                    Reason = "identity_changed",
+                });
+            }
+
+            // The delta reader compares this against the artifact's own family/artifact id, so it
+            // gets the cursor's family id, never the composed generation-identity string.
+            RevisionDeltaResult delta = RevisionDeltaReader.Read(session, fromKey.Revision, cursor.FamilyId);
             if (delta.Status != RevisionDeltaStatus.Complete || delta.ToRevision != current.Revision)
             {
                 return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult("", [], [], [])
