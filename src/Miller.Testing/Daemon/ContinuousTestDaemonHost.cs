@@ -4,10 +4,15 @@ using Miller.Indexing;
 namespace Miller.Testing;
 
 /// <summary>
-/// <paramref name="Activity"/> and <paramref name="Run"/> are trailing optionals so every existing positional
-/// construction keeps compiling. <paramref name="Executing"/> stays because callers read it; it answers "is a
-/// drain in flight", while <paramref name="Run"/> names the project that drain is on.
+/// <paramref name="Activity"/>, <paramref name="Run"/> and <paramref name="LoopHealth"/> are trailing
+/// optionals so every existing positional construction keeps compiling. <paramref name="Executing"/> stays
+/// because callers read it; it answers "is a drain in flight", while <paramref name="Run"/> names the project
+/// that drain is on.
 /// </summary>
+/// <param name="LoopHealth">
+/// What the published record proves about the daemon's MAIN LOOP, or null when the snapshot was not read from
+/// a record at all. See <see cref="CtDaemonLoopHealth"/>.
+/// </param>
 public sealed record ContinuousTestDaemonSnapshot(
     CtDaemonLifecycleState State,
     string Reason,
@@ -18,7 +23,8 @@ public sealed record ContinuousTestDaemonSnapshot(
     bool Enabled,
     bool Executing,
     CtDaemonActivity Activity = CtDaemonActivity.Idle,
-    CtDaemonRunProgress? Run = null);
+    CtDaemonRunProgress? Run = null,
+    CtLoopHealthVerdict? LoopHealth = null);
 
 public sealed class ContinuousTestDaemonHostOptions
 {
@@ -254,6 +260,14 @@ public sealed class ContinuousTestDaemonHost
     private volatile CtDaemonLifecycleState _publishedState = CtDaemonLifecycleState.Running;
     private volatile string _publishedReason = "starting";
 
+    /// <summary>
+    /// When the MAIN LOOP last published, as ticks so the field can be read and written atomically. Zero
+    /// until the loop's first write, which publishes a null tick — an unproven loop, not a stalled one.
+    /// The pulse copies this value; it must never stamp one of its own, or a wedged loop would keep
+    /// reporting a fresh tick forever.
+    /// </summary>
+    private long _loopTickTicks;
+
     public ContinuousTestDaemonHost(string workspaceRoot, ContinuousTestDaemonHostOptions? options = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -347,7 +361,8 @@ public sealed class ContinuousTestDaemonHost
                 0,
                 0,
                 Enabled: true,
-                Executing: false);
+                Executing: false,
+                LoopHealth: CtDaemonLoopHealth.Unknown("the daemon is gone"));
         }
 
         return new ContinuousTestDaemonSnapshot(
@@ -362,7 +377,11 @@ public sealed class ContinuousTestDaemonHost
             // daemon from an idle one. It now comes from the published record.
             Executing: record?.Activity == CtDaemonActivity.Executing,
             Activity: record?.Activity ?? CtDaemonActivity.Idle,
-            Run: record?.Run);
+            Run: record?.Run,
+            // Whether the loop behind that record is still turning. The pulse keeps this file moving even
+            // when the loop is wedged, so the state above cannot answer it and the record's own two stamps
+            // must.
+            LoopHealth: CtDaemonLoopHealth.Evaluate(record));
     }
 
     /// <summary>
@@ -445,11 +464,11 @@ public sealed class ContinuousTestDaemonHost
 
         // The pulse loop exits only on cancellation, and a stop COMMAND does not cancel the caller's
         // token. Its own source lets the shutdown tail stop the pulse and then observe it, instead of
-        // blocking the exit for a whole heartbeat interval or leaving the task unobserved.
-        using var heartbeatCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Task heartbeat = lease is null
+        // blocking the exit for a whole pulse interval or leaving the task unobserved.
+        using var pulseCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task pulse = lease is null
             ? Task.CompletedTask
-            : PulseHeartbeatAsync(lease, heartbeatCancellation.Token);
+            : PulseStatusAsync(lease, pulseCancellation.Token);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -569,30 +588,34 @@ public sealed class ContinuousTestDaemonHost
         ReleaseAdoptedContexts();
 
         // Stop the pulse first, then await it. Awaiting an uncancelled pulse would hang the exit,
-        // and abandoning it would leave both an unobserved exception and a heartbeat that can still
+        // and abandoning it would leave both an unobserved exception and a status write that can still
         // land after the lease below is released.
-        await heartbeatCancellation.CancelAsync().ConfigureAwait(false);
-        await heartbeat.ConfigureAwait(false);
+        await pulseCancellation.CancelAsync().ConfigureAwait(false);
+        await pulse.ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Keeps <c>daemon.heartbeat.json</c> fresh for the life of the loop, including while a long
-    /// drain blocks the main loop. Never throws: liveness is carried by the OS lock on
-    /// <c>daemon-v1.lock</c>; the heartbeat file is an observable freshness signal only.
+    /// Republishes <c>daemon.status.json</c> for the life of the loop, including while a long drain blocks
+    /// the main loop. Never throws: liveness is carried by the OS lock on <c>daemon-v1.lock</c>; the status
+    /// record is an observable freshness signal only.
+    ///
+    /// <para>The main loop is BLOCKED for the whole drain, so without this the status file froze at
+    /// "executing" until the run ended - which is exactly how a 12-minute run and a wedged one looked
+    /// identical. The lifecycle state and reason are the last ones the main loop chose; only the activity,
+    /// the child's liveness, and the record's own timestamp are refreshed here. The loop tick is copied
+    /// verbatim, which is what lets a reader separate "this pulse is alive" from "the loop is alive".</para>
+    ///
+    /// <para>It used to write a second file, <c>daemon.heartbeat.json</c>, 5,760 times a day. No production
+    /// code ever read it, and the one signal it could have carried - that the process is still there - is
+    /// already carried by the OS lock and the recorded identity.</para>
     /// </summary>
-    private async Task PulseHeartbeatAsync(CtDaemonLease lease, CancellationToken cancellationToken)
+    private async Task PulseStatusAsync(CtDaemonLease lease, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
                 await _options.Delay(_options.HeartbeatInterval, cancellationToken).ConfigureAwait(false);
-                lease.Heartbeat();
-
-                // Republish the status too. The main loop is BLOCKED for the whole drain, so without this the
-                // status file froze at "executing" until the run ended - which is exactly how a 12-minute run
-                // and a wedged one looked identical. The lifecycle state and reason are the last ones the main
-                // loop chose; only the activity and the child's liveness are refreshed here.
                 PublishStatus(lease, _publishedState, _publishedReason);
             }
             catch (OperationCanceledException)
@@ -611,7 +634,7 @@ public sealed class ContinuousTestDaemonHost
 
     /// <summary>
     /// The single guarded path for every status write in this loop. Never throws, for the same
-    /// reason <see cref="PulseHeartbeatAsync"/> never throws.
+    /// reason <see cref="PulseStatusAsync"/> never throws.
     ///
     /// The loop republishes <c>daemon.status.json</c> on every poll interval (250 ms by default)
     /// while a waiting <c>tests run --wait</c> reads it every 50 ms, so a read and a publish
@@ -628,12 +651,18 @@ public sealed class ContinuousTestDaemonHost
         // must never invent a state of its own.
         _publishedState = state;
         _publishedReason = reason;
+
+        // This method is the loop's ONLY write path, so stamping here is what makes the tick mean "the loop
+        // reached another publish". Stamped before the write, so a write that fails still records that the
+        // loop moved — the tick measures the loop, not the filesystem.
+        Volatile.Write(ref _loopTickTicks, _options.Clock().UtcTicks);
         PublishStatus(lease, state, reason);
     }
 
     /// <summary>
-    /// Writes one status record, attaching whatever the activity cell currently reports. Called by the main
-    /// loop on every poll and by the pulse task while a drain blocks that loop.
+    /// Writes one status record, attaching whatever the activity cell currently reports and the main loop's
+    /// last tick VERBATIM. Called by the main loop on every poll and by the pulse task while a drain blocks
+    /// that loop.
     /// </summary>
     private void PublishStatus(CtDaemonLease? lease, CtDaemonLifecycleState state, string reason)
     {
@@ -650,11 +679,21 @@ public sealed class ContinuousTestDaemonHost
 
             (CtDaemonActivity activity, CtDaemonRunProgress? run) =
                 _runActivity?.Read() ?? (CtDaemonActivity.Idle, null);
-            lease.WriteStatus(state, reason, activity, run);
+            lease.WriteStatus(state, reason, activity, run, LoopTick());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
         }
+    }
+
+    /// <summary>
+    /// The main loop's last publish, or null before its first one. Never the current time: the pulse calls
+    /// this too, and a pulse that stamped "now" would republish a fresh tick for a loop that had stopped.
+    /// </summary>
+    private DateTimeOffset? LoopTick()
+    {
+        long ticks = Volatile.Read(ref _loopTickTicks);
+        return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
     }
 
     /// <summary>
@@ -663,7 +702,7 @@ public sealed class ContinuousTestDaemonHost
     ///
     /// A stop used to leave through <c>throw new OperationCanceledException()</c>. Production never
     /// cancels the loop token, so that throw was the daemon's only exit, and it jumped over the whole
-    /// shutdown tail: the final <c>Stopped</c> status, the final snapshot, and the heartbeat await
+    /// shutdown tail: the final <c>Stopped</c> status, the final snapshot, and the pulse await
     /// were unreachable, and every requested stop reached the CLI as an error and exit code 1. A
     /// returned flag ends the loop at the top instead, so the tail runs on the normal, requested path
     /// and a real cancellation keeps its own separate route out.

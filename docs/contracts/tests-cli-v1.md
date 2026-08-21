@@ -40,7 +40,9 @@ explicit (`tests serve` / MCP `start`).
     "miller_version": null,
     "version_match": "none",
     "version_mismatch": false,
-    "version_reason": "no live daemon"
+    "version_reason": "no live daemon",
+    "loop_stalled": false,
+    "loop_stall_seconds": null
   },
   "verdict": "unknown",
   "selected": null,
@@ -74,6 +76,8 @@ explicit (`tests serve` / MCP `start`).
 | `daemon.run.run_id` | string | The run's id in `ct.db`. |
 | `daemon.run.selected_case_count` | number | Cases this run selected. |
 | `daemon.run.started_at` | string | ISO-8601 UTC start time of the run. |
+| `daemon.loop_stalled` | bool | `true` only when the daemon's MAIN LOOP is provably wedged — see "Daemon loop-stall detection" below. `false` covers healthy, unproven, and no-daemon alike; a reader that needs the difference reads `loop_stall_seconds` too. |
+| `daemon.loop_stall_seconds` | number \| null | The loop's lag in whole seconds: the record's own `updated_at` minus its `loop_tick_at`. `null` when the lag cannot be measured — no live daemon, no status record, or a record from a build that predates the field. Never `0` for an unmeasurable lag. |
 | `daemon.run.child` | string | `starting`, `active`, `quiet`, or `stalled` — the daemon's own reading of how lively the test process is, so a reader can separate a slow suite from a wedged one without comparing timestamps. `stalled` means the silence bound has passed and the kill is due; it is never reported when `MILLER_CT_STALL_TIMEOUT=off`, because nothing will act on it. |
 | `verdict` | string | Aggregate verdict: `green`, `red`, `partial`, or `unknown`. |
 | `selected` | object \| null | The LIVE index freshness key the verdict was judged at, or `null` when no readable index exists. It is never derived from stored `ct.db` rows. |
@@ -147,7 +151,45 @@ short-circuit: it opens no `ct.db`, reads no live index, and reads no daemon-sta
 file. The payload is the never-enabled shape above with `kill_switch: true`,
 `daemon.reason: "disabled"`, and `daemon.activity: "idle"` — whatever state the workspace holds
 on disk. The payload keeps the top-level `miller_version`, and reports `daemon.version_match: "none"`
-with a null `daemon.miller_version`: the switch guarantees there is no daemon, so no lease is read.
+with a null `daemon.miller_version`: the switch guarantees there is no daemon, so no lease is read. For the
+same reason it reports `daemon.loop_stalled: false` with a null `daemon.loop_stall_seconds`.
+
+## Daemon loop-stall detection
+
+The daemon publishes `daemon.status.json` from two writers: the MAIN LOOP, on every poll, and a pulse task
+on a 15-second timer. The pulse exists so the file keeps moving while a long drain blocks the loop, which
+means it survives a wedged loop BY DESIGN, and the liveness probe above proves only that the process is
+there. A daemon whose loop had stopped scanning therefore read as `running` for as long as the process
+lived.
+
+The loop stamps `loop_tick_at_utc` on its own writes, and the pulse copies that value verbatim — it never
+stamps one of its own. One record then carries two stamps from the same clock, and their difference is the
+loop's lag. The reader's own clock never enters the comparison, and a loaded machine slows both writers
+together, so load cannot fake a stall.
+
+- Judged only when `daemon.activity` is `idle` or `queued`. Default bound: **90 seconds**.
+- Override with `MILLER_CT_LOOP_STALL_TIMEOUT`: whole seconds (`120`) or a TimeSpan (`00:02:00`).
+  `off` / `0` / `false` / `no` disables the detection; `loop_stalled` is then always `false`. An
+  unparseable value falls back to the default.
+- `executing` is NEVER judged by loop lag: the loop legitimately blocks for the whole drain, so the lag is
+  the run's own elapsed time. The separate rule for a run in flight is a kill that was OWED and did not
+  happen — `daemon.run.child` is `stalled` AND the drain has held the loop for longer than
+  `MILLER_CT_STALL_TIMEOUT`. `executing` with `run: null` reports as executing, never as hung.
+- Absence proves nothing. A record with no `loop_tick_at` — a build that predates the field, or the
+  transition record a family daemon writes for an adopted worktree — reports `loop_stalled: false` with
+  `loop_stall_seconds: null`, never a stall.
+- On an adopted worktree the reader resolves the FAMILY endpoint first and judges the daemon that runs the
+  loop. A worktree's own record is written on transitions only, so judging it would report every adopted
+  worktree as wedged.
+
+Detection is REPORT ONLY. Miller never kills a daemon over it and runs no watchdog; `daemon.state` keeps
+its three values. Compact output adds a `daemon_loop:` line only when the loop is provably wedged, and the
+MCP `tests` tool nudges `tests operation=stop` followed by a start — `stop` escalates to a process-tree
+kill after a short unacknowledged wait, so the recovery already exists.
+
+These two keys are ADDITIVE at `schema_version` 1, like the `daemon.version_*` keys before them: they are
+always present in this build's output, and a consumer reading an older build's output must treat their
+absence as "unknown", never as an error.
 
 ## Freshness key
 

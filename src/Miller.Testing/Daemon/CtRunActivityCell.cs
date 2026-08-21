@@ -10,7 +10,7 @@ namespace Miller.Testing;
 /// <c>DrainReadyAsync</c> for the whole run. The status file did not move again until the run ended, so a
 /// reader could not separate a slow suite from a wedged one, and <c>tests run --wait</c> had nothing to wait
 /// on except the verdict — which is not a completion signal. One dogfood run sat at "executing" for 12
-/// minutes with only the heartbeat moving.</para>
+/// minutes with only the pulse's timestamp moving.</para>
 ///
 /// <para><b>Draining and running are separate on purpose.</b> One drain executes every ready project in turn,
 /// so a child ending is NOT the daemon going idle. Collapsing the two would let a waiting caller return in

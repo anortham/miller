@@ -17,8 +17,14 @@ public sealed class ContinuousTestDaemonHostHeartbeatTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
     }
 
+    /// <summary>
+    /// The pulse task republishes <c>daemon.status.json</c> on its own interval. That republish is the only
+    /// thing that keeps the record's timestamp moving while a drain blocks the main loop, and it is now the
+    /// only periodic control-plane write: the separate <c>daemon.heartbeat.json</c> it used to write 5,760
+    /// times a day was read by no production code and is gone.
+    /// </summary>
     [Fact]
-    public async Task Run_refreshes_the_heartbeat_file_while_the_loop_is_alive()
+    public async Task Run_republishes_the_status_record_while_the_loop_is_alive()
     {
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
         var queue = new ContinuousTestDaemonQueue(
@@ -37,9 +43,10 @@ public sealed class ContinuousTestDaemonHostHeartbeatTests : IDisposable
         Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(_root, options, cts.Token);
         try
         {
-            CtDaemonHeartbeatRecord first = await WaitForHeartbeatAsync(after: null);
-            CtDaemonHeartbeatRecord second = await WaitForHeartbeatAsync(after: first.HeartbeatUtc);
-            Assert.True(second.HeartbeatUtc > first.HeartbeatUtc);
+            CtDaemonStatusRecord first = await WaitForStatusAsync(after: null);
+            CtDaemonStatusRecord second = await WaitForStatusAsync(after: first.UpdatedAtUtc);
+            Assert.True(second.UpdatedAtUtc > first.UpdatedAtUtc);
+            Assert.False(File.Exists(Path.Combine(CtDaemonProtocol.RootDirectory(_root), "daemon.heartbeat.json")));
         }
         finally
         {
@@ -397,17 +404,17 @@ public sealed class ContinuousTestDaemonHostHeartbeatTests : IDisposable
         }
     }
 
-    private async Task<CtDaemonHeartbeatRecord> WaitForHeartbeatAsync(DateTimeOffset? after)
+    private async Task<CtDaemonStatusRecord> WaitForStatusAsync(DateTimeOffset? after)
     {
         for (int attempt = 0; attempt < 400; attempt++)
         {
-            CtDaemonHeartbeatRecord? record = CtDaemonLease.TryReadHeartbeat(_root);
-            if (record is not null && (after is null || record.HeartbeatUtc > after))
+            CtDaemonStatusRecord? record = CtDaemonLease.TryReadStatus(_root);
+            if (record is not null && (after is null || record.UpdatedAtUtc > after))
                 return record;
             await Task.Delay(10);
         }
 
-        throw new TimeoutException("the daemon heartbeat file did not refresh");
+        throw new TimeoutException("the daemon status record did not refresh");
     }
 
     private sealed record StatusWrite(CtDaemonLifecycleState State, string Reason);

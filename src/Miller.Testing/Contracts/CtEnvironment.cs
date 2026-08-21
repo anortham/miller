@@ -31,6 +31,13 @@ public static class CtEnvironment
     /// </summary>
     public const string StallTimeout = "MILLER_CT_STALL_TIMEOUT";
 
+    /// <summary>
+    /// Overrides how long the daemon's MAIN LOOP may go without a tick before a reader calls it wedged.
+    /// Accepts whole seconds (<c>120</c>) or a TimeSpan (<c>00:02:00</c>). <c>off</c>/<c>0</c>/<c>false</c>/
+    /// <c>no</c> disables the detection, and the reader then reports nothing about the loop.
+    /// </summary>
+    public const string LoopStallTimeout = "MILLER_CT_LOOP_STALL_TIMEOUT";
+
     public static bool IsOff() => IsOff(Environment.GetEnvironmentVariable(KillSwitch));
 
     /// <summary>
@@ -40,7 +47,18 @@ public static class CtEnvironment
     /// SILENT run is killed; a typo in it must not stop CT from running at all, and the default it falls back
     /// to is the safe one.</para>
     /// </summary>
-    public static TimeSpan ResolveStallTimeout(string? raw, TimeSpan fallback)
+    public static TimeSpan ResolveStallTimeout(string? raw, TimeSpan fallback) =>
+        ResolveTimeout(raw, fallback);
+
+    /// <summary>
+    /// The loop-stall bound to use, or <paramref name="fallback"/> when the variable is unset or unreadable.
+    /// Same tokens as <see cref="ResolveStallTimeout"/>, because an operator should not have to learn two
+    /// spellings of "off" for two bounds on the same daemon.
+    /// </summary>
+    public static TimeSpan ResolveLoopStallTimeout(string? raw, TimeSpan fallback) =>
+        ResolveTimeout(raw, fallback);
+
+    private static TimeSpan ResolveTimeout(string? raw, TimeSpan fallback)
     {
         if (string.IsNullOrWhiteSpace(raw))
             return fallback;

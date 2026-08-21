@@ -62,12 +62,6 @@ public sealed class CtDaemonLease : IDisposable
         return CtDaemonJson.TryRead(path, CtDaemonJsonContext.Default.CtDaemonLeaseRecord);
     }
 
-    public static CtDaemonHeartbeatRecord? TryReadHeartbeat(string workspaceRoot)
-    {
-        string path = CtDaemonProtocol.HeartbeatPath(workspaceRoot);
-        return CtDaemonJson.TryRead(path, CtDaemonJsonContext.Default.CtDaemonHeartbeatRecord);
-    }
-
     public static CtDaemonStatusRecord? TryReadStatus(string workspaceRoot)
     {
         string path = CtDaemonProtocol.StatusPath(workspaceRoot);
@@ -119,9 +113,8 @@ public sealed class CtDaemonLease : IDisposable
             TimeProvider clock = time ?? TimeProvider.System;
             DateTimeOffset now = clock.GetUtcNow();
             CtDaemonLeaseIdentity holder = identity ?? CurrentIdentity();
-            var record = new CtDaemonLeaseRecord(holder, now, now, root, millerVersion);
+            var record = new CtDaemonLeaseRecord(holder, now, root, millerVersion);
             WriteLease(root, record);
-            WriteHeartbeat(root, new CtDaemonHeartbeatRecord(holder, now));
             WriteStatus(root, new CtDaemonStatusRecord(CtDaemonLifecycleState.Running, "acquired", holder, now));
             return new CtDaemonLease(stream, lockPath, record);
         }
@@ -132,32 +125,28 @@ public sealed class CtDaemonLease : IDisposable
         }
     }
 
-    public void Heartbeat(TimeProvider? time = null)
-    {
-        ObjectDisposedException.ThrowIf(_lockStream is null, this);
-        DateTimeOffset now = (time ?? TimeProvider.System).GetUtcNow();
-        WriteHeartbeat(Record.WorkspaceRoot, new CtDaemonHeartbeatRecord(Record.Identity, now));
-    }
-
     public void WriteStatus(CtDaemonLifecycleState state, string reason, TimeProvider? time = null) =>
-        WriteStatus(state, reason, CtDaemonActivity.Idle, run: null, time);
+        WriteStatus(state, reason, CtDaemonActivity.Idle, run: null, loopTickAtUtc: null, time);
 
     /// <summary>
     /// Publishes the status with the daemon's current activity and, while a provider run is in flight, the
-    /// run it is executing. A reader compares <see cref="CtDaemonStatusRecord.UpdatedAtUtc"/> with nothing:
-    /// the activity words already say whether the daemon is busy and whether its child is still talking.
+    /// run it is executing. <paramref name="loopTickAtUtc"/> is the main loop's last tick, written verbatim
+    /// so that a reader can subtract it from <see cref="CtDaemonStatusRecord.UpdatedAtUtc"/> and get the
+    /// loop's lag from two stamps of the same clock. The writer never invents it: the pulse republishes the
+    /// value the loop stamped, and a null stays null.
     /// </summary>
     public void WriteStatus(
         CtDaemonLifecycleState state,
         string reason,
         CtDaemonActivity activity,
         CtDaemonRunProgress? run,
+        DateTimeOffset? loopTickAtUtc = null,
         TimeProvider? time = null)
     {
         DateTimeOffset now = (time ?? TimeProvider.System).GetUtcNow();
         WriteStatus(
             Record.WorkspaceRoot,
-            new CtDaemonStatusRecord(state, reason, Record.Identity, now, activity, run));
+            new CtDaemonStatusRecord(state, reason, Record.Identity, now, activity, run, loopTickAtUtc));
     }
 
     public void Dispose()
@@ -203,12 +192,6 @@ public sealed class CtDaemonLease : IDisposable
             record,
             CtDaemonJsonContext.Default.CtDaemonLeaseRecord);
 
-    private static void WriteHeartbeat(string workspaceRoot, CtDaemonHeartbeatRecord record) =>
-        CtDaemonJson.WriteAtomic(
-            CtDaemonProtocol.HeartbeatPath(workspaceRoot),
-            record,
-            CtDaemonJsonContext.Default.CtDaemonHeartbeatRecord);
-
     private static CtDaemonLeaseIdentity IdentityOf(Process process) =>
         new(process.Id, new DateTimeOffset(process.StartTime.ToUniversalTime()));
 
@@ -235,7 +218,7 @@ public sealed class CtDaemonLease : IDisposable
 /// worktree untracked-dirty and git refused.</para>
 ///
 /// <para>The rule that separates the two: a write that says "a live daemon serves this root" may
-/// create (an attach record, a lease, a heartbeat, a command addressed to a proven-live daemon); a
+/// create (an attach record, a lease, a command addressed to a proven-live daemon); a
 /// write that says "nothing serves this root any more" may only REPLACE. An absent destination is
 /// then success, not an error — a control plane that is already gone needs no record saying so, and
 /// its absence reads as stopped.</para>
@@ -256,9 +239,6 @@ public static class CtDaemonJson
 
     public static string Serialize(CtDaemonLeaseRecord value) =>
         Serialize(value, CtDaemonJsonContext.Default.CtDaemonLeaseRecord);
-
-    public static string Serialize(CtDaemonHeartbeatRecord value) =>
-        Serialize(value, CtDaemonJsonContext.Default.CtDaemonHeartbeatRecord);
 
     public static string Serialize(CtDaemonCommandRequest value) =>
         Serialize(value, CtDaemonJsonContext.Default.CtDaemonCommandRequest);
@@ -530,7 +510,6 @@ internal sealed class CtFreshnessKeyJsonConverter : JsonConverter<CtFreshnessKey
     UseStringEnumConverter = true,
     Converters = [typeof(CtFreshnessKeyJsonConverter)])]
 [JsonSerializable(typeof(CtDaemonLeaseRecord))]
-[JsonSerializable(typeof(CtDaemonHeartbeatRecord))]
 [JsonSerializable(typeof(CtDaemonCommandRequest))]
 [JsonSerializable(typeof(CtDaemonCommandAck))]
 [JsonSerializable(typeof(CtDaemonStatusRecord))]

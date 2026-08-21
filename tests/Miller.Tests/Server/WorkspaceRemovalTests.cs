@@ -183,7 +183,7 @@ public sealed class WorkspaceRemovalTests : IDisposable
         File.WriteAllText(Path.Combine(ctDir, CtDaemonProtocol.LockFileName), "");
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        var leftover = new CtDaemonLeaseRecord(CtDaemonLease.CurrentIdentity(), now, now, root, "1.20.1-test");
+        var leftover = new CtDaemonLeaseRecord(CtDaemonLease.CurrentIdentity(), now, root, "1.20.1-test");
         File.WriteAllText(CtDaemonProtocol.LeasePath(root), CtDaemonJson.Serialize(leftover));
         Assert.NotNull(CtDaemonLease.TryReadLive(root)); // the weaker probe WOULD see a live daemon here
 

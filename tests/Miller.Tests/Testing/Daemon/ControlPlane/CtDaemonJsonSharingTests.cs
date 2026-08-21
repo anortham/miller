@@ -242,7 +242,7 @@ public sealed class CtDaemonJsonSharingTests : IDisposable
     [Fact]
     public void Concurrent_writers_do_not_destroy_each_other_staged_bytes()
     {
-        string path = Path("daemon.heartbeat.json");
+        string path = Path("daemon.concurrent.json");
 
         // A fixed "<path>.tmp" would have these two racing on one temp file.
         Parallel.For(0, 40, i =>

@@ -432,6 +432,15 @@ scripts/test.ps1 all
   land is RETRIED on later scan passes and the context is marked published only after the write returns:
   the record names the serving daemon and status probes that identity, so one lost write left a live
   family daemon reading as `daemon gone` from that worktree, permanently.
+  **Loop-stall detection (report only).** The status record carries `loop_tick_at`, stamped by the MAIN
+  LOOP and copied VERBATIM by the pulse — the pulse survives a wedged loop by design, so a reader compares
+  `updated_at` with `loop_tick_at`, two stamps of one clock in one file, and never its own clock. Lag over
+  90s (`MILLER_CT_LOOP_STALL_TIMEOUT`, `off` disables) is a wedge while idle/queued; `executing` is judged
+  only by the separate hung-supervision rule (child `stalled` plus a drain longer than the child stall
+  bound). Absence of the field is unknown, never a stall; a worktree judges the FAMILY daemon's record.
+  Miller REPORTS it (`loop_stalled`, `loop_stall_seconds`, a compact line, a `tests stop` nudge) and never
+  kills or watchdogs. The lease's never-renewed `heartbeat_utc` and the write-only `daemon.heartbeat.json`
+  were REMOVED with it: one honest periodic record beats two dead ones.
   **Daemon build awareness.** The lease records `miller_version` and `tests status` reports the comparison
   (`daemon.version_match`, `daemon.version_mismatch`); an explicit start from a different build STOPS the
   old daemon and replaces it (`status: "replaced"`). Sameness is the whole build string, so one build

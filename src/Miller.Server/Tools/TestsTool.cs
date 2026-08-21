@@ -201,6 +201,12 @@ public sealed class TestsTool
         if (result.DaemonState == CtDaemonLifecycleState.Stopped)
             return NextStepHint.Render("tests operation=start", "start the daemon");
 
+        // A wedged loop watches nothing while reporting "running", so it outranks every hint below.
+        // Stop is the recovery: it escalates to a process-tree kill after a short unacked wait, and the
+        // next start puts a live loop back on the tree. Miller reports and never kills by itself.
+        if (result.DaemonLoop is { Stalled: true })
+            return NextStepHint.Render("tests operation=stop", "the daemon loop is wedged; stop, then start");
+
         // A running daemon on an OLDER release is watching the tree with old code, and start is what
         // replaces it. Gated on the one verdict that proves a direction, NOT on MayReplace: a
         // build_differs pair (same release, two commits — two worktrees of this repo) is symmetric,

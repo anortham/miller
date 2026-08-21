@@ -28,16 +28,18 @@ public enum CtDaemonLifecycleState
 /// </summary>
 public sealed record CtDaemonLeaseIdentity(int Pid, DateTimeOffset ProcessStartTimeUtc);
 
+/// <summary>
+/// The lease file names the holder; it is written once, when the lock is taken. It carried a
+/// <c>heartbeat_utc</c> that was stamped at acquire and never renewed, so a field that read like a
+/// liveness signal grew staler the longer the daemon stayed healthy. Liveness rides the OS lock and
+/// the recorded identity, and how recently the daemon MOVED is now
+/// <see cref="CtDaemonStatusRecord.UpdatedAtUtc"/>, which is republished every pulse.
+/// </summary>
 public sealed record CtDaemonLeaseRecord(
     CtDaemonLeaseIdentity Identity,
     DateTimeOffset AcquiredAtUtc,
-    DateTimeOffset HeartbeatUtc,
     string WorkspaceRoot,
     string MillerVersion);
-
-public sealed record CtDaemonHeartbeatRecord(
-    CtDaemonLeaseIdentity Identity,
-    DateTimeOffset HeartbeatUtc);
 
 /// <summary>
 /// <paramref name="WorkspaceRoot"/> is a trailing optional so an older request file still
@@ -86,7 +88,7 @@ public enum CtDaemonActivity
 /// How lively the running child process is, DERIVED by the daemon from the child's last output so a reader
 /// never has to subtract timestamps or open a second file.
 ///
-/// <para><c>daemon.status.json</c> used to freeze at reason "executing" for a whole run; only the heartbeat
+/// <para><c>daemon.status.json</c> used to freeze at reason "executing" for a whole run; only its timestamp
 /// moved. A reader could not separate a slow suite from a wedged one without comparing clocks.</para>
 /// </summary>
 public enum CtRunActivity
@@ -115,17 +117,32 @@ public sealed record CtDaemonRunProgress(
     CtRunActivity Activity);
 
 /// <summary>
-/// The published daemon status. <see cref="Activity"/> and <see cref="Run"/> are trailing optionals so an
-/// older status file still deserializes (it reads as <see cref="CtDaemonActivity.Idle"/> with no run) and
-/// every existing positional construction keeps compiling.
+/// The published daemon status. <see cref="Activity"/>, <see cref="Run"/> and
+/// <see cref="LoopTickAtUtc"/> are trailing optionals so an older status file still deserializes (it
+/// reads as <see cref="CtDaemonActivity.Idle"/> with no run and no tick) and every existing positional
+/// construction keeps compiling.
 /// </summary>
+/// <param name="UpdatedAtUtc">
+/// When this record was written. The pulse task republishes it every heartbeat interval, so it keeps
+/// moving even while the main loop is blocked.
+/// </param>
+/// <param name="LoopTickAtUtc">
+/// When the MAIN LOOP last published a status of its own, copied verbatim into every republish the pulse
+/// makes. It exists because nothing else on disk proves the loop is alive: the pulse survives a wedged
+/// loop by design, and the pid probe proves only the process. Two stamps from the same clock in the same
+/// file make the lag measurable without the reader's own clock entering it, so machine load — which stalls
+/// both writers together — cannot fake a stall. Null on a record written before this field existed, and on
+/// the transition records a family daemon writes for an adopted worktree; absence means unknown, never a
+/// stall.
+/// </param>
 public sealed record CtDaemonStatusRecord(
     CtDaemonLifecycleState State,
     string Reason,
     CtDaemonLeaseIdentity? Identity,
     DateTimeOffset UpdatedAtUtc,
     CtDaemonActivity Activity = CtDaemonActivity.Idle,
-    CtDaemonRunProgress? Run = null);
+    CtDaemonRunProgress? Run = null,
+    DateTimeOffset? LoopTickAtUtc = null);
 
 /// <summary>
 /// File layout for the detached CT control plane under <c>&lt;workspace&gt;/.miller/ct/</c>.
@@ -138,7 +155,6 @@ public static class CtDaemonProtocol
     public const string CommandDirectoryName = "commands";
     public const string LockFileName = "daemon-v1.lock";
     public const string LeaseFileName = "daemon.lease.json";
-    public const string HeartbeatFileName = "daemon.heartbeat.json";
     public const string StatusFileName = "daemon.status.json";
 
     private static readonly Regex CommandIdPattern = new(
@@ -153,9 +169,6 @@ public static class CtDaemonProtocol
 
     public static string LeasePath(string workspaceRoot) =>
         Path.Combine(RootDirectory(workspaceRoot), LeaseFileName);
-
-    public static string HeartbeatPath(string workspaceRoot) =>
-        Path.Combine(RootDirectory(workspaceRoot), HeartbeatFileName);
 
     public static string StatusPath(string workspaceRoot) =>
         Path.Combine(RootDirectory(workspaceRoot), StatusFileName);

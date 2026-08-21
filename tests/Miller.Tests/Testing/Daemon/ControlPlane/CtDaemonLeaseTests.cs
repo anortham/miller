@@ -29,7 +29,7 @@ public sealed class CtDaemonLeaseTests : IDisposable
     }
 
     [Fact]
-    public void TryAcquire_WritesPidPlusStartTimeIdentityAndHeartbeat()
+    public void TryAcquire_WritesPidPlusStartTimeIdentityAndStatus()
     {
         using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "1.20.0-test");
 
@@ -41,7 +41,10 @@ public sealed class CtDaemonLeaseTests : IDisposable
         Assert.Equal(Path.GetFullPath(_root), lease.Record.WorkspaceRoot);
         Assert.True(File.Exists(CtDaemonProtocol.LockPath(_root)));
         Assert.True(File.Exists(CtDaemonProtocol.LeasePath(_root)));
-        Assert.True(File.Exists(CtDaemonProtocol.HeartbeatPath(_root)));
+        Assert.True(File.Exists(CtDaemonProtocol.StatusPath(_root)));
+        // The lease is written once and never renewed, so it carries no timestamp that pretends to be a
+        // liveness signal. How recently the daemon moved lives in the status record.
+        Assert.False(File.Exists(Path.Combine(CtDaemonProtocol.RootDirectory(_root), "daemon.heartbeat.json")));
 
         CtDaemonLeaseRecord? read = CtDaemonLease.TryRead(_root);
         Assert.NotNull(read);
@@ -90,26 +93,26 @@ public sealed class CtDaemonLeaseTests : IDisposable
         Assert.NotEqual(reused.ProcessStartTimeUtc, lease.Record.Identity.ProcessStartTimeUtc);
     }
 
+    /// <summary>
+    /// A status write keeps the lease file alone: the lease names the holder, and rewriting it every pulse
+    /// would put a periodic writer on the file that routing and the version check read on every status call.
+    /// </summary>
     [Fact]
-    public void Heartbeat_RewritesHeartbeatFile_WithoutChangingLeaseIdentity()
+    public void WriteStatus_RepublishesTheStatusRecord_WithoutRewritingTheLease()
     {
         using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "1.20.0-test");
         Assert.NotNull(lease);
-        CtDaemonLeaseIdentity identity = lease.Record.Identity;
-        DateTimeOffset firstHeartbeat = lease.Record.HeartbeatUtc;
+        CtDaemonLeaseRecord? before = CtDaemonLease.TryRead(_root);
+        Assert.NotNull(before);
 
-        var later = new FrozenTime(firstHeartbeat.AddSeconds(12));
-        lease.Heartbeat(later);
+        var later = new FrozenTime(before.AcquiredAtUtc.AddSeconds(12));
+        lease.WriteStatus(CtDaemonLifecycleState.Running, "idle", later);
 
-        CtDaemonLeaseRecord? record = CtDaemonLease.TryRead(_root);
-        Assert.NotNull(record);
-        Assert.Equal(identity, record.Identity);
-        Assert.Equal(firstHeartbeat, record.HeartbeatUtc);
-
-        CtDaemonHeartbeatRecord? beat = CtDaemonLease.TryReadHeartbeat(_root);
-        Assert.NotNull(beat);
-        Assert.Equal(identity, beat.Identity);
-        Assert.Equal(later.GetUtcNow(), beat.HeartbeatUtc);
+        Assert.Equal(before, CtDaemonLease.TryRead(_root));
+        CtDaemonStatusRecord? status = CtDaemonLease.TryReadStatus(_root);
+        Assert.NotNull(status);
+        Assert.Equal(later.GetUtcNow(), status.UpdatedAtUtc);
+        Assert.Equal(before.Identity, status.Identity);
     }
 
     [Fact]
@@ -138,7 +141,6 @@ public sealed class CtDaemonLeaseTests : IDisposable
         Directory.CreateDirectory(CtDaemonProtocol.RootDirectory(_root));
         var record = new CtDaemonLeaseRecord(
             identity,
-            DateTimeOffset.UnixEpoch,
             DateTimeOffset.UnixEpoch,
             Path.GetFullPath(_root),
             "stale");

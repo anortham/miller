@@ -21,11 +21,10 @@ public sealed class CtDaemonProtocolTests
         var lease = new CtDaemonLeaseRecord(
             Identity: first,
             AcquiredAtUtc: start,
-            HeartbeatUtc: start.AddSeconds(5),
             WorkspaceRoot: "/tmp/ws",
             MillerVersion: "1.20.0");
         Assert.Equal(first, lease.Identity);
-        Assert.Equal(start.AddSeconds(5), lease.HeartbeatUtc);
+        Assert.Equal(start, lease.AcquiredAtUtc);
     }
 
     [Fact]
@@ -85,7 +84,6 @@ public sealed class CtDaemonProtocolTests
         Assert.Equal(ctDir, CtDaemonProtocol.RootDirectory(root));
         Assert.Equal(Path.Combine(ctDir, "daemon-v1.lock"), CtDaemonProtocol.LockPath(root));
         Assert.Equal(Path.Combine(ctDir, "daemon.lease.json"), CtDaemonProtocol.LeasePath(root));
-        Assert.Equal(Path.Combine(ctDir, "daemon.heartbeat.json"), CtDaemonProtocol.HeartbeatPath(root));
         Assert.Equal(Path.Combine(ctDir, "daemon.status.json"), CtDaemonProtocol.StatusPath(root));
         Assert.Equal(
             Path.Combine(ctDir, "commands", "abc.request.json"),

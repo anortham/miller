@@ -87,7 +87,14 @@ public sealed record TestsStatusResult(
     /// Which build the LIVE daemon runs, against this one. Null only under the kill switch, which
     /// guarantees there is no daemon to compare.
     /// </summary>
-    CtDaemonVersionVerdict? DaemonVersion = null)
+    CtDaemonVersionVerdict? DaemonVersion = null,
+
+    /// <summary>
+    /// Whether the live daemon's MAIN LOOP is still turning. Null only under the kill switch. On an
+    /// adopted worktree this judges the FAMILY daemon's record, because a worktree has no periodic
+    /// record of its own.
+    /// </summary>
+    CtLoopHealthVerdict? DaemonLoop = null)
 {
     public string Render(bool json) => json ? TestsCore.RenderStatusJson(this) : TestsCore.RenderStatusCompact(this);
 }
@@ -243,10 +250,13 @@ public static class TestsCore
         // The build the daemon runs lives in its LEASE, not its status record, and an adopted
         // worktree's lease lives on the repo's main checkout — so the endpoint resolver is the right
         // read, and it creates nothing. Without this the status was silent about a daemon still
-        // running the code you replaced.
+        // running the code you replaced. The loop-health read takes the same route, for the same
+        // reason: one resolve, two facts about the same live daemon.
+        CtDaemonEndpoint? endpoint = CtDaemonRouting.ResolveLiveEndpoint(root);
         CtDaemonVersionVerdict version = CtDaemonVersion.ForLease(
             request.MillerVersion ?? MillerVersion.Current,
-            CtDaemonRouting.ResolveLiveEndpoint(root)?.Lease);
+            endpoint?.Lease);
+        CtLoopHealthVerdict loop = ResolveLoopHealth(root, endpoint, snapshot);
         return new TestsStatusResult(
             Enabled: optedIn || stored.Count > 0,
             KillSwitchOff: false,
@@ -261,8 +271,40 @@ public static class TestsCore
             BudgetHolder: budget,
             DaemonActivity: snapshot.Activity,
             DaemonRun: snapshot.Run,
-            DaemonVersion: version);
+            DaemonVersion: version,
+            DaemonLoop: loop);
     }
+
+    /// <summary>
+    /// Whether the daemon that serves <paramref name="root"/> is still turning its main loop.
+    ///
+    /// <para>An adopted worktree has no periodic record of its own — the family daemon writes that
+    /// worktree's <c>daemon.status.json</c> on TRANSITIONS only, so its timestamps stand still while a
+    /// perfectly healthy daemon serves it. Judging that record would report every adopted worktree as
+    /// wedged. The live endpoint is the daemon that actually runs the loop, so its record is the one to
+    /// read; when the endpoint is this root, the snapshot already carries the verdict and no second file
+    /// read is needed.</para>
+    /// </summary>
+    private static CtLoopHealthVerdict ResolveLoopHealth(
+        string root,
+        CtDaemonEndpoint? endpoint,
+        ContinuousTestDaemonSnapshot snapshot)
+    {
+        if (endpoint is null)
+            return CtDaemonLoopHealth.Unknown("no live daemon");
+        if (PathsEqual(endpoint.EndpointRoot, root))
+            return snapshot.LoopHealth ?? CtDaemonLoopHealth.Unknown("no status record");
+
+        return CtDaemonLoopHealth.Evaluate(CtDaemonLease.TryReadStatus(endpoint.EndpointRoot));
+    }
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
+            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal);
 
     /// <summary>
     /// One page of the red cases, ordered by test-case id so paging is stable between calls.
@@ -667,6 +709,21 @@ public static class TestsCore
         writer.WriteString("version_reason", version.Reason);
     }
 
+    /// <summary>
+    /// Whether the daemon's main loop is turning. Always both keys: <c>loop_stalled</c> is what a reader
+    /// acts on, and <c>loop_stall_seconds</c> is the measured lag between the record's own two stamps. The
+    /// lag is null — never zero — when the record carries no loop tick to subtract, because a build that
+    /// predates the field proves nothing and a false "0" would read as proof of health.
+    /// </summary>
+    private static void WriteDaemonLoop(Utf8JsonWriter writer, CtLoopHealthVerdict? loop)
+    {
+        writer.WriteBoolean("loop_stalled", loop?.Stalled ?? false);
+        if (loop?.LagSeconds is { } seconds)
+            writer.WriteNumber("loop_stall_seconds", seconds);
+        else
+            writer.WriteNull("loop_stall_seconds");
+    }
+
     internal static string RenderStatusJson(TestsStatusResult result)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -689,6 +746,7 @@ public static class TestsCore
             writer.WritePropertyName("run");
             WriteDaemonRun(writer, result.DaemonRun);
             WriteDaemonVersion(writer, result.DaemonVersion);
+            WriteDaemonLoop(writer, result.DaemonLoop);
             writer.WriteEndObject();
             writer.WriteString("verdict", Snake(result.Verdict.ToString()));
             writer.WritePropertyName("selected");
@@ -738,6 +796,10 @@ public static class TestsCore
         // line needs no second copy of the version.
         if (result.DaemonVersion is { Mismatch: true } version)
             sb.AppendLine("daemon_build: " + version.Reason);
+        // Only when the loop is provably wedged. A healthy loop, an unproven one, and a daemon that is
+        // not running all stay silent: this line exists to name a fault, not to certify health.
+        if (result.DaemonLoop is { Stalled: true } loop)
+            sb.AppendLine($"daemon_loop: {Snake(loop.Health.ToString())} — {loop.Reason}");
         sb.AppendLine("verdict: " + Snake(result.Verdict.ToString()));
         sb.AppendLine("selected: " + (result.Selected is { } selectedKey
             ? CompactFreshness(selectedKey)

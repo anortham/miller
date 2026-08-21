@@ -73,7 +73,6 @@ public sealed class CtDaemonVersionTests
         var lease = new CtDaemonLeaseRecord(
             new CtDaemonLeaseIdentity(1234, DateTimeOffset.UnixEpoch),
             DateTimeOffset.UnixEpoch,
-            DateTimeOffset.UnixEpoch,
             "C:/does/not/matter",
             "1.9.0+aaa");
 
