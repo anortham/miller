@@ -590,6 +590,41 @@ public sealed class WorkspaceRemovalTests : IDisposable
     }
 
     [Fact]
+    public void RemoveById_RecordsTheOwedReclaimBeforeTheRegistryRowIsDeleted()
+    {
+        var (root, _) = MakeWorkspace("ws-store-intent");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-store-intent-01", "store-intent-disp", root);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-intent");
+        registry.UpsertStoreMember(
+            "ws-store-intent-01", family.FamilyId, "view-intent", root, WorkspaceRootIdentity.Unknown);
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-intent");
+        string sidecarDir = StoreSidecarCatalog.DirectoryFor(family.StoreRoot);
+
+        // The sidecar lease is taken INSIDE the reclaim, which runs after the registry delete. A record that is
+        // already on disk at that moment was written BEFORE the delete, so a crash in the window between the two
+        // still leaves the view id named on disk. Without the intent write there is nothing to find it by.
+        bool recordedAtLeaseTime = false;
+        bool rowGoneAtLeaseTime = false;
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "store-intent-disp",
+            liveRoot: null,
+            acquireSidecarLease: _ =>
+            {
+                recordedAtLeaseTime = Directory
+                    .GetFiles(sidecarDir, "*" + StoreSidecarReclaim.OwedRecordSuffix).Length == 1;
+                rowGoneAtLeaseTime = registry.Get("ws-store-intent-01") is null;
+                return null;
+            });
+
+        Assert.True(rowGoneAtLeaseTime, "the registry row must already be gone when the reclaim runs");
+        Assert.True(recordedAtLeaseTime, "the owed record must be written before the registry row is deleted");
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+    }
+
+    [Fact]
     public void RemoveById_DeletesTheRemovedViewsStoreSidecars()
     {
         var (root, _) = MakeWorkspace("ws-store-member");

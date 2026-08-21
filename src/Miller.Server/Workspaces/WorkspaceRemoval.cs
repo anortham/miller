@@ -14,6 +14,10 @@ namespace Miller.Server.Workspaces;
 /// part of the removal. The reclaim is best-effort by design: a busy sidecar lease, an absent store root, or a
 /// file a reader still holds leaves the files in place and reports it in
 /// <see cref="WorkspaceRemoveResult.SidecarReclaim"/>. It never turns a successful removal into a failure.</para>
+///
+/// <para>The reclaim is also DURABLE across a crash: <see cref="StoreSidecarReclaim.RecordIntent"/> writes the
+/// workspace-to-view mapping beside the sidecars before the registry row is deleted, so a process that dies in
+/// the window between the delete and the reclaim leaves a record the next pass can finish from.</para>
 /// </summary>
 public static class WorkspaceRemoval
 {
@@ -75,6 +79,7 @@ public static class WorkspaceRemoval
                 return WorkspaceRemoveResult.NotFound(goneMillerDir);
             StoreSidecarReclaimTarget? staleTarget =
                 StoreSidecarReclaimTarget.Capture(registry, stale.WorkspaceId);
+            _ = StoreSidecarReclaim.RecordIntent(staleTarget);
             registry.Remove(stale.WorkspaceId);
             return WorkspaceRemoveResult.Removed(
                 goneMillerDir,
@@ -141,12 +146,19 @@ public static class WorkspaceRemoval
         // The view id lives in the store_members row, which the workspace delete cascades away. Capture it
         // BEFORE the delete: after the row is gone nothing on disk records which view this workspace owned, and
         // the sidecars would be unreclaimable forever. Nothing is deleted from the capture alone.
+        //
+        // The capture lives in MEMORY, so it dies with a crashed process. Every registry delete below is
+        // therefore preceded by StoreSidecarReclaim.RecordIntent, which writes the same mapping to disk beside
+        // the sidecars; the reclaim clears it only once the delete pass completes. The intent write sits
+        // immediately before each delete so a refusal above never leaves a record behind, and a write that fails
+        // never fails the removal — it surfaces in the reclaim's skip reason instead.
         StoreSidecarReclaimTarget? sidecarTarget = StoreSidecarReclaimTarget.Capture(registry, workspaceId);
 
         if (!Directory.Exists(millerDir))
         {
             if (workspaceId is null)
                 return WorkspaceRemoveResult.NotFound(millerDir, workspaceId, root);
+            _ = StoreSidecarReclaim.RecordIntent(sidecarTarget);
             registry.Remove(workspaceId);
             return WorkspaceRemoveResult.Removed(
                 millerDir,
@@ -195,7 +207,11 @@ public static class WorkspaceRemoval
 
         SingleWriterLock.TryDeleteEmptiedDir(millerDir);
         if (workspaceId is not null)
+        {
+            _ = StoreSidecarReclaim.RecordIntent(sidecarTarget);
             registry.Remove(workspaceId);
+        }
+
         return WorkspaceRemoveResult.Removed(
             millerDir,
             workspaceId,

@@ -61,9 +61,11 @@ public static class WorkspaceRegistryPrune
             }
 
             // The view id lives in the store_members row, which the workspace delete cascades away. Capture it
-            // FIRST, then delete, then reclaim — the reclaim re-reads the members table and spares any view a
-            // surviving workspace still claims.
+            // FIRST, write the owed-reclaim record to disk, then delete, then reclaim — the reclaim re-reads the
+            // members table and spares any view a surviving workspace still claims. The record is what survives
+            // a crash in the window between the delete and the reclaim; the in-memory capture does not.
             StoreSidecarReclaimTarget? target = StoreSidecarReclaimTarget.Capture(registry, row.WorkspaceId);
+            _ = StoreSidecarReclaim.RecordIntent(target);
             registry.Remove(row.WorkspaceId);
             reclaimed = StoreSidecarReclaimResult.Combine(
                 reclaimed,

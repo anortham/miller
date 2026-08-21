@@ -68,6 +68,41 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
     }
 
     [Fact]
+    public void Run_RecordsTheOwedReclaimBeforeTheRegistryRowIsDeleted()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-prune-intent");
+        string goneRoot = Register("ws-prune-intent-1", "intent-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-intent-1", goneRoot, "view-prune-intent");
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-prune-intent");
+        string sidecarDir = StoreSidecarCatalog.DirectoryFor(family.StoreRoot);
+
+        // Only the FIRST lease request is the reclaim of this row; the prune asks again for its trailing
+        // discharge sweep, by which time the busy-lease path has written a record of its own.
+        int leaseRequests = 0;
+        bool recordedAtLeaseTime = false;
+        bool rowGoneAtLeaseTime = false;
+        WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            acquireSidecarLease: _ =>
+            {
+                if (++leaseRequests == 1)
+                {
+                    recordedAtLeaseTime = Directory
+                        .GetFiles(sidecarDir, "*" + StoreSidecarReclaim.OwedRecordSuffix).Length == 1;
+                    rowGoneAtLeaseTime = _registry.Get("ws-prune-intent-1") is null;
+                }
+
+                return null;
+            });
+
+        Assert.True(rowGoneAtLeaseTime, "the registry row must already be gone when the reclaim runs");
+        Assert.True(recordedAtLeaseTime, "the owed record must be written before the registry row is deleted");
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+    }
+
+    [Fact]
     public void Run_PrunedRow_ReclaimsItsViewAndSparesTheSurvivingMember()
     {
         StoreFamilyRegistryRow family = SeedFamily("lineage-prune");

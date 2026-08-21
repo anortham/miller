@@ -382,4 +382,188 @@ public sealed class StoreSidecarReclaimTests : IDisposable
         Assert.Equal(StoreSidecarReclaimResult.None, result);
         Assert.False(Directory.Exists(family.StoreRoot));
     }
+
+    // ---------- the reclaim intent survives a crash (F1) ----------
+
+    private static string[] OwedRecords(string storeRoot) =>
+        Directory.GetFiles(
+            StoreSidecarCatalog.DirectoryFor(storeRoot), "*" + StoreSidecarReclaim.OwedRecordSuffix);
+
+    [Fact]
+    public void RecordIntent_SurvivesACrashBetweenTheRegistryDeleteAndTheReclaim()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-intent-crash");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-crash-00001", "view-crash");
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-crash", bytesEach: 9);
+
+        Assert.True(StoreSidecarReclaim.RecordIntent(target));
+        _registry.Remove("ws-crash-00001");
+
+        // The process dies HERE: the member row is gone, the reclaim never ran, and the captured target died
+        // with the process. Only the record on disk still says which view these files belong to.
+        Assert.Single(OwedRecords(family.StoreRoot));
+
+        StoreSidecarReclaimResult recovered = StoreSidecarReclaim.DischargeOwed(_registry, family.StoreRoot);
+
+        Assert.Equal(6, recovered.FilesDeleted);
+        Assert.All(paths, p => Assert.False(File.Exists(p)));
+        Assert.Empty(OwedRecords(family.StoreRoot));
+    }
+
+    [Fact]
+    public void RecordIntent_NullTarget_IsANoOp() => Assert.True(StoreSidecarReclaim.RecordIntent(null));
+
+    [Fact]
+    public void RecordIntent_MissingStoreRoot_CreatesNothing()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-intent-absent", createStoreRoot: false);
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-intabs-0001", "view-intent-absent");
+
+        Assert.True(StoreSidecarReclaim.RecordIntent(target));
+
+        Assert.False(Directory.Exists(family.StoreRoot));
+    }
+
+    [Fact]
+    public void Reclaim_OwedRecordCannotBeWritten_SaysSoInTheSkipReason()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-owed-unwritable");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-owedun-0001", "view-owed-unwritable");
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-owed-unwritable", bytesEach: 2);
+
+        // A directory sitting where the record belongs fails every write, the way a denying ACL would.
+        Directory.CreateDirectory(Path.Combine(
+            StoreSidecarCatalog.DirectoryFor(family.StoreRoot),
+            StoreSidecarCatalog.ViewKey("view-owed-unwritable") + StoreSidecarReclaim.OwedRecordSuffix));
+
+        Assert.False(StoreSidecarReclaim.RecordIntent(target));
+        _registry.Remove("ws-owedun-0001");
+
+        StoreSidecarReclaimResult result = StoreSidecarReclaim.Reclaim(_registry, target, _ => null);
+
+        Assert.Equal(
+            StoreSidecarReclaim.LeaseBusyReason + StoreSidecarReclaim.NotRecordedSuffix,
+            result.SkipReason);
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+    }
+
+    // ---------- membership is re-checked under the lease (F2) ----------
+
+    private sealed class FakeLease : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    [Fact]
+    public void Reclaim_ViewClaimedAgainWhileWaitingForTheLease_KeepsTheFiles()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-lease-race");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-race-000001", "view-race");
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-race", bytesEach: 16);
+        Assert.True(StoreSidecarReclaim.RecordIntent(target));
+        _registry.Remove("ws-race-000001");
+
+        // The lease wait lasts up to two seconds, and `workspace open` on the same root lands inside it: the
+        // family resolver reconciles the re-registered workspace onto the SAME view id from the store catalog.
+        StoreSidecarReclaimResult result = StoreSidecarReclaim.Reclaim(_registry, target, _ =>
+        {
+            SeedMember(family, "ws-race-000002", "view-race");
+            return new FakeLease();
+        });
+
+        Assert.Equal(StoreSidecarReclaim.StillAMemberReason, result.SkipReason);
+        Assert.Equal(0, result.FilesDeleted);
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+        Assert.Empty(OwedRecords(family.StoreRoot));
+    }
+
+    // ---------- the owed record is scoped to its own store (F3) ----------
+
+    [Fact]
+    public void DischargeOwed_SameViewIdInAnotherFamily_StillReclaimsThisStore()
+    {
+        StoreFamilyRegistryRow mine = SeedFamily("lineage-scope-mine");
+        StoreFamilyRegistryRow other = SeedFamily("lineage-scope-other");
+        StoreSidecarReclaimTarget target = SeedMember(mine, "ws-scope-000001", "view-shared");
+        IReadOnlyList<string> paths = WriteSidecars(mine.StoreRoot, "view-shared", bytesEach: 7);
+        Assert.True(StoreSidecarReclaim.RecordIntent(target));
+        _registry.Remove("ws-scope-000001");
+
+        // A live member of a DIFFERENT family holding the same view id claims that family's view, not this
+        // store's. Sparing this record would keep the files AND drop the only thing that names them.
+        SeedMember(other, "ws-scope-000002", "view-shared");
+
+        StoreSidecarReclaimResult result = StoreSidecarReclaim.DischargeOwed(_registry, mine.StoreRoot);
+
+        Assert.Equal(6, result.FilesDeleted);
+        Assert.All(paths, p => Assert.False(File.Exists(p)));
+        Assert.Empty(OwedRecords(mine.StoreRoot));
+    }
+
+    // ---------- a failed listing is not an empty directory (F4) ----------
+
+    /// <summary>A listing that fails only for the retained-generation pattern, as an ACL denial or a sharing
+    /// violation on the sidecar directory would.</summary>
+    private static StoreSidecarReclaim.FileLister FailGenerationListing() =>
+        (directory, pattern) => pattern.Contains(".gen-", StringComparison.Ordinal)
+            ? null
+            : Directory.GetFiles(directory, pattern);
+
+    private static (string First, string Second) GenerationPaths(string storeRoot, string viewId)
+    {
+        string active = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Vector, viewId);
+        string prefix = Path.Combine(
+            Path.GetDirectoryName(active)!, Path.GetFileNameWithoutExtension(active));
+        return (prefix + ".gen-aaaa.db", prefix + ".gen-bbbb.db");
+    }
+
+    [Fact]
+    public void Reclaim_GenerationListingFails_KeepsTheReclaimOwedAndReportsIt()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-listing-failure");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-listfail-0001", "view-listfail");
+        WriteSidecars(family.StoreRoot, "view-listfail", bytesEach: 4);
+        WriteVectorGenerations(family.StoreRoot, "view-listfail", bytesEach: 40);
+        var (first, second) = GenerationPaths(family.StoreRoot, "view-listfail");
+        Assert.True(StoreSidecarReclaim.RecordIntent(target));
+        _registry.Remove("ws-listfail-0001");
+
+        StoreSidecarReclaimResult result = StoreSidecarReclaim.Reclaim(
+            _registry, target, acquireLease: null, listFiles: FailGenerationListing());
+
+        Assert.Equal(StoreSidecarReclaim.ListingFailedReason, result.SkipReason);
+        Assert.True(File.Exists(first));
+        Assert.True(File.Exists(second));
+        Assert.Single(OwedRecords(family.StoreRoot));
+    }
+
+    [Fact]
+    public void DischargeOwed_GenerationListingFails_KeepsTheRecordForTheNextPass()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-listing-discharge");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-listdis-0001", "view-listdis");
+        WriteSidecars(family.StoreRoot, "view-listdis", bytesEach: 4);
+        WriteVectorGenerations(family.StoreRoot, "view-listdis", bytesEach: 40);
+        var (first, second) = GenerationPaths(family.StoreRoot, "view-listdis");
+        Assert.True(StoreSidecarReclaim.RecordIntent(target));
+        _registry.Remove("ws-listdis-0001");
+
+        StoreSidecarReclaimResult blocked = StoreSidecarReclaim.DischargeOwed(
+            _registry, family.StoreRoot, acquireLease: null, listFiles: FailGenerationListing());
+
+        Assert.Equal(StoreSidecarReclaim.ListingFailedReason, blocked.SkipReason);
+        Assert.True(File.Exists(first));
+        Assert.True(File.Exists(second));
+        Assert.Single(OwedRecords(family.StoreRoot));
+
+        // The next pass reads the directory and finishes the job the failed listing left owed.
+        StoreSidecarReclaimResult recovered = StoreSidecarReclaim.DischargeOwed(_registry, family.StoreRoot);
+
+        Assert.Equal(2, recovered.FilesDeleted);
+        Assert.False(File.Exists(first));
+        Assert.False(File.Exists(second));
+        Assert.Empty(OwedRecords(family.StoreRoot));
+    }
 }
