@@ -3801,6 +3801,11 @@ public static class CliDispatch
                 ISymbolLookupIndex symbolIndex = requireSearchSidecar && sidecar.Enabled
                     ? sidecar.OpenStoreRequired(storeRoot, session.Snapshot)
                     : SymbolSearchProjectionLoader.LoadSession(session);
+                // No supplemental-edge cache delegate ON PURPOSE. The delegate exists to SHARE one edge load
+                // across the many graph instances a resident server builds; this process answers one command
+                // and exits, so a cache here can never be hit. The edges themselves are identical either way —
+                // both paths run SqliteSymbolGraphIndex.ReadSupplementalEdges, whose test-linkage arm is gated
+                // by a LIMIT 1 existence probe and whose endpoints resolve in one batched statement.
                 var graph = new SqliteSymbolGraphIndex(session);
                 scope = new CliReadScope(session, symbolIndex, graph, graph);
             }

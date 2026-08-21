@@ -590,6 +590,116 @@ public sealed class SqliteSymbolGraphIndexTests
         Assert.Empty(actual.Nodes);
     }
 
+    // FIX 1 (2026-08-21 context-latency diagnosis): no store julie-extract has ever written carries a
+    // test_linkage/test_coverage metadata key, so the whole-index metadata scan must not run at all.
+    [Fact]
+    public void TestLinkage_TestMetadataWithoutLinkageKeys_SkipsTheMetadataScan()
+    {
+        const string testId = "52400000000000000000000000000001";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(testId, "ExecuteWorks", "method", "csharp", "tests/ServiceTests.cs", "void ExecuteWorks()", 1, null)
+                {
+                    IsTest = true,
+                    Metadata = "{\"is_test\":true,\"test_lifecycle\":\"fact\"}",
+                },
+            ]);
+        using SqliteConnection connection = OpenReadOnly(fixture.DbPath);
+
+        TestLinkageReadResult result = TestLinkageReader.ReadWithProbe(connection);
+
+        Assert.False(result.Scanned);
+        Assert.Empty(result.Edges);
+    }
+
+    [Fact]
+    public void TestLinkage_TestMetadataWithLinkageKey_ScansAndProducesTheEdge()
+    {
+        const string sourceId = "52500000000000000000000000000001";
+        const string testId = "52500000000000000000000000000002";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(sourceId, "Execute", "method", "csharp", "src/Service.cs", "void Execute()", 1, null),
+                new(testId, "ExecuteWorks", "method", "csharp", "tests/ServiceTests.cs", "void ExecuteWorks()", 1, null)
+                {
+                    IsTest = true,
+                    Metadata = "{\"test_coverage\":{\"symbol_id\":\"" + sourceId + "\",\"confidence\":0.97}}",
+                },
+            ]);
+        using SqliteConnection connection = OpenReadOnly(fixture.DbPath);
+
+        TestLinkageReadResult result = TestLinkageReader.ReadWithProbe(connection);
+
+        Assert.True(result.Scanned);
+        GraphEdge edge = Assert.Single(result.Edges);
+        Assert.Equal(testId, edge.From);
+        Assert.Equal(sourceId, edge.To);
+    }
+
+    // FIX 7: the supplemental edge endpoints were probed one `SELECT 1 FROM symbols` at a time against a
+    // per-instance cache that always started empty. Three linkage edges cost three probes plus the start probe;
+    // one batched prime makes it two statements regardless of the edge count.
+    [Fact]
+    public void Reach_SupplementalEdgeEndpointsResolveInOneBatchedProbe()
+    {
+        const string sourceId = "52600000000000000000000000000001";
+        string[] testIds =
+        [
+            "52600000000000000000000000000002",
+            "52600000000000000000000000000003",
+            "52600000000000000000000000000004",
+        ];
+        var symbols = new List<JulieDbFixture.SymbolRow>
+        {
+            new(sourceId, "Execute", "method", "csharp", "src/Service.cs", "void Execute()", 1, null),
+        };
+        foreach (string testId in testIds)
+        {
+            symbols.Add(new(
+                testId,
+                "ExecuteWorks" + testId[^1],
+                "method",
+                "csharp",
+                "tests/ServiceTests.cs",
+                "void ExecuteWorks()",
+                1,
+                null)
+            {
+                IsTest = true,
+                Metadata = "{\"test_coverage\":{\"symbol_id\":\"" + sourceId + "\",\"confidence\":0.97}}",
+            });
+        }
+
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            symbols);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+
+        IReadOnlyList<ReachedNode> reached = sqlite.Reach([sourceId], 1, 10, Direction.Reverse);
+        GraphQueryTelemetrySnapshot telemetry = sqlite.QueryTelemetry;
+
+        Assert.Equal(testIds, reached.Select(static node => node.Id).OrderBy(static id => id, StringComparer.Ordinal));
+        Assert.Equal(3, telemetry.SupplementalEdges.Rows);
+        Assert.Equal(2, telemetry.SymbolExists.Executions);
+    }
+
+    private static SqliteConnection OpenReadOnly(string dbPath)
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        return connection;
+    }
+
     [Fact]
     public void ReachWithEvidence_EqualPriorityEdgesUseDeterministicKindTieBreak()
     {

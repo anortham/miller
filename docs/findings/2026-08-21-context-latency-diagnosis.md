@@ -98,6 +98,16 @@ during active development: 57% (15 misses / 35 calls).
 SqliteSymbolGraphIndex(session)` with no `loadSupplementalEdges` delegate, so every CLI
 process pays the full load — the flat 13.6s.
 
+**Shipped 2026-08-21 (fixes 1, 2, 3, 7).** The linkage scan is now gated by a `LIMIT 1`
+existence probe, the `ORDER BY` is gone, the cache key is the manifest identity, and the edge
+endpoints resolve in one batched statement. Re-measured read-only against the live store the
+same day (32,436 test symbols carry metadata now, up from 7,128): the old sorted scan 2,978 ms,
+the same scan unsorted 220 ms, the existence probe 206 ms and zero JSON parses. What remains
+under `supplemental` on a cache miss is the Blazor arm — 15 ms for the fact read plus 273 ms
+for `BlazorComponentGraphReader.ReadEvidence`'s own sorted `symbols` scan (34,021 rows), which
+is NOT dead code and is out of scope here. The CLI keeps its null delegate on purpose: a
+one-shot process can never hit a cross-call cache, and both paths compute the same edges.
+
 ### 2. N+1 term-rescue reads drag in the whole-generation fact load under reference_mode=off
 
 `PromoteTermRescueTestSubjects` (`ContextTool.cs:2012-2024`) calls `readOutgoing(symbolId)`
@@ -190,11 +200,19 @@ than re-diagnosing it from scratch. The same note is on
 
 1. ~~Does julie-extract ever emit `test_linkage`/`test_coverage`?~~ **ANSWERED: no.** Zero
    rows across all five store families on this machine (probe 2026-08-21).
-2. **Where do the 24 supplemental edges come from?** The probe found 0 test-linkage edges
-   AND 0 `blazor.component.reference` structural facts in Miller's view, yet every call
-   reports 24 edges. Experiment: log edge `Source` counts from `ReadSupplementalEdges`, or
-   check whether `BridgeStructuralPatterns.BlazorComponentReference` uses a different
-   pattern id than the one queried. Settle this before changing the edge readers.
+2. ~~Where do the 24 supplemental edges come from?~~ **ANSWERED: all 24 are Blazor
+   component-reference edges from the dashboard's `.razor` files.** The earlier probe spelled
+   the pattern id `blazor.component.reference`; the emitted id is
+   `blazor.component_reference.v1` (`BridgeStructuralPatterns.BlazorComponentReference`), so
+   it matched nothing. Counted read-only against the live store at the pinned view
+   (`e32fd74f…`, generation 1344) on 2026-08-21: **26** visible `blazor.component_reference.v1`
+   facts over 8 `.razor` files; 24 name a tag that resolves to a visible razor-component class
+   symbol, and the 2 that do not are `<AntiforgeryToken>`, an ASP.NET framework component with
+   no workspace symbol. `BlazorComponentGraphReader` emits one `uses` edge per resolvable fact
+   and drops the rest — **24**, matching the count every call reported.
+   **Consequence for fix 1:** only the TEST-LINKAGE arm of `ReadSupplementalEdges` is dead; the
+   Blazor arm carries every edge the graph actually uses and must keep running. The gate is on
+   the linkage scan alone.
 3. **What causes `FindByName` bursts of 468 calls at 13.0 s?** (Seen twice on 2026-08-20,
    ~27.8 ms/call; other calls do 98 calls at ~0 ms.) Hypothesis: the in-memory projection
    answered instead of the FTS sidecar — would be a search-sidecar availability bug, not a

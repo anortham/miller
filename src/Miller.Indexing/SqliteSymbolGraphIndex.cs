@@ -666,7 +666,67 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             ? _loadSupplementalEdges()
             : LoadSupplementalEdges();
         _queryTelemetry.SupplementalEdges.Add(_supplementalEdges.Count, Stopwatch.GetElapsedTime(started));
+        PrimeSupplementalEndpointExistence(_supplementalEdges);
         return _supplementalEdges;
+    }
+
+    /// <summary>
+    /// Resolves every supplemental edge endpoint in ONE statement per batch instead of one
+    /// <c>SELECT 1 FROM symbols</c> per endpoint per frontier. The edge set is fixed for the life of this
+    /// instance and <see cref="_symbolExistsCache"/> starts empty on every instance (the provider builds a new
+    /// graph per call), so the per-endpoint probes were paid in full on every single call — 48 round trips for
+    /// this repo's 24 edges. The cached answers are identical to what <see cref="SymbolExists"/> would return:
+    /// an id the batch does not report is recorded as absent.
+    /// </summary>
+    private void PrimeSupplementalEndpointExistence(IReadOnlyList<GraphEdge> edges)
+    {
+        if (edges.Count == 0)
+            return;
+
+        var pending = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (GraphEdge edge in edges)
+        {
+            AddPendingEndpoint(edge.From, pending, seen);
+            AddPendingEndpoint(edge.To, pending, seen);
+        }
+
+        if (pending.Count == 0)
+            return;
+
+        foreach (string[] batch in pending.Chunk(MaximumBatchIds))
+        {
+            using Microsoft.Data.Sqlite.SqliteCommand command = Connection.CreateCommand();
+            string placeholders = string.Join(
+                ", ",
+                Enumerable.Range(0, batch.Length).Select(static index => $"$id{index}"));
+            command.CommandText =
+                $"SELECT symbol_id FROM symbols WHERE symbol_id IN ({placeholders});";
+            for (int index = 0; index < batch.Length; index++)
+                command.Parameters.AddWithValue($"$id{index}", batch[index]);
+
+            long started = Stopwatch.GetTimestamp();
+            using Microsoft.Data.Sqlite.SqliteDataReader reader = command.ExecuteReader();
+            int rows = 0;
+            while (reader.Read())
+            {
+                rows++;
+                _symbolExistsCache[reader.GetString(0)] = true;
+            }
+            _queryTelemetry.SymbolExists.Add(rows, Stopwatch.GetElapsedTime(started));
+
+            foreach (string id in batch)
+            {
+                if (!_symbolExistsCache.ContainsKey(id))
+                    _symbolExistsCache[id] = false;
+            }
+        }
+    }
+
+    private void AddPendingEndpoint(string id, List<string> pending, HashSet<string> seen)
+    {
+        if (!_symbolExistsCache.ContainsKey(id) && seen.Add(id))
+            pending.Add(id);
     }
 
     internal IReadOnlyList<GraphEdge> ReadCurrentSupplementalEdges() => LoadSupplementalEdges();

@@ -625,7 +625,7 @@ public sealed class WorkspaceIndexProvider
         string? workspaceId,
         WorkspaceReadHandle readSession)
     {
-        CacheKey key = KeyFor(workspaceId, readSession.Snapshot);
+        SupplementalEdgeKey key = SupplementalKeyFor(workspaceId, readSession.Snapshot);
         SqliteSymbolGraphIndex? graph = null;
         graph = new SqliteSymbolGraphIndex(
             readSession,
@@ -1499,9 +1499,9 @@ public sealed class WorkspaceIndexProvider
     }
 
     private IReadOnlyList<GraphEdge> GetOrAddSupplementalEdges(
-        CacheKey key,
+        SupplementalEdgeKey key,
         Func<IReadOnlyList<GraphEdge>> load) =>
-        _supplementalEdgesCache.GetOrAdd(key.WorkspaceId, key.ToString(), load);
+        _supplementalEdgesCache.GetOrAdd(key.WorkspaceId, key.Identity, load);
 
     private static void EvictOtherEntriesForWorkspaceUnderLock<T>(
         Dictionary<CacheKey, Lazy<T>> cache, CacheKey keep)
@@ -1691,6 +1691,53 @@ public sealed class WorkspaceIndexProvider
             0,
             freshness.StoreInstanceId ?? freshness.ArtifactOrStoreId,
             ArtifactStampState.Present);
+    }
+
+    private readonly record struct SupplementalEdgeKey(string WorkspaceId, string Identity);
+
+    /// <summary>
+    /// The cache key for the supplemental edge set (test-linkage edges + Blazor component-reference edges).
+    /// </summary>
+    /// <remarks>
+    /// <para>Those edges are read from the STORE's visible fact rows, so the set is a function of WHICH file
+    /// versions the pinned manifest makes visible, and of the index level that decided how much of each version
+    /// was extracted. Nothing else can change it.</para>
+    /// <para>The general <see cref="KeyFor(string?, WorkspaceReadSnapshot, StoreSidecarStamp?)"/> folds
+    /// <c>StoreLogSequence</c>, <c>Revision</c>, <c>ResolutionStamp</c> and the <c>Search</c>/<c>Content</c>/
+    /// <c>Vector</c> sidecar stamps as well. Those move without the visible fact rows moving — the store log
+    /// sequence advances on ANY write to the shared family (another worktree's view converging), and the three
+    /// sidecar stamps are Miller's own derived artifacts, which these edges never read. Keying on them threw the
+    /// edge set away on writes that could not have changed it, and reloading it costs a whole-index read
+    /// (2026-08-21 latency diagnosis: 57% hit rate during active development).</para>
+    /// <para>Against the three events that MUST invalidate: a converged file edit rewrites this view's manifest
+    /// (new version id ⟹ new manifest generation and hash) — key changes; a generation promotion moves
+    /// <c>StoreInstanceId</c>/<c>GenerationName</c> — key changes; a view replan moves <c>ViewId</c> and the
+    /// manifest generation — key changes. A legacy artifact has no manifest, so that arm keeps the artifact id
+    /// plus the revision, which is what advances when julie merges into the artifact in place.</para>
+    /// </remarks>
+    private static SupplementalEdgeKey SupplementalKeyFor(
+        string? workspaceId,
+        WorkspaceReadSnapshot snapshot)
+    {
+        WorkspaceFreshnessToken freshness = snapshot.Freshness;
+        string resolvedWorkspaceId = string.IsNullOrWhiteSpace(workspaceId)
+            ? snapshot.WorkspaceId ?? snapshot.WorkspaceRoot
+            : workspaceId;
+        string identity = snapshot.Mode == WorkspaceReadMode.FamilyStore
+            ? string.Join(
+                ':',
+                "store",
+                freshness.StoreInstanceId ?? snapshot.ArtifactOrStoreId,
+                freshness.ViewId ?? snapshot.ViewId,
+                freshness.GenerationName ?? snapshot.GenerationName,
+                freshness.ManifestGeneration ?? snapshot.ManifestGeneration,
+                freshness.ManifestHash,
+                freshness.IndexLevel ?? snapshot.IndexLevel,
+                freshness.LevelStampL1,
+                freshness.LevelStampL2,
+                freshness.LevelStampL3)
+            : string.Join(':', "artifact", snapshot.ArtifactOrStoreId, freshness.Revision);
+        return new SupplementalEdgeKey(resolvedWorkspaceId, identity);
     }
 
     private static long ContextRevision(WorkspaceReadSnapshot snapshot, long legacyRevision) =>

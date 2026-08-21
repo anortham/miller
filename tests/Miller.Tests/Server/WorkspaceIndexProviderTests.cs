@@ -211,6 +211,88 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal(2, loadCount);
     }
 
+    // FIX 3 (2026-08-21 context-latency diagnosis): the supplemental edge set is a function of the pinned
+    // manifest alone. A store write that leaves this view's manifest alone — another worktree converging, or
+    // Miller restamping its own search/content/vector sidecars — must not throw the edge set away; a generation
+    // promotion and a view replan must.
+    [Fact]
+    public void Resolve_CurrentFamilyStoreKeepsSupplementalEdgesWhenOnlyStoreAndSidecarStampsMove()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("current-store-supplemental-key");
+        var holder = new IndexHolder(
+            () => throw new InvalidOperationException("holder repository was not expected"),
+            builtRevision: 12,
+            documentCount: 1,
+            knownExtensionsCount: 1);
+        WorkspaceReadSnapshot snapshot = StoreSnapshot(root, "manifest-a");
+        int loadCount = 0;
+        var provider = NewProvider(
+            holder,
+            CurrentWorkspaceAt(root, current.DbPath, "current-ws"),
+            registry,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(snapshot, target.DbPath)),
+            loadSessionSymbolSearch: session => SymbolSearchProjectionLoader.LoadSession(session),
+            loadSupplementalEdges: _ =>
+            {
+                loadCount++;
+                return [];
+            });
+
+        void ReadGraph()
+        {
+            using WorkspaceReadContext context = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None);
+            IndexedSymbol targetSymbol = Assert.Single(context.Index.FindByName("TargetType"));
+            Assert.Empty(context.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
+        }
+
+        ReadGraph();
+        Assert.Equal(1, loadCount);
+
+        // Another member of the family converged: the shared store log advanced, Miller restamped its own
+        // sidecars, the view's revision counter moved. This view's manifest did not move.
+        snapshot = snapshot with
+        {
+            Freshness = snapshot.Freshness with
+            {
+                Revision = snapshot.Freshness.Revision + 5,
+                StoreLogSequence = snapshot.Freshness.StoreLogSequence + 9,
+                ResolutionStamp = "resolution-b",
+                SearchStamp = "search-b",
+                ContentStamp = "content-b",
+                VectorStamp = "vector-b",
+            },
+        };
+        ReadGraph();
+        Assert.Equal(1, loadCount);
+
+        // A generation promotion replaces the served generation.
+        snapshot = snapshot with
+        {
+            GenerationName = "gen-002",
+            Freshness = snapshot.Freshness with
+            {
+                StoreInstanceId = "family-a:gen-002",
+                GenerationName = "gen-002",
+            },
+        };
+        ReadGraph();
+        Assert.Equal(2, loadCount);
+
+        // A view replan re-plans the visible file set under a new view id.
+        snapshot = snapshot with
+        {
+            ViewId = "view-b",
+            ManifestGeneration = 8,
+            Freshness = snapshot.Freshness with { ViewId = "view-b", ManifestGeneration = 8 },
+        };
+        ReadGraph();
+        Assert.Equal(3, loadCount);
+    }
+
     [Fact]
     public void Resolve_CurrentFamilyStoreSharesSupplementalEdgesAcrossProviderInstances()
     {
