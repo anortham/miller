@@ -230,8 +230,8 @@ everything (`ContinuousTestStore.ApplyRevisionAdvance`, one transaction, stalene
 currently fresh GREEN cases the change cannot reach carry forward to the new revision; impacted
 cases go stale and lose their watermark rows; red and skipped results never ride the watermark; a
 case whose reachability is unknown reads stale. A run executes the stale set (the impacted set
-plus the already-owed backlog) as an explicit test-ID list; a user-requested run adds the red cases
-at the live key on top of it (see "What an explicit run selects"). Truncated, degraded, or unavailable
+plus the already-owed backlog) as an explicit test-ID list; a user-requested run adds every red case
+on top of it (see "What an explicit run selects"). Truncated, degraded, or unavailable
 impact data yields the Unknown outcome: everything goes stale and NOTHING executes — never a
 whole-suite fallback. Green requires complete results at the selected composite key.
 
@@ -281,11 +281,18 @@ one-shot in the calling process.
 ### What an explicit run selects
 
 An explicit run (`miller tests run`, MCP `tests operation=run`, the daemon `run` command) executes
-the current stale set PLUS every RED case at the live key. A user-requested run means "prove it
-again", so a failing test is re-run even when nothing in the tree has changed. A GREEN case that is
-fresh at that key — committed there, or riding a covering watermark — is neither re-marked stale nor
-re-run: it has nothing to prove, and the run travels as an id list rather than a whole suite
-whenever the selection is a strict subset of the inventory.
+the current stale set PLUS every RED case. A user-requested run means "prove it again", so a failing
+test is re-run even when nothing in the tree has changed. Every red is added, whatever key its row
+carries: a red recorded at an older identity or revision is not fresh at the live key anyway, so the
+rule is "every red" and not "every red at the live key". A GREEN case that is fresh at the live key —
+committed there, or riding a covering watermark — is neither re-marked stale nor re-run: it has
+nothing to prove, and the run travels as an id list rather than a whole suite whenever the selection
+is a strict subset of the inventory.
+
+A SKIPPED case fresh at the live key is left alone too. Skipped is committed-fresh by the same rule
+green and red are, and the explicit run's exception covers red only: a skipped test skips again, so
+"prove it again" has nothing to prove about it. A workspace whose only stale-able cases are skipped
+therefore executes nothing on an explicit run and reports its standing verdict unchanged.
 
 Automatic runs are unchanged: they select the impacted set plus the owed backlog and never add reds.
 A debounced run that re-ran every failing test on every save would be a red loop on every save.

@@ -320,34 +320,137 @@ public sealed class CtDaemonJsonSharingTests : IDisposable
     }
 
     /// <summary>
-    /// The LAST attempt swaps the destination with <c>MoveFileEx</c> instead of <c>ReplaceFile</c>.
-    /// One name operation has less to fail than ReplaceFile's three-step dance, and this attempt was
-    /// going to throw otherwise — so the fallback either publishes the record or reports the same
-    /// failure the caller would have seen anyway.
+    /// EVERY attempt swaps a whole destination with <c>ReplaceFile</c>, the last one included.
+    /// <c>File.Move(overwrite: true)</c> is measured to FAIL against the reader
+    /// <see cref="CtDaemonJson.TryRead"/> opens (share ReadWrite|Delete) where <c>File.Replace</c>
+    /// succeeds, and a held reader is the main contention this loop exists for. So a last-attempt
+    /// Move converts a case Replace still wins into a certain failure. The half-done state that
+    /// motivated the swap is recovered by its own branch instead.
     /// </summary>
     [Fact]
-    public void The_last_attempt_swaps_a_whole_destination_with_a_move()
+    public void The_last_attempt_swaps_a_whole_destination_with_replace_too()
     {
         string final = Path("daemon.status.json");
         File.WriteAllText(final, "previous record");
         string staged = Path("daemon.status.json.staged");
         File.WriteAllText(staged, "next record");
 
+        var replaceCalls = 0;
+        var primitives = new CtDaemonPublishPrimitives(
+            Replace: (_, _) =>
+            {
+                replaceCalls++;
+                throw new IOException(
+                    "Unable to move the replacement file to the file to be replaced. The file to be "
+                    + "replaced has retained its original name.");
+            },
+            Move: (_, _) => Assert.Fail(
+                "a whole destination must be swapped with Replace on every attempt, the last included: "
+                + "Move is refused by the very reader Replace was chosen to serve"),
+            Sleep: _ => { });
+
+        Assert.Throws<IOException>(
+            () => CtDaemonJson.MoveWithRetry(staged, final, CtDaemonWriteMode.CreateIfMissing, primitives));
+
+        Assert.True(replaceCalls > 1, $"the publish gave up after {replaceCalls} attempt(s)");
+        Assert.Equal("previous record", File.ReadAllText(final));
+    }
+
+    /// <summary>
+    /// The SAME half-done recovery under <see cref="CtDaemonWriteMode.ReplaceExistingOnly"/>. The
+    /// destination existed when this publish began, so re-occupying the name it freed is a REPLACE,
+    /// not a create: the rule this mode enforces (never create the file, never create its directory)
+    /// is not broken by the recovery. Without this, the recovery pass sees the destination gone,
+    /// reads it as "the caller's root went away", and returns SUCCESS with the record permanently
+    /// destroyed — which is how a live daemon reads as "daemon gone" from a worktree forever.
+    /// </summary>
+    [Fact]
+    public void A_replace_only_publish_recovers_the_destination_its_own_replace_freed()
+    {
+        string final = Path("daemon.status.json");
+        File.WriteAllText(final, "previous record");
+        string staged = Path("daemon.status.json.staged");
+        File.WriteAllText(staged, "next record");
+
+        var replaceCalls = 0;
         var moveCalls = 0;
         var primitives = new CtDaemonPublishPrimitives(
-            Replace: (_, _) => throw new IOException(
-                "Unable to move the replacement file to the file to be replaced. The file to be "
-                + "replaced has retained its original name."),
+            Replace: (_, destination) =>
+            {
+                replaceCalls++;
+                File.Delete(destination);
+                throw new IOException(
+                    "Unable to move the replacement file to the file to be replaced. The file to be "
+                    + "replaced has been renamed using the backup name.");
+            },
             Move: (source, destination) =>
             {
                 moveCalls++;
                 File.Move(source, destination, overwrite: true);
             },
-            Sleep: _ => { });
+            Sleep: _ => Assert.Fail(
+                "the recovery slept while the destination name was unoccupied; every millisecond "
+                + "there is a millisecond in which readers find no record at all"));
+
+        CtDaemonJson.MoveWithRetry(staged, final, CtDaemonWriteMode.ReplaceExistingOnly, primitives);
+
+        Assert.Equal(1, replaceCalls);
+        Assert.Equal(1, moveCalls);
+        Assert.Equal("next record", File.ReadAllText(final));
+    }
+
+    /// <summary>
+    /// The one state where BOTH files are gone: nothing landed, and the staged bytes that were the
+    /// only other copy of the record are gone too. A missing temp file alone is NOT proof that the
+    /// swap completed, so the destination is probed before the publish reports success.
+    /// </summary>
+    [Fact]
+    public void A_publish_that_loses_the_staged_bytes_and_the_destination_reports_the_failure()
+    {
+        string final = Path("daemon.status.json");
+        File.WriteAllText(final, "previous record");
+        string staged = Path("daemon.status.json.staged");
+        File.WriteAllText(staged, "next record");
+
+        var primitives = new CtDaemonPublishPrimitives(
+            Replace: (source, destination) =>
+            {
+                File.Delete(destination);
+                File.Delete(source);
+                throw new IOException("the replacement and the file to be replaced are both gone");
+            },
+            Move: (_, _) => Assert.Fail("there are no staged bytes left to move"),
+            Sleep: _ => Assert.Fail("there is nothing left to retry with"));
+
+        Assert.Throws<IOException>(
+            () => CtDaemonJson.MoveWithRetry(staged, final, CtDaemonWriteMode.CreateIfMissing, primitives));
+        Assert.False(File.Exists(final));
+    }
+
+    /// <summary>
+    /// The benign half of the same state: the staged bytes are gone because the swap CONSUMED them.
+    /// The destination holds the new record, so the publish succeeded and only its bookkeeping
+    /// failed. A retry here would raise FileNotFoundException over a record that already landed.
+    /// </summary>
+    [Fact]
+    public void A_publish_whose_staged_bytes_were_consumed_by_the_swap_succeeds()
+    {
+        string final = Path("daemon.status.json");
+        File.WriteAllText(final, "previous record");
+        string staged = Path("daemon.status.json.staged");
+        File.WriteAllText(staged, "next record");
+
+        var primitives = new CtDaemonPublishPrimitives(
+            Replace: (source, destination) =>
+            {
+                File.Move(source, destination, overwrite: true);
+                throw new IOException("the swap landed and the metadata copy failed");
+            },
+            Move: (_, _) => Assert.Fail("the record already landed"),
+            Sleep: _ => Assert.Fail("there is nothing left to retry with"));
 
         CtDaemonJson.MoveWithRetry(staged, final, CtDaemonWriteMode.CreateIfMissing, primitives);
 
-        Assert.Equal(1, moveCalls);
         Assert.Equal("next record", File.ReadAllText(final));
     }
 

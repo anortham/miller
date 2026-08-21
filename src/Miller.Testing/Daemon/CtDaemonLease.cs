@@ -491,7 +491,10 @@ public static class CtDaemonJson
     ///
     /// <c>File.Replace</c> requires the destination to exist, so a first write is a plain move. The
     /// two are attempted in a retry loop rather than gated on a stale <c>File.Exists</c> check,
-    /// because another process can create or delete the destination in between.
+    /// because another process can create or delete the destination in between. A whole destination
+    /// is swapped with Replace on EVERY attempt, the last one included: the table above measures
+    /// Move as REFUSED by the very reader Replace was chosen to serve, so a last-attempt Move turns
+    /// a case Replace still wins into a certain failure.
     ///
     /// <para><b>ReplaceFile can fail HALF DONE, and that is the dangerous case.</b> Windows reports
     /// two partial outcomes: "the file to be replaced has retained its original name" (nothing
@@ -502,6 +505,12 @@ public static class CtDaemonJson
     /// spending an attempt on a Replace whose destination no longer exists: the next pass takes the
     /// Move branch and re-occupies the name. Both stay atomic for readers, because both are name
     /// operations and neither truncates anything.</para>
+    ///
+    /// <para>The recovery runs under <see cref="CtDaemonWriteMode.ReplaceExistingOnly"/> too. That
+    /// mode forbids CREATING the destination, and re-occupying a name this publish's own Replace
+    /// freed is not a create — the file was there when the publish began. Without the exception the
+    /// recovery pass read its own half-done state as "the caller's root went away", returned
+    /// success, and left the record permanently destroyed under a live daemon.</para>
     /// </summary>
     private static void MoveWithRetry(
         string tempPath,
@@ -516,10 +525,15 @@ public static class CtDaemonJson
         CtDaemonPublishPrimitives primitives)
     {
         ArgumentNullException.ThrowIfNull(primitives);
+
+        // Set only by the recovery below. A publish that freed the destination name itself must
+        // re-occupy it even under ReplaceExistingOnly, so the "never create" guard has to tell that
+        // pass apart from a first pass whose destination was never there.
+        var recoveringFreedName = false;
         for (var attempt = 1; ; attempt++)
         {
             bool destinationExists = File.Exists(finalPath);
-            if (!destinationExists && mode == CtDaemonWriteMode.ReplaceExistingOnly)
+            if (!destinationExists && mode == CtDaemonWriteMode.ReplaceExistingOnly && !recoveringFreedName)
             {
                 // The destination vanished between the caller's probe and this call. The Move branch
                 // below would CREATE it, and with it the directory this mode must leave alone, so
@@ -530,11 +544,9 @@ public static class CtDaemonJson
             try
             {
                 // ReplaceFile is the Win32 call designed to swap a file somebody is READING, so it
-                // is the primary. On the LAST attempt a whole destination is swapped with MoveFileEx
-                // instead: one name operation has less to fail than ReplaceFile's three-step dance,
-                // and this attempt was going to throw otherwise — so the fallback either publishes
-                // the record or reports the same failure the caller would have seen anyway.
-                if (destinationExists && attempt < PublishAttempts)
+                // is the primary whenever a destination is there to swap. The Move branch is for the
+                // name that is UNOCCUPIED: a first write, or the recovery of a half-done Replace.
+                if (destinationExists)
                     primitives.Replace(tempPath, finalPath);
                 else
                     primitives.Move(tempPath, finalPath);
@@ -546,16 +558,22 @@ public static class CtDaemonJson
             {
                 if (!File.Exists(tempPath))
                 {
-                    // The staged bytes are gone, so the swap half of the operation completed and
-                    // only its bookkeeping failed. There is nothing left to retry WITH, and a retry
-                    // would raise FileNotFoundException over a record that already landed.
-                    return;
+                    // The staged bytes are gone. When the destination holds a record, the swap half
+                    // completed and only its bookkeeping failed: there is nothing left to retry
+                    // WITH, and a retry would raise FileNotFoundException over a record that already
+                    // landed. When BOTH names are free, nothing landed and the only other copy of
+                    // the record is gone too — the caller has to hear that, so the failure is
+                    // reported rather than read as a landed publish.
+                    if (File.Exists(finalPath))
+                        return;
+                    throw;
                 }
 
                 if (destinationExists && !File.Exists(finalPath))
                 {
                     // Half done: the destination name is free and the staged file is intact. Recover
                     // at once — a sleep here is time in which every reader finds no record at all.
+                    recoveringFreedName = true;
                     continue;
                 }
 

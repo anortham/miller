@@ -72,10 +72,15 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
 
     /// <summary>
     /// An explicit run request (<c>tests run</c>, the daemon run command). A workspace-scope
-    /// explicit run executes the current stale set PLUS every RED case at the request's key: a
-    /// user-requested run means "prove it again". GREEN cases fresh at that key — committed there
-    /// or under a covering watermark — are neither re-marked stale nor re-run, so a green result
-    /// survives an explicit run that has nothing to prove about it.
+    /// explicit run executes the current stale set PLUS every RED case: a user-requested run means
+    /// "prove it again". GREEN cases fresh at the request's key — committed there or under a
+    /// covering watermark — are neither re-marked stale nor re-run, so a green result survives an
+    /// explicit run that has nothing to prove about it. SKIPPED cases fresh at that key are left
+    /// alone for the same reason: a skipped test skips again.
+    ///
+    /// <para>"Every red" is the whole rule, not "every red at the live key". A red recorded at an
+    /// older identity or revision was never fresh at the live key, so the trim kept it either way;
+    /// naming a key here would describe a filter that does not exist.</para>
     ///
     /// <para>A red is committed-fresh by the same rule a green is, so the trim used to drop it and
     /// the run selected nothing: the verdict stayed red, the stale count stayed 0, and
@@ -787,6 +792,12 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     /// the same rule a green is, so without it a user-requested run over a red tree selected nothing
     /// at all. It is off everywhere else: an automatic run that re-ran every failing test on every
     /// debounce would be a red loop on every save.</para>
+    ///
+    /// <para>The exception covers RED only, and it covers every red whatever key the row carries —
+    /// it short-circuits the freshness test rather than narrowing it. SKIPPED is committed-fresh by
+    /// the same rule and is NOT excepted: a skipped test skips again, so an explicit run has nothing
+    /// to prove about it. Both statements are the contract's, so keep them in step
+    /// (<c>docs/contracts/tests-cli-v1.md</c>).</para>
     /// </summary>
     private IReadOnlyList<string> DropFreshAt(
         string workspaceId,

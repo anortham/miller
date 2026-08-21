@@ -439,10 +439,13 @@ scripts/test.ps1 all
   transaction, staleness first): fresh GREEN cases the change cannot reach carry forward; impacted cases go
   stale and lose their watermark rows; red/skipped never advance; unknown reachability reads stale. A run
   executes the stale set (impacted ∪ owed backlog) as an explicit test-ID list. An EXPLICIT run
-  (`tests run`, MCP `operation=run`, the daemon run command) adds every RED case at the live key: a red
+  (`tests run`, MCP `operation=run`, the daemon run command) adds every RED case: a red
   is committed-fresh by the same rule a green is, so the fresh-case trim dropped it and a user-requested
   run over a red tree selected NOTHING — verdict red, stale 0, `last_run` frozen however many times the
-  user asked (2026-08-21). Reds join what EXECUTES, never what is marked stale, and only on the explicit
+  user asked (2026-08-21). "Every red" is the whole rule — the trim's red exception short-circuits the
+  freshness test rather than narrowing it, and a red at an older key was never fresh at the live key
+  anyway. SKIPPED is committed-fresh too and is NOT excepted: a skipped test skips again. Reds join what
+  EXECUTES, never what is marked stale, and only on the explicit
   path — an auto-run that re-ran every failing test on every debounce is a red loop on every save.
   Truncated/degraded/
   unavailable impact means Unknown — everything stale, NOTHING executes, never a whole-suite fallback.
@@ -465,13 +468,22 @@ scripts/test.ps1 all
   `~/.miller/ct-daemon/<version>-<build stamp>` and `CtDaemonLauncher.SpawnDetached` launches THAT: a live
   Windows process locks its own image and every DLL it loaded, so a daemon started from `bin/Release` failed
   the next `dotnet build` with MSB3027 and blocked a plugin upgrade from overwriting the installed binary
-  (2026-08-21 user report; the only recovery was Task Manager). The key carries the executable's LENGTH and
-  LAST-WRITE TIME, not the version string alone — the version's git SHA does not move between commits, so a
-  version-only key would run stale code for a whole day of rebuilds. `.tools` is not copied (the daemon
+  (2026-08-21 user report; the only recovery was Task Manager). The key is a digest of the WHOLE copied file
+  set — every file's relative path, length and last-write time — not the version string and not the apphost.
+  The version's git SHA does not move between commits, so a version-only key runs stale code for a whole day
+  of rebuilds; and .NET does NOT re-stamp `miller.exe` when only a referenced project rebuilds, so an
+  apphost-only key stood still on the commonest rebuild there is (the daemon's own logic lives in
+  `Miller.Testing.dll`). The key and the copy read ONE enumeration (`EnumerateCopySet`), so a file that
+  cannot reach the copy cannot move the key. `.tools` is not copied (the daemon
   carries no tools root and reads the index through `WorkspaceReadSessionFactory`), copies of other builds
   are removed only when no live daemon runs from them, and a copy that cannot be made falls back to the
   in-place spawn with the reason plus a `miller tests stop` nudge in the spawn result. An injected process
-  starter takes the in-place path, so no fast test copies an output directory. **A record about a root the process is LEAVING
+  starter takes the in-place path, so no fast test copies an output directory. Cleanup reclaims three
+  things: copies the process probe proves idle, the staging directory of a writer that crashed, and — when
+  that probe cannot answer, which used to delete NOTHING and let copies grow without limit — copies older
+  than three days whose own executable opens for writing, which proves no process has that image mapped.
+  `tests status` still compares the daemon's `miller_version` alone, so a daemon that predates a rebuild
+  inside one commit reports `version_match: true`; restart it by hand after such a rebuild. **A record about a root the process is LEAVING
   may only REPLACE an existing file — never create it, and never create its directory.** An attach record
   creates the adopted worktree's control plane; a detach/stop record, a released lease, and a CT log line
   do not (`CtDaemonWriteMode.ReplaceExistingOnly`). Why: the detach write recreated

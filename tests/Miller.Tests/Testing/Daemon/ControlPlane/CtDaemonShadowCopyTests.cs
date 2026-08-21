@@ -30,31 +30,71 @@ public sealed class CtDaemonShadowCopyTests : IDisposable
 
     // ---- key selection -------------------------------------------------------------------
 
+    private static readonly DateTime Written = new(2026, 8, 21, 10, 0, 0, DateTimeKind.Utc);
+
+    private static CtDaemonCopyEntry[] CopySet(params CtDaemonCopyEntry[] files) => files;
+
+    private static CtDaemonCopyEntry Entry(string relativePath, long length, DateTime? written = null) =>
+        new(relativePath, length, written ?? Written);
+
     /// <summary>
     /// The version string alone cannot key the copy. It carries the release version plus the git
     /// short SHA, and the SHA does not move between commits — so every rebuild inside one commit,
     /// which is the whole inner development loop, would reuse a copy of the PREVIOUS build and run
-    /// stale code. The executable's own length and last-write time are what make the key a build.
+    /// stale code. The file set's own lengths and last-write times are what make the key a build.
     /// </summary>
     [Fact]
     public void The_key_changes_when_the_executable_is_rebuilt()
     {
-        var written = new DateTime(2026, 8, 21, 10, 0, 0, DateTimeKind.Utc);
-        string first = CtDaemonShadowCopy.BuildKey("1.13.0+abc1234", Install, 4096, written);
+        CtDaemonCopyEntry[] build = CopySet(Entry("miller.exe", 4096), Entry("Miller.Testing.dll", 512));
+        string first = CtDaemonShadowCopy.BuildKey("1.13.0+abc1234", Install, build);
 
-        Assert.NotEqual(first, CtDaemonShadowCopy.BuildKey("1.13.0+abc1234", Install, 4096, written.AddSeconds(1)));
-        Assert.NotEqual(first, CtDaemonShadowCopy.BuildKey("1.13.0+abc1234", Install, 4097, written));
-        Assert.Equal(first, CtDaemonShadowCopy.BuildKey("1.13.0+abc1234", Install, 4096, written));
+        Assert.NotEqual(first, CtDaemonShadowCopy.BuildKey(
+            "1.13.0+abc1234", Install, CopySet(Entry("miller.exe", 4096, Written.AddSeconds(1)), Entry("Miller.Testing.dll", 512))));
+        Assert.NotEqual(first, CtDaemonShadowCopy.BuildKey(
+            "1.13.0+abc1234", Install, CopySet(Entry("miller.exe", 4097), Entry("Miller.Testing.dll", 512))));
+        Assert.Equal(first, CtDaemonShadowCopy.BuildKey("1.13.0+abc1234", Install, build));
+    }
+
+    /// <summary>
+    /// The key covers EVERY file the copy carries, not the apphost alone. .NET leaves miller.exe
+    /// untouched when only a referenced project rebuilds, and the daemon's own logic lives in
+    /// Miller.Testing.dll — so an apphost-only key stood still on the commonest rebuild there is.
+    /// </summary>
+    [Fact]
+    public void The_key_changes_when_only_a_dependency_is_rebuilt()
+    {
+        string first = CtDaemonShadowCopy.BuildKey(
+            "1.13.0", Install, CopySet(Entry("miller.exe", 4096), Entry("Miller.Testing.dll", 512)));
+
+        Assert.NotEqual(first, CtDaemonShadowCopy.BuildKey(
+            "1.13.0", Install, CopySet(Entry("miller.exe", 4096), Entry("Miller.Testing.dll", 513))));
+        Assert.NotEqual(first, CtDaemonShadowCopy.BuildKey(
+            "1.13.0", Install, CopySet(Entry("miller.exe", 4096), Entry("Miller.Testing.dll", 512, Written.AddSeconds(1)))));
+        // A file that appears or disappears is a different build too.
+        Assert.NotEqual(first, CtDaemonShadowCopy.BuildKey("1.13.0", Install, CopySet(Entry("miller.exe", 4096))));
+    }
+
+    /// <summary>
+    /// The filesystem promises no enumeration order, so the key sorts its own material. Two orders
+    /// of one build must not key two copies.
+    /// </summary>
+    [Fact]
+    public void The_key_does_not_depend_on_the_enumeration_order()
+    {
+        Assert.Equal(
+            CtDaemonShadowCopy.BuildKey("1.13.0", Install, CopySet(Entry("a.dll", 1), Entry("b/c.dll", 2))),
+            CtDaemonShadowCopy.BuildKey("1.13.0", Install, CopySet(Entry("b/c.dll", 2), Entry("a.dll", 1))));
     }
 
     /// <summary>Two installs of the same build must not share one copy.</summary>
     [Fact]
     public void The_key_separates_two_installs_of_the_same_build()
     {
-        var written = new DateTime(2026, 8, 21, 10, 0, 0, DateTimeKind.Utc);
+        CtDaemonCopyEntry[] build = CopySet(Entry("miller.exe", 4096));
         Assert.NotEqual(
-            CtDaemonShadowCopy.BuildKey("1.13.0", Path.Combine(_work, "a"), 4096, written),
-            CtDaemonShadowCopy.BuildKey("1.13.0", Path.Combine(_work, "b"), 4096, written));
+            CtDaemonShadowCopy.BuildKey("1.13.0", Path.Combine(_work, "a"), build),
+            CtDaemonShadowCopy.BuildKey("1.13.0", Path.Combine(_work, "b"), build));
     }
 
     /// <summary>The key is a legal directory name whatever the version string contains.</summary>
@@ -62,10 +102,29 @@ public sealed class CtDaemonShadowCopyTests : IDisposable
     public void The_key_is_a_legal_directory_name()
     {
         string key = CtDaemonShadowCopy.BuildKey(
-            "1.13.0+abc/def:ghi", Install, 1, DateTime.UnixEpoch);
+            "1.13.0+abc/def:ghi", Install, CopySet(Entry("miller.exe", 1, DateTime.UnixEpoch)));
 
         Assert.Equal(-1, key.IndexOfAny(Path.GetInvalidFileNameChars()));
         Assert.False(key.StartsWith('.'), "a dotted key would be read as control state, never as a copy");
+    }
+
+    /// <summary>
+    /// The key digests exactly what <c>CopyTree</c> copies. A file that cannot reach the copy must
+    /// not move the key: <c>.tools</c> is 164 MB that julie-extract restores independently of any
+    /// Miller build, and re-keying on it would copy the whole tree again for nothing.
+    /// </summary>
+    [Fact]
+    public void The_copy_set_leaves_out_what_the_copy_leaves_out()
+    {
+        WriteInstall("build one");
+        string first = CtDaemonShadowCopy.BuildKey("1.13.0", Install, CtDaemonShadowCopy.EnumerateCopySet(Install));
+
+        File.WriteAllText(Path.Combine(Install, ".tools", "julie-extract.exe"), "a different extractor entirely");
+
+        Assert.Equal(first, CtDaemonShadowCopy.BuildKey("1.13.0", Install, CtDaemonShadowCopy.EnumerateCopySet(Install)));
+        Assert.DoesNotContain(
+            CtDaemonShadowCopy.EnumerateCopySet(Install),
+            entry => entry.RelativePath.Contains(".tools", StringComparison.Ordinal));
     }
 
     // ---- cleanup safety ------------------------------------------------------------------
@@ -118,6 +177,77 @@ public sealed class CtDaemonShadowCopyTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(CopyRoot, "live")));
         Assert.True(Directory.Exists(Path.Combine(CopyRoot, CtDaemonShadowCopy.StagingDirectoryName)));
         Assert.False(Directory.Exists(Path.Combine(CopyRoot, "old")));
+    }
+
+    /// <summary>
+    /// A writer that crashed part way leaves its staging directory behind, and each orphan holds a
+    /// full copy (about 83 MB). Materialize deletes only THIS process and thread's staging path, and
+    /// the removable-copy rule skips every dotted entry, so nothing else ever reclaims one.
+    /// </summary>
+    [Fact]
+    public void Cleanup_reclaims_the_staging_of_a_writer_that_died()
+    {
+        string staging = Path.Combine(CopyRoot, CtDaemonShadowCopy.StagingDirectoryName);
+        string orphan = Path.Combine(staging, "4242-7");
+        string live = Path.Combine(staging, "4243-8");
+        Directory.CreateDirectory(orphan);
+        Directory.CreateDirectory(live);
+        Directory.SetLastWriteTimeUtc(orphan, DateTime.UtcNow - CtDaemonShadowCopy.StagingOrphanAge - TimeSpan.FromHours(1));
+
+        CtDaemonShadowCopy.SweepStaging(CopyRoot, DateTime.UtcNow);
+
+        Assert.False(Directory.Exists(orphan));
+        Assert.True(Directory.Exists(live), "a copy in progress must survive: it is another writer's build");
+        Assert.True(Directory.Exists(staging), "the staging area itself is not an orphan");
+    }
+
+    /// <summary>
+    /// The floor under an INCONCLUSIVE process probe. An elevated miller instance, or one that exits
+    /// mid-probe, makes the exact answer unavailable and the round used to delete nothing at all — so
+    /// a machine that meets that condition regularly accumulated copies without limit.
+    /// </summary>
+    [Fact]
+    public void Old_copies_are_still_candidates_when_the_process_probe_cannot_answer()
+    {
+        DateTime now = new(2026, 8, 21, 12, 0, 0, DateTimeKind.Utc);
+        IReadOnlyList<string> stale = CtDaemonShadowCopy.SelectStaleCopies(
+            [
+                ("current", now - TimeSpan.FromDays(30)),
+                ("old", now - CtDaemonShadowCopy.StaleCopyAge - TimeSpan.FromHours(1)),
+                ("recent", now - TimeSpan.FromHours(1)),
+                (CtDaemonShadowCopy.StagingDirectoryName, now - TimeSpan.FromDays(30)),
+            ],
+            currentKey: "current",
+            nowUtc: now,
+            maxAge: CtDaemonShadowCopy.StaleCopyAge);
+
+        Assert.Equal(["old"], stale);
+    }
+
+    /// <summary>
+    /// The age alone never authorizes a delete: gutting a copy a daemon still runs from would break
+    /// that daemon on its next lazy assembly load. A live process holds its own image open, so an
+    /// executable that opens for WRITING is the proof that nobody runs from that copy.
+    /// </summary>
+    [Fact]
+    public void An_old_copy_is_removed_only_while_nothing_runs_from_it()
+    {
+        string copy = Path.Combine(CopyRoot, "old");
+        Directory.CreateDirectory(copy);
+        string image = Path.Combine(copy, "miller.exe");
+        File.WriteAllText(image, "an old build");
+
+        Assert.True(CtDaemonShadowCopy.IsIdleCopy(copy, "miller.exe"));
+
+        // The sharing shape a running process's image has on Windows.
+        using (new FileStream(image, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Assert.Equal(!OperatingSystem.IsWindows(), CtDaemonShadowCopy.IsIdleCopy(copy, "miller.exe"));
+        }
+
+        // A copy with no executable is unusable, so nothing can be running from it.
+        File.Delete(image);
+        Assert.True(CtDaemonShadowCopy.IsIdleCopy(copy, "miller.exe"));
     }
 
     /// <summary>How a live daemon's process image is mapped back to the copy that must survive.</summary>
@@ -205,6 +335,34 @@ public sealed class CtDaemonShadowCopyTests : IDisposable
     }
 
     /// <summary>
+    /// The common inner-loop rebuild. .NET does NOT re-stamp the apphost when only a referenced
+    /// project changes: a build after an edit to <c>Miller.Testing</c> rewrites
+    /// <c>Miller.Testing.dll</c> and leaves <c>miller.exe</c> at its old length and last-write time
+    /// (measured on this machine, 2026-08-21). A key built from the executable alone therefore does
+    /// not move, the copy is reused, and the daemon runs the PREVIOUS build's code — which is the
+    /// exact failure the key exists to prevent, and the daemon's own logic lives in that DLL.
+    /// </summary>
+    [Fact]
+    public void A_rebuilt_dependency_gets_a_fresh_copy_even_when_the_executable_is_untouched()
+    {
+        string executable = WriteInstall("build one");
+        CtDaemonImage first = CtDaemonShadowCopy.Resolve(executable, "1.13.0", CopyRoot);
+        Assert.Equal("managed", File.ReadAllText(Path.Combine(Path.GetDirectoryName(first.Executable)!, "Miller.Testing.dll")));
+
+        // Only the dependency is rebuilt. The executable keeps its bytes AND its timestamp.
+        DateTime executableWritten = new FileInfo(executable).LastWriteTimeUtc;
+        File.WriteAllText(Path.Combine(Install, "Miller.Testing.dll"), "daemon code v2");
+        Assert.Equal(executableWritten, new FileInfo(executable).LastWriteTimeUtc);
+
+        CtDaemonImage second = CtDaemonShadowCopy.Resolve(executable, "1.13.0", CopyRoot);
+
+        Assert.NotEqual(first.Executable, second.Executable);
+        Assert.Equal(
+            "daemon code v2",
+            File.ReadAllText(Path.Combine(Path.GetDirectoryName(second.Executable)!, "Miller.Testing.dll")));
+    }
+
+    /// <summary>
     /// A copy interrupted part way must never be launched. The ready marker is written last and the
     /// directory is MOVED into place, so a directory without the marker is known to be partial.
     /// </summary>
@@ -213,7 +371,7 @@ public sealed class CtDaemonShadowCopyTests : IDisposable
     {
         string executable = WriteInstall("build one");
         string key = CtDaemonShadowCopy.BuildKey(
-            "1.13.0", Install, new FileInfo(executable).Length, new FileInfo(executable).LastWriteTimeUtc);
+            "1.13.0", Install, CtDaemonShadowCopy.EnumerateCopySet(Install));
         string partial = Path.Combine(CopyRoot, key);
         Directory.CreateDirectory(partial);
         File.WriteAllText(Path.Combine(partial, Path.GetFileName(executable)), "torn");

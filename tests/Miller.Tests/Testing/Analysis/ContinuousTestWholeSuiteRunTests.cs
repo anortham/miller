@@ -273,6 +273,73 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
     }
 
     /// <summary>
+    /// The rule is "every red", not "every red at the live key". A red recorded at an OLDER index
+    /// identity is selected too — it was never fresh at the live key, so the trim would have kept it
+    /// either way, and stating the narrower rule in the contract would describe a filter that does
+    /// not exist.
+    /// </summary>
+    [Fact]
+    public async Task An_explicit_run_retries_a_red_recorded_at_an_older_key()
+    {
+        ContinuousTestWorkspace workspace = Workspace();
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        // The green beside it keeps the selection a strict subset of the inventory, so the run
+        // travels as an id list and this test can read WHICH case was chosen.
+        SeedTestCases(store, workspace, "test:green", "test:red");
+        CommitResult(store, "test:green", Identity, 2, passed: true);
+        CommitResult(store, "test:red", "ctgen1:artifact:previous:blake3", 1, passed: false);
+        var provider = new RecordingProvider { DiscoverCases = ProviderCases("test:green", "test:red") };
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            SelectorFor(store),
+            new ContinuousTestCoordinator(provider, store, runIdFactory: static () => "run:1"));
+
+        queue.EnqueueExplicit(new ContinuousTestDaemonChange(
+            workspace,
+            "2",
+            Identity,
+            WorkspaceScope: true,
+            ObservedAt: DateTimeOffset.UtcNow.AddSeconds(-1)));
+        await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["test:red"], Assert.Single(provider.Requests).TestCaseIds);
+    }
+
+    /// <summary>
+    /// SKIPPED is committed-fresh by the same rule green and red are, and the explicit run's
+    /// exception covers RED only. A skipped test skips again, so "prove it again" has nothing to
+    /// prove about it. The contract states this exclusion rather than leaving a user to discover it
+    /// as a `last_run` that will not move.
+    /// </summary>
+    [Fact]
+    public async Task An_explicit_run_leaves_a_fresh_skipped_case_alone()
+    {
+        ContinuousTestWorkspace workspace = Workspace();
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCases(store, workspace, "test:skipped", "test:red");
+        CommitStatus(store, "test:skipped", Identity, 2, "skipped");
+        CommitResult(store, "test:red", Identity, 2, passed: false);
+        var provider = new RecordingProvider
+        {
+            DiscoverCases = ProviderCases("test:skipped", "test:red"),
+        };
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            SelectorFor(store),
+            new ContinuousTestCoordinator(provider, store, runIdFactory: static () => "run:1"));
+
+        queue.EnqueueExplicit(new ContinuousTestDaemonChange(
+            workspace,
+            "2",
+            Identity,
+            WorkspaceScope: true,
+            ObservedAt: DateTimeOffset.UtcNow.AddSeconds(-1)));
+        await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["test:red"], Assert.Single(provider.Requests).TestCaseIds);
+    }
+
+    /// <summary>
     /// The AUTOMATIC path is untouched. A debounced auto-run that includes reds would re-run every
     /// failing test on every save, which is the red loop this repo has always refused.
     /// </summary>
@@ -385,16 +452,26 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
         bool passed) =>
         CommitResultFor(store, WorkspaceId, testCaseId, identity, revision, passed);
 
+    /// <summary>A committed result whose status is neither passed nor failed — "skipped".</summary>
+    private static void CommitStatus(
+        ContinuousTestStore store,
+        string testCaseId,
+        string identity,
+        long revision,
+        string status) =>
+        CommitResultFor(store, WorkspaceId, testCaseId, identity, revision, passed: true, status);
+
     private static void CommitResultFor(
         ContinuousTestStore store,
         string workspaceId,
         string testCaseId,
         string identity,
         long revision,
-        bool passed)
+        bool passed,
+        string? resultStatus = null)
     {
         string revisionText = revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        string status = passed ? "passed" : "failed";
+        string status = resultStatus ?? (passed ? "passed" : "failed");
         string runId = "seed-run:" + testCaseId;
         store.StartContinuousTestRun(
             new ContinuousTestRun(
