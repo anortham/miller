@@ -70,11 +70,20 @@ public static class ContinuousTestStatusSummarizer
     private const int MaxAllowedItems = 20;
     private const int FailureSummaryMaxChars = 160;
 
+    /// <summary>
+    /// Builds one workspace's summary. <paramref name="liveKey"/> is the LIVE index cursor's
+    /// freshness key; the verdict is judged against it through
+    /// <see cref="ContinuousTestStatusProjection"/> — never against a key derived from the stored
+    /// rows themselves. No live key means the verdict is honest
+    /// <see cref="ContinuousTestVerdict.Unknown"/>.
+    /// </summary>
     public static ContinuousTestStatusSummary Build(
         string workspaceId,
         IReadOnlyList<ContinuousTestStatus> statuses,
+        CtFreshnessKey? liveKey = null,
         int maxItems = DefaultMaxItems,
-        ContinuousTestWatchHealthSnapshot? watchHealth = null)
+        ContinuousTestWatchHealthSnapshot? watchHealth = null,
+        IReadOnlyDictionary<string, CtFreshnessKey>? watermarks = null)
     {
         if (string.IsNullOrWhiteSpace(workspaceId))
             throw new ArgumentException("must not be empty", nameof(workspaceId));
@@ -88,6 +97,11 @@ public static class ContinuousTestStatusSummarizer
         var counts = Counts(workspaceStatuses);
         var watch = watchHealth ?? UnknownWatch();
         var completeAtKey = ContinuousTestFreshness.CompleteAt(workspaceStatuses);
+        var projected = ContinuousTestStatusProjection.Project(
+            liveKey,
+            workspaceStatuses,
+            watermarks,
+            watchHealthy: string.Equals(watch.State, "healthy", StringComparison.Ordinal));
 
         return new ContinuousTestStatusSummary(
             WorkspaceId: workspaceId,
@@ -123,40 +137,10 @@ public static class ContinuousTestStatusSummarizer
                         TestCaseId: row.TestCaseId,
                         StaleSinceRevision: row.StaleSinceRevision))
                     .ToArray()),
-            Verdict: ResolveVerdict(counts, watch, completeAtKey?.Revision),
+            Verdict: projected.Verdict,
             CompleteAtKey: completeAtKey,
             FreshnessBasis: MillerWatchedFilesFreshnessBasis,
             Watch: watch);
-    }
-
-    public static ContinuousTestVerdict ResolveVerdict(
-        ContinuousTestStatusCounts counts,
-        ContinuousTestWatchHealthSnapshot watch,
-        long? completeAtRevision)
-    {
-        ArgumentNullException.ThrowIfNull(counts);
-        ArgumentNullException.ThrowIfNull(watch);
-
-        if (counts.Red > 0 || counts.RunningLastFailed > 0)
-            return ContinuousTestVerdict.Red;
-
-        if (!string.Equals(watch.State, "healthy", StringComparison.Ordinal)
-            || !TryNumericRevision(watch.ObservedRevision, out var observedRevision)
-            || counts.Total == 0
-            || counts.Unknown > 0)
-        {
-            return ContinuousTestVerdict.Unknown;
-        }
-
-        if (counts.Stale > 0
-            || counts.Running > 0
-            || completeAtRevision is null
-            || completeAtRevision.Value != observedRevision)
-        {
-            return ContinuousTestVerdict.Partial;
-        }
-
-        return ContinuousTestVerdict.Green;
     }
 
     public static ContinuousTestAggregateStatus Aggregate(IEnumerable<ContinuousTestStatusSummary> summaries)
@@ -239,9 +223,6 @@ public static class ContinuousTestStatusSummarizer
         ContinuousTestVerdict.Green => 1,
         _ => 0,
     };
-
-    private static bool TryNumericRevision(string? value, out long revision) =>
-        long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out revision);
 
     private static ContinuousTestWatchHealthSnapshot UnknownWatch() =>
         new("unknown", null, null, null, null);

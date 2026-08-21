@@ -155,7 +155,9 @@ public sealed class TestsRunExecutionBudgetTests : IDisposable
         Assert.True(storedRun.Ran);
         Assert.False(first.Paused);
         Assert.Equal(ContinuousTestVerdict.Green, first.Verdict);
-        Assert.Equal(ContinuousTestVerdict.Green, TestsCore.Status(StatusRequest()).Verdict);
+        // A status read judges the rows against the LIVE cursor, so proving the stored green needs
+        // a status request whose live cursor still sits at the stored generation.
+        Assert.Equal(ContinuousTestVerdict.Green, TestsCore.Status(StatusRequest(storedGeneration)).Verdict);
 
         // 2. The index moved to a new generation and another workspace holds the execution budget.
         using CtExecutionBudgetLease? held = budget.TryAcquire(
@@ -179,18 +181,18 @@ public sealed class TestsRunExecutionBudgetTests : IDisposable
         Assert.Equal(0, paused.ExitCode);
         Assert.Equal("execution budget held", paused.Reason);
 
-        // The stored rows are still green, so `unknown` came from the paused rule and not from an
-        // empty store - which is what makes this assertion worth anything.
-        Assert.Equal(ContinuousTestVerdict.Green, TestsCore.Status(StatusRequest()).Verdict);
-        Assert.NotNull(paused.Selected);
-        Assert.Equal("gen-old", paused.Selected!.Value.IndexIdentity);
-        Assert.Equal(41L, paused.Selected!.Value.Revision);
+        // The stored rows are still green at their own generation, so `unknown` came from the
+        // paused rule and not from an empty store - which is what makes this assertion worth
+        // anything. The paused run itself reports NO selected key: the key is the live cursor,
+        // and a paused run is a total deferral that opens nothing, not even the index.
+        Assert.Equal(ContinuousTestVerdict.Green, TestsCore.Status(StatusRequest(storedGeneration)).Verdict);
+        Assert.Null(paused.Selected);
 
         using JsonDocument doc = JsonDocument.Parse(paused.Render(json: true));
         Assert.Equal("unknown", doc.RootElement.GetProperty("verdict").GetString());
         Assert.True(doc.RootElement.GetProperty("paused").GetBoolean());
         Assert.False(doc.RootElement.GetProperty("waited").GetBoolean());
-        Assert.Equal(41L, doc.RootElement.GetProperty("selected").GetProperty("revision").GetInt64());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("selected").ValueKind);
         Assert.Contains("verdict=unknown", paused.Render(json: false), StringComparison.Ordinal);
     }
 
@@ -212,7 +214,9 @@ public sealed class TestsRunExecutionBudgetTests : IDisposable
             DrainRequest(CtExecutionBudget.ForMillerHome(_home), ledger, provider));
 
         // The injected factory IS the source the run reads, and it is called for this workspace.
-        Assert.Equal(1, ledger.Opened);
+        // Two opens, both closed immediately: the run reads its key once before the drain, and the
+        // final status read opens once to judge the rows against the live cursor.
+        Assert.Equal(2, ledger.Opened);
         Assert.Equal(Path.GetFullPath(_root), ledger.LastWorkspaceRoot);
         Assert.Equal(WorkspaceId.FromCanonicalRoot(_root), ledger.LastWorkspaceId);
 
@@ -274,12 +278,13 @@ public sealed class TestsRunExecutionBudgetTests : IDisposable
             Json: true,
             Wait: wait);
 
-    private TestsCoreRequest StatusRequest() =>
+    private TestsCoreRequest StatusRequest(FactSourceLedger? facts = null) =>
         new(
             WorkspaceRoot: _root,
             WorkspaceId: WorkspaceId.FromCanonicalRoot(_root),
             MillerHome: _home,
             KillSwitch: null,
+            Hooks: facts is null ? null : new TestsCoreHooks(OpenFacts: facts.OpenSource),
             Json: true);
 
     /// <summary>

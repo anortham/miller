@@ -90,20 +90,102 @@ public static class ContinuousTestFreshness
     public static ContinuousTestVerdict Evaluate(
         IReadOnlyList<ContinuousTestStatus> statuses,
         CtFreshnessKey selected,
-        bool watchHealthy)
+        bool watchHealthy) =>
+        ContinuousTestStatusProjection.Project(selected, statuses, watermarks: null, watchHealthy).Verdict;
+}
+
+/// <summary>
+/// One workspace's projected live status: the verdict, the key it was judged at, and how many
+/// rows need a run to be green at that key. <see cref="SelectedKey"/> is null exactly when no
+/// live cursor was available, and then the verdict is <see cref="ContinuousTestVerdict.Unknown"/>.
+/// </summary>
+public sealed record ContinuousTestProjectedStatus(
+    ContinuousTestVerdict Verdict,
+    CtFreshnessKey? SelectedKey,
+    int StaleCount);
+
+/// <summary>
+/// THE status projection: the live index cursor plus the stored rows yield the verdict and the
+/// staleness. The selected key comes ONLY from the live cursor — a projection that derived it from
+/// the rows it judges read uniformly stale rows as green forever, and flipped keys between two
+/// consecutive reads (observed live 2026-08-20: rev 32424 in one read, 32161 in the next).
+/// Every status path (foreground status, run verdicts, summaries, daemon evaluation) must call
+/// this one implementation.
+/// </summary>
+public static class ContinuousTestStatusProjection
+{
+    /// <summary>
+    /// Projects the verdict and staleness of <paramref name="statuses"/> at the live key.
+    ///
+    /// <para>A row is fresh when it is committed at the live key
+    /// (<see cref="ContinuousTestDurableFreshness.IsCommittedFreshAt"/>) or when it is green and a
+    /// per-case watermark covers the live key
+    /// (<see cref="ContinuousTestDurableFreshness.IsWatermarkFreshAt"/>). Only green results ride
+    /// the watermark; a red stays where it ran until its test reruns. <paramref name="watermarks"/>
+    /// maps a test-case id to its fresh watermark and is empty until the watermark writer lands.</para>
+    ///
+    /// <para>No live cursor means the verdict is honest <see cref="ContinuousTestVerdict.Unknown"/>
+    /// with no key, and the stale count falls back to the rows the store itself marked stale.</para>
+    /// </summary>
+    public static ContinuousTestProjectedStatus Project(
+        CtFreshnessKey? liveKey,
+        IReadOnlyList<ContinuousTestStatus> statuses,
+        IReadOnlyDictionary<string, CtFreshnessKey>? watermarks = null,
+        bool watchHealthy = true)
     {
         ArgumentNullException.ThrowIfNull(statuses);
-        if (!watchHealthy || statuses.Count == 0)
-            return ContinuousTestVerdict.Unknown;
-        if (statuses.Any(row => row.State is ContinuousTestState.Unknown or ContinuousTestState.Running))
-            return ContinuousTestVerdict.Unknown;
+        if (liveKey is not { } selected)
+        {
+            return new ContinuousTestProjectedStatus(
+                ContinuousTestVerdict.Unknown,
+                SelectedKey: null,
+                StaleCount: statuses.Count(row => row.State == ContinuousTestState.Stale));
+        }
 
-        CtFreshnessKey? complete = CompleteAt(statuses);
-        if (complete is null || complete != selected)
-            return ContinuousTestVerdict.Partial;
-        if (statuses.Any(row => row.State == ContinuousTestState.Red))
-            return ContinuousTestVerdict.Red;
-        return ContinuousTestVerdict.Green;
+        bool pending = false;
+        bool red = false;
+        int stale = 0;
+        foreach (ContinuousTestStatus row in statuses)
+        {
+            if (row.State is ContinuousTestState.Unknown or ContinuousTestState.Running)
+            {
+                pending = true;
+            }
+            else if (!IsFreshAt(row, selected, watermarks))
+            {
+                stale++;
+            }
+            else if (row.State == ContinuousTestState.Red)
+            {
+                red = true;
+            }
+        }
+
+        ContinuousTestVerdict verdict;
+        if (!watchHealthy || statuses.Count == 0 || pending)
+            verdict = ContinuousTestVerdict.Unknown;
+        else if (stale > 0)
+            verdict = ContinuousTestVerdict.Partial;
+        else if (red)
+            verdict = ContinuousTestVerdict.Red;
+        else
+            verdict = ContinuousTestVerdict.Green;
+
+        return new ContinuousTestProjectedStatus(verdict, selected, stale);
+    }
+
+    private static bool IsFreshAt(
+        ContinuousTestStatus row,
+        CtFreshnessKey selected,
+        IReadOnlyDictionary<string, CtFreshnessKey>? watermarks)
+    {
+        if (ContinuousTestDurableFreshness.IsCommittedFreshAt(row, selected))
+            return true;
+
+        return row.State == ContinuousTestState.Green
+            && watermarks is not null
+            && watermarks.TryGetValue(row.TestCaseId, out CtFreshnessKey watermark)
+            && ContinuousTestDurableFreshness.IsWatermarkFreshAt(watermark, selected);
     }
 }
 

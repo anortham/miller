@@ -200,10 +200,12 @@ public static class TestsCore
         IReadOnlyList<ContinuousTestProject> stored = store.ListContinuousTestProjects(workspaceId, includeDisabled: false);
         IReadOnlyList<ContinuousTestStatus> statuses = store.ListContinuousTestStatuses(workspaceId);
         ContinuousTestDaemonSnapshot snapshot = ContinuousTestDaemonHost.ReadStatus(root);
-        CtFreshnessKey? selected = SelectedFrom(statuses);
-        ContinuousTestVerdict verdict = selected is { } key
-            ? ContinuousTestFreshness.Evaluate(statuses, key, watchHealthy: true)
-            : ContinuousTestVerdict.Unknown;
+        // The selected key comes from the LIVE index cursor, never from the stored rows. A key
+        // derived from the rows it judges reads uniformly stale rows as green forever, and flips
+        // between consecutive reads when rows carry mixed keys (observed live 2026-08-20).
+        ContinuousTestProjectedStatus projected = ContinuousTestStatusProjection.Project(
+            TryReadLiveFreshness(request, root, workspaceId),
+            statuses);
         TestsBudgetHolder? budget = ReadBudgetHolder(request.MillerHome);
         bool enabled = !killSwitchOff && (optedIn || stored.Count > 0);
         return new TestsStatusResult(
@@ -212,9 +214,9 @@ public static class TestsCore
             Projects: stored.Select(ToStatusProject).ToArray(),
             DaemonState: snapshot.State,
             DaemonReason: killSwitchOff ? "disabled" : snapshot.Reason,
-            Verdict: verdict,
-            Selected: selected,
-            StaleCount: statuses.Count(row => row.State == ContinuousTestState.Stale),
+            Verdict: projected.Verdict,
+            Selected: projected.SelectedKey,
+            StaleCount: projected.StaleCount,
             SelectedCount: statuses.Count,
             LastRun: store.LatestTestRunAt(workspaceId),
             BudgetHolder: budget,
@@ -479,17 +481,16 @@ public static class TestsCore
                 () => RunForeground(request, root, workspaceId, store, projects));
         }
 
-        TestsStatusResult after = Status(request);
-
         // A paused run executed NOTHING, so it holds no results at the selected key and must not
         // report the verdict an earlier revision stored. CLAUDE.md states the CT invariant plainly:
         // "Green requires complete results at the selected composite key." Zero results is not
         // green. A consumer of `tests run --json` reads the exit code and `verdict` - the two fields
         // docs/contracts/tests-cli-v1.md lists for this verb - so a stored green here passes a
-        // change that no test ever saw. `paused` and the reason stay in the payload, and `selected`
-        // still names the key the stored rows carry, so a person still sees what CT knows. `waited`
-        // is false because nothing waited: the budget was already held when the request arrived.
-        // The exit code stays 0 - a held budget is a deferral, not a failure.
+        // change that no test ever saw. `paused` and the reason stay in the payload. `selected` is
+        // null: the key is the LIVE index cursor, and a paused run is a total deferral that opens
+        // nothing - not even the index it would have run against. `waited` is false because nothing
+        // waited: the budget was already held when the request arrived. The exit code stays 0 - a
+        // held budget is a deferral, not a failure.
         if (outcome.Paused)
         {
             return new TestsRunResult(
@@ -498,10 +499,11 @@ public static class TestsCore
                 Verdict: ContinuousTestVerdict.Unknown,
                 Reason: outcome.Reason,
                 Waited: false,
-                Selected: after.Selected,
+                Selected: null,
                 Paused: true);
         }
 
+        TestsStatusResult after = Status(request);
         return new TestsRunResult(
             0,
             outcome.Execution,
@@ -599,7 +601,9 @@ public static class TestsCore
                 + $" started={running.RunStartedAtUtc:O} child={Snake(running.Activity.ToString())}");
         }
         sb.AppendLine("verdict: " + Snake(result.Verdict.ToString()));
-        sb.AppendLine("selected: " + (result.Selected is { } selectedKey ? CompactFreshness(selectedKey) : "-"));
+        sb.AppendLine("selected: " + (result.Selected is { } selectedKey
+            ? CompactFreshness(selectedKey)
+            : "none (no live index)"));
         sb.AppendLine($"stale: {result.StaleCount.ToString(CultureInfo.InvariantCulture)}");
         sb.AppendLine("last_run: " + (result.LastRun ?? "-"));
         sb.AppendLine("budget: " + (result.BudgetHolder is { } holder
@@ -829,7 +833,18 @@ public static class TestsCore
 
         // Read the freshness key ONCE: every work item in this one-shot is enqueued at the same
         // generation, and a reopening source would otherwise open the store once per project.
-        CtFreshnessKey freshness = facts.Freshness;
+        // No readable index means no key to run at — refuse honestly instead of enqueuing at a
+        // fabricated sentinel key that stored results nobody can ever match again.
+        CtFreshnessKey? live = TryFreshness(facts);
+        if (live is not { } freshness)
+        {
+            return new TestsRunOutcome(
+                CtRunExecution.ForegroundOneShot,
+                ContinuousTestVerdict.Unknown,
+                "no readable index",
+                request.Wait);
+        }
+
         foreach (ContinuousTestProjectWorkItem item in ContinuousTestProjectInventory.MaterializeProjectWorkItems(projects, root))
         {
             queue.EnqueueExplicit(new ContinuousTestDaemonChange(
@@ -846,11 +861,10 @@ public static class TestsCore
             queue.DrainReadyAsync(now, CancellationToken.None).GetAwaiter().GetResult();
 
         IReadOnlyList<ContinuousTestStatus> statuses = store.ListContinuousTestStatuses(workspaceId);
-        CtFreshnessKey? selected = SelectedFrom(statuses) ?? freshness;
-        ContinuousTestVerdict verdict = selected is { } key
-            ? ContinuousTestFreshness.Evaluate(statuses, key, watchHealthy: true)
-            : ContinuousTestVerdict.Unknown;
-        return new TestsRunOutcome(CtRunExecution.ForegroundOneShot, verdict, "foreground", request.Wait);
+        // Judge at the key this one-shot ran at. The caller (`Run`) re-reads a live status right
+        // after and prefers ITS verdict, so a generation that moved mid-run is reported there.
+        ContinuousTestProjectedStatus projected = ContinuousTestStatusProjection.Project(freshness, statuses);
+        return new TestsRunOutcome(CtRunExecution.ForegroundOneShot, projected.Verdict, "foreground", request.Wait);
     }
 
     /// <summary>
@@ -937,18 +951,41 @@ public static class TestsCore
         || (status.DaemonActivity == CtDaemonActivity.Idle
             && string.Equals(status.DaemonReason, ExecutionBudgetHeldReason, StringComparison.Ordinal));
 
+    /// <summary>
+    /// Opens the live index for CT facts. Throws when no readable index exists; callers that can
+    /// degrade honestly go through <see cref="TryFreshness"/> / <see cref="TryReadLiveFreshness"/>
+    /// instead of receiving a fabricated sentinel cursor.
+    /// </summary>
     private static IOwnedFactSource OpenLiveFacts(string workspaceRoot, string workspaceId)
     {
         string dbPath = Path.Combine(workspaceRoot, CtSchema.MillerDirectoryName, "symbols.db");
+        WorkspaceReadHandle handle = WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId);
+        return new OwningMillerFactSource(handle);
+    }
+
+    /// <summary>
+    /// The live index's freshness key, or null when no readable index exists. The selected key
+    /// NEVER comes from stored <c>ct.db</c> rows.
+    /// </summary>
+    private static CtFreshnessKey? TryReadLiveFreshness(TestsCoreRequest request, string root, string workspaceId)
+    {
+        Func<string, string, IMillerFactSource>? openFacts = request.Hooks?.OpenFacts;
+        var facts = new ReopeningMillerFactSource(() => openFacts is null
+            ? OpenLiveFacts(root, workspaceId)
+            : openFacts(root, workspaceId));
+        return TryFreshness(facts);
+    }
+
+    private static CtFreshnessKey? TryFreshness(IMillerFactSource facts)
+    {
         try
         {
-            WorkspaceReadHandle handle = WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId);
-            return new OwningMillerFactSource(handle);
+            return facts.Freshness;
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or InvalidOperationException or FamilyStoreReadException)
         {
-            return new EmptyMillerFactSource();
+            return null;
         }
     }
 
@@ -959,17 +996,6 @@ public static class TestsCore
             : millerHome;
         CtExecutionBudgetOwner? owner = CtExecutionBudget.FromEnvironment(home).TryReadOwner();
         return owner is null ? null : new TestsBudgetHolder(owner.Pid, owner.WorkspaceRoot, owner.Reason);
-    }
-
-    private static CtFreshnessKey? SelectedFrom(IReadOnlyList<ContinuousTestStatus> statuses)
-    {
-        if (statuses.Count == 0)
-            return null;
-        ContinuousTestStatus row = statuses
-            .OrderByDescending(item => item.Revision)
-            .ThenBy(item => item.IndexIdentity, StringComparer.Ordinal)
-            .First();
-        return new CtFreshnessKey(row.IndexIdentity, row.Revision);
     }
 
     private static TestsStatusProject ToStatusProject(ContinuousTestProject project) =>
@@ -1123,24 +1149,6 @@ public static class TestsCore
         {
             _adapter.Dispose();
             _handle.Dispose();
-        }
-    }
-
-    private sealed class EmptyMillerFactSource : IOwnedFactSource
-    {
-        public CtIndexCursor Current => new("unspecified", 0);
-
-        public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths) => [];
-
-        public IReadOnlyList<CtReferenceFact> ReferencesTo(IReadOnlyList<string> symbolIds) => [];
-
-        public IReadOnlyList<CtReferenceFact> IdentifierEvidenceTo(IReadOnlyList<string> symbolIds) => [];
-
-        public CtImpactResult Impact(IReadOnlyList<string> seedSymbolIds, int maxDepth = 2, int limit = 100) =>
-            new([], [], 0, false, false);
-
-        public void Dispose()
-        {
         }
     }
 }

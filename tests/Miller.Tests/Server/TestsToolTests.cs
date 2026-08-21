@@ -2,9 +2,11 @@ using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Testing;
 using Miller.Server;
 using Miller.Server.Tools;
 using Miller.Testing;
+using Miller.Tests.Testing.Selection;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -310,16 +312,78 @@ public sealed class TestsToolTests : IDisposable
     }
 
     /// <summary>
+    /// The selected key must come from the LIVE index cursor. The old <c>SelectedFrom</c> derived it
+    /// from the stored rows themselves, so rows uniformly committed at an old key judged themselves
+    /// fresh and read green forever.
+    /// </summary>
+    [Fact]
+    public void Status_rows_committed_at_an_old_key_with_a_newer_live_cursor_are_stale_never_green()
+    {
+        SeedCases(3, resultStatus: "passed", identity: "gen-1", revision: 41);
+
+        TestsStatusResult status = TestsCore.Status(CoreRequest(FactsHooks("gen-1", 58)));
+
+        Assert.Equal(ContinuousTestVerdict.Partial, status.Verdict);
+        Assert.Equal(new CtFreshnessKey("gen-1", 58), status.Selected);
+        Assert.Equal(3, status.StaleCount);
+    }
+
+    /// <summary>
+    /// The old row-derived key flipped between consecutive reads (observed live: rev 32424 in one
+    /// read, 32161 in the next). With no index writes between two reads, the reported key must not
+    /// move — and it must be the live cursor, not either stored row key.
+    /// </summary>
+    [Fact]
+    public void Status_two_consecutive_reads_with_no_index_writes_report_the_same_live_key()
+    {
+        SeedCases(2, resultStatus: "passed", identity: "gen-a", revision: 32161);
+        SeedCases(2, resultStatus: "passed", identity: "gen-b", revision: 32424, caseOffset: 100);
+        TestsCoreHooks hooks = FactsHooks("gen-live", 32500);
+
+        TestsStatusResult first = TestsCore.Status(CoreRequest(hooks));
+        TestsStatusResult second = TestsCore.Status(CoreRequest(hooks));
+
+        Assert.Equal(new CtFreshnessKey("gen-live", 32500), first.Selected);
+        Assert.Equal(first.Selected, second.Selected);
+        Assert.Equal(first.Verdict, second.Verdict);
+    }
+
+    [Fact]
+    public void Status_with_no_live_index_is_unknown_with_no_key_even_when_stored_rows_are_green()
+    {
+        SeedCases(2, resultStatus: "passed", identity: "gen-old", revision: 41);
+
+        TestsStatusResult status = TestsCore.Status(CoreRequest());
+
+        Assert.Equal(ContinuousTestVerdict.Unknown, status.Verdict);
+        Assert.Null(status.Selected);
+        Assert.Contains(
+            "selected: none (no live index)",
+            TestsCore.RenderStatusCompact(status),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Writes <paramref name="count"/> red cases through the real run-completion path, so the states come from
     /// the same code that produces them in production rather than from a hand-written row.
     /// </summary>
-    private void SeedRedCases(int count)
-    {
-        const string identity = "store:failures";
-        string workspaceId = _workspace.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(_root);
-        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
-        for (int index = 0; index < count; index++)
+    private void SeedRedCases(int count) =>
+        SeedCases(count, resultStatus: "failed", identity: "store:failures", revision: 1);
+
+    private static TestsCoreHooks FactsHooks(string identity, long revision) =>
+        new(OpenFacts: (_, _) => new FakeMillerFactSource
         {
+            Current = new CtIndexCursor(identity, revision),
+        });
+
+    private void SeedCases(int count, string resultStatus, string identity, long revision, int caseOffset = 0)
+    {
+        string workspaceId = _workspace.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(_root);
+        string revisionText = revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        for (int offset = 0; offset < count; offset++)
+        {
+            int index = caseOffset + offset;
             // Zero-padded so ordinal order matches numeric order and a paging assertion reads plainly.
             string caseId = $"test:{index:D3}";
             string runId = $"run:{index:D3}";
@@ -336,18 +400,18 @@ public sealed class TestsToolTests : IDisposable
                     Id: runId,
                     WorkspaceId: workspaceId,
                     Status: "running",
-                    SelectedRevision: "1",
+                    SelectedRevision: revisionText,
                     IndexIdentity: identity,
-                    Revision: 1),
+                    Revision: revision),
                 [caseId]);
             store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
                 WorkspaceId: workspaceId,
                 TestRunId: runId,
-                SelectedRevision: "1",
-                CurrentRevision: "1",
+                SelectedRevision: revisionText,
+                CurrentRevision: revisionText,
                 IndexIdentity: identity,
-                Revision: 1,
-                Status: "failed",
+                Revision: revision,
+                Status: resultStatus,
                 Results:
                 [
                     new ContinuousTestResult(
@@ -355,11 +419,11 @@ public sealed class TestsToolTests : IDisposable
                         WorkspaceId: workspaceId,
                         TestCaseId: caseId,
                         TestRunId: runId,
-                        Status: "failed",
-                        ResultRevision: "1",
+                        Status: resultStatus,
+                        ResultRevision: revisionText,
                         IndexIdentity: identity,
-                        Revision: 1,
-                        FailureSummary: "boom " + caseId),
+                        Revision: revision,
+                        FailureSummary: resultStatus == "failed" ? "boom " + caseId : null),
                 ]));
         }
     }

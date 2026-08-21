@@ -124,30 +124,69 @@ public sealed class ContinuousTestStatusSummaryTests
             LastErrorAt: null,
             ErrorCode: null);
 
+        var liveKey = new CtFreshnessKey("store:test", 42);
         Assert.Equal(
             ContinuousTestVerdict.Red,
             ContinuousTestStatusSummarizer.Build(
                 "ws:1",
-                [Status("ws:1", "test:red", ContinuousTestState.Red)],
+                [Status("ws:1", "test:red", ContinuousTestState.Red, provenFreshRevision: 42)],
+                liveKey,
                 watchHealth: healthy).Verdict);
         Assert.Equal(
             ContinuousTestVerdict.Unknown,
             ContinuousTestStatusSummarizer.Build(
                 "ws:1",
                 [Status("ws:1", "test:cached", ContinuousTestState.Green, provenFreshRevision: 42)],
+                liveKey,
                 watchHealth: degraded).Verdict);
         Assert.Equal(
             ContinuousTestVerdict.Partial,
             ContinuousTestStatusSummarizer.Build(
                 "ws:1",
                 [Status("ws:1", "test:stale", ContinuousTestState.Stale, provenFreshRevision: 41)],
+                liveKey,
                 watchHealth: healthy).Verdict);
         Assert.Equal(
             ContinuousTestVerdict.Green,
             ContinuousTestStatusSummarizer.Build(
                 "ws:1",
                 [Status("ws:1", "test:green", ContinuousTestState.Green, provenFreshRevision: 42)],
+                liveKey,
                 watchHealth: healthy).Verdict);
+    }
+
+    /// <summary>
+    /// The summary judges the rows against the LIVE key the caller passes, through the same
+    /// projection the foreground status uses. Rows that judged their own freshness read green
+    /// forever.
+    /// </summary>
+    [Fact]
+    public void Rows_complete_at_an_old_key_with_a_newer_live_key_are_partial_never_green()
+    {
+        var healthy = new ContinuousTestWatchHealthSnapshot("healthy", "58", DateTimeOffset.UtcNow, null, null);
+        var summary = ContinuousTestStatusSummarizer.Build(
+            "ws:1",
+            [
+                Status("ws:1", "test:a", ContinuousTestState.Green, provenFreshRevision: 41),
+                Status("ws:1", "test:b", ContinuousTestState.Green, provenFreshRevision: 41),
+            ],
+            new CtFreshnessKey("store:test", 58),
+            watchHealth: healthy);
+
+        Assert.Equal(ContinuousTestVerdict.Partial, summary.Verdict);
+    }
+
+    [Fact]
+    public void No_live_key_is_unknown_even_when_every_row_is_green()
+    {
+        var healthy = new ContinuousTestWatchHealthSnapshot("healthy", "42", DateTimeOffset.UtcNow, null, null);
+        var summary = ContinuousTestStatusSummarizer.Build(
+            "ws:1",
+            [Status("ws:1", "test:a", ContinuousTestState.Green, provenFreshRevision: 42)],
+            liveKey: null,
+            watchHealth: healthy);
+
+        Assert.Equal(ContinuousTestVerdict.Unknown, summary.Verdict);
     }
 
     [Fact]
@@ -188,6 +227,7 @@ public sealed class ContinuousTestStatusSummaryTests
                 Status("ws:1", "test:a", ContinuousTestState.Green, provenFreshRevision: 42),
                 Status("ws:1", "test:b", ContinuousTestState.Green, provenFreshRevision: 44),
             ],
+            new CtFreshnessKey("store:test", 42),
             watchHealth: healthy);
         var incomplete = ContinuousTestStatusSummarizer.Build(
             "ws:1",
