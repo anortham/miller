@@ -280,6 +280,11 @@ public static class TestsCore
         string marker = ContinuousTestPolicy.EnabledMarkerPath(root);
         Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
         File.WriteAllText(marker, string.Empty);
+        // An earlier `tests disable` may have left the opt-out tombstone, and the tombstone beats
+        // the marker just written. Enable must reverse the opt-out or it silently does nothing.
+        string tombstone = ContinuousTestPolicy.DisabledMarkerPath(root);
+        if (File.Exists(tombstone))
+            File.Delete(tombstone);
 
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
         store.Transaction(() =>
@@ -324,6 +329,13 @@ public static class TestsCore
             string marker = ContinuousTestPolicy.EnabledMarkerPath(root);
             if (File.Exists(marker))
                 File.Delete(marker);
+            // Deleting the local marker is not enough on a linked worktree: the main checkout's
+            // marker re-enables it on the next probe. The tombstone makes THIS root's opt-out
+            // stick, and never touches the main checkout. Written only on a full disable — a
+            // project-scoped disable that leaves rows enabled keeps the workspace opted in.
+            string tombstone = ContinuousTestPolicy.DisabledMarkerPath(root);
+            Directory.CreateDirectory(Path.GetDirectoryName(tombstone)!);
+            File.WriteAllText(tombstone, string.Empty);
         }
 
         return new TestsMutationResult(

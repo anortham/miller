@@ -167,6 +167,59 @@ public sealed class TestsCliTests : IDisposable
         using JsonDocument doc = JsonDocument.Parse(status.Out);
         Assert.Empty(doc.RootElement.GetProperty("projects").EnumerateArray());
         Assert.False(doc.RootElement.GetProperty("enabled").GetBoolean());
+
+        // A full disable leaves the opt-out tombstone so the decision sticks even where an
+        // enablement could be inherited (a linked worktree of an enabled main checkout).
+        Assert.True(File.Exists(ContinuousTestPolicy.DisabledMarkerPath(_root)));
+        Assert.False(File.Exists(ContinuousTestPolicy.EnabledMarkerPath(_root)));
+    }
+
+    [Fact]
+    public void Disable_OnInheritedEnabledWorktree_SticksWithoutTouchingMain()
+    {
+        var (main, wt) = BuildLinkedWorktreeOfEnabledMain();
+        Assert.True(ContinuousTestPolicy.IsWorkspaceOptedIn(wt));
+
+        TestsMutationResult result = TestsCore.Disable(new TestsCoreRequest(wt));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(File.Exists(ContinuousTestPolicy.DisabledMarkerPath(wt)));
+        Assert.False(File.Exists(ContinuousTestPolicy.EnabledMarkerPath(wt)));
+        Assert.False(ContinuousTestPolicy.IsWorkspaceOptedIn(wt));
+        // The MAIN checkout's marker is not this worktree's to touch.
+        Assert.True(File.Exists(ContinuousTestPolicy.EnabledMarkerPath(main)));
+        Assert.True(ContinuousTestPolicy.IsWorkspaceOptedIn(main));
+    }
+
+    [Fact]
+    public void Enable_OnWorktree_RemovesTombstoneAndWritesLocalMarker()
+    {
+        var (_, wt) = BuildLinkedWorktreeOfEnabledMain();
+        Assert.Equal(0, TestsCore.Disable(new TestsCoreRequest(wt)).ExitCode);
+        Assert.False(ContinuousTestPolicy.IsWorkspaceOptedIn(wt));
+
+        TestsMutationResult result = TestsCore.Enable(new TestsCoreRequest(wt));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.False(File.Exists(ContinuousTestPolicy.DisabledMarkerPath(wt)));
+        Assert.True(File.Exists(ContinuousTestPolicy.EnabledMarkerPath(wt)));
+        Assert.True(ContinuousTestPolicy.IsWorkspaceOptedIn(wt));
+    }
+
+    [Fact]
+    public void Disable_ProjectScoped_WithARemainingProject_DoesNotOptTheWorkspaceOut()
+    {
+        string first = WriteTestProject("tests/One.Tests/One.Tests.csproj");
+        WriteTestProject("tests/Two.Tests/Two.Tests.csproj");
+        Assert.Equal(0, Run("tests", "enable").Code);
+
+        var (code, _, errText) = Run("tests", "disable", "--project", first, "--json");
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.False(File.Exists(ContinuousTestPolicy.DisabledMarkerPath(_root)));
+        Assert.True(File.Exists(ContinuousTestPolicy.EnabledMarkerPath(_root)));
+        Assert.True(ContinuousTestPolicy.IsWorkspaceOptedIn(_root));
     }
 
     [Fact]
@@ -408,6 +461,26 @@ public sealed class TestsCliTests : IDisposable
             ? CliDispatch.Run(args, Context(), stdout, stderr)
             : CliDispatch.Run(args, Context(), stdout, stderr, new DashboardCliLauncher(), new ProcessGitDiffReader(), hooks);
         return (code, stdout.ToString(), stderr.ToString());
+    }
+
+    /// <summary>
+    /// A hand-built linked-worktree layout (a <c>.git</c> FILE with <c>gitdir:</c> plus the admin
+    /// dir's <c>commondir</c> pointer — no git subprocess) whose main checkout carries
+    /// <c>.miller/ct.enabled</c>, so the worktree starts inherited-enabled.
+    /// </summary>
+    private (string MainRoot, string WorktreeRoot) BuildLinkedWorktreeOfEnabledMain()
+    {
+        string main = Path.Combine(_dir, "main");
+        string wt = Path.Combine(_dir, "wt");
+        string adminDir = Path.Combine(main, ".git", "worktrees", "wt");
+        Directory.CreateDirectory(adminDir);
+        File.WriteAllText(Path.Combine(adminDir, "commondir"), "../..\n");
+        Directory.CreateDirectory(wt);
+        File.WriteAllText(Path.Combine(wt, ".git"), $"gitdir: {adminDir}\n");
+        string marker = ContinuousTestPolicy.EnabledMarkerPath(main);
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        File.WriteAllText(marker, string.Empty);
+        return (main, wt);
     }
 
     private string WriteTestProject(string relativePath = "tests/Sample.Tests/Sample.Tests.csproj", string frameworkHint = "xunit")
