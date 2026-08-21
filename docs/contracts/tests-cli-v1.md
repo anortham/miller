@@ -230,7 +230,8 @@ everything (`ContinuousTestStore.ApplyRevisionAdvance`, one transaction, stalene
 currently fresh GREEN cases the change cannot reach carry forward to the new revision; impacted
 cases go stale and lose their watermark rows; red and skipped results never ride the watermark; a
 case whose reachability is unknown reads stale. A run executes the stale set (the impacted set
-plus the already-owed backlog) as an explicit test-ID list. Truncated, degraded, or unavailable
+plus the already-owed backlog) as an explicit test-ID list; a user-requested run adds the red cases
+at the live key on top of it (see "What an explicit run selects"). Truncated, degraded, or unavailable
 impact data yields the Unknown outcome: everything goes stale and NOTHING executes — never a
 whole-suite fallback. Green requires complete results at the selected composite key.
 
@@ -276,6 +277,25 @@ Enable and disable do not start the daemon.
 
 A live daemon receives `run` on the file command channel. With no daemon, Miller runs a foreground
 one-shot in the calling process.
+
+### What an explicit run selects
+
+An explicit run (`miller tests run`, MCP `tests operation=run`, the daemon `run` command) executes
+the current stale set PLUS every RED case at the live key. A user-requested run means "prove it
+again", so a failing test is re-run even when nothing in the tree has changed. A GREEN case that is
+fresh at that key — committed there, or riding a covering watermark — is neither re-marked stale nor
+re-run: it has nothing to prove, and the run travels as an id list rather than a whole suite
+whenever the selection is a strict subset of the inventory.
+
+Automatic runs are unchanged: they select the impacted set plus the owed backlog and never add reds.
+A debounced run that re-ran every failing test on every save would be a red loop on every save.
+
+A red that passes on the retry is committed green at the live key, so the next revision advance
+carries it forward on its own fresh watermark like any other green. A red that fails again stays
+red at the live key, and the next explicit run selects it once more.
+
+Reds are added to what EXECUTES, never to what is marked stale. Marking a red stale would erase the
+standing verdict for the whole length of the run that is about to replace it.
 
 `--wait` waits for the daemon to FINISH the accepted run, then reports whatever verdict is true at
 that moment. It does not wait for a verdict VALUE: accepting a run marks the selected cases stale,

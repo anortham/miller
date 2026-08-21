@@ -128,6 +128,15 @@ public sealed record ContinuousTestDaemonPendingRun
     public DateTimeOffset ObservedAt { get; init; }
     public DateTimeOffset ReadyAt { get; init; }
     public ContinuousTestRunLane Lane { get; init; } = ContinuousTestRunLane.Foreground;
+
+    /// <summary>
+    /// This pending came from a USER-REQUESTED run (<c>tests run</c>, MCP <c>operation=run</c>, the
+    /// daemon run command). It is carried all the way to the drain because the fresh-case trim runs
+    /// again there: an explicit run keeps RED cases, which are committed-fresh at the live key and
+    /// would otherwise be dropped as having nothing to prove. An automatic run never sets it — a
+    /// red included on every debounce is a red loop on every save.
+    /// </summary>
+    public bool ExplicitRun { get; init; }
     public IReadOnlyList<string> ExcludeTraits { get; init; } = [];
     public int ImpactPriority { get; init; } = ContinuousTestImpactPriority.WorkspaceScope;
     public ContinuousTestCoverageMode CoverageMode { get; init; } = ContinuousTestCoverageMode.None;

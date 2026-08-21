@@ -72,9 +72,16 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
 
     /// <summary>
     /// An explicit run request (<c>tests run</c>, the daemon run command). A workspace-scope
-    /// explicit run executes exactly the CURRENT stale set: cases fresh at the request's key —
-    /// committed there or green under a covering watermark — are neither re-marked stale nor
-    /// re-run, so a green result survives an explicit run that has nothing to prove about it.
+    /// explicit run executes the current stale set PLUS every RED case at the request's key: a
+    /// user-requested run means "prove it again". GREEN cases fresh at that key — committed there
+    /// or under a covering watermark — are neither re-marked stale nor re-run, so a green result
+    /// survives an explicit run that has nothing to prove about it.
+    ///
+    /// <para>A red is committed-fresh by the same rule a green is, so the trim used to drop it and
+    /// the run selected nothing: the verdict stayed red, the stale count stayed 0, and
+    /// <c>last_run</c> never moved however many times the user asked (observed 2026-08-21). Only the
+    /// EXPLICIT path includes reds — an automatic run that re-ran every failing test on every
+    /// debounce would be a red loop on every save.</para>
     /// </summary>
     public ContinuousTestDaemonEnqueueResult EnqueueExplicit(ContinuousTestDaemonChange change) =>
         EnqueueCore(change, requireCompleteDelta: false, explicitRun: true);
@@ -125,15 +132,19 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         IReadOnlyList<string> foregroundTestCaseIds = SelectForegroundTestCaseIds(change, selection);
         if (explicitRun && change.WorkspaceScope)
         {
-            // The explicit run executes the current stale set, so trim fresh cases (committed or
-            // watermark-fresh) BEFORE the stale marking below would overwrite their rows.
+            // The explicit run executes the current stale set plus every red, so trim fresh cases
+            // (committed or watermark-fresh) BEFORE the stale marking below would overwrite their
+            // rows. The two trims differ on purpose: what EXECUTES keeps the reds, what is marked
+            // STALE does not. Marking a red stale would erase the standing verdict for the whole
+            // length of the run it is about to be proved by.
             selection = selection with
             {
                 SelectedTestCaseIds = DropFreshAt(
                     change.Workspace.WorkspaceId,
                     change.Workspace.ProjectPath,
                     selection.SelectedTestCaseIds,
-                    change.Freshness),
+                    change.Freshness,
+                    keepRed: true),
                 StaleTestCaseIds = DropFreshAt(
                     change.Workspace.WorkspaceId,
                     change.Workspace.ProjectPath,
@@ -213,6 +224,11 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             {
                 Lane = ContinuousTestRunLane.Foreground,
                 ImpactPriority = PriorityFor(change.WorkspaceScope, selection),
+                // Carried to the drain, which trims fresh cases again: without it the reds this
+                // enqueue selected are dropped there and the explicit run executes nothing. A merge
+                // KEEPS the mark - a user asked for this run, and a later automatic change arriving
+                // during the debounce does not withdraw the request.
+                ExplicitRun = explicitRun || (merged && existing!.ExplicitRun),
             };
             _pending[key] = pending;
 
@@ -304,6 +320,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             ExcludeTraits = existing.ExcludeTraits,
             ImpactPriority = existing.ImpactPriority,
             CoverageMode = existing.CoverageMode,
+            ExplicitRun = existing.ExplicitRun,
         };
     }
 
@@ -336,7 +353,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                     readyPending.Workspace.WorkspaceId,
                     readyPending.Workspace.ProjectPath,
                     readyPending.TestCaseIds,
-                    readyPending.Freshness);
+                    readyPending.Freshness,
+                    keepRed: readyPending.ExplicitRun);
                 if (survivors.Count == 0)
                 {
                     Log($"ct drain skip workspace={readyPending.Workspace.WorkspaceId} reason=all_fresh_at_revision");
@@ -738,11 +756,14 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             WorkspaceId: pending.Workspace.WorkspaceId,
             WorkspaceScope: true,
             ProjectPath: pending.Workspace.ProjectPath));
+        // The explicit run's selection is rebuilt here after discovery, so the red-keeping rule has to
+        // be applied again: this is the list the drain executes.
         IReadOnlyList<string> selectedTestCaseIds = DropFreshAt(
             pending.Workspace.WorkspaceId,
             pending.Workspace.ProjectPath,
             selection.SelectedTestCaseIds,
-            pending.Freshness);
+            pending.Freshness,
+            keepRed: pending.ExplicitRun);
         _store.MarkContinuousTestsStale(
             pending.Workspace.WorkspaceId,
             DropFreshAt(
@@ -759,11 +780,20 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         };
     }
 
+    /// <summary>
+    /// Drops the cases that are fresh at <paramref name="selected"/> and have nothing to prove.
+    ///
+    /// <para><paramref name="keepRed"/> is the EXPLICIT run's exception. A red is committed-fresh by
+    /// the same rule a green is, so without it a user-requested run over a red tree selected nothing
+    /// at all. It is off everywhere else: an automatic run that re-ran every failing test on every
+    /// debounce would be a red loop on every save.</para>
+    /// </summary>
     private IReadOnlyList<string> DropFreshAt(
         string workspaceId,
         string projectPath,
         IReadOnlyList<string> testCaseIds,
-        CtFreshnessKey selected)
+        CtFreshnessKey selected,
+        bool keepRed = false)
     {
         if (testCaseIds.Count == 0)
             return testCaseIds;
@@ -777,6 +807,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             _store.ListContinuousTestFreshWatermarks(workspaceId, selected.IndexIdentity);
         string[] survivors = testCaseIds
             .Where(id => !(statusesById.TryGetValue(id, out ContinuousTestStatus? status)
+                && !(keepRed && status.State == ContinuousTestState.Red)
                 && ContinuousTestDurableFreshness.IsFreshAt(status, selected, watermarks)))
             .ToArray();
         return survivors.Length == testCaseIds.Count ? testCaseIds : survivors;

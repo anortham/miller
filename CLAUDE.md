@@ -438,7 +438,13 @@ scripts/test.ps1 all
   identity, a revision advance is a watermark keep-set (`ContinuousTestStore.ApplyRevisionAdvance`, one
   transaction, staleness first): fresh GREEN cases the change cannot reach carry forward; impacted cases go
   stale and lose their watermark rows; red/skipped never advance; unknown reachability reads stale. A run
-  executes the stale set (impacted ∪ owed backlog) as an explicit test-ID list; truncated/degraded/
+  executes the stale set (impacted ∪ owed backlog) as an explicit test-ID list. An EXPLICIT run
+  (`tests run`, MCP `operation=run`, the daemon run command) adds every RED case at the live key: a red
+  is committed-fresh by the same rule a green is, so the fresh-case trim dropped it and a user-requested
+  run over a red tree selected NOTHING — verdict red, stale 0, `last_run` frozen however many times the
+  user asked (2026-08-21). Reds join what EXECUTES, never what is marked stale, and only on the explicit
+  path — an auto-run that re-ran every failing test on every debounce is a red loop on every save.
+  Truncated/degraded/
   unavailable impact means Unknown — everything stale, NOTHING executes, never a whole-suite fallback.
   Auto-runs debounce trailing-edge (`MILLER_CT_DEBOUNCE` seconds, default 2, `0` immediate, invalid/>3600
   falls back); changes during a run queue a follow-up, never kill a healthy run. The status `selected` key

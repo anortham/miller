@@ -162,7 +162,7 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
         ContinuousTestWorkspace workspace = Workspace();
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
         SeedTestCases(store, workspace, "test:fresh", "test:stale");
-        CommitGreen(store, "test:fresh", Identity, 2);
+        CommitResult(store, "test:fresh", Identity, 2, passed: true);
         var provider = new RecordingProvider
         {
             DiscoverCases = ProviderCases("test:fresh", "test:stale"),
@@ -187,6 +187,116 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
             store.ListContinuousTestStatuses(WorkspaceId),
             row => row.TestCaseId == "test:fresh");
         Assert.Equal(ContinuousTestState.Green, fresh.State);
+    }
+
+    /// <summary>
+    /// A user-requested run means "prove it again". A RED case committed at the live key is fresh by
+    /// the committed rule, so the explicit run trimmed it away and executed nothing: the verdict
+    /// stayed red, the stale count stayed 0, and `last_run` never moved however many times the user
+    /// typed `tests run` (observed live 2026-08-21). A red has something to prove; a green does not.
+    /// </summary>
+    [Fact]
+    public async Task An_explicit_run_retries_a_red_case_on_an_unchanged_tree()
+    {
+        ContinuousTestWorkspace workspace = Workspace();
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCases(store, workspace, "test:green", "test:red");
+        CommitResult(store, "test:green", Identity, 2, passed: true);
+        CommitResult(store, "test:red", Identity, 2, passed: false);
+        var provider = new RecordingProvider
+        {
+            DiscoverCases = ProviderCases("test:green", "test:red"),
+        };
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            SelectorFor(store),
+            new ContinuousTestCoordinator(provider, store, runIdFactory: static () => "run:1"));
+
+        queue.EnqueueExplicit(new ContinuousTestDaemonChange(
+            workspace,
+            "2",
+            Identity,
+            WorkspaceScope: true,
+            ObservedAt: DateTimeOffset.UtcNow.AddSeconds(-1)));
+        await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+
+        // The red is re-run; the green beside it still has nothing to prove.
+        Assert.Equal(["test:red"], Assert.Single(provider.Requests).TestCaseIds);
+    }
+
+    /// <summary>
+    /// A red that passes on the retry becomes green at the live key, and the next revision advance
+    /// then carries it forward on its own watermark. Without the second half the retry would fix the
+    /// verdict for exactly one revision.
+    /// </summary>
+    [Fact]
+    public async Task A_red_that_passes_on_retry_goes_green_and_rides_the_watermark()
+    {
+        ContinuousTestWorkspace workspace = Workspace();
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCases(store, workspace, "test:red");
+        CommitResult(store, "test:red", Identity, 2, passed: false);
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            SelectorFor(store),
+            new ContinuousTestCoordinator(
+                new RecordingProvider { DiscoverCases = ProviderCases("test:red"), PassCases = true },
+                store,
+                runIdFactory: static () => "run:1"));
+
+        queue.EnqueueExplicit(new ContinuousTestDaemonChange(
+            workspace,
+            "2",
+            Identity,
+            WorkspaceScope: true,
+            ObservedAt: DateTimeOffset.UtcNow.AddSeconds(-1)));
+        await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+
+        ContinuousTestStatus retried = Assert.Single(store.ListContinuousTestStatuses(WorkspaceId));
+        Assert.Equal(ContinuousTestState.Green, retried.State);
+
+        // The index advances with nothing impacted; the fresh green rides its watermark to the new key.
+        store.ApplyRevisionAdvance(
+            WorkspaceId,
+            workspace.ProjectPath,
+            new CtFreshnessKey(Identity, 2),
+            new CtFreshnessKey(Identity, 3),
+            [],
+            ContinuousTestSelectionOutcome.KnownEmpty);
+
+        IReadOnlyDictionary<string, CtFreshnessKey> watermarks =
+            store.ListContinuousTestFreshWatermarks(WorkspaceId, Identity);
+        Assert.True(
+            watermarks.TryGetValue("test:red", out CtFreshnessKey watermark),
+            "the repaired case never got a watermark, so it goes stale again on the next revision");
+        Assert.Equal(3, watermark.Revision);
+    }
+
+    /// <summary>
+    /// The AUTOMATIC path is untouched. A debounced auto-run that includes reds would re-run every
+    /// failing test on every save, which is the red loop this repo has always refused.
+    /// </summary>
+    [Fact]
+    public void An_auto_run_leaves_a_red_case_alone()
+    {
+        ContinuousTestWorkspace workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        // In a DIFFERENT file from the impacted `tests/AppTests.cs`, so the change cannot reach it.
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        store.PutTestCase(EngineTestSupport.Case("test:red", workspace.ProjectPath, "tests/OtherTests.cs"));
+        CommitResultFor(store, EngineTestSupport.WorkspaceId, "test:red", EngineTestSupport.Identity, 2, passed: false);
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(
+                new RecordingProvider(), store, runIdFactory: static () => "run:1"));
+
+        ContinuousTestDaemonEnqueueResult enqueued =
+            queue.Enqueue(EngineTestSupport.Change(workspace, debounce: TimeSpan.Zero));
+
+        // The automatic selection is the impacted set, exactly as before. A red the change cannot
+        // reach is not in it; only a user who typed `tests run` gets the retry.
+        Assert.Equal(["test:app"], enqueued.Selection.SelectedTestCaseIds);
     }
 
     /// <summary>
@@ -265,41 +375,52 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
                 SourcePath: "tests/AppTests.cs"))
             .ToArray();
 
-    /// <summary>Commits one green result at <c>(identity, revision)</c> through the real
-    /// run-completion path, so the case is committed-fresh at that key.</summary>
-    private static void CommitGreen(
+    /// <summary>Commits one result at <c>(identity, revision)</c> through the real run-completion
+    /// path, so the case is committed-fresh at that key.</summary>
+    private static void CommitResult(
         ContinuousTestStore store,
         string testCaseId,
         string identity,
-        long revision)
+        long revision,
+        bool passed) =>
+        CommitResultFor(store, WorkspaceId, testCaseId, identity, revision, passed);
+
+    private static void CommitResultFor(
+        ContinuousTestStore store,
+        string workspaceId,
+        string testCaseId,
+        string identity,
+        long revision,
+        bool passed)
     {
         string revisionText = revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string status = passed ? "passed" : "failed";
         string runId = "seed-run:" + testCaseId;
         store.StartContinuousTestRun(
             new ContinuousTestRun(
                 Id: runId,
-                WorkspaceId: WorkspaceId,
+                WorkspaceId: workspaceId,
                 Status: "running",
                 SelectedRevision: revisionText,
                 IndexIdentity: identity,
                 Revision: revision),
             [testCaseId]);
         store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
-            WorkspaceId: WorkspaceId,
+            WorkspaceId: workspaceId,
             TestRunId: runId,
             SelectedRevision: revisionText,
             CurrentRevision: revisionText,
             IndexIdentity: identity,
             Revision: revision,
-            Status: "passed",
+            Status: status,
             Results:
             [
                 new ContinuousTestResult(
                     Id: runId + ":result",
-                    WorkspaceId: WorkspaceId,
+                    WorkspaceId: workspaceId,
                     TestCaseId: testCaseId,
                     TestRunId: runId,
-                    Status: "passed",
+                    Status: status,
                     ResultRevision: revisionText,
                     IndexIdentity: identity,
                     Revision: revision),
@@ -334,6 +455,13 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
 
         public IReadOnlyList<ProviderTestCase> DiscoverCases { get; init; } = [];
 
+        /// <summary>
+        /// Report each requested case as passed. Off by default: most tests here assert what the
+        /// provider was TOLD to run, and a provider that also records verdicts would move rows the
+        /// assertions read.
+        /// </summary>
+        public bool PassCases { get; init; }
+
         public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
             ContinuousTestWorkspace workspace,
             CancellationToken cancellationToken = default) =>
@@ -344,7 +472,24 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
-            return Task.FromResult(new ProviderRunResult(request.RunId ?? "run:1", "passed"));
+            string runId = request.RunId ?? "run:1";
+            if (!PassCases)
+                return Task.FromResult(new ProviderRunResult(runId, "passed"));
+
+            IReadOnlyList<string> covered = request.TestCaseIds.Count > 0
+                ? request.TestCaseIds
+                : DiscoverCases.Select(discovered => discovered.Id).ToArray();
+            return Task.FromResult(new ProviderRunResult(
+                runId,
+                "passed",
+                CaseResults: covered
+                    .Select(id => new ProviderCaseResult(
+                        Id: $"{runId}:{id}",
+                        TestCaseId: id,
+                        Status: "passed",
+                        ResultRevision: request.SelectedRevision,
+                        IndexIdentity: request.IndexIdentity))
+                    .ToArray()));
         }
     }
 }
