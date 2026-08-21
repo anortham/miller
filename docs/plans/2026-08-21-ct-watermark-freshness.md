@@ -272,12 +272,12 @@ All tasks are serial: the freshness cursor (Task 1) feeds everything, `TestsCore
 **What to build:** The multi-context host. The Codex review's point stands: enumerating worktrees onto a single-workspace host risks cross-workspace reads and dead command routing — the contexts and the routing are the real work.
 
 **Acceptance criteria:**
-- [ ] Daemon on main + registered enabled-by-inheritance worktree → worktree gets status/selection/runs with zero manual calls beyond `workspace open`.
-- [ ] A worktree change triggers a debounced impacted run against the worktree's own index and `ct.db` under the shared budget.
-- [ ] A never-enabled repo's worktree is not adopted; a worktree with its own live daemon is not adopted.
-- [ ] `tests status` with `MILLER_CT=off` performs zero registry/filesystem creation (filesystem assertion: no registry dir, no `.miller/ct/`, no `ct.db` appear).
-- [ ] Worktree `tests run`/`stop` route to the family daemon; removing the worktree detaches it; main state untouched.
-- [ ] Worker-scope verification passes; commit per commit mode.
+- [x] Daemon on main + registered enabled-by-inheritance worktree → worktree gets status/selection/runs with zero manual calls beyond `workspace open`.
+- [x] A worktree change triggers a debounced impacted run against the worktree's own index and `ct.db` under the shared budget.
+- [x] A never-enabled repo's worktree is not adopted; a worktree with its own live daemon is not adopted.
+- [x] `tests status` with `MILLER_CT=off` performs zero registry/filesystem creation (filesystem assertion: no registry dir, no `.miller/ct/`, no `ct.db` appear).
+- [x] Worktree `tests run`/`stop` route to the family daemon; removing the worktree detaches it; main state untouched.
+- [x] Worker-scope verification passes; commit per commit mode.
 
 ### Task 8: Docs and contracts
 
