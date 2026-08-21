@@ -385,17 +385,35 @@ scripts/test.ps1 all
   build/result/temp artifacts under supervised CT paths (`BuildOutputRoot` generations and `miller-ct`
   temps) — never workspace `bin`/`obj`. `ct.db` is self-contained: no foreign keys into `symbols.db` or
   `search.db`; rows name files by path+blake3 hash and symbols by name+path. Freshness is the composite
-  `(index_identity, revision)` from `WorkspaceReadSnapshot.IndexIdentity`. Revision alone is forbidden: a
-  rebuild restarts the counter, so a stale green must not match a new generation that reuses the number.
-  **Safety (load-bearing).** Opt-in per workspace (`.miller/ct.enabled`), default off. Explicit start only:
+  `(IndexGenerationIdentity, revision)` from the LIVE `WorkspaceReadSnapshot`
+  (`ctgen1:store:<family>:<view>:<generation>` / `ctgen1:artifact:<id>:<hash-algorithm>`). The identity
+  excludes everything a routine import moves (log sequence, revision counter, manifest hash/generation) and
+  flips on every counter-restart event (generation promotion, view replan, family recreate, extractor
+  upgrade / schema heal); an identity change makes EVERY result stale — the rebuild fail-safe. Within one
+  identity, a revision advance is a watermark keep-set (`ContinuousTestStore.ApplyRevisionAdvance`, one
+  transaction, staleness first): fresh GREEN cases the change cannot reach carry forward; impacted cases go
+  stale and lose their watermark rows; red/skipped never advance; unknown reachability reads stale. A run
+  executes the stale set (impacted ∪ owed backlog) as an explicit test-ID list; truncated/degraded/
+  unavailable impact means Unknown — everything stale, NOTHING executes, never a whole-suite fallback.
+  Auto-runs debounce trailing-edge (`MILLER_CT_DEBOUNCE` seconds, default 2, `0` immediate, invalid/>3600
+  falls back); changes during a run queue a follow-up, never kill a healthy run. The status `selected` key
+  is the LIVE index key, never derived from stored rows; no readable index means `selected: null` and an
+  honest unknown verdict.
+  **Safety (load-bearing).** Opt-in per workspace (`.miller/ct.enabled`), default off. A linked worktree
+  inherits the MAIN checkout's opt-in through the git link (no git subprocess); a local `.miller/ct.disabled`
+  tombstone beats inheritance; `MILLER_CT=off` beats everything. ONE family daemon (one process, one lease
+  on the main root) adopts registered, opted-in worktrees of its repo — each gets its own ct.db and
+  index-bound context, and the daemon writes that worktree's `.miller/ct/daemon.status.json` on transitions
+  (`adopted by <main root>`). Worktree `tests start` anchors the daemon at the main checkout (reason:
+  `family daemon at <root>`); worktree `stop` detaches that worktree only (`detached`, never a daemon kill);
+  routed `run` reaches the worktree's own queue and ct.db. Explicit start only:
   `miller tests serve`, the dashboard, or MCP `tests operation=start`. Status reads never create `ct.db`,
   never create `.miller/ct/`, and never start the daemon. On start the daemon is status-only: it reports
-  staleness but executes nothing until a new change or an explicit `run`. Delta-unavailable or degraded
-  index never falls back to a full-suite run. A test process that goes SILENT for 10 minutes is treated as
-  wedged: Miller kills its process tree and FAILS the run. The bound is on silence, not total duration, so a
-  slow suite survives and a wedged one does not (`MILLER_CT_STALL_TIMEOUT` overrides it; `off` disables it).
-  User-global execution budget: at most one workspace executes
-  tests at a time. `MILLER_CT=off` (also `0`/`false`/`no`) is a permanent zero-work guarantee: no daemon,
+  staleness but executes nothing until a new change or an explicit `run`. A test process that goes SILENT
+  for 10 minutes is treated as wedged: Miller kills its process tree and FAILS the run. The bound is on
+  silence, not total duration, so a slow suite survives and a wedged one does not (`MILLER_CT_STALL_TIMEOUT`
+  overrides it; `off` disables it). User-global execution budget: at most one workspace (worktrees included)
+  executes tests at a time. `MILLER_CT=off` (also `0`/`false`/`no`) is a permanent zero-work guarantee: no daemon,
   no `ct.db` writes, honest status. Green requires complete results at the selected composite key.
   The tenth MCP tool is `tests` (approved 2026-08-18): `status|failures|start|stop|enable|disable|run`.
   Status is cheap. Start is the only spawn. JSON contract:
