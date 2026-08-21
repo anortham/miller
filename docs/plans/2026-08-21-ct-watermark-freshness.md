@@ -180,13 +180,13 @@ All tasks are serial: the freshness cursor (Task 1) feeds everything, `TestsCore
 **What to build:** The narrow stale set with honest edges. A 3-file edit stales dozens of cases, not 7,690 — and the degraded edges stale MORE, never run more.
 
 **Acceptance criteria:**
-- [ ] Path-scoped change: stale set == impacted ∪ already-stale.
-- [ ] Known-empty impact: stale delta empty, no run enqueued.
-- [ ] Degraded/unavailable/truncated impact: all previously fresh cases stale; no execution enqueued; no `WholeSuite`.
-- [ ] All-known-IDs selection executes as an ID list, not `WholeSuite`.
-- [ ] Explicit `tests run` executes exactly the current stale set.
-- [ ] Green definition unchanged (zero stale + zero red at selected key).
-- [ ] Worker-scope verification passes; commit per commit mode.
+- [x] Path-scoped change: stale set == impacted ∪ already-stale.
+- [x] Known-empty impact: stale delta empty, no run enqueued.
+- [x] Degraded/unavailable/truncated impact: all previously fresh cases stale; no execution enqueued; no `WholeSuite`.
+- [x] All-known-IDs selection executes as an ID list, not `WholeSuite`.
+- [x] Explicit `tests run` executes exactly the current stale set.
+- [x] Green definition unchanged (zero stale + zero red at selected key).
+- [x] Worker-scope verification passes; commit per commit mode. (e4ebb5cf; ContinuousTestSelectionOutcome contract; selector 51/51, queue+coordinator 20/20, server 44/44)
 
 ### Task 5: Crash-atomic watermark
 
