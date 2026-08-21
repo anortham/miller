@@ -129,11 +129,14 @@ Worktree acceptance criteria:
       of the same repo gives `tests status` on that worktree an honest enabled/adopted
       answer without any manual enable. (Task 9 live scenario 8: `enabled=true`,
       `reason=adopted by <main root>`, status read created no files.)
-- [ ] A change in the worktree triggers an impacted run against the worktree's index,
-      debounced, under the shared budget. (Task 9: the family daemon observed the worktree's
-      revision advance against the worktree's own index, but the selection returned Unknown —
-      defect 1 in the task-9 report — so the impacted run never fired. Unproven until that
-      defect is fixed.)
+- [x] A change in the worktree triggers an impacted run against the worktree's index,
+      debounced, under the shared budget. (Task 9 re-validation at 23e50e9c: after the
+      worktree's first seeding run — result seeding is out of scope by design, so a new
+      worktree holds no cases until its first explicit run — a worktree edit produced
+      `enqueue … selected=1` on the worktree's own identity, the family daemon auto-ran the
+      one impacted case to green in its own `ct.db`, the unimpacted case rode the watermark,
+      and the main checkout's `ct.db` stayed at zero runs. Before seeding, the same edit
+      fails closed: Unknown, nothing executes, status honest.)
 - [x] A worktree of a repo that never enabled CT stays fully off. (Task 9 live scenario 8:
       `enabled=false`, no `ct.db`, no `.miller/ct/` created.)
 - [x] Removing the worktree detaches it without disturbing the main workspace's CT state.
@@ -150,32 +153,38 @@ Worktree acceptance criteria:
 
 ## Acceptance criteria
 
-- [ ] Editing one non-test source file marks only the impacted cases stale; the daemon
+- [x] Editing one non-test source file marks only the impacted cases stale; the daemon
       runs only those after the debounce; verdict returns to green without a full run.
-      (Task 9 live scenario 1 FAILED: the index named the impacted test correctly, but the
-      selector could not map it to the stored xunit.v3 case — defect 1 in the task-9 report —
-      so the outcome was Unknown: both cases stale, no run.)
+      (Task 9 re-validation at 23e50e9c: `MathOps.cs` edit → `stale=1` — only the impacted
+      case — → auto run fired ~2 s after observation with no run command →
+      `enqueue … selected=1`, one result row for the impacted case at the live revision,
+      verdict green; the unimpacted case kept its old committed state and rode the watermark
+      to the live revision. Deferred limitation: xunit THEORY rows still fail closed.)
 - [x] Editing an unrelated markdown file (index writes, no reachable tests) leaves the
       verdict green and stale at 0. The watermark advanced instead. (Task 9 live scenario 2:
       `outcome=KnownEmpty stale=0`, watermark rows advanced, states unchanged, no new run.)
-- [ ] A full rebuild (generation change) marks every case stale. (Task 9 live scenario 3:
-      a store-mode `workspace full` keeps the generation identity by design; a store RECREATE
-      reused family+view+gen-001 with a restarted counter and later resurrected stale greens —
-      defect 4 in the task-9 report.)
-- [ ] A red result never becomes green or fresh without its test rerunning. (Task 9 live
-      scenario 4 proved the watermark path: the red case never rode the watermark and turned
-      green only after its rerun. But defect 4's counter replay can make ANY stored row —
-      red included — read fresh without a rerun, so the universal claim is unproven.)
+- [x] A full rebuild (generation change) marks every case stale. (Task 9 re-validation at
+      23e50e9c: deleting the store root and re-importing minted a NEW view id, so the ctgen1
+      identity differs and every stored row reads stale; replaying the counter back to the
+      old numeric revision — the exact recipe that produced the pre-fix false green — now
+      stays `partial stale=2`. A routine store-mode `workspace full` keeps the identity by
+      design because the revision counter never restarts there.)
+- [x] A red result never becomes green or fresh without its test rerunning. (Task 9: the
+      red case never rode the watermark across unrelated changes — proven twice — and turned
+      green only via its own rerun; the counter-replay resurrection hole is closed by the D4
+      fix, so no path makes a stored row read fresh without a rerun.)
 - [x] A case with unknown reachability is stale after any change. (Task 9: observed live
       twice — `outcome=Unknown` staled everything and executed nothing; fail-closed pins in
       ForbiddenEnqueueTests and DurableFreshnessTests.)
 - [x] Status reports the live index key; two consecutive reads never flip between keys.
       (Task 9: consecutive reads returned the identical `ctgen1:` key; the key stayed live
       even when every stored row carried a legacy identity.)
-- [ ] Explicit `tests run` executes the stale set only. (Task 9: the run selected exactly
-      the stale set, but at the daemon's START key rather than the live key — defect 2 in the
-      task-9 report — so results landed at a dead revision and the verdict never converged
-      without a daemon restart.)
+- [x] Explicit `tests run` executes the stale set only. (Task 9 re-validation at 23e50e9c:
+      after an index advance the run selected exactly the stale set at the latest observed
+      key — no daemon restart needed — and converged to green. Residual noted in the task-9
+      report: when a split refresh lands mid-flight, a run selected at the intermediate
+      revision completes at the final one and its green does not commit; the workspace stays
+      honestly stale and the next run heals it.)
 - [ ] All existing CT safety gates (status-starts-nothing, budget, stall kill) still pass.
       (Lead-owned branch gate; task 9 observed status-starts-nothing, the kill switch, and the
       shared budget live, but the suite-level claim belongs to the branch gate.)
