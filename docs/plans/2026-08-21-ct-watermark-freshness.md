@@ -336,7 +336,7 @@ All tasks are serial: the freshness cursor (Task 1) feeds everything, `TestsCore
 **What to build:** Run the scenarios against a real daemon in the worktree. Any failure is a defect report back into the relevant task, not a criteria edit.
 
 **Acceptance criteria:**
-- [ ] Every hard-gate scenario above ticked with recorded evidence.
-- [ ] Every design acceptance criterion (freshness list + worktree list) ticked.
-- [ ] Branch gate (`scripts/test.ps1 all`) green in the worktree.
-- [ ] Verification ledger complete for the branch HEAD.
+- [x] Every hard-gate scenario above ticked with recorded evidence. (task-9-report.md: 9 scenarios + 5-check re-validation after fix rounds D1-D5.)
+- [x] Every design acceptance criterion (freshness list + worktree list) ticked. (Design doc 12/12.)
+- [x] Branch gate (`scripts/test.ps1 all`) green in the worktree. (At 288c3979 as a scale-then-fast chain: scale 153/0, fast 7729/0.)
+- [x] Verification ledger complete for the branch HEAD. (.razorback/sdd/2026-08-21-ct-watermark-freshness/progress.md.)

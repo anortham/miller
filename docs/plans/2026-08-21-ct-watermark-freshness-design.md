@@ -185,9 +185,10 @@ Worktree acceptance criteria:
       report: when a split refresh lands mid-flight, a run selected at the intermediate
       revision completes at the final one and its green does not commit; the workspace stays
       honestly stale and the next run heals it.)
-- [ ] All existing CT safety gates (status-starts-nothing, budget, stall kill) still pass.
-      (Lead-owned branch gate; task 9 observed status-starts-nothing, the kill switch, and the
-      shared budget live, but the suite-level claim belongs to the branch gate.)
+- [x] All existing CT safety gates (status-starts-nothing, budget, stall kill) still pass.
+      (Branch gate green at 288c3979: scale 153 passed / 0 failed, fast 7729 passed / 0 failed,
+      2026-08-21. Task 9 also observed status-starts-nothing, the kill switch, and the shared
+      budget live.)
 
 ## Out of scope
 
