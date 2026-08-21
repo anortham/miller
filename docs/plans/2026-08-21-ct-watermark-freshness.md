@@ -122,11 +122,11 @@ All tasks are serial: the freshness cursor (Task 1) feeds everything, `TestsCore
 **What to build:** Kill the self-referential guard: `SelectedFrom` derives the reported key from stored rows, so uniform stale rows read green forever and consecutive status reads flip keys (observed live: 32424 vs 32161).
 
 **Acceptance criteria:**
-- [ ] Stored rows at an old key + newer live cursor → stale, never green.
-- [ ] Two consecutive status reads with no index writes report the same key.
-- [ ] No cursor available → verdict `unknown` (sentinel removed).
-- [ ] Foreground status and summary use the same projection (one implementation, verified by tests exercising both paths).
-- [ ] Worker-scope verification passes; commit per commit mode.
+- [x] Stored rows at an old key + newer live cursor → stale, never green.
+- [x] Two consecutive status reads with no index writes report the same key.
+- [x] No cursor available → verdict `unknown` (sentinel removed).
+- [x] Foreground status and summary use the same projection (one implementation, verified by tests exercising both paths).
+- [x] Worker-scope verification passes; commit per commit mode. (d244986f, 66/66 across 7 classes)
 
 ### Task 3: Worktree enablement + tombstone
 
