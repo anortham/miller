@@ -133,8 +133,8 @@ public sealed class ContinuousTestImpactSelector
             .GroupBy(row => row.Id, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         Dictionary<string, TestCaseFact[]> casesBySourcePath = testCases
-            .Where(row => !string.IsNullOrEmpty(row.SourcePath))
-            .GroupBy(row => NormalizePath(row.SourcePath!), PathComparer)
+            .SelectMany(row => CaseResidencePaths(row).Select(path => (Path: path, Case: row)))
+            .GroupBy(pair => pair.Path, pair => pair.Case, PathComparer)
             .ToDictionary(group => group.Key, group => group.ToArray(), PathComparer);
 
         var evidence = new List<ContinuousTestSelectionEvidence>();
@@ -557,6 +557,29 @@ public sealed class ContinuousTestImpactSelector
                     || ContainsOrdinal(testCase.QualifiedName, nestedModuleHint)
                     || ContainsOrdinal(testCase.Selector, nestedModuleHint)))
             .ToArray();
+    }
+
+    /// <summary>
+    /// A case's residence can arrive as a source_path metadata key OR as the stored row's
+    /// file_path column (kept in FileId once path-validated). Real xunit.v3 discovery can write
+    /// the file path column without the metadata key (defect D5, branch-gate scale suite), and
+    /// either path is honest evidence of where the case lives — so the by-path hint bucket
+    /// indexes both. A case whose two paths differ appears under both keys.
+    /// </summary>
+    private static IEnumerable<string> CaseResidencePaths(TestCaseFact testCase)
+    {
+        string? sourcePath = string.IsNullOrEmpty(testCase.SourcePath)
+            ? null
+            : NormalizePath(testCase.SourcePath);
+        if (sourcePath is not null)
+            yield return sourcePath;
+
+        if (string.IsNullOrEmpty(testCase.FileId))
+            yield break;
+
+        string filePath = NormalizePath(testCase.FileId);
+        if (sourcePath is null || !PathComparer.Equals(sourcePath, filePath))
+            yield return filePath;
     }
 
     /// <summary>

@@ -418,6 +418,62 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     /// <summary>
+    /// Defect D5 (branch-gate scale suite): a stored case can carry its residence in the row's
+    /// file_path column (real xunit.v3 FQN display name plus a discovered file path) WITHOUT a
+    /// source_path metadata key. The by-path hint bucket must index file_path too; before the fix
+    /// it was keyed on source_path metadata only, so the hint tier read the case as unmappable
+    /// and the whole selection failed closed to Unknown — while the changed-test-file tier ranked
+    /// the very same case by the very same path.
+    /// </summary>
+    [Fact]
+    public void Select_maps_impacted_hint_to_case_stored_with_file_path_but_no_source_path_metadata()
+    {
+        using ContinuousTestStore store = OpenStore();
+        const string projectPath = "/repo/Sample.Tests.csproj";
+        SeedProviderCase(
+            store,
+            "tc:adds",
+            selector: "Sample.Tests.CalculatorTests.Adds",
+            qualifiedName: "Sample.Tests.CalculatorTests.Adds",
+            name: "Sample.Tests.CalculatorTests.Adds",
+            sourcePath: null,
+            projectPath: projectPath,
+            className: "Sample.Tests.CalculatorTests",
+            filePath: "tests/Sample.Tests/CalculatorTests.cs");
+        SeedProviderCase(
+            store,
+            "tc:other",
+            selector: "Sample.Tests.OtherTests.Works",
+            qualifiedName: "Sample.Tests.OtherTests.Works",
+            name: "Sample.Tests.OtherTests.Works",
+            sourcePath: null,
+            projectPath: projectPath,
+            className: "Sample.Tests.OtherTests",
+            filePath: "tests/Sample.Tests/OtherTests.cs");
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ProjectPath: projectPath,
+            ChangedPaths: ["src/Sample/Calculator.cs"],
+            ImpactedTests:
+            [
+                new ContinuousTestImpactedTest(
+                    SymbolId: "sym:adds",
+                    Path: "tests/Sample.Tests/CalculatorTests.cs",
+                    Name: "Adds",
+                    TestCase: true,
+                    EvidenceStatus: "current"),
+            ]));
+
+        Assert.Equal(["tc:adds"], result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+        ContinuousTestSelectionEvidence evidence = Assert.Single(result.Evidence);
+        Assert.Equal("impacted_test", evidence.Tier);
+        Assert.DoesNotContain("tc:other", result.SelectedTestCaseIds);
+    }
+
+    /// <summary>
     /// Contract clause (a): the stale set for a path-scoped change is the impacted set plus the
     /// already-owed backlog — NOTHING else. A case committed fresh must survive an edit that
     /// cannot reach it; that survival is the whole point of the watermark design.
@@ -1291,7 +1347,8 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         string? sourcePath,
         string? projectPath = null,
         string? className = null,
-        string framework = "xunit")
+        string framework = "xunit",
+        string? filePath = null)
     {
         var metadata = new Dictionary<string, object?>();
         if (!string.IsNullOrWhiteSpace(sourcePath))
@@ -1307,6 +1364,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             Name: name,
             QualifiedName: qualifiedName,
             Selector: selector,
+            FilePath: filePath,
             Framework: framework,
             Role: ContinuousTestRole.TestCase,
             Source: "ct-provider:dotnet",
