@@ -273,6 +273,151 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     /// <summary>
+    /// Defect D1 (2026-08-21 live validation): real xunit.v3 discovery stores the case NAME as the
+    /// fully qualified "Namespace.Class.Method" with NULL file_path/symbol_name and a "class"
+    /// metadata key. The impacted-test hint carries the SHORT method name plus the test file path.
+    /// The fallback must map them via class metadata + file stem, or every source edit fails
+    /// closed to Unknown and the impacted auto-run never fires.
+    /// </summary>
+    [Fact]
+    public void Select_maps_fqn_named_fileless_xunit_v3_case_via_class_metadata()
+    {
+        using ContinuousTestStore store = OpenStore();
+        const string projectPath = "/repo/Fixture.Tests.csproj";
+        SeedProviderCase(
+            store,
+            "tc:adds",
+            selector: "Fixture.Tests.MathOpsTests.Adds",
+            qualifiedName: "Fixture.Tests.MathOpsTests.Adds",
+            name: "Fixture.Tests.MathOpsTests.Adds",
+            sourcePath: null,
+            projectPath: projectPath,
+            className: "Fixture.Tests.MathOpsTests");
+        SeedProviderCase(
+            store,
+            "tc:greets",
+            selector: "Fixture.Tests.GreeterTests.Greets",
+            qualifiedName: "Fixture.Tests.GreeterTests.Greets",
+            name: "Fixture.Tests.GreeterTests.Greets",
+            sourcePath: null,
+            projectPath: projectPath,
+            className: "Fixture.Tests.GreeterTests");
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ProjectPath: projectPath,
+            ChangedPaths: ["Fixture/MathOps.cs"],
+            ImpactedTests:
+            [
+                new ContinuousTestImpactedTest(
+                    SymbolId: "sym:adds",
+                    Path: "Fixture.Tests/MathOpsTests.cs",
+                    Name: "Adds",
+                    TestCase: true,
+                    EvidenceStatus: "current"),
+            ]));
+
+        Assert.Equal(["tc:adds"], result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+        ContinuousTestSelectionEvidence evidence = Assert.Single(result.Evidence);
+        Assert.Equal("impacted_test", evidence.Tier);
+        Assert.DoesNotContain("tc:greets", result.SelectedTestCaseIds);
+    }
+
+    /// <summary>
+    /// Two stored FQN cases share the SHORT method name in different classes. The impacted test's
+    /// file stem names one class; class metadata must pick that one deterministically instead of
+    /// reading the pair as ambiguous.
+    /// </summary>
+    [Fact]
+    public void Select_disambiguates_shared_method_name_by_class_metadata_and_file_stem()
+    {
+        using ContinuousTestStore store = OpenStore();
+        const string projectPath = "/repo/Fixture.Tests.csproj";
+        SeedProviderCase(
+            store,
+            "tc:mathops-adds",
+            selector: "Fixture.Tests.MathOpsTests.Adds",
+            qualifiedName: "Fixture.Tests.MathOpsTests.Adds",
+            name: "Fixture.Tests.MathOpsTests.Adds",
+            sourcePath: null,
+            projectPath: projectPath,
+            className: "Fixture.Tests.MathOpsTests");
+        SeedProviderCase(
+            store,
+            "tc:calc-adds",
+            selector: "Fixture.Tests.CalculatorTests.Adds",
+            qualifiedName: "Fixture.Tests.CalculatorTests.Adds",
+            name: "Fixture.Tests.CalculatorTests.Adds",
+            sourcePath: null,
+            projectPath: projectPath,
+            className: "Fixture.Tests.CalculatorTests");
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ProjectPath: projectPath,
+            ChangedPaths: ["Fixture/MathOps.cs"],
+            ImpactedTests:
+            [
+                new ContinuousTestImpactedTest(
+                    SymbolId: "sym:adds",
+                    Path: "Fixture.Tests/MathOpsTests.cs",
+                    Name: "Adds",
+                    TestCase: true),
+            ]));
+
+        Assert.Equal(["tc:mathops-adds"], result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+        Assert.DoesNotContain("tc:calc-adds", result.SelectedTestCaseIds);
+    }
+
+    /// <summary>
+    /// A stored FQN case with NO class metadata still maps when its trailing name segment matches
+    /// the impacted short name UNIQUELY across the fileless cases in scope.
+    /// </summary>
+    [Fact]
+    public void Select_maps_unique_fqn_named_fileless_case_without_class_metadata()
+    {
+        using ContinuousTestStore store = OpenStore();
+        const string projectPath = "/repo/Fixture.Tests.csproj";
+        SeedProviderCase(
+            store,
+            "tc:adds",
+            selector: "Fixture.Tests.MathOpsTests.Adds",
+            qualifiedName: "Fixture.Tests.MathOpsTests.Adds",
+            name: "Fixture.Tests.MathOpsTests.Adds",
+            sourcePath: null,
+            projectPath: projectPath);
+        SeedProviderCase(
+            store,
+            "tc:greets",
+            selector: "Fixture.Tests.GreeterTests.Greets",
+            qualifiedName: "Fixture.Tests.GreeterTests.Greets",
+            name: "Fixture.Tests.GreeterTests.Greets",
+            sourcePath: null,
+            projectPath: projectPath);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ProjectPath: projectPath,
+            ChangedPaths: ["Fixture/MathOps.cs"],
+            ImpactedTests:
+            [
+                new ContinuousTestImpactedTest(
+                    SymbolId: "sym:adds",
+                    Path: "Fixture.Tests/MathOpsTests.cs",
+                    Name: "Adds",
+                    TestCase: true),
+            ]));
+
+        Assert.Equal(["tc:adds"], result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+    }
+
+    /// <summary>
     /// Contract clause (a): the stale set for a path-scoped change is the impacted set plus the
     /// already-owed backlog — NOTHING else. A case committed fresh must survive an edit that
     /// cannot reach it; that survival is the whole point of the watermark design.
@@ -390,7 +535,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     /// <summary>
     /// An impacted-test hint that names a case this project knows but cannot uniquely map is
     /// UNKNOWN reachability: everything goes stale and nothing runs. The old behaviour ran the
-    /// whole workspace instead — a degraded edge must stale more, never run more.
+    /// whole workspace instead — a degraded edge must stale more, never run more. Here TWO classes
+    /// in different namespaces share the trailing class segment the impacted file stem names, so
+    /// class metadata cannot pick one: that is genuine ambiguity.
     /// </summary>
     [Fact]
     public void Select_ambiguous_fileless_nunit_name_fails_closed_without_a_run()
@@ -399,8 +546,8 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         const string projectPath = "/repo/Client.Tests.csproj";
         foreach ((string Id, string Selector, string ClassName) item in new[]
         {
-            (Id: "tc:first", Selector: "Client.Tests.FirstTests.SavesAsync", ClassName: "Client.Tests.FirstTests"),
-            (Id: "tc:second", Selector: "Client.Tests.SecondTests.SavesAsync", ClassName: "Client.Tests.SecondTests"),
+            (Id: "tc:first", Selector: "Client.Tests.A.FirstTests.SavesAsync", ClassName: "Client.Tests.A.FirstTests"),
+            (Id: "tc:second", Selector: "Client.Tests.B.FirstTests.SavesAsync", ClassName: "Client.Tests.B.FirstTests"),
         })
         {
             SeedProviderCase(
@@ -408,7 +555,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
                 item.Id,
                 selector: item.Selector,
                 qualifiedName: item.Selector,
-                name: "SavesAsync",
+                name: item.Selector,
                 sourcePath: null,
                 projectPath: projectPath,
                 className: item.ClassName,

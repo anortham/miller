@@ -530,14 +530,7 @@ public sealed class ContinuousTestImpactSelector
         IReadOnlyList<TestCaseFact> allTestCases)
     {
         if (normalizedMillerPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-        {
-            TestCaseFact[] matches = allTestCases
-                .Where(testCase => IsFilelessDotnetImpactCase(testCase)
-                    && string.Equals(testCase.Name, impactedTest.Name, StringComparison.Ordinal))
-                .Take(2)
-                .ToArray();
-            return matches.Length == 1 ? matches : [];
-        }
+            return ResolveFilelessDotnetCases(normalizedMillerPath, impactedTest, allTestCases);
 
         if (!normalizedMillerPath.EndsWith(".rs", StringComparison.OrdinalIgnoreCase))
             return [];
@@ -564,6 +557,81 @@ public sealed class ContinuousTestImpactSelector
                     || ContainsOrdinal(testCase.QualifiedName, nestedModuleHint)
                     || ContainsOrdinal(testCase.Selector, nestedModuleHint)))
             .ToArray();
+    }
+
+    /// <summary>
+    /// Maps an impacted .NET test hint (SHORT method name + test file path from miller impact)
+    /// onto provider cases that carry no source path. Real discovery shapes differ by runner:
+    /// xunit.v3 stores the case name as the fully qualified "Namespace.Class.Method" with a
+    /// "class" metadata key and NULL file_path/symbol_name (defect D1, 2026-08-21 live
+    /// validation), while the VSTest/NUnit path stores the short method name. Preference order:
+    /// first, cases whose class metadata's trailing segment equals the impacted file's stem —
+    /// unambiguous when exactly one class corresponds; second, a UNIQUE name match whose case has
+    /// no class metadata. Two corresponding classes, or a non-unique match, is genuine ambiguity:
+    /// return empty so the impacted test stays unmappable and the selection fails closed to
+    /// Unknown.
+    /// </summary>
+    private static TestCaseFact[] ResolveFilelessDotnetCases(
+        string normalizedMillerPath,
+        ContinuousTestImpactedTest impactedTest,
+        IReadOnlyList<TestCaseFact> allTestCases)
+    {
+        string? impactedName = impactedTest.Name;
+        if (string.IsNullOrEmpty(impactedName))
+            return [];
+
+        TestCaseFact[] candidates = allTestCases
+            .Where(testCase => IsFilelessDotnetImpactCase(testCase)
+                && FilelessDotnetNameMatches(impactedName, testCase))
+            .ToArray();
+        if (candidates.Length == 0)
+            return [];
+
+        string fileStem = DotnetFileStem(normalizedMillerPath);
+        TestCaseFact[] classMatches = candidates
+            .Where(testCase => ClassCorrespondsToFileStem(testCase.ClassName, fileStem))
+            .ToArray();
+        if (classMatches.Length > 0)
+        {
+            int distinctClasses = classMatches
+                .Select(testCase => testCase.ClassName!)
+                .Distinct(StringComparer.Ordinal)
+                .Count();
+            return distinctClasses == 1 ? classMatches : [];
+        }
+
+        return candidates.Length == 1 && string.IsNullOrEmpty(candidates[0].ClassName)
+            ? candidates
+            : [];
+    }
+
+    private static bool FilelessDotnetNameMatches(string impactedName, TestCaseFact testCase)
+    {
+        if (string.IsNullOrEmpty(testCase.Name))
+            return false;
+        return string.Equals(testCase.Name, impactedName, StringComparison.Ordinal)
+            || testCase.Name.EndsWith("." + impactedName, StringComparison.Ordinal);
+    }
+
+    private static string DotnetFileStem(string normalizedPath)
+    {
+        int lastSlash = normalizedPath.LastIndexOf('/');
+        string fileName = lastSlash >= 0 ? normalizedPath[(lastSlash + 1)..] : normalizedPath;
+        return fileName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            ? fileName[..^3]
+            : fileName;
+    }
+
+    private static bool ClassCorrespondsToFileStem(string? className, string fileStem)
+    {
+        if (string.IsNullOrEmpty(className) || string.IsNullOrEmpty(fileStem))
+            return false;
+
+        int dot = className.LastIndexOf('.');
+        int plus = className.LastIndexOf('+');
+        int separator = Math.Max(dot, plus);
+        string trailing = separator >= 0 ? className[(separator + 1)..] : className;
+        return string.Equals(trailing, fileStem, StringComparison.Ordinal);
     }
 
     private static bool IsFilelessDotnetImpactCase(TestCaseFact testCase) =>
