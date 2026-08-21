@@ -82,6 +82,7 @@ public sealed class StoreFamilyResolver
         StoreMemberRegistryRow? member = _registry.GetStoreMember(facts.WorkspaceId);
         StoreFamilyRegistryRow family;
         string viewId;
+        StoreViewReplan replan = StoreViewReplan.None;
         WorkspaceRootIdentity rootIdentity = facts.RootIdentity;
         if (member is not null)
         {
@@ -103,7 +104,7 @@ public sealed class StoreFamilyResolver
                     throw new StoreBindingMismatchException(
                         "The family store has a published generation but is missing its CURRENT pointer.");
                 }
-                viewId = member.ViewId;
+                (viewId, replan) = PlanViewForAbsentCatalog(member, workspace);
             }
             else if (IsPositiveFamilyReplacement(family, member, facts))
             {
@@ -117,7 +118,7 @@ public sealed class StoreFamilyResolver
             }
             else
             {
-                viewId = member.ViewId;
+                (viewId, replan) = PlanViewForAbsentCatalog(member, workspace);
                 WorkspaceRootIdentity priorIdentity = new(
                     member.RootGitDir,
                     member.RootGitDirCreatedAtUtc);
@@ -190,10 +191,33 @@ public sealed class StoreFamilyResolver
             family.StoreRoot,
             storedMember.ViewId,
             facts.WorkspaceRoot,
-            StoreBindingState.Planned);
+            StoreBindingState.Planned,
+            replan);
         StoreWorkspacePointer.Write(facts.WorkspaceRoot, binding);
         return binding;
     }
+
+    /// <summary>
+    /// The serving catalog is ABSENT and no published generation survives under the family root. Two
+    /// causes share that state: a first import whose earlier attempt failed, and a store whose root was
+    /// destroyed after it served this workspace — a recreate. They must not share a view id. A recreated
+    /// store restarts the family's revision counter at gen-001, so reusing the member's view id would
+    /// compose the SAME CT generation identity (family:view:generation) over a RESTARTED counter, and
+    /// results stored under the destroyed store could replay as fresh once the counter caught up
+    /// (defect D4, 2026-08-21 live validation — a false green with zero runs executed). A completed scan
+    /// on the workspace row is the publication witness, the same one ReconcileCatalog uses: with it, mint
+    /// a fresh view id and record the loss loudly (the vanished classification also bars the stale
+    /// legacy-artifact seed, so the lost view owes a full re-extract); without it, keep the planned view
+    /// id so a failed first import stays stable across retries. A wrong reading is safe in both
+    /// directions — minting for an unpublished view loses nothing, because a Planned binding grants no
+    /// reads and no data exists under the old id.
+    /// </summary>
+    private (string ViewId, StoreViewReplan Replan) PlanViewForAbsentCatalog(
+        StoreMemberRegistryRow member,
+        WorkspaceRegistryRow workspace) =>
+        workspace.LastRevision is null && workspace.LastScanAt is null
+            ? (member.ViewId, StoreViewReplan.None)
+            : (MintViewId(), StoreViewReplan.VanishedFromCatalog);
 
     private bool HasUsableRegisteredLineage(WorkspaceRootFacts facts)
     {

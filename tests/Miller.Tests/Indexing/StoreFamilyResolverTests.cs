@@ -655,6 +655,112 @@ public sealed class StoreFamilyResolverTests : IDisposable
         Assert.False(File.Exists(Path.Combine(outside, "store.json")));
     }
 
+    /// <summary>
+    /// Defect D4 (2026-08-21 live validation): the workspace pointer and member row survived, the
+    /// family store root was DELETED, and the resolver re-planned the import under the SAME family
+    /// id, view id, and gen-001. The recreated store restarts the revision counter, so the reused
+    /// (family:view:generation) identity let stored CT rows replay as fresh once the counter caught
+    /// up — a false green with zero runs executed. A recreate must mint a NEW view id.
+    /// </summary>
+    [Fact]
+    public void ARecreatedStoreRootMintsANewViewIdForAWorkspaceThatHasScanned()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
+        var ids = new Queue<Guid>(
+        [
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+            Guid.Parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        ]);
+        var resolver = Resolver(registry, ids);
+        WorkspaceRootFacts facts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        StoreFamilyBinding original = resolver.ResolveOrCreate(facts);
+        WriteStoreCatalog(original.StoreRoot, original.FamilyId, original.ViewId, facts.WorkspaceRoot);
+        registry.MarkScanned("ws-a", revision: 55, Utc(2));
+        // The whole family store root is destroyed: CURRENT, coord.db, every generation.
+        Directory.Delete(original.StoreRoot, recursive: true);
+
+        StoreFamilyBinding recreated = resolver.ResolveOrCreate(facts);
+
+        Assert.Equal(StoreBindingState.Planned, recreated.State);
+        Assert.Equal(original.FamilyId, recreated.FamilyId);
+        Assert.NotEqual(original.ViewId, recreated.ViewId);
+        Assert.Equal(StoreViewReplan.VanishedFromCatalog, recreated.Replan);
+        Assert.Equal(recreated.ViewId, registry.GetStoreMember("ws-a")?.ViewId);
+        StoreWorkspacePointerDocument pointer = Assert.IsType<StoreWorkspacePointerDocument>(
+            StoreWorkspacePointer.Read(facts.WorkspaceRoot));
+        Assert.Equal(recreated.ViewId, pointer.ViewId);
+        // The composed CT generation identity can therefore never equal the destroyed store's
+        // identity, even though the recreated store restarts at gen-001 and replays revisions.
+        Assert.NotEqual(
+            WorkspaceReadSnapshotTests.StoreSnapshot(
+                familyId: original.FamilyId.ToString("D"),
+                viewId: original.ViewId,
+                generationName: "gen-001").IndexGenerationIdentity,
+            WorkspaceReadSnapshotTests.StoreSnapshot(
+                familyId: recreated.FamilyId.ToString("D"),
+                viewId: recreated.ViewId,
+                generationName: "gen-001").IndexGenerationIdentity);
+    }
+
+    /// <summary>
+    /// The sibling hole to defect D4: the unknown-lineage promotion branch also reused the member's
+    /// view id when the serving catalog was absent. A workspace that completed a scan gets the same
+    /// recreate treatment there — a fresh view id, recorded as a loss.
+    /// </summary>
+    [Fact]
+    public void ARecreatedStoreRootMintsANewViewIdEvenWhenUnknownLineageIsPromoted()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
+        var ids = new Queue<Guid>(
+        [
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+            Guid.Parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        ]);
+        var resolver = Resolver(registry, ids);
+        WorkspaceRootFacts unknownFacts = Facts("ws-a", "root-a", "/repo/.git", null);
+        StoreFamilyBinding original = resolver.ResolveOrCreate(unknownFacts);
+        WriteStoreCatalog(original.StoreRoot, original.FamilyId, original.ViewId, unknownFacts.WorkspaceRoot);
+        registry.MarkScanned("ws-a", revision: 7, Utc(2));
+        Directory.Delete(original.StoreRoot, recursive: true);
+
+        StoreFamilyBinding recreated = resolver.ResolveOrCreate(Facts("ws-a", "root-a", "/repo/.git", Utc(1)));
+
+        Assert.Equal(StoreBindingState.Planned, recreated.State);
+        Assert.Equal(original.FamilyId, recreated.FamilyId);
+        Assert.NotEqual(original.ViewId, recreated.ViewId);
+        Assert.Equal(StoreViewReplan.VanishedFromCatalog, recreated.Replan);
+    }
+
+    /// <summary>
+    /// The other side of the recreate split: with NO completed scan on record, an absent store root
+    /// is a first import whose earlier attempt failed. The planned view id must stay stable across
+    /// retries, and the recovery stays quiet.
+    /// </summary>
+    [Fact]
+    public void AnAbsentStoreRootForANeverScannedWorkspaceKeepsThePlannedViewId()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
+        var ids = new Queue<Guid>(
+        [
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ]);
+        var resolver = Resolver(registry, ids);
+        WorkspaceRootFacts facts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        StoreFamilyBinding planned = resolver.ResolveOrCreate(facts);
+
+        StoreFamilyBinding retried = resolver.ResolveOrCreate(facts);
+
+        Assert.Equal(planned.ViewId, retried.ViewId);
+        Assert.Equal(StoreViewReplan.None, retried.Replan);
+        Assert.Equal(StoreBindingState.Planned, retried.State);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_directory))

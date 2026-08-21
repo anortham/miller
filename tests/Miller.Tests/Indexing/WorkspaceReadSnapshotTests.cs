@@ -62,9 +62,9 @@ public sealed class WorkspaceReadSnapshotTests
 
         // A store generation promotion flips the CURRENT pointer to gen-<n+1> (contract §12).
         WorkspaceReadSnapshot promoted = StoreSnapshot(generationName: "gen-000003");
-        // A replanned recovery mints a new view id (StoreFamilyResolver / StoreViewReplan).
+        // A recreated store mints a new view id (StoreFamilyResolver.PlanViewForAbsentCatalog).
         WorkspaceReadSnapshot mintedView = StoreSnapshot(viewId: "view-2");
-        // A recreated store mints a new family id.
+        // A positive lineage replacement mints a new family id (StoreFamilyResolver).
         WorkspaceReadSnapshot otherFamily = StoreSnapshot(familyId: "fam-2");
 
         Assert.NotEqual(current.IndexGenerationIdentity, promoted.IndexGenerationIdentity);

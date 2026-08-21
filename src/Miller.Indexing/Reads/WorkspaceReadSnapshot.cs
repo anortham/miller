@@ -62,9 +62,11 @@ public sealed record WorkspaceReadSnapshot(
     /// (a routine import advances the manifest generation, the manifest hash, and the log sequence,
     /// so none of those may appear here): the family id, the view id, and the store generation name
     /// from the CURRENT pointer. Each event that can restart or reuse the revision counter changes
-    /// one of them — a generation promotion flips CURRENT to gen-&lt;n+1&gt; (store contract §12), a
-    /// replanned recovery mints a new view id (StoreFamilyResolver), a recreated store mints a new
-    /// family id — while in-place imports keep the counter monotonic ("sequence continuity across
+    /// one of them — a generation promotion flips CURRENT to gen-&lt;n+1&gt; (store contract §12), and a
+    /// recreated store (its root destroyed and reimported, which restarts the counter at gen-001)
+    /// mints a new view id (StoreFamilyResolver.PlanViewForAbsentCatalog; defect D4, 2026-08-21).
+    /// A replanned view inside a LIVING store keeps its view id safely: the family-wide store log
+    /// keeps the counter monotonic there, as do in-place imports ("sequence continuity across
     /// promotion", docs/plans/2026-08-07-index-store-v4-contract.md). The <c>ctgen1:</c> prefix
     /// guarantees no legacy-format identity can ever equal a new-format one.
     /// </summary>
