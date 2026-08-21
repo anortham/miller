@@ -1,0 +1,123 @@
+# CT watermark freshness — design
+
+Date: 2026-08-21. Status: awaiting user review.
+Decision 1 from `docs/plans/2026-08-20-ct-dogfood-defects-and-2344-pin.md` was decided by the user
+on 2026-08-21: **watermark keep-set**.
+
+## Goal
+
+Make CT behave like NCrunch for agents:
+
+- An edit marks only the tests that the change can reach as stale.
+- A change triggers a run of exactly those tests, after a short debounce.
+- A green result survives every edit that cannot reach its test.
+- A full-suite run happens only when the served index generation really changes.
+
+Running the whole suite after every edit is worthless as a feature. Agents already do that
+too much; CT exists to stop it.
+
+## Evidence this design rests on
+
+Live dogfood on 2026-08-20/21 (merged main, version 1.20.1+5a0585400ab9):
+
+- A 3-file test edit marked all 7,690 results stale. A clean 7,588-case run then finished
+  with 0 failures — and every result was stale on arrival, because the index identity had
+  moved during the run. Verdict stayed `partial`. A full green run bought nothing.
+- Cause chain (diagnosed in the 2026-08-20 plan, confirmed live):
+  1. `WorkspaceReadSnapshot.IndexIdentity` joins the whole store cursor, including
+     `store_log_sequence`, which moves on **every** index write (six counts for one file save).
+  2. `ContinuousTestDurableFreshness.IsCommittedFreshAt` requires identity **and** revision
+     to match. Any write anywhere kills every result.
+  3. The carry-forward machinery (`AdvanceContinuousTestFreshWatermark`,
+     `IsWatermarkFreshAt`) exists and is tested, but has zero production callers.
+  4. `ContinuousTestImpactSelector.Select` computes a ranked impacted set — and then sets
+     `staleIds` to every case in scope (`ContinuousTestImpactSelector.cs:97-101`).
+  5. The daemon did not auto-run when files changed; it sat idle until an explicit run.
+- `TestsCore.SelectedFrom` reads the reported key from `ct.db`'s own rows. The guard is
+  self-referential: without an automatic staleness signal it would read green forever.
+  It also caused the status field flip seen live (rev 32424 in one read, 32161 in the next).
+
+## Design
+
+Ordered; each step is safe only after the one before it.
+
+### 1. Reported key comes from the live index
+
+`TestsCore.SelectedFrom` stops deriving the selected key from stored rows. Status asks the
+live `WorkspaceReadSnapshot` for the current key and compares stored rows against it. This
+lands first: removing automatic staleness while the guard is self-referential produces a
+false green.
+
+### 2. `IndexGenerationIdentity` — an identity that ignores routine writes
+
+A new property beside `IndexIdentity`. It changes only when the served generation really
+changes: full rebuild or promote, store view or family change, extractor upgrade, schema
+heal. It does **not** include `store_log_sequence` or the revision counter.
+`CtFactAdapter.cs:49` is the only place CT takes its identity, so the swap is contained.
+
+CT result freshness key becomes `(IndexGenerationIdentity, revision)`:
+
+- Generation changed → every result is stale. The rebuild fail-safe stays absolute.
+- Same generation, revision advanced → the watermark (step 3) decides per test.
+
+### 3. Wire the watermark
+
+On each revision advance from `R0` to `R1` with changed files `F`:
+
+- Run `ContinuousTestImpactSelector` over `F` to get the impacted set `I`.
+- Keep-set = all currently fresh green cases not in `I` — fresh by commit **or** by an
+  earlier watermark, so a second unrelated edit keeps carrying what the first kept. Call
+  `AdvanceContinuousTestFreshWatermark` for the keep-set to `R1`.
+- Cases in `I` go stale. A case whose reachability is unknown is treated as impacted.
+  Unknown always means stale, never fresh.
+- Only green results ride the watermark. A red stays red until its test reruns.
+- `IsWatermarkFreshAt` joins `IsCommittedFreshAt` in verdict and staleness computation.
+
+### 4. Stale set = impacted set; runs execute the stale set
+
+`ContinuousTestImpactSelector.Select` stops returning `staleIds = everything`. Stale is
+what the watermark did not keep. A run executes the current stale set. `verdict=green`
+still requires: zero stale cases and zero red results at the current key — that
+definition does not change.
+
+### 5. Changes trigger impacted runs, with a debounce
+
+The daemon runs the impacted set automatically when changes arrive (this is the documented
+contract already; live dogfood showed it does not fire — find and fix why as part of this
+work). A debounce coalesces save bursts: the timer resets on each new change and the run
+starts after a quiet period. Debounce duration is an env-tunable constant
+(`MILLER_CT_DEBOUNCE`, seconds; default in the low single digits — exact default picked
+during implementation against the existing revision-poller cadence). Changes that arrive
+during an executing run queue a follow-up selection; they never kill a healthy run.
+
+### 6. The CT delta seam passes the family id
+
+Step 4 from the 2026-08-20 plan, unchanged: pass the family id on the CT side without
+touching `RevisionDeltaReader.cs`.
+
+## Safety invariants (unchanged from today)
+
+- Status reads never create `ct.db`, never start the daemon.
+- Delta-unavailable or degraded index never falls back to a full-suite run.
+- `MILLER_CT=off` stays a permanent zero-work guarantee.
+- Green requires complete results at the selected key. Partial coverage is `partial`.
+- Revision alone is never a freshness key (rebuild restarts the counter).
+
+## Acceptance criteria
+
+- [ ] Editing one non-test source file marks only the impacted cases stale; the daemon
+      runs only those after the debounce; verdict returns to green without a full run.
+- [ ] Editing an unrelated markdown file (index writes, no reachable tests) leaves the
+      verdict green and stale at 0. The watermark advanced instead.
+- [ ] A full rebuild (generation change) marks every case stale.
+- [ ] A red result never becomes green or fresh without its test rerunning.
+- [ ] A case with unknown reachability is stale after any change.
+- [ ] Status reports the live index key; two consecutive reads never flip between keys.
+- [ ] Explicit `tests run` executes the stale set only.
+- [ ] All existing CT safety gates (status-starts-nothing, budget, stall kill) still pass.
+
+## Out of scope
+
+- Decision 2 (extraction epoch pointer owner) — separate decision, still open.
+- Coverage-hash freshness (`ct_coverage_maps` population) — a later precision upgrade;
+  the watermark does not depend on it.
