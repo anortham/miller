@@ -330,6 +330,66 @@ public sealed class TelemetrySummaryTests : IDisposable
         Assert.True(ledger.Summarize().DroppedWrites >= 1);
     }
 
+    // telemetry.db is shared by every Miller process on the machine, and one Summarize is several statements:
+    // the grouped read, a p95 read per tool, then the totals read. Outside a transaction each statement takes
+    // its own WAL snapshot, so a row another process commits between them lands in the totals but not in the
+    // per-tool breakdown — a summary whose headline count disagrees with its own rows. The interleave hook
+    // writes from a SECOND connection at exactly that point, which is what a concurrent process does.
+    [Fact]
+    public void Summarize_ReadsOneSnapshot_WhenAnotherConnectionCommitsMidRead()
+    {
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
+        InsertRow("search", 100, "ok", 10, "2026-05-01T00:00:00.000Z");
+        ledger.InterleavedWriteForTest = () =>
+            InsertRow("inspect", 50, "ok", 5, "2026-05-01T00:00:01.000Z");
+
+        var summary = ledger.Summarize();
+
+        Assert.Equal(1, summary.TotalCalls);
+        Assert.Equal(summary.TotalCalls, summary.Tools.Sum(static tool => tool.Calls));
+        Assert.Equal("search", Assert.Single(summary.Tools).Tool);
+        Assert.Equal("2026-05-01T00:00:00.000Z", summary.WindowEndTs);
+    }
+
+    // The read transaction must not outlive the call that opened it: the next Summarize has to see the row the
+    // previous one deliberately excluded, or a snapshot taken once would freeze every later read.
+    [Fact]
+    public void Summarize_SeesTheInterleavedRow_OnTheNextCall()
+    {
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
+        InsertRow("search", 100, "ok", 10, "2026-05-01T00:00:00.000Z");
+        ledger.InterleavedWriteForTest = () =>
+            InsertRow("inspect", 50, "ok", 5, "2026-05-01T00:00:01.000Z");
+        ledger.Summarize();
+        ledger.InterleavedWriteForTest = null;
+
+        var summary = ledger.Summarize();
+
+        Assert.Equal(2, summary.TotalCalls);
+        Assert.Equal(summary.TotalCalls, summary.Tools.Sum(static tool => tool.Calls));
+        Assert.Equal(2, summary.Tools.Count);
+    }
+
+    // A read transaction left open would block this ledger's own prepared INSERT on the same connection.
+    [Fact]
+    public void Record_StillWrites_AfterASummarize()
+    {
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
+        InsertRow("search", 100, "ok", 10, "2026-05-01T00:00:00.000Z");
+        ledger.Summarize();
+
+        var good = new TelemetryRecord(
+            Tool: "inspect", Op: null, WorkspaceId: "ws1", WorkspaceRoot: null,
+            DurationMs: 7, Outcome: "ok", ErrorKind: null,
+            ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
+            EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}");
+        ledger.Record(in good);
+
+        var summary = ledger.Summarize();
+        Assert.Equal(0, ledger.DroppedWrites);
+        Assert.Equal(2, summary.TotalCalls);
+    }
+
     [Fact]
     public void Summarize_AfterDispose_ReturnsEmptySummary_DoesNotThrow()
     {

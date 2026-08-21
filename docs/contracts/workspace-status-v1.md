@@ -111,6 +111,14 @@ The compact status line names the busiest tool and, when they differ, the slowes
 when the busiest tool is also the slowest; it reads `slowest=n/a` when no tool has reached the 5-call floor a
 p95 needs before it may be reported as the slowest.
 
+The line is omitted entirely only when the summary has no tool rows AND `dropped_writes` is `0`. When there are
+no tool rows but writes were dropped — what a ledger whose every write fails looks like — the line still
+renders, with the drop clause and no tool clauses:
+
+```
+telemetry: 7d  0 calls  dropped=6 since start
+```
+
 ## Eros CT fields
 
 Eros CT may depend on:

@@ -864,35 +864,42 @@ public static class WorkspaceRender
 
     private static string TelemetryLine(TelemetrySummary telemetry)
     {
-        if (telemetry.Tools.Count == 0)
+        // No tool rows AND no drops is a quiet workspace with a healthy ledger: say nothing. No tool rows WITH
+        // drops is what a ledger whose every write fails looks like, and suppressing the line there hides the
+        // one signal that telemetry is broken behind a blank space.
+        if (telemetry.Tools.Count == 0 && telemetry.DroppedWrites == 0)
             return string.Empty;
 
-        ToolStat busiest = TelemetryHighlights.Busiest(telemetry.Tools)!.Value;
-        ToolStat? slowest = TelemetryHighlights.Slowest(telemetry.Tools);
-        long errors = telemetry.Tools.Sum(static tool => tool.ErrorCount);
         var sb = new StringBuilder();
         sb.Append("telemetry: ");
         if (telemetry.WindowDays is { } windowDays)
             sb.Append(windowDays.ToString(CultureInfo.InvariantCulture)).Append("d  ");
         sb.Append(telemetry.TotalCalls.ToString(CultureInfo.InvariantCulture)).Append(" calls");
-        if (errors > 0)
-            sb.Append("  errors=").Append(errors.ToString(CultureInfo.InvariantCulture));
-        sb.Append("  busiest=").Append(busiest.Tool)
-          .Append(" p95=").Append(busiest.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms");
-        // The busiest tool is often the fastest one, so its p95 answers a different question than "what is
-        // slow here". Naming the slowest tool too costs one clause and stops the label being misread. An
-        // absent clause means the busiest tool IS the slowest; `n/a` means no tool has enough calls to say.
-        if (slowest is { } slow)
+
+        if (telemetry.Tools.Count > 0)
         {
-            if (!string.Equals(slow.Tool, busiest.Tool, StringComparison.Ordinal))
+            ToolStat busiest = TelemetryHighlights.Busiest(telemetry.Tools)!.Value;
+            ToolStat? slowest = TelemetryHighlights.Slowest(telemetry.Tools);
+            long errors = telemetry.Tools.Sum(static tool => tool.ErrorCount);
+            if (errors > 0)
+                sb.Append("  errors=").Append(errors.ToString(CultureInfo.InvariantCulture));
+            sb.Append("  busiest=").Append(busiest.Tool)
+              .Append(" p95=").Append(busiest.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms");
+            // The busiest tool is often the fastest one, so its p95 answers a different question than "what is
+            // slow here". Naming the slowest tool too costs one clause and stops the label being misread. An
+            // absent clause means the busiest tool IS the slowest; `n/a` means no tool has enough calls to say.
+            if (slowest is { } slow)
             {
-                sb.Append("  slowest=").Append(slow.Tool)
-                  .Append(" p95=").Append(slow.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms");
+                if (!string.Equals(slow.Tool, busiest.Tool, StringComparison.Ordinal))
+                {
+                    sb.Append("  slowest=").Append(slow.Tool)
+                      .Append(" p95=").Append(slow.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms");
+                }
             }
-        }
-        else
-        {
-            sb.Append("  slowest=n/a");
+            else
+            {
+                sb.Append("  slowest=n/a");
+            }
         }
 
         // DroppedWrites is this process's in-memory counter, so it spans the process, not the window this line

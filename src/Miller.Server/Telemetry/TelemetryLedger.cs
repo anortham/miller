@@ -88,6 +88,14 @@ public sealed class TelemetryLedger : IDisposable
     /// </summary>
     public long DroppedWrites => Interlocked.Read(ref _droppedWrites);
 
+    /// <summary>
+    /// Test-only seam: runs between the grouped read and the totals read of one <see cref="Summarize"/> call —
+    /// the exact point at which another Miller process sharing this <c>telemetry.db</c> can commit a row or
+    /// prune one. A test sets it to write from a SECOND connection and prove the read transaction holds one
+    /// snapshot across all the statements. Null in production, and never invoked on the disposed path.
+    /// </summary>
+    internal Action? InterleavedWriteForTest { get; set; }
+
     private TelemetryLedger(
         SqliteConnection connection, string dbPath, string? workspaceId, string? workspaceRoot, TimeProvider clock)
     {
@@ -342,6 +350,9 @@ public sealed class TelemetryLedger : IDisposable
     /// <c>workspace</c> status surfaces. Queries this ledger's OWN connection under <see cref="_gate"/> (the
     /// same lock as <see cref="Record"/>), so it sees every committed row with no second connection and no
     /// WAL-visibility question; admin calls are rare, so the brief lock-out of the write path is negligible.
+    /// Every statement runs inside ONE deferred read transaction, because the lock orders only THIS process and
+    /// the file is shared: without it a row another process commits mid-read shows up in some statements and
+    /// not others, and the parts of one summary stop agreeing.
     /// <para>
     /// Per-tool count/avg/max/error_count/sum(est_tokens) come from ONE <c>GROUP BY tool</c>. p95 is computed
     /// per tool by a separate ordered query (<c>ORDER BY duration_ms LIMIT 1 OFFSET floor((count-1)*0.95)</c>) —
@@ -393,6 +404,16 @@ public sealed class TelemetryLedger : IDisposable
                     .ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture)
                 : DBNull.Value;
 
+            // One read transaction over every statement below. `_gate` orders this process's own writes, but
+            // telemetry.db is SHARED by every Miller process on the machine, and one summary is many statements:
+            // the grouped read, one p95 read per tool, then the totals read. In WAL each statement outside a
+            // transaction takes its OWN snapshot, so another process's insert (or Prune's delete) landing between
+            // them yields a summary that contradicts itself — totals that disagree with the sum of the per-tool
+            // rows, or a p95 read over a different row set than the count it is attached to. BEGIN DEFERRED takes
+            // the read snapshot at the first read and holds it to the end, so every statement sees one database.
+            // Deferred, not immediate: this is a read, and it must not take the write lock other processes need.
+            using var read = _connection.BeginTransaction(deferred: true);
+
             // One GROUP BY for the cheap aggregates; p95 needs a per-tool ordered offset query (below).
             var stats = new List<ToolStat>();
             using (var group = _connection.CreateCommand())
@@ -428,6 +449,8 @@ public sealed class TelemetryLedger : IDisposable
                 }
             }
 
+            InterleavedWriteForTest?.Invoke();
+
             long totalCalls = 0;
             string? windowStart = null;
             string? windowEnd = null;
@@ -446,6 +469,10 @@ public sealed class TelemetryLedger : IDisposable
                     windowEnd = reader.IsDBNull(2) ? null : reader.GetString(2);
                 }
             }
+
+            // Nothing was written, so commit and rollback are equivalent here; commit ends the snapshot on the
+            // normal path rather than leaving it to the `using`. An exception still rolls it back on dispose.
+            read.Commit();
 
             return new TelemetrySummary(stats, totalCalls, windowStart, windowEnd, DroppedWrites)
             {

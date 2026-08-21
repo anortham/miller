@@ -261,6 +261,39 @@ public sealed class WorkspaceRenderTests
         Assert.Contains("dropped=4 since start", text, StringComparison.Ordinal);
     }
 
+    // Zero tool rows is exactly what a ledger whose every write fails looks like, and the line used to return
+    // "" on that count before it ever read the drop counter. That hid the one signal that telemetry is broken.
+    [Fact]
+    public void Status_Compact_TelemetryLine_ReportsDroppedWrites_WhenNoToolRowsSurvived()
+    {
+        var summary = new TelemetrySummary(
+            Array.Empty<ToolStat>(), TotalCalls: 0, WindowStartTs: null, WindowEndTs: null, DroppedWrites: 6)
+        {
+            WindowDays = 7,
+        };
+
+        string text = WorkspaceRender.Status(Facts(), summary, json: false);
+
+        Assert.Contains("telemetry: 7d  0 calls  dropped=6 since start", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("busiest=", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("slowest=", text, StringComparison.Ordinal);
+    }
+
+    // A quiet workspace with a healthy ledger has nothing to say, and a line saying "0 calls" would be noise.
+    [Fact]
+    public void Status_Compact_TelemetryLine_StaysAbsent_WhenThereAreNoRowsAndNoDrops()
+    {
+        var summary = new TelemetrySummary(
+            Array.Empty<ToolStat>(), TotalCalls: 0, WindowStartTs: null, WindowEndTs: null, DroppedWrites: 0)
+        {
+            WindowDays = 7,
+        };
+
+        string text = WorkspaceRender.Status(Facts(), summary, json: false);
+
+        Assert.DoesNotContain("telemetry:", text, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Status_Json_TelemetryObject_CarriesTheWindowDays()
     {
