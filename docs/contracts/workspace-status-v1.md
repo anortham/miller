@@ -98,7 +98,18 @@ continuous testing, launcher smokes, fleet inventory, and local readiness checks
 `window_days`: the rolling window in days the rows were summarized over, or `null` when the summary covers
 every retained row. The MCP `workspace` status surface summarizes a 7-day window so one bad day does not
 inflate the headline p95 for the whole 30-day retention; `miller workspace status --json` still emits an empty
-telemetry object. The field is additive; the rest of the object shape is unchanged.
+telemetry object. The field itself is additive, but two existing fields change meaning when it is non-null:
+
+- `window_start` and `window_end` are `MIN(ts)` / `MAX(ts)` over the SELECTED rows, so a non-null `window_days`
+  bounds them. On the MCP status surface `window_start` is the oldest row inside the 7-day window, not the
+  retention floor. When `window_days` is `null` they keep their old meaning: the oldest and newest retained row.
+- `dropped_writes` is NEVER windowed. It is the reading process's in-memory count of swallowed telemetry writes
+  since that process started, so it does not shrink when `window_days` does. The compact status line says
+  `dropped=<n> since start` for the same reason.
+
+The compact status line names the busiest tool and, when they differ, the slowest tool. `slowest=` is omitted
+when the busiest tool is also the slowest; it reads `slowest=n/a` when no tool has reached the 5-call floor a
+p95 needs before it may be reported as the slowest.
 
 ## Eros CT fields
 

@@ -208,8 +208,10 @@ public sealed class WorkspaceRenderTests
         Assert.DoesNotContain("top=", text, StringComparison.Ordinal);
     }
 
+    // No tool reaches the call floor and "the busiest tool is also the slowest" both used to render as a line
+    // with only `busiest=`, so the reader could not tell which one they were looking at. Say `n/a` for the first.
     [Fact]
-    public void Status_Compact_TelemetryLine_OmitsSlowest_WhenNoToolMeetsTheCallFloor()
+    public void Status_Compact_TelemetryLine_SaysSlowestIsUnknown_WhenNoToolMeetsTheCallFloor()
     {
         var summary = new TelemetrySummary(
             new[]
@@ -221,8 +223,7 @@ public sealed class WorkspaceRenderTests
 
         string text = WorkspaceRender.Status(Facts(), summary, json: false);
 
-        Assert.Contains("busiest=search p95=191ms", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("slowest=", text, StringComparison.Ordinal);
+        Assert.Contains("busiest=search p95=191ms  slowest=n/a", text, StringComparison.Ordinal);
         Assert.DoesNotContain("90000", text, StringComparison.Ordinal);
     }
 
@@ -245,6 +246,19 @@ public sealed class WorkspaceRenderTests
 
         Assert.Contains("telemetry: 7d  11 calls", windowed, StringComparison.Ordinal);
         Assert.Contains("telemetry: 11 calls", lifetime, StringComparison.Ordinal);
+    }
+
+    // DroppedWrites is a process-lifetime counter. Rendered bare inside a line labelled `7d` it reads as a
+    // windowed figure, which is the one number on the line that would still misstate its span.
+    [Fact]
+    public void Status_Compact_TelemetryLine_SaysDroppedWritesSpanTheProcess_NotTheWindow()
+    {
+        var summary = Telemetry with { WindowDays = 7, DroppedWrites = 4 };
+
+        string text = WorkspaceRender.Status(Facts(), summary, json: false);
+
+        Assert.Contains("telemetry: 7d  11 calls", text, StringComparison.Ordinal);
+        Assert.Contains("dropped=4 since start", text, StringComparison.Ordinal);
     }
 
     [Fact]

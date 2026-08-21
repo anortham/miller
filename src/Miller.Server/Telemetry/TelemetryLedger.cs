@@ -379,11 +379,15 @@ public sealed class TelemetryLedger : IDisposable
     {
         lock (_gate)
         {
+            // The window still has to be named on this path: a null WindowDays means "every retained row", which
+            // is a different claim than "the read could not run".
             if (_disposed)
-                return TelemetrySummary.Empty;
+                return TelemetrySummary.Empty with { WindowDays = windowDays };
 
-            // ts is ISO-8601 UTC text of a fixed width, so the window is a lexical lower bound (same comparison
-            // Prune uses). A null cutoff selects every retained row, keeping the unwindowed read unchanged.
+            // ts is ISO-8601 UTC text of a fixed width, so the window is a lexical lower bound. The TEXT FORMAT
+            // matches the one Prune compares against; the clock does not — Prune reads DateTime.UtcNow while this
+            // cutoff reads the injected _clock. A null cutoff selects every retained row, keeping the unwindowed
+            // read unchanged.
             object cutoff = windowDays is { } days
                 ? _clock.GetUtcNow().UtcDateTime.AddDays(-days)
                     .ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture)

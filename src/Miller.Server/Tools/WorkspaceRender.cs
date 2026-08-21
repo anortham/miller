@@ -877,14 +877,28 @@ public static class WorkspaceRender
         sb.Append("  busiest=").Append(busiest.Tool)
           .Append(" p95=").Append(busiest.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms");
         // The busiest tool is often the fastest one, so its p95 answers a different question than "what is
-        // slow here". Naming the slowest tool too costs one clause and stops the label being misread.
-        if (slowest is { } slow && !string.Equals(slow.Tool, busiest.Tool, StringComparison.Ordinal))
+        // slow here". Naming the slowest tool too costs one clause and stops the label being misread. An
+        // absent clause means the busiest tool IS the slowest; `n/a` means no tool has enough calls to say.
+        if (slowest is { } slow)
         {
-            sb.Append("  slowest=").Append(slow.Tool)
-              .Append(" p95=").Append(slow.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms");
+            if (!string.Equals(slow.Tool, busiest.Tool, StringComparison.Ordinal))
+            {
+                sb.Append("  slowest=").Append(slow.Tool)
+                  .Append(" p95=").Append(slow.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms");
+            }
         }
+        else
+        {
+            sb.Append("  slowest=n/a");
+        }
+
+        // DroppedWrites is this process's in-memory counter, so it spans the process, not the window this line
+        // names. Say so, or a reader takes it for a windowed figure.
         if (telemetry.DroppedWrites > 0)
-            sb.Append("  dropped=").Append(telemetry.DroppedWrites.ToString(CultureInfo.InvariantCulture));
+        {
+            sb.Append("  dropped=").Append(telemetry.DroppedWrites.ToString(CultureInfo.InvariantCulture))
+              .Append(" since start");
+        }
         return sb.ToString();
     }
 

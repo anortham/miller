@@ -404,6 +404,43 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.DoesNotContain("rebinding:", output, StringComparison.OrdinalIgnoreCase);
     }
 
+    // The only test that crosses the WorkspaceTool → ledger seam. Without it a revert to the lifetime
+    // Summarize() leaves every other telemetry-window test green while the status line silently reports a month.
+    [Fact]
+    public void Status_Compact_TelemetrySummarizesTheSevenDayWindow()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, ledger, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+        DateTime now = DateTime.UtcNow;
+        // 20 days old: inside the 30-day retention (so Prune is not a factor) and outside the 7-day window.
+        ledger.InsertRawForTest(Guid.NewGuid().ToString(), now.AddDays(-20), "aged-caller");
+        ledger.InsertRawForTest(Guid.NewGuid().ToString(), now, "search");
+
+        string output = tool.Workspace(operation: "status");
+
+        Assert.Contains("telemetry: 7d  1 calls", output, StringComparison.Ordinal);
+        Assert.Contains("busiest=search", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("aged-caller", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Json_TelemetryCarriesTheSevenDayWindow()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, ledger, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+        DateTime now = DateTime.UtcNow;
+        ledger.InsertRawForTest(Guid.NewGuid().ToString(), now.AddDays(-20), "aged-caller");
+        ledger.InsertRawForTest(Guid.NewGuid().ToString(), now, "search");
+
+        using var doc = JsonDocument.Parse(tool.Workspace(operation: "status", format: "json"));
+        JsonElement telemetry = doc.RootElement.GetProperty("telemetry");
+
+        Assert.Equal(7, telemetry.GetProperty("window_days").GetInt32());
+        Assert.Equal(1, telemetry.GetProperty("total_calls").GetInt64());
+        Assert.Equal("search", Assert.Single(telemetry.GetProperty("tools").EnumerateArray())
+            .GetProperty("tool").GetString());
+    }
+
     [Fact]
     public void Status_CurrentStoreFactsDoNotMaterializeTheHolderRepository()
     {

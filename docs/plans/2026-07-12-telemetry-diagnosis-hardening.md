@@ -66,6 +66,12 @@
 
 **Contract inputs:** Stable privacy-safe buckets must cover at least `no_match`, `ambiguous_match`, `stale_target`, `invalid_request`, `target_not_found`, `apply_failed`, and `unknown`. Successful and no-op edits do not emit a failure reason; expected resolution failures may retain their existing `empty` outcome while carrying a diagnostic bucket.
 
+> **Superseded 2026-08-21.** The `unknown` bucket was retired and replaced by two buckets that name the layer
+> that failed to classify: `unclassified_plan_error` (a planner error kind with no mapping) and
+> `unclassified_result` (an error result that reached the telemetry seam with no bucket). No source constant
+> emits `unknown` any more. Rows already written to `~/.miller/telemetry.db` keep the old value, so a replay or
+> analysis script built from the current vocabulary must still accept `unknown` for historical rows.
+
 **File ownership:** `src/Miller.Server/Tools/EditService.cs`, `src/Miller.Server/Tools/EditTool.cs`, `tests/Miller.Tests/Server/EditToolTests.cs`
 
 **Serialization required:** No

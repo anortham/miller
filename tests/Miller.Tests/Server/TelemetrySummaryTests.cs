@@ -341,6 +341,22 @@ public sealed class TelemetrySummaryTests : IDisposable
         Assert.Empty(summary.Tools);
         Assert.Equal(0, summary.TotalCalls);
     }
+
+    // A null WindowDays means "every retained row". The disposed path must not claim that about a windowed read,
+    // or the field added to stop an unlabelled figure reading as lifetime behaviour does exactly that.
+    [Fact]
+    public void SummarizeRecent_AfterDispose_StillNamesTheWindow()
+    {
+        var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
+        InsertRow("search", 1, "ok", 1, "2026-05-01T00:00:00.000Z");
+        ledger.Dispose();
+
+        TelemetrySummary summary = ledger.SummarizeRecent(7);
+
+        Assert.Empty(summary.Tools);
+        Assert.Equal(0, summary.TotalCalls);
+        Assert.Equal(7, summary.WindowDays);
+    }
 }
 
 /// <summary>
