@@ -626,12 +626,28 @@ public sealed class ContinuousTestDaemonHost
 
                 if (target.Queue is not null && target.Projects.Count > 0)
                 {
+                    // Select at the LIVE cursor the poller last observed, never at the daemon's
+                    // START key. Falling back to StartedAt made every explicit run after an index
+                    // advance select at the birth revision forever (defect D2): the store rightly
+                    // records stale-revision results as history-only, so the verdict never
+                    // converged and only a daemon restart (which reset StartedAt) recovered.
+                    CtFreshnessKey? selected = request.Freshness
+                        ?? target.LatestFreshness
+                        ?? target.StartedAt;
+                    if (selected is not { } freshness)
+                    {
+                        // No poll has landed yet, so no real key exists. The old
+                        // ("unspecified", 0) sentinel enqueued anyway, burning the whole suite to
+                        // store results at a key that can never match the live one - the
+                        // watermark-freshness design removes that sentinel everywhere. Refuse
+                        // honestly instead; the caller retries after the first poll lands.
+                        TryWriteAck(id, "no-live-key", CtDaemonCommandState.Rejected);
+                        continue;
+                    }
+
                     foreach (ContinuousTestProjectWorkItem item in ContinuousTestProjectInventory.MaterializeProjectWorkItems(
                                  target.Projects, target.WorkspaceRoot))
                     {
-                        CtFreshnessKey freshness = request.Freshness
-                            ?? target.StartedAt
-                            ?? new CtFreshnessKey("unspecified", 0);
                         target.Queue.EnqueueExplicit(new ContinuousTestDaemonChange(
                             item.Workspace,
                             freshness.Revision.ToString(CultureInfo.InvariantCulture),

@@ -397,6 +397,231 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Defect D2: the explicit-run handler fell back to <c>StartedAt</c>, so every
+    /// <c>tests run</c> after an index advance selected at the daemon's BIRTH revision. The store
+    /// rightly records stale-revision results as history-only, so the verdict never converged and
+    /// only a daemon restart recovered. An explicit run must select at the LATEST key the poller
+    /// observed. This is the PRIMARY context; the routed test below proves the shared path.
+    /// </summary>
+    [Fact]
+    public async Task An_explicit_run_selects_the_latest_observed_key_not_the_daemons_start_key()
+    {
+        Directory.CreateDirectory(MainRoot);
+        const string mainId = "ws:main";
+        string project = Path.Combine(MainRoot, "src", "App.Tests.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        File.WriteAllText(project, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(MainRoot));
+        var enqueueLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            new ContinuousTestImpactSelector(store, new FakeMillerFactSource
+            {
+                Current = new CtIndexCursor("gen-1", 27),
+            }),
+            new ContinuousTestCoordinator(new FakeContinuousTestProvider(), store),
+            lifecycleLog: enqueueLog.Enqueue);
+        var source = new ScriptedRevisionSource();
+        source.Observations.Enqueue(Observation(mainId, revision: 21));
+        source.Observations.Enqueue(Observation(mainId, revision: 27));
+        var options = new ContinuousTestDaemonHostOptions
+        {
+            Enabled = true,
+            AcquireLease = false,
+            WorkspaceId = mainId,
+            Store = store,
+            Queue = queue,
+            Poller = new ContinuousTestRevisionPoller(source),
+            Projects = [new ContinuousTestProject("proj:main", mainId, project, Framework: "xunit")],
+            Budget = CtExecutionBudget.ForMillerHome(Path.Combine(_dir, "budget-home")),
+            PollInterval = TimeSpan.FromMilliseconds(5),
+        };
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            options,
+            cts.Token);
+        try
+        {
+            // Two observations landed and a third pass began, so the host has stored 27 as the
+            // latest key before the command arrives.
+            await WaitForAsync(() => source.RefreshCount >= 3);
+
+            CtDaemonCommandRequest request = CtCommandChannel.WriteRequest(
+                MainRoot,
+                CtDaemonCommandKind.Run,
+                reason: "run",
+                freshness: null);
+            await WaitForAsync(() => CtCommandChannel.TryReadAck(MainRoot, request.CommandId) is not null);
+            await WaitForAsync(() => EnqueueLines(enqueueLog).Count > 0);
+
+            IReadOnlyList<string> enqueued = EnqueueLines(enqueueLog);
+            Assert.Contains(enqueued, line => line.Contains("revision=27", StringComparison.Ordinal));
+            Assert.DoesNotContain(enqueued, line => line.Contains("revision=21", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>Defect D2, routed shape: the same key selection serves an ADOPTED context.</summary>
+    [Fact]
+    public async Task A_routed_explicit_run_selects_the_worktrees_latest_observed_key()
+    {
+        BuildLinkedWorktree();
+        EnableMain();
+        const string wtId = "ws:wt";
+        string project = Path.Combine(WorktreeRoot, "src", "App.Tests.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        File.WriteAllText(project, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+        using var wtStore = new ContinuousTestStore(CtSchema.DbPathFor(WorktreeRoot));
+        var enqueueLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var wtQueue = new ContinuousTestDaemonQueue(
+            wtStore,
+            new ContinuousTestImpactSelector(wtStore, new FakeMillerFactSource
+            {
+                Current = new CtIndexCursor("gen-1", 27),
+            }),
+            new ContinuousTestCoordinator(new FakeContinuousTestProvider(), wtStore),
+            lifecycleLog: enqueueLog.Enqueue);
+        var source = new ScriptedRevisionSource();
+        source.Observations.Enqueue(Observation(wtId, revision: 21));
+        source.Observations.Enqueue(Observation(wtId, revision: 27));
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            DiscoverRegisteredRoots = () => [WorktreeRoot],
+            CreateContext = root => new ContinuousTestWorkspaceContext
+            {
+                WorkspaceRoot = root,
+                WorkspaceId = wtId,
+                Store = wtStore,
+                Queue = wtQueue,
+                Poller = new ContinuousTestRevisionPoller(source),
+                Projects = [new ContinuousTestProject("proj:wt", wtId, project, Framework: "xunit")],
+            },
+            ScanInterval = TimeSpan.Zero,
+        };
+        var options = new ContinuousTestDaemonHostOptions
+        {
+            Enabled = true,
+            AcquireLease = false,
+            Enqueuer = new RecordingEnqueuer(),
+            PollInterval = TimeSpan.FromMilliseconds(5),
+            WorktreeAdoption = adoption,
+            Budget = CtExecutionBudget.ForMillerHome(Path.Combine(_dir, "budget-home")),
+        };
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            options,
+            cts.Token);
+        try
+        {
+            await WaitForWorktreeStatusAsync(state: CtDaemonLifecycleState.Running);
+            await WaitForAsync(() => source.RefreshCount >= 3);
+
+            CtDaemonCommandRequest request = CtDaemonRouting.WriteRoutedRequest(
+                MainRoot,
+                CtDaemonCommandKind.Run,
+                reason: "run",
+                freshness: null,
+                targetWorkspaceRoot: WorktreeRoot);
+            await WaitForAsync(() => CtCommandChannel.TryReadAck(MainRoot, request.CommandId) is not null);
+            await WaitForAsync(() => EnqueueLines(enqueueLog).Count > 0);
+
+            IReadOnlyList<string> enqueued = EnqueueLines(enqueueLog);
+            Assert.Contains(enqueued, line => line.Contains("revision=27", StringComparison.Ordinal));
+            Assert.DoesNotContain(enqueued, line => line.Contains("revision=21", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>
+    /// The <c>("unspecified", 0)</c> sentinel tail is GONE (the watermark-freshness design removes
+    /// it everywhere): a run enqueued at a fabricated key can never produce committed-fresh
+    /// results, so it burned the whole suite to store history nobody can match. With no observed
+    /// key yet, the daemon refuses the run honestly and enqueues nothing.
+    /// </summary>
+    [Fact]
+    public async Task An_explicit_run_before_any_observed_key_is_rejected_and_enqueues_nothing()
+    {
+        Directory.CreateDirectory(MainRoot);
+        const string mainId = "ws:main";
+        string project = Path.Combine(MainRoot, "src", "App.Tests.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        File.WriteAllText(project, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(MainRoot));
+        var enqueueLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            new ContinuousTestImpactSelector(store, new FakeMillerFactSource()),
+            new ContinuousTestCoordinator(new FakeContinuousTestProvider(), store),
+            lifecycleLog: enqueueLog.Enqueue);
+        var options = new ContinuousTestDaemonHostOptions
+        {
+            Enabled = true,
+            AcquireLease = false,
+            WorkspaceId = mainId,
+            Store = store,
+            Queue = queue,
+
+            // No poller: no key has ever been observed and none ever will be.
+            Projects = [new ContinuousTestProject("proj:main", mainId, project, Framework: "xunit")],
+            Budget = CtExecutionBudget.ForMillerHome(Path.Combine(_dir, "budget-home")),
+            PollInterval = TimeSpan.FromMilliseconds(5),
+        };
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            options,
+            cts.Token);
+        try
+        {
+            CtDaemonCommandRequest request = CtCommandChannel.WriteRequest(
+                MainRoot,
+                CtDaemonCommandKind.Run,
+                reason: "run",
+                freshness: null);
+            await WaitForAsync(() => CtCommandChannel.TryReadAck(MainRoot, request.CommandId) is not null);
+
+            CtDaemonCommandAck? ack = CtCommandChannel.TryReadAck(MainRoot, request.CommandId);
+            Assert.Equal(CtDaemonCommandState.Rejected, ack?.State);
+            Assert.Equal("no-live-key", ack?.Reason);
+            Assert.False(run.IsCompleted, "a refused run ended the daemon loop");
+            Assert.Empty(EnqueueLines(enqueueLog));
+            Assert.False(File.Exists(CtSchema.DbPathFor(MainRoot)));
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    private static ContinuousTestRevisionObservation Observation(string workspaceId, long revision) =>
+        new(
+            workspaceId,
+            new CtFreshnessKey("gen-1", revision),
+            IndexFresh: true,
+            Status: "fresh",
+            ObservedAt: DateTimeOffset.UtcNow);
+
+    private static IReadOnlyList<string> EnqueueLines(IEnumerable<string> lifecycleLog) =>
+        lifecycleLog.Where(line => line.StartsWith("ct enqueue", StringComparison.Ordinal)).ToArray();
+
     [Fact]
     public async Task The_kill_switch_stops_the_daemon_before_any_discovery_or_filesystem_read()
     {
