@@ -104,7 +104,7 @@ public sealed class StoreFamilyResolver
                     throw new StoreBindingMismatchException(
                         "The family store has a published generation but is missing its CURRENT pointer.");
                 }
-                (viewId, replan) = PlanViewForAbsentCatalog(member, workspace);
+                (viewId, replan) = PlanViewForAbsentCatalog(workspace);
             }
             else if (IsPositiveFamilyReplacement(family, member, facts))
             {
@@ -118,7 +118,7 @@ public sealed class StoreFamilyResolver
             }
             else
             {
-                (viewId, replan) = PlanViewForAbsentCatalog(member, workspace);
+                (viewId, replan) = PlanViewForAbsentCatalog(workspace);
                 WorkspaceRootIdentity priorIdentity = new(
                     member.RootGitDir,
                     member.RootGitDirCreatedAtUtc);
@@ -205,19 +205,21 @@ public sealed class StoreFamilyResolver
     /// compose the SAME CT generation identity (family:view:generation) over a RESTARTED counter, and
     /// results stored under the destroyed store could replay as fresh once the counter caught up
     /// (defect D4, 2026-08-21 live validation — a false green with zero runs executed). A completed scan
-    /// on the workspace row is the publication witness, the same one ReconcileCatalog uses: with it, mint
-    /// a fresh view id and record the loss loudly (the vanished classification also bars the stale
-    /// legacy-artifact seed, so the lost view owes a full re-extract); without it, keep the planned view
-    /// id so a failed first import stays stable across retries. A wrong reading is safe in both
-    /// directions — minting for an unpublished view loses nothing, because a Planned binding grants no
-    /// reads and no data exists under the old id.
+    /// on the workspace row CANNOT separate the two causes: the witness is written separately from —
+    /// and after — the publication it witnesses, so a crash between the two leaves a recreate that
+    /// LOOKS like a failed first import (review finding F4). Reusing the recorded view id would be safe
+    /// only with PROOF that nothing was ever served under it, and no such proof exists — so ALWAYS
+    /// mint. Minting is safe in both directions: a fresh id only makes CT results stale, never falsely
+    /// fresh, and for a genuine first import no data exists under the old id to lose. The witness still
+    /// picks the honest replan reason, the same split ReconcileCatalog uses: with it the view is a
+    /// recorded LOSS (loud, and barred from the stale legacy-artifact seed); without it the recovery is
+    /// classified as a first import, which keeps the legacy-to-store seed.
     /// </summary>
-    private (string ViewId, StoreViewReplan Replan) PlanViewForAbsentCatalog(
-        StoreMemberRegistryRow member,
-        WorkspaceRegistryRow workspace) =>
-        workspace.LastRevision is null && workspace.LastScanAt is null
-            ? (member.ViewId, StoreViewReplan.None)
-            : (MintViewId(), StoreViewReplan.VanishedFromCatalog);
+    private (string ViewId, StoreViewReplan Replan) PlanViewForAbsentCatalog(WorkspaceRegistryRow workspace) =>
+        (MintViewId(),
+            workspace.LastRevision is null && workspace.LastScanAt is null
+                ? StoreViewReplan.NeverPublished
+                : StoreViewReplan.VanishedFromCatalog);
 
     private bool HasUsableRegisteredLineage(WorkspaceRootFacts facts)
     {

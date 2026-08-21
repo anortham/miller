@@ -39,7 +39,7 @@ public sealed class StoreFamilyResolverTests : IDisposable
     }
 
     [Fact]
-    public void PositiveLineageReplacementMintsANewFamilyButMissingEvidenceKeepsTheOldBinding()
+    public void PositiveLineageReplacementMintsANewFamilyButMissingEvidenceKeepsTheOldFamily()
     {
         Directory.CreateDirectory(_directory);
         using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
@@ -49,6 +49,8 @@ public sealed class StoreFamilyResolverTests : IDisposable
             Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
             Guid.Parse("22222222-2222-4222-8222-222222222222"),
             Guid.Parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+            Guid.Parse("33333333-3333-4333-8333-333333333333"),
+            Guid.Parse("cccccccc-cccc-4ccc-8ccc-cccccccccccc"),
         ]);
         var resolver = Resolver(registry, ids);
 
@@ -58,10 +60,10 @@ public sealed class StoreFamilyResolverTests : IDisposable
         StoreFamilyBinding replacement = resolver.ResolveOrCreate(
             Facts("ws-a", "root-a", "/other/.git", Utc(2), rootReplacementObserved: true));
 
+        // Missing evidence keeps the FAMILY binding. The view id is re-minted on every
+        // absent-catalog resolve (review finding F4), so only the family is asserted stable.
         Assert.Equal(original.FamilyId, unknown.FamilyId);
-        Assert.Equal(original.ViewId, unknown.ViewId);
         Assert.Equal(original.FamilyId, unobserved.FamilyId);
-        Assert.Equal(original.ViewId, unobserved.ViewId);
         Assert.NotEqual(original.FamilyId, replacement.FamilyId);
         Assert.NotEqual(original.ViewId, replacement.ViewId);
     }
@@ -345,6 +347,7 @@ public sealed class StoreFamilyResolverTests : IDisposable
         [
             Guid.Parse("11111111-1111-4111-8111-111111111111"),
             Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+            Guid.Parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
         ]);
         var resolver = Resolver(registry, ids);
         WorkspaceRootFacts facts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
@@ -353,10 +356,13 @@ public sealed class StoreFamilyResolverTests : IDisposable
 
         StoreFamilyBinding recovered = resolver.ResolveOrCreate(facts);
 
-        Assert.Equal(planned, recovered);
+        Assert.Equal(planned.FamilyId, recovered.FamilyId);
         Assert.Equal(StoreBindingState.Planned, recovered.State);
         Assert.Equal(StoreViewReplan.None, planned.Replan);
-        Assert.Equal(StoreViewReplan.None, recovered.Replan);
+        // Review finding F4: an absent catalog behind an existing member row always mints a fresh
+        // view id, because the completed-scan witness cannot prove the old id never served.
+        Assert.NotEqual(planned.ViewId, recovered.ViewId);
+        Assert.Equal(StoreViewReplan.NeverPublished, recovered.Replan);
     }
 
     /// <summary>
@@ -736,12 +742,15 @@ public sealed class StoreFamilyResolverTests : IDisposable
     }
 
     /// <summary>
-    /// The other side of the recreate split: with NO completed scan on record, an absent store root
-    /// is a first import whose earlier attempt failed. The planned view id must stay stable across
-    /// retries, and the recovery stays quiet.
+    /// The crash-window side of defect D4 (review finding F4): the completed-scan witness is written
+    /// SEPARATELY from the store publication, so a crash between the two leaves a recreated store
+    /// behind a member row with NO witness. The registry cannot prove the recorded view id never
+    /// served, so an absent catalog behind an existing member row ALWAYS mints a fresh view id — a
+    /// fresh id only makes CT results stale, never falsely fresh. Without the witness the recovery
+    /// is classified as a first import, which keeps the legacy-to-store seed.
     /// </summary>
     [Fact]
-    public void AnAbsentStoreRootForANeverScannedWorkspaceKeepsThePlannedViewId()
+    public void AnAbsentStoreRootForANeverScannedWorkspaceStillMintsAFreshViewId()
     {
         Directory.CreateDirectory(_directory);
         using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
@@ -749,6 +758,7 @@ public sealed class StoreFamilyResolverTests : IDisposable
         [
             Guid.Parse("11111111-1111-4111-8111-111111111111"),
             Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+            Guid.Parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
         ]);
         var resolver = Resolver(registry, ids);
         WorkspaceRootFacts facts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
@@ -756,9 +766,14 @@ public sealed class StoreFamilyResolverTests : IDisposable
 
         StoreFamilyBinding retried = resolver.ResolveOrCreate(facts);
 
-        Assert.Equal(planned.ViewId, retried.ViewId);
-        Assert.Equal(StoreViewReplan.None, retried.Replan);
+        Assert.NotEqual(planned.ViewId, retried.ViewId);
+        Assert.Equal(planned.FamilyId, retried.FamilyId);
+        Assert.Equal(StoreViewReplan.NeverPublished, retried.Replan);
         Assert.Equal(StoreBindingState.Planned, retried.State);
+        Assert.Equal(retried.ViewId, registry.GetStoreMember("ws-a")?.ViewId);
+        StoreWorkspacePointerDocument pointer = Assert.IsType<StoreWorkspacePointerDocument>(
+            StoreWorkspacePointer.Read(facts.WorkspaceRoot));
+        Assert.Equal(retried.ViewId, pointer.ViewId);
     }
 
     public void Dispose()
