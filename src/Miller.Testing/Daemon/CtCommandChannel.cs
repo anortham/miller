@@ -122,13 +122,17 @@ public static class CtCommandChannel
         TimeSpan exit = exitWait ?? DefaultExitWait;
         CtDaemonCommandRequest request = WriteRequest(
             workspaceRoot, CtDaemonCommandKind.Stop, "stop", freshness: null);
+        // Both status writes here describe a root this command is tearing down, so neither may
+        // re-mint a control plane that has already gone. Neither call is guarded by a try, which is
+        // the second reason the replace-only writer must treat an absent destination as success.
         CtDaemonLease.WriteStatus(
             workspaceRoot,
             new CtDaemonStatusRecord(
                 CtDaemonLifecycleState.Paused,
                 "stop requested",
                 live.Identity,
-                DateTimeOffset.UtcNow));
+                DateTimeOffset.UtcNow),
+            CtDaemonWriteMode.ReplaceExistingOnly);
 
         WaitForAck(workspaceRoot, request.CommandId, graceful);
         WaitUntilDead(live.Identity, graceful);
@@ -143,7 +147,8 @@ public static class CtCommandChannel
                 CtDaemonLifecycleState.Stopped,
                 gone ? "stopped" : "stop failed",
                 live.Identity,
-                DateTimeOffset.UtcNow));
+                DateTimeOffset.UtcNow),
+            CtDaemonWriteMode.ReplaceExistingOnly);
         return gone
             ? new CtDaemonStopResult(CtDaemonStopStatus.Stopped, "stopped")
             : new CtDaemonStopResult(CtDaemonStopStatus.Failed, "process still live");

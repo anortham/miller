@@ -408,7 +408,22 @@ scripts/test.ps1 all
   `family daemon at <root>`); worktree `stop` detaches that worktree only (`detached`, never a daemon kill);
   routed `run` reaches the worktree's own queue and ct.db. Explicit start only:
   `miller tests serve`, the dashboard, or MCP `tests operation=start`. Status reads never create `ct.db`,
-  never create `.miller/ct/`, and never start the daemon. On start the daemon is status-only: it reports
+  never create `.miller/ct/`, and never start the daemon. **A record about a root the process is LEAVING
+  may only REPLACE an existing file — never create it, and never create its directory.** An attach record
+  creates the adopted worktree's control plane; a detach/stop record, a released lease, and a CT log line
+  do not (`CtDaemonWriteMode.ReplaceExistingOnly`). Why: the detach write recreated
+  `<worktree>/.miller/ct/` under a root that had just been removed, which left the worktree
+  untracked-dirty and defeated `git worktree remove` twice (2026-08-21). An attach record that fails to
+  land is RETRIED on later scan passes and the context is marked published only after the write returns:
+  the record names the serving daemon and status probes that identity, so one lost write left a live
+  family daemon reading as `daemon gone` from that worktree, permanently.
+  **Daemon build awareness.** The lease records `miller_version` and `tests status` reports the comparison
+  (`daemon.version_match`, `daemon.version_mismatch`); an explicit start from a different build STOPS the
+  old daemon and replaces it (`status: "replaced"`). Sameness is the whole build string, so one build
+  across an agent swarm never contends; direction is numeric `major.minor.patch`, because `1.9.0` sorts
+  above `1.13.0` as text. A newer daemon is never replaced by an older build; an unorderable pair is left
+  alone. Decision core: [`CtDaemonVersion`](src/Miller.Testing/Daemon/CtDaemonVersion.cs).
+  On start the daemon is status-only: it reports
   staleness but executes nothing until a new change or an explicit `run`. A test process that goes SILENT
   for 10 minutes is treated as wedged: Miller kills its process tree and FAILS the run. The bound is on
   silence, not total duration, so a slow suite survives and a wedged one does not (`MILLER_CT_STALL_TIMEOUT`

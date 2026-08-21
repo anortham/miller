@@ -221,7 +221,7 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
             await WaitForWorktreeStatusAsync(state: CtDaemonLifecycleState.Running);
 
             Directory.Delete(WorktreeRoot, recursive: true);
-            await WaitForAsync(() => disposed.Disposed);
+            await WaitForAsync(() => disposed.Disposed, "the detached context to be disposed");
 
             Assert.True(disposed.Disposed, "the context of the missing root was not disposed");
             Assert.False(run.IsCompleted, "a missing worktree root ended the daemon loop");
@@ -312,7 +312,9 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
                 freshness: new CtFreshnessKey("gen-1", 2),
                 targetWorkspaceRoot: WorktreeRoot);
 
-            await WaitForAsync(() => wtStore.ListContinuousTestStatuses(wtId).Count > 0);
+            await WaitForAsync(
+                () => wtStore.ListContinuousTestStatuses(wtId).Count > 0,
+                "the routed run to land a status in the worktree store");
 
             // The run landed in the WORKTREE's ct.db under the worktree's id...
             Assert.NotEmpty(wtStore.ListContinuousTestStatuses(wtId));
@@ -488,7 +490,7 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
             await WaitForWorktreeStatusAsync(state: CtDaemonLifecycleState.Running);
 
             Volatile.Write(ref registered, false);
-            await WaitForAsync(() => disposed.Disposed);
+            await WaitForAsync(() => disposed.Disposed, "the detached context to be disposed");
 
             Assert.True(disposed.Disposed, "the unregistered worktree stayed adopted");
             Assert.False(run.IsCompleted, "an unregistered worktree ended the daemon loop");
@@ -696,15 +698,17 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
         {
             // Two observations landed and a third pass began, so the host has stored 27 as the
             // latest key before the command arrives.
-            await WaitForAsync(() => source.RefreshCount >= 3);
+            await WaitForAsync(() => source.RefreshCount >= 3, "the source to refresh three times");
 
             CtDaemonCommandRequest request = CtCommandChannel.WriteRequest(
                 MainRoot,
                 CtDaemonCommandKind.Run,
                 reason: "run",
                 freshness: null);
-            await WaitForAsync(() => CtCommandChannel.TryReadAck(MainRoot, request.CommandId) is not null);
-            await WaitForAsync(() => EnqueueLines(enqueueLog).Count > 0);
+            await WaitForAsync(
+                () => CtCommandChannel.TryReadAck(MainRoot, request.CommandId) is not null,
+                "the routed request to be acknowledged");
+            await WaitForAsync(() => EnqueueLines(enqueueLog).Count > 0, "an enqueue to be logged");
 
             IReadOnlyList<string> enqueued = EnqueueLines(enqueueLog);
             Assert.Contains(enqueued, line => line.Contains("revision=27", StringComparison.Ordinal));
@@ -773,7 +777,7 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
         try
         {
             await WaitForWorktreeStatusAsync(state: CtDaemonLifecycleState.Running);
-            await WaitForAsync(() => source.RefreshCount >= 3);
+            await WaitForAsync(() => source.RefreshCount >= 3, "the source to refresh three times");
 
             CtDaemonCommandRequest request = CtDaemonRouting.WriteRoutedRequest(
                 MainRoot,
@@ -781,8 +785,10 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
                 reason: "run",
                 freshness: null,
                 targetWorkspaceRoot: WorktreeRoot);
-            await WaitForAsync(() => CtCommandChannel.TryReadAck(MainRoot, request.CommandId) is not null);
-            await WaitForAsync(() => EnqueueLines(enqueueLog).Count > 0);
+            await WaitForAsync(
+                () => CtCommandChannel.TryReadAck(MainRoot, request.CommandId) is not null,
+                "the routed request to be acknowledged");
+            await WaitForAsync(() => EnqueueLines(enqueueLog).Count > 0, "an enqueue to be logged");
 
             IReadOnlyList<string> enqueued = EnqueueLines(enqueueLog);
             Assert.Contains(enqueued, line => line.Contains("revision=27", StringComparison.Ordinal));
@@ -843,7 +849,9 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
                 CtDaemonCommandKind.Run,
                 reason: "run",
                 freshness: null);
-            await WaitForAsync(() => CtCommandChannel.TryReadAck(MainRoot, request.CommandId) is not null);
+            await WaitForAsync(
+                () => CtCommandChannel.TryReadAck(MainRoot, request.CommandId) is not null,
+                "the routed request to be acknowledged");
 
             CtDaemonCommandAck? ack = CtCommandChannel.TryReadAck(MainRoot, request.CommandId);
             Assert.Equal(CtDaemonCommandState.Rejected, ack?.State);
@@ -903,37 +911,425 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(WorktreeRoot, ".miller")));
     }
 
-    private ContinuousTestDaemonHostOptions HostOptions(ContinuousTestWorktreeAdoptionOptions adoption) =>
+    /// <summary>
+    /// A lost status write used to be remembered as published, so the record on disk never caught up.
+    /// The daemon marked the record published BEFORE it tried to write, the attach loop skips a root
+    /// already adopted, and nothing else writes that file — so one failed write was permanent.
+    ///
+    /// <para>What that costs: the record names the daemon that serves the worktree, and a one-shot
+    /// <c>tests status</c> probes that identity for liveness. A worktree left holding a DEAD
+    /// predecessor daemon's record therefore reports "daemon gone" while a live family daemon is
+    /// serving it.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_failed_adopted_status_write_is_retried_and_the_landed_record_names_the_live_daemon()
+    {
+        BuildLinkedWorktree();
+        EnableMain();
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            DiscoverRegisteredRoots = () => [WorktreeRoot],
+            CreateContext = root => new ContinuousTestWorkspaceContext
+            {
+                WorkspaceRoot = root,
+                WorkspaceId = "ws:wt",
+            },
+            ScanInterval = TimeSpan.Zero,
+        };
+
+        int calls = 0;
+        bool Writer(string root, CtDaemonStatusRecord record, CtDaemonWriteMode mode)
+        {
+            // The first three attempts are lost, exactly as a sharing violation loses them.
+            if (Interlocked.Increment(ref calls) <= 3)
+                return false;
+            CtDaemonLease.WriteStatus(root, record, mode);
+            return true;
+        }
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            HostOptions(adoption, acquireLease: true, adoptedStatusWriter: Writer),
+            cts.Token);
+        try
+        {
+            CtDaemonStatusRecord record = await WaitForWorktreeStatusAsync(
+                state: CtDaemonLifecycleState.Running);
+
+            // The identity, not just the state: an honest stale record from a dead predecessor also
+            // says Running, and that one must still read as "daemon gone".
+            Assert.Equal(CtDaemonLease.CurrentIdentity(), record.Identity);
+            Assert.Contains(Path.GetFullPath(MainRoot), record.Reason, StringComparison.Ordinal);
+            Assert.Equal(4, Volatile.Read(ref calls));
+
+            // Once the record has landed the dedupe guard suppresses every rewrite, so the daemon
+            // does not republish an identical record on every scan pass.
+            await WaitPassesAsync(5);
+            Assert.Equal(4, Volatile.Read(ref calls));
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>
+    /// The retry is bounded. An unwritable root must cost a minute of attempts, not a spin for the
+    /// life of the daemon — each attempt blocks the loop thread inside the write's own retry budget.
+    /// </summary>
+    [Fact]
+    public async Task A_permanently_failing_adopted_status_write_stops_at_the_attempt_cap()
+    {
+        BuildLinkedWorktree();
+        EnableMain();
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            DiscoverRegisteredRoots = () => [WorktreeRoot],
+            CreateContext = root => new ContinuousTestWorkspaceContext
+            {
+                WorkspaceRoot = root,
+                WorkspaceId = "ws:wt",
+            },
+            ScanInterval = TimeSpan.Zero,
+        };
+
+        int calls = 0;
+        bool Writer(string root, CtDaemonStatusRecord record, CtDaemonWriteMode mode)
+        {
+            Interlocked.Increment(ref calls);
+            return false;
+        }
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            HostOptions(adoption, adoptedStatusWriter: Writer),
+            cts.Token);
+        ContinuousTestDaemonSnapshot snapshot;
+        try
+        {
+            // One attach attempt plus the twelve retries the cap allows.
+            await WaitForAsync(
+                () => Volatile.Read(ref calls) >= 13,
+                "the adopted status write to reach its attempt cap");
+            await WaitPassesAsync(10);
+            Assert.Equal(13, Volatile.Read(ref calls));
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            snapshot = await run;
+        }
+
+        Assert.Equal(CtDaemonLifecycleState.Stopped, snapshot.State);
+    }
+
+    /// <summary>
+    /// A detach record says nothing serves this root any more. Writing it used to CREATE
+    /// <c>&lt;worktree&gt;/.miller/ct/</c>, so the daemon re-minted the tree it was detaching from —
+    /// which defeated <c>git worktree remove</c> twice on 2026-08-21, because the recreated directory
+    /// left the worktree untracked-dirty and git refused.
+    /// </summary>
+    [Fact]
+    public async Task A_scan_detach_never_recreates_a_control_plane_the_worktree_no_longer_has()
+    {
+        BuildLinkedWorktree();
+        EnableMain();
+        var disposed = new DisposeFlag();
+        var registered = new List<string> { WorktreeRoot };
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            DiscoverRegisteredRoots = () =>
+            {
+                lock (registered)
+                    return registered.ToArray();
+            },
+            CreateContext = root => new ContinuousTestWorkspaceContext
+            {
+                WorkspaceRoot = root,
+                WorkspaceId = "ws:wt",
+                Owned = disposed,
+            },
+            ScanInterval = TimeSpan.Zero,
+        };
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            HostOptions(adoption),
+            cts.Token);
+        try
+        {
+            // The attach record proves the control plane existed before the test removed it.
+            await WaitForWorktreeStatusAsync(state: CtDaemonLifecycleState.Running);
+
+            // Stand in for `git worktree remove`, which deletes the tree the daemon still holds a
+            // context for. The worktree directory itself stays, so the root check cannot mask the bug.
+            Directory.Delete(Path.Combine(WorktreeRoot, ".miller"), recursive: true);
+            lock (registered)
+                registered.Clear();
+
+            await WaitForAsync(() => disposed.Disposed, "the worktree context to be detached");
+            await WaitPassesAsync(5);
+
+            Assert.True(Directory.Exists(WorktreeRoot), "the test deleted the control plane, not the worktree");
+            Assert.False(
+                Directory.Exists(Path.Combine(WorktreeRoot, ".miller")),
+                "the detach recreated the control plane it was tearing down");
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>
+    /// The second caller of the same detach write. This path needs no race and no
+    /// <c>git worktree remove</c> — a routed <c>tests stop</c> reaches it directly.
+    /// </summary>
+    [Fact]
+    public async Task A_routed_stop_never_recreates_a_control_plane_the_worktree_no_longer_has()
+    {
+        BuildLinkedWorktree();
+        EnableMain();
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            DiscoverRegisteredRoots = () => [WorktreeRoot],
+            CreateContext = root => new ContinuousTestWorkspaceContext
+            {
+                WorkspaceRoot = root,
+                WorkspaceId = "ws:wt",
+            },
+            ScanInterval = TimeSpan.Zero,
+        };
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            HostOptions(adoption),
+            cts.Token);
+        try
+        {
+            await WaitForWorktreeStatusAsync(state: CtDaemonLifecycleState.Running);
+            Directory.Delete(Path.Combine(WorktreeRoot, ".miller"), recursive: true);
+
+            CtDaemonCommandAck? ack = await Task.Run(() => CtDaemonRouting.RequestDetach(
+                MainRoot,
+                WorktreeRoot,
+                ackTimeout: TimeSpan.FromSeconds(5)));
+
+            Assert.Equal("detached", ack?.Reason);
+            Assert.False(
+                Directory.Exists(Path.Combine(WorktreeRoot, ".miller")),
+                "the routed stop recreated the control plane it was tearing down");
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>
+    /// The retry writes an ATTACH record, and an attach record may CREATE the control plane. So the
+    /// retry must run AFTER the detach pass, never before it: a retry that fires on the pass that was
+    /// about to drop the root re-mints the very tree the removal deleted, which is the resurrect the
+    /// replace-only mode exists to stop — reintroduced through the repair path.
+    ///
+    /// <para>The failing write is the synchronization point: the worktree is removed from disk and
+    /// from the registry inside the failed attempt, so the next pass runs the exact race.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_owed_attach_record_is_not_retried_onto_a_worktree_that_has_been_removed()
+    {
+        BuildLinkedWorktree();
+        EnableMain();
+        var disposed = new DisposeFlag();
+        var registered = new List<string> { WorktreeRoot };
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            DiscoverRegisteredRoots = () =>
+            {
+                lock (registered)
+                    return registered.ToArray();
+            },
+            CreateContext = root => new ContinuousTestWorkspaceContext
+            {
+                WorkspaceRoot = root,
+                WorkspaceId = "ws:wt",
+                Owned = disposed,
+            },
+            ScanInterval = TimeSpan.Zero,
+        };
+
+        int calls = 0;
+        bool Writer(string root, CtDaemonStatusRecord record, CtDaemonWriteMode mode)
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                // The worktree leaves the registry DURING the attempt that fails, so a record is owed
+                // for a root that no longer qualifies. Every later attempt writes for real, which is
+                // what makes a mis-ordered retry visible: it would create the control plane here.
+                lock (registered)
+                    registered.Clear();
+                return false;
+            }
+
+            CtDaemonLease.WriteStatus(root, record, mode);
+            return true;
+        }
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            HostOptions(adoption, adoptedStatusWriter: Writer),
+            cts.Token);
+        try
+        {
+            await WaitForAsync(() => disposed.Disposed, "the removed worktree to be detached");
+            await WaitPassesAsync(10);
+
+            Assert.True(Directory.Exists(WorktreeRoot), "the test deleted the control plane, not the worktree");
+            Assert.False(
+                Directory.Exists(Path.Combine(WorktreeRoot, ".miller")),
+                "the owed attach record was retried onto a removed worktree and recreated its control plane");
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>
+    /// A detach record is un-retryable by construction: the context leaves <c>_adopted</c> before the
+    /// write, so no later pass can reach it. A lost detach write therefore used to leave the worktree
+    /// holding an <c>adopted by …</c> record naming a daemon that is still ALIVE — which the liveness
+    /// probe cannot contradict, so status reported a running daemon for a worktree nothing watches.
+    ///
+    /// <para>Removing the stale record is the honest repair: an absent record reads as stopped, which
+    /// is what a detached worktree is.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_detach_record_that_cannot_be_written_removes_the_stale_one_instead()
+    {
+        BuildLinkedWorktree();
+        EnableMain();
+        var disposed = new DisposeFlag();
+        var registered = new List<string> { WorktreeRoot };
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            DiscoverRegisteredRoots = () =>
+            {
+                lock (registered)
+                    return registered.ToArray();
+            },
+            CreateContext = root => new ContinuousTestWorkspaceContext
+            {
+                WorkspaceRoot = root,
+                WorkspaceId = "ws:wt",
+                Owned = disposed,
+            },
+            ScanInterval = TimeSpan.Zero,
+        };
+
+        // The attach record lands for real; only the detach write is lost.
+        bool Writer(string root, CtDaemonStatusRecord record, CtDaemonWriteMode mode)
+        {
+            if (record.State != CtDaemonLifecycleState.Running)
+                return false;
+            CtDaemonLease.WriteStatus(root, record, mode);
+            return true;
+        }
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            HostOptions(adoption, adoptedStatusWriter: Writer),
+            cts.Token);
+        try
+        {
+            await WaitForWorktreeStatusAsync(state: CtDaemonLifecycleState.Running);
+            lock (registered)
+                registered.Clear();
+
+            await WaitForAsync(() => disposed.Disposed, "the worktree context to be detached");
+            await WaitForAsync(
+                () => CtDaemonLease.TryReadStatus(WorktreeRoot) is null,
+                "the stale adopted record to be removed");
+
+            // An absent record is the honest "stopped", and the read must not create anything.
+            Assert.Equal(
+                CtDaemonLifecycleState.Stopped,
+                ContinuousTestDaemonHost.ReadLiveStatus(WorktreeRoot).State);
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    private ContinuousTestDaemonHostOptions HostOptions(
+        ContinuousTestWorktreeAdoptionOptions adoption,
+        bool acquireLease = false,
+        Func<string, CtDaemonStatusRecord, CtDaemonWriteMode, bool>? adoptedStatusWriter = null) =>
         new()
         {
             Enabled = true,
-            AcquireLease = false,
+            AcquireLease = acquireLease,
             Enqueuer = new RecordingEnqueuer(),
             PollInterval = TimeSpan.FromMilliseconds(5),
             WorktreeAdoption = adoption,
+            AdoptedStatusWriter = adoptedStatusWriter,
         };
+
+    /// <summary>
+    /// The cap on a wait for something that MUST happen. It is wall-clock, not a count of attempts:
+    /// 400 attempts of <c>Task.Delay(10)</c> is four seconds only on an idle thread pool, and under the
+    /// full suite's parallelism each delay stretches, so the real bound moved with the load.
+    ///
+    /// <para>That is how <c>A_routed_run_reaches_only_the_worktrees_own_store</c> went red in the suite
+    /// while passing alone in two seconds (observed 2026-08-21, with a CT daemon running alongside).
+    /// These waits end the moment their condition holds, so a generous cap costs nothing when healthy.</para>
+    /// </summary>
+    private static readonly TimeSpan PositiveWait = TimeSpan.FromSeconds(30);
 
     private async Task<CtDaemonStatusRecord> WaitForWorktreeStatusAsync(CtDaemonLifecycleState state)
     {
-        for (int attempt = 0; attempt < 400; attempt++)
+        DateTime deadline = DateTime.UtcNow + PositiveWait;
+        do
         {
             CtDaemonStatusRecord? record = CtDaemonLease.TryReadStatus(WorktreeRoot);
             if (record is not null && record.State == state)
                 return record;
             await Task.Delay(10, TestContext.Current.CancellationToken);
         }
+        while (DateTime.UtcNow < deadline);
 
         throw new TimeoutException($"the worktree status record never reached state {state}");
     }
 
-    private static async Task WaitForAsync(Func<bool> predicate)
+    /// <summary>
+    /// Throws when the condition never holds. It used to return quietly, which turned every timeout into
+    /// whichever assertion ran next — a routed run that never landed reported "Assert.NotEmpty() Failure:
+    /// Collection was empty", naming the symptom instead of the wait that gave up.
+    /// </summary>
+    private static async Task WaitForAsync(Func<bool> predicate, string what)
     {
-        for (int attempt = 0; attempt < 400; attempt++)
+        DateTime deadline = DateTime.UtcNow + PositiveWait;
+        do
         {
             if (predicate())
                 return;
             await Task.Delay(10, TestContext.Current.CancellationToken);
         }
+        while (DateTime.UtcNow < deadline);
+
+        throw new TimeoutException($"timed out after {PositiveWait.TotalSeconds:0}s waiting for {what}");
     }
 
     /// <summary>A handful of poll intervals, so "nothing happened" had every chance to happen.</summary>

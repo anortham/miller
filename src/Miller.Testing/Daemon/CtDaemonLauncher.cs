@@ -9,6 +9,13 @@ public enum CtDaemonSpawnStatus
 {
     Started,
     AlreadyRunning,
+
+    /// <summary>
+    /// A live daemon on a different build was stopped and this build started in its place. A third
+    /// outcome on purpose: a caller must not read it as a fresh start, and must not read it as
+    /// nothing-happened.
+    /// </summary>
+    Replaced,
     Failed,
     Refused,
 }
@@ -87,24 +94,68 @@ public static class CtDaemonLauncher
         throw new InvalidOperationException("Cannot resolve the current executable for the CT daemon.");
     }
 
+    /// <summary>
+    /// Starts the daemon, or reports why it did not.
+    ///
+    /// <para><paramref name="ownVersion"/> turns on the version check. Left null, a live daemon always
+    /// answers <see cref="CtDaemonSpawnStatus.AlreadyRunning"/> — the behaviour every caller had before
+    /// the check existed. Supplied, a live daemon running a build this one can prove is older, or the
+    /// same release from a different commit, is STOPPED and replaced: an explicit start is the user
+    /// asking for this binary, and until now an upgraded Miller answered exit 0 and left the old daemon
+    /// watching the tree with old code. A NEWER daemon is never replaced by an older build, and an
+    /// unorderable pair is left alone.</para>
+    ///
+    /// <para><paramref name="stopDaemon"/> is the seam for that stop. A test holding a real lease holds
+    /// it as its OWN process, so the real stop would kill the test run.</para>
+    /// </summary>
     public static CtDaemonSpawnResult SpawnDetached(
         string workspaceRoot,
-        Func<ProcessStartInfo, Process?>? startProcess = null)
+        Func<ProcessStartInfo, Process?>? startProcess = null,
+        string? ownVersion = null,
+        Func<string, CtDaemonStopResult>? stopDaemon = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         RejectSensitiveRoot(workspaceRoot);
 
-        if (CtDaemonLease.TryReadLive(workspaceRoot) is { } live)
+        string root = Path.GetFullPath(workspaceRoot);
+        string? replacedVersion = null;
+        if (CtDaemonLease.TryReadLive(root) is { } live)
         {
-            return new CtDaemonSpawnResult(
-                CtDaemonSpawnStatus.AlreadyRunning,
-                live.Identity.Pid,
-                Executable: null,
-                "daemon already running");
+            if (string.IsNullOrWhiteSpace(ownVersion))
+            {
+                return new CtDaemonSpawnResult(
+                    CtDaemonSpawnStatus.AlreadyRunning,
+                    live.Identity.Pid,
+                    Executable: null,
+                    "daemon already running");
+            }
+
+            CtDaemonVersionVerdict verdict = CtDaemonVersion.Evaluate(ownVersion, live.MillerVersion);
+            if (!verdict.MayReplace)
+            {
+                return new CtDaemonSpawnResult(
+                    CtDaemonSpawnStatus.AlreadyRunning,
+                    live.Identity.Pid,
+                    Executable: null,
+                    verdict.Match == CtDaemonVersionMatch.Same
+                        ? "daemon already running"
+                        : $"daemon already running; {verdict.Reason}");
+            }
+
+            CtDaemonStopResult stopped = (stopDaemon ?? (r => CtCommandChannel.Stop(r)))(root);
+            if (stopped.Status == CtDaemonStopStatus.Failed)
+            {
+                return new CtDaemonSpawnResult(
+                    CtDaemonSpawnStatus.Failed,
+                    live.Identity.Pid,
+                    Executable: null,
+                    $"cannot replace the daemon: {stopped.Reason}");
+            }
+
+            replacedVersion = live.MillerVersion;
         }
 
         string executable = ResolveCurrentExecutable();
-        string root = Path.GetFullPath(workspaceRoot);
         (string stdoutPath, string stderrPath) = PrepareDaemonLogPaths(root);
         ProcessStartInfo startInfo = BuildStartInfo(executable, root, stdoutPath, stderrPath);
         Func<ProcessStartInfo, Process?> starter = startProcess ?? Process.Start;
@@ -136,7 +187,13 @@ public static class CtDaemonLauncher
 
         ReleaseDaemonStandardInput(process);
         int? pid = TryReadProcessId(process);
-        return new CtDaemonSpawnResult(CtDaemonSpawnStatus.Started, pid, executable, "started");
+        return replacedVersion is null
+            ? new CtDaemonSpawnResult(CtDaemonSpawnStatus.Started, pid, executable, "started")
+            : new CtDaemonSpawnResult(
+                CtDaemonSpawnStatus.Replaced,
+                pid,
+                executable,
+                $"replaced the daemon on {replacedVersion}");
     }
 
     internal static void RejectSensitiveRoot(string workspaceRoot)

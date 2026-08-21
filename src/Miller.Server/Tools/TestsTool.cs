@@ -192,7 +192,7 @@ public sealed class TestsTool
         return (row.CanonicalRoot, row.WorkspaceId);
     }
 
-    private static string? StatusHint(TestsStatusResult result)
+    internal static string? StatusHint(TestsStatusResult result)
     {
         if (result.KillSwitchOff)
             return null;
@@ -200,6 +200,15 @@ public sealed class TestsTool
             return NextStepHint.Render("tests operation=enable", "opt in to continuous testing");
         if (result.DaemonState == CtDaemonLifecycleState.Stopped)
             return NextStepHint.Render("tests operation=start", "start the daemon");
+
+        // A running daemon on an OLDER release is watching the tree with old code, and start is what
+        // replaces it. Gated on the one verdict that proves a direction, NOT on MayReplace: a
+        // build_differs pair (same release, two commits — two worktrees of this repo) is symmetric,
+        // so each side would read "replace the older daemon" about the other and follow it, and the
+        // takeover kills every suite in flight. Miller must never nudge both sides of a tie.
+        // build_differs stays fully visible in `version_mismatch`, the compact line, and the JSON.
+        if (result.DaemonVersion is { Match: CtDaemonVersionMatch.DaemonOlder })
+            return NextStepHint.Render("tests operation=start", "replace the older daemon");
         if (result.Verdict == ContinuousTestVerdict.Red)
             return NextStepHint.Render("tests operation=failures", "inspect red cases");
         return NextStepHint.Render("tests operation=failures", "inspect recent results");

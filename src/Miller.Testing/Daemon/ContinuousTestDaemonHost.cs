@@ -59,6 +59,19 @@ public sealed class ContinuousTestDaemonHostOptions
     /// </summary>
     public Action<CtDaemonLifecycleState, string>? StatusWriter { get; init; }
 
+    /// <summary>
+    /// Test seam for the PER-WORKTREE status write, which <see cref="StatusWriter"/> cannot serve
+    /// because that seam carries no root and every adopted worktree publishes into its own
+    /// <c>.miller/ct/</c>. Returns whether the record landed. Production leaves this null and the
+    /// write goes through <see cref="CtDaemonLease.WriteStatus(string, CtDaemonStatusRecord, CtDaemonWriteMode)"/>.
+    /// A test returns false to prove a lost write is retried instead of being remembered as published.
+    ///
+    /// <para>The write MODE is part of the seam. Without it a test that delegates to the real writer
+    /// would create a control plane on a detach record, which is the opposite of what the production
+    /// path does — a seam that cannot reproduce the behaviour it stands in for is worse than none.</para>
+    /// </summary>
+    public Func<string, CtDaemonStatusRecord, CtDaemonWriteMode, bool>? AdoptedStatusWriter { get; init; }
+
     public IContinuousTestDaemonEnqueuer? Enqueuer { get; init; }
 
     /// <summary>
@@ -128,9 +141,24 @@ public sealed class ContinuousTestWorkspaceContext : IDisposable
 
     internal CtFreshnessKey? LatestFreshness;
 
+    /// <summary>
+    /// The record that is ON DISK for this workspace, not the one the host meant to write. Set only
+    /// after a write returns, so one lost write cannot arm the dedupe guard forever.
+    /// </summary>
     internal CtDaemonLifecycleState? PublishedState;
 
     internal string? PublishedReason;
+
+    /// <summary>
+    /// The attach record a failed write still owes this worktree, retried on later scan passes and
+    /// bounded by <see cref="OwedAttempts"/>. A fresh attach builds a fresh context, so all three
+    /// fields reset by themselves.
+    /// </summary>
+    internal CtDaemonLifecycleState? OwedState;
+
+    internal string? OwedReason;
+
+    internal int OwedAttempts;
 
     public void Dispose() => Owned?.Dispose();
 }
@@ -178,6 +206,13 @@ public sealed class ContinuousTestWorktreeAdoptionOptions
 /// </summary>
 public sealed class ContinuousTestDaemonHost
 {
+    /// <summary>
+    /// How many times a failed adopted-status write is retried before the daemon gives up on that
+    /// root. At the five-second production scan interval this is about a minute of repair attempts,
+    /// which covers a transient sharing violation without spinning forever on an unwritable root.
+    /// </summary>
+    private const int MaxAdoptedStatusAttempts = 12;
+
     private readonly string _workspaceRoot;
     private readonly ContinuousTestDaemonHostOptions _options;
     private readonly CtExecutionBudget _budget;
@@ -248,7 +283,36 @@ public sealed class ContinuousTestDaemonHost
 
     public ContinuousTestDaemonSnapshot? LastSnapshot { get; private set; }
 
-    public static ContinuousTestDaemonSnapshot ReadStatus(string workspaceRoot)
+    /// <summary>
+    /// The daemon state as a one-shot reader must judge it: the published record, and then a liveness
+    /// probe on the identity that record names.
+    ///
+    /// <para>A daemon that dies without a clean shutdown — killed to free the locked binary, crashed, or
+    /// taken down with the process that spawned it — leaves its last <c>Running</c> record on disk, and
+    /// nothing rewrites that file once the writer is gone. Observed live on 2026-08-21: the process was
+    /// gone, <c>tests stop</c> answered "no daemon", and <c>tests status</c> reported
+    /// <c>daemon: running, idle</c>. Liveness rides the OS lock and the recorded identity, never the
+    /// published state.</para>
+    ///
+    /// <para>Separate from <see cref="ReadStatus"/> because the probe reads a second file and asks the OS
+    /// about a process. The run wait polls the record every 50ms and runs its own probe on a slower clock,
+    /// so making every read probe would add twelve thousand process lookups to one full wait.</para>
+    /// </summary>
+    public static ContinuousTestDaemonSnapshot ReadLiveStatus(
+        string workspaceRoot,
+        Func<CtDaemonLeaseIdentity, bool>? isLive = null) =>
+        ReadStatus(workspaceRoot, isLive ?? CtDaemonLease.IsIdentityLive);
+
+    /// <summary>
+    /// The published record verbatim, with no liveness probe. Callers that poll in a loop use this and
+    /// probe on their own clock; every other reader wants <see cref="ReadLiveStatus"/>.
+    /// </summary>
+    public static ContinuousTestDaemonSnapshot ReadStatus(string workspaceRoot) =>
+        ReadStatus(workspaceRoot, isLive: null);
+
+    private static ContinuousTestDaemonSnapshot ReadStatus(
+        string workspaceRoot,
+        Func<CtDaemonLeaseIdentity, bool>? isLive)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         if (!ContinuousTestPolicy.ShouldConstructEngine(workspaceRoot))
@@ -265,6 +329,27 @@ public sealed class ContinuousTestDaemonHost
         }
 
         CtDaemonStatusRecord? record = CtDaemonLease.TryReadStatus(workspaceRoot);
+        // Only an ACTIVE published state can be contradicted by a dead process. A clean shutdown
+        // publishes Stopped and THEN exits, so probing that record would relabel every orderly stop
+        // "daemon gone" and destroy the very distinction the probe exists to draw.
+        if (isLive is not null
+            && record is not null
+            && record.State is CtDaemonLifecycleState.Running or CtDaemonLifecycleState.Paused
+            && !PublisherIsLive(workspaceRoot, record, isLive))
+        {
+            // Every field of a dead daemon's record lies the same way: one killed mid-run names the
+            // project it was executing, so keeping the activity would report a run no process is running.
+            return new ContinuousTestDaemonSnapshot(
+                CtDaemonLifecycleState.Stopped,
+                "daemon gone",
+                ContinuousTestVerdict.Unknown,
+                null,
+                0,
+                0,
+                Enabled: true,
+                Executing: false);
+        }
+
         return new ContinuousTestDaemonSnapshot(
             record?.State ?? CtDaemonLifecycleState.Stopped,
             record?.Reason ?? "stopped",
@@ -278,6 +363,25 @@ public sealed class ContinuousTestDaemonHost
             Executing: record?.Activity == CtDaemonActivity.Executing,
             Activity: record?.Activity ?? CtDaemonActivity.Idle,
             Run: record?.Run);
+    }
+
+    /// <summary>
+    /// Whether the process that published <paramref name="record"/> is still alive.
+    ///
+    /// <para>The record names its own writer, and an adopted worktree's record names the family daemon
+    /// that serves it, so this probe reaches a dead family daemon through every worktree it left behind.
+    /// A record written before that field existed carries no identity, so it falls back to the lease —
+    /// which every daemon writes when it takes the lock. Neither one means nothing holds the lock, and
+    /// stopped is then the honest answer.</para>
+    /// </summary>
+    private static bool PublisherIsLive(
+        string workspaceRoot,
+        CtDaemonStatusRecord record,
+        Func<CtDaemonLeaseIdentity, bool> isLive)
+    {
+        CtDaemonLeaseIdentity? identity =
+            record.Identity ?? CtDaemonLease.TryRead(workspaceRoot)?.Identity;
+        return identity is not null && isLive(identity);
     }
 
     public static async Task<ContinuousTestDaemonSnapshot> RunAsync(
@@ -889,6 +993,13 @@ public sealed class ContinuousTestDaemonHost
                 DetachWorktree(key, context, "detached");
         }
 
+        // AFTER the detach pass, never before it. An owed record is always an ATTACH record, which
+        // writes in create mode — so retrying it on a root the detach pass was about to drop would
+        // re-mint the control plane of a worktree that had just been removed, which is the very
+        // resurrect this change exists to stop. Everything still in _adopted here passed BOTH detach
+        // triggers on this same pass: it is registered AND it still qualifies.
+        RetryOwedAdoptedStatus();
+
         foreach (string root in registered)
         {
             if (PathsEqual(root, _workspaceRoot) || _adopted.ContainsKey(root) || _stopDetached.Contains(root))
@@ -896,7 +1007,7 @@ public sealed class ContinuousTestDaemonHost
             if (!QualifiesForAdoption(root))
                 continue;
             if (AttachWorktree(root) is { } context)
-                TryWriteAdoptedStatus(context, CtDaemonLifecycleState.Running, AdoptedReason());
+                RequestAdoptedStatus(context, CtDaemonLifecycleState.Running, AdoptedReason());
         }
     }
 
@@ -993,7 +1104,33 @@ public sealed class ContinuousTestDaemonHost
             Diagnostic($"ct worktree detach error root={context.WorkspaceRoot} {CtDaemonLog.FailureDetail(exception)}");
         }
 
-        TryWriteAdoptedStatus(context, CtDaemonLifecycleState.Stopped, reason);
+        if (!TryWriteAdoptedStatus(context, CtDaemonLifecycleState.Stopped, reason))
+            TryClearAdoptedStatus(context);
+    }
+
+    /// <summary>
+    /// The fallback when a DETACH record cannot be written: remove the stale record instead.
+    ///
+    /// <para>A detach is un-retryable by construction — the context is already out of
+    /// <see cref="_adopted"/> and disposed, so no later pass can reach it. Without this, one failed
+    /// write left the worktree holding an <c>adopted by …</c> record naming a daemon that is still
+    /// ALIVE, so the liveness probe cannot contradict it and <c>tests status</c> reports a running
+    /// daemon for a worktree nothing watches — the same dishonest reading, from the other side.</para>
+    ///
+    /// <para>Deleting is the honest repair: an absent record reads as <c>stopped</c>, which is exactly
+    /// what a detached worktree is. It also cannot resurrect anything, because it only ever removes.</para>
+    /// </summary>
+    private void TryClearAdoptedStatus(ContinuousTestWorkspaceContext context)
+    {
+        try
+        {
+            File.Delete(CtDaemonProtocol.StatusPath(context.WorkspaceRoot));
+        }
+        catch (Exception ex)
+        {
+            Diagnostic(
+                $"ct worktree status clear failed root={context.WorkspaceRoot} {CtDaemonLog.FailureDetail(ex)}");
+        }
     }
 
     /// <summary>
@@ -1020,7 +1157,7 @@ public sealed class ContinuousTestDaemonHost
         _stopDetached.Remove(root);
         if (AttachWorktree(root) is not { } context)
             return null;
-        TryWriteAdoptedStatus(context, CtDaemonLifecycleState.Running, AdoptedReason());
+        RequestAdoptedStatus(context, CtDaemonLifecycleState.Running, AdoptedReason());
         return context;
     }
 
@@ -1030,29 +1167,111 @@ public sealed class ContinuousTestDaemonHost
     /// <c>.miller/ct/</c>. Written on transitions only (attach, detach, shutdown), guarded like
     /// every other control-plane write, and skipped entirely when the root is gone.
     /// </summary>
-    private void TryWriteAdoptedStatus(
+    private bool TryWriteAdoptedStatus(
         ContinuousTestWorkspaceContext context,
         CtDaemonLifecycleState state,
         string reason)
     {
+        // The guard means "this record is already ON DISK", which is only true because the fields
+        // below are set after the write returns.
         if (context.PublishedState == state
             && string.Equals(context.PublishedReason, reason, StringComparison.Ordinal))
         {
-            return;
+            return true;
+        }
+
+        if (!Directory.Exists(context.WorkspaceRoot))
+            return false;
+
+        // An ATTACH record legitimately creates a newly adopted worktree's control plane. A DETACH
+        // record says nothing serves this root any more, so it may only replace an existing file —
+        // creating one would re-mint the tree the detach is reacting to.
+        CtDaemonWriteMode mode = state == CtDaemonLifecycleState.Running
+            ? CtDaemonWriteMode.CreateIfMissing
+            : CtDaemonWriteMode.ReplaceExistingOnly;
+        var record = new CtDaemonStatusRecord(state, reason, _leaseIdentity, _options.Clock());
+        try
+        {
+            if (_options.AdoptedStatusWriter is { } writer)
+            {
+                if (!writer(context.WorkspaceRoot, record, mode))
+                    return false;
+            }
+            else
+            {
+                CtDaemonLease.WriteStatus(context.WorkspaceRoot, record, mode);
+            }
+        }
+        // Wider than the IOException/UnauthorizedAccessException pair this used to catch. ScanWorktrees
+        // runs in the main loop with no surrounding try, so a PathTooLongException or a JsonException
+        // from one malformed root ended the loop while the lease still held the daemon lock. The
+        // Diagnostic line is not optional: without it this failure left no trace anywhere.
+        catch (Exception ex)
+        {
+            Diagnostic(
+                $"ct worktree status write failed root={context.WorkspaceRoot} {CtDaemonLog.FailureDetail(ex)}");
+            return false;
         }
 
         context.PublishedState = state;
         context.PublishedReason = reason;
-        try
+        return true;
+    }
+
+    /// <summary>
+    /// The attach half of <see cref="TryWriteAdoptedStatus"/>: a record that does NOT land is
+    /// remembered as owed and retried on later scan passes.
+    ///
+    /// <para>Only an attach is retryable. A detach record is un-retryable by construction —
+    /// <see cref="DetachWorktree"/> removes the context from <see cref="_adopted"/> before it writes,
+    /// so the retry pass can never reach it again.</para>
+    ///
+    /// <para>Why this matters: the record names the daemon that serves the worktree, a one-shot
+    /// <c>tests status</c> probes that identity for liveness, and the attach loop skips a root already
+    /// in <see cref="_adopted"/>. So one lost write left a DEAD predecessor's record in place and a
+    /// live family daemon read as "daemon gone" from that worktree, permanently.</para>
+    /// </summary>
+    private void RequestAdoptedStatus(
+        ContinuousTestWorkspaceContext context,
+        CtDaemonLifecycleState state,
+        string reason)
+    {
+        if (TryWriteAdoptedStatus(context, state, reason))
         {
-            if (!Directory.Exists(context.WorkspaceRoot))
-                return;
-            CtDaemonLease.WriteStatus(
-                context.WorkspaceRoot,
-                new CtDaemonStatusRecord(state, reason, _leaseIdentity, _options.Clock()));
+            context.OwedState = null;
+            context.OwedReason = null;
+            context.OwedAttempts = 0;
+            return;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+
+        context.OwedState = state;
+        context.OwedReason = reason;
+    }
+
+    /// <summary>
+    /// Retries the attach records earlier passes failed to write, bounded by
+    /// <see cref="MaxAdoptedStatusAttempts"/> so an unwritable root cannot spin forever.
+    ///
+    /// <para>Runs after the scan throttle, so it inherits the scan interval rather than the much
+    /// faster poll interval, and after the DETACH pass, so it can only write for a worktree that is
+    /// still registered and still qualifies.</para>
+    /// </summary>
+    private void RetryOwedAdoptedStatus()
+    {
+        foreach (ContinuousTestWorkspaceContext context in _adopted.Values)
         {
+            if (context.OwedState is not { } state || context.OwedReason is not { } reason)
+                continue;
+            if (context.OwedAttempts >= MaxAdoptedStatusAttempts)
+                continue;
+
+            context.OwedAttempts++;
+            if (!TryWriteAdoptedStatus(context, state, reason))
+                continue;
+
+            context.OwedState = null;
+            context.OwedReason = null;
+            context.OwedAttempts = 0;
         }
     }
 

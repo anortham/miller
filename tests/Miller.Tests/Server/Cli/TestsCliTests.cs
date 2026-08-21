@@ -503,8 +503,133 @@ public sealed class TestsCliTests : IDisposable
         return path;
     }
 
+    /// <summary>
+    /// The daemon's lease has always recorded which Miller build it runs, and nothing read it — so an
+    /// upgraded Miller kept the old daemon and status called it healthy. Status now reports the
+    /// comparison, and with no daemon the four keys read as the honest "nothing to compare".
+    /// </summary>
+    [Fact]
+    public void Status_Json_ReportsTheDaemonBuildVersionFields()
+    {
+        WriteTestProject();
+        Assert.Equal(0, Run("tests", "enable").Code);
+
+        var (code, outText, _) = Run("tests", "status", "--json");
+
+        Assert.Equal(0, code);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal(1, root.GetProperty("schema_version").GetInt32());
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("miller_version").GetString()));
+
+        JsonElement daemon = root.GetProperty("daemon");
+        Assert.Equal(JsonValueKind.Null, daemon.GetProperty("miller_version").ValueKind);
+        Assert.Equal("none", daemon.GetProperty("version_match").GetString());
+        Assert.False(daemon.GetProperty("version_mismatch").GetBoolean());
+        Assert.Equal("no live daemon", daemon.GetProperty("version_reason").GetString());
+    }
+
+    /// <summary>
+    /// The kill switch guarantees there is no daemon, so the comparison is "none" — and the new lease
+    /// read must not break the zero-WORK guarantee, which is stronger than zero-creation.
+    ///
+    /// <para>The workspace is seeded with a LIVE lease held by this very process, so the test cannot
+    /// pass by accident: a version read that ran before the short-circuit would find that lease and
+    /// report a build, not "none". Asserting only that nothing was created would leave the
+    /// short-circuit free to move.</para>
+    ///
+    /// <para>Driven through <see cref="TestsCore"/> rather than the CLI on purpose: the switch is read
+    /// from the environment, and xUnit runs test classes in parallel, so setting a process-wide
+    /// variable here would reach into every other class running beside this one.</para>
+    /// </summary>
+    [Fact]
+    public void Status_UnderTheKillSwitch_ReadsNoLeaseEvenWhenOneIsLive()
+    {
+        WriteTestProject();
+        using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "1.9.0+aaa");
+        Assert.NotNull(lease);
+        Assert.NotNull(CtDaemonLease.TryReadLive(_root));
+
+        TestsStatusResult result = TestsCore.Status(
+            new TestsCoreRequest(
+                _root,
+                MillerHome: Path.GetDirectoryName(_registryDb),
+                KillSwitch: "off",
+                MillerVersion: "1.13.0+bbb"));
+
+        using JsonDocument doc = JsonDocument.Parse(result.Render(json: true));
+        JsonElement root = doc.RootElement;
+        Assert.True(root.GetProperty("kill_switch").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("miller_version").GetString()));
+
+        JsonElement daemon = root.GetProperty("daemon");
+        Assert.Equal(JsonValueKind.Null, daemon.GetProperty("miller_version").ValueKind);
+        Assert.Equal("none", daemon.GetProperty("version_match").GetString());
+        Assert.False(daemon.GetProperty("version_mismatch").GetBoolean());
+        Assert.Equal("no live daemon", daemon.GetProperty("version_reason").GetString());
+        Assert.Equal("disabled", daemon.GetProperty("reason").GetString());
+    }
+
+    /// <summary>
+    /// A takeover is a SUCCESS, end to end. Until this landed, an upgraded Miller met the old
+    /// daemon's live lease, answered exit 0, and started nothing — so the tree kept being watched by
+    /// the code you replaced. This drives the whole chain: the lease is parked on a real child
+    /// process, so the stop that the replace performs is the real one.
+    /// </summary>
+    [Fact]
+    public void Start_WhenTheLiveDaemonRunsAnOlderBuild_ReplacesItAndReportsSuccess()
+    {
+        WriteTestProject();
+        Assert.Equal(0, Run("tests", "enable").Code);
+
+        using Process stub = StartStub();
+        var older = new CtDaemonLeaseIdentity(stub.Id, new DateTimeOffset(stub.StartTime.ToUniversalTime()));
+        using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "1.9.0+aaa", older);
+        Assert.NotNull(lease);
+
+        ProcessStartInfo? spawned = null;
+        TestsServeResult result = TestsCore.Start(new TestsCoreRequest(
+            _root,
+            MillerHome: Path.GetDirectoryName(_registryDb),
+            MillerVersion: "1.13.0+bbb",
+            Hooks: new TestsCoreHooks
+            {
+                StartProcess = info =>
+                {
+                    spawned = info;
+                    return stub;
+                },
+            }));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("replaced", result.Status);
+        Assert.Contains("1.9.0+aaa", result.Reason, StringComparison.Ordinal);
+        Assert.NotNull(spawned);
+    }
+
+    /// <summary>A stub that outlives the test, so a parked lease reads as live.</summary>
+    private static Process StartStub()
+    {
+        var info = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true };
+        if (OperatingSystem.IsWindows())
+        {
+            info.FileName = "cmd.exe";
+            info.ArgumentList.Add("/c");
+            info.ArgumentList.Add("ping -n 30 127.0.0.1 >nul");
+        }
+        else
+        {
+            info.FileName = "sleep";
+            info.ArgumentList.Add("30");
+        }
+
+        return Process.Start(info) ?? throw new InvalidOperationException("stub process did not start");
+    }
+
     private static void AssertStatusContractShape(JsonElement root)
     {
+        Assert.True(root.TryGetProperty("schema_version", out _));
+        Assert.True(root.TryGetProperty("miller_version", out _));
         Assert.True(root.TryGetProperty("enabled", out _));
         Assert.True(root.TryGetProperty("projects", out JsonElement projects));
         Assert.Equal(JsonValueKind.Array, projects.ValueKind);
@@ -513,6 +638,10 @@ public sealed class TestsCliTests : IDisposable
         Assert.True(daemon.TryGetProperty("reason", out _));
         Assert.True(daemon.TryGetProperty("running", out _));
         Assert.True(daemon.TryGetProperty("paused", out _));
+        Assert.True(daemon.TryGetProperty("miller_version", out _));
+        Assert.True(daemon.TryGetProperty("version_match", out _));
+        Assert.True(daemon.TryGetProperty("version_mismatch", out _));
+        Assert.True(daemon.TryGetProperty("version_reason", out _));
         Assert.True(root.TryGetProperty("verdict", out _));
         Assert.True(root.TryGetProperty("selected", out _));
         Assert.True(root.TryGetProperty("stale_count", out _));

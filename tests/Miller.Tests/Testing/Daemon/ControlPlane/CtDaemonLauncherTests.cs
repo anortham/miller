@@ -85,6 +85,133 @@ public sealed class CtDaemonLauncherTests : IDisposable
         Assert.Equal(lease.Record.Identity.Pid, result.ProcessId);
     }
 
+    /// <summary>
+    /// An explicit start from a build the live daemon is not running replaces it. Until this landed,
+    /// an upgraded Miller answered exit 0 and left the old daemon watching the tree with old code.
+    ///
+    /// <para><c>stopDaemon</c> is a seam, not a convenience: the lease these tests hold is held by the
+    /// xUnit process itself, so the real stop would kill the test run.</para>
+    /// </summary>
+    [Fact]
+    public void SpawnDetached_WhenTheLiveLeaseRunsAnOlderBuild_ReplacesIt()
+    {
+        using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "1.9.0+aaa");
+        Assert.NotNull(lease);
+        var stopped = new List<string>();
+        bool started = false;
+        using Process holder = StartStub();
+        try
+        {
+            CtDaemonSpawnResult result = CtDaemonLauncher.SpawnDetached(
+                _root,
+                startProcess: _ =>
+                {
+                    started = true;
+                    return holder;
+                },
+                ownVersion: "1.13.0+bbb",
+                stopDaemon: root =>
+                {
+                    stopped.Add(root);
+                    return new CtDaemonStopResult(CtDaemonStopStatus.Stopped, "stopped");
+                });
+
+            Assert.Equal(CtDaemonSpawnStatus.Replaced, result.Status);
+            Assert.Single(stopped);
+            Assert.True(started, "the replacement daemon was never started");
+            Assert.Contains("1.9.0+aaa", result.Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (!holder.HasExited)
+            {
+                holder.Kill(entireProcessTree: true);
+                holder.WaitForExit(2000);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Direction is numeric, not textual. As text "1.13.0" sorts BELOW "1.9.0", so a text comparison
+    /// would call the newer daemon older and stop it.
+    /// </summary>
+    [Fact]
+    public void SpawnDetached_WhenTheLiveLeaseRunsANewerBuild_DoesNotStart()
+    {
+        using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "1.13.0+bbb");
+        Assert.NotNull(lease);
+        var stopped = new List<string>();
+        bool started = false;
+
+        CtDaemonSpawnResult result = CtDaemonLauncher.SpawnDetached(
+            _root,
+            startProcess: _ =>
+            {
+                started = true;
+                return null;
+            },
+            ownVersion: "1.9.0+aaa",
+            stopDaemon: root =>
+            {
+                stopped.Add(root);
+                return new CtDaemonStopResult(CtDaemonStopStatus.Stopped, "stopped");
+            });
+
+        Assert.Equal(CtDaemonSpawnStatus.AlreadyRunning, result.Status);
+        Assert.Empty(stopped);
+        Assert.False(started);
+        Assert.Contains("1.13.0+bbb", result.Reason, StringComparison.Ordinal);
+    }
+
+    /// <summary>Concurrent agents run one build, so nothing contends and the reason stays unchanged.</summary>
+    [Fact]
+    public void SpawnDetached_WhenTheLiveLeaseRunsThisBuild_DoesNotStart()
+    {
+        using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "1.13.0+bbb");
+        Assert.NotNull(lease);
+        var stopped = new List<string>();
+
+        CtDaemonSpawnResult result = CtDaemonLauncher.SpawnDetached(
+            _root,
+            startProcess: _ => throw new InvalidOperationException("must not spawn"),
+            ownVersion: "1.13.0+bbb",
+            stopDaemon: root =>
+            {
+                stopped.Add(root);
+                return new CtDaemonStopResult(CtDaemonStopStatus.Stopped, "stopped");
+            });
+
+        Assert.Equal(CtDaemonSpawnStatus.AlreadyRunning, result.Status);
+        Assert.Equal("daemon already running", result.Reason);
+        Assert.Empty(stopped);
+    }
+
+    /// <summary>
+    /// A replace that cannot stop the old daemon must not start a second one beside it. Two daemons
+    /// on one root is worse than the stale daemon this was trying to fix.
+    /// </summary>
+    [Fact]
+    public void SpawnDetached_WhenTheReplaceStopFails_ReportsFailedAndStartsNothing()
+    {
+        using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "1.9.0+aaa");
+        Assert.NotNull(lease);
+        bool started = false;
+
+        CtDaemonSpawnResult result = CtDaemonLauncher.SpawnDetached(
+            _root,
+            startProcess: _ =>
+            {
+                started = true;
+                return null;
+            },
+            ownVersion: "1.13.0+bbb",
+            stopDaemon: _ => new CtDaemonStopResult(CtDaemonStopStatus.Failed, "process still live"));
+
+        Assert.Equal(CtDaemonSpawnStatus.Failed, result.Status);
+        Assert.False(started);
+        Assert.Contains("process still live", result.Reason, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void SpawnDetached_ResolvesExecutableAndSetsWorkspaceRoot()
     {

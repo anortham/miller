@@ -6,6 +6,20 @@ namespace Miller.Tests.Testing.Daemon.ControlPlane;
 
 public sealed class CtCommandChannelTests : IDisposable
 {
+    /// <summary>
+    /// The cap on a wait for something that MUST happen — a request file appearing, a killed process
+    /// exiting. Every one of these is condition-based and ends the moment the condition holds, so on a
+    /// healthy machine the cap is never reached and a generous value costs nothing.
+    ///
+    /// <para>It was two seconds, which is a budget rather than a cap: a full-suite CT run starved the
+    /// background write past it and reported
+    /// <c>Run_WhenDaemonIsLive_WritesRequestAndReturnsAck</c> RED while the same test passed in 611ms on
+    /// a quiet machine (observed 2026-08-21). CT's own job is to run the whole suite, so the load that
+    /// broke this test is the load it runs under. A false red there costs more than a slow failure here.
+    /// Waits that assert a timeout EXPIRES stay short — they are measuring the giving up.</para>
+    /// </summary>
+    private static readonly TimeSpan PositiveWait = TimeSpan.FromSeconds(30);
+
     private readonly string _root;
 
     public CtCommandChannelTests()
@@ -91,7 +105,7 @@ public sealed class CtCommandChannelTests : IDisposable
             CtDaemonStopResult result = CtCommandChannel.Stop(
                 _root,
                 gracefulWait: TimeSpan.FromMilliseconds(40),
-                exitWait: TimeSpan.FromSeconds(2));
+                exitWait: PositiveWait);
 
             Assert.Equal(CtDaemonStopStatus.Stopped, result.Status);
             Assert.True(leased.HasExited);
@@ -125,9 +139,9 @@ public sealed class CtCommandChannelTests : IDisposable
             _root,
             reason: "wake",
             freshness: freshness,
-            ackTimeout: TimeSpan.FromSeconds(2)));
+            ackTimeout: PositiveWait));
 
-        DateTimeOffset deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(2);
+        DateTimeOffset deadline = DateTimeOffset.UtcNow + PositiveWait;
         string? commandId = null;
         while (DateTimeOffset.UtcNow < deadline)
         {

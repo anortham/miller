@@ -45,6 +45,17 @@ public static class CtDaemonLog
         {
             DateTimeOffset when = utcNow ?? DateTimeOffset.UtcNow;
             int processId = pid ?? Environment.ProcessId;
+            // A log line must never RECREATE a workspace root that is gone. The daemon logs for every
+            // adopted worktree, and a lifecycle line written while one is being torn down re-minted
+            // <worktree>/.miller/logs/ under the root git had just removed — the same resurrect the
+            // detach status record used to cause, and the same reason git worktree remove failed.
+            // The check is on the ROOT, not on .miller: a worktree that inherits its opt-in from the
+            // main checkout has no .miller of its own until something writes one, and refusing those
+            // would silently drop that worktree's logs. Creating .miller/logs INSIDE a root that
+            // exists stays allowed — a first run has no logs directory yet.
+            if (!Directory.Exists(workspaceRoot))
+                return;
+
             string logsDir = LogsDirectory(workspaceRoot);
             Directory.CreateDirectory(logsDir);
             (string humanPath, string jsonPath) = LogFilePaths(logsDir, when);

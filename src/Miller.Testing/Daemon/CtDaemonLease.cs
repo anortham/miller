@@ -168,7 +168,18 @@ public sealed class CtDaemonLease : IDisposable
         _lockStream = null;
         try
         {
-            WriteStatus(CtDaemonLifecycleState.Stopped, "released");
+            // A record about a root this process is LEAVING must never re-mint the control plane.
+            // In the normal case the directory holds the lock file this very method is about to
+            // release, so replace-only behaves identically; it differs only when the tree was
+            // deleted under a live daemon, which is exactly the resurrect to refuse.
+            WriteStatus(
+                Record.WorkspaceRoot,
+                new CtDaemonStatusRecord(
+                    CtDaemonLifecycleState.Stopped,
+                    "released",
+                    Record.Identity,
+                    DateTimeOffset.UtcNow),
+                CtDaemonWriteMode.ReplaceExistingOnly);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -176,11 +187,15 @@ public sealed class CtDaemonLease : IDisposable
         stream.Dispose();
     }
 
-    internal static void WriteStatus(string workspaceRoot, CtDaemonStatusRecord status) =>
+    internal static void WriteStatus(
+        string workspaceRoot,
+        CtDaemonStatusRecord status,
+        CtDaemonWriteMode mode = CtDaemonWriteMode.CreateIfMissing) =>
         CtDaemonJson.WriteAtomic(
             CtDaemonProtocol.StatusPath(workspaceRoot),
             status,
-            CtDaemonJsonContext.Default.CtDaemonStatusRecord);
+            CtDaemonJsonContext.Default.CtDaemonStatusRecord,
+            mode);
 
     private static void WriteLease(string workspaceRoot, CtDaemonLeaseRecord record) =>
         CtDaemonJson.WriteAtomic(
@@ -207,6 +222,31 @@ public sealed class CtDaemonLease : IDisposable
             return nativeError is 32 or 33;
         return nativeError is 11 or 35;
     }
+}
+
+/// <summary>
+/// Whether a control-plane write may CREATE the file and the directory that holds it.
+///
+/// <para><see cref="ReplaceExistingOnly"/> exists because a status record about a workspace this
+/// process is LEAVING used to re-mint the very tree it was tearing down: every write went through
+/// one unconditional <c>Directory.CreateDirectory</c>, so a detach record recreated
+/// <c>&lt;worktree&gt;/.miller/ct/</c> under a root that had just been removed. Observed live on
+/// 2026-08-21, where it defeated <c>git worktree remove</c> twice — the recreated directory left the
+/// worktree untracked-dirty and git refused.</para>
+///
+/// <para>The rule that separates the two: a write that says "a live daemon serves this root" may
+/// create (an attach record, a lease, a heartbeat, a command addressed to a proven-live daemon); a
+/// write that says "nothing serves this root any more" may only REPLACE. An absent destination is
+/// then success, not an error — a control plane that is already gone needs no record saying so, and
+/// its absence reads as stopped.</para>
+/// </summary>
+public enum CtDaemonWriteMode
+{
+    /// <summary>Create the file and its directory when they are absent.</summary>
+    CreateIfMissing,
+
+    /// <summary>Replace an existing file only. Never create the file, never create the directory.</summary>
+    ReplaceExistingOnly,
 }
 
 public static class CtDaemonJson
@@ -265,6 +305,13 @@ public static class CtDaemonJson
     /// </summary>
     private static bool ExistsThroughPublishWindow(string path)
     {
+        // No directory means no publish window to step over: a publish creates that directory and
+        // never removes it, so the file cannot be mid-replace. Without this, every status call on a
+        // workspace whose control plane no daemon ever created paid the full ~10ms of retries to
+        // learn what one stat already knew — on the call the contract calls the cheap one.
+        if (Path.GetDirectoryName(path) is { Length: > 0 } dir && !Directory.Exists(dir))
+            return false;
+
         for (var attempt = 1; ; attempt++)
         {
             if (File.Exists(path))
@@ -328,10 +375,19 @@ public static class CtDaemonJson
         }
     }
 
-    public static void WriteAtomic<T>(string path, T value, JsonTypeInfo<T> typeInfo)
+    public static void WriteAtomic<T>(
+        string path,
+        T value,
+        JsonTypeInfo<T> typeInfo,
+        CtDaemonWriteMode mode = CtDaemonWriteMode.CreateIfMissing)
     {
+        // Probed BEFORE the temp file is staged. Staging alone would recreate the directory this
+        // mode exists to leave alone, because the temp name is a sibling of the destination.
+        if (mode == CtDaemonWriteMode.ReplaceExistingOnly && !File.Exists(path))
+            return;
+
         string? dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir))
+        if (mode == CtDaemonWriteMode.CreateIfMissing && !string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
         // The temp name carries the writing process AND thread. A fixed "<path>.tmp" is shared state:
@@ -346,7 +402,15 @@ public static class CtDaemonJson
         try
         {
             File.WriteAllText(tempPath, JsonSerializer.Serialize(value, typeInfo));
-            MoveWithRetry(tempPath, path);
+            MoveWithRetry(tempPath, path, mode);
+        }
+        // The destination tree went away between the probe and the write. Leaving is the whole point
+        // of this mode, so an absent destination is success. Both shapes are IOException subclasses,
+        // so a create-mode write keeps reporting them as it always did.
+        catch (Exception ex) when (
+            mode == CtDaemonWriteMode.ReplaceExistingOnly
+            && ex is DirectoryNotFoundException or FileNotFoundException)
+        {
         }
         finally
         {
@@ -380,7 +444,10 @@ public static class CtDaemonJson
     /// two are attempted in a retry loop rather than gated on a stale <c>File.Exists</c> check,
     /// because another process can create or delete the destination in between.
     /// </summary>
-    private static void MoveWithRetry(string tempPath, string finalPath)
+    private static void MoveWithRetry(
+        string tempPath,
+        string finalPath,
+        CtDaemonWriteMode mode = CtDaemonWriteMode.CreateIfMissing)
     {
         for (var attempt = 1; ; attempt++)
         {
@@ -391,6 +458,13 @@ public static class CtDaemonJson
                     // ignoreMetadataErrors: the destination's ACLs and attributes are irrelevant here;
                     // a metadata copy failure must not fail the publish of a status record.
                     File.Replace(tempPath, finalPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                }
+                else if (mode == CtDaemonWriteMode.ReplaceExistingOnly)
+                {
+                    // The destination vanished between the caller's probe and this call. The Move
+                    // branch below would CREATE it, and with it the directory this mode must leave
+                    // alone, so the second half of the guard belongs here and not only at the top.
+                    return;
                 }
                 else
                 {

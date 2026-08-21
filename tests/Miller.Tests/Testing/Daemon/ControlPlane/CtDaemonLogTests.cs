@@ -39,6 +39,37 @@ public sealed class CtDaemonLogTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(_root, ".miller")));
     }
 
+    /// <summary>
+    /// The daemon logs for every adopted worktree, and a lifecycle line written while one is being
+    /// torn down used to re-mint <c>&lt;worktree&gt;/.miller/logs/</c> — recreating the root
+    /// <c>git worktree remove</c> had just deleted, which left the worktree untracked-dirty and made
+    /// git refuse. A log line is an observable signal, never a reason to resurrect a workspace.
+    /// </summary>
+    [Fact]
+    public void Write_DoesNotRecreateAWorkspaceRootThatIsGone()
+    {
+        string gone = Path.Combine(_root, "removed-worktree");
+
+        CtDaemonLog.Write(gone, "detached");
+
+        Assert.False(Directory.Exists(gone), "a log line recreated the workspace root");
+    }
+
+    /// <summary>
+    /// The guard is on the ROOT, not on <c>.miller</c>. A worktree that inherits its opt-in from the
+    /// main checkout has no <c>.miller</c> of its own, and refusing those would silently drop that
+    /// worktree's logs.
+    /// </summary>
+    [Fact]
+    public void Write_StillCreatesTheLogsDirectoryInsideARootThatExists()
+    {
+        Assert.False(Directory.Exists(Path.Combine(_root, ".miller")));
+
+        CtDaemonLog.Write(_root, "adopted");
+
+        Assert.True(Directory.Exists(CtDaemonLog.LogsDirectory(_root)));
+    }
+
     [Fact]
     public void Write_AppendsRoleCtToSharedPair()
     {

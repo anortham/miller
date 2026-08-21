@@ -36,6 +36,11 @@ public sealed class WindowsKillOnCloseJobScaleTests
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
+                // The tree this test spawns is real PowerShell, and the job close tears it down mid-launch,
+                // so an unsuppressed window leaves a console error box on the developer's desktop
+                // ("the pipe is being closed", 0x800700e8) for every scale run. The kill behaviour under
+                // test does not depend on the window; the scripts hide their own spawns the same way.
+                CreateNoWindow = true,
             };
             foreach (string argument in new[]
             {
@@ -126,6 +131,11 @@ public sealed class WindowsKillOnCloseJobScaleTests
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
+                // The tree this test spawns is real PowerShell, and the job close tears it down mid-launch,
+                // so an unsuppressed window leaves a console error box on the developer's desktop
+                // ("the pipe is being closed", 0x800700e8) for every scale run. The kill behaviour under
+                // test does not depend on the window; the scripts hide their own spawns the same way.
+                CreateNoWindow = true,
             };
             foreach (string argument in new[]
             {
@@ -305,7 +315,7 @@ public sealed class WindowsKillOnCloseJobScaleTests
         while (-not (Test-Path -LiteralPath "go.signal")) {
             Start-Sleep -Milliseconds 25
         }
-        $child = Start-Process -FilePath "powershell.exe" -WorkingDirectory (Get-Location).Path -ArgumentList @(
+        $child = Start-Process -FilePath "powershell.exe" -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -ArgumentList @(
             "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "child.ps1"
         ) -PassThru
         $child.Id | Set-Content -LiteralPath "child.pid"
@@ -315,7 +325,7 @@ public sealed class WindowsKillOnCloseJobScaleTests
         """;
 
     private const string ChildScript = """
-        $grandchild = Start-Process -FilePath "powershell.exe" -WorkingDirectory (Get-Location).Path -ArgumentList @(
+        $grandchild = Start-Process -FilePath "powershell.exe" -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -ArgumentList @(
             "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "grandchild.ps1"
         ) -PassThru
         $grandchild.Id | Set-Content -LiteralPath "grandchild.pid"
@@ -338,7 +348,7 @@ public sealed class WindowsKillOnCloseJobScaleTests
         while (-not (Test-Path -LiteralPath "go.signal")) {
             Start-Sleep -Milliseconds 25
         }
-        $child = Start-Process -FilePath "powershell.exe" -WorkingDirectory (Get-Location).Path -ArgumentList @(
+        $child = Start-Process -FilePath "powershell.exe" -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -ArgumentList @(
             "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "exiting-child.ps1"
         ) -PassThru
         $child.Id | Set-Content -LiteralPath "child.pid"
@@ -348,7 +358,7 @@ public sealed class WindowsKillOnCloseJobScaleTests
         """;
 
     private const string ExitingChildScript = """
-        $grandchild = Start-Process -FilePath "powershell.exe" -WorkingDirectory (Get-Location).Path -ArgumentList @(
+        $grandchild = Start-Process -FilePath "powershell.exe" -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -ArgumentList @(
             "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "grandchild.ps1"
         ) -PassThru
         $grandchild.Id | Set-Content -LiteralPath "grandchild.pid"

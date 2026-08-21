@@ -62,6 +62,102 @@ public sealed class TestsToolTests : IDisposable
         Assert.Contains("29158", line, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The MISMATCH half of the daemon build report. The lease has always recorded which build the
+    /// daemon runs and nothing read it, so an upgraded Miller kept the old daemon and status called
+    /// it healthy. Both renderers must name the older build, not merely flag a difference.
+    /// </summary>
+    [Fact]
+    public void A_daemon_on_an_older_build_is_named_in_both_renderers()
+    {
+        var result = new TestsStatusResult(
+            Enabled: true,
+            KillSwitchOff: false,
+            Projects: [],
+            DaemonState: CtDaemonLifecycleState.Running,
+            DaemonReason: "idle",
+            Verdict: ContinuousTestVerdict.Green,
+            Selected: null,
+            StaleCount: 0,
+            SelectedCount: 0,
+            LastRun: null,
+            BudgetHolder: null,
+            DaemonVersion: CtDaemonVersion.Evaluate("1.13.0+bbb", "1.9.0+aaa"));
+
+        using JsonDocument doc = JsonDocument.Parse(TestsCore.RenderStatusJson(result));
+        JsonElement daemon = doc.RootElement.GetProperty("daemon");
+        Assert.Equal("1.9.0+aaa", daemon.GetProperty("miller_version").GetString());
+        Assert.Equal("daemon_older", daemon.GetProperty("version_match").GetString());
+        Assert.True(daemon.GetProperty("version_mismatch").GetBoolean());
+        Assert.Equal("1.13.0+bbb", doc.RootElement.GetProperty("miller_version").GetString());
+
+        string compact = TestsCore.RenderStatusCompact(result);
+        string line = compact.Split('\n').Single(row => row.StartsWith("daemon_build:", StringComparison.Ordinal));
+        Assert.Contains("1.9.0+aaa", line, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agreeing case writes no compact line. A daemon on this build is the normal state, and a
+    /// line on every status read would train the reader to ignore the one that matters.
+    /// </summary>
+    [Fact]
+    public void A_daemon_on_this_build_adds_no_compact_line()
+    {
+        var result = new TestsStatusResult(
+            Enabled: true,
+            KillSwitchOff: false,
+            Projects: [],
+            DaemonState: CtDaemonLifecycleState.Running,
+            DaemonReason: "idle",
+            Verdict: ContinuousTestVerdict.Green,
+            Selected: null,
+            StaleCount: 0,
+            SelectedCount: 0,
+            LastRun: null,
+            BudgetHolder: null,
+            DaemonVersion: CtDaemonVersion.Evaluate("1.13.0+bbb", "1.13.0+bbb"));
+
+        Assert.DoesNotContain("daemon_build:", TestsCore.RenderStatusCompact(result), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Two builds of the SAME release — two worktrees of one repo on different commits — is a
+    /// symmetric verdict: each reads the other as build_differs. Miller must report it and must NOT
+    /// nudge either side to act, or both follow the nudge and take the daemon from each other in a
+    /// loop, killing every suite in flight. Only a proven direction earns the hint.
+    /// </summary>
+    [Fact]
+    public void A_symmetric_build_difference_is_reported_but_never_nudged()
+    {
+        CtDaemonVersionVerdict forward = CtDaemonVersion.Evaluate("1.13.0+aaa", "1.13.0+bbb");
+        CtDaemonVersionVerdict backward = CtDaemonVersion.Evaluate("1.13.0+bbb", "1.13.0+aaa");
+
+        Assert.Equal(CtDaemonVersionMatch.BuildDiffers, forward.Match);
+        Assert.Equal(forward.Match, backward.Match);
+        Assert.True(forward.Mismatch && backward.Mismatch, "a build difference must stay visible");
+
+        string? compact = TestsTool.StatusHint(StatusWith(forward));
+        Assert.DoesNotContain("replace the older daemon", compact ?? "", StringComparison.Ordinal);
+
+        string? older = TestsTool.StatusHint(StatusWith(CtDaemonVersion.Evaluate("1.13.0+aaa", "1.9.0+zzz")));
+        Assert.Contains("replace the older daemon", older ?? "", StringComparison.Ordinal);
+    }
+
+    private static TestsStatusResult StatusWith(CtDaemonVersionVerdict version) =>
+        new(
+            Enabled: true,
+            KillSwitchOff: false,
+            Projects: [],
+            DaemonState: CtDaemonLifecycleState.Running,
+            DaemonReason: "idle",
+            Verdict: ContinuousTestVerdict.Green,
+            Selected: null,
+            StaleCount: 0,
+            SelectedCount: 0,
+            LastRun: null,
+            BudgetHolder: null,
+            DaemonVersion: version);
+
     [Fact]
     public void Status_OnNeverEnabledWorkspace_StartsNothingAndCreatesNoState()
     {

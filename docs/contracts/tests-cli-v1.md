@@ -26,6 +26,7 @@ explicit (`tests serve` / MCP `start`).
 ```json
 {
   "schema_version": 1,
+  "miller_version": "1.20.1+def5678",
   "enabled": false,
   "kill_switch": false,
   "projects": [],
@@ -35,7 +36,11 @@ explicit (`tests serve` / MCP `start`).
     "running": false,
     "paused": false,
     "activity": "idle",
-    "run": null
+    "run": null,
+    "miller_version": null,
+    "version_match": "none",
+    "version_mismatch": false,
+    "version_reason": "no live daemon"
   },
   "verdict": "unknown",
   "selected": null,
@@ -51,6 +56,7 @@ explicit (`tests serve` / MCP `start`).
 | Field | Type | Meaning |
 |---|---|---|
 | `schema_version` | number | This contract version. Currently `1`. |
+| `miller_version` | string | The Miller build that produced this output. |
 | `enabled` | bool | Workspace is opted in (`<workspace>/.miller/ct.enabled`, or inherited from the main checkout on a linked worktree — see "Worktrees" below) or has enabled project rows. |
 | `kill_switch` | bool | `true` when `MILLER_CT=off` (also `0`/`false`/`no`). |
 | `projects` | array | **Enabled** projects only. Empty on a never-enabled workspace. |
@@ -58,6 +64,10 @@ explicit (`tests serve` / MCP `start`).
 | `daemon.reason` | string | Why the daemon is in that state. Wording is not a contract. |
 | `daemon.running` | bool | `true` only when `state` is `running`. |
 | `daemon.paused` | bool | `true` only when `state` is `paused`. |
+| `daemon.miller_version` | string \| null | The build the LIVE daemon runs, read from its `daemon.lease.json`. `null` when no live daemon. |
+| `daemon.version_match` | string | `none`, `same`, `daemon_older`, `daemon_newer`, `build_differs`, or `unknown`. |
+| `daemon.version_mismatch` | bool | `true` when a live daemon runs a build that is not this one. |
+| `daemon.version_reason` | string | Plain-English explanation. Wording is not a contract. |
 | `daemon.activity` | string | `idle`, `queued`, or `executing`. What the daemon is DOING, which the lifecycle state does not answer: a `running` daemon may have nothing to do, and a `paused` one may still hold accepted work. |
 | `daemon.run` | object \| null | The run in flight, or `null`. |
 | `daemon.run.project_path` | string | The project the daemon is executing. |
@@ -98,11 +108,46 @@ A never-enabled workspace reports `enabled: false`, empty `projects`, `daemon.st
 files. `selected` is also `null` — and the verdict honest `unknown` — whenever the workspace has
 no readable live index, whatever `ct.db` holds.
 
+`daemon.state` is PROBED, not merely published. A daemon that dies without a clean shutdown —
+killed to free the locked binary, crashed, or taken down with the process that spawned it — leaves
+its last `running` record in `.miller/ct/daemon.status.json`, and nothing rewrites that file once
+the writer is gone. Status probes the identity the record names (its pid plus process start time,
+falling back to the lease for a record written before that field existed) and reports
+`daemon.state: "stopped"` with `daemon.reason: "daemon gone"`, `activity: "idle"`, and null `run`
+when that process is gone. Only an ACTIVE published state — `running` or `paused` — is probed this
+way: a clean shutdown publishes `stopped` and THEN exits, so that record is already honest and keeps
+its own reason. An adopted worktree's record names the family daemon, so a dead family daemon reads
+as stopped from every worktree it served. (Why: observed live on 2026-08-21 — the
+process was gone, `tests stop` answered `already_stopped`, and status still reported
+`daemon: running, idle`.)
+
+### Daemon build version
+
+`daemon.miller_version` is the build the LIVE daemon runs, read from its `daemon.lease.json`. The
+lease has always recorded it; nothing read it until now, so an upgraded Miller kept the old daemon
+and status called it healthy while it watched the tree with old code.
+
+Two rules decide `daemon.version_match`:
+
+- SAMENESS compares the whole build string, character for character. Concurrent agents run one
+  build, so their strings are identical, the match is `same`, and nothing warns and nothing
+  contends.
+- DIRECTION compares `major.minor.patch` numerically, because version strings are not orderable as
+  text — as text `1.13.0` sorts BELOW `1.9.0`, and a text comparison would call a newer daemon older.
+
+A pair with the same release and different commits reads `build_differs`; that is the
+rebuild-from-source case, where direction cannot be proven. A daemon whose build is unrecorded or
+unparseable reads `unknown` and never authorizes a replace.
+
+`daemon.version_mismatch` is `true` whenever a live daemon runs a build that is not this one. It is
+what a reader acts on; `version_match` says which way.
+
 Under the kill switch (`MILLER_CT=off`, also `0`/`false`/`no`), status is a zero-WORK
 short-circuit: it opens no `ct.db`, reads no live index, and reads no daemon-status or budget
 file. The payload is the never-enabled shape above with `kill_switch: true`,
 `daemon.reason: "disabled"`, and `daemon.activity: "idle"` — whatever state the workspace holds
-on disk.
+on disk. The payload keeps the top-level `miller_version`, and reports `daemon.version_match: "none"`
+with a null `daemon.miller_version`: the switch guarantees there is no daemon, so no lease is read.
 
 ## Freshness key
 
@@ -225,8 +270,21 @@ runs `ContinuousTestDaemonHost.RunAsync`. It refuses when the workspace is not e
 `MILLER_CT=off`. `stop` signals the leased daemon, waits, then kills that process tree. No daemon
 returns `already_stopped` and creates nothing.
 
-`serve --json` reports `status` (`started`, `alreadyrunning`, `failed`, `refused`), `reason`
-(string or null), and `pid` (number or null). `stop --json` reports `status` and `reason`.
+`serve --json` reports `status` (`started`, `alreadyrunning`, `replaced`, `failed`, `refused`),
+`reason` (string or null), and `pid` (number or null). `stop --json` reports `status` and `reason`.
+
+An explicit start from a build the live daemon is NOT running replaces that daemon: Miller stops it
+through the same stop command channel, starts this build in its place, and reports
+`status: "replaced"` with exit `0`. An equal build reports `alreadyrunning` and changes nothing. A
+NEWER daemon is never replaced by an older build; the reason names both builds. A replace whose stop
+fails reports `status: "failed"` and exit `3` — one stale daemon is better than two daemons on one
+root. A daemon whose build cannot be ordered against this one is left alone.
+
+A takeover kills any suite in flight, on the daemon's own root and on every worktree it adopts.
+Nothing is lost: `ct.db` keeps those cases stale and the next change re-runs them. On a linked
+worktree the replace targets the FAMILY daemon on the main checkout, and the replacement re-adopts
+every registered, opted-in worktree on its next scan — including a worktree an earlier
+`tests stop` had detached, exactly as any daemon restart does.
 
 ## Worktrees: one family daemon
 
@@ -242,6 +300,16 @@ The running family daemon adopts every registered, opted-in worktree of its own 
 context bound to that worktree's own index and `ct.db` — and writes the worktree's own
 `.miller/ct/daemon.status.json` on transitions with reason `adopted by <main root>`. The
 user-global execution budget is shared: N worktrees never mean N concurrent suites.
+
+An ATTACH record may CREATE `<worktree>/.miller/ct/` when it is absent. A DETACH or STOP record only
+REPLACES an existing `daemon.status.json`, and never creates the file or the directory: a record
+saying nothing serves this root must not re-mint the control plane it is tearing down. A worktree
+whose control plane is already gone therefore gets no record, and its absence reads as `stopped`.
+(Why: observed live on 2026-08-21 — the detach write recreated `<worktree>/.miller/ct/` under a root
+that had just been removed, which left the worktree untracked-dirty and defeated
+`git worktree remove` twice.) An attach record that FAILS to land is retried on later scan passes,
+because the record names the serving daemon and status probes that identity: a worktree left holding
+a dead predecessor's record reports `daemon gone` while a live family daemon is serving it.
 
 On an adopted worktree, `tests run` routes to the family daemon and reaches that worktree's own
 queue and `ct.db`. `tests stop` detaches that worktree only — it never stops the family daemon —

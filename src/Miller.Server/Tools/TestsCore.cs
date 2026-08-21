@@ -81,7 +81,13 @@ public sealed record TestsStatusResult(
     string? LastRun,
     TestsBudgetHolder? BudgetHolder,
     CtDaemonActivity DaemonActivity = CtDaemonActivity.Idle,
-    CtDaemonRunProgress? DaemonRun = null)
+    CtDaemonRunProgress? DaemonRun = null,
+
+    /// <summary>
+    /// Which build the LIVE daemon runs, against this one. Null only under the kill switch, which
+    /// guarantees there is no daemon to compare.
+    /// </summary>
+    CtDaemonVersionVerdict? DaemonVersion = null)
 {
     public string Render(bool json) => json ? TestsCore.RenderStatusJson(this) : TestsCore.RenderStatusCompact(this);
 }
@@ -219,7 +225,10 @@ public static class TestsCore
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
         IReadOnlyList<ContinuousTestProject> stored = store.ListContinuousTestProjects(workspaceId, includeDisabled: false);
         IReadOnlyList<ContinuousTestStatus> statuses = store.ListContinuousTestStatuses(workspaceId);
-        ContinuousTestDaemonSnapshot snapshot = ContinuousTestDaemonHost.ReadStatus(root);
+        // Probed, not merely published: a daemon that died without a clean shutdown leaves its last
+        // "running" record on disk, and reporting it would tell the reader CT watches the tree when
+        // nothing does. The wait loop keeps the cheap unprobed read and probes on its own clock.
+        ContinuousTestDaemonSnapshot snapshot = ContinuousTestDaemonHost.ReadLiveStatus(root);
         // The selected key comes from the LIVE index cursor, never from the stored rows. A key
         // derived from the rows it judges reads uniformly stale rows as green forever, and flips
         // between consecutive reads when rows carry mixed keys (observed live 2026-08-20).
@@ -231,6 +240,13 @@ public static class TestsCore
                 ? store.ListContinuousTestFreshWatermarks(workspaceId, live.IndexIdentity)
                 : null);
         TestsBudgetHolder? budget = ReadBudgetHolder(request.MillerHome);
+        // The build the daemon runs lives in its LEASE, not its status record, and an adopted
+        // worktree's lease lives on the repo's main checkout — so the endpoint resolver is the right
+        // read, and it creates nothing. Without this the status was silent about a daemon still
+        // running the code you replaced.
+        CtDaemonVersionVerdict version = CtDaemonVersion.ForLease(
+            request.MillerVersion ?? MillerVersion.Current,
+            CtDaemonRouting.ResolveLiveEndpoint(root)?.Lease);
         return new TestsStatusResult(
             Enabled: optedIn || stored.Count > 0,
             KillSwitchOff: false,
@@ -244,7 +260,8 @@ public static class TestsCore
             LastRun: store.LatestTestRunAt(workspaceId),
             BudgetHolder: budget,
             DaemonActivity: snapshot.Activity,
-            DaemonRun: snapshot.Run);
+            DaemonRun: snapshot.Run,
+            DaemonVersion: version);
     }
 
     /// <summary>
@@ -381,8 +398,16 @@ public static class TestsCore
         // A worktree start anchors the FAMILY daemon at the repo's main checkout: one daemon per
         // repo adopts every family worktree, so a worktree must not mint a sibling-blind second one.
         string anchor = CtDaemonLauncher.ResolveSpawnRoot(root);
-        CtDaemonSpawnResult spawned = CtDaemonLauncher.SpawnDetached(anchor, request.Hooks?.StartProcess);
-        int exit = spawned.Status is CtDaemonSpawnStatus.Started or CtDaemonSpawnStatus.AlreadyRunning ? 0 : 3;
+        // Passing this build turns on the version check: a live daemon running code this binary
+        // replaced is stopped and started again here, rather than answering exit 0 and leaving the
+        // old daemon watching the tree. A replace is a success, so it takes the same exit code.
+        CtDaemonSpawnResult spawned = CtDaemonLauncher.SpawnDetached(
+            anchor,
+            request.Hooks?.StartProcess,
+            request.MillerVersion ?? MillerVersion.Current);
+        int exit = spawned.Status is CtDaemonSpawnStatus.Started
+            or CtDaemonSpawnStatus.AlreadyRunning
+            or CtDaemonSpawnStatus.Replaced ? 0 : 3;
         string? reason = spawned.Reason;
         if (!string.Equals(anchor, root, StringComparison.Ordinal))
         {
@@ -618,6 +643,30 @@ public static class TestsCore
         writer.WriteEndObject();
     }
 
+    /// <summary>
+    /// Which build the live daemon runs. Always four keys, so a reader never has to branch on their
+    /// presence: with no daemon they read null / <c>none</c> / false / "no live daemon".
+    /// </summary>
+    private static void WriteDaemonVersion(Utf8JsonWriter writer, CtDaemonVersionVerdict? version)
+    {
+        if (version is null)
+        {
+            writer.WriteNull("miller_version");
+            writer.WriteString("version_match", Snake(CtDaemonVersionMatch.None.ToString()));
+            writer.WriteBoolean("version_mismatch", false);
+            writer.WriteString("version_reason", "no live daemon");
+            return;
+        }
+
+        if (version.DaemonVersion is { Length: > 0 } daemonVersion)
+            writer.WriteString("miller_version", daemonVersion);
+        else
+            writer.WriteNull("miller_version");
+        writer.WriteString("version_match", Snake(version.Match.ToString()));
+        writer.WriteBoolean("version_mismatch", version.Mismatch);
+        writer.WriteString("version_reason", version.Reason);
+    }
+
     internal static string RenderStatusJson(TestsStatusResult result)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -625,6 +674,7 @@ public static class TestsCore
         {
             writer.WriteStartObject();
             writer.WriteNumber("schema_version", JsonSchemaVersion);
+            writer.WriteString("miller_version", result.DaemonVersion?.OwnVersion ?? MillerVersion.Current);
             writer.WriteBoolean("enabled", result.Enabled);
             writer.WriteBoolean("kill_switch", result.KillSwitchOff);
             writer.WritePropertyName("projects");
@@ -638,6 +688,7 @@ public static class TestsCore
             writer.WriteString("activity", Snake(result.DaemonActivity.ToString()));
             writer.WritePropertyName("run");
             WriteDaemonRun(writer, result.DaemonRun);
+            WriteDaemonVersion(writer, result.DaemonVersion);
             writer.WriteEndObject();
             writer.WriteString("verdict", Snake(result.Verdict.ToString()));
             writer.WritePropertyName("selected");
@@ -683,6 +734,10 @@ public static class TestsCore
                 + running.SelectedCaseCount.ToString(CultureInfo.InvariantCulture)
                 + $" started={running.RunStartedAtUtc:O} child={Snake(running.Activity.ToString())}");
         }
+        // Only when a live daemon disagrees with this build. The reason names both builds, so the
+        // line needs no second copy of the version.
+        if (result.DaemonVersion is { Mismatch: true } version)
+            sb.AppendLine("daemon_build: " + version.Reason);
         sb.AppendLine("verdict: " + Snake(result.Verdict.ToString()));
         sb.AppendLine("selected: " + (result.Selected is { } selectedKey
             ? CompactFreshness(selectedKey)
