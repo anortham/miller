@@ -56,7 +56,7 @@ public sealed class InspectTool
         [Description("Max symbols when listing a file. Default and maximum 10.")] int limit = ToolOutputBudget.McpRowLimit,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
-        [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
+        [Description("Wait for a refresh before reading. With workspace_id the default now serves the pinned index immediately and refreshes in the background; true still waits, false does zero refresh work.")]
         bool? ensure_fresh = null,
         [Description("Opaque token from a truncated depth=full body. Bound to workspace, symbol, extractor hash, and source span.")]
         string? continuation = null)
@@ -72,12 +72,12 @@ public sealed class InspectTool
                     "invalid_format",
                     "inspect format must be compact or json."));
             }
-            bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
+            WorkspaceRefreshMode refresh = ReadToolWorkspaceRouting.ResolveRefreshMode(workspace_id, ensure_fresh);
             InspectDepth parsedDepth = ParseDepth(depth);
             int effectiveLimit = Math.Min(limit, ToolOutputBudget.McpRowLimit);
 
             using WorkspaceSymbolReadContext context =
-                _workspaceSymbolReadProvider.ResolveSymbolRead(workspace_id, ensureFresh);
+                _workspaceSymbolReadProvider.ResolveSymbolRead(workspace_id, refresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             string output = RunLookupWithDiagnostics(
                 context.Index,

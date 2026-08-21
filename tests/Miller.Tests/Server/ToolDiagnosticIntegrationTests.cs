@@ -114,18 +114,18 @@ public sealed class ToolDiagnosticIntegrationTests
           IWorkspaceContentSearchProvider,
           IWorkspaceArtifactProvider
     {
-        public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh) => throw exception;
+        public WorkspaceReadContext Resolve(string? workspaceId, WorkspaceRefreshMode refresh) => throw exception;
 
-        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw exception;
 
-        public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw exception;
 
-        public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw exception;
 
-        public WorkspaceArtifactContext ResolveArtifact(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceArtifactContext ResolveArtifact(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw exception;
     }
 }

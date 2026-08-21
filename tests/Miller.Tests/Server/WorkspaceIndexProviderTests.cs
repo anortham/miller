@@ -61,7 +61,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return revision == 1;
             });
 
-        WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
+        WorkspaceReadContext context = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None);
 
         Assert.Equal(1, context.Revision);
         Assert.True(context.IndexFresh);
@@ -94,10 +94,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 new FixtureReadSession(StoreSnapshot(root, "manifest-a"), target.DbPath)),
             loadSessionSymbolSearch: session => SymbolSearchProjectionLoader.LoadSession(session));
 
-        using WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
-        using WorkspaceSymbolSearchContext search = provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false);
-        using WorkspaceSymbolReadContext inspect = provider.ResolveSymbolRead(workspaceId: null, ensureFresh: false);
-        using WorkspaceArtifactContext artifact = provider.ResolveArtifact(workspaceId: null, ensureFresh: false);
+        using WorkspaceReadContext context = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None);
+        using WorkspaceSymbolSearchContext search = provider.ResolveSymbolSearch(workspaceId: null, WorkspaceRefreshMode.None);
+        using WorkspaceSymbolReadContext inspect = provider.ResolveSymbolRead(workspaceId: null, WorkspaceRefreshMode.None);
+        using WorkspaceArtifactContext artifact = provider.ResolveArtifact(workspaceId: null, WorkspaceRefreshMode.None);
 
         Assert.Single(context.Index.FindByName("TargetType"));
         Assert.Single(search.Index.FindByName("TargetType"));
@@ -130,7 +130,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "telemetry.db"), "current-ws", root);
         using TelemetryScope scope = ledger.Measure("context", op: null);
 
-        using WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
+        using WorkspaceReadContext context = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None);
         IndexedSymbol targetSymbol = Assert.Single(context.Index.FindByName("TargetType"));
         Assert.Empty(context.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
         ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
@@ -182,10 +182,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return [];
             });
 
-        using (WorkspaceReadContext unusedGraph = provider.Resolve(workspaceId: null, ensureFresh: false))
+        using (WorkspaceReadContext unusedGraph = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None))
             Assert.Equal(0, loadCount);
 
-        using (WorkspaceReadContext first = provider.Resolve(workspaceId: null, ensureFresh: false))
+        using (WorkspaceReadContext first = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None))
         {
             IndexedSymbol targetSymbol = Assert.Single(first.Index.FindByName("TargetType"));
             Assert.Empty(first.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
@@ -193,7 +193,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         Assert.Equal(1, loadCount);
 
-        using (WorkspaceReadContext second = provider.Resolve(workspaceId: null, ensureFresh: false))
+        using (WorkspaceReadContext second = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None))
         {
             IndexedSymbol targetSymbol = Assert.Single(second.Index.FindByName("TargetType"));
             Assert.Empty(second.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
@@ -202,7 +202,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal(1, loadCount);
 
         snapshot = StoreSnapshot(root, "manifest-b");
-        using (WorkspaceReadContext afterManifestChange = provider.Resolve(workspaceId: null, ensureFresh: false))
+        using (WorkspaceReadContext afterManifestChange = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None))
         {
             IndexedSymbol targetSymbol = Assert.Single(afterManifestChange.Index.FindByName("TargetType"));
             Assert.Empty(afterManifestChange.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
@@ -240,13 +240,13 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             },
             supplementalEdgesCache: cache);
 
-        using (WorkspaceReadContext first = CreateProvider().Resolve(workspaceId: null, ensureFresh: false))
+        using (WorkspaceReadContext first = CreateProvider().Resolve(workspaceId: null, WorkspaceRefreshMode.None))
         {
             IndexedSymbol targetSymbol = Assert.Single(first.Index.FindByName("TargetType"));
             Assert.Empty(first.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
         }
 
-        using (WorkspaceReadContext second = CreateProvider().Resolve(workspaceId: null, ensureFresh: false))
+        using (WorkspaceReadContext second = CreateProvider().Resolve(workspaceId: null, WorkspaceRefreshMode.None))
         {
             IndexedSymbol targetSymbol = Assert.Single(second.Index.FindByName("TargetType"));
             Assert.Empty(second.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
@@ -275,13 +275,13 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 new FixtureReadSession(StoreSnapshot(root, "manifest-a"), target.DbPath)),
             loadSessionSymbolSearch: session => SymbolSearchProjectionLoader.LoadSession(session));
 
-        using (WorkspaceReadContext first = provider.Resolve(workspaceId: null, ensureFresh: false))
+        using (WorkspaceReadContext first = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None))
         {
             IndexedSymbol targetSymbol = Assert.Single(first.Index.FindByName("TargetType"));
             Assert.Empty(first.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
         }
 
-        using (WorkspaceReadContext second = provider.Resolve(workspaceId: null, ensureFresh: false))
+        using (WorkspaceReadContext second = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None))
         {
             IndexedSymbol targetSymbol = Assert.Single(second.Index.FindByName("TargetType"));
             Assert.Empty(second.Graph.Reach([targetSymbol.SymbolId], 1, 10, Direction.Forward));
@@ -764,7 +764,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         ISymbolLookupIndex firstIndex;
 
         using (TelemetryScope firstScope = ledger.Measure("context", op: null))
-        using (WorkspaceReadContext first = provider.Resolve(workspaceId: null, ensureFresh: false))
+        using (WorkspaceReadContext first = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None))
         {
             firstIndex = first.Index;
             Assert.Single(first.Index.FindByName("TargetType"));
@@ -774,7 +774,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         }
 
         using (TelemetryScope secondScope = ledger.Measure("context", op: null))
-        using (WorkspaceReadContext second = provider.Resolve(workspaceId: null, ensureFresh: false))
+        using (WorkspaceReadContext second = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None))
         {
             Assert.Same(firstIndex, second.Index);
             Assert.Single(second.Index.FindByName("TargetType"));
@@ -825,7 +825,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         {
             for (int graphRoute = 0; graphRoute < 3; graphRoute++)
             {
-                using WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
+                using WorkspaceReadContext context = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None);
                 Assert.IsType<MeasuredSymbolGraphReachability>(context.Graph);
                 Assert.False(context.BridgeGraph.IsValueCreated);
                 if (priorGraph is not null)
@@ -834,7 +834,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             }
 
             using WorkspaceSymbolReadContext inspect =
-                provider.ResolveSymbolRead(workspaceId: null, ensureFresh: false);
+                provider.ResolveSymbolRead(workspaceId: null, WorkspaceRefreshMode.None);
             Assert.Single(inspect.Index.FindByName("TargetType"));
         }
 
@@ -863,7 +863,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return new WorkspaceReadHandle(LegacyArtifactReadSession.Open(databasePath, root, workspaceId));
             });
 
-        using WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
+        using WorkspaceReadContext context = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None);
 
         Assert.Equal(2, context.Revision);
         Assert.Single(context.Index.FindByName("AfterType"));
@@ -903,7 +903,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                     workspaceId));
             });
 
-        using WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
+        using WorkspaceReadContext context = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None);
 
         Assert.Equal(2, openCount);
         Assert.Equal(1, refreshCount);
@@ -931,10 +931,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return RepositoryIndexLoader.Load(path);
             });
 
-        WorkspaceReadContext first = provider.Resolve("target-ws", ensureFresh: false);
-        WorkspaceReadContext second = provider.Resolve("target-ws", ensureFresh: false);
+        WorkspaceReadContext first = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
+        WorkspaceReadContext second = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
         registry.MarkScanned("target-ws", revision: 2);
-        WorkspaceReadContext afterRevisionChange = provider.Resolve("target-ws", ensureFresh: false);
+        WorkspaceReadContext afterRevisionChange = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal("target-ws", first.WorkspaceId);
         Assert.Equal(1, first.Revision);
@@ -970,15 +970,15 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return SymbolSearchProjectionLoader.Load(target.DbPath);
             });
 
-        using WorkspaceReadContext first = provider.Resolve("target-ws", ensureFresh: false);
-        using WorkspaceReadContext second = provider.Resolve("target-ws", ensureFresh: false);
+        using WorkspaceReadContext first = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
+        using WorkspaceReadContext second = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
         Assert.Equal(12, first.Revision);
         snapshot = StoreSnapshot(root, "manifest-b");
-        using WorkspaceReadContext afterManifestChange = provider.Resolve("target-ws", ensureFresh: false);
+        using WorkspaceReadContext afterManifestChange = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
         snapshot = StoreSnapshot(root, "manifest-b", storeLogSequence: 13);
-        using WorkspaceReadContext afterStoreLogChange = provider.Resolve("target-ws", ensureFresh: false);
+        using WorkspaceReadContext afterStoreLogChange = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
         snapshot = StoreSnapshot(root, "manifest-b", IndexLevels.SymbolsMetadataValue);
-        using WorkspaceReadContext afterLevelChange = provider.Resolve("target-ws", ensureFresh: false);
+        using WorkspaceReadContext afterLevelChange = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal(WorkspaceReadMode.FamilyStore, first.Snapshot.Mode);
         Assert.Equal("manifest-a", first.Snapshot.Freshness.ManifestHash);
@@ -1012,7 +1012,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 new FixtureReadSession(snapshot, target.DbPath)),
             loadSessionIndex: _ => throw new InvalidOperationException("full session index load was not expected"));
 
-        using WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: false);
+        using WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Single(context.Index.FindByName("TargetType"));
         Assert.IsType<TargetResolution.Symbol>(context.Resolver.Resolve("TargetType"));
@@ -1042,7 +1042,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return BridgeGraph.Build([], new Dictionary<string, BridgeNode>(StringComparer.Ordinal));
             });
 
-        using WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: false);
+        using WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal(0, bridgeLoadCount);
         Assert.Same(context.BridgeGraph.Value, context.BridgeGraph.Value);
@@ -1077,8 +1077,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return SymbolSearchProjectionLoader.Load(target.DbPath);
             });
 
-        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
-        using WorkspaceSymbolReadContext currentContext = provider.ResolveSymbolRead(null, ensureFresh: false);
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
+        using WorkspaceSymbolReadContext currentContext = provider.ResolveSymbolRead(null, WorkspaceRefreshMode.None);
 
         Assert.Single(context.Index.FindByName("TargetType"));
         Assert.Single(currentContext.Index.FindByName("TargetType"));
@@ -1128,7 +1128,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return sidecar.OpenStoreRequired(root, session.Snapshot);
             });
 
-        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Single(context.Index.FindByName("TargetType"));
         Assert.Equal(1, storeOpens);
@@ -1171,7 +1171,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             },
             openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
 
-        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Single(context.Index.FindByName("TargetType"));
         Assert.Equal(0, generationLoads);
@@ -1210,7 +1210,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 throw new InvalidOperationException("a missing sidecar must not be opened");
             });
 
-        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Single(context.Index.FindByName("TargetType"));
         Assert.Equal(0, storeOpens);
@@ -1249,7 +1249,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 throw new InvalidOperationException("an unstamped sidecar must not be opened");
             });
 
-        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Single(context.Index.FindByName("TargetType"));
         Assert.Equal(0, storeOpens);
@@ -1288,7 +1288,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 throw new InvalidOperationException("the opt-out path must not open the sidecar");
             });
 
-        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Single(context.Index.FindByName("TargetType"));
         Assert.Equal(0, storeOpens);
@@ -1325,7 +1325,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             },
             openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
 
-        using WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: false);
+        using WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Single(context.Index.FindByName("TargetType"));
         Assert.Equal(0, generationLoads);
@@ -1367,7 +1367,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 throw new InvalidOperationException("the generation projection was not expected"),
             openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
 
-        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
 
         // The lagging sidecar holds the same name at the same path under a re-minted id. The read must not
         // publish that id: it is not in the live artifact the graph and the evidence readers query.
@@ -1413,7 +1413,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 throw new InvalidOperationException("the generation projection was not expected"),
             openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
 
-        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
 
         IndexedSymbol served = Assert.Single(context.Index.FindByName("TargetType"));
         Assert.Equal(liveRow.SymbolId, served.SymbolId);
@@ -1448,7 +1448,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 throw new InvalidOperationException("the generation projection was not expected"),
             openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
 
-        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Single(context.Index.FindByName("TargetType"));
     }
@@ -1478,7 +1478,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 throw new InvalidOperationException("the generation projection was not expected"),
             openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
 
-        using WorkspaceSymbolReadContext first = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        using WorkspaceSymbolReadContext first = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
         Assert.Single(first.Index.FindByName("TargetType"));
         Assert.Empty(first.Index.FindByName("FreshType"));
 
@@ -1488,7 +1488,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             searchPath,
             StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, live));
 
-        using WorkspaceSymbolReadContext second = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        using WorkspaceSymbolReadContext second = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
 
         Assert.NotSame(first.Index, second.Index);
         Assert.Empty(second.Index.FindByName("TargetType"));
@@ -1525,7 +1525,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
             openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
 
-        using WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        using WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
         Assert.Single(first.Index.FindByName("TargetType"));
         Assert.Empty(first.Index.FindByName("FreshType"));
 
@@ -1535,7 +1535,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             searchPath,
             StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, live));
 
-        using WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        using WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.NotSame(first.Index, second.Index);
         Assert.Empty(second.Index.FindByName("TargetType"));
@@ -1570,10 +1570,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return RepositoryIndexLoader.Load(path);
             });
 
-        WorkspaceReadContext first = provider.Resolve("target-ws", ensureFresh: false);
+        WorkspaceReadContext first = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
         // A force rebuild recreates the DB from scratch, so its revision counter can land on the SAME
         // number the cache key already holds — the entry must be evicted, not trusted to age out by key.
-        WorkspaceReadContext second = provider.Resolve("target-ws", ensureFresh: true);
+        WorkspaceReadContext second = provider.Resolve("target-ws", WorkspaceRefreshMode.Blocking);
 
         Assert.Equal(1, second.Revision);
         Assert.NotSame(first.Index, second.Index);
@@ -1609,7 +1609,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return RepositoryIndexLoader.Load(path);
             });
 
-        WorkspaceReadContext first = provider.Resolve("target-ws", ensureFresh: false);
+        WorkspaceReadContext first = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
         // ANOTHER process force-rebuilds the workspace: the DB file is deleted and recreated, and the fresh
         // artifact's restarted revision counter lands on the number this process already cached. This
@@ -1619,7 +1619,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         File.Copy(rebuilt.DbPath, target.DbPath, overwrite: true);
         File.SetLastWriteTimeUtc(target.DbPath, File.GetLastWriteTimeUtc(target.DbPath).AddSeconds(7));
 
-        WorkspaceReadContext second = provider.Resolve("target-ws", ensureFresh: true);
+        WorkspaceReadContext second = provider.Resolve("target-ws", WorkspaceRefreshMode.Blocking);
 
         Assert.Equal(1, second.Revision);
         Assert.NotSame(first.Index, second.Index);
@@ -1654,7 +1654,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return SymbolSearchProjectionLoader.Load(path);
             });
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal("target-ws", context.WorkspaceId);
         Assert.Equal(1, context.Revision);
@@ -1698,7 +1698,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 throw new InvalidOperationException("content loader was not expected");
             });
 
-        WorkspaceArtifactContext context = provider.ResolveArtifact("target-ws", ensureFresh: false);
+        WorkspaceArtifactContext context = provider.ResolveArtifact("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal("target-ws", context.WorkspaceId);
         Assert.Equal("target-111111111111", context.DisplayId);
@@ -1728,7 +1728,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry);
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch(selector, ensureFresh: false);
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch(selector, WorkspaceRefreshMode.None);
 
         Assert.Equal("target-ws", context.WorkspaceId);
         Assert.Equal("target-111111111111", context.DisplayId);
@@ -1748,7 +1748,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry);
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch(selector, ensureFresh: false);
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch(selector, WorkspaceRefreshMode.None);
 
         Assert.Equal("current-ws", context.WorkspaceId);
         var hit = Assert.Single(context.Index.Search("CurrentType", limit: 10));
@@ -1772,7 +1772,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             registry,
             refresh: _ => throw new InvalidOperationException("current display prefix should not refresh through registry"));
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("current-display-prefix-abcdef", ensureFresh: true);
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("current-display-prefix-abcdef", WorkspaceRefreshMode.Blocking);
 
         Assert.Equal(currentId, context.WorkspaceId);
         Assert.Equal(displayId, context.DisplayId);
@@ -1800,7 +1800,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             registry);
 
         var ex = Assert.Throws<KeyNotFoundException>(() =>
-            provider.ResolveSymbolSearch("target", ensureFresh: false));
+            provider.ResolveSymbolSearch("target", WorkspaceRefreshMode.None));
 
         Assert.Contains("ambiguous workspace selector 'target'", ex.Message);
         Assert.Contains("target-111111111111", ex.Message);
@@ -1828,15 +1828,15 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return SymbolSearchProjectionLoader.Load(path);
             });
 
-        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
-        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
+        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Same(first.Index, second.Index);
         Assert.Equal(1, searchLoadCount);
 
         registry.MarkScanned("target-ws", revision: 2);
         WorkspaceSymbolSearchContext afterRevisionChange =
-            provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+            provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal(2, afterRevisionChange.Revision);
         Assert.NotSame(first.Index, afterRevisionChange.Index);
@@ -1865,9 +1865,9 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return SymbolSearchProjectionLoader.Load(path);
             });
 
-        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
         registry.UpsertSeen("target-ws", "target-111111111111", root, targetB.DbPath);
-        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Empty(first.Index.Search("Zigglethorpe", limit: 10));
         Assert.NotEmpty(second.Index.Search("Zigglethorpe", limit: 10));
@@ -1893,8 +1893,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadSymbolSearch: _ => throw new InvalidOperationException("in-memory fallback must not run when the sidecar serves"),
             sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled));
 
-        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
-        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
+        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.IsType<FtsSymbolSearchIndex>(first.Index);
         Assert.Same(first.Index, second.Index);   // opened once, cached by (workspace, dbPath, revision)
@@ -1920,7 +1920,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadSymbolSearch: _ => throw new InvalidOperationException("fallback must not run while a fresh sidecar exists"),
             sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled));
 
-        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
         Assert.IsType<FtsSymbolSearchIndex>(first.Index);
         Assert.Equal(1, first.Revision);
 
@@ -1928,7 +1928,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         // must evict the stale revision-1 reader and re-route to the fresh artifact, not serve the cached one.
         registry.MarkScanned("target-ws", revision: 2);
         WriteSearchDbFor(target, revision: 2);
-        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.IsType<FtsSymbolSearchIndex>(second.Index);
         Assert.Equal(2, second.Revision);
@@ -1954,7 +1954,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             sidecar: new SymbolSearchSidecar(enabled: true));
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
+            provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None));
 
         Assert.Contains("Search sidecar is enabled but missing", ex.Message);
         Assert.Contains("workspace refresh", ex.Message);
@@ -1978,9 +1978,9 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             sidecar: new SymbolSearchSidecar(enabled: true));
 
         Assert.Throws<InvalidOperationException>(() =>
-            provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
+            provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None));
         WriteSearchDbFor(target, revision: 1);
-        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.IsType<FtsSymbolSearchIndex>(second.Index);
         var hit = Assert.Single(second.Index.Search("TargetType", limit: 10));
@@ -2006,7 +2006,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             sidecar: new SymbolSearchSidecar(enabled: true));
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
+            provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None));
 
         Assert.Contains("Search sidecar", ex.Message);
         Assert.Contains("stale", ex.Message);
@@ -2025,7 +2025,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             registry,
             sidecar: new SymbolSearchSidecar(enabled: true));
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false);
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch(workspaceId: null, WorkspaceRefreshMode.None);
 
         Assert.IsType<FtsSymbolSearchIndex>(context.Index);
         var hit = Assert.Single(context.Index.Search("CurrentType", limit: 10));
@@ -2044,7 +2044,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             CurrentWorkspaceAt(current.Directory, current.DbPath, "current-ws"),
             registry);   // default sidecar = Disabled
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false);
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch(workspaceId: null, WorkspaceRefreshMode.None);
 
         Assert.IsType<MillerRepositoryIndex>(context.Index);
         Assert.Same(holder.Current, context.Index);
@@ -2064,7 +2064,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             sidecar: new SymbolSearchSidecar(enabled: true));
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false));
+            provider.ResolveSymbolSearch(workspaceId: null, WorkspaceRefreshMode.None));
 
         Assert.Contains("Search sidecar is enabled but missing", ex.Message);
     }
@@ -2082,9 +2082,9 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             sidecar: new SymbolSearchSidecar(enabled: true));
 
         Assert.Throws<InvalidOperationException>(() =>
-            provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false));
+            provider.ResolveSymbolSearch(workspaceId: null, WorkspaceRefreshMode.None));
         WriteSearchDbFor(current, revision: 1);
-        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false);
+        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch(workspaceId: null, WorkspaceRefreshMode.None);
 
         Assert.IsType<FtsSymbolSearchIndex>(second.Index);
         var hit = Assert.Single(second.Index.Search("CurrentType", limit: 10));
@@ -2126,7 +2126,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "content-telemetry.db"), "current-ws");
         using var scope = ledger.Measure("content", op: null);
 
-        WorkspaceContentSearchContext context = provider.ResolveContentSearch("target-ws", ensureFresh: false);
+        WorkspaceContentSearchContext context = provider.ResolveContentSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal("target-ws", context.WorkspaceId);
         Assert.Equal(1, context.Revision);
@@ -2159,15 +2159,15 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return ContentSearchProjectionLoader.Load(dbPath, root);
             });
 
-        WorkspaceContentSearchContext first = provider.ResolveContentSearch("target-ws", ensureFresh: false);
-        WorkspaceContentSearchContext second = provider.ResolveContentSearch("target-ws", ensureFresh: false);
+        WorkspaceContentSearchContext first = provider.ResolveContentSearch("target-ws", WorkspaceRefreshMode.None);
+        WorkspaceContentSearchContext second = provider.ResolveContentSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Same(first.Index, second.Index);
         Assert.Equal(1, contentLoadCount);
 
         registry.MarkScanned("target-ws", revision: 2);
         WorkspaceContentSearchContext afterRevisionChange =
-            provider.ResolveContentSearch("target-ws", ensureFresh: false);
+            provider.ResolveContentSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal(2, afterRevisionChange.Revision);
         Assert.NotSame(first.Index, afterRevisionChange.Index);
@@ -2195,9 +2195,9 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return ContentSearchProjectionLoader.Load(dbPath, root);
             });
 
-        WorkspaceContentSearchContext first = provider.ResolveContentSearch("target-ws", ensureFresh: false);
+        WorkspaceContentSearchContext first = provider.ResolveContentSearch("target-ws", WorkspaceRefreshMode.None);
         registry.UpsertSeen("target-ws", "target-111111111111", targetB.WorkspaceRoot, targetB.DbPath);
-        WorkspaceContentSearchContext second = provider.ResolveContentSearch("target-ws", ensureFresh: false);
+        WorkspaceContentSearchContext second = provider.ResolveContentSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Empty(first.Index.Search("zigglethorpe", limit: 10));
         Assert.NotEmpty(second.Index.Search("zigglethorpe", limit: 10));
@@ -2223,8 +2223,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return ContentSearchProjectionLoader.Load(dbPath, root);
             });
 
-        WorkspaceContentSearchContext byNull = provider.ResolveContentSearch(workspaceId: null, ensureFresh: false);
-        WorkspaceContentSearchContext byId = provider.ResolveContentSearch("current-ws", ensureFresh: false);
+        WorkspaceContentSearchContext byNull = provider.ResolveContentSearch(workspaceId: null, WorkspaceRefreshMode.None);
+        WorkspaceContentSearchContext byId = provider.ResolveContentSearch("current-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal(7, byNull.Revision);
         Assert.Equal("current", byNull.FreshnessStatus);
@@ -2252,10 +2252,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return ContentSearchProjectionLoader.Load(dbPath, root);
             });
 
-        WorkspaceContentSearchContext first = provider.ResolveContentSearch(workspaceId: null, ensureFresh: false);
-        WorkspaceContentSearchContext cached = provider.ResolveContentSearch(workspaceId: null, ensureFresh: false);
+        WorkspaceContentSearchContext first = provider.ResolveContentSearch(workspaceId: null, WorkspaceRefreshMode.None);
+        WorkspaceContentSearchContext cached = provider.ResolveContentSearch(workspaceId: null, WorkspaceRefreshMode.None);
         holder.Swap(RepositoryIndexLoader.Load(fx.DbPath), revision: 2);
-        WorkspaceContentSearchContext afterSwap = provider.ResolveContentSearch(workspaceId: null, ensureFresh: false);
+        WorkspaceContentSearchContext afterSwap = provider.ResolveContentSearch(workspaceId: null, WorkspaceRefreshMode.None);
 
         Assert.Equal(1, first.Revision);
         Assert.Same(first.Index, cached.Index);       // same holder revision → cached, one build
@@ -2290,8 +2290,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return FtsTextContentSearchIndex.Open(ContentCorpusSidecar.ContentDbPathFor(dbPath), revision);
             });
 
-        WorkspaceTextContentSearchContext first = provider.ResolveTextContentSearch("target-ws", ensureFresh: false);
-        WorkspaceTextContentSearchContext second = provider.ResolveTextContentSearch("target-ws", ensureFresh: false);
+        WorkspaceTextContentSearchContext first = provider.ResolveTextContentSearch("target-ws", WorkspaceRefreshMode.None);
+        WorkspaceTextContentSearchContext second = provider.ResolveTextContentSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal("target-ws", first.WorkspaceId);
         Assert.Equal(1, first.Revision);
@@ -2332,8 +2332,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         var telemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
         using IDisposable activation = telemetry.ActivateSearchTelemetry();
 
-        WorkspaceTextContentSearchContext byNull = provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false);
-        WorkspaceTextContentSearchContext byId = provider.ResolveTextContentSearch("current-ws", ensureFresh: false);
+        WorkspaceTextContentSearchContext byNull = provider.ResolveTextContentSearch(workspaceId: null, WorkspaceRefreshMode.None);
+        WorkspaceTextContentSearchContext byId = provider.ResolveTextContentSearch("current-ws", WorkspaceRefreshMode.None);
         ContextLookupPhaseObservation observation =
             telemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
 
@@ -2383,12 +2383,12 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using IDisposable activation = telemetry.ActivateSearchTelemetry();
 
         WorkspaceTextContentSearchContext first =
-            provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false);
+            provider.ResolveTextContentSearch(workspaceId: null, WorkspaceRefreshMode.None);
         WorkspaceTextContentSearchContext cached =
-            provider.ResolveTextContentSearch("current-ws", ensureFresh: false);
+            provider.ResolveTextContentSearch("current-ws", WorkspaceRefreshMode.None);
         snapshot = StoreSnapshot(root, "manifest-b");
         WorkspaceTextContentSearchContext changed =
-            provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false);
+            provider.ResolveTextContentSearch(workspaceId: null, WorkspaceRefreshMode.None);
         ContextLookupPhaseObservation observation =
             telemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
 
@@ -2440,10 +2440,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             TextContentIndexResolveTelemetryCollector.Current!;
 
         Task<WorkspaceTextContentSearchContext> first = RunBlockingResolve(
-            () => provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false));
+            () => provider.ResolveTextContentSearch(workspaceId: null, WorkspaceRefreshMode.None));
         Assert.True(loadEntered.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
         Task<WorkspaceTextContentSearchContext> second = RunBlockingResolve(
-            () => provider.ResolveTextContentSearch("current-ws", ensureFresh: false));
+            () => provider.ResolveTextContentSearch("current-ws", WorkspaceRefreshMode.None));
         Assert.True(SpinWait.SpinUntil(
             () => collector.Snapshot().CacheHit.CallCount == 1,
             TimeSpan.FromSeconds(5)));
@@ -2477,9 +2477,9 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using IDisposable activation = telemetry.ActivateSearchTelemetry();
 
         Assert.Throws<OperationCanceledException>(() =>
-            provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false));
+            provider.ResolveTextContentSearch(workspaceId: null, WorkspaceRefreshMode.None));
         Assert.Throws<OperationCanceledException>(() =>
-            provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false));
+            provider.ResolveTextContentSearch(workspaceId: null, WorkspaceRefreshMode.None));
         ContextLookupPhaseObservation observation =
             telemetry.CompleteLookupPhase(ContextLookupPhase.SourceRescue);
 
@@ -2502,7 +2502,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled));
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            provider.ResolveRegionSearch(workspaceId: null, ensureFresh: false));
+            provider.ResolveRegionSearch(workspaceId: null, WorkspaceRefreshMode.None));
 
         Assert.Contains("MILLER_REGION_INDEX=0", ex.Message);
     }
@@ -2532,8 +2532,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             },
             sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.EnabledDefault));
 
-        WorkspaceRegionSearchContext first = provider.ResolveRegionSearch("target-ws", ensureFresh: false);
-        WorkspaceRegionSearchContext second = provider.ResolveRegionSearch("target-ws", ensureFresh: false);
+        WorkspaceRegionSearchContext first = provider.ResolveRegionSearch("target-ws", WorkspaceRefreshMode.None);
+        WorkspaceRegionSearchContext second = provider.ResolveRegionSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.IsType<FtsRegionSearchIndex>(first.Index);
         Assert.Same(first.Index, second.Index);
@@ -2567,10 +2567,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return RepositoryIndexLoader.Load(path);
             });
 
-        Task<WorkspaceReadContext> first = RunBlockingResolve(() => provider.Resolve("target-ws", ensureFresh: false));
+        Task<WorkspaceReadContext> first = RunBlockingResolve(() => provider.Resolve("target-ws", WorkspaceRefreshMode.None));
         Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(loadStarted.Task, await Task.WhenAny(loadStarted.Task, timeout));
-        Task<WorkspaceReadContext> second = RunBlockingResolve(() => provider.Resolve("target-ws", ensureFresh: false));
+        Task<WorkspaceReadContext> second = RunBlockingResolve(() => provider.Resolve("target-ws", WorkspaceRefreshMode.None));
         releaseLoad.Set();
 
         WorkspaceReadContext[] contexts = await Task.WhenAll(first, second);
@@ -2607,7 +2607,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Task<string> first = RunBlockingResolve(() =>
         {
             using TelemetryScope scope = ledger.Measure("inspect", op: null);
-            provider.Resolve("target-ws", ensureFresh: false);
+            provider.Resolve("target-ws", WorkspaceRefreshMode.None);
             return scope.MetadataJson;
         });
         Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -2618,7 +2618,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         {
             using TelemetryScope scope = ledger.Measure("inspect", op: null);
             secondScopePublished.TrySetResult(scope);
-            provider.Resolve("target-ws", ensureFresh: false);
+            provider.Resolve("target-ws", WorkspaceRefreshMode.None);
             return scope.MetadataJson;
         });
         TelemetryScope secondScope = await secondScopePublished.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -2662,11 +2662,11 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             });
 
         Task<WorkspaceContentSearchContext> first =
-            RunBlockingResolve(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+            RunBlockingResolve(() => provider.ResolveContentSearch("target-ws", WorkspaceRefreshMode.None));
         Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(loadStarted.Task, await Task.WhenAny(loadStarted.Task, timeout));
         Task<WorkspaceContentSearchContext> second =
-            RunBlockingResolve(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+            RunBlockingResolve(() => provider.ResolveContentSearch("target-ws", WorkspaceRefreshMode.None));
         releaseLoad.Set();
 
         WorkspaceContentSearchContext[] contexts = await Task.WhenAll(first, second);
@@ -2697,9 +2697,9 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return RepositoryIndexLoader.Load(path);
             });
 
-        WorkspaceReadContext first = provider.Resolve("target-ws", ensureFresh: false);
+        WorkspaceReadContext first = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
         registry.UpsertSeen("target-ws", "target-111111111111", root, targetB.DbPath);
-        WorkspaceReadContext second = provider.Resolve("target-ws", ensureFresh: false);
+        WorkspaceReadContext second = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
         Assert.NotSame(first.Index, second.Index);
         Assert.IsType<TargetResolution.NotFound>(first.Resolver.Resolve("TargetB"));
@@ -2730,15 +2730,15 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return RepositoryIndexLoader.Load(activeDbPath);
             });
 
-        WorkspaceReadContext first = provider.Resolve("target-ws", ensureFresh: false);
+        WorkspaceReadContext first = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
         registry.UpsertSeen("target-ws", "target-111111111111", root, targetB.DbPath);
         registry.MarkScanned("target-ws", revision: 2);
         activeDbPath = targetB.DbPath;
-        WorkspaceReadContext second = provider.Resolve("target-ws", ensureFresh: false);
+        WorkspaceReadContext second = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
         registry.UpsertSeen("target-ws", "target-111111111111", root, targetA.DbPath);
         registry.MarkScanned("target-ws", revision: 1);
         activeDbPath = targetA.DbPath;
-        WorkspaceReadContext third = provider.Resolve("target-ws", ensureFresh: false);
+        WorkspaceReadContext third = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
         Assert.IsType<TargetResolution.Symbol>(first.Resolver.Resolve("TargetA"));
         Assert.IsType<TargetResolution.Symbol>(second.Resolver.Resolve("TargetB"));
@@ -2782,21 +2782,21 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return RepositoryIndexLoader.Load(path);
             });
 
-        Task<WorkspaceReadContext> first = RunBlockingResolve(() => provider.Resolve("target-ws", ensureFresh: false));
+        Task<WorkspaceReadContext> first = RunBlockingResolve(() => provider.Resolve("target-ws", WorkspaceRefreshMode.None));
         Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(startedA.Task, await Task.WhenAny(startedA.Task, timeout));
 
         registry.UpsertSeen("target-ws", "target-111111111111", root, targetB.DbPath);
         registry.MarkScanned("target-ws", revision: 2);
 
-        Task<WorkspaceReadContext> second = RunBlockingResolve(() => provider.Resolve("target-ws", ensureFresh: false));
+        Task<WorkspaceReadContext> second = RunBlockingResolve(() => provider.Resolve("target-ws", WorkspaceRefreshMode.None));
         Assert.Same(startedB.Task, await Task.WhenAny(startedB.Task, timeout));
 
         releaseA.Set();
         WorkspaceReadContext stale = await first;
         releaseB.Set();
         WorkspaceReadContext fresh = await second;
-        WorkspaceReadContext freshAgain = provider.Resolve("target-ws", ensureFresh: false);
+        WorkspaceReadContext freshAgain = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
         Assert.IsType<TargetResolution.Symbol>(stale.Resolver.Resolve("TargetA"));
         Assert.IsType<TargetResolution.Symbol>(fresh.Resolver.Resolve("TargetB"));
@@ -2842,7 +2842,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             });
 
         Task<WorkspaceSymbolSearchContext> first =
-            RunBlockingResolve(() => provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
+            RunBlockingResolve(() => provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None));
         Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(startedA.Task, await Task.WhenAny(startedA.Task, timeout));
 
@@ -2850,14 +2850,14 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         registry.MarkScanned("target-ws", revision: 2);
 
         Task<WorkspaceSymbolSearchContext> second =
-            RunBlockingResolve(() => provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
+            RunBlockingResolve(() => provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None));
         Assert.Same(startedB.Task, await Task.WhenAny(startedB.Task, timeout));
 
         releaseA.Set();
         WorkspaceSymbolSearchContext stale = await first;
         releaseB.Set();
         WorkspaceSymbolSearchContext fresh = await second;
-        WorkspaceSymbolSearchContext freshAgain = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WorkspaceSymbolSearchContext freshAgain = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.NotEmpty(stale.Index.Search("TargetA", limit: 10));
         Assert.NotEmpty(fresh.Index.Search("TargetB", limit: 10));
@@ -2901,7 +2901,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             });
 
         Task<WorkspaceContentSearchContext> first =
-            RunBlockingResolve(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+            RunBlockingResolve(() => provider.ResolveContentSearch("target-ws", WorkspaceRefreshMode.None));
         Task firstTimeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(startedA.Task, await Task.WhenAny(startedA.Task, firstTimeout));
 
@@ -2909,7 +2909,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         registry.MarkScanned("target-ws", revision: 2);
 
         Task<WorkspaceContentSearchContext> second =
-            RunBlockingResolve(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+            RunBlockingResolve(() => provider.ResolveContentSearch("target-ws", WorkspaceRefreshMode.None));
         Task secondTimeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(startedB.Task, await Task.WhenAny(startedB.Task, secondTimeout));
 
@@ -2917,7 +2917,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         WorkspaceContentSearchContext stale = await first;
         releaseB.Set();
         WorkspaceContentSearchContext fresh = await second;
-        WorkspaceContentSearchContext freshAgain = provider.ResolveContentSearch("target-ws", ensureFresh: false);
+        WorkspaceContentSearchContext freshAgain = provider.ResolveContentSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.NotEmpty(stale.Index.Search("alpha", limit: 10));
         Assert.NotEmpty(fresh.Index.Search("beta", limit: 10));
@@ -2956,7 +2956,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "refresh-telemetry.db"), "current-ws");
         using var scope = ledger.Measure("inspect", op: null);
 
-        WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: true);
+        WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.Blocking);
 
         Assert.True(refreshed);
         Assert.Equal(2, context.Revision);
@@ -2983,7 +2983,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         using (TelemetryScope firstScope = ledger.Measure("inspect", op: null))
         {
-            provider.Resolve("target-ws", ensureFresh: false);
+            provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
             using JsonDocument metadata = JsonDocument.Parse(firstScope.MetadataJson);
             Assert.Equal("index_load", metadata.RootElement.GetProperty("wait_reason").GetString());
@@ -2991,7 +2991,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         using (TelemetryScope cachedScope = ledger.Measure("inspect", op: null))
         {
-            provider.Resolve("target-ws", ensureFresh: false);
+            provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
             using JsonDocument metadata = JsonDocument.Parse(cachedScope.MetadataJson);
             Assert.False(metadata.RootElement.TryGetProperty("wait_reason", out _));
@@ -3019,7 +3019,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 Revision: 4,
                 Scanned: true));
 
-        WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: true);
+        WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.Blocking);
 
         Assert.Equal("unchanged", context.FreshnessStatus);
         Assert.True(context.IndexFresh);
@@ -3047,7 +3047,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 Revision: 4,
                 WarningText: "busy but readable"));
 
-        WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: true);
+        WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.Blocking);
 
         Assert.Equal("unconfirmed_lock_busy", context.FreshnessStatus);
         Assert.False(context.IndexFresh);
@@ -3073,7 +3073,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry);
 
-        WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: false);
+        WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal("loaded_existing", context.FreshnessStatus);
         Assert.False(context.IndexFresh);
@@ -3101,7 +3101,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadIndex: _ => throw new InvalidOperationException("provider should not load a missing index"));
 
         var ex = Assert.Throws<FileNotFoundException>(() =>
-            provider.Resolve("target-ws", ensureFresh: true));
+            provider.Resolve("target-ws", WorkspaceRefreshMode.Blocking));
 
         Assert.Contains("index db missing", ex.Message, StringComparison.Ordinal);
     }
@@ -3128,7 +3128,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadIndex: _ => throw new InvalidOperationException("provider should not load after failed refresh"));
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            provider.Resolve("target-ws", ensureFresh: true));
+            provider.Resolve("target-ws", WorkspaceRefreshMode.Blocking));
 
         Assert.Contains("scan failed", ex.Message, StringComparison.Ordinal);
     }
@@ -3148,10 +3148,279 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             registry);
 
         var ex = Assert.Throws<DirectoryNotFoundException>(() =>
-            provider.Resolve("target-ws", ensureFresh: false));
+            provider.Resolve("target-ws", WorkspaceRefreshMode.None));
 
         Assert.Contains(missingRoot, ex.Message, StringComparison.Ordinal);
         Assert.Equal(WorkspaceRegistryState.Missing, registry.Get("target-ws")?.State);
+    }
+
+    // ---------------------------------------------------------------------------------------------------------
+    // Serve-then-refresh (WorkspaceRefreshMode.Background), the default for an explicit workspace_id since
+    // 2026-08-21. The old default put a whole cross-workspace scan in front of every read (p50 ~2.9s, p95 20s+).
+    // ---------------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Resolve_RegisteredBackground_ServesThePinnedViewWithoutWaitingForTheRefresh()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-background-serve");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        var scheduled = new List<Action>();
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: _ => throw new InvalidOperationException("the read path must not run the refresh"),
+            scheduleBackgroundRefresh: scheduled.Add);
+
+        using WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.Background);
+
+        Assert.Equal(3, context.Revision);
+        Assert.NotEmpty(context.Index.FindByName("TargetType"));
+        // The refresh is OWED, not done: one work item is queued and the read never touched it.
+        Assert.Single(scheduled);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredBackground_ReportsRefreshPendingAndTheServedRevision()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-background-honesty");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: _ => throw new InvalidOperationException("the read path must not run the refresh"),
+            scheduleBackgroundRefresh: _ => { });
+
+        using WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.Background);
+
+        Assert.Equal("refresh_pending", context.FreshnessStatus);
+        Assert.False(context.IndexFresh);
+        Assert.Equal(3, context.Revision);
+
+        string? banner = ReadToolWorkspaceRouting.CompactBanner(context, "target-ws", json: false);
+        Assert.Equal("workspace: target-111111111111\nfreshness: refresh_pending\nrevision: 3", banner);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredBackground_RunsTheRefreshOffTheReadPath()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-background-runs");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        var refreshed = new List<string>();
+        var scheduled = new List<Action>();
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId =>
+            {
+                refreshed.Add(workspaceId);
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.Refreshed, workspaceId, root, target.DbPath, Revision: 4, Scanned: true);
+            },
+            scheduleBackgroundRefresh: scheduled.Add);
+
+        provider.Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
+        Assert.Empty(refreshed);
+
+        Assert.Single(scheduled)();
+
+        Assert.Equal(["target-ws"], refreshed);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredBackground_CoalescesWhileARefreshIsInFlight()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-background-coalesce");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        int refreshCalls = 0;
+        var scheduled = new List<Action>();
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId =>
+            {
+                refreshCalls++;
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.Unchanged, workspaceId, root, target.DbPath, Revision: 3, Scanned: true);
+            },
+            scheduleBackgroundRefresh: scheduled.Add);
+
+        // Ten cross-workspace reads must not spawn ten extractors: while the first refresh is still in flight the
+        // next nine join it. The blocking arm throttled itself because every caller queued behind the same scan;
+        // a fire-and-forget arm has no such queue, so the in-flight set IS the guard.
+        for (int i = 0; i < 10; i++)
+            provider.Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
+
+        Assert.Single(scheduled);
+
+        scheduled[0]();
+        Assert.Equal(1, refreshCalls);
+
+        // The in-flight entry is released when the refresh returns, so a later read starts the next one.
+        provider.Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
+        Assert.Equal(2, scheduled.Count);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredBackground_AFailedBackgroundRefreshNeverEscapesAndReleasesTheGuard()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-background-failure");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        var scheduled = new List<Action>();
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: _ => throw new InvalidOperationException("extractor is wedged"),
+            scheduleBackgroundRefresh: scheduled.Add);
+
+        provider.Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
+        scheduled[0]();
+
+        provider.Resolve("target-ws", WorkspaceRefreshMode.Background).Dispose();
+        Assert.Equal(2, scheduled.Count);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredBackgroundWithNoReadableIndex_RefreshesInTheForeground()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-background-no-index");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        int refreshCalls = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId =>
+            {
+                refreshCalls++;
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.Refreshed, workspaceId, root, target.DbPath, Revision: 3, Scanned: true);
+            },
+            scheduleBackgroundRefresh: _ => throw new InvalidOperationException("must not go to the background"),
+            hasReadableIndex: _ => false);
+
+        using WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.Background);
+
+        // Nothing to serve means nothing to serve STALE: the read does the foreground work instead.
+        Assert.Equal(1, refreshCalls);
+        Assert.NotEqual("refresh_pending", context.FreshnessStatus);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredBackgroundWithNoReadableIndex_StillReportsTheHonestNotReadyError()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-background-missing-index");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.MissingIndex,
+                workspaceId,
+                root,
+                target.DbPath,
+                Revision: null,
+                Scanned: false,
+                Error: "Workspace index DB not found."),
+            scheduleBackgroundRefresh: _ => throw new InvalidOperationException("must not go to the background"),
+            hasReadableIndex: _ => false);
+
+        Assert.Throws<FileNotFoundException>(
+            () => provider.Resolve("target-ws", WorkspaceRefreshMode.Background));
+    }
+
+    [Fact]
+    public void Resolve_RegisteredBlocking_StillWaitsForTheRefreshBeforeReading()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-blocking-still-waits");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        int refreshCalls = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId =>
+            {
+                refreshCalls++;
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.Unchanged, workspaceId, root, target.DbPath, Revision: 3, Scanned: true);
+            },
+            scheduleBackgroundRefresh: _ => throw new InvalidOperationException("ensure_fresh=true must not defer"));
+
+        using WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.Blocking);
+
+        Assert.Equal(1, refreshCalls);
+        Assert.True(context.IndexFresh);
+        Assert.NotEqual("refresh_pending", context.FreshnessStatus);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredNone_StartsNoRefreshAtAll()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 3, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-none-zero-work");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: _ => throw new InvalidOperationException("ensure_fresh=false must do zero refresh work"),
+            scheduleBackgroundRefresh: _ => throw new InvalidOperationException("ensure_fresh=false must not defer"),
+            hasReadableIndex: _ => throw new InvalidOperationException("ensure_fresh=false must not probe"));
+
+        using WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
+
+        Assert.Equal(3, context.Revision);
+        Assert.NotEqual("refresh_pending", context.FreshnessStatus);
     }
 
     private WorkspaceIndexProvider NewProvider(
@@ -3174,7 +3443,9 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Action<GraphStatementObservation>? graphStatementObserver = null,
         Func<WorkspaceReadHandle, ITextContentSearchIndex>? openStoreTextContentSearch = null,
         Func<WorkspaceReadHandle, IReadOnlyList<GraphEdge>>? loadSupplementalEdges = null,
-        SupplementalEdgeCache? supplementalEdgesCache = null) =>
+        SupplementalEdgeCache? supplementalEdgesCache = null,
+        Action<Action>? scheduleBackgroundRefresh = null,
+        Func<WorkspaceRegistryRow, bool>? hasReadableIndex = null) =>
         new(
             holder,
             workspace,
@@ -3197,7 +3468,12 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             graphStatementObserver,
             openStoreTextContentSearch,
             loadSupplementalEdges,
-            supplementalEdgesCache);
+            supplementalEdgesCache,
+            factCacheStore: null,
+            // Tests drive the background arm by hand so no assertion races a thread pool item; the fixtures use the
+            // legacy read-session seam, so readability is the legacy artifact's existence.
+            scheduleBackgroundRefresh: scheduleBackgroundRefresh,
+            hasReadableIndex: hasReadableIndex ?? (row => File.Exists(row.IndexDbPath)));
 
     private static WorkspaceReadSnapshot StoreSnapshot(
         string root,
@@ -3320,7 +3596,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadSymbolSearch: _ => throw new InvalidOperationException("fallback must not run while a fresh sidecar exists"),
             sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled));
 
-        Assert.IsType<FtsSymbolSearchIndex>(provider.ResolveSymbolSearch("target-ws", ensureFresh: false).Index);
+        Assert.IsType<FtsSymbolSearchIndex>(provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None).Index);
 
         // A full rebuild promotes a NEW artifact whose revision counter restarted at 1. Revision comparison alone
         // reads that as fresh, so the sidecar built from the superseded artifact would keep serving pre-rebuild
@@ -3328,7 +3604,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         ReplaceArtifactId(target.DbPath, "artifact-after-full-rebuild");
 
         InvalidOperationException failure = Assert.Throws<InvalidOperationException>(
-            () => provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
+            () => provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None));
         Assert.Contains("different index generation", failure.Message, StringComparison.Ordinal);
     }
 
@@ -3352,12 +3628,12 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry);
 
-        Assert.Equal(1, provider.ResolveTextContentSearch("target-ws", ensureFresh: false).Revision);
+        Assert.Equal(1, provider.ResolveTextContentSearch("target-ws", WorkspaceRefreshMode.None).Revision);
 
         ReplaceArtifactId(target.DbPath, "artifact-after-full-rebuild");
 
         InvalidOperationException failure = Assert.Throws<InvalidOperationException>(
-            () => provider.ResolveTextContentSearch("target-ws", ensureFresh: false));
+            () => provider.ResolveTextContentSearch("target-ws", WorkspaceRefreshMode.None));
         Assert.Contains("different index generation", failure.Message, StringComparison.Ordinal);
     }
 

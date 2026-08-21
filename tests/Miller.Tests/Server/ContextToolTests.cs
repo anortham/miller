@@ -1889,7 +1889,7 @@ public sealed class ContextToolTests
     }
 
     [Fact]
-    public void Context_ExplicitWorkspaceId_DefaultsEnsureFreshTrue_AndRoutesToTargetIndex()
+    public void Context_ExplicitWorkspaceId_DefaultsToBackgroundRefresh_AndRoutesToTargetIndex()
     {
         var currentIndex = EmptyIndex();
         var (targetIndex, _) = BuildFixture();
@@ -1903,7 +1903,7 @@ public sealed class ContextToolTests
         string output = tool.Context("OrderService", workspace_id: "target-ws");
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
-        Assert.True(provider.LastEnsureFresh);
+        Assert.Equal(WorkspaceRefreshMode.Background, provider.LastRefreshMode);
         Assert.StartsWith("workspace: target-ws\n", output);
         Assert.DoesNotContain(targetRoot, output);
         Assert.Contains("OrderService", output);

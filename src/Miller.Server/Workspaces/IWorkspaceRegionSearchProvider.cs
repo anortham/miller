@@ -2,5 +2,5 @@ namespace Miller.Server.Workspaces;
 
 public interface IWorkspaceRegionSearchProvider
 {
-    WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh);
+    WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, WorkspaceRefreshMode refresh);
 }

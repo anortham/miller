@@ -47,7 +47,7 @@ impact(workspace_id="<selector>", target="<symbol-or-file>")
 trace(workspace_id="<selector>", target="<symbol>")
 ```
 
-Explicit `workspace_id` defaults to refresh-first. Set `ensure_fresh=false` only when a fast, possibly stale read is acceptable.
+Explicit `workspace_id` serves the pinned index immediately and refreshes in the background, so the read is fast and the NEXT call sees fresher data. Such a read says so: `freshness: refresh_pending` plus the served `revision`. Set `ensure_fresh=true` when you must wait for a current index; set `ensure_fresh=false` for zero refresh work.
 
 ## Report
 

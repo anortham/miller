@@ -40,6 +40,12 @@ public sealed class WorkspaceIndexProvider
     private readonly Dictionary<CacheKey, Lazy<CachedRegionSearch>> _regionSearchCache = new();
     private readonly SupplementalEdgeCache _supplementalEdgesCache;
     private readonly RevisionFactCacheStore _factCacheStore;
+    private readonly Action<Action> _scheduleBackgroundRefresh;
+    private readonly Func<WorkspaceRegistryRow, bool> _hasReadableIndex;
+
+    // One background refresh per workspace at a time. See StartBackgroundRefresh.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _backgroundRefreshes =
+        new(StringComparer.Ordinal);
 
     public WorkspaceIndexProvider(
         IndexHolder holder,
@@ -93,7 +99,9 @@ public sealed class WorkspaceIndexProvider
         Func<WorkspaceReadHandle, ITextContentSearchIndex>? openStoreTextContentSearch = null,
         Func<WorkspaceReadHandle, IReadOnlyList<GraphEdge>>? loadSupplementalEdges = null,
         SupplementalEdgeCache? supplementalEdgesCache = null,
-        RevisionFactCacheStore? factCacheStore = null)
+        RevisionFactCacheStore? factCacheStore = null,
+        Action<Action>? scheduleBackgroundRefresh = null,
+        Func<WorkspaceRegistryRow, bool>? hasReadableIndex = null)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(currentWorkspace);
@@ -137,9 +145,12 @@ public sealed class WorkspaceIndexProvider
         _supplementalEdgesCache = supplementalEdgesCache ?? new SupplementalEdgeCache();
         _factCacheStore = factCacheStore ?? new RevisionFactCacheStore();
         _graphStatementObserver = graphStatementObserver ?? ObserveGraphStatement;
+        _scheduleBackgroundRefresh = scheduleBackgroundRefresh
+            ?? (work => ThreadPool.QueueUserWorkItem(static state => ((Action)state!)(), work));
+        _hasReadableIndex = hasReadableIndex ?? HasReadableIndex;
     }
 
-    public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
+    public WorkspaceReadContext Resolve(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         if (workspaceId is null)
             return ResolveCurrent();
@@ -148,10 +159,10 @@ public sealed class WorkspaceIndexProvider
         if (SelectorTargetsCurrent(workspaceId))
             return ResolveCurrent();
 
-        return ResolveRegistered(workspaceId, ensureFresh);
+        return ResolveRegistered(workspaceId, refresh);
     }
 
-    public WorkspaceArtifactContext ResolveArtifact(string? workspaceId, bool ensureFresh)
+    public WorkspaceArtifactContext ResolveArtifact(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         if (workspaceId is null)
             return ResolveCurrentArtifact();
@@ -160,10 +171,10 @@ public sealed class WorkspaceIndexProvider
         if (SelectorTargetsCurrent(workspaceId))
             return ResolveCurrentArtifact();
 
-        return ResolveRegisteredArtifact(workspaceId, ensureFresh);
+        return ResolveRegisteredArtifact(workspaceId, refresh);
     }
 
-    public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh)
+    public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         if (workspaceId is null)
             return ResolveCurrentSymbolSearch();
@@ -172,10 +183,10 @@ public sealed class WorkspaceIndexProvider
         if (SelectorTargetsCurrent(workspaceId))
             return ResolveCurrentSymbolSearch();
 
-        return ResolveRegisteredSymbolSearch(workspaceId, ensureFresh);
+        return ResolveRegisteredSymbolSearch(workspaceId, refresh);
     }
 
-    public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, bool ensureFresh)
+    public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         if (workspaceId is null)
             return ResolveCurrentSymbolRead();
@@ -184,10 +195,10 @@ public sealed class WorkspaceIndexProvider
         if (SelectorTargetsCurrent(workspaceId))
             return ResolveCurrentSymbolRead();
 
-        return ResolveRegisteredSymbolRead(workspaceId, ensureFresh);
+        return ResolveRegisteredSymbolRead(workspaceId, refresh);
     }
 
-    public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh)
+    public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         if (workspaceId is null)
             return ResolveCurrentContentSearch();
@@ -196,10 +207,10 @@ public sealed class WorkspaceIndexProvider
         if (SelectorTargetsCurrent(workspaceId))
             return ResolveCurrentContentSearch();
 
-        return ResolveRegisteredContentSearch(workspaceId, ensureFresh);
+        return ResolveRegisteredContentSearch(workspaceId, refresh);
     }
 
-    public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh)
+    public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         if (workspaceId is null)
             return ResolveCurrentRegionSearch();
@@ -208,10 +219,10 @@ public sealed class WorkspaceIndexProvider
         if (SelectorTargetsCurrent(workspaceId))
             return ResolveCurrentRegionSearch();
 
-        return ResolveRegisteredRegionSearch(workspaceId, ensureFresh);
+        return ResolveRegisteredRegionSearch(workspaceId, refresh);
     }
 
-    public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh)
+    public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         WorkspaceTextContentSearchContext context;
@@ -222,7 +233,7 @@ public sealed class WorkspaceIndexProvider
             ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
             context = SelectorTargetsCurrent(workspaceId)
                 ? ResolveCurrentTextContentSearch()
-                : ResolveRegisteredTextContentSearch(workspaceId, ensureFresh);
+                : ResolveRegisteredTextContentSearch(workspaceId, refresh);
         }
 
         ObserveTextContentIndexResolve(TextContentIndexResolveFamily.Resolve, startedAt);
@@ -450,10 +461,10 @@ public sealed class WorkspaceIndexProvider
         return GetOrLoadSymbolSearch(key, dbPath, () => legacyIndex).Index;
     }
 
-    private WorkspaceReadContext ResolveRegistered(string workspaceId, bool ensureFresh)
+    private WorkspaceReadContext ResolveRegistered(string workspaceId, WorkspaceRefreshMode refresh)
     {
         long resolveStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, refresh);
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
@@ -497,8 +508,8 @@ public sealed class WorkspaceIndexProvider
                 revision,
                 familyStore
                     ? null
-                    : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+                    : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
+                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.WarningTextFor(refreshResult),
                 row.DisplayId,
                 IndexLevel: readSession.Snapshot.IndexLevel)
@@ -622,9 +633,9 @@ public sealed class WorkspaceIndexProvider
         return graph;
     }
 
-    private WorkspaceSymbolSearchContext ResolveRegisteredSymbolSearch(string workspaceId, bool ensureFresh)
+    private WorkspaceSymbolSearchContext ResolveRegisteredSymbolSearch(string workspaceId, WorkspaceRefreshMode refresh)
     {
-        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, refresh);
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
@@ -666,8 +677,8 @@ public sealed class WorkspaceIndexProvider
                 revision,
                 familyStore
                     ? null
-                    : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+                    : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
+                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.WarningTextFor(refreshResult),
                 row.DisplayId,
                 IsCurrent: false,
@@ -680,10 +691,10 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
-    private WorkspaceSymbolReadContext ResolveRegisteredSymbolRead(string workspaceId, bool ensureFresh)
+    private WorkspaceSymbolReadContext ResolveRegisteredSymbolRead(string workspaceId, WorkspaceRefreshMode refresh)
     {
         long resolveStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, refresh);
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
@@ -708,8 +719,8 @@ public sealed class WorkspaceIndexProvider
                 revision,
                 familyStore
                     ? null
-                    : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+                    : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
+                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.WarningTextFor(refreshResult),
                 row.DisplayId,
                 IsCurrent: false,
@@ -727,9 +738,9 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
-    private WorkspaceArtifactContext ResolveRegisteredArtifact(string workspaceId, bool ensureFresh)
+    private WorkspaceArtifactContext ResolveRegisteredArtifact(string workspaceId, WorkspaceRefreshMode refresh)
     {
-        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, refresh);
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
@@ -744,8 +755,8 @@ public sealed class WorkspaceIndexProvider
                 ContextRevision(readSession.Snapshot, row.LastRevision ?? 0),
                 familyStore
                     ? null
-                    : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+                    : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
+                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.WarningTextFor(refreshResult),
                 row.DisplayId,
                 IndexLevel: readSession.Snapshot.IndexLevel);
@@ -791,9 +802,9 @@ public sealed class WorkspaceIndexProvider
             DisplayId: CurrentDisplayId());
     }
 
-    private WorkspaceContentSearchContext ResolveRegisteredContentSearch(string workspaceId, bool ensureFresh)
+    private WorkspaceContentSearchContext ResolveRegisteredContentSearch(string workspaceId, WorkspaceRefreshMode refresh)
     {
-        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, refresh);
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
@@ -811,8 +822,8 @@ public sealed class WorkspaceIndexProvider
             row.WorkspaceId,
             row.CanonicalRoot,
             revision,
-            familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+            familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
+            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
             row.DisplayId);
     }
@@ -851,9 +862,9 @@ public sealed class WorkspaceIndexProvider
             DisplayId: CurrentDisplayId());
     }
 
-    private WorkspaceTextContentSearchContext ResolveRegisteredTextContentSearch(string workspaceId, bool ensureFresh)
+    private WorkspaceTextContentSearchContext ResolveRegisteredTextContentSearch(string workspaceId, WorkspaceRefreshMode refresh)
     {
-        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, refresh);
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
@@ -879,8 +890,8 @@ public sealed class WorkspaceIndexProvider
             row.WorkspaceId,
             row.CanonicalRoot,
             revision,
-            familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+            familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
+            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
             row.DisplayId,
             IsCurrent: false);
@@ -925,9 +936,9 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
-    private WorkspaceRegionSearchContext ResolveRegisteredRegionSearch(string workspaceId, bool ensureFresh)
+    private WorkspaceRegionSearchContext ResolveRegisteredRegionSearch(string workspaceId, WorkspaceRefreshMode refresh)
     {
-        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, refresh);
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
@@ -951,8 +962,8 @@ public sealed class WorkspaceIndexProvider
                 row.WorkspaceId,
                 row.CanonicalRoot,
                 revision,
-                familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+                familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row, state.RefreshPending),
+                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row, state.RefreshPending),
                 WorkspaceFreshnessView.WarningTextFor(refreshResult),
                 row.DisplayId,
                 IndexLevel: readSession.Snapshot.IndexLevel);
@@ -965,13 +976,14 @@ public sealed class WorkspaceIndexProvider
     }
 
     /// <summary>
-    /// The refresh-first path behind every cross-workspace read, as a named seam so its backoff posture is
+    /// The refresh path behind every cross-workspace read, as a named seam so its backoff posture is
     /// directly testable rather than living in a constructor lambda a mutation could flip unobserved.
     ///
-    /// <para><c>bypassBackoff</c> stays FALSE: this is the AUTOMATIC path, not a person asking.
-    /// <c>ReadToolWorkspaceRouting.ResolveEnsureFresh</c> turns freshness on for any explicit
-    /// <c>workspace_id</c>, so bypassing here would let ten cross-workspace searches against a workspace whose
-    /// extractor is being OOM-killed spawn ten more extractor processes.</para>
+    /// <para><c>bypassBackoff</c> stays FALSE: this is the AUTOMATIC path, not a person asking. It is now reached
+    /// mostly OFF the read path (<see cref="WorkspaceRefreshMode.Background"/>), which makes the posture MORE
+    /// load-bearing, not less — a read no longer waits for the answer, so nothing throttles the caller. Bypassing
+    /// here would let ten cross-workspace searches against a workspace whose extractor is being OOM-killed spawn
+    /// ten more extractor processes.</para>
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="refreshService"/> is null.</exception>
     internal static Func<string, WorkspaceRefreshResult> AutomaticRefresh(
@@ -981,13 +993,25 @@ public sealed class WorkspaceIndexProvider
         return workspaceId => refreshService.Refresh(workspaceId);
     }
 
-    private RegisteredWorkspaceState ResolveRegisteredState(string workspaceId, bool ensureFresh)
+    private RegisteredWorkspaceState ResolveRegisteredState(string workspaceId, WorkspaceRefreshMode refresh)
     {
         WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, workspaceId);
         VerifyRegisteredRoot(row);
 
+        // A serve-then-refresh read needs something to serve. With NO readable index there is no pinned view and
+        // no honest stale answer, so that ONE case does the foreground work — which then produces either the built
+        // index or the same not-ready error the blocking arm has always raised.
+        if (refresh == WorkspaceRefreshMode.Background && !_hasReadableIndex(row))
+            refresh = WorkspaceRefreshMode.Blocking;
+
+        if (refresh == WorkspaceRefreshMode.Background)
+        {
+            StartBackgroundRefresh(row);
+            return new RegisteredWorkspaceState(row, RefreshResult: null, RefreshPending: true);
+        }
+
         WorkspaceRefreshResult? refreshResult = null;
-        if (ensureFresh)
+        if (refresh == WorkspaceRefreshMode.Blocking)
         {
             long revisionBeforeRefresh = row.LastRevision ?? 0;
             TelemetryContext.Current?.SetWaitReason("workspace_refresh");
@@ -1017,7 +1041,81 @@ public sealed class WorkspaceIndexProvider
             }
         }
 
-        return new RegisteredWorkspaceState(row, refreshResult);
+        return new RegisteredWorkspaceState(row, refreshResult, RefreshPending: false);
+    }
+
+    /// <summary>
+    /// Start ONE background refresh for this workspace, or join the one already running.
+    ///
+    /// <para>The in-flight set is the coalescing guard the serve-then-refresh default needs: the blocking arm used
+    /// to throttle itself because every caller queued behind the same scan, and a fire-and-forget arm has no such
+    /// queue. Ten cross-workspace reads in a row therefore start ONE refresh, not ten. The persisted scan-failure
+    /// backoff (<c>bypassBackoff: false</c>, see <see cref="AutomaticRefresh"/>) still governs whether that one
+    /// refresh is allowed to scan at all.</para>
+    ///
+    /// <para>The work item never throws into the thread pool: a background refresh that fails must degrade the NEXT
+    /// read's freshness, never take down the process or the read that started it.</para>
+    /// </summary>
+    private void StartBackgroundRefresh(WorkspaceRegistryRow row)
+    {
+        string workspaceId = row.WorkspaceId;
+        long revisionBeforeRefresh = row.LastRevision ?? 0;
+        if (!_backgroundRefreshes.TryAdd(workspaceId, 0))
+            return;
+
+        bool scheduled = false;
+        try
+        {
+            _scheduleBackgroundRefresh(() =>
+            {
+                try
+                {
+                    WorkspaceRefreshResult result = _refresh(workspaceId);
+
+                    // Same from-scratch-rebuild eviction the blocking arm does: a Refreshed scan whose revision did
+                    // not advance replaced the file under cache keys that still name it, so the entries describe a
+                    // file that no longer exists.
+                    if (result.Status == WorkspaceRefreshStatus.Refreshed &&
+                        (result.Revision ?? 0) <= revisionBeforeRefresh)
+                    {
+                        EvictWorkspaceEntries(workspaceId);
+                    }
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+                {
+                    // Reported by the NEXT read's freshness status, which is exactly what this arm promises.
+                }
+                finally
+                {
+                    _backgroundRefreshes.TryRemove(workspaceId, out _);
+                }
+            });
+            scheduled = true;
+        }
+        finally
+        {
+            if (!scheduled)
+                _backgroundRefreshes.TryRemove(workspaceId, out _);
+        }
+    }
+
+    /// <summary>
+    /// Cheap "is there anything to serve?" probe for the serve-then-refresh arm. Unknown counts as NOT readable, so
+    /// an unreadable workspace takes the foreground path and gets an honest answer instead of a promised stale one.
+    /// </summary>
+    private static bool HasReadableIndex(WorkspaceRegistryRow row)
+    {
+        try
+        {
+            return WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
+                ? Directory.Exists(row.CanonicalRoot) && StoreWorkspacePointer.Read(row.CanonicalRoot) is not null
+                : File.Exists(row.IndexDbPath);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+        {
+            return false;
+        }
     }
 
     private void EvictWorkspaceEntries(string workspaceId)
@@ -1623,7 +1721,12 @@ public sealed class WorkspaceIndexProvider
             TelemetryContext.Current?.CorrelationId ?? "unmeasured");
     }
 
-    private sealed record RegisteredWorkspaceState(WorkspaceRegistryRow Row, WorkspaceRefreshResult? RefreshResult);
+    /// <param name="RefreshPending">
+    /// True when this read served the PINNED view and left a refresh running behind it. It is not an error and not
+    /// a confirmed-fresh read, so it gets its own freshness word rather than borrowing either.
+    /// </param>
+    private sealed record RegisteredWorkspaceState(
+        WorkspaceRegistryRow Row, WorkspaceRefreshResult? RefreshResult, bool RefreshPending);
 
     private sealed record CachedIndex(MillerRepositoryIndex Index, SmartTargetResolver Resolver);
 

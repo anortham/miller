@@ -124,7 +124,7 @@ public sealed partial class ContextTool
         [Description("When reference_mode=usage, filter test symbols, test-path references, and test content chunks. Default false.")]
         bool exclude_tests = false,
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
-        [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
+        [Description("Wait for a refresh before reading. With workspace_id the default now serves the pinned index immediately and refreshes in the background; true still waits, false does zero refresh work.")]
         bool? ensure_fresh = null,
         [Description("Workspace-relative files changed by the current task; their symbols rank as pivots. Optional.")]
         string[]? edited_files = null,
@@ -140,9 +140,9 @@ public sealed partial class ContextTool
             if (token_budget <= 0)
                 return string.Empty;
 
-            bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
+            WorkspaceRefreshMode refresh = ReadToolWorkspaceRouting.ResolveRefreshMode(workspace_id, ensure_fresh);
             int effectiveTokenBudget = Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens);
-            using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, refresh);
             using IDisposable? searchTelemetry = context.ReadTelemetry?.ActivateSearchTelemetry();
             ISymbolLookupIndex contextIndex = new ContextSearchCacheLookupIndex(context.Index);
             var contextResolver = new SmartTargetResolver(contextIndex);
@@ -171,7 +171,7 @@ public sealed partial class ContextTool
                 cancellationToken.ThrowIfCancellationRequested();
                 sourceSeeds = LoadSourceRescueSeeds(
                     contextIndex,
-                    TryResolveTextContentIndex(workspace_id, ensureFresh),
+                    TryResolveTextContentIndex(workspace_id, refresh),
                     query,
                     rescueExcludeTests);
                 CompletePhase("source_rescue", telemetry, ref phaseStart, context.ReadTelemetry);
@@ -567,14 +567,14 @@ public sealed partial class ContextTool
         return seeds;
     }
 
-    private ITextContentSearchIndex? TryResolveTextContentIndex(string? workspaceId, bool ensureFresh)
+    private ITextContentSearchIndex? TryResolveTextContentIndex(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         if (_workspaceProvider is not IWorkspaceTextContentSearchProvider textProvider)
             return null;
 
         try
         {
-            return textProvider.ResolveTextContentSearch(workspaceId, ensureFresh).Index;
+            return textProvider.ResolveTextContentSearch(workspaceId, refresh).Index;
         }
         catch (Exception)
         {

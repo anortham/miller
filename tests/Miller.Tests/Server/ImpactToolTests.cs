@@ -6,6 +6,7 @@ using Miller.Server.Git;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 using Miller.Tests;
 using Miller.Tests.Indexing;
 using Microsoft.Data.Sqlite;
@@ -1856,7 +1857,7 @@ public sealed class ImpactToolTests
     // ---- routed wrapper / ctor shape ----
 
     [Fact]
-    public void Impact_ExplicitWorkspaceId_DefaultsEnsureFreshTrue_AndRoutesToTargetIndex()
+    public void Impact_ExplicitWorkspaceId_DefaultsToBackgroundRefresh_AndRoutesToTargetIndex()
     {
         var currentIndex = EmptyIndex();
         var (targetIndex, _) = BuildFixture();
@@ -1870,7 +1871,7 @@ public sealed class ImpactToolTests
         string output = tool.Impact(target: "Validate", workspace_id: "target-ws");
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
-        Assert.True(provider.LastEnsureFresh);
+        Assert.Equal(WorkspaceRefreshMode.Background, provider.LastRefreshMode);
         Assert.StartsWith("workspace: target-ws\n", output);
         Assert.DoesNotContain(targetRoot, output);
         Assert.Contains("Process", output);
@@ -2077,7 +2078,7 @@ public sealed class ImpactToolTests
         string output = tool.Impact(@base: "origin/main", staged: true, workspace_id: "target-ws");
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
-        Assert.True(provider.LastEnsureFresh);
+        Assert.Equal(WorkspaceRefreshMode.Background, provider.LastRefreshMode);
         Assert.Single(git.Requests);
         Assert.Equal(targetRoot, git.Requests[0].WorkspaceRoot);
         Assert.Equal("origin/main", git.Requests[0].BaseRef);

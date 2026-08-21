@@ -36,7 +36,9 @@ parameters and selectors below are what those short forms omit.
   `retrieval=auto|lexical|hybrid|semantic` selects the per-call symbol policy; lexical does no vector work and the
   global semantic off switch remains authoritative. `mode=markers` with `query=TODO,FIXME,HACK,XXX` runs
   a marker audit. Symbol hits may include `has_doc`. Optional `workspace_id` accepts a display ID, unique prefix,
-  full ID, root path, `current`, or `primary`; an explicit `workspace_id` defaults `ensure_fresh=true`.
+  full ID, root path, `current`, or `primary`. An explicit `workspace_id` serves the pinned index immediately and
+  refreshes in the background (`freshness: refresh_pending` plus the served `revision`); `ensure_fresh=true`
+  waits for the refresh, `ensure_fresh=false` does zero refresh work.
 - **`inspect`** — a file path lists symbols; a symbol name gives definition, signature, and docs. Default depth is
   `summary`. The first symbol read should usually be `inspect target depth=overview` (bounded refs/calls/body
   preview); use `depth=full` for the complete body and complete relation lists. Optional `workspace_id` and

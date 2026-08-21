@@ -335,18 +335,18 @@ public sealed class PatternsRegionCliGuardTests : IDisposable
 
     private sealed class SingleArtifactProvider(WorkspaceArtifactContext context) : IWorkspaceArtifactProvider
     {
-        public WorkspaceArtifactContext ResolveArtifact(string? workspaceId, bool ensureFresh) => context;
+        public WorkspaceArtifactContext ResolveArtifact(string? workspaceId, WorkspaceRefreshMode refresh) => context;
     }
 
     private sealed class RegionSearchProvider(WorkspaceRegionSearchContext context)
         : IWorkspaceSearchProvider, IWorkspaceRegionSearchProvider, IWorkspaceContentSearchProvider
     {
-        public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh) => context;
+        public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, WorkspaceRefreshMode refresh) => context;
 
-        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw new NotSupportedException("the regions route never resolves symbol search");
 
-        public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw new NotSupportedException("the regions route never resolves content search");
     }
 }

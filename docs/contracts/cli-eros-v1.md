@@ -164,8 +164,8 @@ point:
   started in that root services it, and a refusal against a root with no readable index reports
   `missing_index` (exit `3`) instead — `lock_busy` exit `0` therefore never advertises a registered workspace
   with no `symbols.db`.
-- **Deferred by the persisted scan-failure backoff.** An AUTOMATIC refresh — the refresh-first path behind a
-  cross-workspace read with an explicit `workspace_id` — is deferred while `scan_failure.next_attempt_utc` is in
+- **Deferred by the persisted scan-failure backoff.** An AUTOMATIC refresh — the background refresh a
+  cross-workspace read with an explicit `workspace_id` starts behind the served view — is deferred while `scan_failure.next_attempt_utc` is in
   the future. Nothing is scanning and nothing is queued; the record itself is the schedule. The `note` begins
   `The previous whole-repo scan of this workspace failed`, and a root with no readable index again reports
   `missing_index` (exit `3`) instead. A DIRECT request (`workspace refresh/full/open`, the MCP `workspace` tool,

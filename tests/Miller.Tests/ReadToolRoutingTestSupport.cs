@@ -80,45 +80,45 @@ internal sealed class RecordingWorkspaceIndexProvider
     }
 
     public string? LastWorkspaceId { get; private set; }
-    public bool? LastEnsureFresh { get; private set; }
+    public WorkspaceRefreshMode? LastRefreshMode { get; private set; }
     public int ResolveCount { get; private set; }
     public int SymbolSearchResolveCount { get; private set; }
     public int ContentSearchResolveCount { get; private set; }
     public int TextContentSearchResolveCount { get; private set; }
     public int RegionSearchResolveCount { get; private set; }
 
-    public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
+    public WorkspaceReadContext Resolve(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         LastWorkspaceId = workspaceId;
-        LastEnsureFresh = ensureFresh;
+        LastRefreshMode = refresh;
         ResolveCount++;
 
         return ResolveContext(workspaceId);
     }
 
-    public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh)
+    public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         LastWorkspaceId = workspaceId;
-        LastEnsureFresh = ensureFresh;
+        LastRefreshMode = refresh;
         ResolveCount++;
         SymbolSearchResolveCount++;
 
         return ReadToolRoutingTestSupport.SearchContextFor(ResolveContext(workspaceId));
     }
 
-    public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, bool ensureFresh)
+    public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         LastWorkspaceId = workspaceId;
-        LastEnsureFresh = ensureFresh;
+        LastRefreshMode = refresh;
         ResolveCount++;
 
         return ReadToolRoutingTestSupport.SymbolReadContextFor(ResolveContext(workspaceId));
     }
 
-    public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh)
+    public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         LastWorkspaceId = workspaceId;
-        LastEnsureFresh = ensureFresh;
+        LastRefreshMode = refresh;
         ResolveCount++;
         ContentSearchResolveCount++;
 
@@ -130,10 +130,10 @@ internal sealed class RecordingWorkspaceIndexProvider
             : throw new KeyNotFoundException(workspaceId);
     }
 
-    public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh)
+    public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         LastWorkspaceId = workspaceId;
-        LastEnsureFresh = ensureFresh;
+        LastRefreshMode = refresh;
         ResolveCount++;
         RegionSearchResolveCount++;
 
@@ -145,10 +145,10 @@ internal sealed class RecordingWorkspaceIndexProvider
             : throw new KeyNotFoundException(workspaceId);
     }
 
-    public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh)
+    public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         LastWorkspaceId = workspaceId;
-        LastEnsureFresh = ensureFresh;
+        LastRefreshMode = refresh;
         ResolveCount++;
         TextContentSearchResolveCount++;
 
@@ -299,7 +299,7 @@ internal sealed class HolderWorkspaceIndexProvider
         _workspaceRoot = workspaceRoot;
     }
 
-    public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
+    public WorkspaceReadContext Resolve(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
         return new WorkspaceReadContext(
@@ -314,7 +314,7 @@ internal sealed class HolderWorkspaceIndexProvider
             WarningText: null);
     }
 
-    public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh)
+    public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
         return new WorkspaceSymbolSearchContext(
@@ -328,7 +328,7 @@ internal sealed class HolderWorkspaceIndexProvider
             WarningText: null);
     }
 
-    public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, bool ensureFresh)
+    public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
         return new WorkspaceSymbolReadContext(
@@ -344,12 +344,12 @@ internal sealed class HolderWorkspaceIndexProvider
 
     // These freshness/repoint fixtures exercise symbol search only; content search has no holder-backed
     // index, so this double does not serve it (a content-mode test wires a content provider explicitly).
-    public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>
+    public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
         throw new NotSupportedException("HolderWorkspaceIndexProvider does not serve content search.");
 
-    public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh) =>
+    public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
         throw new NotSupportedException("HolderWorkspaceIndexProvider does not serve region search.");
 
-    public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh) =>
+    public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
         throw new NotSupportedException("HolderWorkspaceIndexProvider does not serve text content search.");
 }

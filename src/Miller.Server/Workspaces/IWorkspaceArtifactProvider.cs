@@ -2,5 +2,5 @@ namespace Miller.Server.Workspaces;
 
 public interface IWorkspaceArtifactProvider
 {
-    WorkspaceArtifactContext ResolveArtifact(string? workspaceId, bool ensureFresh);
+    WorkspaceArtifactContext ResolveArtifact(string? workspaceId, WorkspaceRefreshMode refresh);
 }

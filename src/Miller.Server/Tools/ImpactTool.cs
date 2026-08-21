@@ -102,7 +102,7 @@ public sealed class ImpactTool
         [Description("Max impacted symbols to return, clamped to 1-1000. Default 100.")] int limit = 100,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
-        [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
+        [Description("Wait for a refresh before reading. With workspace_id the default now serves the pinned index immediately and refreshes in the background; true still waits, false does zero refresh work.")]
         bool? ensure_fresh = null,
         [Description("Opaque token from an impact_output_page response. Repeat the same call arguments to read the next byte-identical fragment.")]
         string? continuation = null)
@@ -115,8 +115,8 @@ public sealed class ImpactTool
             max_depth = NormalizeDepth(max_depth);
             limit = NormalizeLimit(limit);
             ImpactTelemetrySnapshot? impactTelemetry = null;
-            bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
-            using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            WorkspaceRefreshMode refresh = ReadToolWorkspaceRouting.ResolveRefreshMode(workspace_id, ensure_fresh);
+            using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, refresh);
             continuationWorkspaceId =
                 context.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(context.WorkspaceRoot);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);

@@ -300,6 +300,6 @@ public sealed class InspectMissingFileTests : IDisposable
 
         public SymbolReadProvider(WorkspaceSymbolReadContext context) => _context = context;
 
-        public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, bool ensureFresh) => _context;
+        public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, WorkspaceRefreshMode refresh) => _context;
     }
 }

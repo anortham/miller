@@ -1259,7 +1259,7 @@ public sealed class PatternsToolTests
     }
 
     [Fact]
-    public void Patterns_CompactExplicitWorkspace_DefaultsEnsureFreshAndAddsBanner()
+    public void Patterns_CompactExplicitWorkspace_DefaultsToBackgroundRefreshAndAddsBanner()
     {
         using var fx = CreatePatternFixture();
         WorkspaceArtifactContext current = ArtifactFor(fx);
@@ -1275,7 +1275,7 @@ public sealed class PatternsToolTests
         string output = tool.Patterns(operation: "list", workspace_id: "target-ws");
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
-        Assert.True(provider.LastEnsureFresh);
+        Assert.Equal(WorkspaceRefreshMode.Background, provider.LastRefreshMode);
         Assert.StartsWith("workspace: target", output, StringComparison.Ordinal);
         Assert.Contains("# patterns", output, StringComparison.Ordinal);
         Assert.Contains("htmx.attribute.v1", output, StringComparison.Ordinal);
@@ -1570,12 +1570,12 @@ public sealed class PatternsToolTests
         }
 
         public string? LastWorkspaceId { get; private set; }
-        public bool? LastEnsureFresh { get; private set; }
+        public WorkspaceRefreshMode? LastRefreshMode { get; private set; }
 
-        public WorkspaceArtifactContext ResolveArtifact(string? workspaceId, bool ensureFresh)
+        public WorkspaceArtifactContext ResolveArtifact(string? workspaceId, WorkspaceRefreshMode refresh)
         {
             LastWorkspaceId = workspaceId;
-            LastEnsureFresh = ensureFresh;
+            LastRefreshMode = refresh;
 
             if (workspaceId is null)
                 return _current;

@@ -625,18 +625,18 @@ public sealed class SearchToolRescueTests
             _workspaceId = workspaceId;
         }
 
-        public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw new NotSupportedException("RescueSearchProvider serves no region route.");
 
 
-        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             new(_symbols, "symbols.db", _workspaceId, Root, Revision: 1, IndexFresh: true, "current",
                 WarningText: null, DisplayId: _workspaceId);
 
-        public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw new NotSupportedException("RescueSearchProvider serves the corpus, not the legacy projection.");
 
-        public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             new(_content, "content.db", _workspaceId, Root, Revision: 1, IndexFresh: true, "current",
                 WarningText: null, DisplayId: _workspaceId);
     }

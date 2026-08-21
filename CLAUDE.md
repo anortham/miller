@@ -304,9 +304,11 @@ scripts/test.ps1 all
   in-memory doubling backoff was REPLACED by it, not layered under it; do not re-add a second timer. Exit 137
   (SIGKILL/OOM) clamps the next automatic attempt to `--jobs 1`. An explicit user request (`workspace
   full/refresh/open`, the MCP `workspace` tool, the dashboard, bootstrap) bypasses the timer once but still
-  records — pass `bypassBackoff: true` at those call sites only; the automatic refresh-first path behind every
+  records — pass `bypassBackoff: true` at those call sites only; the automatic path behind every
   cross-workspace read (`WorkspaceIndexProvider`) must leave it false or ten cross-workspace searches spawn ten
-  extractors. The record names the STRONGEST scan still owed (`ScanFailurePolicy.RecordFailure` folds via
+  extractors. That path now runs in the BACKGROUND, which makes the posture more load-bearing, not less: no
+  caller waits for it, so nothing else throttles it. `WorkspaceIndexProvider` keeps one in-flight background
+  refresh per workspace as the coalescing guard. The record names the STRONGEST scan still owed (`ScanFailurePolicy.RecordFailure` folds via
   `Strongest`), because a downgraded retry that also fails runs as a delta and recording that verbatim would let
   the next routine refresh clear a force throttle in two steps. Clearing uses
   `ScanIntentPolicy.ClearsFailureRecord`, NOT the latch rule `Satisfies`: a delta clears only a delta-intent
@@ -357,7 +359,12 @@ scripts/test.ps1 all
   [`docs/m8-design.md`](docs/m8-design.md)).
 - **Workspace registry.** Index DBs stay local at `<workspace>/.miller/symbols.db`; the central discovery
   surface is `~/.miller/workspaces.db`. Read tools accept `workspace_id` selectors: display ID, unique prefix,
-  full ID, registered root path, `current`, or `primary`; explicit `workspace_id` defaults to refresh-first.
+  full ID, registered root path, `current`, or `primary`. An explicit `workspace_id` defaults to
+  **serve-then-refresh**: the pinned view answers immediately and the refresh runs in the BACKGROUND (coalesced,
+  one per workspace), so the next call sees fresher data. Such a read reports `freshness: refresh_pending` plus
+  the served `revision`. `ensure_fresh=true` still blocks; `ensure_fresh=false` still does zero refresh work.
+  A workspace with NO readable index has nothing to serve stale, so that one case still refreshes in the
+  foreground or returns the honest not-ready error.
   When a user asks from workspace A to inspect workspace B, keep the session in A, run `workspace list`, and pass
   B's selector to `search`/`inspect`/`context`/`impact`/`trace`/`patterns`/`tests`. If B is not registered, run
   `workspace open` with its root path first. `workspace_id=all` is only for `content search` text audits, not

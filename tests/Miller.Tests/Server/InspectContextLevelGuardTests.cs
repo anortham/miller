@@ -374,9 +374,9 @@ public sealed class InspectContextLevelGuardTests : IDisposable
             _read = read;
         }
 
-        public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, bool ensureFresh) => _symbolRead;
+        public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, WorkspaceRefreshMode refresh) => _symbolRead;
 
-        public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceReadContext Resolve(string? workspaceId, WorkspaceRefreshMode refresh) =>
             _read ?? throw new NotSupportedException("this provider serves symbol reads only");
     }
 }

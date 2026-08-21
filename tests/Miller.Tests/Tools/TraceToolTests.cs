@@ -3551,7 +3551,7 @@ public sealed class TraceToolTests
     // ---------- dispatch / guards ----------
 
     [Fact]
-    public void Trace_ExplicitWorkspaceId_DefaultsEnsureFreshTrue_AndRoutesToTargetIndex()
+    public void Trace_ExplicitWorkspaceId_DefaultsToBackgroundRefresh_AndRoutesToTargetIndex()
     {
         var currentIndex = EmptyIndex();
         var targetIndex = BuildSymbolIndex(
@@ -3571,7 +3571,7 @@ public sealed class TraceToolTests
         string output = tool.Trace("Alpha", mode: "path", to: "Beta", workspace_id: "target-ws");
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
-        Assert.True(provider.LastEnsureFresh);
+        Assert.Equal(WorkspaceRefreshMode.Background, provider.LastRefreshMode);
         Assert.StartsWith("workspace: target-ws\n", output);
         Assert.DoesNotContain(targetRoot, output);
         Assert.Contains("Beta", output);

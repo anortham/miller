@@ -146,7 +146,7 @@ public sealed class PatternsTool
         [Description("summary grouping: language_pattern_capture|file|directory|top_directory. Default language_pattern_capture.")] string? group_by = null,
         [Description("Optional summary metadata facet key using letters, digits, underscore, or hyphen.")] string? facet = null,
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
-        [Description("Refresh selected workspace before reading. Defaults true when workspace_id is supplied.")] bool? ensure_fresh = null,
+        [Description("Wait for a refresh before reading. With workspace_id the default now serves the pinned index immediately and refreshes in the background; true still waits, false does zero refresh work.")] bool? ensure_fresh = null,
         [Description("Max search results. Default 50, maximum 500.")] int limit = DefaultLimit,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
         [Description("Stateless continuation returned by a prior page of the same request.")] string? continuation = null)
@@ -162,7 +162,7 @@ public sealed class PatternsTool
                     "invalid_format",
                     "patterns format must be compact or json."));
             }
-            bool refresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
+            WorkspaceRefreshMode refresh = ReadToolWorkspaceRouting.ResolveRefreshMode(workspace_id, ensure_fresh);
             using WorkspaceArtifactContext context = _workspaceProvider.ResolveArtifact(workspace_id, refresh);
             string? banner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             int outputBudget = ToolOutputBudget.PatternsMcpMaxBytes

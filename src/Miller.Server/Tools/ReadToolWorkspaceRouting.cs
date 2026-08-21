@@ -6,8 +6,24 @@ namespace Miller.Server.Tools;
 
 internal static class ReadToolWorkspaceRouting
 {
-    public static bool ResolveEnsureFresh(string? workspaceId, bool? ensureFresh) =>
-        workspaceId is null ? ensureFresh ?? false : ensureFresh ?? true;
+    /// <summary>
+    /// Turn the caller's <c>ensure_fresh</c> answer into the refresh mode the provider runs.
+    ///
+    /// <para>An explicit <c>workspace_id</c> used to mean "refresh first and wait", which put a whole cross-workspace
+    /// scan in front of every read (measured p50 ~2.9s, p95 20s+ against a current-workspace p50 of 757ms). The
+    /// DEFAULT is now <see cref="WorkspaceRefreshMode.Background"/>: serve the pinned view now, refresh off the read
+    /// path, and say so in the output. Both EXPLICIT answers are unchanged — <c>true</c> still waits, <c>false</c>
+    /// still does zero refresh work.</para>
+    /// </summary>
+    public static WorkspaceRefreshMode ResolveRefreshMode(string? workspaceId, bool? ensureFresh) =>
+        ensureFresh switch
+        {
+            true => WorkspaceRefreshMode.Blocking,
+            false => WorkspaceRefreshMode.None,
+            // No answer: only a named target has anything to refresh in the background; the current workspace is
+            // already converged by its own leader/watcher and has never refreshed on a read.
+            null => workspaceId is null ? WorkspaceRefreshMode.None : WorkspaceRefreshMode.Background,
+        };
 
     public static string? CompactBanner(WorkspaceReadContext context, string? requestedWorkspaceId, bool json)
     {
@@ -17,6 +33,7 @@ internal static class ReadToolWorkspaceRouting
             context.WorkspaceRoot,
             context.IndexFresh,
             context.FreshnessStatus,
+            context.Revision,
             requestedWorkspaceId,
             json);
     }
@@ -29,6 +46,7 @@ internal static class ReadToolWorkspaceRouting
             context.WorkspaceRoot,
             context.IndexFresh,
             context.FreshnessStatus,
+            context.Revision,
             requestedWorkspaceId,
             json);
     }
@@ -41,6 +59,7 @@ internal static class ReadToolWorkspaceRouting
             context.WorkspaceRoot,
             context.IndexFresh,
             context.FreshnessStatus,
+            context.Revision,
             requestedWorkspaceId,
             json);
     }
@@ -53,6 +72,7 @@ internal static class ReadToolWorkspaceRouting
             context.WorkspaceRoot,
             context.IndexFresh,
             context.FreshnessStatus,
+            context.Revision,
             requestedWorkspaceId,
             json);
     }
@@ -65,6 +85,7 @@ internal static class ReadToolWorkspaceRouting
             context.WorkspaceRoot,
             context.IndexFresh,
             context.FreshnessStatus,
+            context.Revision,
             requestedWorkspaceId,
             json);
     }
@@ -77,6 +98,7 @@ internal static class ReadToolWorkspaceRouting
             context.WorkspaceRoot,
             context.IndexFresh,
             context.FreshnessStatus,
+            context.Revision,
             requestedWorkspaceId,
             json);
     }
@@ -89,6 +111,7 @@ internal static class ReadToolWorkspaceRouting
             context.WorkspaceRoot,
             context.IndexFresh,
             context.FreshnessStatus,
+            context.Revision,
             requestedWorkspaceId,
             json);
     }
@@ -99,6 +122,7 @@ internal static class ReadToolWorkspaceRouting
         string workspaceRoot,
         bool? indexFresh,
         string freshnessStatus,
+        long revision,
         string? requestedWorkspaceId,
         bool json)
     {
@@ -115,6 +139,15 @@ internal static class ReadToolWorkspaceRouting
 
         if (showFreshness)
             sb.Append('\n').Append("freshness: ").Append(freshnessStatus);
+
+        // A serve-then-refresh read is the one state where the caller cannot tell WHAT was served from the status
+        // alone: the answer is a pinned view and a refresh is still running behind it. Name the revision it came
+        // from so a second call can tell "same view again" from "the refresh landed".
+        if (showFreshness && string.Equals(
+                freshnessStatus, WorkspaceFreshnessView.RefreshPendingStatus, StringComparison.Ordinal))
+        {
+            sb.Append('\n').Append("revision: ").Append(revision);
+        }
 
         return sb.ToString();
     }

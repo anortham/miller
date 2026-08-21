@@ -2825,7 +2825,7 @@ public sealed class InspectToolTests
             ensure_fresh: false);
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
-        Assert.False(provider.LastEnsureFresh);
+        Assert.Equal(WorkspaceRefreshMode.None, provider.LastRefreshMode);
         Assert.StartsWith("workspace: target-ws\n", output);
         Assert.DoesNotContain(targetRoot, output);
         Assert.Contains("freshness: unconfirmed_lock_busy", output);
@@ -3316,19 +3316,19 @@ public sealed class InspectToolTests
             _onSearchResolve = onSearchResolve;
         }
 
-        public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
+        public WorkspaceReadContext Resolve(string? workspaceId, WorkspaceRefreshMode refresh)
         {
             _onFullResolve();
             return workspaceId is null ? _current : _target;
         }
 
-        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh)
+        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, WorkspaceRefreshMode refresh)
         {
             _onSearchResolve();
             return ReadToolRoutingTestSupport.SearchContextFor(workspaceId is null ? _current : _target);
         }
 
-        public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, bool ensureFresh)
+        public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, WorkspaceRefreshMode refresh)
         {
             _onSearchResolve();
             return ReadToolRoutingTestSupport.SymbolReadContextFor(workspaceId is null ? _current : _target);

@@ -229,9 +229,9 @@ public sealed class MarkerLevelGuardTests : IDisposable
     private sealed class MarkerSearchProvider(WorkspaceSymbolSearchContext context)
         : IWorkspaceSearchProvider, IWorkspaceContentSearchProvider
     {
-        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh) => context;
+        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, WorkspaceRefreshMode refresh) => context;
 
-        public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw new NotSupportedException("the markers route never resolves content search");
     }
 

@@ -80,7 +80,7 @@ public sealed class IndexLevelContextTests : IDisposable
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         WorkspaceIndexProvider provider = CurrentWorkspaceProvider(SymbolsLevelArtifact.Create, registry);
 
-        WorkspaceReadContext context = provider.Resolve(workspaceId: null, ensureFresh: false);
+        WorkspaceReadContext context = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None);
 
         Assert.Equal(IndexLevels.SymbolsMetadataValue, context.IndexLevel);
         Assert.True(IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel));
@@ -92,7 +92,7 @@ public sealed class IndexLevelContextTests : IDisposable
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         WorkspaceIndexProvider provider = CurrentWorkspaceProvider(SymbolsLevelArtifact.Create, registry);
 
-        WorkspaceSymbolReadContext context = provider.ResolveSymbolRead(workspaceId: null, ensureFresh: false);
+        WorkspaceSymbolReadContext context = provider.ResolveSymbolRead(workspaceId: null, WorkspaceRefreshMode.None);
 
         Assert.Equal(IndexLevels.SymbolsMetadataValue, context.IndexLevel);
         Assert.True(IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel));
@@ -104,8 +104,8 @@ public sealed class IndexLevelContextTests : IDisposable
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         WorkspaceIndexProvider provider = CurrentWorkspaceProvider(SymbolsLevelArtifact.CreateFull, registry);
 
-        WorkspaceReadContext read = provider.Resolve(workspaceId: null, ensureFresh: false);
-        WorkspaceSymbolReadContext symbolRead = provider.ResolveSymbolRead(workspaceId: null, ensureFresh: false);
+        WorkspaceReadContext read = provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None);
+        WorkspaceSymbolReadContext symbolRead = provider.ResolveSymbolRead(workspaceId: null, WorkspaceRefreshMode.None);
 
         Assert.Equal(IndexLevels.FullMetadataValue, read.IndexLevel);
         Assert.Equal(IndexLevels.FullMetadataValue, symbolRead.IndexLevel);
@@ -153,7 +153,7 @@ public sealed class IndexLevelContextTests : IDisposable
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         WorkspaceIndexProvider provider = RegisteredProvider(SymbolsLevelArtifact.Create, registry);
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal(IndexLevels.SymbolsMetadataValue, context.IndexLevel);
         Assert.True(IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel));
@@ -165,7 +165,7 @@ public sealed class IndexLevelContextTests : IDisposable
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         WorkspaceIndexProvider provider = RegisteredProvider(SymbolsLevelArtifact.CreateFull, registry);
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal(IndexLevels.FullMetadataValue, context.IndexLevel);
         Assert.False(IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel));
@@ -177,7 +177,7 @@ public sealed class IndexLevelContextTests : IDisposable
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         WorkspaceIndexProvider provider = RegisteredProvider(SymbolsLevelArtifact.Create, registry);
 
-        WorkspaceArtifactContext context = provider.ResolveArtifact("target-ws", ensureFresh: false);
+        WorkspaceArtifactContext context = provider.ResolveArtifact("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal(IndexLevels.SymbolsMetadataValue, context.IndexLevel);
         Assert.True(IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel));
@@ -189,7 +189,7 @@ public sealed class IndexLevelContextTests : IDisposable
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         WorkspaceIndexProvider provider = RegisteredProvider(SymbolsLevelArtifact.CreateFull, registry);
 
-        WorkspaceArtifactContext context = provider.ResolveArtifact("target-ws", ensureFresh: false);
+        WorkspaceArtifactContext context = provider.ResolveArtifact("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Equal(IndexLevels.FullMetadataValue, context.IndexLevel);
         Assert.False(IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel));
@@ -221,13 +221,13 @@ public sealed class IndexLevelContextTests : IDisposable
 
         Assert.Equal(
             IndexLevels.SymbolsMetadataValue,
-            provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false).IndexLevel);
+            provider.ResolveSymbolSearch(workspaceId: null, WorkspaceRefreshMode.None).IndexLevel);
         Assert.Equal(
             IndexLevels.SymbolsMetadataValue,
-            provider.ResolveArtifact(workspaceId: null, ensureFresh: false).IndexLevel);
+            provider.ResolveArtifact(workspaceId: null, WorkspaceRefreshMode.None).IndexLevel);
         Assert.Equal(
             IndexLevels.SymbolsMetadataValue,
-            provider.ResolveRegionSearch(workspaceId: null, ensureFresh: false).IndexLevel);
+            provider.ResolveRegionSearch(workspaceId: null, WorkspaceRefreshMode.None).IndexLevel);
     }
 
     [Fact]
@@ -238,13 +238,13 @@ public sealed class IndexLevelContextTests : IDisposable
 
         Assert.Equal(
             IndexLevels.FullMetadataValue,
-            provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false).IndexLevel);
+            provider.ResolveSymbolSearch(workspaceId: null, WorkspaceRefreshMode.None).IndexLevel);
         Assert.Equal(
             IndexLevels.FullMetadataValue,
-            provider.ResolveArtifact(workspaceId: null, ensureFresh: false).IndexLevel);
+            provider.ResolveArtifact(workspaceId: null, WorkspaceRefreshMode.None).IndexLevel);
         Assert.Equal(
             IndexLevels.FullMetadataValue,
-            provider.ResolveRegionSearch(workspaceId: null, ensureFresh: false).IndexLevel);
+            provider.ResolveRegionSearch(workspaceId: null, WorkspaceRefreshMode.None).IndexLevel);
     }
 
     [Fact]
@@ -260,13 +260,13 @@ public sealed class IndexLevelContextTests : IDisposable
         Assert.Equal(IndexLevels.SymbolsMetadataValue, ExtractIndexLevelReader.Read(dbPath));
         Assert.Equal(
             IndexLevels.SymbolsMetadataValue,
-            provider.Resolve(workspaceId: null, ensureFresh: false).IndexLevel);
+            provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None).IndexLevel);
         Assert.Equal(
             IndexLevels.SymbolsMetadataValue,
-            provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false).IndexLevel);
+            provider.ResolveSymbolSearch(workspaceId: null, WorkspaceRefreshMode.None).IndexLevel);
         Assert.Equal(
             IndexLevels.SymbolsMetadataValue,
-            provider.ResolveSymbolRead(workspaceId: null, ensureFresh: false).IndexLevel);
+            provider.ResolveSymbolRead(workspaceId: null, WorkspaceRefreshMode.None).IndexLevel);
     }
 
     [Fact]
@@ -279,9 +279,9 @@ public sealed class IndexLevelContextTests : IDisposable
         PromoteOver(dbPath, SymbolsLevelArtifact.Create(NewDir("repaired")));
 
         Assert.True(IndexLevelGuard.ReferenceLayerConverging(
-            provider.Resolve(workspaceId: null, ensureFresh: false).IndexLevel));
+            provider.Resolve(workspaceId: null, WorkspaceRefreshMode.None).IndexLevel));
         Assert.True(IndexLevelGuard.ReferenceLayerConverging(
-            provider.ResolveSymbolRead(workspaceId: null, ensureFresh: false).IndexLevel));
+            provider.ResolveSymbolRead(workspaceId: null, WorkspaceRefreshMode.None).IndexLevel));
     }
 
     [Fact]
@@ -322,7 +322,7 @@ public sealed class IndexLevelContextTests : IDisposable
 
         PromoteOver(dbPath, SymbolsLevelArtifact.CreateFull(NewDir("promoted")));
 
-        WorkspaceArtifactContext context = provider.ResolveArtifact(workspaceId: null, ensureFresh: false);
+        WorkspaceArtifactContext context = provider.ResolveArtifact(workspaceId: null, WorkspaceRefreshMode.None);
 
         Assert.Equal(IndexLevels.FullMetadataValue, context.IndexLevel);
         Assert.False(IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel));
@@ -352,7 +352,7 @@ public sealed class IndexLevelContextTests : IDisposable
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         WorkspaceIndexProvider provider = RegisteredProvider(createArtifact, registry);
-        return provider.Resolve("target-ws", ensureFresh: false);
+        return provider.Resolve("target-ws", WorkspaceRefreshMode.None);
     }
 
     private WorkspaceRegionSearchContext RegisteredRegionSearch(Func<string, string> createArtifact)
@@ -373,7 +373,7 @@ public sealed class IndexLevelContextTests : IDisposable
             registry,
             new SymbolSearchSidecar(enabled: true, RegionIndexOptions.EnabledDefault));
 
-        return provider.ResolveRegionSearch("target-ws", ensureFresh: false);
+        return provider.ResolveRegionSearch("target-ws", WorkspaceRefreshMode.None);
     }
 
     private WorkspaceIndexProvider CurrentSidecarProvider(
@@ -402,7 +402,7 @@ public sealed class IndexLevelContextTests : IDisposable
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         WorkspaceIndexProvider provider = RegisteredProvider(createArtifact, registry);
-        return provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+        return provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
     }
 
     private WorkspaceIndexProvider RegisteredProvider(Func<string, string> createArtifact, WorkspaceRegistry registry)

@@ -254,19 +254,19 @@ public sealed class SearchToolTests
 
         public int SymbolSearchResolveCount { get; private set; }
 
-        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh)
+        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, WorkspaceRefreshMode refresh)
         {
             SymbolSearchResolveCount++;
             return _context;
         }
 
-        public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw new NotSupportedException("FixedSymbolSearchProvider serves symbol search only.");
 
-        public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw new NotSupportedException("FixedSymbolSearchProvider serves no region route.");
 
-        public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh)
+        public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, WorkspaceRefreshMode refresh)
         {
             TextContentSearchResolveCount++;
             return _textContentContext
@@ -2483,7 +2483,7 @@ public sealed class SearchToolTests
     }
 
     [Fact]
-    public void Search_ExplicitWorkspaceId_DefaultsEnsureFreshTrue_AndRoutesToTargetIndex()
+    public void Search_ExplicitWorkspaceId_DefaultsToBackgroundRefresh_AndRoutesToTargetIndex()
     {
         using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
         using var target = FixtureWithSymbol("target-ws", "TargetOnly");
@@ -2502,7 +2502,7 @@ public sealed class SearchToolTests
         string output = tool.Search("TargetOnly", workspace_id: "target-ws");
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
-        Assert.True(provider.LastEnsureFresh);
+        Assert.Equal(WorkspaceRefreshMode.Background, provider.LastRefreshMode);
         Assert.StartsWith("workspace: target-111111111111\n", output);
         Assert.DoesNotContain(targetRoot, output);
         Assert.Contains("TargetOnly", output);
@@ -2538,7 +2538,7 @@ public sealed class SearchToolTests
                 string output = tool.Search("TargetOnly", workspace_id: "target-ws", ensure_fresh: false);
 
                 Assert.Equal("target-ws", provider.LastWorkspaceId);
-                Assert.False(provider.LastEnsureFresh);
+                Assert.Equal(WorkspaceRefreshMode.None, provider.LastRefreshMode);
                 Assert.StartsWith("workspace: target-111111111111\n", output);
                 Assert.Contains("freshness: loaded_existing", output);
                 Assert.DoesNotContain(targetRoot, output);
@@ -2713,7 +2713,7 @@ public sealed class SearchToolTests
         string output = tool.Search("freshness", mode: "content", workspace_id: "target-ws");
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
-        Assert.True(provider.LastEnsureFresh); // explicit workspace_id defaults ensure_fresh=true
+        Assert.Equal(WorkspaceRefreshMode.Background, provider.LastRefreshMode); // explicit workspace_id serves then refreshes
         Assert.Equal(1, provider.TextContentSearchResolveCount);
         Assert.Equal(0, provider.ContentSearchResolveCount);
         Assert.Equal(0, provider.SymbolSearchResolveCount); // content mode never touches the symbol provider
@@ -3122,7 +3122,7 @@ public sealed class SearchToolTests
         string output = tool.Search("KnownSourceError", mode: "source", workspace_id: "target-ws");
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
-        Assert.True(provider.LastEnsureFresh);
+        Assert.Equal(WorkspaceRefreshMode.Background, provider.LastRefreshMode);
         Assert.Equal(1, provider.TextContentSearchResolveCount);
         Assert.Equal(0, provider.SymbolSearchResolveCount);
         Assert.Equal(0, provider.ContentSearchResolveCount);

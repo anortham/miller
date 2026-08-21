@@ -89,7 +89,7 @@ public sealed class TraceTool
         [Description("Output format: compact|json|full. full adds the firing signals per bridge link in compact output. Default compact.")]
         string format = "compact",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
-        [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
+        [Description("Wait for a refresh before reading. With workspace_id the default now serves the pinned index immediately and refreshes in the background; true still waits, false does zero refresh work.")]
         bool? ensure_fresh = null)
     {
         var telemetry = TelemetryContext.Current;
@@ -105,8 +105,8 @@ public sealed class TraceTool
                     "trace format must be compact, json, or full."));
             }
             bool full = string.Equals(format, "full", StringComparison.OrdinalIgnoreCase);
-            bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
-            using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            WorkspaceRefreshMode refresh = ReadToolWorkspaceRouting.ResolveRefreshMode(workspace_id, ensure_fresh);
+            using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, refresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             string normalizedMode = NormalizeMode(mode);
             if (normalizedMode is not (ModeRefs or ModePath or ModeBridge))

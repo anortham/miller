@@ -301,7 +301,7 @@ public sealed class SearchTool
         bool? exclude_tests = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
-        [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
+        [Description("Wait for a refresh before reading. With workspace_id the default now serves the pinned index immediately and refreshes in the background; true still waits, false does zero refresh work.")]
         bool? ensure_fresh = null,
         [Description("Source-region kinds to search: comma list of comment, doc_comment, string_literal. Alias: docstring.")]
         string? regions = null,
@@ -320,7 +320,7 @@ public sealed class SearchTool
             SearchRoute route = SearchRoutePlanner.Plan(mode, regions, query);
             EnsureRetrievalSupportsRoute(retrievalMode, route);
             int effectiveLimit = Math.Min(limit, ToolOutputBudget.McpRowLimit);
-            bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
+            WorkspaceRefreshMode refresh = ReadToolWorkspaceRouting.ResolveRefreshMode(workspace_id, ensure_fresh);
             if (scope is not null)
             {
                 ApplyTelemetryShape(scope, route, json, effectiveLimit, regions, file_pattern, language, exclude_tests);
@@ -333,7 +333,7 @@ public sealed class SearchTool
             ToolDiagnostic? markersConverging = null;
             if (route.Kind == SearchRouteKind.Regions)
             {
-                using WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, ensureFresh);
+                using WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, refresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(region, workspace_id, json);
                 regionsConverging = RegionLevelDiagnostic(region.IndexLevel, scope);
                 SearchRouteExecutionResult result = SearchRouteExecutor.RunRegions(
@@ -358,7 +358,7 @@ public sealed class SearchTool
             }
             else if (route.Kind == SearchRouteKind.Markers)
             {
-                using WorkspaceSymbolSearchContext region = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
+                using WorkspaceSymbolSearchContext region = _workspaceProvider.ResolveSymbolSearch(workspace_id, refresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(region, workspace_id, json);
                 markersConverging = MarkerLevelDiagnostic(region.IndexLevel, scope);
                 SearchRouteExecutionResult result = SearchRouteExecutor.RunMarkers(
@@ -385,7 +385,7 @@ public sealed class SearchTool
             {
                 // Content/docs search routes through the corpus sidecar but keeps the legacy content result shape.
                 WorkspaceTextContentSearchContext content =
-                    _textContentProvider.ResolveTextContentSearch(workspace_id, ensureFresh);
+                    _textContentProvider.ResolveTextContentSearch(workspace_id, refresh);
                 string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(content, workspace_id, json);
 
                 CanaryMode canaryMode = CanaryActivation.FromEnvironment();
@@ -400,7 +400,7 @@ public sealed class SearchTool
                     contentBanner,
                     file_pattern,
                     language,
-                    identifier => SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh),
+                    identifier => SuggestSymbolsBestEffort(identifier, workspace_id, refresh),
                     SemanticContentRerank(
                         content.Index, query, content.WorkspaceRoot, exclude_tests is true, file_pattern, language),
                     canaryMode,
@@ -437,7 +437,7 @@ public sealed class SearchTool
             else if (route.Kind == SearchRouteKind.TextContent)
             {
                 WorkspaceTextContentSearchContext textContent =
-                    _textContentProvider.ResolveTextContentSearch(workspace_id, ensureFresh);
+                    _textContentProvider.ResolveTextContentSearch(workspace_id, refresh);
                 string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(textContent, workspace_id, json);
                 SearchRouteExecutionResult result = SearchRouteExecutor.RunTextContent(
                     textContent.Index,
@@ -451,7 +451,7 @@ public sealed class SearchTool
                         FilePattern: file_pattern,
                         Language: language,
                         SuggestionLookup: identifier =>
-                            SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh),
+                            SuggestSymbolsBestEffort(identifier, workspace_id, refresh),
                         BoundAgentOutput: true));
                 output = result.Output;
                 count = result.Count;
@@ -464,7 +464,7 @@ public sealed class SearchTool
             }
             else
             {
-                using WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
+                using WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspace_id, refresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
                 var request = new SearchRouteExecutionRequest(
                     query,
@@ -529,7 +529,7 @@ public sealed class SearchTool
                         output,
                         count,
                         workspace_id,
-                        ensureFresh,
+                        refresh,
                         file_pattern,
                         language,
                         compactBanner,
@@ -3319,7 +3319,7 @@ public sealed class SearchTool
         string primaryOutput,
         int primaryCount,
         string? workspaceId,
-        bool ensureFresh,
+        WorkspaceRefreshMode refresh,
         string? filePattern,
         string? language,
         string? compactBanner,
@@ -3331,7 +3331,7 @@ public sealed class SearchTool
         try
         {
             WorkspaceTextContentSearchContext textContent =
-                _textContentProvider.ResolveTextContentSearch(workspaceId, ensureFresh);
+                _textContentProvider.ResolveTextContentSearch(workspaceId, refresh);
             bool preferDocsConfig = LooksLikeDocsOrConfigQuery(query);
             if (preferDocsConfig &&
                 TryRunAutoDocsConfigRescue(
@@ -3886,11 +3886,11 @@ public sealed class SearchTool
     private IReadOnlyList<IndexedSymbol> SuggestSymbolsBestEffort(
         string identifier,
         string? workspaceId,
-        bool ensureFresh)
+        WorkspaceRefreshMode refresh)
     {
         try
         {
-            using WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspaceId, ensureFresh);
+            using WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspaceId, refresh);
             return SymbolSuggestionEngine.Suggest(context.Index, identifier, EmptySuggestionLimit);
         }
         catch (Exception ex) when (
@@ -4794,13 +4794,13 @@ public sealed class SearchTool
 
     private sealed class UnavailableRegionSearchProvider : IWorkspaceRegionSearchProvider
     {
-        public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw new InvalidOperationException("region search provider is not configured.");
     }
 
     private sealed class UnavailableTextContentSearchProvider : IWorkspaceTextContentSearchProvider
     {
-        public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh) =>
+        public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, WorkspaceRefreshMode refresh) =>
             throw new InvalidOperationException("text content search provider is not configured.");
     }
 }
