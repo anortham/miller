@@ -152,17 +152,17 @@ public sealed class ContinuousTestImpactSelector
 
         // Fail-closed gate. A truncated impact read means an incomplete blast radius; unmappable
         // evidence means the read named an impacted test this project knows but cannot run; an
-        // unaccounted changed path means the index cannot say what the change reaches. A COMPLETE
-        // set of mapped impact hints accounts for the whole delta — the hints came from the same
-        // impact computation over the same changed files.
+        // unaccounted changed path means the index cannot say what the change reaches. Impact
+        // hints never vouch for the whole delta: the hint read proves what the RESOLVED symbols
+        // reach, not that every changed path resolved to symbols, so per-path accounting runs on
+        // every non-workspace-scope selection (review finding F2 — a mixed save of a mapped .cs
+        // plus an unresolvable fixture previously read Impacted and kept false-green watermarks).
         bool truncated = graphImpact is { } impactRead
             && (impactRead.TruncatedByDepth || impactRead.TruncatedByLimit);
-        bool hintsAccountForDelta = request.ImpactedTests.Count > 0 && !unmappableHint;
         bool unknown = truncated
             || unmappableHint
             || unmappableEvidence
-            || (!hintsAccountForDelta
-                && HasUnaccountedChangedPath(request, changedFileSymbols, changedFiles, testCases));
+            || HasUnaccountedChangedPath(request, changedFileSymbols, changedFiles, testCases);
         if (unknown)
         {
             string[] allIds = testCases
@@ -259,24 +259,17 @@ public sealed class ContinuousTestImpactSelector
     private static readonly HashSet<string> HarmlessChangedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".adoc",
-        ".bmp",
-        ".gif",
-        ".ico",
-        ".jpeg",
-        ".jpg",
         ".markdown",
         ".md",
-        ".png",
         ".rst",
-        ".svg",
-        ".txt",
-        ".webp",
-        ".woff",
-        ".woff2",
     };
 
-    /// <summary>Docs and image assets cannot reach a test; a change touching only these kinds is
-    /// evidence of nothing, not of unknown reachability.</summary>
+    /// <summary>Prose documentation cannot reach a test, so a docs-only change reads KnownEmpty —
+    /// the design's approved "a markdown edit keeps the verdict green" acceptance. The list is
+    /// docs-ONLY by decision (review finding F3, flagged by the general AND security passes):
+    /// images, fonts, .txt, .svg, .ico and other assets can be embedded resources, snapshot
+    /// fixtures, or runtime config, so they take ordinary path accounting — accounted when
+    /// symbols/config/project rules cover them, otherwise the selection fails closed.</summary>
     private static bool IsHarmlessChangedPath(string path)
     {
         string extension = Path.GetExtension(path);

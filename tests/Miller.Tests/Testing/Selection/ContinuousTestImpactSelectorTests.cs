@@ -66,7 +66,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             qualifiedName: "web.suite.not_the_reported_name",
             name: "renders homepage",
             sourcePath: "tests/web/app.test.ts");
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:safepath", "SafePath", "src/Eros.Core/SafePath.cs"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -117,7 +119,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             qualifiedName: "AppTests.does_the_thing",
             name: "does_the_thing",
             sourcePath: "tests/AppTests.cs");
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:app", "App", "src/App.cs"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -161,7 +165,13 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             name: "tests::other::test_other",
             sourcePath: "/repo/crates/julie-extractors",
             projectPath: projectPath);
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:axum",
+            "extract_axum_route",
+            "crates/julie-extractors/src/base/framework_structural_facts/axum.rs",
+            language: "rust"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -205,7 +215,10 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             sourcePath: null,
             projectPath: projectPath,
             framework: "nunit");
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:upload", "EdrFileUpload", "src/Client/Features/Edr/EdrFileUpload.razor"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -252,7 +265,10 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             projectPath: projectPath,
             className: "Client.Tests.UnrelatedTests",
             framework: "nunit");
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:upload", "EdrFileUpload", "src/Client/Features/Edr/EdrFileUpload.razor"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -553,6 +569,75 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.Empty(result.SelectedTestCaseIds);
         Assert.Empty(result.StaleTestCaseIds);
         Assert.Equal(ContinuousTestSelectionOutcome.KnownEmpty, result.Outcome);
+    }
+
+    /// <summary>
+    /// Review finding F2: one mapped impact hint must not vouch for the whole delta. The hint
+    /// read proves what the RESOLVED symbols reach; it never proves that every changed path
+    /// resolved to symbols. A mixed save (a mapped .cs plus a fixture asset the index cannot
+    /// account for) previously skipped per-path accounting and produced a false Impacted while
+    /// the fixture's dependent tests kept their watermarks.
+    /// </summary>
+    [Fact]
+    public void Select_mixed_delta_with_unaccounted_path_fails_closed_despite_mapped_hint()
+    {
+        using ContinuousTestStore store = OpenStore();
+        const string projectPath = "/repo/Sample.Tests.csproj";
+        SeedProviderCase(
+            store,
+            "tc:adds",
+            selector: "Sample.Tests.CalculatorTests.Adds",
+            qualifiedName: "Sample.Tests.CalculatorTests.Adds",
+            name: "Sample.Tests.CalculatorTests.Adds",
+            sourcePath: null,
+            projectPath: projectPath,
+            className: "Sample.Tests.CalculatorTests",
+            filePath: "tests/Sample.Tests/CalculatorTests.cs");
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:calc", "Calculator", "src/Sample/Calculator.cs"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ProjectPath: projectPath,
+            ChangedPaths: ["src/Sample/Calculator.cs", "tests/Sample.Tests/fixtures/Payload.dat"],
+            ImpactedTests:
+            [
+                new ContinuousTestImpactedTest(
+                    SymbolId: "sym:adds",
+                    Path: "tests/Sample.Tests/CalculatorTests.cs",
+                    Name: "Adds",
+                    TestCase: true),
+            ]));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(["tc:adds"], result.StaleTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.False(result.MayExecute);
+    }
+
+    /// <summary>
+    /// Review finding F3 (general + security pass): images, fonts, .txt, .svg and other assets
+    /// can be embedded resources, snapshot fixtures, or runtime config — they are NOT harmless.
+    /// With nothing else accounting for the path, the honest outcome under the path-accounting
+    /// rules is Unknown (fail closed). Only prose documentation stays KnownEmpty.
+    /// </summary>
+    [Fact]
+    public void Select_image_only_change_fails_closed_when_nothing_accounts_for_it()
+    {
+        using ContinuousTestStore store = OpenStore();
+        SeedLinkedCase(store, "tc:fresh", "sym:test-fresh", "tests/other/FreshTests.cs", "test_fresh");
+        SeedCommittedResult(store, "tc:fresh");
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["assets/Logo.png"]));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(["tc:fresh"], result.StaleTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.False(result.MayExecute);
     }
 
     /// <summary>
