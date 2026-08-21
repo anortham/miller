@@ -131,6 +131,48 @@ internal static class RevisionFactCacheLoader
         FillSymbols(command, slices, intern);
     }
 
+    /// <summary>
+    /// The one name arm of the whole-generation symbol load, read for a single name instead of for every
+    /// visible file. The projection, the visibility join, the ordering, and the row transform are the ones
+    /// <see cref="FillStoreSymbols"/> uses, so the list this returns is the list the eager name index would
+    /// hold for that name — including the duplicate rows a version with two manifest paths produces.
+    /// </summary>
+    internal static List<(long VersionId, PackedSymbol Symbol)> ReadStoreSymbolsNamed(
+        SqliteConnection connection,
+        StoreVisibility visibility,
+        string name,
+        StringInternPool intern)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandTimeout = 0;
+        command.CommandText =
+            """
+            SELECT s.version_id,s.symbol_id,s.name,s.kind,s.language,s.parent_symbol_id,s.signature,s.visibility,s.metadata_json
+            FROM main.symbols AS s
+            JOIN main.manifest_entries AS e ON e.version_id=s.version_id
+            WHERE e.view_id=$view_id AND e.generation=$generation AND s.name=$name
+            ORDER BY s.version_id,s.symbol_id
+            """;
+        command.Parameters.AddWithValue("$view_id", visibility.ViewId);
+        command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
+        command.Parameters.AddWithValue("$name", name);
+        using SqliteDataReader reader = command.ExecuteReader();
+        var rows = new List<(long VersionId, PackedSymbol Symbol)>();
+        var packed = new List<PackedSymbol>(1);
+        var seeds = new List<ImportSeed>(1);
+        while (reader.Read())
+        {
+            long versionId = reader.GetInt64(0);
+            packed.Clear();
+            seeds.Clear();
+            AppendSymbol(reader, intern, packed, seeds);
+            if (packed.Count == 1)
+                rows.Add((versionId, packed[0]));
+        }
+
+        return rows;
+    }
+
     private static void FillArtifactSymbols(
         SqliteConnection connection,
         Dictionary<long, VersionSlice> slices,
@@ -540,15 +582,25 @@ internal static class RevisionFactCacheLoader
         return grouped;
     }
 
+    /// <summary>
+    /// <paramref name="indexedLocate"/> buckets the file's propagation candidates by name instead of
+    /// rescanning them per source row. It answers identically and is only set by the bounded cache, whose
+    /// per-query file set is dominated by this repo's largest files.
+    /// </summary>
     internal static VersionSlice LoadStoreSlice(
         SqliteConnection connection,
         StoreVisibility visibility,
         VisibleFile file,
-        StringInternPool intern)
+        StringInternPool intern,
+        bool indexedLocate = false)
     {
         (PackedSymbol[] symbols, ImportSeed[] importSeeds) = LoadStoreSymbols(connection, visibility, file, intern);
         PackedTypeFact[] typeFacts = LoadStoreTypeFacts(connection, visibility, file.VersionId, intern);
-        (long[] rowIds, PropagationSource[] sources) = LocateStore(connection, visibility, file.VersionId);
+        (long[] rowIds, PropagationSource[] sources) = LocateStore(
+            connection,
+            visibility,
+            file.VersionId,
+            indexedLocate);
         return new VersionSlice(
             file.VersionId,
             intern.Intern(file.Path),
@@ -766,10 +818,13 @@ internal static class RevisionFactCacheLoader
     private static (long[] RowIds, PropagationSource[] Sources) LocateStore(
         SqliteConnection connection,
         StoreVisibility visibility,
-        long versionId)
+        long versionId,
+        bool indexedLocate = false)
     {
         List<PendingLocateRow> pending = ReadStorePendings(connection, visibility, versionId);
-        List<RelationshipLocateRow> relationships = ReadStoreRelationships(connection, visibility, versionId);
+        List<RelationshipLocateRow> relationships =
+            (indexedLocate ? TryReadStoreRelationshipsByVersion(connection, visibility, versionId) : null)
+            ?? ReadStoreRelationships(connection, visibility, versionId);
         if (pending.Count == 0 && relationships.Count == 0)
             return ([], []);
 
@@ -784,7 +839,7 @@ internal static class RevisionFactCacheLoader
         command.Parameters.AddWithValue("$view_id", visibility.ViewId);
         command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
         command.Parameters.AddWithValue("$version", versionId);
-        return Locate(command, pending, relationships);
+        return Locate(command, pending, relationships, indexedLocate);
     }
 
     private static (long[] RowIds, PropagationSource[] Sources) LocateArtifact(SqliteConnection connection, long versionId)
@@ -809,7 +864,8 @@ internal static class RevisionFactCacheLoader
     private static (long[] RowIds, PropagationSource[] Sources) Locate(
         SqliteCommand identifierCommand,
         List<PendingLocateRow> pending,
-        List<RelationshipLocateRow> relationships)
+        List<RelationshipLocateRow> relationships,
+        bool indexedLocate = false)
     {
         using SqliteDataReader reader = identifierCommand.ExecuteReader();
         var candidates = new List<PropagationCandidate>();
@@ -824,19 +880,24 @@ internal static class RevisionFactCacheLoader
                 reader.GetInt64(4)));
         }
 
+        PropagationCandidateIndex? index = indexedLocate ? new PropagationCandidateIndex(candidates) : null;
         var located = new Dictionary<long, PropagationSource>();
         foreach (PendingLocateRow row in pending)
         {
-            int? index = PropagationLocator.Locate(candidates, row.Name, row.StartByte, row.EndByte, row.StartLine);
-            if (index is { } hit)
-                located[rowIds[hit]] = new PropagationSource(PropagationOrigin.Pending, row.RowId);
+            int? hit = index is null
+                ? PropagationLocator.Locate(candidates, row.Name, row.StartByte, row.EndByte, row.StartLine)
+                : index.Locate(row.Name, row.StartByte, row.EndByte, row.StartLine);
+            if (hit is { } hitIndex)
+                located[rowIds[hitIndex]] = new PropagationSource(PropagationOrigin.Pending, row.RowId);
         }
 
         foreach (RelationshipLocateRow row in relationships)
         {
-            int? index = PropagationLocator.Locate(candidates, row.Name, row.StartByte, row.EndByte, row.StartLine);
-            if (index is { } hit)
-                located[rowIds[hit]] = new PropagationSource(PropagationOrigin.Relationship, row.RowId);
+            int? hit = index is null
+                ? PropagationLocator.Locate(candidates, row.Name, row.StartByte, row.EndByte, row.StartLine)
+                : index.Locate(row.Name, row.StartByte, row.EndByte, row.StartLine);
+            if (hit is { } hitIndex)
+                located[rowIds[hitIndex]] = new PropagationSource(PropagationOrigin.Relationship, row.RowId);
         }
 
         return ToLocatedArrays(located);
@@ -931,6 +992,73 @@ internal static class RevisionFactCacheLoader
         command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
         command.Parameters.AddWithValue("$version", versionId);
         return ReadRelationships(command);
+    }
+
+    /// <summary>
+    /// The one-file propagation source rows, asked in a shape SQLite can drive from
+    /// <c>relationships(version_id)</c>. Returns null when the fast shape cannot be proved equal to
+    /// <see cref="ReadStoreRelationships"/>, and the caller falls back to that one.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ReadStoreRelationships"/> joins two manifest_entries aliases, and SQLite plans it by
+    /// driving from the whole generation's manifest and its 127k symbols before it ever reaches the one file
+    /// asked for — 240 ms per file on this repo, against 1 ms for the same answer here. The visibility joins
+    /// become EXISTS tests, which is the same predicate without the row multiplication.
+    /// <para>Equality: both forms yield one row per (relationship, visible target symbol row) and the caller
+    /// keeps the first row per relationship id. Every field except <c>name</c> comes from the relationship
+    /// itself, so the two forms can only disagree when one relationship's target id resolves to visible
+    /// symbol rows with DIFFERENT names — which this method detects and refuses. Row ORDER may differ, and
+    /// does not matter: the located map is keyed by identifier row and only its key set and origin are read
+    /// (<c>PropagationSource.RowId</c> is stored and never consulted).</para>
+    /// </remarks>
+    private static List<RelationshipLocateRow>? TryReadStoreRelationshipsByVersion(
+        SqliteConnection connection,
+        StoreVisibility visibility,
+        long versionId)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT r.relationship_id,t.name,r.start_byte,r.end_byte,r.start_line
+            FROM main.relationships AS r
+            JOIN main.symbols AS t ON t.symbol_id=r.to_symbol_id
+            WHERE r.version_id=$version
+              AND r.kind IN ('calls','instantiates','uses','extends','implements')
+              AND EXISTS (
+                    SELECT 1 FROM main.manifest_entries AS e
+                    WHERE e.version_id=r.version_id AND e.view_id=$view_id AND e.generation=$generation)
+              AND EXISTS (
+                    SELECT 1 FROM main.manifest_entries AS te
+                    WHERE te.version_id=t.version_id AND te.view_id=$view_id AND te.generation=$generation)
+            ORDER BY r.relationship_id
+            """;
+        command.Parameters.AddWithValue("$view_id", visibility.ViewId);
+        command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
+        command.Parameters.AddWithValue("$version", versionId);
+        using SqliteDataReader reader = command.ExecuteReader();
+        var rows = new List<RelationshipLocateRow>();
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            string id = reader.GetString(0);
+            string name = reader.GetString(1);
+            if (names.TryGetValue(id, out string? kept))
+            {
+                if (!string.Equals(kept, name, StringComparison.Ordinal))
+                    return null;
+                continue;
+            }
+
+            names.Add(id, name);
+            rows.Add(new RelationshipLocateRow(
+                id,
+                name,
+                ReadNullableInt64(reader, 2),
+                ReadNullableInt64(reader, 3),
+                ReadNullableInt64(reader, 4) ?? 0));
+        }
+
+        return rows;
     }
 
     private static List<RelationshipLocateRow> ReadArtifactRelationships(SqliteConnection connection, long versionId)

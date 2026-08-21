@@ -140,6 +140,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
     private readonly Dictionary<long, VersionSlice> _slices;
     private readonly Dictionary<string, RevisionFactCacheLoader.VisibleFile> _pathIndex;
     private readonly StoreVisibility? _visibility;
+    private readonly BoundedStoreSource? _bounded;
     private Dictionary<string, List<PackedRef>> _byName = new(StringComparer.Ordinal);
     private Dictionary<long, ImportBinding[]> _imports = [];
 
@@ -153,16 +154,37 @@ internal sealed class RevisionFactCache : IResolutionFacts
         _slices = slices;
         _pathIndex = pathIndex;
         _visibility = visibility;
+        _bounded = null;
         RebuildIndexes();
         Propagation = new PropagationIndex(_slices);
         ResidentBytes = EstimateBytes();
+    }
+
+    private RevisionFactCache(
+        StringInternPool intern,
+        Dictionary<string, RevisionFactCacheLoader.VisibleFile> pathIndex,
+        StoreVisibility visibility,
+        BoundedStoreSource bounded)
+    {
+        _intern = intern;
+        _slices = [];
+        _pathIndex = pathIndex;
+        _visibility = visibility;
+        _bounded = bounded;
+        Propagation = new PropagationIndex(_slices, EnsureSlice);
+        ResidentBytes = 0;
     }
 
     internal PropagationIndex Propagation { get; private set; }
 
     internal long ResidentBytes { get; private set; }
 
-    internal bool CanAdvance => _visibility is not null;
+    /// <summary>Files this cache has materialized. A full load has one per visible file from the start.</summary>
+    internal int LoadedSliceCount => _slices.Count;
+
+    // A bounded cache reads through a session-owned connection and holds only what one query asked for, so it
+    // can neither be shared by a later revision nor advanced onto one.
+    internal bool CanAdvance => _visibility is not null && _bounded is null;
 
     internal static RevisionFactCache Load(SqliteConnection storeRead, StoreVisibility visibility)
     {
@@ -222,10 +244,51 @@ internal sealed class RevisionFactCache : IResolutionFacts
         return new RevisionFactCache(intern, slices, pathIndex, visibility: null);
     }
 
+    /// <summary>
+    /// A fact view over one pinned generation that reads a file's facts, and a name's symbols, only when a
+    /// query asks for them. Every answer comes from the same loader queries the whole-generation
+    /// <see cref="Load"/> uses, so a bounded cache and a full one answer every accessor identically; the
+    /// bounded one just never reads the files no answer depends on.
+    /// <para>The caller owns <paramref name="storeRead"/> and must keep it open, and must serialize its own
+    /// reads: a bounded cache fills as it is queried and is not thread-safe. Use it for a one-shot process
+    /// (the CLI), never for the shared server cache — that one is reused across queries, so paying the whole
+    /// generation once is the cheaper trade.</para>
+    /// </summary>
+    internal static RevisionFactCache LoadBounded(SqliteConnection storeRead, StoreVisibility visibility)
+    {
+        ArgumentNullException.ThrowIfNull(storeRead);
+        ArgumentNullException.ThrowIfNull(visibility);
+        var intern = new StringInternPool();
+        List<RevisionFactCacheLoader.VisibleFile> files = RevisionFactCacheLoader.ReadVisibleStore(storeRead, visibility);
+        var pathIndex = new Dictionary<string, RevisionFactCacheLoader.VisibleFile>(files.Count, StringComparer.Ordinal);
+        var byVersion = new Dictionary<long, RevisionFactCacheLoader.VisibleFile>(files.Count);
+        foreach (RevisionFactCacheLoader.VisibleFile file in files)
+        {
+            RevisionFactCacheLoader.VisibleFile interned = file with
+            {
+                Path = intern.Intern(file.Path),
+                Language = intern.Intern(file.Language),
+            };
+            pathIndex[interned.Path] = interned;
+
+            // Path order with last-write-wins, exactly as LoadAllStoreSlices keys its slices: two manifest
+            // paths can share one version_id, and the full load keeps the last path for that version.
+            byVersion[interned.VersionId] = interned;
+        }
+
+        return new RevisionFactCache(
+            intern,
+            pathIndex,
+            visibility,
+            new BoundedStoreSource(storeRead, visibility, byVersion));
+    }
+
     internal RevisionFactCache Advance(SqliteConnection storeRead, StoreVisibility newVisibility)
     {
         ArgumentNullException.ThrowIfNull(storeRead);
         ArgumentNullException.ThrowIfNull(newVisibility);
+        if (_bounded is not null)
+            throw new InvalidOperationException("Bounded fact caches cannot Advance.");
         if (_visibility is null)
             throw new InvalidOperationException("Artifact fact caches cannot Advance.");
 
@@ -279,6 +342,8 @@ internal sealed class RevisionFactCache : IResolutionFacts
     public IEnumerable<FactSymbol> SymbolsNamed(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
+        if (_bounded is { } bounded)
+            return bounded.SymbolsNamed(name, _intern);
         if (!_byName.TryGetValue(name, out List<PackedRef>? refs))
             return [];
         var matches = new FactSymbol[refs.Count];
@@ -289,7 +354,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
 
     public FactSymbol? Symbol(FactSymbolKey key)
     {
-        if (!_slices.TryGetValue(key.VersionId, out VersionSlice? slice))
+        if (SliceFor(key.VersionId) is not { } slice)
             return null;
         foreach (PackedSymbol packed in slice.Packed)
         {
@@ -302,7 +367,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
 
     public IReadOnlyList<FactSymbol> ChildrenOf(FactSymbolKey parent)
     {
-        if (!_slices.TryGetValue(parent.VersionId, out VersionSlice? slice))
+        if (SliceFor(parent.VersionId) is not { } slice)
             return [];
         var matches = new List<FactSymbol>();
         for (int i = 0; i < slice.Packed.Length; i++)
@@ -317,7 +382,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
 
     public IReadOnlyList<FactSymbol> TopLevelOf(long versionId)
     {
-        if (!_slices.TryGetValue(versionId, out VersionSlice? slice))
+        if (SliceFor(versionId) is not { } slice)
             return [];
         var top = new List<FactSymbol>();
         foreach (PackedSymbol packed in slice.Packed)
@@ -331,7 +396,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
 
     public IReadOnlyList<FactTypeFact> TypeFactsOf(FactSymbolKey symbol)
     {
-        if (!_slices.TryGetValue(symbol.VersionId, out VersionSlice? slice))
+        if (SliceFor(symbol.VersionId) is not { } slice)
             return [];
         var matches = new List<FactTypeFact>();
         foreach (PackedTypeFact fact in slice.TypeFactRows)
@@ -343,17 +408,46 @@ internal sealed class RevisionFactCache : IResolutionFacts
         return matches.Count == 0 ? [] : matches.ToArray();
     }
 
-    public IReadOnlyList<ImportBinding> ImportsOf(long versionId) =>
-        _imports.TryGetValue(versionId, out ImportBinding[]? imports) ? imports : [];
+    public IReadOnlyList<ImportBinding> ImportsOf(long versionId) => ImportArrayOf(versionId);
 
     internal FactSymbol[] SymbolsOfVersion(long versionId) =>
-        _slices.TryGetValue(versionId, out VersionSlice? slice) ? slice.Symbols : [];
+        SliceFor(versionId) is { } slice ? slice.Symbols : [];
 
-    internal ImportBinding[] ImportArrayOf(long versionId) =>
-        _imports.TryGetValue(versionId, out ImportBinding[]? imports) ? imports : [];
+    internal ImportBinding[] ImportArrayOf(long versionId)
+    {
+        _ = SliceFor(versionId);
+        return _imports.TryGetValue(versionId, out ImportBinding[]? imports) ? imports : [];
+    }
 
-    internal VersionSlice? Slice(long versionId) =>
-        _slices.TryGetValue(versionId, out VersionSlice? slice) ? slice : null;
+    internal VersionSlice? Slice(long versionId) => SliceFor(versionId);
+
+    private VersionSlice? SliceFor(long versionId) =>
+        _bounded is null
+            ? (_slices.TryGetValue(versionId, out VersionSlice? slice) ? slice : null)
+            : EnsureSlice(versionId);
+
+    private VersionSlice? EnsureSlice(long versionId)
+    {
+        if (_slices.TryGetValue(versionId, out VersionSlice? existing))
+            return existing;
+        if (_bounded is not { } bounded
+            || !bounded.TryGetVisibleFile(versionId, out RevisionFactCacheLoader.VisibleFile file))
+        {
+            return null;
+        }
+
+        VersionSlice slice = RevisionFactCacheLoader.LoadStoreSlice(
+            bounded.Connection,
+            bounded.Visibility,
+            file,
+            _intern,
+            indexedLocate: true);
+        slice.Imports = RevisionFactCacheLoader.BindImports(slice, _pathIndex);
+        slice.ImportSeeds = [];
+        _slices[versionId] = slice;
+        _imports[versionId] = slice.Imports;
+        return slice;
+    }
 
     private void RebuildIndexes()
     {
@@ -412,6 +506,45 @@ internal sealed class RevisionFactCache : IResolutionFacts
     {
         foreach (VersionSlice slice in slices.Values)
             slice.ImportSeeds = [];
+    }
+
+    /// <summary>The read-through state a bounded cache adds: the visible files, the connection, and one
+    /// materialized symbol list per name already asked for.</summary>
+    private sealed class BoundedStoreSource
+    {
+        private readonly Dictionary<long, RevisionFactCacheLoader.VisibleFile> _byVersion;
+        private readonly Dictionary<string, FactSymbol[]> _named = new(StringComparer.Ordinal);
+
+        internal BoundedStoreSource(
+            SqliteConnection connection,
+            StoreVisibility visibility,
+            Dictionary<long, RevisionFactCacheLoader.VisibleFile> byVersion)
+        {
+            Connection = connection;
+            Visibility = visibility;
+            _byVersion = byVersion;
+        }
+
+        internal SqliteConnection Connection { get; }
+
+        internal StoreVisibility Visibility { get; }
+
+        internal bool TryGetVisibleFile(long versionId, out RevisionFactCacheLoader.VisibleFile file) =>
+            _byVersion.TryGetValue(versionId, out file);
+
+        internal FactSymbol[] SymbolsNamed(string name, StringInternPool intern)
+        {
+            if (_named.TryGetValue(name, out FactSymbol[]? cached))
+                return cached;
+
+            List<(long VersionId, PackedSymbol Symbol)> rows =
+                RevisionFactCacheLoader.ReadStoreSymbolsNamed(Connection, Visibility, name, intern);
+            var facts = new FactSymbol[rows.Count];
+            for (int i = 0; i < rows.Count; i++)
+                facts[i] = rows[i].Symbol.ToFact(rows[i].VersionId);
+            _named[name] = facts;
+            return facts;
+        }
     }
 
     private static bool MembershipChanged(

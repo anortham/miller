@@ -94,14 +94,20 @@ public sealed class CliDispatchTests : IDisposable
     private (int Code, string Out, string Err) RunFamilyStore(
         MinimalFamilyStoreFixture fixture,
         IReadOnlyList<string> args,
-        bool sidecarEnabled = false)
+        bool sidecarEnabled = false,
+        bool boundedFacts = true)
     {
         string? previousStoreMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
         string? previousSearchSidecar = Environment.GetEnvironmentVariable(SymbolSearchSidecar.EnvVar);
         string? previousSemantic = Environment.GetEnvironmentVariable("MILLER_SEMANTIC");
+        string? previousBoundedFacts = Environment.GetEnvironmentVariable(
+            FamilyStoreReadSession.BoundedFactsEnvironmentVariable);
         Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
         Environment.SetEnvironmentVariable(SymbolSearchSidecar.EnvVar, sidecarEnabled ? "on" : "0");
         Environment.SetEnvironmentVariable("MILLER_SEMANTIC", "off");
+        Environment.SetEnvironmentVariable(
+            FamilyStoreReadSession.BoundedFactsEnvironmentVariable,
+            boundedFacts ? "on" : "off");
         try
         {
             return Run(args, Context(fixture.LegacyArtifactPath, fixture.WorkspaceRoot));
@@ -111,6 +117,9 @@ public sealed class CliDispatchTests : IDisposable
             Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, previousStoreMode);
             Environment.SetEnvironmentVariable(SymbolSearchSidecar.EnvVar, previousSearchSidecar);
             Environment.SetEnvironmentVariable("MILLER_SEMANTIC", previousSemantic);
+            Environment.SetEnvironmentVariable(
+                FamilyStoreReadSession.BoundedFactsEnvironmentVariable,
+                previousBoundedFacts);
         }
     }
 
@@ -919,6 +928,47 @@ public sealed class CliDispatchTests : IDisposable
         Assert.True(code == 0, error);
         Assert.Empty(error);
         Assert.Contains("VisibleType", output);
+    }
+
+    // The CLI reads its reference facts one file at a time instead of loading the whole pinned generation.
+    // The rendered answer is the contract: it must be the same text either way, or the fast path is a
+    // different tool.
+    [Theory]
+    [InlineData("summary")]
+    [InlineData("overview")]
+    [InlineData("full")]
+    public void FamilyStoreInspect_BoundedFactsRenderWhatTheWholeGenerationLoadRenders(string depth)
+    {
+        using var fx = MinimalFamilyStoreFixture.Create();
+        string[] args = ["inspect", "VisibleType", "--depth", depth, "--json"];
+
+        var bounded = RunFamilyStore(fx, args);
+        var whole = RunFamilyStore(fx, args, boundedFacts: false);
+
+        Assert.True(bounded.Code == 0, bounded.Err);
+        Assert.Equal(whole.Code, bounded.Code);
+        Assert.Equal(whole.Out, bounded.Out);
+        Assert.Equal(whole.Err, bounded.Err);
+    }
+
+    [Fact]
+    public void FamilyStoreTraceAndImpact_BoundedFactsRenderWhatTheWholeGenerationLoadRenders()
+    {
+        using var fx = MinimalFamilyStoreFixture.Create();
+
+        foreach (string[] args in new[]
+                 {
+                     new[] { "trace", "VisibleType", "--json" },
+                     ["impact", "VisibleType", "--json"],
+                 })
+        {
+            var bounded = RunFamilyStore(fx, args);
+            var whole = RunFamilyStore(fx, args, boundedFacts: false);
+
+            Assert.True(bounded.Code == 0, bounded.Err);
+            Assert.Equal(whole.Out, bounded.Out);
+            Assert.Equal(whole.Err, bounded.Err);
+        }
     }
 
     [Fact]
@@ -5340,6 +5390,41 @@ public sealed class CliDispatchTests : IDisposable
                   confidence REAL,
                   method TEXT,
                   operation TEXT);
+                CREATE TABLE complexity_metrics (
+                  complexity_metric_id INTEGER PRIMARY KEY,
+                  version_id INTEGER NOT NULL,
+                  path TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  scope TEXT NOT NULL,
+                  symbol_id TEXT,
+                  algorithm_id TEXT NOT NULL,
+                  covered_lines INTEGER,
+                  covered_bytes INTEGER,
+                  decision_count INTEGER,
+                  loop_count INTEGER,
+                  max_nesting_depth INTEGER,
+                  parameter_count INTEGER,
+                  start_line INTEGER,
+                  start_column INTEGER,
+                  end_line INTEGER,
+                  end_column INTEGER,
+                  start_byte INTEGER,
+                  end_byte INTEGER,
+                  metadata_json TEXT);
+                CREATE TABLE source_regions (
+                  source_region_id INTEGER PRIMARY KEY,
+                  version_id INTEGER NOT NULL,
+                  path TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  containing_symbol_id TEXT,
+                  start_line INTEGER,
+                  start_column INTEGER,
+                  end_line INTEGER,
+                  end_column INTEGER,
+                  start_byte INTEGER,
+                  end_byte INTEGER,
+                  metadata_json TEXT);
                 CREATE TABLE store_log (
                   sequence INTEGER PRIMARY KEY,
                   request_id TEXT NOT NULL,

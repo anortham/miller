@@ -350,6 +350,19 @@ scripts/test.ps1 all
   (cross-platform; no shell script). Build version is single-sourced in `Directory.Build.props` (`<Version>` + git
   short SHA → `MillerVersion.Current`), surfaced in MCP `ServerInfo.Version`, `miller version`, and the `workspace`
   status header.
+- **The CLI reads reference facts bounded; the server loads the generation once.** `RevisionFactCache` has two
+  modes. The server keeps the whole pinned generation in the process-wide `RevisionFactCacheStore` and reuses it
+  across calls. The one-shot CLI has nobody to reuse it, so a cold `miller inspect <symbol> --depth
+  overview|full` paid a flat whole-generation load (~5s on this repo, 1,785 files) to return a handful of
+  references. A session opened with NO fact-cache store now uses `RevisionFactCache.LoadBounded`: the visible
+  file list up front, then one file's slice or one name's symbols on demand, through the SAME loader queries the
+  full load uses — so every accessor answers identically and the output is byte-identical, guarded by
+  `BoundedRevisionFactCacheTests` and the rendered A/B in `CliDispatchTests`. Two rules keep it honest: a version
+  outside the pinned manifest must report NO slice (not an empty one), and a bounded cache never advances onto a
+  newer generation. `MILLER_BOUNDED_FACTS=off` restores the whole-generation load. The per-file propagation load
+  buckets candidates by name (`PropagationCandidateIndex`) and asks for relationship rows in a shape SQLite can
+  drive from `relationships(version_id)`; the whole-generation load keeps its scan, so the server path is
+  unchanged.
 - **Eros-facing CLI/export contracts.** Keep Eros on public process/artifact contracts, not Miller private .NET
   internals. Current documented surfaces live in [`docs/contracts/cli-eros-v1.md`](docs/contracts/cli-eros-v1.md):
   `capabilities --json`, `refresh --json --wait`, `workspace status --json`, `workspace health --json`,

@@ -90,10 +90,27 @@ public sealed class FamilyStoreReadSession :
         }
         else
         {
-            cache = RevisionFactCache.Load(_connection, Visibility);
+            // No fact-cache store means nobody will reuse this cache: this is the one-shot CLI, which exits
+            // after one read. A whole-generation load costs the same whether the answer needs three files or
+            // three hundred, and the CLI pays it from cold every time — so read the facts one query asks for.
+            // Bounded and full answer every accessor identically (see RevisionFactCache.LoadBounded);
+            // MILLER_BOUNDED_FACTS=off restores the whole-generation load.
+            cache = BoundedFactsEnabled()
+                ? RevisionFactCache.LoadBounded(_connection, Visibility)
+                : RevisionFactCache.Load(_connection, Visibility);
         }
 
         return new QueryTimeResolutionReader(cache, Visibility);
+    }
+
+    internal const string BoundedFactsEnvironmentVariable = "MILLER_BOUNDED_FACTS";
+
+    private static bool BoundedFactsEnabled()
+    {
+        string? value = Environment.GetEnvironmentVariable(BoundedFactsEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+        return value.Trim().ToLowerInvariant() is not ("0" or "false" or "off" or "disabled");
     }
 
     public StoreVisibility Visibility { get; }

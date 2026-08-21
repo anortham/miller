@@ -3,6 +3,7 @@ using Miller.Core.Graph;
 using Miller.Core.References;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Resolution;
 using Miller.Indexing.Store;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -233,6 +234,61 @@ public sealed class FamilyStoreReadSessionTests
             FamilyStoreReadSession.Open(fixture.Binding));
 
         Assert.Equal(FamilyStoreReadFailure.SchemaIncompatible, error.Failure);
+    }
+
+    // The seam between the two fact-cache strategies. A session handed the shared store keeps using it — that
+    // is the MCP server, which reuses one loaded generation across every call. A session without one is the
+    // one-shot CLI, and it must read facts per file instead of loading the whole generation to answer once.
+    [Fact]
+    public void SessionWithAFactCacheStoreLoadsTheWholeGenerationThroughIt()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var store = new RevisionFactCacheStore();
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding, "workspace-a", store);
+
+        RevisionFactCache cache = session.Resolution.Cache;
+
+        Assert.Equal(1, store.ScopeCount);
+        Assert.True(cache.CanAdvance);
+        Assert.Equal(1, cache.LoadedSliceCount);
+    }
+
+    [Fact]
+    public void SessionWithoutAFactCacheStoreReadsFactsPerFile()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding, "workspace-a");
+
+        RevisionFactCache cache = session.Resolution.Cache;
+
+        Assert.False(cache.CanAdvance);
+        Assert.Equal(0, cache.LoadedSliceCount);
+        Assert.Equal("Visible", Assert.Single(cache.SymbolsNamed("Visible")).Name);
+        Assert.Empty(cache.SymbolsNamed("Hidden"));
+    }
+
+    [Fact]
+    public void SessionWithoutAFactCacheStoreLoadsTheWholeGenerationWhenBoundedFactsAreOff()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        string? previous = Environment.GetEnvironmentVariable(
+            FamilyStoreReadSession.BoundedFactsEnvironmentVariable);
+        Environment.SetEnvironmentVariable(FamilyStoreReadSession.BoundedFactsEnvironmentVariable, "off");
+        try
+        {
+            using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding, "workspace-a");
+
+            RevisionFactCache cache = session.Resolution.Cache;
+
+            Assert.True(cache.CanAdvance);
+            Assert.Equal(1, cache.LoadedSliceCount);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                FamilyStoreReadSession.BoundedFactsEnvironmentVariable,
+                previous);
+        }
     }
 
     [Fact]
