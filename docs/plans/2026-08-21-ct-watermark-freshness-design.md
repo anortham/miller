@@ -95,6 +95,38 @@ during an executing run queue a follow-up selection; they never kill a healthy r
 Step 4 from the 2026-08-20 plan, unchanged: pass the family id on the CT side without
 touching `RevisionDeltaReader.cs`.
 
+## CT on worktrees (user decision, 2026-08-21: daemon adopts)
+
+Today a linked worktree is a separate workspace with its own `.miller/`, so CT is off there
+and an agent gets nothing without three manual calls. That defeats the agent workflow the
+tool exists for. Design:
+
+- **Enablement inherits through the git link.** A linked worktree resolves its main repo
+  via `GitWorktreeLayout` (no `git` subprocess). If the main checkout has `.miller/ct.enabled`,
+  the worktree counts as enabled. The explicit opt-in covers the repo, not one root.
+- **The running daemon adopts family worktrees.** The user's explicit `tests start` covers
+  the repo family: when a worktree of the same repo registers as a workspace, the running
+  daemon serves it too — status, selection, and runs keyed to that worktree's own index and
+  `ct.db`. No new daemon process per worktree.
+- **Budget is unchanged.** The user-global one-execution budget applies across worktrees;
+  N worktrees never mean N concurrent suites.
+- **Safety rules unchanged.** Status reads still never create `ct.db` or start anything;
+  `MILLER_CT=off` still means zero work everywhere; adoption never fires when the repo has
+  no explicit enable + start.
+- **Result seeding across worktrees is out of scope.** `ct.db` keys files by blake3 hash,
+  so inheriting greens for identical files is possible later, but it is soundness-sensitive;
+  a new worktree starts with a fresh run.
+
+Worktree acceptance criteria:
+
+- [ ] With CT enabled and the daemon running on the main checkout, registering a worktree
+      of the same repo gives `tests status` on that worktree an honest enabled/adopted
+      answer without any manual enable.
+- [ ] A change in the worktree triggers an impacted run against the worktree's index,
+      debounced, under the shared budget.
+- [ ] A worktree of a repo that never enabled CT stays fully off.
+- [ ] Removing the worktree detaches it without disturbing the main workspace's CT state.
+
 ## Safety invariants (unchanged from today)
 
 - Status reads never create `ct.db`, never start the daemon.
