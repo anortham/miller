@@ -49,8 +49,11 @@ public sealed class FamilyStoreReadSession :
 
     private readonly SqliteConnection _connection;
     private readonly RevisionFactCacheStore? _factCacheStore;
+    private readonly bool _boundedFactsRequested;
     private readonly object _gate = new();
     private QueryTimeResolutionReader? _resolution;
+    private SqliteConnection? _boundedConnection;
+    private SqliteTransaction? _boundedSnapshot;
     private bool _disposed;
 
     internal bool CaptureGraphResolutionQueryPlan { get; set; }
@@ -69,12 +72,14 @@ public sealed class FamilyStoreReadSession :
         SqliteConnection connection,
         StoreVisibility visibility,
         WorkspaceReadSnapshot snapshot,
-        RevisionFactCacheStore? factCacheStore)
+        RevisionFactCacheStore? factCacheStore,
+        bool boundedFactsRequested)
     {
         _connection = connection;
         Visibility = visibility;
         Snapshot = snapshot;
         _factCacheStore = factCacheStore;
+        _boundedFactsRequested = boundedFactsRequested;
     }
 
     private QueryTimeResolutionReader CreateResolutionReader()
@@ -88,16 +93,27 @@ public sealed class FamilyStoreReadSession :
                 () => OpenReadOnly(Visibility.StoreDatabasePath),
                 Visibility);
         }
+        else if (_boundedFactsRequested && BoundedFactsEnabled())
+        {
+            // Only a caller that NAMED itself a one-shot process gets here. A whole-generation load costs the
+            // same whether the answer needs three files or three hundred, and a process that exits after one
+            // read pays it from cold every time — so read the facts one query asks for. Bounded and full answer
+            // every accessor identically (see RevisionFactCache.LoadBounded); MILLER_BOUNDED_FACTS=off restores
+            // the whole-generation load. The absence of a fact-cache store is NOT the signal: the MCP edit tool,
+            // the MCP tests tool and the CT daemon all open store-less sessions and must keep the full load.
+            //
+            // The bounded cache reads through its OWN connection, held inside one deferred read transaction, for
+            // two reasons. Every lazy slice then comes from the state this session validated at open, instead of
+            // each slice taking its own implicit snapshot and a mid-command generation delete producing a
+            // half-populated view. And the session's connection stays free: callers serialize it on _gate, and
+            // readers such as PatternFactsReader open their own transaction on it.
+            _boundedConnection = OpenReadOnly(Visibility.StoreDatabasePath);
+            _boundedSnapshot = _boundedConnection.BeginTransaction(deferred: true);
+            cache = RevisionFactCache.LoadBounded(_boundedConnection, Visibility);
+        }
         else
         {
-            // No fact-cache store means nobody will reuse this cache: this is the one-shot CLI, which exits
-            // after one read. A whole-generation load costs the same whether the answer needs three files or
-            // three hundred, and the CLI pays it from cold every time — so read the facts one query asks for.
-            // Bounded and full answer every accessor identically (see RevisionFactCache.LoadBounded);
-            // MILLER_BOUNDED_FACTS=off restores the whole-generation load.
-            cache = BoundedFactsEnabled()
-                ? RevisionFactCache.LoadBounded(_connection, Visibility)
-                : RevisionFactCache.Load(_connection, Visibility);
+            cache = RevisionFactCache.Load(_connection, Visibility);
         }
 
         return new QueryTimeResolutionReader(cache, Visibility);
@@ -105,12 +121,17 @@ public sealed class FamilyStoreReadSession :
 
     internal const string BoundedFactsEnvironmentVariable = "MILLER_BOUNDED_FACTS";
 
+    /// <summary>
+    /// The escape hatch that returns a one-shot process to the whole-generation load. It takes the same
+    /// off-token set the CT kill switch takes, so a typo such as <c>no</c> disables the path the operator meant
+    /// to disable rather than silently leaving it on.
+    /// </summary>
     private static bool BoundedFactsEnabled()
     {
         string? value = Environment.GetEnvironmentVariable(BoundedFactsEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(value))
             return true;
-        return value.Trim().ToLowerInvariant() is not ("0" or "false" or "off" or "disabled");
+        return value.Trim().ToLowerInvariant() is not ("0" or "false" or "off" or "no" or "disabled");
     }
 
     public StoreVisibility Visibility { get; }
@@ -136,10 +157,16 @@ public sealed class FamilyStoreReadSession :
         string? workspaceId = null) =>
         Open(binding, workspaceId, factCacheStore: null);
 
+    /// <summary>
+    /// <paramref name="boundedFactsRequested"/> is the caller's statement that this process reads the pinned
+    /// generation once and exits, so reference facts should be read per file rather than loaded whole. Only the
+    /// one-shot CLI passes it; every resident caller leaves it false and keeps the whole-generation load.
+    /// </summary>
     internal static FamilyStoreReadSession Open(
         StoreFamilyBinding binding,
         string? workspaceId,
-        RevisionFactCacheStore? factCacheStore)
+        RevisionFactCacheStore? factCacheStore,
+        bool boundedFactsRequested = false)
     {
         ArgumentNullException.ThrowIfNull(binding);
         if (binding.State != StoreBindingState.Ready)
@@ -204,7 +231,12 @@ public sealed class FamilyStoreReadSession :
                     visibility.ResolutionBaseId,
                     visibility.ResolutionDeltaGeneration,
                     visibility.ResolutionExactAt);
-                return new FamilyStoreReadSession(connection, visibility, snapshot, factCacheStore);
+                return new FamilyStoreReadSession(
+                    connection,
+                    visibility,
+                    snapshot,
+                    factCacheStore,
+                    boundedFactsRequested);
             }
             catch
             {
@@ -497,6 +529,12 @@ public sealed class FamilyStoreReadSession :
             if (_disposed)
                 return;
             _disposed = true;
+            // The bounded snapshot transaction ends with its own connection; ending it first keeps the release
+            // explicit rather than leaving it to the handle close.
+            _boundedSnapshot?.Dispose();
+            _boundedSnapshot = null;
+            _boundedConnection?.Dispose();
+            _boundedConnection = null;
             _connection.Dispose();
         }
     }

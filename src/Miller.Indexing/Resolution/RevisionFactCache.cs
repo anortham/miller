@@ -141,6 +141,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
     private readonly Dictionary<string, RevisionFactCacheLoader.VisibleFile> _pathIndex;
     private readonly StoreVisibility? _visibility;
     private readonly BoundedStoreSource? _bounded;
+    private readonly object _boundedGate = new();
     private Dictionary<string, List<PackedRef>> _byName = new(StringComparer.Ordinal);
     private Dictionary<long, ImportBinding[]> _imports = [];
 
@@ -171,7 +172,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
         _pathIndex = pathIndex;
         _visibility = visibility;
         _bounded = bounded;
-        Propagation = new PropagationIndex(_slices, EnsureSlice);
+        Propagation = new PropagationIndex(_slices, SliceFor);
         ResidentBytes = 0;
     }
 
@@ -180,7 +181,17 @@ internal sealed class RevisionFactCache : IResolutionFacts
     internal long ResidentBytes { get; private set; }
 
     /// <summary>Files this cache has materialized. A full load has one per visible file from the start.</summary>
-    internal int LoadedSliceCount => _slices.Count;
+    internal int LoadedSliceCount
+    {
+        get
+        {
+            if (_bounded is null)
+                return _slices.Count;
+
+            lock (_boundedGate)
+                return _slices.Count;
+        }
+    }
 
     // A bounded cache reads through a session-owned connection and holds only what one query asked for, so it
     // can neither be shared by a later revision nor advanced onto one.
@@ -249,10 +260,12 @@ internal sealed class RevisionFactCache : IResolutionFacts
     /// query asks for them. Every answer comes from the same loader queries the whole-generation
     /// <see cref="Load"/> uses, so a bounded cache and a full one answer every accessor identically; the
     /// bounded one just never reads the files no answer depends on.
-    /// <para>The caller owns <paramref name="storeRead"/> and must keep it open, and must serialize its own
-    /// reads: a bounded cache fills as it is queried and is not thread-safe. Use it for a one-shot process
-    /// (the CLI), never for the shared server cache — that one is reused across queries, so paying the whole
-    /// generation once is the cheaper trade.</para>
+    /// <para>The caller owns <paramref name="storeRead"/> and must keep it open for the cache's life, and must
+    /// give the cache that connection to ITSELF: the cache issues SQL on it from any accessor, under its own
+    /// gate, so a connection shared with the caller's other reads would be used off that gate. Every bounded
+    /// accessor takes the gate, so the returned cache is safe to share between threads. Use it for a one-shot
+    /// process (the CLI), never for the shared server cache — that one is reused across queries, so paying the
+    /// whole generation once is the cheaper trade.</para>
     /// </summary>
     internal static RevisionFactCache LoadBounded(SqliteConnection storeRead, StoreVisibility visibility)
     {
@@ -343,7 +356,11 @@ internal sealed class RevisionFactCache : IResolutionFacts
     {
         ArgumentNullException.ThrowIfNull(name);
         if (_bounded is { } bounded)
-            return bounded.SymbolsNamed(name, _intern);
+        {
+            lock (_boundedGate)
+                return bounded.SymbolsNamed(name, _intern);
+        }
+
         if (!_byName.TryGetValue(name, out List<PackedRef>? refs))
             return [];
         var matches = new FactSymbol[refs.Count];
@@ -415,16 +432,31 @@ internal sealed class RevisionFactCache : IResolutionFacts
 
     internal ImportBinding[] ImportArrayOf(long versionId)
     {
-        _ = SliceFor(versionId);
-        return _imports.TryGetValue(versionId, out ImportBinding[]? imports) ? imports : [];
+        if (_bounded is null)
+            return _imports.TryGetValue(versionId, out ImportBinding[]? eager) ? eager : [];
+
+        lock (_boundedGate)
+        {
+            _ = EnsureSlice(versionId);
+            return _imports.TryGetValue(versionId, out ImportBinding[]? imports) ? imports : [];
+        }
     }
 
     internal VersionSlice? Slice(long versionId) => SliceFor(versionId);
 
-    private VersionSlice? SliceFor(long versionId) =>
-        _bounded is null
-            ? (_slices.TryGetValue(versionId, out VersionSlice? slice) ? slice : null)
-            : EnsureSlice(versionId);
+    // A full load never mutates after its constructor, so its readers need no lock. A bounded one fills as it
+    // is queried — _slices, _imports and the name cache all grow on an ACCESSOR — and the reader it lives in is
+    // handed out (IQueryTimeResolutionHost.Resolution, WorkspaceReadHandle.ResolutionReader) with no promise
+    // that one thread holds it. Every bounded read therefore takes this gate, which also serializes the
+    // cache-owned connection the read-through uses.
+    private VersionSlice? SliceFor(long versionId)
+    {
+        if (_bounded is null)
+            return _slices.TryGetValue(versionId, out VersionSlice? slice) ? slice : null;
+
+        lock (_boundedGate)
+            return EnsureSlice(versionId);
+    }
 
     private VersionSlice? EnsureSlice(long versionId)
     {
@@ -532,10 +564,13 @@ internal sealed class RevisionFactCache : IResolutionFacts
         internal bool TryGetVisibleFile(long versionId, out RevisionFactCacheLoader.VisibleFile file) =>
             _byVersion.TryGetValue(versionId, out file);
 
+        // The full load builds a fresh array per call, so a caller that sorts or writes into the result in place
+        // cannot disturb a later call. Handing out the cached instance would give the two modes different
+        // aliasing, so the cached list is copied on the way out.
         internal FactSymbol[] SymbolsNamed(string name, StringInternPool intern)
         {
             if (_named.TryGetValue(name, out FactSymbol[]? cached))
-                return cached;
+                return [.. cached];
 
             List<(long VersionId, PackedSymbol Symbol)> rows =
                 RevisionFactCacheLoader.ReadStoreSymbolsNamed(Connection, Visibility, name, intern);
@@ -543,7 +578,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
             for (int i = 0; i < rows.Count; i++)
                 facts[i] = rows[i].Symbol.ToFact(rows[i].VersionId);
             _named[name] = facts;
-            return facts;
+            return [.. facts];
         }
     }
 

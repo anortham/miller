@@ -971,7 +971,7 @@ internal static class RevisionFactCacheLoader
         return rows;
     }
 
-    private static List<RelationshipLocateRow> ReadStoreRelationships(
+    internal static List<RelationshipLocateRow> ReadStoreRelationships(
         SqliteConnection connection,
         StoreVisibility visibility,
         long versionId)
@@ -1011,7 +1011,7 @@ internal static class RevisionFactCacheLoader
     /// does not matter: the located map is keyed by identifier row and only its key set and origin are read
     /// (<c>PropagationSource.RowId</c> is stored and never consulted).</para>
     /// </remarks>
-    private static List<RelationshipLocateRow>? TryReadStoreRelationshipsByVersion(
+    internal static List<RelationshipLocateRow>? TryReadStoreRelationshipsByVersion(
         SqliteConnection connection,
         StoreVisibility visibility,
         long versionId)
@@ -1119,7 +1119,7 @@ internal static class RevisionFactCacheLoader
         long? EndByte,
         long StartLine);
 
-    private readonly record struct RelationshipLocateRow(
+    internal readonly record struct RelationshipLocateRow(
         string RowId,
         string Name,
         long? StartByte,

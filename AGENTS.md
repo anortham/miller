@@ -350,19 +350,26 @@ scripts/test.ps1 all
   (cross-platform; no shell script). Build version is single-sourced in `Directory.Build.props` (`<Version>` + git
   short SHA → `MillerVersion.Current`), surfaced in MCP `ServerInfo.Version`, `miller version`, and the `workspace`
   status header.
-- **The CLI reads reference facts bounded; the server loads the generation once.** `RevisionFactCache` has two
-  modes. The server keeps the whole pinned generation in the process-wide `RevisionFactCacheStore` and reuses it
-  across calls. The one-shot CLI has nobody to reuse it, so a cold `miller inspect <symbol> --depth
-  overview|full` paid a flat whole-generation load (~5s on this repo, 1,785 files) to return a handful of
-  references. A session opened with NO fact-cache store now uses `RevisionFactCache.LoadBounded`: the visible
-  file list up front, then one file's slice or one name's symbols on demand, through the SAME loader queries the
-  full load uses — so every accessor answers identically and the output is byte-identical, guarded by
-  `BoundedRevisionFactCacheTests` and the rendered A/B in `CliDispatchTests`. Two rules keep it honest: a version
-  outside the pinned manifest must report NO slice (not an empty one), and a bounded cache never advances onto a
-  newer generation. `MILLER_BOUNDED_FACTS=off` restores the whole-generation load. The per-file propagation load
-  buckets candidates by name (`PropagationCandidateIndex`) and asks for relationship rows in a shape SQLite can
-  drive from `relationships(version_id)`; the whole-generation load keeps its scan, so the server path is
-  unchanged.
+- **Only the one-shot CLI reads reference facts bounded; every resident process loads the generation once.**
+  `RevisionFactCache` has two modes. A resident process keeps the whole pinned generation — the MCP server in
+  the process-wide `RevisionFactCacheStore`, and the CT daemon, the `edit`/`tests` tools and the dashboard
+  through the plain `WorkspaceReadSessionFactory.Open`. The one-shot CLI has nobody to reuse a load, so a cold
+  `miller inspect <symbol> --depth overview|full` paid a flat whole-generation load (~5s on this repo, 1,785
+  files) to return a handful of references. **The bounded mode is REQUESTED BY NAME, never inferred**:
+  `WorkspaceReadSessionFactory.OpenForOneShotCli` is the only caller that asks for it, from the single
+  `TryOpenCliReadScope` every CLI read verb pins. Absence of a fact-cache store is NOT the signal — `EditTool`,
+  `TestsCore` and `ContinuousTestRevisionPoller` all open store-less sessions inside resident processes, and CT
+  impact answers decide which tests execute. `RevisionFactCache.LoadBounded` reads the visible file list up
+  front, then one file's slice or one name's symbols on demand, through the SAME loader queries the full load
+  uses — so every accessor answers identically and the output is byte-identical, guarded by
+  `BoundedRevisionFactCacheTests` and the rendered A/B in `CliDispatchTests`. Three rules keep it honest: a
+  version outside the pinned manifest must report NO slice (not an empty one), a bounded cache never advances
+  onto a newer generation, and it reads through its OWN connection inside one deferred read transaction, so
+  every lazy slice comes from the state the session validated at open. `MILLER_BOUNDED_FACTS=off` (also
+  `0`/`false`/`no`/`disabled`) restores the whole-generation load. The per-file propagation load buckets
+  candidates by name (`PropagationCandidateIndex`) and asks for relationship rows in a shape SQLite can drive
+  from `relationships(version_id)`, refusing itself when a target id resolves to visible symbol rows with
+  different names; the whole-generation load keeps its scan, so the resident path is unchanged.
 - **Eros-facing CLI/export contracts.** Keep Eros on public process/artifact contracts, not Miller private .NET
   internals. Current documented surfaces live in [`docs/contracts/cli-eros-v1.md`](docs/contracts/cli-eros-v1.md):
   `capabilities --json`, `refresh --json --wait`, `workspace status --json`, `workspace health --json`,

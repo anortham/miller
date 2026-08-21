@@ -237,8 +237,7 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     // The seam between the two fact-cache strategies. A session handed the shared store keeps using it — that
-    // is the MCP server, which reuses one loaded generation across every call. A session without one is the
-    // one-shot CLI, and it must read facts per file instead of loading the whole generation to answer once.
+    // is the MCP server, which reuses one loaded generation across every call.
     [Fact]
     public void SessionWithAFactCacheStoreLoadsTheWholeGenerationThroughIt()
     {
@@ -253,11 +252,49 @@ public sealed class FamilyStoreReadSessionTests
         Assert.Equal(1, cache.LoadedSliceCount);
     }
 
+    // The other half of the seam, and the one that must NOT be inferred. A store-less session is not proof of a
+    // one-shot process: the MCP edit tool, the MCP tests tool and the CT daemon all open one inside a resident
+    // process, and CT's impact answer decides which tests execute. Absent an explicit request, the session keeps
+    // the whole-generation load it had before bounded facts existed.
     [Fact]
-    public void SessionWithoutAFactCacheStoreReadsFactsPerFile()
+    public void SessionWithoutAFactCacheStoreStillLoadsTheWholeGeneration()
     {
         using StoreFixture fixture = StoreFixture.Create();
         using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding, "workspace-a");
+
+        RevisionFactCache cache = session.Resolution.Cache;
+
+        Assert.True(cache.CanAdvance);
+        Assert.Equal(1, cache.LoadedSliceCount);
+    }
+
+    // The public factory entry point the MCP tools and the CT daemon use is the same story: no bounded facts.
+    [Fact]
+    public void FactoryOpenKeepsTheWholeGenerationLoadForResidentCallers()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+
+        using WorkspaceReadHandle handle = WorkspaceReadSessionFactory.Open(
+            Path.Combine(fixture.Root, "missing-legacy.db"),
+            fixture.Binding.WorkspaceRoot,
+            "workspace-a",
+            storeEnabled: true);
+
+        RevisionFactCache cache = RequireCache(handle);
+        Assert.True(cache.CanAdvance);
+        Assert.Equal(1, cache.LoadedSliceCount);
+    }
+
+    [Fact]
+    public void SessionThatNamesItselfAOneShotCliReadsFactsPerFile()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(
+            fixture.Binding,
+            "workspace-a",
+            factCacheStore: null,
+            boundedFactsRequested: true);
 
         RevisionFactCache cache = session.Resolution.Cache;
 
@@ -268,15 +305,44 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
-    public void SessionWithoutAFactCacheStoreLoadsTheWholeGenerationWhenBoundedFactsAreOff()
+    public void FactoryOpenForOneShotCliReadsFactsPerFile()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+
+        using WorkspaceReadHandle handle = WorkspaceReadSessionFactory.OpenForOneShotCli(
+            Path.Combine(fixture.Root, "missing-legacy.db"),
+            fixture.Binding.WorkspaceRoot,
+            "workspace-a",
+            storeEnabled: true);
+
+        RevisionFactCache cache = RequireCache(handle);
+        Assert.False(cache.CanAdvance);
+        Assert.Equal(0, cache.LoadedSliceCount);
+    }
+
+    // The escape hatch must answer to the token set an operator actually types. `no` used to leave bounded facts
+    // ON, which is the failure mode a typo in a kill switch must never have.
+    [Theory]
+    [InlineData("off")]
+    [InlineData("0")]
+    [InlineData("false")]
+    [InlineData("no")]
+    [InlineData("disabled")]
+    [InlineData("OFF")]
+    public void BoundedFactsEnvironmentSwitchRestoresTheWholeGenerationLoad(string value)
     {
         using StoreFixture fixture = StoreFixture.Create();
         string? previous = Environment.GetEnvironmentVariable(
             FamilyStoreReadSession.BoundedFactsEnvironmentVariable);
-        Environment.SetEnvironmentVariable(FamilyStoreReadSession.BoundedFactsEnvironmentVariable, "off");
+        Environment.SetEnvironmentVariable(FamilyStoreReadSession.BoundedFactsEnvironmentVariable, value);
         try
         {
-            using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding, "workspace-a");
+            using FamilyStoreReadSession session = FamilyStoreReadSession.Open(
+                fixture.Binding,
+                "workspace-a",
+                factCacheStore: null,
+                boundedFactsRequested: true);
 
             RevisionFactCache cache = session.Resolution.Cache;
 
@@ -290,6 +356,57 @@ public sealed class FamilyStoreReadSessionTests
                 previous);
         }
     }
+
+    // A bounded cache reads its slices lazily, so without a pinned snapshot the first slice and the last could
+    // come from two different states of the store — some files' facts present, others silently absent, and no
+    // staleness signal to the caller. The session holds ONE deferred read transaction on the cache's own
+    // connection for the cache's life. Here another connection deletes the pinned generation's symbol rows
+    // after the cache is live, and a slice the cache had NOT yet read must still carry them. A writer that the
+    // read lock BLOCKS is the same proof, so a busy database is tolerated; what must not happen is the cache
+    // answering from the post-delete state.
+    [Fact]
+    public void BoundedFactsReadEveryLazySliceFromTheSnapshotTheSessionOpened()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(
+            fixture.Binding,
+            "workspace-a",
+            factCacheStore: null,
+            boundedFactsRequested: true);
+        RevisionFactCache cache = session.Resolution.Cache;
+        Assert.NotEmpty(cache.SymbolsNamed("Visible"));
+        Assert.Equal(0, cache.LoadedSliceCount);
+
+        TryDeleteEverySymbolRow(fixture);
+
+        VersionSlice? slice = cache.Slice(2);
+        Assert.NotNull(slice);
+        Assert.Equal("Visible", Assert.Single(slice.Symbols).Name);
+    }
+
+    private static void TryDeleteEverySymbolRow(StoreFixture fixture)
+    {
+        try
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db"),
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM symbols;";
+            command.ExecuteNonQuery();
+        }
+        catch (SqliteException)
+        {
+            // The read lock refused the writer. That is the pin doing its job, not a test failure.
+        }
+    }
+
+    private static RevisionFactCache RequireCache(WorkspaceReadHandle handle) =>
+        (handle.ResolutionReader
+            ?? throw new InvalidOperationException("The read session exposes no resolution reader.")).Cache;
 
     [Fact]
     public void SessionConnectionIsQueryOnlyAfterProjectionSetup()

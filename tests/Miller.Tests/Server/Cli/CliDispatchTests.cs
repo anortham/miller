@@ -932,14 +932,15 @@ public sealed class CliDispatchTests : IDisposable
 
     // The CLI reads its reference facts one file at a time instead of loading the whole pinned generation.
     // The rendered answer is the contract: it must be the same text either way, or the fast path is a
-    // different tool.
+    // different tool. The fixture carries five visible files with references that cross them, instead of the
+    // single file a bounded read could not possibly miss.
     [Theory]
     [InlineData("summary")]
     [InlineData("overview")]
     [InlineData("full")]
     public void FamilyStoreInspect_BoundedFactsRenderWhatTheWholeGenerationLoadRenders(string depth)
     {
-        using var fx = MinimalFamilyStoreFixture.Create();
+        using var fx = MinimalFamilyStoreFixture.Create(includeCrossFileReferences: true);
         string[] args = ["inspect", "VisibleType", "--depth", depth, "--json"];
 
         var bounded = RunFamilyStore(fx, args);
@@ -951,10 +952,48 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(whole.Err, bounded.Err);
     }
 
+    // The same A/B on the symbol whose ANSWER depends on a per-file fact. The reference to Widget in
+    // src/mod.ts is resolved through the import binding mod.ts carries, so the bounded cache must have read
+    // that file to answer it at all. This is the case that fails when a bounded read drops a file; the
+    // VisibleType cases above resolve by name and would not.
+    [Theory]
+    [InlineData("overview")]
+    [InlineData("full")]
+    public void FamilyStoreInspect_BoundedFactsRenderAnImportBoundReferenceIdentically(string depth)
+    {
+        using var fx = MinimalFamilyStoreFixture.Create(includeCrossFileReferences: true);
+        string[] args = ["inspect", "Widget", "--depth", depth, "--json"];
+
+        var bounded = RunFamilyStore(fx, args);
+        var whole = RunFamilyStore(fx, args, boundedFacts: false);
+
+        Assert.True(bounded.Code == 0, bounded.Err);
+        Assert.Equal(whole.Out, bounded.Out);
+        Assert.Equal(whole.Err, bounded.Err);
+    }
+
+    // The guard on the A/Bs above: the deep render really does reach the other files, so the comparisons are
+    // not comparing two answers that never left src/Visible.cs.
+    [Fact]
+    public void FamilyStoreInspect_CrossFileFixtureRendersReferencesFromEveryFile()
+    {
+        using var fx = MinimalFamilyStoreFixture.Create(includeCrossFileReferences: true);
+
+        var visible = RunFamilyStore(fx, ["inspect", "VisibleType", "--depth", "full", "--json"]);
+        var widget = RunFamilyStore(fx, ["inspect", "Widget", "--depth", "full", "--json"]);
+
+        Assert.True(visible.Code == 0, visible.Err);
+        Assert.Contains("src/Caller.cs", visible.Out, StringComparison.Ordinal);
+        Assert.Contains("src/Other.cs", visible.Out, StringComparison.Ordinal);
+        Assert.True(widget.Code == 0, widget.Err);
+        Assert.Contains("src/mod.ts", widget.Out, StringComparison.Ordinal);
+        Assert.Contains("\"resolution_tier\":2", widget.Out, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void FamilyStoreTraceAndImpact_BoundedFactsRenderWhatTheWholeGenerationLoadRenders()
     {
-        using var fx = MinimalFamilyStoreFixture.Create();
+        using var fx = MinimalFamilyStoreFixture.Create(includeCrossFileReferences: true);
 
         foreach (string[] args in new[]
                  {
@@ -5100,7 +5139,8 @@ public sealed class CliDispatchTests : IDisposable
         public static MinimalFamilyStoreFixture Create(
             bool includeBridgeTables = false,
             bool includeInvalidRelationship = false,
-            bool includeBridgeEvidence = false)
+            bool includeBridgeEvidence = false,
+            bool includeCrossFileReferences = false)
         {
             string root = Path.Combine(
                 Path.GetTempPath(),
@@ -5120,7 +5160,8 @@ public sealed class CliDispatchTests : IDisposable
                 canonicalWorkspace,
                 includeBridgeTables,
                 includeInvalidRelationship,
-                includeBridgeEvidence);
+                includeBridgeEvidence,
+                includeCrossFileReferences);
             StoreWorkspacePointer.Write(
                 canonicalWorkspace,
                 new StoreFamilyBinding(
@@ -5133,6 +5174,22 @@ public sealed class CliDispatchTests : IDisposable
             File.WriteAllText(
                 Path.Combine(canonicalWorkspace, "src", "Visible.cs"),
                 "public class VisibleType { public void Run() { } }\n");
+            if (includeCrossFileReferences)
+            {
+                File.WriteAllText(
+                    Path.Combine(canonicalWorkspace, "src", "Caller.cs"),
+                    CallerSource);
+                File.WriteAllText(
+                    Path.Combine(canonicalWorkspace, "src", "Other.cs"),
+                    OtherSource);
+                File.WriteAllText(
+                    Path.Combine(canonicalWorkspace, "src", "widget.ts"),
+                    "export class Widget { }\n");
+                File.WriteAllText(
+                    Path.Combine(canonicalWorkspace, "src", "mod.ts"),
+                    "import { Widget } from './widget';\nfunction run(w: Widget) { }\n");
+            }
+
             return new MinimalFamilyStoreFixture(root, canonicalWorkspace, canonicalStore);
         }
 
@@ -5158,12 +5215,19 @@ public sealed class CliDispatchTests : IDisposable
             command.ExecuteNonQuery();
         }
 
+        private const string CallerSource =
+            "public class Caller { public void CallVisible() { VisibleType v; } }\n";
+
+        private const string OtherSource =
+            "public class OtherCaller { public void UseVisible() { new VisibleType(); } }\n";
+
         private static void CreateStore(
             string path,
             string workspaceRoot,
             bool includeBridgeTables,
             bool includeInvalidRelationship,
-            bool includeBridgeEvidence)
+            bool includeBridgeEvidence,
+            bool includeCrossFileReferences = false)
         {
             using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
             {
@@ -5454,6 +5518,118 @@ public sealed class CliDispatchTests : IDisposable
                 """;
             command.Parameters.AddWithValue("$root", workspaceRoot);
             command.ExecuteNonQuery();
+
+            if (includeCrossFileReferences)
+            {
+                // Two MORE visible files whose references cross into src/Visible.cs. Without them the store
+                // holds one file, and a bounded read that loaded only that file would render exactly what a
+                // whole-generation load renders — so the CLI A/B could not fail even if boundedness were
+                // broken. Each carrier shape the deep-inspect path reads is present once: an identifier, a
+                // resolved relationship, and a pending relationship.
+                command.CommandText =
+                    """
+                    INSERT INTO file_versions VALUES
+                      (2,'src/Caller.cs','blake3:caller',1,'csharp',68,2,NULL,1,2,3),
+                      (3,'src/Other.cs','blake3:other',1,'csharp',76,2,NULL,1,2,3);
+                    INSERT INTO manifest_entries VALUES
+                      ('view-a',1,'src/Caller.cs','csharp',2,'indexed','blake3:caller',
+                       '2026-08-09T00:00:00Z',NULL,NULL),
+                      ('view-a',1,'src/Other.cs','csharp',3,'indexed','blake3:other',
+                       '2026-08-09T00:00:00Z',NULL,NULL);
+                    INSERT INTO symbols
+                        (version_id, symbol_id, path, language, name, kind, signature, visibility,
+                         parent_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                         is_test, test_container, test_lifecycle)
+                    VALUES
+                        (2,'sym-caller','src/Caller.cs','csharp','Caller','class','public class Caller',
+                         'public',NULL,1,1,1,68,0,67,0,0,0),
+                        (2,'sym-caller-call','src/Caller.cs','csharp','CallVisible','method',
+                         'public void CallVisible()','public','sym-caller',1,23,1,66,22,65,0,0,0),
+                        (3,'sym-other','src/Other.cs','csharp','OtherCaller','class',
+                         'public class OtherCaller','public',NULL,1,1,1,76,0,75,0,0,0),
+                        (3,'sym-other-use','src/Other.cs','csharp','UseVisible','method',
+                         'public void UseVisible()','public','sym-other',1,28,1,74,27,73,0,0,0);
+                    INSERT INTO reference_sites
+                        (version_id, reference_site_id, path, language, containing_symbol_id,
+                         start_line, start_column, end_line, end_column, start_byte, end_byte,
+                         is_exact, provenance)
+                    VALUES
+                        (2,'site-caller-visible','src/Caller.cs','csharp','sym-caller-call',
+                         1,51,1,62,50,61,1,'target_token'),
+                        (2,'site-caller-rel','src/Caller.cs','csharp','sym-caller-call',
+                         1,51,1,62,50,61,1,'target_token'),
+                        (3,'site-other-visible','src/Other.cs','csharp','sym-other-use',
+                         1,59,1,70,58,69,1,'target_token'),
+                        (3,'site-other-pending','src/Other.cs','csharp','sym-other-use',
+                         1,59,1,70,58,69,1,'target_token');
+                    INSERT INTO identifiers
+                        (version_id, identifier_id, reference_site_id, path, language, name, kind,
+                         containing_symbol_id, start_line, start_column, end_line, end_column,
+                         start_byte, end_byte, confidence, code_context, metadata_json)
+                    VALUES
+                        (2,'id-caller-visible','site-caller-visible','src/Caller.cs','csharp','VisibleType',
+                         'type_usage','sym-caller-call',1,51,1,62,50,61,1.0,NULL,NULL),
+                        (3,'id-other-visible','site-other-visible','src/Other.cs','csharp','VisibleType',
+                         'type_usage','sym-other-use',1,59,1,70,58,69,1.0,NULL,NULL);
+                    INSERT INTO relationships
+                        (version_id, relationship_id, reference_site_id, from_symbol_id, to_symbol_id,
+                         path, kind, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                         confidence, metadata_json)
+                    VALUES
+                        (2,'rel-caller-visible','site-caller-rel','sym-caller-call','sym-visible',
+                         'src/Caller.cs','uses',1,51,1,62,50,61,1.0,NULL);
+                    INSERT INTO pending_relationships
+                        (version_id, pending_relationship_id, reference_site_id, from_symbol_id,
+                         caller_scope_symbol_id, path, kind, target_display_name, target_terminal_name,
+                         target_receiver, target_namespace_json, target_import_context,
+                         start_line, start_column, end_line, end_column, start_byte, end_byte,
+                         confidence, metadata_json)
+                    VALUES
+                        (3,'pend-other-visible','site-other-pending','sym-other-use','sym-other-use',
+                         'src/Other.cs','instantiates','VisibleType','VisibleType',NULL,'[]',NULL,
+                         1,59,1,70,58,69,1.0,NULL);
+
+                    -- The shape that makes a DROPPED file's facts visible in the rendered answer. The TypeScript
+                    -- reference in src/mod.ts is resolved through the import binding mod.ts itself carries, and
+                    -- that binding is a per-file fact the bounded cache loads lazily. The C# references above
+                    -- resolve by name alone, so they render the same text whether or not the bounded cache
+                    -- reads any file at all.
+                    INSERT INTO file_versions VALUES
+                      (4,'src/widget.ts','blake3:widget',1,'typescript',40,2,NULL,1,2,3),
+                      (6,'src/mod.ts','blake3:mod',1,'typescript',60,3,NULL,1,2,3);
+                    INSERT INTO manifest_entries VALUES
+                      ('view-a',1,'src/widget.ts','typescript',4,'indexed','blake3:widget',
+                       '2026-08-09T00:00:00Z',NULL,NULL),
+                      ('view-a',1,'src/mod.ts','typescript',6,'indexed','blake3:mod',
+                       '2026-08-09T00:00:00Z',NULL,NULL);
+                    INSERT INTO symbols
+                        (version_id, symbol_id, path, language, name, kind, signature, visibility,
+                         parent_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                         is_test, test_container, test_lifecycle, metadata_json)
+                    VALUES
+                        (4,'cls-widget','src/widget.ts','typescript','Widget','class','export class Widget',
+                         'public',NULL,1,1,1,20,0,19,0,0,0,NULL),
+                        (6,'imp-widget','src/mod.ts','typescript','Widget','import',NULL,NULL,NULL,
+                         1,1,1,32,0,31,0,0,0,'{"source":"./widget","imported_name":"Widget"}'),
+                        (6,'fn-mod','src/mod.ts','typescript','run','function','function run()','public',NULL,
+                         2,1,2,28,32,59,0,0,0,NULL);
+                    INSERT INTO reference_sites
+                        (version_id, reference_site_id, path, language, containing_symbol_id,
+                         start_line, start_column, end_line, end_column, start_byte, end_byte,
+                         is_exact, provenance)
+                    VALUES
+                        (6,'site-mod-widget','src/mod.ts','typescript','fn-mod',2,14,2,20,45,51,1,
+                         'target_token');
+                    INSERT INTO identifiers
+                        (version_id, identifier_id, reference_site_id, path, language, name, kind,
+                         containing_symbol_id, start_line, start_column, end_line, end_column,
+                         start_byte, end_byte, confidence, code_context, metadata_json)
+                    VALUES
+                        (6,'id-mod-widget','site-mod-widget','src/mod.ts','typescript','Widget','type_usage',
+                         'fn-mod',2,14,2,20,45,51,1.0,NULL,NULL);
+                    """;
+                command.ExecuteNonQuery();
+            }
 
             if (includeInvalidRelationship)
             {

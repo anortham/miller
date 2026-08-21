@@ -14,12 +14,34 @@ public static class WorkspaceReadSessionFactory
         bool? storeEnabled = null) =>
         Open(legacyDatabasePath, workspaceRoot, workspaceId, storeEnabled, factCacheStore: null);
 
+    /// <summary>
+    /// The read session for a process that answers ONE command and exits — the <c>miller</c> CLI. It is the
+    /// only caller that reads reference facts per file instead of loading the pinned generation whole, because
+    /// it is the only caller with nobody to reuse a loaded generation. Every resident caller (the MCP tools,
+    /// the CT daemon, the dashboard, the indexer) uses <see cref="Open(string, string, string?, bool?)"/> and
+    /// keeps the whole-generation load. Process role is stated here, never inferred from whether a shared
+    /// fact-cache store happens to be present.
+    /// </summary>
+    public static WorkspaceReadHandle OpenForOneShotCli(
+        string legacyDatabasePath,
+        string workspaceRoot,
+        string? workspaceId,
+        bool? storeEnabled = null) =>
+        Open(
+            legacyDatabasePath,
+            workspaceRoot,
+            workspaceId,
+            storeEnabled,
+            factCacheStore: null,
+            boundedFactsRequested: true);
+
     internal static WorkspaceReadHandle Open(
         string legacyDatabasePath,
         string workspaceRoot,
         string? workspaceId,
         bool? storeEnabled,
-        RevisionFactCacheStore? factCacheStore)
+        RevisionFactCacheStore? factCacheStore,
+        bool boundedFactsRequested = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(legacyDatabasePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -50,7 +72,8 @@ public static class WorkspaceReadSessionFactory
             pointer.ViewId,
             pointer.WorkspaceRoot,
             StoreBindingState.Ready);
-        return new WorkspaceReadHandle(FamilyStoreReadSession.Open(binding, workspaceId, factCacheStore));
+        return new WorkspaceReadHandle(
+            FamilyStoreReadSession.Open(binding, workspaceId, factCacheStore, boundedFactsRequested));
     }
 
     public static WorkspaceFreshnessProbe Probe(

@@ -3786,7 +3786,10 @@ public static class CliDispatch
         WorkspaceReadHandle? session = null;
         try
         {
-            session = WorkspaceReadSessionFactory.Open(
+            // The one CLI read scope every read verb pins, and the ONLY place Miller asks for bounded reference
+            // facts: this process answers one command and exits, so it has nobody to reuse a whole-generation
+            // load. Resident processes open the plain factory entry point.
+            session = WorkspaceReadSessionFactory.OpenForOneShotCli(
                 ctx.ExtractDbPath,
                 ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
                 ctx.WorkspaceId);

@@ -183,6 +183,132 @@ public sealed class BoundedRevisionFactCacheTests
         Assert.InRange(bounded.LoadedSliceCount, 1, VisibleVersions.Length - 1);
     }
 
+    // The fast relationship shape is the only new SQL on the bounded path, and it carries two safety predicates.
+    // This is the first: for every visible file it must return exactly the rows the manifest-joined read
+    // returns, which includes DROPPING a relationship whose target is outside the pinned manifest.
+    [Fact]
+    public void TheFastRelationshipShapeAnswersWhatTheManifestJoinedReadAnswers()
+    {
+        using ResolutionStoreFixture fixture = Populate();
+        using SqliteConnection connection = fixture.OpenRead();
+
+        foreach (long versionId in VisibleVersions)
+        {
+            List<RevisionFactCacheLoader.RelationshipLocateRow>? fast =
+                RevisionFactCacheLoader.TryReadStoreRelationshipsByVersion(
+                    connection,
+                    fixture.Visibility(),
+                    versionId);
+            List<RevisionFactCacheLoader.RelationshipLocateRow> manifestJoined =
+                RevisionFactCacheLoader.ReadStoreRelationships(connection, fixture.Visibility(), versionId);
+
+            Assert.NotNull(fast);
+            Assert.Equal(Serialize(ByRowId(manifestJoined)), Serialize(ByRowId(fast)));
+        }
+
+        // The guard on the guard: the fixture really does carry a relationship whose target is invisible, so
+        // the comparison above is not comparing two empty answers.
+        Assert.DoesNotContain(
+            RevisionFactCacheLoader.ReadStoreRelationships(connection, fixture.Visibility(), 1),
+            row => string.Equals(row.RowId, "rel-ghost", StringComparison.Ordinal));
+    }
+
+    // The second predicate. `symbol_id` is unique per VERSION, not per generation, so one to_symbol_id can name
+    // two visible symbol rows. When their names differ, which row each shape keeps decides the answer and
+    // neither shape's row order is promised — so the fast shape must refuse itself and let the caller fall back.
+    [Fact]
+    public void TheFastRelationshipShapeRefusesATargetIdWithTwoVisibleNames()
+    {
+        using ResolutionStoreFixture fixture = PopulateWithAConflictingRelationshipTarget();
+        using SqliteConnection connection = fixture.OpenRead();
+
+        Assert.Null(RevisionFactCacheLoader.TryReadStoreRelationshipsByVersion(
+            connection,
+            fixture.Visibility(),
+            1));
+
+        // A file with no such conflict still takes the fast shape.
+        Assert.NotNull(RevisionFactCacheLoader.TryReadStoreRelationshipsByVersion(
+            connection,
+            fixture.Visibility(),
+            2));
+    }
+
+    // And the refusal must reach the answer: a bounded cache over that fixture falls back and agrees with the
+    // whole-generation load anyway.
+    [Fact]
+    public void BoundedAndFullAgreeWhenTheFastRelationshipShapeRefusesItself()
+    {
+        using ResolutionStoreFixture fixture = PopulateWithAConflictingRelationshipTarget();
+        using SqliteConnection fullConnection = fixture.OpenRead();
+        using SqliteConnection boundedConnection = fixture.OpenRead();
+        RevisionFactCache full = RevisionFactCache.Load(fullConnection, fixture.Visibility());
+        RevisionFactCache bounded = RevisionFactCache.LoadBounded(boundedConnection, fixture.Visibility());
+
+        foreach (long versionId in VisibleVersions)
+        {
+            Assert.Equal(
+                Serialize(LocatedRows(full.Slice(versionId))),
+                Serialize(LocatedRows(bounded.Slice(versionId))));
+        }
+    }
+
+    // A bounded cache fills as it is queried, and the reader that holds it is handed out with no promise that
+    // one thread owns it. Unsynchronized growth of its dictionaries shows up here as a throw or a wrong answer.
+    [Fact]
+    public void BoundedFactsServeConcurrentReadersWhatASerialReaderSees()
+    {
+        using ResolutionStoreFixture fixture = Populate();
+        using SqliteConnection fullConnection = fixture.OpenRead();
+        using SqliteConnection boundedConnection = fixture.OpenRead();
+        RevisionFactCache full = RevisionFactCache.Load(fullConnection, fixture.Visibility());
+        RevisionFactCache bounded = RevisionFactCache.LoadBounded(boundedConnection, fixture.Visibility());
+        string[] expected = VisibleVersions
+            .Select(versionId => Serialize(full.SymbolsOfVersion(versionId)))
+            .ToArray();
+        string expectedNamed = Serialize(full.SymbolsNamed("Helper"));
+
+        var observed = new string[64];
+        var observedNamed = new string[64];
+        Parallel.For(0, observed.Length, i =>
+        {
+            long versionId = VisibleVersions[i % VisibleVersions.Length];
+            observed[i] = Serialize(bounded.SymbolsOfVersion(versionId));
+            observedNamed[i] = Serialize(bounded.SymbolsNamed("Helper"));
+        });
+
+        for (int i = 0; i < observed.Length; i++)
+        {
+            Assert.Equal(expected[i % VisibleVersions.Length], observed[i]);
+            Assert.Equal(expectedNamed, observedNamed[i]);
+        }
+    }
+
+    // The full load builds a fresh array per call, so a caller may sort or rewrite the result in place. The
+    // bounded cache keeps the materialized list for the name, so it has to hand out a copy or the two modes
+    // would differ in a way no accessor comparison can see.
+    [Fact]
+    public void BoundedSymbolsNamedHandsEveryCallerItsOwnArray()
+    {
+        using ResolutionStoreFixture fixture = Populate();
+        using SqliteConnection fullConnection = fixture.OpenRead();
+        using SqliteConnection boundedConnection = fixture.OpenRead();
+        RevisionFactCache full = RevisionFactCache.Load(fullConnection, fixture.Visibility());
+        RevisionFactCache bounded = RevisionFactCache.LoadBounded(boundedConnection, fixture.Visibility());
+        string expected = Serialize(full.SymbolsNamed("Dup"));
+
+        // The first call materializes the name; both calls under test therefore come from the cached list,
+        // which is where handing out the instance itself would let one caller rewrite another's answer.
+        _ = bounded.SymbolsNamed("Dup");
+        var first = Assert.IsType<FactSymbol[]>(bounded.SymbolsNamed("Dup"));
+        Assert.Equal(2, first.Length);
+        Array.Reverse(first);
+        var second = Assert.IsType<FactSymbol[]>(bounded.SymbolsNamed("Dup"));
+
+        Assert.NotSame(first, second);
+        Assert.Equal(expected, Serialize(second));
+    }
+
     [Fact]
     public void BoundedFactsRefuseToAdvanceOntoANewerGeneration()
     {
@@ -194,7 +320,10 @@ public sealed class BoundedRevisionFactCacheTests
         Assert.Throws<InvalidOperationException>(() => bounded.Advance(connection, fixture.Visibility()));
     }
 
-    private static readonly long[] VisibleVersions = [1, 2, 3, 4];
+    // Every version the pinned manifest carries, so the comparison covers the TypeScript pair as well: file 5
+    // is the only one with an import symbol, and ImportsOf is the one accessor where the bounded path binds the
+    // imports itself instead of going through the whole-generation BindAllImports.
+    private static readonly long[] VisibleVersions = [1, 2, 3, 4, 5, 6];
 
     private static ReferenceEvidenceBundle Read(
         FixtureReadSession session,
@@ -227,6 +356,25 @@ public sealed class BoundedRevisionFactCacheTests
     }
 
     private static string Serialize<T>(T value) => JsonSerializer.Serialize(value);
+
+    private static IEnumerable<RevisionFactCacheLoader.RelationshipLocateRow> ByRowId(
+        IEnumerable<RevisionFactCacheLoader.RelationshipLocateRow> rows) =>
+        rows.OrderBy(row => row.RowId, StringComparer.Ordinal);
+
+    // The base fixture plus one to_symbol_id that names two VISIBLE symbol rows with different names.
+    private static ResolutionStoreFixture PopulateWithAConflictingRelationshipTarget()
+    {
+        ResolutionStoreFixture fixture = Populate();
+        fixture.AddSymbol(1, "cls-twin", "TwinHere", "class", "src/App.cs");
+        fixture.AddSymbol(2, "cls-twin", "TwinThere", "class", "src/Other.cs");
+        fixture.AddIdentifier(
+            1, "id-twin", "TwinHere", "src/App.cs", kind: "type_usage", containingSymbolId: Run,
+            startByte: 300, endByte: 308, startLine: 9);
+        fixture.AddRelationship(
+            1, "rel-twin", Run, "cls-twin", "src/App.cs", kind: "uses",
+            startByte: 300, endByte: 308, startLine: 9);
+        return fixture;
+    }
 
     private static ResolutionStoreFixture Populate()
     {
@@ -273,6 +421,20 @@ public sealed class BoundedRevisionFactCacheTests
         fixture.AddIdentifier(
             5, "id-widget", "Widget", "src/mod.ts", kind: "type_usage", containingSymbolId: "fn-mod",
             startByte: 5, endByte: 11, language: "typescript");
+
+        // A relationship whose TARGET symbol lives on a version the pinned manifest does not carry. Both read
+        // shapes must drop it: the manifest-joined read by its target-visibility join, the fast read by its
+        // target-visibility EXISTS. The identifier at the same span is what makes the difference observable —
+        // keeping the relationship would locate that identifier and change the propagation row set.
+        fixture.AddFile(7, "src/Ghost.cs");
+        fixture.AddSymbol(7, "cls-ghost", "Ghost", "class", "src/Ghost.cs");
+        fixture.ExecuteWrite("DELETE FROM manifest_entries WHERE path='src/Ghost.cs'");
+        fixture.AddIdentifier(
+            1, "id-ghost", "Ghost", "src/App.cs", kind: "type_usage", containingSymbolId: Run,
+            startByte: 200, endByte: 205, startLine: 7);
+        fixture.AddRelationship(
+            1, "rel-ghost", Run, "cls-ghost", "src/App.cs", kind: "uses",
+            startByte: 200, endByte: 205, startLine: 7);
 
         fixture.AddSymbol(3, "cls-third", "Third", "class", "src/Third.cs");
         fixture.AddIdentifier(3, "id-third-run", "Run", "src/Third.cs", kind: "call", containingSymbolId: "cls-third", startByte: 5, endByte: 8);
