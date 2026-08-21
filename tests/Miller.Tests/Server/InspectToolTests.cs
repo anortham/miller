@@ -3058,7 +3058,8 @@ public sealed class InspectToolTests
                 ensure_fresh: false);
 
             Assert.DoesNotContain("inspect failed", output);
-            Assert.Contains("GetUser", output);
+            // The doc comment proves a real symbol rendered. "GetUser" alone is the query echoed back.
+            Assert.Contains("Gets a user by id.", output);
             Assert.Equal(0, fullLoadCount);
             Assert.Equal(1, storeSearchOpenCount);
             Assert.Equal(0, symbolLoadCount);

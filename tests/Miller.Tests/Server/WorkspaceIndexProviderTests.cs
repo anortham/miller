@@ -1115,7 +1115,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry,
             sidecar: sidecar,
-            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(live, target.DbPath)),
             loadSessionSymbolSearch: _ =>
             {
                 generationLoads++;
@@ -1161,7 +1162,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry,
             sidecar: sidecar,
-            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(live, target.DbPath)),
             loadSessionSymbolSearch: _ =>
             {
                 generationLoads++;
@@ -1329,6 +1331,128 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal(0, generationLoads);
     }
 
+    /// <summary>
+    /// Every consumer behind a named read joins on the id the lookup returned — the live graph, the live bridge
+    /// graph, ExtractReader, the reference evidence reader, and the impact seed set all read the LIVE artifact.
+    /// So a lagging sidecar may supply the recall but never the id: the row that comes back must be the live
+    /// artifact's row, or the read would hand a dead id to a live join and get a confident empty answer.
+    /// </summary>
+    [Fact]
+    public void ResolveSymbolRead_FamilyStoreLastGood_AnswersWithTheLiveGenerationsRow()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var stale = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("inspect-id");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-b", storeLogSequence: 21);
+        WriteLastGoodSearchSidecar(root, stale, lastGood);
+
+        string staleId = SqliteSymbolReader.Read(stale.DbPath).Single().SymbolId;
+        string liveId = SqliteSymbolReader.Read(target.DbPath).Single().SymbolId;
+        Assert.NotEqual(staleId, liveId);
+
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: sidecar,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(live, target.DbPath)),
+            loadSessionSymbolSearch: _ =>
+                throw new InvalidOperationException("the generation projection was not expected"),
+            openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+
+        // The lagging sidecar holds the same name at the same path under a re-minted id. The read must not
+        // publish that id: it is not in the live artifact the graph and the evidence readers query.
+        Assert.Empty(context.Index.FindByName("TargetType"));
+        Assert.Null(context.Index.FindBySymbolId(staleId));
+    }
+
+    /// <summary>
+    /// The live row wins on every field, not only on the id. impact with no arguments reads the working-tree diff
+    /// and picks seeds by intersecting changed line ranges against IndexedSymbol.StartLine/EndLine, so a lagging
+    /// span would select the wrong seeds on the most common impact call there is.
+    /// </summary>
+    [Fact]
+    public void ResolveSymbolRead_FamilyStoreLastGood_TakesTheSpanFromTheLiveArtifact()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("inspect-span");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-b", storeLogSequence: 21);
+
+        IndexedSymbol liveRow = SqliteSymbolReader.Read(target.DbPath).Single();
+        IndexedSymbol movedRow = liveRow with { StartLine = liveRow.StartLine + 40, EndLine = liveRow.EndLine + 40 };
+        string searchPath = StoreSidecarCatalog.PathFor(root, StoreSidecarKind.Search, lastGood.ViewId);
+        Directory.CreateDirectory(Path.GetDirectoryName(searchPath)!);
+        SearchIndexWriter.Write(searchPath, new[] { movedRow }, lastGood.Freshness.StoreLogSequence!.Value);
+        StoreSidecarCatalog.Stamp(
+            searchPath,
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, lastGood));
+
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: sidecar,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(live, target.DbPath)),
+            loadSessionSymbolSearch: _ =>
+                throw new InvalidOperationException("the generation projection was not expected"),
+            openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+
+        IndexedSymbol served = Assert.Single(context.Index.FindByName("TargetType"));
+        Assert.Equal(liveRow.SymbolId, served.SymbolId);
+        Assert.Equal(liveRow.StartLine, served.StartLine);
+        Assert.Equal(liveRow.EndLine, served.EndLine);
+    }
+
+    /// <summary>
+    /// A sidecar stamped at the LIVE snapshot minted the ids the consumers read, so it is served straight through
+    /// with no live verification at all. The stub session fails any read, which is what pins the zero cost.
+    /// </summary>
+    [Fact]
+    public void ResolveSymbolRead_FamilyStoreCurrentSidecar_VerifiesNothingAgainstTheLiveSession()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("inspect-cur");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-a", storeLogSequence: 21);
+        WriteLastGoodSearchSidecar(root, target, live);
+
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: sidecar,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            loadSessionSymbolSearch: _ =>
+                throw new InvalidOperationException("the generation projection was not expected"),
+            openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", ensureFresh: false);
+
+        Assert.Single(context.Index.FindByName("TargetType"));
+    }
+
     [Fact]
     public void ResolveSymbolRead_FamilyStoreLastGood_ReopensWhenTheSidecarStampCatchesUp()
     {
@@ -1348,7 +1472,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry,
             sidecar: sidecar,
-            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(live, target.DbPath)),
             loadSessionSymbolSearch: _ =>
                 throw new InvalidOperationException("the generation projection was not expected"),
             openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));

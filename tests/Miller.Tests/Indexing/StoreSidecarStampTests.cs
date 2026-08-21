@@ -227,6 +227,40 @@ public sealed class StoreSidecarStampTests : IDisposable
         Assert.Null(StoreSidecarCatalog.TryLastGood(databasePath, otherView));
     }
 
+    /// <summary>
+    /// A generation promotion re-mints every symbol id, and the store log does NOT restart with it: the v4 store
+    /// contract §13 opens the new generation's log at the predecessor's last sequence + 1. So family, view, and
+    /// "strictly lower sequence" all still hold across a promotion, and without the generation test the previous
+    /// generation's sidecar would pass as last-good and hand out ids no live row carries.
+    /// </summary>
+    [Fact]
+    public void TryLastGood_APromotedGeneration_IsNeverLastGood()
+    {
+        Directory.CreateDirectory(_root);
+        string databasePath = StoreSidecarCatalog.PathFor(_root, StoreSidecarKind.Search, "view-a");
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+        }
+
+        StoreSidecarCatalog.Stamp(
+            databasePath,
+            StoreSidecarStamp.FromSnapshot(
+                StoreSidecarKind.Search,
+                Snapshot("manifest-a", sequence: 17, generationName: "gen-001")));
+
+        StoreSidecarStamp promoted = StoreSidecarStamp.FromSnapshot(
+            StoreSidecarKind.Search,
+            Snapshot("manifest-b", sequence: 21, generationName: "gen-002"));
+
+        Assert.Null(StoreSidecarCatalog.TryLastGood(databasePath, promoted));
+    }
+
     [Fact]
     public void AllowsLastGoodServe_FamilyStoreSnapshot_IsTrueWhenResolutionIsExact()
     {
@@ -392,7 +426,8 @@ public sealed class StoreSidecarStampTests : IDisposable
         long sequence,
         string familyId = "family-a",
         string viewId = "view-a",
-        string? resolutionState = null) =>
+        string? resolutionState = null,
+        string generationName = "gen-001") =>
         new(
             _root,
             "workspace-a",
@@ -404,9 +439,9 @@ public sealed class StoreSidecarStampTests : IDisposable
                 manifestHash,
                 sequence,
                 "resolution-a",
-                StoreInstanceId: $"{familyId}:gen-001",
+                StoreInstanceId: $"{familyId}:{generationName}",
                 ViewId: viewId,
-                GenerationName: "gen-001",
+                GenerationName: generationName,
                 ManifestGeneration: 3,
                 IndexLevel: IndexLevels.FullMetadataValue,
                 LevelStampL1: "l1-a",
@@ -414,7 +449,7 @@ public sealed class StoreSidecarStampTests : IDisposable
                 LevelStampL3: "l3-a"),
             IndexLevels.FullMetadataValue,
             WorkspaceReadMode.FamilyStore,
-            GenerationName: "gen-001",
+            GenerationName: generationName,
             ManifestGeneration: 3,
             ResolutionState: resolutionState);
 

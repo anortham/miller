@@ -108,8 +108,12 @@ Missing, stale, corrupt, or incompatible derived sidecars remain typed warnings 
 authoritative `symbols.db` readiness verdict. Missing/stale `search_sidecar` and `content_corpus` warnings carry a
 `workspace refresh` recovery action; corrupt or otherwise unreadable derived artifacts carry a `workspace full`
 recovery action. Non-search symbol reads such as `inspect`, `context`, `impact`, and `trace` continue from a fresh,
-compatible `symbols.db` when an unrelated search/content/vector sidecar is unavailable. Symbol search still fails
-visibly when its required `search.db` is missing, stale, or corrupt.
+compatible `symbols.db` when the search sidecar is MISSING, unstamped, or unreadable, and when an unrelated
+content/vector sidecar is unavailable. A readable search sidecar answers the name lookup for those four surfaces
+as well as for search: one stamped at the live snapshot is served as-is, and a readable last-good one — the same
+generation at an earlier store sequence — is served with each row verified against the live `symbols.db` by symbol
+id, so a symbol the live generation no longer holds reads as not-found rather than as a resolved symbol with no
+dependents. Symbol search still fails visibly when its required `search.db` is missing, stale, or corrupt.
 An `imports_only` content corpus is `usable_with_warnings` and recommends `workspace refresh`.
 `preservation_blocked` is degraded and recommends preserving/recovering the imported sources before replacing the
 sidecar, starting with the concrete CLI `miller content export`; it never recommends a destructive full rebuild as

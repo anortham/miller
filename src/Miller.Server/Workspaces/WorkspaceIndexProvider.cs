@@ -407,11 +407,13 @@ public sealed class WorkspaceIndexProvider
 
     // Current workspace symbol routing. Explicit sidecar opt-out: the holder's already-built full index serves
     // search. Sidecar enabled on the legacy route: require a revision-fresh on-disk sidecar so stale/missing
-    // artifacts are visible instead of hidden behind a memory fallback. On the family-store route the acceptance
-    // is TryServedSearchStamp's — current, or the same view's readable last-good — and ResolveFamilyStoreLookup
-    // now applies the same rule to the named-read route. The chosen backend is cached keyed on (workspace,
-    // dbPath/served stamp, revision), so the sidecar is not opened per query, and a sidecar that converges
-    // changes the key and is opened again on the next read.
+    // artifacts are visible instead of hidden behind a memory fallback. On the family-store route search does NOT
+    // gate the open on the served stamp: with the sidecar enabled it opens the store sidecar unconditionally and
+    // a missing or corrupt one fails visibly, while the stamp only enters the cache key. ResolveFamilyStoreLookup
+    // gates its open on a readable stamp instead, and verifies a lagging one against the live artifact, because
+    // its consumers join on the ids — search renders self-contained rows and needs neither. The chosen backend is
+    // cached keyed on (workspace, dbPath/served stamp, revision), so the sidecar is not opened per query, and a
+    // sidecar that converges changes the key and is opened again on the next read.
     private ISymbolLookupIndex ResolveCurrentSymbolSearchIndex(
         MillerRepositoryIndex? holderIndex,
         long revision,
@@ -419,8 +421,8 @@ public sealed class WorkspaceIndexProvider
     {
         if (readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore)
         {
-            StoreSidecarStamp? served = TryServedSearchStamp(readSession);
-            CacheKey storeKey = KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot, served);
+            ServedSearchSidecar? served = TryServedSearchStamp(readSession);
+            CacheKey storeKey = KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot, served?.Stamp);
             if (_sidecar.Enabled)
             {
                 return GetOrAddSymbolSearchCache(
@@ -515,18 +517,26 @@ public sealed class WorkspaceIndexProvider
 
     /// <summary>
     /// The named-read route (inspect, and the context/impact/trace lookup behind <see cref="ResolveCurrent"/>)
-    /// accepts whatever sidecar <see cref="TryServedSearchStamp"/> reports readable — the SAME acceptance
-    /// <see cref="ResolveCurrentSymbolSearchIndex"/> already applies to search. It used to demand a byte-equal
-    /// stamp, and <c>StoreSidecarStamp</c> equality folds the store log sequence and the manifest hash, so ONE
-    /// converged file change failed it and sent the read through a whole-generation
-    /// <see cref="SymbolSearchProjection"/> rebuild over every visible symbol. That rebuild, not the lookup, was
-    /// the measured multi-second inspect peak.
+    /// serves whatever sidecar <see cref="TryServedSearchStamp"/> reports readable — current, or the same
+    /// generation's readable last-good. It used to demand a byte-equal stamp, and <c>StoreSidecarStamp</c>
+    /// equality folds the store log sequence and the manifest hash, so ONE converged file change failed it and
+    /// sent the read through a whole-generation <see cref="SymbolSearchProjection"/> rebuild over every visible
+    /// symbol. That rebuild, not the lookup, was the measured multi-second inspect peak.
     ///
-    /// <para>A lagging sidecar can answer with a stale definition row, exactly as search can, and neither surface
-    /// says so — the honest bound is that it never turns into a stale BODY: inspect and context re-read the span
-    /// from the LIVE session by symbol id (<c>ExtractReader.ReadDetail</c>), so a symbol the lag window changed
-    /// reads as body-unavailable rather than as the wrong bytes. The index level travels on the live snapshot
-    /// too, so the reference-layer guard is unaffected by which sidecar answered.</para>
+    /// <para>This is NOT the rule <see cref="ResolveCurrentSymbolSearchIndex"/> applies to search, and the
+    /// difference runs both ways. Search does not gate the OPEN on the served stamp at all: with the sidecar
+    /// enabled it opens the store sidecar unconditionally and lets a missing or corrupt one fail visibly, and the
+    /// stamp only enters the cache key. This route gates the open on a readable stamp and falls back to the
+    /// in-memory projection instead, so a missing or corrupt sidecar stays silent here. And search's ACCEPTANCE
+    /// is not transferable to this consumer: <c>WorkspaceSymbolSearchContext</c> carries an index alone and
+    /// renders self-contained rows, while this route's contexts also carry a live graph, a live read session, and
+    /// a live bridge graph, and every consumer JOINS on the id the lookup returned.</para>
+    ///
+    /// <para>So a lagging sidecar is wrapped in <see cref="LaggingSidecarSymbolLookup"/>, which answers from the
+    /// live artifact's row of the same id and drops a row the live generation no longer holds. That keeps the id
+    /// producer and the id consumers on one generation without the projection rebuild — a stale id can no longer
+    /// read as <c>no_dependents</c> or as zero references. The index level travels on the live snapshot too, so
+    /// the reference-layer guard is unaffected by which sidecar answered.</para>
     ///
     /// <para>The served stamp is folded into the cache key, so a sidecar that catches up produces a different
     /// key and the next read reopens it instead of serving the lagging generation forever.</para>
@@ -535,15 +545,17 @@ public sealed class WorkspaceIndexProvider
         string? workspaceId,
         WorkspaceReadHandle readSession)
     {
-        StoreSidecarStamp? served = TryServedSearchStamp(readSession);
-        if (_sidecar.Enabled && served is not null)
+        // The opt-out must do ZERO sidecar I/O, so the enabled test comes before the stamp read.
+        if (_sidecar.Enabled && TryServedSearchStamp(readSession) is { } served)
         {
-            CacheKey servedKey = KeyFor(workspaceId, readSession.Snapshot, served);
-            return GetOrAddSymbolSearchCache(
+            CacheKey servedKey = KeyFor(workspaceId, readSession.Snapshot, served.Stamp);
+            ISymbolLookupIndex sidecarIndex = GetOrAddSymbolSearchCache(
                 servedKey,
                 () => new CachedSymbolSearch(
                     MeasureFamilyLookup(_openStoreSymbolSearch(readSession)),
                     IsSidecar: true)).Index;
+            return MeasureFamilyLookup(
+                LaggingSidecarSymbolLookup.Wrap(sidecarIndex, served.Lagging, readSession));
         }
 
         CacheKey key = KeyFor(workspaceId, readSession.Snapshot);
@@ -552,7 +564,11 @@ public sealed class WorkspaceIndexProvider
             () => new CachedSymbolRead(MeasureFamilyLookup(_loadSessionSymbolSearch(readSession)))).Index;
     }
 
-    private static StoreSidecarStamp? TryServedSearchStamp(WorkspaceReadHandle readSession)
+    /// <summary>
+    /// The readable search sidecar for this read, and whether it LAGS the live snapshot. The pair is read once:
+    /// the lag test is the same comparison <see cref="StoreSidecarCatalog.TryResolveReadable"/> already made.
+    /// </summary>
+    private static ServedSearchSidecar? TryServedSearchStamp(WorkspaceReadHandle readSession)
     {
         string? storeRoot = StoreSearchRoot(readSession);
         if (storeRoot is null)
@@ -567,7 +583,11 @@ public sealed class WorkspaceIndexProvider
                 storeRoot,
                 StoreSidecarKind.Search,
                 readSession.Snapshot.ViewId);
-            return StoreSidecarCatalog.TryResolveReadable(searchDbPath, expected, readSession.Snapshot);
+            StoreSidecarStamp? served = StoreSidecarCatalog.TryResolveReadable(
+                searchDbPath,
+                expected,
+                readSession.Snapshot);
+            return served is null ? null : new ServedSearchSidecar(served, served != expected);
         }
         catch (ArgumentException)
         {
@@ -613,9 +633,9 @@ public sealed class WorkspaceIndexProvider
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
             long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
-            StoreSidecarStamp? served = familyStore ? TryServedSearchStamp(readSession) : null;
+            ServedSearchSidecar? served = familyStore ? TryServedSearchStamp(readSession) : null;
             CacheKey key = familyStore
-                ? KeyFor(row.WorkspaceId, readSession.Snapshot, served)
+                ? KeyFor(row.WorkspaceId, readSession.Snapshot, served?.Stamp)
                 : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
             CachedSymbolSearch cached;
             if (familyStore && _sidecar.Enabled)
@@ -877,9 +897,9 @@ public sealed class WorkspaceIndexProvider
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
             long revision = ContextRevision(readSession.Snapshot, holderRevision);
-            StoreSidecarStamp? served = familyStore ? TryServedSearchStamp(readSession) : null;
+            ServedSearchSidecar? served = familyStore ? TryServedSearchStamp(readSession) : null;
             CacheKey key = familyStore
-                ? KeyFor(workspaceKey, readSession.Snapshot, served)
+                ? KeyFor(workspaceKey, readSession.Snapshot, served?.Stamp)
                 : KeyFor(workspaceKey, dbPath, revision);
             CachedRegionSearch cached = familyStore
                 ? GetOrLoadRegionSearch(
@@ -916,9 +936,9 @@ public sealed class WorkspaceIndexProvider
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
             long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
-            StoreSidecarStamp? served = familyStore ? TryServedSearchStamp(readSession) : null;
+            ServedSearchSidecar? served = familyStore ? TryServedSearchStamp(readSession) : null;
             CacheKey key = familyStore
-                ? KeyFor(row.WorkspaceId, readSession.Snapshot, served)
+                ? KeyFor(row.WorkspaceId, readSession.Snapshot, served?.Stamp)
                 : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
             CachedRegionSearch cached = familyStore
                 ? GetOrLoadRegionSearch(
@@ -1606,6 +1626,9 @@ public sealed class WorkspaceIndexProvider
     private sealed record RegisteredWorkspaceState(WorkspaceRegistryRow Row, WorkspaceRefreshResult? RefreshResult);
 
     private sealed record CachedIndex(MillerRepositoryIndex Index, SmartTargetResolver Resolver);
+
+    /// <summary>The readable search sidecar for one read, and whether it lags the live snapshot.</summary>
+    private readonly record struct ServedSearchSidecar(StoreSidecarStamp Stamp, bool Lagging);
 
     private sealed record CachedSymbolSearch(ISymbolLookupIndex Index, bool IsSidecar);
 

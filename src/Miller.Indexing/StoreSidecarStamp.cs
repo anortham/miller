@@ -280,14 +280,25 @@ public static class StoreSidecarCatalog
     internal const int ReadableOpenAttempts = 4;
 
     /// <summary>
-    /// The newest stamp on <paramref name="databasePath"/> that matches <paramref name="live"/> family, view,
-    /// and kind at an earlier store sequence. A different family or view is never last-good.
+    /// The newest stamp on <paramref name="databasePath"/> that matches <paramref name="live"/> kind, family,
+    /// view, store instance, and GENERATION at an earlier store sequence. A different family, view, store
+    /// instance, or generation is never last-good.
+    ///
+    /// <para>The generation test is load-bearing, not belt and braces. A generation promotion re-mints every
+    /// symbol id, and the store log does NOT restart with it: the v4 store contract §13 opens the new
+    /// generation's log at the predecessor's last sequence + 1 so sidecar cursors survive the flip. Family, view,
+    /// and "strictly lower sequence" therefore all still hold across a promotion, and without this test the
+    /// previous generation's sidecar would pass as last-good and serve ids no live row carries.</para>
     /// </summary>
     public static StoreSidecarStamp? TryLastGood(string databasePath, StoreSidecarStamp live)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         ArgumentNullException.ThrowIfNull(live);
-        StoreSidecarStamp? stamp = TryRead(databasePath);
+        return LastGoodOrNull(TryRead(databasePath), live);
+    }
+
+    private static StoreSidecarStamp? LastGoodOrNull(StoreSidecarStamp? stamp, StoreSidecarStamp live)
+    {
         if (stamp is null)
             return null;
         if (stamp.Kind != live.Kind)
@@ -295,6 +306,10 @@ public static class StoreSidecarCatalog
         if (!string.Equals(stamp.FamilyId, live.FamilyId, StringComparison.Ordinal))
             return null;
         if (!string.Equals(stamp.ViewId, live.ViewId, StringComparison.Ordinal))
+            return null;
+        if (!string.Equals(stamp.StoreInstanceId, live.StoreInstanceId, StringComparison.Ordinal))
+            return null;
+        if (!string.Equals(stamp.GenerationName, live.GenerationName, StringComparison.Ordinal))
             return null;
         if (stamp.StoreLogSequence >= live.StoreLogSequence)
             return null;
@@ -312,18 +327,25 @@ public static class StoreSidecarCatalog
             && snapshot.Freshness.StoreLogSequence is not null;
     }
 
+    /// <summary>
+    /// The stamp table is read ONCE here and compared against both rules. The lagging case is the common case on
+    /// a converging workspace, so a second <see cref="TryRead"/> would open a second unpooled connection on every
+    /// named read.
+    /// </summary>
     internal static StoreSidecarStamp? TryResolveReadable(
         string databasePath,
         StoreSidecarStamp expected,
         WorkspaceReadSnapshot snapshot)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(snapshot);
-        if (IsCurrent(databasePath, expected))
+        StoreSidecarStamp? stamp = TryRead(databasePath);
+        if (stamp == expected)
             return expected;
         if (!AllowsLastGoodServe(snapshot))
             return null;
-        return TryLastGood(databasePath, expected);
+        return LastGoodOrNull(stamp, expected);
     }
 
     internal static bool TryFastForwardEmptyDelta(
