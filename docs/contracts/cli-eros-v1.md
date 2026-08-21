@@ -488,8 +488,14 @@ without deletion. The JSON `result` vocabulary is `removed`, `not_found`, `refus
 A removal or a prune of a family-store member also reclaims that view's Miller-owned sidecars under
 `<store root>/sidecars`. Both `workspace remove --json` and `workspace prune --json` carry a
 `store_sidecar_reclaim` object with `files_deleted`, `bytes_reclaimed`, `files_retained`, and a nullable
-`skip_reason`. The reclaim is best-effort: a busy sidecar lease or a held file reports the reason and leaves the
-files in place; it never changes the removal `result` or the prune totals. A skip is owed, not lost — a later
+`skip_reason`. The reclaim is best-effort: a busy sidecar lease (`sidecar write lease busy`), a held file
+(`sidecar files in use`), or a directory the reclaim could not read (`sidecar listing failed`) reports the reason
+and leaves the files in place; it never changes the removal `result` or the prune totals. Treat `skip_reason` as
+free text and never switch on it. A listing failure reports `files_retained: 0` beside a non-null `skip_reason`,
+because `files_retained` counts only files PROVED undeletable and a failed listing proves nothing — a non-null
+`skip_reason` with zero retained files means "unknown", not "nothing was left". Any reason may carry the suffix
+`; reclaim not recorded`, which says the owed-reclaim record itself could not be written, so the retry below is
+not guaranteed. A skip is otherwise owed, not lost — a later
 `workspace prune --json` discharges it and reports the files in its own `store_sidecar_reclaim` totals, so a
 non-null `skip_reason` means "run prune again later", not "these bytes are gone forever".
 

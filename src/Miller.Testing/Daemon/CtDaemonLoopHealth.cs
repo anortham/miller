@@ -202,10 +202,15 @@ public static class CtDaemonLoopHealth
     /// otherwise the two wall-clock stamps subtracted, which is all a record from an older build offers.
     ///
     /// <para>A negative published age is impossible from a monotonic clock, so one can only come from a
-    /// corrupt or hand-edited file; it reads as no age, exactly as a backwards wall-clock pair does.</para>
+    /// corrupt or hand-edited file; it reads as no age, exactly as a backwards wall-clock pair does. The
+    /// same holds at the other end: an age no <see cref="TimeSpan"/> can hold is equally impossible, and
+    /// <see cref="TimeSpan.FromSeconds(double)"/> THROWS on one rather than saturating. The range test is
+    /// what rejects it — and it subsumes the finite test, because NaN fails every comparison and infinity
+    /// fails the upper bound. It is strict at the top so a value whose rounding to ticks would land one
+    /// past the end cannot slip through.</para>
     /// </summary>
     private static TimeSpan LoopAge(CtDaemonStatusRecord record, DateTimeOffset tick) =>
-        record.LoopAgeSeconds is { } seconds && seconds >= 0 && double.IsFinite(seconds)
+        record.LoopAgeSeconds is { } seconds && seconds >= 0 && seconds < TimeSpan.MaxValue.TotalSeconds
             ? TimeSpan.FromSeconds(seconds)
             : record.UpdatedAtUtc - tick;
 

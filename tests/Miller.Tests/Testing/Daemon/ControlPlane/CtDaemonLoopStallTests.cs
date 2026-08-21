@@ -339,6 +339,48 @@ public sealed class CtDaemonLoopStallTests : IDisposable
         Assert.Equal(300, verdict.LagSeconds);
     }
 
+    /// <summary>
+    /// The same corrupt-file threat, one step further out. A hand-edited age of 1e18 is valid JSON and is
+    /// finite, so the reader accepts it, but no <see cref="TimeSpan"/> can hold it: the whole
+    /// <c>tests status</c> call threw instead of reporting. A published age the clock could never produce
+    /// must read as no age, exactly as a negative one does.
+    /// </summary>
+    [Theory]
+    [InlineData(1e18)]
+    [InlineData(double.MaxValue)]
+    public void An_unholdable_published_age_is_ignored_like_a_negative_one(double seconds)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(
+            CtDaemonJson.Serialize(Record(lag: TimeSpan.FromMinutes(5), loopAge: TimeSpan.FromSeconds(2))))!;
+        node["loop_age_seconds"] = seconds;
+        Directory.CreateDirectory(CtDaemonProtocol.RootDirectory(_root));
+        File.WriteAllText(CtDaemonProtocol.StatusPath(_root), node.ToJsonString());
+
+        CtDaemonStatusRecord? read = CtDaemonLease.TryReadStatus(_root);
+        CtLoopHealthVerdict verdict = Evaluate(read);
+
+        Assert.Equal(CtLoopHealth.LoopStalled, verdict.Health);
+        Assert.Equal(300, verdict.LagSeconds);
+    }
+
+    /// <summary>
+    /// The same rule for the two values plain JSON cannot carry but an in-process record can. They reach the
+    /// rule from a hand-written record rather than from the file, and must not be trusted either.
+    /// </summary>
+    [Theory]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NaN)]
+    public void A_published_age_that_is_not_a_real_number_is_ignored_like_a_negative_one(double seconds)
+    {
+        CtDaemonStatusRecord record =
+            Record(lag: TimeSpan.FromMinutes(5)) with { LoopAgeSeconds = seconds };
+
+        CtLoopHealthVerdict verdict = Evaluate(record);
+
+        Assert.Equal(CtLoopHealth.LoopStalled, verdict.Health);
+        Assert.Equal(300, verdict.LagSeconds);
+    }
+
     [Fact]
     public void The_default_loop_stall_bound_is_ninety_seconds()
     {
