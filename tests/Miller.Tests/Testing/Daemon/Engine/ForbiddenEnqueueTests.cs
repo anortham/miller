@@ -297,6 +297,58 @@ public sealed class ForbiddenEnqueueTests : IDisposable
     }
 
     /// <summary>
+    /// The kill switch is a zero-WORK guarantee for <c>tests status</c>, not merely zero-creation.
+    /// Zero-creation was already proven (no files appear on a bare workspace); this proves the
+    /// stronger property on a workspace that HAS state: a corrupt seeded <c>ct.db</c> proves the
+    /// store is never opened (a store read fails visibly on a corrupt file), a recording
+    /// <c>OpenFacts</c> hook proves the live index is never opened, and a seeded budget owner that
+    /// must NOT surface proves the budget file is never consulted. The payload is the
+    /// never-enabled shape with <c>kill_switch: true</c>.
+    /// </summary>
+    [Fact]
+    public void Status_under_the_kill_switch_does_zero_work_and_reports_the_disabled_shape()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, ".miller"));
+        string dbPath = CtSchema.DbPathFor(_root);
+        File.WriteAllText(dbPath, "this is not a sqlite database");
+
+        string home = Path.Combine(_root, "home", ".miller");
+        Directory.CreateDirectory(Path.Combine(home, CtExecutionBudget.DirectoryName));
+        File.WriteAllText(
+            Path.Combine(home, CtExecutionBudget.DirectoryName, CtExecutionBudget.OwnerFileName),
+            """{"pid":43210,"workspace_root":"elsewhere","reason":"run","started_at_utc":"2026-08-21T00:00:00+00:00"}""");
+        // The probe must be real: a seed the budget reader cannot parse would prove nothing.
+        Assert.NotNull(CtExecutionBudget.ForMillerHome(home).TryReadOwner());
+
+        bool openedIndex = false;
+        TestsStatusResult status = TestsCore.Status(new TestsCoreRequest(_root)
+        {
+            MillerHome = home,
+            KillSwitch = "off",
+            Hooks = new TestsCoreHooks(OpenFacts: (_, _) =>
+            {
+                openedIndex = true;
+                throw new InvalidOperationException("the kill switch must not read the live index");
+            }),
+        });
+
+        Assert.False(openedIndex);
+        Assert.False(status.Enabled);
+        Assert.True(status.KillSwitchOff);
+        Assert.Empty(status.Projects);
+        Assert.Equal(CtDaemonLifecycleState.Stopped, status.DaemonState);
+        Assert.Equal("disabled", status.DaemonReason);
+        Assert.Equal(ContinuousTestVerdict.Unknown, status.Verdict);
+        Assert.Null(status.Selected);
+        Assert.Equal(0, status.StaleCount);
+        Assert.Equal(0, status.SelectedCount);
+        Assert.Null(status.LastRun);
+        Assert.Null(status.BudgetHolder);
+        Assert.Equal(CtDaemonActivity.Idle, status.DaemonActivity);
+        Assert.Null(status.DaemonRun);
+    }
+
+    /// <summary>
     /// The zero-work guarantee survives a WIRED sink. Production hands the disabled branch the same
     /// live <see cref="CtDaemonLog"/> sink the running daemon gets, so the guarantee cannot rest on
     /// the caller remembering to leave it null - it has to rest on the branch returning first.

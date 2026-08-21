@@ -98,6 +98,12 @@ A never-enabled workspace reports `enabled: false`, empty `projects`, `daemon.st
 files. `selected` is also `null` — and the verdict honest `unknown` — whenever the workspace has
 no readable live index, whatever `ct.db` holds.
 
+Under the kill switch (`MILLER_CT=off`, also `0`/`false`/`no`), status is a zero-WORK
+short-circuit: it opens no `ct.db`, reads no live index, and reads no daemon-status or budget
+file. The payload is the never-enabled shape above with `kill_switch: true`,
+`daemon.reason: "disabled"`, and `daemon.activity: "idle"` — whatever state the workspace holds
+on disk.
+
 ## Freshness key
 
 CT freshness is the composite `(index_identity, revision)` taken from the live

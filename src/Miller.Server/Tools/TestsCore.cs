@@ -193,8 +193,28 @@ public static class TestsCore
     {
         ArgumentNullException.ThrowIfNull(request);
         string root = RequireRoot(request);
+
+        // MILLER_CT=off is a zero-WORK guarantee, not merely zero-creation: no ct.db open, no
+        // live-index read, no daemon-status read, no budget read. The earlier shape did the reads
+        // and masked the rendered fields, which honored zero-creation but not zero-work. The
+        // payload is the never-enabled workspace shape with the kill switch reported.
+        if (ContinuousTestPolicy.IsKillSwitchOff(request.KillSwitch))
+        {
+            return new TestsStatusResult(
+                Enabled: false,
+                KillSwitchOff: true,
+                Projects: [],
+                DaemonState: CtDaemonLifecycleState.Stopped,
+                DaemonReason: "disabled",
+                Verdict: ContinuousTestVerdict.Unknown,
+                Selected: null,
+                StaleCount: 0,
+                SelectedCount: 0,
+                LastRun: null,
+                BudgetHolder: null);
+        }
+
         string workspaceId = ResolveWorkspaceId(request, root);
-        bool killSwitchOff = ContinuousTestPolicy.IsKillSwitchOff(request.KillSwitch);
         bool optedIn = ContinuousTestPolicy.IsWorkspaceOptedIn(root);
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
         IReadOnlyList<ContinuousTestProject> stored = store.ListContinuousTestProjects(workspaceId, includeDisabled: false);
@@ -211,21 +231,20 @@ public static class TestsCore
                 ? store.ListContinuousTestFreshWatermarks(workspaceId, live.IndexIdentity)
                 : null);
         TestsBudgetHolder? budget = ReadBudgetHolder(request.MillerHome);
-        bool enabled = !killSwitchOff && (optedIn || stored.Count > 0);
         return new TestsStatusResult(
-            Enabled: enabled,
-            KillSwitchOff: killSwitchOff,
+            Enabled: optedIn || stored.Count > 0,
+            KillSwitchOff: false,
             Projects: stored.Select(ToStatusProject).ToArray(),
             DaemonState: snapshot.State,
-            DaemonReason: killSwitchOff ? "disabled" : snapshot.Reason,
+            DaemonReason: snapshot.Reason,
             Verdict: projected.Verdict,
             Selected: projected.SelectedKey,
             StaleCount: projected.StaleCount,
             SelectedCount: statuses.Count,
             LastRun: store.LatestTestRunAt(workspaceId),
             BudgetHolder: budget,
-            DaemonActivity: killSwitchOff ? CtDaemonActivity.Idle : snapshot.Activity,
-            DaemonRun: killSwitchOff ? null : snapshot.Run);
+            DaemonActivity: snapshot.Activity,
+            DaemonRun: snapshot.Run);
     }
 
     /// <summary>
