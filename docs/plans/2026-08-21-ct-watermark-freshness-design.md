@@ -1,6 +1,6 @@
 # CT watermark freshness — design
 
-Date: 2026-08-21. Status: awaiting user review.
+Date: 2026-08-21. Status: approved by the user on 2026-08-21 (freshness policy, worktree adoption, and debounced auto-run).
 Decision 1 from `docs/plans/2026-08-20-ct-dogfood-defects-and-2344-pin.md` was decided by the user
 on 2026-08-21: **watermark keep-set**.
 
