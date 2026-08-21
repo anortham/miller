@@ -145,7 +145,12 @@ public sealed class ContinuousTestWorkspaceContext : IDisposable
 /// </summary>
 public sealed class ContinuousTestWorktreeAdoptionOptions
 {
-    /// <summary>Registered workspace roots, from the registry's non-creating read path.</summary>
+    /// <summary>
+    /// Registered workspace roots, from the registry's non-creating read path. A read FAILURE must
+    /// THROW rather than degrade to an empty list: on a throw the host keeps its current adopted
+    /// set and refuses routed attaches, where an empty list means "nothing registered" and
+    /// detaches every adopted worktree.
+    /// </summary>
     public required Func<IReadOnlyList<string>> DiscoverRegisteredRoots { get; init; }
 
     /// <summary>
@@ -575,95 +580,126 @@ public sealed class ContinuousTestDaemonHost
             CtDaemonCommandRequest? request = CtCommandChannel.TryReadRequest(_workspaceRoot, id);
             if (request is null)
                 continue;
-            string? targetRoot = string.IsNullOrWhiteSpace(request.WorkspaceRoot)
-                ? null
-                : Path.GetFullPath(request.WorkspaceRoot);
-            bool targetsPrimary = targetRoot is null || PathsEqual(targetRoot, _workspaceRoot);
-            if (request.Kind == CtDaemonCommandKind.Stop)
+            bool stopRequested;
+            try
             {
-                // A stop request targets the daemon that was alive when it was written. One left
-                // unacknowledged by a dead predecessor must not kill this instance at startup.
-                if (request.RequestedAtUtc < _runStartedAtUtc)
-                {
-                    TryWriteAck(id, "stale-stop-ignored");
-                    continue;
-                }
+                stopRequested = ProcessCommand(lease, id, request);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                // One poisonous request must never kill the daemon. The file stays on disk
+                // forever, so an escaped throw here was a crash on THIS request at every restart
+                // (a workspace_root that Path.GetFullPath refuses, for example). Reject it,
+                // remember the ack, and keep draining.
+                Diagnostic($"ct command {id} rejected {CtDaemonLog.FailureDetail(exception)}");
+                TryWriteAck(id, "invalid-request", CtDaemonCommandState.Rejected);
+                continue;
+            }
 
-                if (!targetsPrimary)
-                {
-                    // A worktree stop detaches THAT context only. It never stops the family daemon:
-                    // the daemon belongs to the main root, and every other adopted worktree still
-                    // depends on it.
-                    if (_adopted.TryGetValue(targetRoot!, out ContinuousTestWorkspaceContext? adopted))
-                    {
-                        DetachWorktree(targetRoot!, adopted, "detached");
-                        _stopDetached.Add(targetRoot!);
-                        TryWriteAck(id, "detached");
-                    }
-                    else
-                    {
-                        TryWriteAck(id, "not-adopted", CtDaemonCommandState.Rejected);
-                    }
-
-                    continue;
-                }
-
-                TryWriteAck(id, "stopping");
-                TryWriteStatus(lease, CtDaemonLifecycleState.Stopped, "stop");
+            if (stopRequested)
                 return true;
-            }
-
-            if (request.Kind == CtDaemonCommandKind.Run)
-            {
-                ContinuousTestWorkspaceContext? target = targetsPrimary
-                    ? _primary
-                    : ResolveRoutedRunTarget(targetRoot!);
-                if (target is null)
-                {
-                    TryWriteAck(id, "not-adopted", CtDaemonCommandState.Rejected);
-                    continue;
-                }
-
-                if (target.Queue is not null && target.Projects.Count > 0)
-                {
-                    // Select at the LIVE cursor the poller last observed, never at the daemon's
-                    // START key. Falling back to StartedAt made every explicit run after an index
-                    // advance select at the birth revision forever (defect D2): the store rightly
-                    // records stale-revision results as history-only, so the verdict never
-                    // converged and only a daemon restart (which reset StartedAt) recovered.
-                    CtFreshnessKey? selected = request.Freshness
-                        ?? target.LatestFreshness
-                        ?? target.StartedAt;
-                    if (selected is not { } freshness)
-                    {
-                        // No poll has landed yet, so no real key exists. The old
-                        // ("unspecified", 0) sentinel enqueued anyway, burning the whole suite to
-                        // store results at a key that can never match the live one - the
-                        // watermark-freshness design removes that sentinel everywhere. Refuse
-                        // honestly instead; the caller retries after the first poll lands.
-                        TryWriteAck(id, "no-live-key", CtDaemonCommandState.Rejected);
-                        continue;
-                    }
-
-                    foreach (ContinuousTestProjectWorkItem item in ContinuousTestProjectInventory.MaterializeProjectWorkItems(
-                                 target.Projects, target.WorkspaceRoot))
-                    {
-                        target.Queue.EnqueueExplicit(new ContinuousTestDaemonChange(
-                            item.Workspace,
-                            freshness.Revision.ToString(CultureInfo.InvariantCulture),
-                            freshness.IndexIdentity,
-                            WorkspaceScope: true,
-                            ObservedAt: DateTimeOffset.UtcNow,
-                            Command: item.Project.Command,
-                            Framework: item.Project.Framework));
-                    }
-                }
-            }
-
-            TryWriteAck(id, "run");
         }
 
         _acknowledged.IntersectWith(seen);
+        return false;
+    }
+
+    /// <summary>
+    /// Handles ONE readable command request. Returns <c>true</c> when a live stop request asked
+    /// this daemon to exit. Any throw is the caller's signal to reject the request and move on.
+    /// </summary>
+    private bool ProcessCommand(CtDaemonLease? lease, string id, CtDaemonCommandRequest request)
+    {
+        string? targetRoot = string.IsNullOrWhiteSpace(request.WorkspaceRoot)
+            ? null
+            : RootKey(request.WorkspaceRoot);
+        bool targetsPrimary = targetRoot is null || PathsEqual(targetRoot, _workspaceRoot);
+        if (request.Kind == CtDaemonCommandKind.Stop)
+        {
+            // A stop request targets the daemon that was alive when it was written. One left
+            // unacknowledged by a dead predecessor must not kill this instance at startup.
+            if (request.RequestedAtUtc < _runStartedAtUtc)
+            {
+                TryWriteAck(id, "stale-stop-ignored");
+                return false;
+            }
+
+            if (!targetsPrimary)
+            {
+                // A worktree stop detaches THAT context only. It never stops the family daemon:
+                // the daemon belongs to the main root, and every other adopted worktree still
+                // depends on it.
+                if (_adopted.TryGetValue(targetRoot!, out ContinuousTestWorkspaceContext? adopted))
+                {
+                    DetachWorktree(targetRoot!, adopted, "detached");
+                    _stopDetached.Add(targetRoot!);
+                    TryWriteAck(id, "detached");
+                }
+                else
+                {
+                    TryWriteAck(id, "not-adopted", CtDaemonCommandState.Rejected);
+                }
+
+                return false;
+            }
+
+            TryWriteAck(id, "stopping");
+            TryWriteStatus(lease, CtDaemonLifecycleState.Stopped, "stop");
+            return true;
+        }
+
+        if (request.Kind == CtDaemonCommandKind.Run)
+        {
+            ContinuousTestWorkspaceContext? target = targetsPrimary
+                ? _primary
+                : ResolveRoutedRunTarget(targetRoot!);
+            if (target is null)
+            {
+                TryWriteAck(id, "not-adopted", CtDaemonCommandState.Rejected);
+                return false;
+            }
+
+            if (target.Queue is not null && target.Projects.Count > 0)
+            {
+                // Select at the LIVE cursor the poller last observed, never at the daemon's
+                // START key. Falling back to StartedAt made every explicit run after an index
+                // advance select at the birth revision forever (defect D2): the store rightly
+                // records stale-revision results as history-only, so the verdict never
+                // converged and only a daemon restart (which reset StartedAt) recovered.
+                CtFreshnessKey? selected = request.Freshness
+                    ?? target.LatestFreshness
+                    ?? target.StartedAt;
+                if (selected is not { } freshness)
+                {
+                    // No poll has landed yet, so no real key exists. The old
+                    // ("unspecified", 0) sentinel enqueued anyway, burning the whole suite to
+                    // store results at a key that can never match the live one - the
+                    // watermark-freshness design removes that sentinel everywhere. Refuse
+                    // honestly instead; the caller retries after the first poll lands.
+                    TryWriteAck(id, "no-live-key", CtDaemonCommandState.Rejected);
+                    return false;
+                }
+
+                foreach (ContinuousTestProjectWorkItem item in ContinuousTestProjectInventory.MaterializeProjectWorkItems(
+                             target.Projects, target.WorkspaceRoot))
+                {
+                    target.Queue.EnqueueExplicit(new ContinuousTestDaemonChange(
+                        item.Workspace,
+                        freshness.Revision.ToString(CultureInfo.InvariantCulture),
+                        freshness.IndexIdentity,
+                        WorkspaceScope: true,
+                        ObservedAt: DateTimeOffset.UtcNow,
+                        Command: item.Project.Command,
+                        Framework: item.Project.Framework));
+                }
+            }
+        }
+
+        TryWriteAck(id, "run");
         return false;
     }
 
@@ -837,14 +873,43 @@ public sealed class ContinuousTestDaemonHost
             return;
         _lastWorktreeScanAt = now;
 
-        // Detach pass: a root that disappeared or stopped qualifying releases its context. A
-        // MISSING root is a detach, never an error loop - the registry row may simply be stale.
+        // Registration is scan state: the detach pass and the attach pass read the SAME successful
+        // registry snapshot. A FAILED discovery ends the pass before either - a transient registry
+        // error must never read as "nothing registered" and detach the whole family.
+        HashSet<string>? registered = TryReadRegisteredRoots();
+        if (registered is null)
+            return;
+
+        // Detach pass: a root that disappeared, stopped qualifying, or left the registry
+        // (workspace remove) releases its context. A MISSING root is a detach, never an error
+        // loop - the registry row may simply be stale.
         foreach ((string key, ContinuousTestWorkspaceContext context) in _adopted.ToArray())
         {
-            if (!QualifiesForAdoption(context.WorkspaceRoot))
+            if (!registered.Contains(key) || !QualifiesForAdoption(context.WorkspaceRoot))
                 DetachWorktree(key, context, "detached");
         }
 
+        foreach (string root in registered)
+        {
+            if (PathsEqual(root, _workspaceRoot) || _adopted.ContainsKey(root) || _stopDetached.Contains(root))
+                continue;
+            if (!QualifiesForAdoption(root))
+                continue;
+            if (AttachWorktree(root) is { } context)
+                TryWriteAdoptedStatus(context, CtDaemonLifecycleState.Running, AdoptedReason());
+        }
+    }
+
+    /// <summary>
+    /// The registration clause's one read, shared by the scan and the routed-run attach so the two
+    /// cannot drift. Returns the registered roots normalized to <see cref="RootKey"/> form, or
+    /// null when discovery FAILED - the caller must treat null as "cannot read the registry",
+    /// never as "nothing registered".
+    /// </summary>
+    private HashSet<string>? TryReadRegisteredRoots()
+    {
+        if (_adoption is null)
+            return null;
         IReadOnlyList<string> roots;
         try
         {
@@ -853,21 +918,26 @@ public sealed class ContinuousTestDaemonHost
         catch (Exception exception)
         {
             Diagnostic($"ct worktree discovery error {CtDaemonLog.FailureDetail(exception)}");
-            return;
+            return null;
         }
 
+        var registered = new HashSet<string>(PathKeyComparer);
         foreach (string candidate in roots)
         {
             if (string.IsNullOrWhiteSpace(candidate))
                 continue;
-            string root = Path.GetFullPath(candidate);
-            if (PathsEqual(root, _workspaceRoot) || _adopted.ContainsKey(root) || _stopDetached.Contains(root))
-                continue;
-            if (!QualifiesForAdoption(root))
-                continue;
-            if (AttachWorktree(root) is { } context)
-                TryWriteAdoptedStatus(context, CtDaemonLifecycleState.Running, AdoptedReason());
+            try
+            {
+                registered.Add(RootKey(candidate));
+            }
+            catch (Exception exception) when (exception is ArgumentException or PathTooLongException or NotSupportedException)
+            {
+                // One malformed registry row must not fail the whole pass or kill the daemon.
+                Diagnostic($"ct worktree discovery skipped malformed root {CtDaemonLog.FailureDetail(exception)}");
+            }
         }
+
+        return registered;
     }
 
     /// <summary>
@@ -929,15 +999,25 @@ public sealed class ContinuousTestDaemonHost
     /// <summary>
     /// A routed <c>run</c> may name a worktree the scan has not attached yet - or one an earlier
     /// stop detached. It is the user asking for that worktree explicitly, so it clears the stop
-    /// suppression and attaches on the spot when the root qualifies.
+    /// suppression and attaches on the spot when the root qualifies AND is registered - the
+    /// registry (<c>workspace open</c>) is adoption's authorization gate, and a routed run must
+    /// not attach a directory the registry has never seen. A failed registry read refuses the
+    /// attach: "cannot authorize" is not "not registered".
     /// </summary>
     private ContinuousTestWorkspaceContext? ResolveRoutedRunTarget(string root)
     {
-        _stopDetached.Remove(root);
         if (_adopted.TryGetValue(root, out ContinuousTestWorkspaceContext? adopted))
+        {
+            _stopDetached.Remove(root);
             return adopted;
+        }
+
         if (_adoption is null || !QualifiesForAdoption(root))
             return null;
+        HashSet<string>? registered = TryReadRegisteredRoots();
+        if (registered is null || !registered.Contains(root))
+            return null;
+        _stopDetached.Remove(root);
         if (AttachWorktree(root) is not { } context)
             return null;
         TryWriteAdoptedStatus(context, CtDaemonLifecycleState.Running, AdoptedReason());
@@ -984,6 +1064,14 @@ public sealed class ContinuousTestDaemonHost
         foreach ((string key, ContinuousTestWorkspaceContext context) in _adopted.ToArray())
             DetachWorktree(key, context, "stopped");
     }
+
+    /// <summary>
+    /// The canonical form every root takes before it becomes an <see cref="_adopted"/> key, a
+    /// <see cref="_stopDetached"/> entry, or a registered-set member, so the three always compare
+    /// under the same <see cref="PathKeyComparer"/> semantics as <see cref="PathsEqual"/>.
+    /// </summary>
+    private static string RootKey(string root) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
 
     private static bool PathsEqual(string left, string right) =>
         string.Equals(

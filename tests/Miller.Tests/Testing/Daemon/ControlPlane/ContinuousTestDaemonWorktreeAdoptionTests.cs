@@ -398,6 +398,253 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
     }
 
     /// <summary>
+    /// Review finding F8: adoption's authorization gate is registration (<c>workspace open</c>).
+    /// A routed run naming a directory that LOOKS like a family worktree but was never registered
+    /// must be refused with the existing <c>not-adopted</c> rejection, not attached and executed.
+    /// </summary>
+    [Fact]
+    public async Task A_routed_run_naming_an_unregistered_worktree_is_rejected_and_attaches_nothing()
+    {
+        BuildLinkedWorktree();
+        EnableMain();
+        int created = 0;
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            // The registry has never seen the worktree.
+            DiscoverRegisteredRoots = () => [],
+            CreateContext = root =>
+            {
+                Interlocked.Increment(ref created);
+                return new ContinuousTestWorkspaceContext
+                {
+                    WorkspaceRoot = root,
+                    WorkspaceId = "ws:wt",
+                };
+            },
+            ScanInterval = TimeSpan.Zero,
+        };
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            HostOptions(adoption),
+            cts.Token);
+        try
+        {
+            CtDaemonCommandRequest request = CtDaemonRouting.WriteRoutedRequest(
+                MainRoot,
+                CtDaemonCommandKind.Run,
+                reason: "run",
+                freshness: new CtFreshnessKey("gen-1", 1),
+                targetWorkspaceRoot: WorktreeRoot);
+            CtDaemonCommandAck? ack = await Task.Run(() => CtCommandChannel.WaitForAck(
+                MainRoot,
+                request.CommandId,
+                TimeSpan.FromSeconds(5)));
+
+            Assert.Equal(CtDaemonCommandState.Rejected, ack?.State);
+            Assert.Equal("not-adopted", ack?.Reason);
+            Assert.Equal(0, Volatile.Read(ref created));
+            Assert.False(run.IsCompleted, "a refused routed run ended the daemon loop");
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>
+    /// Review finding F5, first half: <c>workspace remove</c> takes a worktree out of the
+    /// registry, so the next scan must detach it - a directory that still exists must not keep an
+    /// adoption the user revoked.
+    /// </summary>
+    [Fact]
+    public async Task A_worktree_removed_from_the_registry_detaches_on_the_next_scan()
+    {
+        BuildLinkedWorktree();
+        EnableMain();
+        var disposed = new DisposeFlag();
+        bool registered = true;
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            DiscoverRegisteredRoots = () => Volatile.Read(ref registered) ? [WorktreeRoot] : [],
+            CreateContext = root => new ContinuousTestWorkspaceContext
+            {
+                WorkspaceRoot = root,
+                WorkspaceId = "ws:wt",
+                Owned = disposed,
+            },
+            ScanInterval = TimeSpan.Zero,
+        };
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            HostOptions(adoption),
+            cts.Token);
+        try
+        {
+            await WaitForWorktreeStatusAsync(state: CtDaemonLifecycleState.Running);
+
+            Volatile.Write(ref registered, false);
+            await WaitForAsync(() => disposed.Disposed);
+
+            Assert.True(disposed.Disposed, "the unregistered worktree stayed adopted");
+            Assert.False(run.IsCompleted, "an unregistered worktree ended the daemon loop");
+            CtDaemonStatusRecord? record = CtDaemonLease.TryReadStatus(WorktreeRoot);
+            Assert.Equal(CtDaemonLifecycleState.Stopped, record?.State);
+            Assert.Equal("detached", record?.Reason);
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>
+    /// Review finding F5, second half: a discovery FAILURE is "cannot read the registry", never
+    /// "nothing registered". A transient registry error must keep the current adopted set intact
+    /// instead of detaching every worktree.
+    /// </summary>
+    [Fact]
+    public async Task A_discovery_failure_detaches_no_adopted_worktree()
+    {
+        BuildLinkedWorktree();
+        EnableMain();
+        var disposed = new DisposeFlag();
+        bool fail = false;
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            DiscoverRegisteredRoots = () =>
+            {
+                if (Volatile.Read(ref fail))
+                    throw new InvalidOperationException("registry read failed");
+                return [WorktreeRoot];
+            },
+            CreateContext = root => new ContinuousTestWorkspaceContext
+            {
+                WorkspaceRoot = root,
+                WorkspaceId = "ws:wt",
+                Owned = disposed,
+            },
+            ScanInterval = TimeSpan.Zero,
+        };
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            HostOptions(adoption),
+            cts.Token);
+        try
+        {
+            await WaitForWorktreeStatusAsync(state: CtDaemonLifecycleState.Running);
+
+            Volatile.Write(ref fail, true);
+            await WaitPassesAsync(5);
+
+            Assert.False(disposed.Disposed, "a discovery failure detached an adopted worktree");
+            Assert.False(run.IsCompleted, "a discovery failure ended the daemon loop");
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>
+    /// Review finding F9: a routed request whose <c>workspace_root</c> cannot be normalized used
+    /// to escape the loop and kill the daemon - and the unacknowledged file crashed every restart
+    /// too. It must be rejected as <c>invalid-request</c>, the daemon must keep serving the next
+    /// command, and a fresh daemon must start over the leftover file.
+    /// </summary>
+    [Fact]
+    public async Task A_malformed_routed_request_is_rejected_and_the_daemon_survives_and_restarts()
+    {
+        BuildLinkedWorktree();
+        EnableMain();
+        var adoption = new ContinuousTestWorktreeAdoptionOptions
+        {
+            DiscoverRegisteredRoots = () => [WorktreeRoot],
+            CreateContext = _ => null,
+            ScanInterval = TimeSpan.Zero,
+        };
+
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            HostOptions(adoption),
+            cts.Token);
+        try
+        {
+            // An embedded NUL makes Path.GetFullPath throw ArgumentException on every platform.
+            // Written straight to the file: the daemon must survive ANY request file, and the
+            // routing helper's own normalization would refuse to write this one.
+            var bad = new CtDaemonCommandRequest(
+                "badcmd1",
+                CtDaemonCommandKind.Run,
+                DateTimeOffset.UtcNow,
+                "run",
+                Freshness: null,
+                WorkspaceRoot: "bad\0root");
+            CtDaemonJson.WriteAtomic(
+                CtDaemonProtocol.CommandRequestPath(MainRoot, bad.CommandId),
+                bad,
+                CtDaemonJsonContext.Default.CtDaemonCommandRequest);
+            CtDaemonCommandAck? ack = await Task.Run(() => CtCommandChannel.WaitForAck(
+                MainRoot,
+                bad.CommandId,
+                TimeSpan.FromSeconds(5)));
+
+            Assert.Equal(CtDaemonCommandState.Rejected, ack?.State);
+            Assert.Equal("invalid-request", ack?.Reason);
+            Assert.False(run.IsCompleted, "one malformed request killed the daemon");
+
+            // The daemon still serves the NEXT command: a live stop lands normally.
+            CtDaemonCommandRequest stop = CtCommandChannel.WriteRequest(
+                MainRoot,
+                CtDaemonCommandKind.Stop,
+                reason: "stop",
+                freshness: null);
+            ContinuousTestDaemonSnapshot stopped = await run.WaitAsync(
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(CtDaemonLifecycleState.Stopped, stopped.State);
+            Assert.Equal("stopping", CtCommandChannel.TryReadAck(MainRoot, stop.CommandId)?.Reason);
+        }
+        catch
+        {
+            await cts.CancelAsync();
+
+            // Await without rethrowing: pre-fix the daemon task faults, and its exception must
+            // not mask the assertion that brought us here.
+            await Task.WhenAny(run);
+            _ = run.Exception;
+            throw;
+        }
+
+        // A restart re-reads the SAME command directory: the malformed file is still on disk and
+        // must not crash the fresh daemon either.
+        using var restartCts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> rerun = ContinuousTestDaemonHost.RunAsync(
+            MainRoot,
+            HostOptions(adoption),
+            restartCts.Token);
+        try
+        {
+            await WaitPassesAsync(5);
+            Assert.False(rerun.IsCompleted, "the restarted daemon crashed on the leftover malformed request");
+        }
+        finally
+        {
+            await restartCts.CancelAsync();
+            await rerun;
+        }
+    }
+
+    /// <summary>
     /// Defect D2: the explicit-run handler fell back to <c>StartedAt</c>, so every
     /// <c>tests run</c> after an index advance selected at the daemon's BIRTH revision. The store
     /// rightly records stale-revision results as history-only, so the verdict never converged and

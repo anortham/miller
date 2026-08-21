@@ -4,7 +4,6 @@ using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
-using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Testing;
@@ -1031,24 +1030,21 @@ public static class TestsCore
 
     /// <summary>
     /// Registered workspace roots from the machine-global registry, through the NON-CREATING read
-    /// path. Any failure - absent file, foreign schema, a locked database - degrades to an empty
-    /// list: the adoption scan must never repair, create, or crash over the registry.
+    /// path - the scan must never repair or create the registry. An ABSENT registry is an honest
+    /// empty list: nothing was ever registered. A read FAILURE (locked database, foreign schema,
+    /// denied access) THROWS instead of degrading to empty: the daemon host treats a throw as
+    /// "cannot read the registry" and keeps its current adopted set, where an empty list reads as
+    /// "nothing registered" and detaches every adopted worktree.
     /// </summary>
     private static IReadOnlyList<string> ReadRegisteredWorkspaceRoots(string registryDbPath)
     {
-        try
-        {
-            using WorkspaceRegistry? registry = WorkspaceRegistry.TryOpenReadOnly(registryDbPath);
-            return registry is null
-                ? []
-                : registry.List().Select(row => row.CanonicalRoot).ToArray();
-        }
-        catch (Exception ex) when (
-            ex is SqliteException or IOException or UnauthorizedAccessException
-                or InvalidOperationException or InvalidDataException)
-        {
+        using WorkspaceRegistry? registry = WorkspaceRegistry.TryOpenReadOnly(registryDbPath);
+        if (registry is not null)
+            return registry.List().Select(row => row.CanonicalRoot).ToArray();
+        if (!File.Exists(registryDbPath))
             return [];
-        }
+        throw new IOException(
+            $"the workspace registry at {registryDbPath} exists but could not be opened for reading");
     }
 
     /// <summary>
