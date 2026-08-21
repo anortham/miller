@@ -22,6 +22,14 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     private readonly CtRunActivityCell? _runActivity;
     private readonly ContinuousTestCoverageNarrowingMode _coverageNarrowingMode;
     private readonly Dictionary<PendingKey, ContinuousTestDaemonPendingRun> _pending = [];
+
+    /// <summary>
+    /// Foreground pendings whose selection is PURELY workspace-scope-derived. Only these may
+    /// collapse to the whole-suite provider form; an impact-derived selection that happens to
+    /// cover every known case still travels as its explicit id list (contract clause e). A merge
+    /// with any impact-derived enqueue clears the mark.
+    /// </summary>
+    private readonly HashSet<PendingKey> _wholeSuiteEligible = [];
     private readonly Dictionary<RetryKey, int> _retryAttempts = [];
     private readonly Dictionary<string, CtFreshnessKey> _latestByWorkspace = new(StringComparer.Ordinal);
     private readonly Dictionary<PendingKey, CancellationTokenSource> _backfillCancellationByProject = [];
@@ -62,15 +70,22 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             _latestByWorkspace[workspaceId] = freshness;
     }
 
+    /// <summary>
+    /// An explicit run request (<c>tests run</c>, the daemon run command). A workspace-scope
+    /// explicit run executes exactly the CURRENT stale set: cases committed fresh at the request's
+    /// key are neither re-marked stale nor re-run, so a green result survives an explicit run that
+    /// has nothing to prove about it.
+    /// </summary>
     public ContinuousTestDaemonEnqueueResult EnqueueExplicit(ContinuousTestDaemonChange change) =>
-        EnqueueCore(change, requireCompleteDelta: false);
+        EnqueueCore(change, requireCompleteDelta: false, explicitRun: true);
 
     public ContinuousTestDaemonEnqueueResult Enqueue(ContinuousTestDaemonChange change) =>
-        EnqueueCore(change, requireCompleteDelta: true);
+        EnqueueCore(change, requireCompleteDelta: true, explicitRun: false);
 
     private ContinuousTestDaemonEnqueueResult EnqueueCore(
         ContinuousTestDaemonChange change,
-        bool requireCompleteDelta)
+        bool requireCompleteDelta,
+        bool explicitRun)
     {
         ArgumentNullException.ThrowIfNull(change);
         ValidateBuildOutputRoot(change.Workspace);
@@ -98,11 +113,41 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             WorkspaceScope: change.WorkspaceScope,
             ProjectPath: change.Workspace.ProjectPath));
         IReadOnlyList<string> foregroundTestCaseIds = SelectForegroundTestCaseIds(change, selection);
+        if (explicitRun && change.WorkspaceScope)
+        {
+            // The explicit run executes the current stale set, so trim committed-fresh cases
+            // BEFORE the stale marking below would overwrite their rows.
+            selection = selection with
+            {
+                SelectedTestCaseIds = DropCommittedFreshAt(
+                    change.Workspace.WorkspaceId,
+                    change.Workspace.ProjectPath,
+                    selection.SelectedTestCaseIds,
+                    change.Freshness),
+                StaleTestCaseIds = DropCommittedFreshAt(
+                    change.Workspace.WorkspaceId,
+                    change.Workspace.ProjectPath,
+                    selection.StaleTestCaseIds,
+                    change.Freshness),
+            };
+            foregroundTestCaseIds = selection.SelectedTestCaseIds;
+        }
+
         _store.MarkContinuousTestsStale(
             change.Workspace.WorkspaceId,
             selection.StaleTestCaseIds,
             change.Freshness);
         NotifyCtStateChanged(change.Workspace.WorkspaceId);
+
+        if (!selection.MayExecute)
+        {
+            // Fail closed: the staleness above is recorded, but an unknown or known-empty
+            // selection never enqueues provider execution — no foreground run, no backfill,
+            // and NEVER a full-suite fallback.
+            Log($"ct enqueue no-run workspace={change.Workspace.WorkspaceId} revision={change.CurrentRevision} "
+                + $"outcome={selection.Outcome} stale={selection.StaleTestCaseIds.Count}");
+            return new ContinuousTestDaemonEnqueueResult(selection, rejected);
+        }
 
         PendingKey key = PendingKey.FromWorkspace(change.Workspace, ContinuousTestRunLane.Foreground);
         ContinuousTestDaemonPendingRun pending;
@@ -115,14 +160,20 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 inFlightBackfill.Cancel();
 
             IReadOnlyList<string> selectedIds = foregroundTestCaseIds;
-            if (_pending.TryGetValue(key, out ContinuousTestDaemonPendingRun? existing))
+            bool merged = _pending.TryGetValue(key, out ContinuousTestDaemonPendingRun? existing);
+            if (merged)
             {
-                selectedIds = existing.TestCaseIds
+                selectedIds = existing!.TestCaseIds
                     .Concat(foregroundTestCaseIds)
                     .Distinct(StringComparer.Ordinal)
                     .Order(StringComparer.Ordinal)
                     .ToArray();
             }
+
+            if (change.WorkspaceScope && (!merged || _wholeSuiteEligible.Contains(key)))
+                _wholeSuiteEligible.Add(key);
+            else
+                _wholeSuiteEligible.Remove(key);
 
             pending = new ContinuousTestDaemonPendingRun(
                 Workspace: change.Workspace,
@@ -168,9 +219,9 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         DateTimeOffset now,
         CancellationToken cancellationToken = default)
     {
-        (PendingKey Key, ContinuousTestDaemonPendingRun Pending)[] ready = SnapshotReady(now);
+        (PendingKey Key, ContinuousTestDaemonPendingRun Pending, bool WholeSuiteEligible)[] ready = SnapshotReady(now);
         var results = new List<ContinuousTestDaemonDrainResult>(ready.Length);
-        foreach ((PendingKey key, ContinuousTestDaemonPendingRun pending) in ready)
+        foreach ((PendingKey key, ContinuousTestDaemonPendingRun pending, bool wholeSuiteEligible) in ready)
         {
             CancellationTokenSource? backfillCancellation = null;
             CancellationToken drainToken = cancellationToken;
@@ -236,7 +287,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                             CurrentRevisionResolver: () => LatestRevisionStringFor(key, readyPending.CurrentRevision),
                             RunId: runId,
                             CoverageMode: readyPending.CoverageMode,
-                            WholeSuite: CoversEveryKnownCase(readyPending)),
+                            WholeSuite: wholeSuiteEligible && CoversEveryKnownCase(readyPending)),
                         drainToken).ConfigureAwait(false);
 
                     ClearRunFailureRetry(key);
@@ -297,7 +348,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         return results;
     }
 
-    private (PendingKey Key, ContinuousTestDaemonPendingRun Pending)[] SnapshotReady(DateTimeOffset now)
+    private (PendingKey Key, ContinuousTestDaemonPendingRun Pending, bool WholeSuiteEligible)[] SnapshotReady(
+        DateTimeOffset now)
     {
         lock (_lock)
         {
@@ -307,10 +359,14 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 .ThenBy(row => row.Value.ImpactPriority)
                 .ThenBy(row => row.Key.WorkspaceId, StringComparer.Ordinal)
                 .ThenBy(row => row.Key.ProjectPath, StringComparer.Ordinal)
+                .ToArray()
                 .Select(row =>
                 {
                     _pending.Remove(row.Key);
-                    return (row.Key, row.Value);
+
+                    // Eligibility leaves the queue with its pending. A retry or remainder
+                    // requeued later is a bounded id-list run, never a whole suite.
+                    return (row.Key, row.Value, _wholeSuiteEligible.Remove(row.Key));
                 })
                 .ToArray();
         }
@@ -328,6 +384,11 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     /// True when this run's selection covers EVERY test case the store knows for the project, which is what
     /// lets the coordinator hand the provider an empty selection and run the whole assembly once instead of
     /// chunking ~6,000 <c>-method</c> pairs across ~50 processes.
+    ///
+    /// <para>Coverage alone is NOT permission. The drain also requires the pending to be
+    /// workspace-scope-derived (<see cref="_wholeSuiteEligible"/>): an impact-derived selection
+    /// that happens to equal the inventory still travels as its explicit id list — contract
+    /// clause (e) of the impacted/stale contract.</para>
     ///
     /// <para>The comparison is on the SET, not on counts. Equal counts can mean two different sets when the
     /// inventory has drifted mid-run, and "run everything" is the wrong instruction for a selection that is

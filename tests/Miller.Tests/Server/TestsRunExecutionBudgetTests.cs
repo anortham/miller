@@ -233,6 +233,37 @@ public sealed class TestsRunExecutionBudgetTests : IDisposable
         Assert.False(result.Paused);
     }
 
+    /// <summary>
+    /// Explicit <c>tests run</c> executes exactly the CURRENT stale set. After a full green run,
+    /// one case is marked stale; the second run must hand the provider only that case — as an id
+    /// list, never as a whole-suite run — and must not disturb the committed-fresh sibling.
+    /// The first run, whose stale set IS the whole inventory, legitimately travels whole-suite.
+    /// </summary>
+    [Fact]
+    public void Foreground_run_executes_only_the_stale_set()
+    {
+        SeedEnabledProject();
+        var ledger = new FactSourceLedger("gen-live", 58);
+        var provider = new TwoCaseProvider();
+        CtExecutionBudget budget = CtExecutionBudget.ForMillerHome(_home);
+
+        TestsRunResult first = TestsCore.Run(DrainRequest(budget, ledger, provider));
+        Assert.Equal(ContinuousTestVerdict.Green, first.Verdict);
+        Assert.Empty(provider.RunRequests[^1].TestCaseIds);
+
+        string workspaceId = WorkspaceId.FromCanonicalRoot(_root);
+        using (var store = new ContinuousTestStore(CtSchema.DbPathFor(_root)))
+        {
+            store.MarkContinuousTestsStale(
+                workspaceId, [TwoCaseProvider.CaseB], new CtFreshnessKey("gen-live", 58));
+        }
+
+        TestsRunResult second = TestsCore.Run(DrainRequest(budget, ledger, provider));
+
+        Assert.Equal([TwoCaseProvider.CaseB], provider.RunRequests[^1].TestCaseIds);
+        Assert.Equal(ContinuousTestVerdict.Green, second.Verdict);
+    }
+
     private static TestsRunOutcome Stub() =>
         new(CtRunExecution.ForegroundOneShot, ContinuousTestVerdict.Unknown, "stub", Waited: false);
 
@@ -365,6 +396,60 @@ public sealed class TestsRunExecutionBudgetTests : IDisposable
 
             public void Dispose() => _ledger.Close();
         }
+    }
+
+    /// <summary>
+    /// Discovers two tests and reports whatever ran as passed. An empty selection is the
+    /// whole-suite form, so the double reports both cases for it — a real provider parses its
+    /// results out of the run artifact rather than echoing the selection.
+    /// </summary>
+    private sealed class TwoCaseProvider : IContinuousTestProvider
+    {
+        internal const string CaseA = "ct-case:alpha";
+        internal const string CaseB = "ct-case:beta";
+
+        public List<ContinuousTestProviderRunRequest> RunRequests { get; } = [];
+
+        public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
+            ContinuousTestWorkspace workspace,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ProviderTestCase>>(
+            [
+                Case(CaseA, "Alpha"),
+                Case(CaseB, "Beta"),
+            ]);
+
+        public Task<ProviderRunResult> RunAsync(
+            ContinuousTestProviderRunRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            RunRequests.Add(request);
+            IReadOnlyList<string> reported = request.TestCaseIds.Count > 0
+                ? request.TestCaseIds
+                : [CaseA, CaseB];
+            ProviderCaseResult[] results = reported
+                .Select(id => new ProviderCaseResult(
+                    Id: "ct-result:" + id,
+                    TestCaseId: id,
+                    Status: "passed",
+                    ResultRevision: request.SelectedRevision,
+                    IndexIdentity: request.IndexIdentity))
+                .ToArray();
+            return Task.FromResult(new ProviderRunResult(
+                RunId: request.RunId ?? "ct-run:two-case",
+                Status: "passed",
+                EndedAt: DateTimeOffset.UtcNow,
+                CaseResults: results));
+        }
+
+        private static ProviderTestCase Case(string id, string name) =>
+            new(
+                Id: id,
+                DisplayName: name,
+                FullyQualifiedName: "Sample.Tests." + name,
+                Selector: "Sample.Tests." + name,
+                Framework: "xunit",
+                SourcePath: "tests/Sample.Tests/SampleTests.cs");
     }
 
     /// <summary>

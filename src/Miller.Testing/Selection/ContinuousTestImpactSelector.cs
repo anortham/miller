@@ -92,23 +92,21 @@ public sealed class ContinuousTestImpactSelector
             .OrderBy(row => row.Selector, StringComparer.Ordinal)
             .ThenBy(row => row.Id, StringComparer.Ordinal)
             .ToArray();
-        List<ContinuousTestSelectionEvidence> workspaceScopeEvidence =
-            request.WorkspaceScope ? WorkspaceScopeEvidence(testCases) : [];
-        string[] staleIds = request.WorkspaceScope
-            ? workspaceScopeEvidence.Select(row => row.TestCaseId).ToArray()
-            : HasSelectionInput(request)
-                ? testCases.OrderBy(row => row.Id, StringComparer.Ordinal).Select(row => row.Id).ToArray()
-                : [];
         if (request.WorkspaceScope)
         {
+            List<ContinuousTestSelectionEvidence> workspaceScopeEvidence = WorkspaceScopeEvidence(testCases);
+            string[] allIds = workspaceScopeEvidence.Select(row => row.TestCaseId).ToArray();
             return new ContinuousTestSelectionResult(
-                workspaceScopeEvidence.Select(row => row.TestCaseId).ToArray(),
-                staleIds,
-                workspaceScopeEvidence);
+                allIds,
+                allIds,
+                workspaceScopeEvidence,
+                ContinuousTestSelectionOutcome.WorkspaceScope);
         }
 
-        if (testCases.Length == 0 || !HasSelectionInput(request))
-            return new ContinuousTestSelectionResult([], staleIds, []);
+        if (!HasSelectionInput(request))
+            return new ContinuousTestSelectionResult([], [], [], ContinuousTestSelectionOutcome.KnownEmpty);
+        if (testCases.Length == 0)
+            return new ContinuousTestSelectionResult([], [], [], ContinuousTestSelectionOutcome.Unknown);
 
         Dictionary<string, TestCaseFact> testCaseBySymbolId = testCases
             .Where(row => !string.IsNullOrEmpty(row.SymbolId))
@@ -142,25 +140,147 @@ public sealed class ContinuousTestImpactSelector
         var evidence = new List<ContinuousTestSelectionEvidence>();
         AddChangedTestFileEvidence(request, testCases, changedFileByPath, evidence);
         AddProjectScopeEvidence(request, testCases, evidence);
-        AddImpactedTestEvidence(request, casesBySourcePath, testCases, evidence);
+        bool unmappableHint = AddImpactedTestEvidence(request, casesBySourcePath, testCases, evidence);
         AddImpactedTestSymbolEvidence(impactedSymbols, testCaseBySymbolId, evidence);
-        AddCoverageEvidence(request, impactedSymbols, changedFiles, testCaseById, evidence);
-        AddGraphReferenceEvidence(impactedSymbolIds, symbolById, testCaseBySymbolId, evidence);
-        AddIdentifierReferenceEvidence(impactedSymbolIds, symbolById, testCaseBySymbolId, evidence);
+        bool unmappableEvidence = AddCoverageEvidence(request, impactedSymbols, changedFiles, testCaseById, evidence);
+        CtImpactResult? graphImpact = impactedSymbolIds.Length == 0 ? null : _facts.Impact(impactedSymbolIds);
+        unmappableEvidence |= AddGraphReferenceEvidence(graphImpact, impactedSymbolIds, symbolById, testCaseBySymbolId, evidence);
+        unmappableEvidence |= AddIdentifierReferenceEvidence(impactedSymbolIds, symbolById, testCaseBySymbolId, evidence);
         AddPathStemEvidence(request, changedFiles, testCases, evidence);
 
         List<ContinuousTestSelectionEvidence> ranked = RankEvidence(evidence);
-        if (ranked.Count == 0)
+
+        // Fail-closed gate. A truncated impact read means an incomplete blast radius; unmappable
+        // evidence means the read named an impacted test this project knows but cannot run; an
+        // unaccounted changed path means the index cannot say what the change reaches. A COMPLETE
+        // set of mapped impact hints accounts for the whole delta — the hints came from the same
+        // impact computation over the same changed files.
+        bool truncated = graphImpact is { } impactRead
+            && (impactRead.TruncatedByDepth || impactRead.TruncatedByLimit);
+        bool hintsAccountForDelta = request.ImpactedTests.Count > 0 && !unmappableHint;
+        bool unknown = truncated
+            || unmappableHint
+            || unmappableEvidence
+            || (!hintsAccountForDelta
+                && HasUnaccountedChangedPath(request, changedFileSymbols, changedFiles, testCases));
+        if (unknown)
         {
-            ranked = IsUnmatchedRazorScopedAssetChange(request)
-                ? []
-                : WorkspaceScopeEvidence(testCases);
+            string[] allIds = testCases
+                .Select(row => row.Id)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            return new ContinuousTestSelectionResult([], allIds, ranked, ContinuousTestSelectionOutcome.Unknown);
         }
 
-        return new ContinuousTestSelectionResult(
-            ranked.Select(row => row.TestCaseId).ToArray(),
-            staleIds,
-            ranked);
+        // The stale set is the impacted set plus the already-owed backlog (rows the store marked
+        // stale, and cases with no result at all) — never every case in scope. Key-drifted green
+        // rows are deliberately NOT re-staled here: keeping or staling them is the watermark's
+        // call, computed as the complement of THIS impacted set.
+        string[] alreadyOwed = AlreadyOwedTestCaseIds(request.WorkspaceId, testCases);
+        if (ranked.Count == 0)
+            return new ContinuousTestSelectionResult([], alreadyOwed, [], ContinuousTestSelectionOutcome.KnownEmpty);
+
+        string[] selected = ranked.Select(row => row.TestCaseId).ToArray();
+        string[] stale = selected
+            .Concat(alreadyOwed)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        return new ContinuousTestSelectionResult(selected, stale, ranked, ContinuousTestSelectionOutcome.Impacted);
+    }
+
+    /// <summary>
+    /// The already-owed backlog: cases the store marked stale and cases with no committed result
+    /// at all. A green or red row at an older key is NOT owed here — carrying or staling it is the
+    /// watermark's decision, not the selector's.
+    /// </summary>
+    private string[] AlreadyOwedTestCaseIds(string workspaceId, IReadOnlyList<TestCaseFact> testCases)
+    {
+        Dictionary<string, ContinuousTestStatus> statuses = _store.ListContinuousTestStatuses(workspaceId)
+            .GroupBy(row => row.TestCaseId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        return testCases
+            .Where(row => !statuses.TryGetValue(row.Id, out ContinuousTestStatus? status)
+                || status.State is ContinuousTestState.Stale or ContinuousTestState.Unknown)
+            .Select(row => row.Id)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// True when some changed path is one the selection cannot account for: not resolved to any
+    /// indexed symbol, not a project/config file, not a changed test file with known cases, not
+    /// stem-matched to a test, and not a harmless docs/asset kind. Such a path has UNKNOWN
+    /// reachability and the selection fails closed.
+    /// </summary>
+    private static bool HasUnaccountedChangedPath(
+        ContinuousTestImpactSelectionRequest request,
+        IReadOnlyList<CtSymbolFact> changedFileSymbols,
+        IReadOnlyList<FileFact> changedFiles,
+        IReadOnlyList<TestCaseFact> testCases)
+    {
+        HashSet<string> resolvedPaths = changedFileSymbols
+            .Select(row => NormalizePath(row.FilePath))
+            .ToHashSet(PathComparer);
+        Dictionary<string, FileFact> fileByPath =
+            changedFiles.ToDictionary(row => NormalizePath(row.Path), PathComparer);
+        HashSet<string> caseFilePaths = testCases
+            .Where(row => !string.IsNullOrEmpty(row.FilePath))
+            .Select(row => NormalizePath(row.FilePath!))
+            .ToHashSet(PathComparer);
+
+        foreach (string raw in request.ChangedPaths)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                continue;
+
+            string path = NormalizePath(raw);
+            if (resolvedPaths.Contains(path))
+                continue;
+            if (IsProjectOrConfigPath(path))
+                continue;
+            if (IsHarmlessChangedPath(path))
+                continue;
+            if (IsTestPath(path) && caseFilePaths.Contains(path))
+                continue;
+            ChangedPathStem? stem = ChangedPathStem.FromPath(path, fileByPath);
+            if (stem is not null
+                && testCases.Any(testCase => HasPathStemCandidate(testCase) && MatchesChangedStem(testCase, stem)))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static readonly HashSet<string> HarmlessChangedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".adoc",
+        ".bmp",
+        ".gif",
+        ".ico",
+        ".jpeg",
+        ".jpg",
+        ".markdown",
+        ".md",
+        ".png",
+        ".rst",
+        ".svg",
+        ".txt",
+        ".webp",
+        ".woff",
+        ".woff2",
+    };
+
+    /// <summary>Docs and image assets cannot reach a test; a change touching only these kinds is
+    /// evidence of nothing, not of unknown reachability.</summary>
+    private static bool IsHarmlessChangedPath(string path)
+    {
+        string extension = Path.GetExtension(path);
+        return !string.IsNullOrEmpty(extension) && HarmlessChangedExtensions.Contains(extension);
     }
 
     private static bool HasSelectionInput(ContinuousTestImpactSelectionRequest request) =>
@@ -349,15 +469,23 @@ public sealed class ContinuousTestImpactSelector
         }
     }
 
-    private static void AddImpactedTestEvidence(
+    /// <summary>
+    /// Adds one <c>impacted_test</c> evidence row per mapped hint. Returns true when some hint is
+    /// LOCALLY UNMAPPABLE: it produced no evidence, yet a case in this project's scope shares its
+    /// name — the impact read says a test this project knows is reachable but the selection cannot
+    /// name it (an ambiguous fileless case, a drifted mapping). That is unknown reachability. A
+    /// hint whose name matches nothing here belongs to another project and is simply ignored.
+    /// </summary>
+    private static bool AddImpactedTestEvidence(
         ContinuousTestImpactSelectionRequest request,
         IReadOnlyDictionary<string, TestCaseFact[]> casesBySourcePath,
         IReadOnlyList<TestCaseFact> allTestCases,
         List<ContinuousTestSelectionEvidence> evidence)
     {
         if (request.ImpactedTests.Count == 0)
-            return;
+            return false;
 
+        bool unmappable = false;
         foreach (ContinuousTestImpactedTest impactedTest in request.ImpactedTests)
         {
             if (string.IsNullOrEmpty(impactedTest.Path))
@@ -367,11 +495,13 @@ public sealed class ContinuousTestImpactSelector
             if (!casesBySourcePath.TryGetValue(normalizedPath, out TestCaseFact[]? casesInFile))
                 casesInFile = ResolveImpactedTestsWhenSourcePathDiffers(normalizedPath, impactedTest, allTestCases);
 
+            bool mapped = false;
             foreach (TestCaseFact testCase in casesInFile)
             {
                 if (!TestNameMatches(impactedTest.Name, testCase))
                     continue;
 
+                mapped = true;
                 evidence.Add(new ContinuousTestSelectionEvidence(
                     TestCaseId: testCase.Id,
                     Selector: testCase.Selector,
@@ -386,7 +516,12 @@ public sealed class ContinuousTestImpactSelector
                     EvidenceStatus: impactedTest.EvidenceStatus,
                     EvidenceReason: impactedTest.EvidenceReason));
             }
+
+            if (!mapped && allTestCases.Any(testCase => TestNameMatches(impactedTest.Name, testCase)))
+                unmappable = true;
         }
+
+        return unmappable;
     }
 
     private static TestCaseFact[] ResolveImpactedTestsWhenSourcePathDiffers(
@@ -436,15 +571,6 @@ public sealed class ContinuousTestImpactSelector
         && string.IsNullOrEmpty(testCase.FileId)
         && string.IsNullOrEmpty(testCase.SourcePath);
 
-    private static bool IsUnmatchedRazorScopedAssetChange(ContinuousTestImpactSelectionRequest request) =>
-        request.ImpactedTests.Count == 0
-        && request.ChangedPaths.Count > 0
-        && request.ChangedPaths.All(IsRazorScopedAssetPath);
-
-    private static bool IsRazorScopedAssetPath(string path) =>
-        path.EndsWith(".razor.css", StringComparison.OrdinalIgnoreCase)
-        || path.EndsWith(".razor.js", StringComparison.OrdinalIgnoreCase);
-
     private static bool ContainsOrdinal(string? value, string fragment) =>
         !string.IsNullOrEmpty(value)
         && value.Contains(fragment, StringComparison.Ordinal);
@@ -493,7 +619,13 @@ public sealed class ContinuousTestImpactSelector
         return string.Equals(NormalizePath(left), NormalizePath(right), PathComparison);
     }
 
-    private void AddCoverageEvidence(
+    /// <summary>
+    /// Adds <c>coverage</c> evidence. Returns true when a matching span cannot be attributed to a
+    /// runnable case in this project: an aggregate span with no test-case id, or a span whose case
+    /// exists here but has no test backing file. Both mean "something covers this change and we
+    /// cannot run it", which is unknown reachability.
+    /// </summary>
+    private bool AddCoverageEvidence(
         ContinuousTestImpactSelectionRequest request,
         IReadOnlyList<SymbolFact> impactedSymbols,
         IReadOnlyList<FileFact> changedFiles,
@@ -501,7 +633,7 @@ public sealed class ContinuousTestImpactSelector
         List<ContinuousTestSelectionEvidence> evidence)
     {
         if (_coverage is null)
-            return;
+            return false;
 
         string[] symbolIds = impactedSymbols
             .Select(row => row.Id)
@@ -516,12 +648,20 @@ public sealed class ContinuousTestImpactSelector
             .Distinct(PathComparer)
             .ToArray();
 
+        bool unmappable = false;
         foreach (CtCoverageSpanFact span in _coverage.SpansCovering(request.WorkspaceId, symbolIds, filePaths))
         {
-            if (string.IsNullOrEmpty(span.TestCaseId)
-                || !testCaseById.TryGetValue(span.TestCaseId, out TestCaseFact? testCase)
-                || !HasTestBackingFile(testCase))
+            if (string.IsNullOrEmpty(span.TestCaseId))
             {
+                unmappable = true;
+                continue;
+            }
+
+            if (!testCaseById.TryGetValue(span.TestCaseId, out TestCaseFact? testCase))
+                continue;
+            if (!HasTestBackingFile(testCase))
+            {
+                unmappable = true;
                 continue;
             }
 
@@ -533,23 +673,35 @@ public sealed class ContinuousTestImpactSelector
                 Explanation: $"coverage artifact covers {span.Path}:{span.StartLine.ToString(CultureInfo.InvariantCulture)}",
                 SourceFactIds: [span.SpanId]));
         }
+
+        return unmappable;
     }
 
-    private void AddGraphReferenceEvidence(
+    /// <summary>
+    /// Adds <c>explicit_linkage</c>/<c>graph_reference</c> evidence from an impact read the caller
+    /// already performed (the caller also owns that read's truncation flags). Returns true when a
+    /// reachable test maps to a case this project knows but the case has no test backing file —
+    /// reachable yet unrunnable is unknown reachability. A test symbol not in this project's
+    /// inventory belongs to another project and is ignored.
+    /// </summary>
+    private static bool AddGraphReferenceEvidence(
+        CtImpactResult? impact,
         IReadOnlyList<string> impactedSymbolIds,
         IReadOnlyDictionary<string, SymbolFact> symbolById,
         IReadOnlyDictionary<string, TestCaseFact> testCaseBySymbolId,
         List<ContinuousTestSelectionEvidence> evidence)
     {
-        if (impactedSymbolIds.Count == 0)
-            return;
+        if (impact is null)
+            return false;
 
-        CtImpactResult impact = _facts.Impact(impactedSymbolIds);
+        bool unmappable = false;
         foreach (CtImpactedSymbol test in impact.Tests)
         {
-            if (!testCaseBySymbolId.TryGetValue(test.SymbolId, out TestCaseFact? testCase)
-                || !HasTestBackingFile(testCase))
+            if (!testCaseBySymbolId.TryGetValue(test.SymbolId, out TestCaseFact? testCase))
+                continue;
+            if (!HasTestBackingFile(testCase))
             {
+                unmappable = true;
                 continue;
             }
 
@@ -565,23 +717,36 @@ public sealed class ContinuousTestImpactSelector
                     : $"test symbol references changed symbol {ChangedSymbolName(impactedSymbolIds, symbolById)}",
                 SourceFactIds: [test.SymbolId]));
         }
+
+        return unmappable;
     }
 
-    private void AddIdentifierReferenceEvidence(
+    /// <summary>
+    /// Adds <c>identifier_reference</c> evidence. Returns true when an identifier reference maps
+    /// to a case this project knows but the case has no test backing file (reachable yet
+    /// unrunnable — unknown reachability).
+    /// </summary>
+    private bool AddIdentifierReferenceEvidence(
         IReadOnlyList<string> impactedSymbolIds,
         IReadOnlyDictionary<string, SymbolFact> symbolById,
         IReadOnlyDictionary<string, TestCaseFact> testCaseBySymbolId,
         List<ContinuousTestSelectionEvidence> evidence)
     {
         if (impactedSymbolIds.Count == 0)
-            return;
+            return false;
 
+        bool unmappable = false;
         foreach (CtReferenceFact reference in _facts.IdentifierEvidenceTo(impactedSymbolIds))
         {
             if (string.IsNullOrEmpty(reference.SourceSymbolId)
-                || !testCaseBySymbolId.TryGetValue(reference.SourceSymbolId, out TestCaseFact? testCase)
-                || !HasTestBackingFile(testCase))
+                || !testCaseBySymbolId.TryGetValue(reference.SourceSymbolId, out TestCaseFact? testCase))
             {
+                continue;
+            }
+
+            if (!HasTestBackingFile(testCase))
+            {
+                unmappable = true;
                 continue;
             }
 
@@ -602,6 +767,8 @@ public sealed class ContinuousTestImpactSelector
                 Explanation: $"test identifier resolves to changed symbol {targetName}",
                 SourceFactIds: [reference.SourceSymbolId]));
         }
+
+        return unmappable;
     }
 
     private static bool IsExplicitLinkageEdge(string? edgeKind) =>

@@ -1,5 +1,6 @@
 using Miller.Testing;
 using Miller.Tests.Testing.Daemon.Engine;
+using Miller.Tests.Testing.Selection;
 using Xunit;
 
 namespace Miller.Tests.Testing.Analysis;
@@ -30,6 +31,7 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
     {
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
+        try { Directory.Delete(_root + "-build", recursive: true); } catch (IOException) { }
     }
 
     [Fact]
@@ -93,12 +95,13 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
     }
 
     /// <summary>
-    /// The tests above prove the coordinator HONOURS the flag. This one proves the queue SETS it, which is the
-    /// half that is easy to leave unwired: a flag nothing ever sets compiles, passes every test written about
-    /// it, and changes nothing in production.
+    /// Contract clause (e): an IMPACT-DERIVED selection that happens to cover every known case
+    /// still travels as its explicit id list. Only a workspace-scope request (a real generation
+    /// change, an explicit run) may collapse to the whole-suite form — an impacted set that merely
+    /// equals the inventory is a coincidence, not an instruction to run the world.
     /// </summary>
     [Fact]
-    public async Task The_queue_marks_a_run_that_covers_every_known_case_as_whole_suite()
+    public async Task An_impact_derived_selection_covering_every_known_case_still_runs_as_an_id_list()
     {
         ContinuousTestWorkspace workspace = EngineTestSupport.Workspace(_root);
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
@@ -114,7 +117,76 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
         queue.Enqueue(EngineTestSupport.Change(workspace, debounce: TimeSpan.Zero));
         await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
 
+        Assert.Equal(["test:app"], Assert.Single(provider.Requests).TestCaseIds);
+    }
+
+    /// <summary>
+    /// The whole-suite fast path survives where it is legitimate: an explicit workspace-scope run
+    /// whose stale set really is the whole inventory. The queue SETS the flag here; the tests above
+    /// prove the coordinator honours it.
+    /// </summary>
+    [Fact]
+    public async Task An_explicit_workspace_scope_run_with_everything_stale_is_whole_suite()
+    {
+        ContinuousTestWorkspace workspace = Workspace();
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCases(store, workspace, "test:a", "test:b", "test:c");
+        var provider = new RecordingProvider
+        {
+            DiscoverCases = ProviderCases("test:a", "test:b", "test:c"),
+        };
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            SelectorFor(store),
+            new ContinuousTestCoordinator(provider, store, runIdFactory: static () => "run:1"));
+
+        queue.EnqueueExplicit(new ContinuousTestDaemonChange(
+            workspace,
+            "2",
+            Identity,
+            WorkspaceScope: true,
+            ObservedAt: DateTimeOffset.UtcNow.AddSeconds(-1)));
+        await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+
         Assert.Empty(Assert.Single(provider.Requests).TestCaseIds);
+    }
+
+    /// <summary>
+    /// Explicit run contract: the run executes exactly the CURRENT stale set. A case committed
+    /// fresh at the live key is neither re-marked stale nor re-run, and because the stale set is a
+    /// strict subset of the inventory the run travels as an id list, never as a whole suite.
+    /// </summary>
+    [Fact]
+    public async Task An_explicit_run_executes_only_the_stale_set()
+    {
+        ContinuousTestWorkspace workspace = Workspace();
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCases(store, workspace, "test:fresh", "test:stale");
+        CommitGreen(store, "test:fresh", Identity, 2);
+        var provider = new RecordingProvider
+        {
+            DiscoverCases = ProviderCases("test:fresh", "test:stale"),
+        };
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            SelectorFor(store),
+            new ContinuousTestCoordinator(provider, store, runIdFactory: static () => "run:1"));
+
+        ContinuousTestDaemonEnqueueResult enqueued = queue.EnqueueExplicit(new ContinuousTestDaemonChange(
+            workspace,
+            "2",
+            Identity,
+            WorkspaceScope: true,
+            ObservedAt: DateTimeOffset.UtcNow.AddSeconds(-1)));
+        await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+
+        // The enqueue itself must not destroy the committed-fresh row.
+        Assert.DoesNotContain("test:fresh", enqueued.Selection.StaleTestCaseIds);
+        Assert.Equal(["test:stale"], Assert.Single(provider.Requests).TestCaseIds);
+        ContinuousTestStatus fresh = Assert.Single(
+            store.ListContinuousTestStatuses(WorkspaceId),
+            row => row.TestCaseId == "test:fresh");
+        Assert.Equal(ContinuousTestState.Green, fresh.State);
     }
 
     /// <summary>
@@ -170,11 +242,68 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
         string project = Path.Combine(_root, "src", "App.Tests.csproj");
         Directory.CreateDirectory(Path.GetDirectoryName(project)!);
         File.WriteAllText(project, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+        // The build output root must live OUTSIDE the workspace root; the queue validates it.
         return new ContinuousTestWorkspace(
             WorkspaceId,
             _root,
             project,
-            Path.Combine(_root, "ct-build", "whole-suite"));
+            Path.Combine(_root + "-build", "whole-suite"));
+    }
+
+    private static ContinuousTestImpactSelector SelectorFor(ContinuousTestStore store) =>
+        new(store, new FakeMillerFactSource());
+
+    private static IReadOnlyList<ProviderTestCase> ProviderCases(params string[] ids) =>
+        ids
+            .Select(id => new ProviderTestCase(
+                Id: id,
+                DisplayName: id,
+                FullyQualifiedName: $"App.Tests.{id}",
+                Selector: $"App.Tests.{id}",
+                Framework: "xunit",
+                SourcePath: "tests/AppTests.cs"))
+            .ToArray();
+
+    /// <summary>Commits one green result at <c>(identity, revision)</c> through the real
+    /// run-completion path, so the case is committed-fresh at that key.</summary>
+    private static void CommitGreen(
+        ContinuousTestStore store,
+        string testCaseId,
+        string identity,
+        long revision)
+    {
+        string revisionText = revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string runId = "seed-run:" + testCaseId;
+        store.StartContinuousTestRun(
+            new ContinuousTestRun(
+                Id: runId,
+                WorkspaceId: WorkspaceId,
+                Status: "running",
+                SelectedRevision: revisionText,
+                IndexIdentity: identity,
+                Revision: revision),
+            [testCaseId]);
+        store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
+            WorkspaceId: WorkspaceId,
+            TestRunId: runId,
+            SelectedRevision: revisionText,
+            CurrentRevision: revisionText,
+            IndexIdentity: identity,
+            Revision: revision,
+            Status: "passed",
+            Results:
+            [
+                new ContinuousTestResult(
+                    Id: runId + ":result",
+                    WorkspaceId: WorkspaceId,
+                    TestCaseId: testCaseId,
+                    TestRunId: runId,
+                    Status: "passed",
+                    ResultRevision: revisionText,
+                    IndexIdentity: identity,
+                    Revision: revision),
+            ]));
     }
 
     private static void SeedTestCases(
@@ -203,10 +332,12 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
     {
         public List<ContinuousTestProviderRunRequest> Requests { get; } = [];
 
+        public IReadOnlyList<ProviderTestCase> DiscoverCases { get; init; } = [];
+
         public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
             ContinuousTestWorkspace workspace,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<ProviderTestCase>>([]);
+            Task.FromResult(DiscoverCases);
 
         public Task<ProviderRunResult> RunAsync(
             ContinuousTestProviderRunRequest request,

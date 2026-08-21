@@ -1,6 +1,8 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Testing;
 using Miller.Server.Tools;
 using Miller.Testing;
+using Miller.Tests.Testing.Selection;
 using Xunit;
 
 namespace Miller.Tests.Testing.Daemon.Engine;
@@ -36,6 +38,71 @@ public sealed class ForbiddenEnqueueTests : IDisposable
         Assert.Empty(result.Selection.SelectedTestCaseIds);
         Assert.False(queue.HasReadyWork(DateTimeOffset.UtcNow));
         Assert.Empty(store.ListTestRuns(EngineTestSupport.WorkspaceId));
+    }
+
+    /// <summary>
+    /// Contract clause (c): an UNKNOWN selection (here: a changed path the index cannot account
+    /// for) stales everything previously fresh, and the queue enqueues NOTHING — no foreground
+    /// run, no backfill, and never a whole-suite fallback.
+    /// </summary>
+    [Fact]
+    public void Unknown_selection_stales_everything_and_enqueues_nothing()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        CommitGreen(store, "test:app", EngineTestSupport.Identity, 2);
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(new FakeContinuousTestProvider(), store));
+
+        ContinuousTestDaemonEnqueueResult result = queue.Enqueue(
+            EngineTestSupport.Change(workspace, changedPaths: ["src/Mystery.xyz"]));
+
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Selection.Outcome);
+        Assert.Empty(result.Selection.SelectedTestCaseIds);
+        Assert.Equal(["test:app"], result.Selection.StaleTestCaseIds);
+        ContinuousTestStatus status = Assert.Single(store.ListContinuousTestStatuses(EngineTestSupport.WorkspaceId));
+        Assert.Equal(ContinuousTestState.Stale, status.State);
+        Assert.False(queue.HasReadyWork(DateTimeOffset.UtcNow.AddMinutes(1)));
+
+        // The only recorded run is the seed that committed the green; nothing new started.
+        Assert.Single(store.ListTestRuns(EngineTestSupport.WorkspaceId));
+    }
+
+    /// <summary>
+    /// Contract clause (b): a KNOWN-EMPTY selection (the changed file resolves in the index and
+    /// its complete impact read reaches no test) leaves committed-fresh results untouched and
+    /// enqueues nothing. This is the edit-an-unreachable-file case the watermark design exists for.
+    /// </summary>
+    [Fact]
+    public void Known_empty_selection_keeps_fresh_results_and_enqueues_nothing()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        CommitGreen(store, "test:app", EngineTestSupport.Identity, 2);
+        var facts = new FakeMillerFactSource
+        {
+            Current = new CtIndexCursor(EngineTestSupport.Identity, 2),
+        };
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:persistence", "Persist", "src/Persistence.cs"));
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            new ContinuousTestImpactSelector(store, facts),
+            new ContinuousTestCoordinator(new FakeContinuousTestProvider(), store));
+
+        ContinuousTestDaemonEnqueueResult result = queue.Enqueue(
+            EngineTestSupport.Change(workspace, changedPaths: ["src/Persistence.cs"]));
+
+        Assert.Equal(ContinuousTestSelectionOutcome.KnownEmpty, result.Selection.Outcome);
+        Assert.Empty(result.Selection.SelectedTestCaseIds);
+        Assert.Empty(result.Selection.StaleTestCaseIds);
+        ContinuousTestStatus status = Assert.Single(store.ListContinuousTestStatuses(EngineTestSupport.WorkspaceId));
+        Assert.Equal(ContinuousTestState.Green, status.State);
+        Assert.False(queue.HasReadyWork(DateTimeOffset.UtcNow.AddMinutes(1)));
+        Assert.Single(store.ListTestRuns(EngineTestSupport.WorkspaceId));
     }
 
     [Fact]
@@ -415,6 +482,47 @@ public sealed class ForbiddenEnqueueTests : IDisposable
         {
             try { Directory.Delete(other, recursive: true); } catch (IOException) { }
         }
+    }
+
+    /// <summary>Commits one green result at <c>(identity, revision)</c> through the real
+    /// run-completion path, so the case is committed-fresh at that key.</summary>
+    private static void CommitGreen(
+        ContinuousTestStore store,
+        string testCaseId,
+        string identity,
+        long revision)
+    {
+        string revisionText = revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string runId = "seed-run:" + testCaseId;
+        store.StartContinuousTestRun(
+            new ContinuousTestRun(
+                Id: runId,
+                WorkspaceId: EngineTestSupport.WorkspaceId,
+                Status: "running",
+                SelectedRevision: revisionText,
+                IndexIdentity: identity,
+                Revision: revision),
+            [testCaseId]);
+        store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
+            WorkspaceId: EngineTestSupport.WorkspaceId,
+            TestRunId: runId,
+            SelectedRevision: revisionText,
+            CurrentRevision: revisionText,
+            IndexIdentity: identity,
+            Revision: revision,
+            Status: "passed",
+            Results:
+            [
+                new ContinuousTestResult(
+                    Id: runId + ":result",
+                    WorkspaceId: EngineTestSupport.WorkspaceId,
+                    TestCaseId: testCaseId,
+                    TestRunId: runId,
+                    Status: "passed",
+                    ResultRevision: revisionText,
+                    IndexIdentity: identity,
+                    Revision: revision),
+            ]));
     }
 
     private static ContinuousTestRevisionPollRequest PollRequest(

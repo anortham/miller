@@ -95,6 +95,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
 
         Assert.Equal(["tc:inventory", "tc:paths", "tc:selector-only"], result.SelectedTestCaseIds);
         Assert.Equal(["tc:inventory", "tc:paths", "tc:selector-only", "tc:unrelated"], result.StaleTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
         Assert.All(result.Evidence, row => Assert.Equal("impacted_test", row.Tier));
         Assert.All(result.Evidence, row => Assert.Equal(0.88, row.Confidence));
         Assert.DoesNotContain("tc:unrelated", result.SelectedTestCaseIds);
@@ -271,8 +272,128 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.Equal("impacted_test", Assert.Single(result.Evidence).Tier);
     }
 
+    /// <summary>
+    /// Contract clause (a): the stale set for a path-scoped change is the impacted set plus the
+    /// already-owed backlog — NOTHING else. A case committed fresh must survive an edit that
+    /// cannot reach it; that survival is the whole point of the watermark design.
+    /// </summary>
     [Fact]
-    public void Select_falls_back_conservatively_when_fileless_nunit_name_is_ambiguous()
+    public void Select_path_scoped_stale_set_is_impacted_union_already_stale()
+    {
+        using ContinuousTestStore store = OpenStore();
+        SeedLinkedCase(store, "tc:hit", "sym:test-hit", "tests/payments/HitTests.cs", "test_hit");
+        SeedLinkedCase(store, "tc:owed", "sym:test-owed", "tests/other/OwedTests.cs", "test_owed");
+        SeedLinkedCase(store, "tc:fresh", "sym:test-fresh", "tests/other/FreshTests.cs", "test_fresh");
+        SeedCommittedResult(store, "tc:fresh");
+        store.MarkContinuousTestsStale(Workspace, ["tc:owed"], new CtFreshnessKey("gen-1", 1));
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:charge", "charge", "src/payments/service.cs"));
+        facts.Tests.Add(FakeMillerFactSource.Hit(
+            "sym:test-hit",
+            "test_hit",
+            "tests/payments/HitTests.cs",
+            isTest: true,
+            edgeKind: "calls",
+            edgeSource: "relationship"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["src/payments/service.cs"]));
+
+        Assert.Equal(["tc:hit"], result.SelectedTestCaseIds);
+        Assert.Equal(["tc:hit", "tc:owed"], result.StaleTestCaseIds);
+        Assert.DoesNotContain("tc:fresh", result.StaleTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+        Assert.True(result.MayExecute);
+    }
+
+    /// <summary>
+    /// Contract clause (b): a change whose files the index fully accounts for, and whose complete
+    /// impact read reaches no test, is a KNOWN-EMPTY selection — an empty stale delta and no run.
+    /// A committed-fresh case stays untouched.
+    /// </summary>
+    [Fact]
+    public void Select_resolved_change_with_no_reachable_tests_is_known_empty()
+    {
+        using ContinuousTestStore store = OpenStore();
+        SeedLinkedCase(store, "tc:fresh", "sym:test-fresh", "tests/other/FreshTests.cs", "test_fresh");
+        SeedCommittedResult(store, "tc:fresh");
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:persistence", "Persist", "src/Persistence.cs"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["src/Persistence.cs"]));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Empty(result.StaleTestCaseIds);
+        Assert.Empty(result.Evidence);
+        Assert.Equal(ContinuousTestSelectionOutcome.KnownEmpty, result.Outcome);
+        Assert.False(result.MayExecute);
+    }
+
+    /// <summary>A docs-only change (a markdown file with no symbols) cannot reach a test, so it is
+    /// known-empty rather than fail-closed — the design's "editing an unrelated markdown file
+    /// leaves the verdict green" acceptance.</summary>
+    [Fact]
+    public void Select_markdown_change_is_known_empty()
+    {
+        using ContinuousTestStore store = OpenStore();
+        SeedLinkedCase(store, "tc:fresh", "sym:test-fresh", "tests/other/FreshTests.cs", "test_fresh");
+        SeedCommittedResult(store, "tc:fresh");
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["docs/README.md"]));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Empty(result.StaleTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.KnownEmpty, result.Outcome);
+    }
+
+    /// <summary>
+    /// Contract clause (c): a truncated impact read means the blast radius is incomplete, so the
+    /// selection fails closed — everything previously fresh goes stale and nothing may execute.
+    /// The truncation flags used to be dropped on the floor.
+    /// </summary>
+    [Fact]
+    public void Select_truncated_impact_read_fails_closed_to_unknown()
+    {
+        using ContinuousTestStore store = OpenStore();
+        SeedLinkedCase(store, "tc:hit", "sym:test-hit", "tests/payments/HitTests.cs", "test_hit");
+        SeedLinkedCase(store, "tc:fresh", "sym:test-fresh", "tests/other/FreshTests.cs", "test_fresh");
+        SeedCommittedResult(store, "tc:fresh");
+        var facts = new FakeMillerFactSource { ImpactTruncatedByLimit = true };
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:charge", "charge", "src/payments/service.cs"));
+        facts.Tests.Add(FakeMillerFactSource.Hit(
+            "sym:test-hit",
+            "test_hit",
+            "tests/payments/HitTests.cs",
+            isTest: true,
+            edgeKind: "calls",
+            edgeSource: "relationship"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["src/payments/service.cs"]));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(["tc:fresh", "tc:hit"], result.StaleTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.False(result.MayExecute);
+    }
+
+    /// <summary>
+    /// An impacted-test hint that names a case this project knows but cannot uniquely map is
+    /// UNKNOWN reachability: everything goes stale and nothing runs. The old behaviour ran the
+    /// whole workspace instead — a degraded edge must stale more, never run more.
+    /// </summary>
+    [Fact]
+    public void Select_ambiguous_fileless_nunit_name_fails_closed_without_a_run()
     {
         using ContinuousTestStore store = OpenStore();
         const string projectPath = "/repo/Client.Tests.csproj";
@@ -317,8 +438,11 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
                     Name: "SavesAsync"),
             ]));
 
-        Assert.Equal(["tc:first", "tc:second", "tc:unrelated"], result.SelectedTestCaseIds);
-        Assert.All(result.Evidence, row => Assert.Equal("workspace_scope", row.Tier));
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(["tc:first", "tc:second", "tc:unrelated"], result.StaleTestCaseIds);
+        Assert.Empty(result.Evidence);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.False(result.MayExecute);
     }
 
     [Theory]
@@ -349,6 +473,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.Empty(result.SelectedTestCaseIds);
         Assert.Equal(["tc:api"], result.StaleTestCaseIds);
         Assert.Empty(result.Evidence);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
     }
 
     [Fact]
@@ -489,14 +614,14 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
                     Name: "charge"),
             ]));
 
-        Assert.Equal(["tc:false-source"], result.SelectedTestCaseIds);
+        Assert.Empty(result.SelectedTestCaseIds);
         Assert.Equal(["tc:false-source"], result.StaleTestCaseIds);
-        ContinuousTestSelectionEvidence evidence = Assert.Single(result.Evidence);
-        Assert.Equal("workspace_scope", evidence.Tier);
+        Assert.Empty(result.Evidence);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
     }
 
     [Fact]
-    public void Select_treats_aggregate_coverage_without_test_case_id_as_workspace_scope()
+    public void Select_treats_aggregate_coverage_without_test_case_id_as_unknown()
     {
         using ContinuousTestStore store = OpenStore();
         SeedLinkedCase(store, "tc:one", "sym:test-one", "tests/payments/OneTests.cs", "test_one");
@@ -522,9 +647,10 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
                     Name: "charge"),
             ]));
 
-        Assert.Equal(["tc:one", "tc:two"], result.SelectedTestCaseIds);
-        Assert.DoesNotContain(result.Evidence, row => row.Tier == "coverage");
-        Assert.All(result.Evidence, row => Assert.Equal("workspace_scope", row.Tier));
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(["tc:one", "tc:two"], result.StaleTestCaseIds);
+        Assert.Empty(result.Evidence);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
     }
 
     [Fact]
@@ -822,8 +948,10 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.All(result.Evidence, row => Assert.Equal("project_scope", row.Tier));
     }
 
+    /// <summary>A changed source file the index cannot resolve has UNKNOWN reachability: everything
+    /// goes stale and nothing runs. The old behaviour ran the whole workspace instead.</summary>
     [Fact]
-    public void Select_unmapped_source_change_falls_back_to_workspace_scope_without_false_green()
+    public void Select_unmapped_source_change_fails_closed_without_false_green()
     {
         using ContinuousTestStore store = OpenStore();
         SeedLinkedCase(store, "tc:one", "sym:test-one", "tests/OneTests.cs", "test_one");
@@ -835,13 +963,14 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             ChangedPaths: ["src/unmapped/anything.cs"]));
 
         Assert.Equal(["tc:one", "tc:two"], result.StaleTestCaseIds);
-        Assert.Equal(["tc:one", "tc:two"], result.SelectedTestCaseIds);
-        Assert.All(result.Evidence, row => Assert.Equal("workspace_scope", row.Tier));
-        Assert.All(result.Evidence, row => Assert.Equal(0.10, row.Confidence));
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Empty(result.Evidence);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.False(result.MayExecute);
     }
 
     [Fact]
-    public void Select_falls_back_to_workspace_scope_when_lifecycle_filter_leaves_no_impacted_tests()
+    public void Select_change_with_no_mappable_evidence_fails_closed_without_a_run()
     {
         using ContinuousTestStore store = OpenStore();
         SeedLinkedCase(store, "tc:one", "sym:test-one", "tests/OneTests.cs", "test_one");
@@ -853,9 +982,10 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             ChangedPaths: ["src/App.cs"],
             ImpactedTests: []));
 
-        Assert.Equal(["tc:one", "tc:two"], result.SelectedTestCaseIds);
+        Assert.Empty(result.SelectedTestCaseIds);
         Assert.Equal(["tc:one", "tc:two"], result.StaleTestCaseIds);
-        Assert.All(result.Evidence, row => Assert.Equal("workspace_scope", row.Tier));
+        Assert.Empty(result.Evidence);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
     }
 
     [Fact]
@@ -872,6 +1002,8 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
 
         Assert.Equal(["tc:one", "tc:two"], result.StaleTestCaseIds);
         Assert.Equal(["tc:one", "tc:two"], result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.WorkspaceScope, result.Outcome);
+        Assert.True(result.MayExecute);
         Assert.All(result.Evidence, row =>
         {
             Assert.Equal("workspace_scope", row.Tier);
@@ -961,6 +1093,47 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     private ContinuousTestStore OpenStore() => new(DbPath);
+
+    /// <summary>Commits one green result through the real run-completion path, so the case is
+    /// committed-fresh at <c>(identity, revision)</c> the way production rows are.</summary>
+    private static void SeedCommittedResult(
+        ContinuousTestStore store,
+        string testCaseId,
+        string identity = "gen-1",
+        long revision = 1)
+    {
+        string revisionText = revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string runId = "run:" + testCaseId;
+        store.StartContinuousTestRun(
+            new ContinuousTestRun(
+                Id: runId,
+                WorkspaceId: Workspace,
+                Status: "running",
+                SelectedRevision: revisionText,
+                IndexIdentity: identity,
+                Revision: revision),
+            [testCaseId]);
+        store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
+            WorkspaceId: Workspace,
+            TestRunId: runId,
+            SelectedRevision: revisionText,
+            CurrentRevision: revisionText,
+            IndexIdentity: identity,
+            Revision: revision,
+            Status: "passed",
+            Results:
+            [
+                new ContinuousTestResult(
+                    Id: runId + ":result",
+                    WorkspaceId: Workspace,
+                    TestCaseId: testCaseId,
+                    TestRunId: runId,
+                    Status: "passed",
+                    ResultRevision: revisionText,
+                    IndexIdentity: identity,
+                    Revision: revision),
+            ]));
+    }
 
     private static void SeedProviderCase(
         ContinuousTestStore store,

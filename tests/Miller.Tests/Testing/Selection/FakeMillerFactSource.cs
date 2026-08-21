@@ -18,6 +18,9 @@ internal sealed class FakeMillerFactSource : IMillerFactSource
 
     public List<CtImpactedSymbol> Tests { get; } = [];
 
+    /// <summary>When set, <see cref="Impact"/> reports a truncated read (an incomplete blast radius).</summary>
+    public bool ImpactTruncatedByLimit { get; set; }
+
     public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths)
     {
         HashSet<string> paths = changedPaths
@@ -44,7 +47,8 @@ internal sealed class FakeMillerFactSource : IMillerFactSource
         if (seedSymbolIds.Count == 0)
             return new CtImpactResult([], [], 0, false, false);
 
-        return new CtImpactResult(Impacted, Tests, Impacted.Count + Tests.Count, false, false);
+        return new CtImpactResult(
+            Impacted, Tests, Impacted.Count + Tests.Count, false, ImpactTruncatedByLimit);
     }
 
     public static CtSymbolFact Symbol(

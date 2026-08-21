@@ -53,10 +53,51 @@ public sealed record ContinuousTestImpactedTest(
     string? EvidenceStatus = null,
     string? EvidenceReason = null);
 
+/// <summary>
+/// What a selection concluded about reachability. The fail-closed rule lives in the result itself:
+/// only <see cref="Impacted"/> and <see cref="WorkspaceScope"/> selections may enqueue provider
+/// execution (see <see cref="ContinuousTestSelectionResult.MayExecute"/>), so a consumer cannot run
+/// tests off an <see cref="Unknown"/> selection without deliberately ignoring the contract.
+/// <see cref="Unknown"/> is deliberately the enum default: a result whose outcome nobody set
+/// refuses execution instead of permitting it.
+/// </summary>
+public enum ContinuousTestSelectionOutcome
+{
+    /// <summary>
+    /// Reachability could not be established: a truncated impact read, a changed path the index
+    /// cannot account for, or impact evidence that cannot be mapped to a runnable case. Everything
+    /// previously fresh goes stale and NOTHING executes — never a full-suite fallback.
+    /// </summary>
+    Unknown,
+
+    /// <summary>A complete read that maps the change to specific test cases; only those (plus the
+    /// already-owed backlog) go stale, and only they run.</summary>
+    Impacted,
+
+    /// <summary>A complete read proving the change reaches no test: an empty stale delta and no
+    /// run.</summary>
+    KnownEmpty,
+
+    /// <summary>An explicit whole-workspace request (generation change, inventory refresh,
+    /// explicit run): everything is stale and everything is selected.</summary>
+    WorkspaceScope,
+}
+
 public sealed record ContinuousTestSelectionResult(
     IReadOnlyList<string> SelectedTestCaseIds,
     IReadOnlyList<string> StaleTestCaseIds,
-    IReadOnlyList<ContinuousTestSelectionEvidence> Evidence);
+    IReadOnlyList<ContinuousTestSelectionEvidence> Evidence,
+    ContinuousTestSelectionOutcome Outcome = ContinuousTestSelectionOutcome.Unknown)
+{
+    /// <summary>
+    /// The fail-closed execution gate. Consumers that turn selections into provider runs must
+    /// check this instead of the outcome enum, so a future outcome value defaults to refusing
+    /// execution rather than permitting it.
+    /// </summary>
+    public bool MayExecute => Outcome
+        is ContinuousTestSelectionOutcome.Impacted
+        or ContinuousTestSelectionOutcome.WorkspaceScope;
+}
 
 public sealed record ContinuousTestSelectionEvidence(
     string TestCaseId,

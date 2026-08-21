@@ -857,6 +857,11 @@ public static class TestsCore
                 request.Wait);
         }
 
+        // An explicit run executes exactly the CURRENT stale set. EnqueueExplicit trims cases
+        // committed fresh at this key before any stale marking, so a green result survives a
+        // `tests run` that has nothing to prove about it; when nothing is stale, nothing runs and
+        // the verdict below reports the standing green. On a first run (no inventory yet) the
+        // refresh path discovers the suite and the stale set IS everything — that is expected.
         foreach (ContinuousTestProjectWorkItem item in ContinuousTestProjectInventory.MaterializeProjectWorkItems(projects, root))
         {
             queue.EnqueueExplicit(new ContinuousTestDaemonChange(
