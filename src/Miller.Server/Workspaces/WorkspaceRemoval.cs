@@ -7,6 +7,13 @@ namespace Miller.Server.Workspaces;
 /// <summary>
 /// Removes registered workspace data under all workspace write leases.
 /// Live, sensitive, machine-global, corrupt-path, unregistered, and in-use targets are never deleted.
+///
+/// <para>A removed workspace that was a family-store member also leaves per-view sidecars behind in the SHARED
+/// store (<c>content-</c>/<c>search-</c>/<c>vector-&lt;sha&gt;.db</c> under <c>&lt;store root&gt;/sidecars</c>),
+/// which no <c>.miller</c> delete can reach. Those are reclaimed through <see cref="StoreSidecarReclaim"/> as
+/// part of the removal. The reclaim is best-effort by design: a busy sidecar lease, an absent store root, or a
+/// file a reader still holds leaves the files in place and reports it in
+/// <see cref="WorkspaceRemoveResult.SidecarReclaim"/>. It never turns a successful removal into a failure.</para>
 /// </summary>
 public static class WorkspaceRemoval
 {
@@ -19,7 +26,8 @@ public static class WorkspaceRemoval
         string selector,
         string? liveRoot,
         string? protectedMillerDir = null,
-        Func<string, IDisposable?>? acquireWriterLock = null)
+        Func<string, IDisposable?>? acquireWriterLock = null,
+        Func<string, IDisposable?>? acquireSidecarLease = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(selector);
@@ -39,7 +47,8 @@ public static class WorkspaceRemoval
             millerDir,
             liveRoot,
             protectedMillerDir,
-            acquireWriterLock);
+            acquireWriterLock,
+            acquireSidecarLease);
     }
 
     /// <summary>Remove by workspace root path (the dir that CONTAINS the <c>.miller</c> index dir).</summary>
@@ -48,7 +57,8 @@ public static class WorkspaceRemoval
         string path,
         string? liveRoot,
         string? protectedMillerDir = null,
-        Func<string, IDisposable?>? acquireWriterLock = null)
+        Func<string, IDisposable?>? acquireWriterLock = null,
+        Func<string, IDisposable?>? acquireSidecarLease = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -63,9 +73,15 @@ public static class WorkspaceRemoval
                 WorkspaceRegistryRootMatcher.FindByPossiblyMissingPath(registry.List(), fullPath);
             if (stale is null)
                 return WorkspaceRemoveResult.NotFound(goneMillerDir);
+            StoreSidecarReclaimTarget? staleTarget =
+                StoreSidecarReclaimTarget.Capture(registry, stale.WorkspaceId);
             registry.Remove(stale.WorkspaceId);
             return WorkspaceRemoveResult.Removed(
-                goneMillerDir, stale.WorkspaceId, stale.CanonicalRoot, indexDirDeleted: false);
+                goneMillerDir,
+                stale.WorkspaceId,
+                stale.CanonicalRoot,
+                indexDirDeleted: false,
+                StoreSidecarReclaim.Reclaim(registry, staleTarget, acquireSidecarLease));
         }
 
         string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(fullPath);
@@ -95,7 +111,8 @@ public static class WorkspaceRemoval
             registeredMillerDir,
             liveRoot,
             protectedMillerDir,
-            acquireWriterLock);
+            acquireWriterLock,
+            acquireSidecarLease);
     }
 
     private static WorkspaceRemoveResult Remove(
@@ -105,7 +122,8 @@ public static class WorkspaceRemoval
         string millerDir,
         string? liveRoot,
         string? protectedMillerDir,
-        Func<string, IDisposable?>? acquireWriterLock)
+        Func<string, IDisposable?>? acquireWriterLock,
+        Func<string, IDisposable?>? acquireSidecarLease)
     {
         if (liveRoot is not null && root is not null && WorkspaceSafety.IsLiveWorkspace(root, liveRoot))
             return WorkspaceRemoveResult.RefusedLive(millerDir, workspaceId, root);
@@ -120,12 +138,22 @@ public static class WorkspaceRemoval
             return WorkspaceRemoveResult.RefusedSensitive(millerDir, workspaceId, root);
         }
 
+        // The view id lives in the store_members row, which the workspace delete cascades away. Capture it
+        // BEFORE the delete: after the row is gone nothing on disk records which view this workspace owned, and
+        // the sidecars would be unreclaimable forever. Nothing is deleted from the capture alone.
+        StoreSidecarReclaimTarget? sidecarTarget = StoreSidecarReclaimTarget.Capture(registry, workspaceId);
+
         if (!Directory.Exists(millerDir))
         {
             if (workspaceId is null)
                 return WorkspaceRemoveResult.NotFound(millerDir, workspaceId, root);
             registry.Remove(workspaceId);
-            return WorkspaceRemoveResult.Removed(millerDir, workspaceId, root, indexDirDeleted: false);
+            return WorkspaceRemoveResult.Removed(
+                millerDir,
+                workspaceId,
+                root,
+                indexDirDeleted: false,
+                StoreSidecarReclaim.Reclaim(registry, sidecarTarget, acquireSidecarLease));
         }
 
         // The CT daemon is a FIFTH live holder, and the only one the lease bundle CANNOT hold. Its lease sits
@@ -168,7 +196,12 @@ public static class WorkspaceRemoval
         SingleWriterLock.TryDeleteEmptiedDir(millerDir);
         if (workspaceId is not null)
             registry.Remove(workspaceId);
-        return WorkspaceRemoveResult.Removed(millerDir, workspaceId, root);
+        return WorkspaceRemoveResult.Removed(
+            millerDir,
+            workspaceId,
+            root,
+            indexDirDeleted: true,
+            StoreSidecarReclaim.Reclaim(registry, sidecarTarget, acquireSidecarLease));
     }
 
     /// <summary>

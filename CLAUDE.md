@@ -365,6 +365,14 @@ scripts/test.ps1 all
   from workspace artifacts, and may perform registry-lifecycle mutations (workspace remove/prune) through its
   antiforgery-protected POST endpoints backed by the shared `WorkspaceRemoval`/`WorkspaceRegistryPrune` cores
   (ADR-0002). It must not hydrate full indexes just to render list/detail views.
+  **A workspace that leaves the family store must take its sidecars with it.** Its per-view
+  `content-`/`search-`/`vector-<sha>.db` files live in the SHARED store (`<store root>/sidecars`), which no
+  `.miller` delete reaches, so `workspace remove`/`prune` reclaim them through `StoreSidecarReclaim` — each dead
+  view otherwise pins ~350MB forever. The view id MUST come from the `store_members` row and be captured BEFORE
+  the delete cascades it away; never rediscover a sidecar by listing the directory or re-hashing a root, and
+  never touch a view a surviving member still claims. The deletes run under the family sidecar write lease, and
+  a busy lease, an absent store root, or a held file is REPORTED (`store_sidecar_reclaim` in the JSON), never a
+  removal failure. julie-extract still owns the `views` row; Miller deletes only files Miller wrote.
 - **Hash split.** Stable `workspace_id` is SHA-256 of the canonical root. File freshness uses
   `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by
   `artifact_metadata.hash_algorithm=blake3`.

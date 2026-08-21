@@ -1360,7 +1360,8 @@ public sealed class WorkspaceTool
         var rendered = new WorkspacePruneResult(
             result.DryRun,
             result.Pruned.Select(e => new WorkspacePruneEntry(e.WorkspaceId, e.DisplayId, e.Root)).ToArray(),
-            result.Kept);
+            result.Kept,
+            result.SidecarReclaim);
         int count = result.Pruned.Count;
         return (
             WorkspaceRender.PruneWithinBudget(

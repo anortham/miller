@@ -330,7 +330,8 @@ public readonly record struct WorkspaceRemoveResult(
     string MillerDir,
     string? WorkspaceId = null,
     string? Root = null,
-    bool IndexDirDeleted = false)
+    bool IndexDirDeleted = false,
+    StoreSidecarReclaimResult SidecarReclaim = default)
 {
     /// <summary>Removal outcome.</summary>
     public enum Outcome
@@ -359,8 +360,9 @@ public readonly record struct WorkspaceRemoveResult(
         string millerDir,
         string? workspaceId = null,
         string? root = null,
-        bool indexDirDeleted = true) =>
-        new(Outcome.Removed, millerDir, workspaceId, root, indexDirDeleted);
+        bool indexDirDeleted = true,
+        StoreSidecarReclaimResult sidecarReclaim = default) =>
+        new(Outcome.Removed, millerDir, workspaceId, root, indexDirDeleted, sidecarReclaim);
 
     /// <summary>Refused because the path is the live (in-use) workspace.</summary>
     public static WorkspaceRemoveResult RefusedLive(string millerDir, string? workspaceId = null, string? root = null) =>
@@ -394,7 +396,8 @@ public readonly record struct WorkspaceRemoveResult(
 public readonly record struct WorkspacePruneResult(
     bool DryRun,
     IReadOnlyList<WorkspacePruneEntry> Pruned,
-    int Kept);
+    int Kept,
+    StoreSidecarReclaimResult SidecarReclaim = default);
 
 /// <summary>One registry row removed (or that would be removed in dry-run) by <c>prune</c>.</summary>
 public readonly record struct WorkspacePruneEntry(string WorkspaceId, string DisplayId, string Root);
@@ -2660,10 +2663,10 @@ public static class WorkspaceRender
     private static string RemoveCompact(WorkspaceRemoveResult result) => result.Result switch
     {
         WorkspaceRemoveResult.Outcome.Removed when result.IndexDirDeleted =>
-            $"removed workspace index: {result.MillerDir}",
+            $"removed workspace index: {result.MillerDir}" + SidecarReclaimSuffix(result.SidecarReclaim),
         WorkspaceRemoveResult.Outcome.Removed =>
             $"removed workspace registry entry: {result.Root ?? result.WorkspaceId ?? result.MillerDir} " +
-            $"(no index dir at {result.MillerDir})",
+            $"(no index dir at {result.MillerDir})" + SidecarReclaimSuffix(result.SidecarReclaim),
         WorkspaceRemoveResult.Outcome.RefusedLive =>
             $"refused: {result.MillerDir} is the workspace this Miller is serving (in use). " +
             "Stop that Miller first, or remove a different workspace.",
@@ -2700,10 +2703,37 @@ public static class WorkspaceRender
             if (result.Root is null) w.WriteNull("root");
             else w.WriteString("root", result.Root);
             w.WriteBoolean("index_dir_deleted", result.IndexDirDeleted);
+            WriteSidecarReclaim(w, result.SidecarReclaim);
             w.WriteString("message", RemoveCompact(result));
             w.WriteEndObject();
         }
         return Utf8(buffer);
+    }
+
+    /// <summary>
+    /// What the removal reclaimed from the family store, appended to the success line. Silent when the workspace
+    /// owned no store view, so a standalone-artifact removal reads exactly as it did before.
+    /// </summary>
+    private static string SidecarReclaimSuffix(StoreSidecarReclaimResult reclaim) =>
+        reclaim.HasReport ? $" ({SidecarReclaimText(reclaim)})" : string.Empty;
+
+    internal static string SidecarReclaimText(StoreSidecarReclaimResult reclaim)
+    {
+        string reclaimed = string.Create(
+            CultureInfo.InvariantCulture,
+            $"reclaimed {reclaim.FilesDeleted} store sidecar files, {reclaim.BytesReclaimed} bytes");
+        return reclaim.SkipReason is { } reason ? $"{reclaimed}; kept: {reason}" : reclaimed;
+    }
+
+    private static void WriteSidecarReclaim(Utf8JsonWriter w, StoreSidecarReclaimResult reclaim)
+    {
+        w.WriteStartObject("store_sidecar_reclaim");
+        w.WriteNumber("files_deleted", reclaim.FilesDeleted);
+        w.WriteNumber("bytes_reclaimed", reclaim.BytesReclaimed);
+        w.WriteNumber("files_retained", reclaim.FilesRetained);
+        if (reclaim.SkipReason is null) w.WriteNull("skip_reason");
+        else w.WriteString("skip_reason", reclaim.SkipReason);
+        w.WriteEndObject();
     }
 
     // ---------- levels ----------
@@ -2792,6 +2822,8 @@ public static class WorkspaceRender
         foreach (WorkspacePruneEntry entry in result.Pruned.Take(PruneCompactExampleCap))
             lines.Add($"  {entry.DisplayId} {entry.Root}");
         lines.Add($"kept: {result.Kept}");
+        if (result.SidecarReclaim.HasReport)
+            lines.Add(SidecarReclaimText(result.SidecarReclaim));
         return string.Join('\n', lines);
     }
 
@@ -2822,6 +2854,7 @@ public static class WorkspaceRender
             }
             w.WriteEndArray();
             w.WriteNumber("kept", result.Kept);
+            WriteSidecarReclaim(w, result.SidecarReclaim);
             w.WriteEndObject();
         }
         return Utf8(buffer);

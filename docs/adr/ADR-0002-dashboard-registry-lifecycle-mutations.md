@@ -38,8 +38,11 @@ endpoints in `DashboardEndpoints`:
 Guard rails that make this safe:
 
 - **Shared core, not a parallel implementation.** Removal semantics (selector resolution,
-  gone-root prune, lease co-holding, registry row removal) live once in
-  `src/Miller.Server/Workspaces/WorkspaceRemoval.cs`; the CLI and the dashboard are thin callers.
+  gone-root prune, lease co-holding, registry row removal, and the family-store sidecar reclaim that
+  follows it) live once in `src/Miller.Server/Workspaces/WorkspaceRemoval.cs`; the CLI and the
+  dashboard are thin callers. The dashboard therefore reclaims a removed member's per-view sidecars
+  with no dashboard-side code and no new notice code: the reclaim reports itself in the result the
+  core returns, and the notice vocabulary below stays closed.
 - **Antiforgery on every mutation form.** Both forms embed `<AntiforgeryToken/>` and the endpoints
   bind form data, which opts them into ASP.NET's antiforgery validation (wired via
   `AddAntiforgery()` + `UseAntiforgery()` in the dashboard host). An arbitrary web page cannot

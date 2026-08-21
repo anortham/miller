@@ -485,6 +485,11 @@ unregistered `.miller` directory returns `not_found` and is left untouched. The 
 the machine-global Miller directory, corrupt registry paths, and any workspace holding a write lease are refused
 without deletion. The JSON `result` vocabulary is `removed`, `not_found`, `refused_live`, `refused_in_use`,
 `refused_sensitive`, and `refused_invalid_registration`; a refusal never unregisters the row or deletes data.
+A removal or a prune of a family-store member also reclaims that view's Miller-owned sidecars under
+`<store root>/sidecars`. Both `workspace remove --json` and `workspace prune --json` carry a
+`store_sidecar_reclaim` object with `files_deleted`, `bytes_reclaimed`, `files_retained`, and a nullable
+`skip_reason`. The reclaim is best-effort: a busy sidecar lease or a held file reports the reason and leaves the
+files in place; it never changes the removal `result` or the prune totals.
 
 `miller context <query> --json` returns ranked `symbol` pivots and neighbours with `role`, `reason`, and
 `confidence`, plus a top-level evidence `disposition`. `--entry-symbol`, `--edited-files`, `--failing-test`, and

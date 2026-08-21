@@ -560,6 +560,159 @@ public sealed class WorkspaceRemovalTests : IDisposable
         Assert.Equal(WorkspaceRemoveResult.Outcome.NotFound, result.Result);
     }
 
+    // ---------- family-store sidecar reclaim ----------
+
+    private StoreFamilyRegistryRow SeedFamily(
+        WorkspaceRegistry registry,
+        string lineage,
+        bool createStoreRoot = true)
+    {
+        StoreFamilyRegistryRow family = registry.GetOrCreateStoreFamily(
+            lineage, canonicalCommonDir: null, commonDirCreatedAtUtc: null,
+            storesRoot: Path.Combine(_dir, "stores"));
+        if (createStoreRoot)
+            Directory.CreateDirectory(Path.Combine(family.StoreRoot, "sidecars"));
+        return family;
+    }
+
+    private static IReadOnlyList<string> WriteSidecars(string storeRoot, string viewId)
+    {
+        var paths = new List<string>();
+        foreach (StoreSidecarKind kind in Enum.GetValues<StoreSidecarKind>())
+        {
+            string path = StoreSidecarCatalog.PathFor(storeRoot, kind, viewId);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllBytes(path, new byte[128]);
+            paths.Add(path);
+        }
+
+        return paths;
+    }
+
+    [Fact]
+    public void RemoveById_DeletesTheRemovedViewsStoreSidecars()
+    {
+        var (root, _) = MakeWorkspace("ws-store-member");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-store-mem-000001", "store-mem-disp", root);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-remove");
+        registry.UpsertStoreMember(
+            "ws-store-mem-000001", family.FamilyId, "view-remove", root, WorkspaceRootIdentity.Unknown);
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-remove");
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "store-mem-disp", liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.Equal(3, result.SidecarReclaim.FilesDeleted);
+        Assert.Equal(3 * 128, result.SidecarReclaim.BytesReclaimed);
+        Assert.Null(result.SidecarReclaim.SkipReason);
+        Assert.All(paths, p => Assert.False(File.Exists(p)));
+    }
+
+    [Fact]
+    public void RemoveById_LeavesTheOtherMembersSidecarsAlone()
+    {
+        var (goingRoot, _) = MakeWorkspace("ws-store-going");
+        var (stayingRoot, _) = MakeWorkspace("ws-store-staying");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-store-going-0001", "store-going-disp", goingRoot);
+        Register(registry, "ws-store-stay-0001", "store-stay-disp", stayingRoot);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-neighbour");
+        registry.UpsertStoreMember(
+            "ws-store-going-0001", family.FamilyId, "view-going", goingRoot, WorkspaceRootIdentity.Unknown);
+        registry.UpsertStoreMember(
+            "ws-store-stay-0001", family.FamilyId, "view-staying", stayingRoot, WorkspaceRootIdentity.Unknown);
+        WriteSidecars(family.StoreRoot, "view-going");
+        IReadOnlyList<string> keep = WriteSidecars(family.StoreRoot, "view-staying");
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "store-going-disp", liveRoot: null);
+
+        Assert.Equal(3, result.SidecarReclaim.FilesDeleted);
+        Assert.All(keep, p => Assert.True(File.Exists(p)));
+        Assert.NotNull(registry.GetStoreMember("ws-store-stay-0001"));
+    }
+
+    [Fact]
+    public void RemoveById_MissingStoreRoot_StillRemovesAndReportsNothing()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-store-no-root");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-store-noroot-01", "store-noroot-disp", root);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-absent", createStoreRoot: false);
+        registry.UpsertStoreMember(
+            "ws-store-noroot-01", family.FamilyId, "view-absent", root, WorkspaceRootIdentity.Unknown);
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "store-noroot-disp", liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.False(Directory.Exists(millerDir));
+        Assert.False(result.SidecarReclaim.HasReport);
+        Assert.False(Directory.Exists(family.StoreRoot));
+        Assert.Null(registry.Get("ws-store-noroot-01"));
+    }
+
+    [Fact]
+    public void RemoveById_SidecarLeaseUnavailable_RemovesAnywayAndReportsTheSkip()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-store-busy");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-store-busy-0001", "store-busy-disp", root);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-busy");
+        registry.UpsertStoreMember(
+            "ws-store-busy-0001", family.FamilyId, "view-busy", root, WorkspaceRootIdentity.Unknown);
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-busy");
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry, "store-busy-disp", liveRoot: null, acquireSidecarLease: _ => null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.False(Directory.Exists(millerDir));
+        Assert.Null(registry.Get("ws-store-busy-0001"));
+        Assert.Equal(StoreSidecarReclaim.LeaseBusyReason, result.SidecarReclaim.SkipReason);
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+        Assert.Contains(
+            StoreSidecarReclaim.LeaseBusyReason,
+            WorkspaceRender.Remove(result, json: false),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The worktree case that leaked: <c>git worktree remove</c> deletes the root, so the removal takes the
+    /// gone-root prune branch. That branch deletes the registry row too, so it owes the same reclaim.
+    /// </summary>
+    [Fact]
+    public void RemoveByPath_GoneRoot_StillReclaimsTheStoreSidecars()
+    {
+        string goneRoot = Path.Combine(_dir, "ws-store-gone");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-store-gone-0001", "store-gone-disp", goneRoot);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-gone");
+        registry.UpsertStoreMember(
+            "ws-store-gone-0001", family.FamilyId, "view-gone", goneRoot, WorkspaceRootIdentity.Unknown);
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-gone");
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveByPath(registry, goneRoot, liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.Equal(3, result.SidecarReclaim.FilesDeleted);
+        Assert.All(paths, p => Assert.False(File.Exists(p)));
+    }
+
+    [Fact]
+    public void RemoveById_NonStoreWorkspace_ReportsNoReclaim()
+    {
+        var (root, _) = MakeWorkspace("ws-standalone");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-standalone-00001", "standalone-disp", root);
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "standalone-disp", liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.False(result.SidecarReclaim.HasReport);
+        Assert.DoesNotContain(
+            "sidecar", WorkspaceRender.Remove(result, json: false), StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// A stand-in for the removal's injected indexer lease that runs an observation at RELEASE time. The lease
     /// bundle disposes indexer-last, so this fires after the guarded delete and before the best-effort dir
