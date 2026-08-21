@@ -212,14 +212,14 @@ All tasks are serial: the freshness cursor (Task 1) feeds everything, `TestsCore
 **What to build:** The production caller for the watermark — as one atomic operation, with the green-only predicate fixed. This is the heart of the plan.
 
 **Acceptance criteria:**
-- [ ] Unrelated change: all greens watermark to R1; verdict green; stale 0.
-- [ ] Impacted change: impacted stale; unimpacted greens fresh; red and skipped rows NEVER watermark (explicit test).
-- [ ] Two chained unrelated changes: greens fresh at R2 via watermark alone.
-- [ ] Unknown outcome: nothing advances; previously fresh cases stale (fail-safe).
-- [ ] Generation change: watermark ignored; everything stale.
-- [ ] Crash/abort between staleness and advance leaves impacted cases stale (injection test).
-- [ ] Daemon verdict path and foreground status agree (same projection).
-- [ ] Worker-scope verification passes; commit per commit mode.
+- [x] Unrelated change: all greens watermark to R1; verdict green; stale 0.
+- [x] Impacted change: impacted stale; unimpacted greens fresh; red and skipped rows NEVER watermark (explicit test).
+- [x] Two chained unrelated changes: greens fresh at R2 via watermark alone.
+- [x] Unknown outcome: nothing advances; previously fresh cases stale (fail-safe).
+- [x] Generation change: watermark ignored; everything stale.
+- [x] Crash/abort between staleness and advance leaves impacted cases stale (injection test).
+- [x] Daemon verdict path and foreground status agree (same projection).
+- [x] Worker-scope verification passes; commit per commit mode. (1271829b; ApplyRevisionAdvance single transaction, 255 tests green, 2 crash tests)
 
 ### Task 6: Debounced auto-run
 
