@@ -36,4 +36,53 @@ public sealed class FamilyStoreSidecarWriteLeaseTests
                 Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public void TryAcquireExisting_AbsentSidecarDirectory_ReturnsNullAndCreatesNothing()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-sidecar-lease-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Assert.Null(FamilyStoreSidecarWriteLease.TryAcquireExisting(root, TimeSpan.Zero));
+            Assert.False(Directory.Exists(Path.Combine(root, "sidecars")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void TryAcquireExisting_AbsentStoreRoot_ReturnsNullAndCreatesNothing()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-sidecar-lease-" + Guid.NewGuid().ToString("N"));
+
+        Assert.Null(FamilyStoreSidecarWriteLease.TryAcquireExisting(root, TimeSpan.Zero));
+        Assert.False(Directory.Exists(root));
+    }
+
+    [Fact]
+    public void TryAcquireExisting_ExistingSidecarDirectory_TakesAndReleasesTheLease()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-sidecar-lease-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "sidecars"));
+        try
+        {
+            using (FamilyStoreSidecarWriteLease? held =
+                FamilyStoreSidecarWriteLease.TryAcquireExisting(root, TimeSpan.Zero))
+            {
+                Assert.NotNull(held);
+                Assert.Null(FamilyStoreSidecarWriteLease.TryAcquireExisting(root, TimeSpan.Zero));
+            }
+
+            using FamilyStoreSidecarWriteLease? again =
+                FamilyStoreSidecarWriteLease.TryAcquireExisting(root, TimeSpan.Zero);
+            Assert.NotNull(again);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

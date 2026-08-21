@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -212,4 +213,173 @@ public sealed class StoreSidecarReclaimTests : IDisposable
     [Fact]
     public void Reclaim_NullTarget_IsANoOp() =>
         Assert.Equal(StoreSidecarReclaimResult.None, StoreSidecarReclaim.Reclaim(_registry, target: null));
+
+    private static IReadOnlyList<string> WriteVectorGenerations(string storeRoot, string viewId, int bytesEach)
+    {
+        string active = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Vector, viewId);
+        string prefix = Path.Combine(
+            Path.GetDirectoryName(active)!, Path.GetFileNameWithoutExtension(active));
+        string[] paths =
+        [
+            active + ".rebuild",
+            active + ".rebuild-wal",
+            prefix + ".gen-aaaa.db",
+            prefix + ".gen-bbbb.db",
+        ];
+        foreach (string path in paths)
+            File.WriteAllBytes(path, new byte[bytesEach]);
+        return paths;
+    }
+
+    [Fact]
+    public void Reclaim_DeletesTheVectorShadowAndEveryRetainedGeneration()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-generations");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-gener-0001", "view-gener");
+        WriteSidecars(family.StoreRoot, "view-gener", bytesEach: 10);
+        IReadOnlyList<string> generations = WriteVectorGenerations(family.StoreRoot, "view-gener", bytesEach: 100);
+        _registry.Remove("ws-gener-0001");
+
+        StoreSidecarReclaimResult result = StoreSidecarReclaim.Reclaim(_registry, target);
+
+        Assert.All(generations, p => Assert.False(File.Exists(p)));
+        Assert.Equal(10, result.FilesDeleted);
+        Assert.Equal((6 * 10) + (4 * 100), result.BytesReclaimed);
+        Assert.Null(result.SkipReason);
+    }
+
+    [Fact]
+    public void Reclaim_LeavesAnotherViewsRetainedGenerationsAlone()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-generations-neighbour");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-genergo-001", "view-gener-going");
+        SeedMember(family, "ws-generstay-01", "view-gener-staying");
+        WriteVectorGenerations(family.StoreRoot, "view-gener-going", bytesEach: 8);
+        IReadOnlyList<string> keep =
+            WriteVectorGenerations(family.StoreRoot, "view-gener-staying", bytesEach: 8);
+        _registry.Remove("ws-genergo-001");
+
+        StoreSidecarReclaim.Reclaim(_registry, target);
+
+        Assert.All(keep, p => Assert.True(File.Exists(p)));
+    }
+
+    [Fact]
+    public void Reclaim_DeletesTheFreshnessStampAndThePreservationMarker()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-siblings");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-sibling-001", "view-sibling");
+        WriteSidecars(family.StoreRoot, "view-sibling", bytesEach: 4);
+        string stamp = StoreFreshnessStamp.FilePath(family.StoreRoot, "view-sibling");
+        string marker = StoreSidecarCatalog.PathFor(family.StoreRoot, StoreSidecarKind.Content, "view-sibling")
+            + ContentCorpusWriter.PreservationFailureSuffix;
+        File.WriteAllText(stamp, "{}");
+        File.WriteAllText(marker, "{}");
+        _registry.Remove("ws-sibling-001");
+
+        StoreSidecarReclaim.Reclaim(_registry, target);
+
+        Assert.False(File.Exists(stamp));
+        Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void Reclaim_LeaseBusy_OwesTheReclaimSoALaterPassFinishesIt()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-owed");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-owed-00001", "view-owed");
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-owed", bytesEach: 12);
+        _registry.Remove("ws-owed-00001");
+
+        StoreSidecarReclaimResult blocked = StoreSidecarReclaim.Reclaim(_registry, target, _ => null);
+        Assert.Equal(StoreSidecarReclaim.LeaseBusyReason, blocked.SkipReason);
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+
+        StoreSidecarReclaimResult discharged =
+            StoreSidecarReclaim.DischargeOwed(_registry, family.StoreRoot);
+
+        Assert.Equal(6, discharged.FilesDeleted);
+        Assert.All(paths, p => Assert.False(File.Exists(p)));
+        Assert.Empty(Directory.GetFiles(
+            StoreSidecarCatalog.DirectoryFor(family.StoreRoot), "*.reclaim-owed"));
+    }
+
+    [Fact]
+    public void Reclaim_ClearsTheOwedRecordOnceTheFilesAreGone()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-owed-clear");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-owedcl-0001", "view-owed-clear");
+        WriteSidecars(family.StoreRoot, "view-owed-clear", bytesEach: 2);
+        _registry.Remove("ws-owedcl-0001");
+        StoreSidecarReclaim.Reclaim(_registry, target, _ => null);
+        Assert.Single(Directory.GetFiles(
+            StoreSidecarCatalog.DirectoryFor(family.StoreRoot), "*.reclaim-owed"));
+
+        StoreSidecarReclaim.Reclaim(_registry, target);
+
+        Assert.Empty(Directory.GetFiles(
+            StoreSidecarCatalog.DirectoryFor(family.StoreRoot), "*.reclaim-owed"));
+    }
+
+    [Fact]
+    public void DischargeOwed_ViewClaimedAgain_KeepsTheFilesAndDropsTheRecord()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-owed-reclaimed");
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-owedre-0001", "view-owed-back");
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-owed-back", bytesEach: 3);
+        _registry.Remove("ws-owedre-0001");
+        StoreSidecarReclaim.Reclaim(_registry, target, _ => null);
+        Assert.Single(Directory.GetFiles(
+            StoreSidecarCatalog.DirectoryFor(family.StoreRoot), "*.reclaim-owed"));
+
+        SeedMember(family, "ws-owedre-0002", "view-owed-back");
+        StoreSidecarReclaimResult result = StoreSidecarReclaim.DischargeOwed(_registry, family.StoreRoot);
+
+        Assert.Equal(0, result.FilesDeleted);
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+        Assert.Empty(Directory.GetFiles(
+            StoreSidecarCatalog.DirectoryFor(family.StoreRoot), "*.reclaim-owed"));
+    }
+
+    [Fact]
+    public void DischargeOwed_RecordWhoseContentDoesNotHashToItsName_DeletesNothingButTheRecord()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-owed-planted");
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-planted", bytesEach: 5);
+        string planted = Path.Combine(
+            StoreSidecarCatalog.DirectoryFor(family.StoreRoot), "not-a-view-key.reclaim-owed");
+        File.WriteAllText(planted, "view-planted");
+
+        StoreSidecarReclaimResult result = StoreSidecarReclaim.DischargeOwed(_registry, family.StoreRoot);
+
+        Assert.Equal(0, result.FilesDeleted);
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+        Assert.False(File.Exists(planted));
+    }
+
+    [Fact]
+    public void DischargeOwed_NothingOwed_TakesNoLeaseAndReportsNothing()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-owed-empty");
+
+        StoreSidecarReclaimResult result = StoreSidecarReclaim.DischargeOwed(
+            _registry,
+            family.StoreRoot,
+            _ => throw new InvalidOperationException("An empty store must not take the sidecar lease."));
+
+        Assert.Equal(StoreSidecarReclaimResult.None, result);
+    }
+
+    [Fact]
+    public void Reclaim_MissingStoreRoot_LeaseBusyPathCreatesNothing()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-absent-owed", createStoreRoot: false);
+        StoreSidecarReclaimTarget target = SeedMember(family, "ws-absown-0001", "view-absent-owed");
+        _registry.Remove("ws-absown-0001");
+
+        StoreSidecarReclaimResult result = StoreSidecarReclaim.Reclaim(_registry, target, _ => null);
+
+        Assert.Equal(StoreSidecarReclaimResult.None, result);
+        Assert.False(Directory.Exists(family.StoreRoot));
+    }
 }

@@ -489,7 +489,9 @@ A removal or a prune of a family-store member also reclaims that view's Miller-o
 `<store root>/sidecars`. Both `workspace remove --json` and `workspace prune --json` carry a
 `store_sidecar_reclaim` object with `files_deleted`, `bytes_reclaimed`, `files_retained`, and a nullable
 `skip_reason`. The reclaim is best-effort: a busy sidecar lease or a held file reports the reason and leaves the
-files in place; it never changes the removal `result` or the prune totals.
+files in place; it never changes the removal `result` or the prune totals. A skip is owed, not lost — a later
+`workspace prune --json` discharges it and reports the files in its own `store_sidecar_reclaim` totals, so a
+non-null `skip_reason` means "run prune again later", not "these bytes are gone forever".
 
 `miller context <query> --json` returns ranked `symbol` pivots and neighbours with `role`, `reason`, and
 `confidence`, plus a top-level evidence `disposition`. `--entry-symbol`, `--edited-files`, `--failing-test`, and

@@ -33,7 +33,41 @@ public sealed class FamilyStoreSidecarWriteLease : IDisposable
         string lockFilePath = LockFilePathFor(storeRoot);
         string directory = Path.GetDirectoryName(lockFilePath)!;
         Directory.CreateDirectory(directory);
+        return Acquire(lockFilePath, timeout);
+    }
 
+    /// <summary>
+    /// Take the lease WITHOUT creating anything but the lock file itself, or return null when the sidecar
+    /// directory is absent or another process holds the lease.
+    ///
+    /// <para>A caller that is LEAVING a store — the sidecar reclaim of a removed workspace — must never
+    /// manufacture the directory it is cleaning out, the same rule the CT control plane learned on 2026-08-21.
+    /// <see cref="AcquireFor"/> creates the directory because its callers are convergers writing into a store
+    /// they belong to; this variant is for the callers that do not.</para>
+    /// </summary>
+    public static FamilyStoreSidecarWriteLease? TryAcquireExisting(string storeRoot, TimeSpan timeout)
+    {
+        string lockFilePath;
+        try
+        {
+            lockFilePath = LockFilePathFor(storeRoot);
+            if (!Directory.Exists(Path.GetDirectoryName(lockFilePath)!))
+                return null;
+            return Acquire(lockFilePath, timeout);
+        }
+        catch (Exception ex) when (
+            ex is TimeoutException
+                or IOException
+                or UnauthorizedAccessException
+                or NotSupportedException
+                or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static FamilyStoreSidecarWriteLease Acquire(string lockFilePath, TimeSpan? timeout)
+    {
         TimeSpan effectiveTimeout = timeout ?? DefaultTimeout;
         if (effectiveTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(timeout), "Sidecar lease timeout must be >= 0.");
@@ -49,6 +83,10 @@ public sealed class FamilyStoreSidecarWriteLease : IDisposable
                     FileAccess.ReadWrite,
                     FileShare.None);
                 return new FamilyStoreSidecarWriteLease(stream, lockFilePath);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                throw; // the sidecar directory is gone: waiting cannot bring it back, and we must not create it.
             }
             catch (IOException ex) when (stopwatch.Elapsed >= effectiveTimeout)
             {

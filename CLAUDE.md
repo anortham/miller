@@ -368,11 +368,18 @@ scripts/test.ps1 all
   **A workspace that leaves the family store must take its sidecars with it.** Its per-view
   `content-`/`search-`/`vector-<sha>.db` files live in the SHARED store (`<store root>/sidecars`), which no
   `.miller` delete reaches, so `workspace remove`/`prune` reclaim them through `StoreSidecarReclaim` — each dead
-  view otherwise pins ~350MB forever. The view id MUST come from the `store_members` row and be captured BEFORE
-  the delete cascades it away; never rediscover a sidecar by listing the directory or re-hashing a root, and
-  never touch a view a surviving member still claims. The deletes run under the family sidecar write lease, and
-  a busy lease, an absent store root, or a held file is REPORTED (`store_sidecar_reclaim` in the JSON), never a
-  removal failure. julie-extract still owns the `views` row; Miller deletes only files Miller wrote.
+  view otherwise pins ~350MB forever. The set is the WHOLE per-view family: the three active artifacts, their
+  `-wal`/`-shm` siblings, the `.rebuild` shadow, EVERY retained `vector-<sha>.gen-<tag>.db` generation (as large
+  as the active artifact, and GC'd only by a converge service that will never wake for a removed view again), the
+  `.preservation-error` marker, and `freshness-stamp-<viewId>.json` at the store root. The view id MUST come from
+  the `store_members` row and be captured BEFORE the delete cascades it away; never rediscover a sidecar by
+  listing the directory or re-hashing a root, and never touch a view a surviving member still claims. The deletes
+  run under the family sidecar write lease, taken WITHOUT creating the sidecar directory — a caller that is
+  leaving a store never manufactures the directory it is cleaning out. **An unfinished reclaim is OWED, never
+  dropped:** by then no registry row names the view, so a busy lease or a held file writes a
+  `<view key>.reclaim-owed` record beside the sidecars, and the next reclaim — or `workspace prune`, which
+  discharges every registered family — finishes it. A skip is REPORTED (`store_sidecar_reclaim` in the JSON),
+  never a removal failure. julie-extract still owns the `views` row; Miller deletes only files Miller wrote.
 - **Hash split.** Stable `workspace_id` is SHA-256 of the canonical root. File freshness uses
   `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by
   `artifact_metadata.hash_algorithm=blake3`.

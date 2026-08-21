@@ -11,14 +11,16 @@ namespace Miller.Server.Workspaces;
 /// them through <see cref="StoreSidecarReclaim"/>: Miller-owned files only, never <c>store.db</c> or
 /// <c>coord.db</c>, and never a view another member still claims. Reclaim is best-effort — a busy lease or a
 /// held file leaves the files in place and reports it; the registry row still goes.</para>
+///
+/// <para>A real prune is also the DISCHARGE point for reclaims earlier passes owed, across every registered
+/// family. A dry run discharges nothing.</para>
 /// </summary>
 public static class WorkspaceRegistryPrune
 {
     public sealed record Entry(
         string WorkspaceId,
         string DisplayId,
-        string Root,
-        StoreSidecarReclaimResult SidecarReclaim = default);
+        string Root);
 
     public sealed record Result(
         bool DryRun,
@@ -63,12 +65,35 @@ public static class WorkspaceRegistryPrune
             // surviving workspace still claims.
             StoreSidecarReclaimTarget? target = StoreSidecarReclaimTarget.Capture(registry, row.WorkspaceId);
             registry.Remove(row.WorkspaceId);
-            StoreSidecarReclaimResult entryReclaim =
-                StoreSidecarReclaim.Reclaim(registry, target, acquireSidecarLease);
-            reclaimed = StoreSidecarReclaimResult.Combine(reclaimed, entryReclaim);
-            pruned.Add(new Entry(row.WorkspaceId, row.DisplayId, row.CanonicalRoot, entryReclaim));
+            reclaimed = StoreSidecarReclaimResult.Combine(
+                reclaimed,
+                StoreSidecarReclaim.Reclaim(registry, target, acquireSidecarLease));
+            pruned.Add(new Entry(row.WorkspaceId, row.DisplayId, row.CanonicalRoot));
         }
 
+        if (!dryRun)
+            reclaimed = StoreSidecarReclaimResult.Combine(reclaimed, DischargeOwed(registry, acquireSidecarLease));
+
         return new Result(dryRun, pruned, kept, reclaimed);
+    }
+
+    /// <summary>
+    /// Finish the reclaims earlier passes could not: a removal that hit a busy sidecar lease left the view id in
+    /// an owed record, because by then no registry row named it any more. Prune is the discharge point, so the
+    /// sweep covers EVERY registered family, not only the families this prune touched.
+    /// </summary>
+    private static StoreSidecarReclaimResult DischargeOwed(
+        WorkspaceRegistry registry,
+        Func<string, IDisposable?>? acquireSidecarLease)
+    {
+        var discharged = StoreSidecarReclaimResult.None;
+        foreach (StoreFamilyRegistryRow family in registry.ListStoreFamilies())
+        {
+            discharged = StoreSidecarReclaimResult.Combine(
+                discharged,
+                StoreSidecarReclaim.DischargeOwed(registry, family.StoreRoot, acquireSidecarLease));
+        }
+
+        return discharged;
     }
 }

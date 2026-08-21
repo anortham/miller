@@ -130,13 +130,30 @@ public static class StoreSidecarCatalog
         ) STRICT;
         """;
 
+    /// <summary>
+    /// The one directory every Miller-owned per-view sidecar of <paramref name="storeRoot"/> lives in. Anything
+    /// that ENUMERATES the sidecars must resolve the directory through this, so it lists the same directory
+    /// <see cref="PathFor"/> writes into.
+    /// </summary>
+    public static string DirectoryFor(string storeRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(storeRoot);
+        return Path.Combine(PathCanonicalizer.CanonicalizeRoot(storeRoot), "sidecars");
+    }
+
     public static string PathFor(string storeRoot, StoreSidecarKind kind, string viewId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storeRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(viewId);
-        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(storeRoot);
-        string viewKey = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(viewId)));
-        return Path.Combine(canonicalRoot, "sidecars", $"{KindName(kind)}-{viewKey}.db");
+        string viewKey = ViewKey(viewId);
+        return Path.Combine(DirectoryFor(storeRoot), $"{KindName(kind)}-{viewKey}.db");
+    }
+
+    /// <summary>The file-name key a view id maps to — the SHA-256 that names every sidecar of that view.</summary>
+    public static string ViewKey(string viewId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(viewId);
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(viewId)));
     }
 
     public static void Stamp(string databasePath, StoreSidecarStamp stamp)

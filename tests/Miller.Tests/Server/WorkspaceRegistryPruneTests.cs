@@ -85,7 +85,6 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         Assert.Equal(1, result.Kept);
         Assert.Equal(3, result.SidecarReclaim.FilesDeleted);
         Assert.Equal(3 * 256, result.SidecarReclaim.BytesReclaimed);
-        Assert.Equal(3, result.Pruned[0].SidecarReclaim.FilesDeleted);
         Assert.All(reclaimed, p => Assert.False(File.Exists(p)));
         Assert.All(keep, p => Assert.True(File.Exists(p)));
     }
@@ -165,6 +164,42 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
 
         Assert.Empty(result.Pruned);
         Assert.Equal(1, result.Kept);
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+    }
+
+    [Fact]
+    public void Run_DischargesAReclaimAnEarlierBusyLeaseOwed()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-prune-owed");
+        string goneRoot = Register("ws-prune-owed-0001", "owed-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-owed-0001", goneRoot, "view-prune-owed");
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-prune-owed");
+        WorkspaceRegistryPrune.Run(
+            _registry, protectedWorkspaceId: null, dryRun: false, acquireSidecarLease: _ => null);
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+
+        WorkspaceRegistryPrune.Result result =
+            WorkspaceRegistryPrune.Run(_registry, protectedWorkspaceId: null, dryRun: false);
+
+        Assert.Empty(result.Pruned);
+        Assert.Equal(3, result.SidecarReclaim.FilesDeleted);
+        Assert.All(paths, p => Assert.False(File.Exists(p)));
+    }
+
+    [Fact]
+    public void Run_DryRun_DischargesNothing()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-prune-owed-dry");
+        string goneRoot = Register("ws-prune-owdry-01", "owed-dry-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-owdry-01", goneRoot, "view-prune-owed-dry");
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-prune-owed-dry");
+        WorkspaceRegistryPrune.Run(
+            _registry, protectedWorkspaceId: null, dryRun: false, acquireSidecarLease: _ => null);
+
+        WorkspaceRegistryPrune.Result result =
+            WorkspaceRegistryPrune.Run(_registry, protectedWorkspaceId: null, dryRun: true);
+
+        Assert.False(result.SidecarReclaim.HasReport);
         Assert.All(paths, p => Assert.True(File.Exists(p)));
     }
 }

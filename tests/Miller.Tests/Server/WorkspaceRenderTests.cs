@@ -2164,4 +2164,95 @@ public sealed class WorkspaceRenderTests
         Assert.Equal("removed", doc.RootElement.GetProperty("result").GetString());
         Assert.False(doc.RootElement.GetProperty("index_dir_deleted").GetBoolean());
     }
+
+    [Fact]
+    public void Remove_Json_ReportsTheStoreSidecarReclaim()
+    {
+        using var doc = JsonDocument.Parse(WorkspaceRender.Remove(
+            WorkspaceRemoveResult.Removed(
+                "/other/repo/.miller",
+                workspaceId: "other-ws",
+                root: "/other/repo",
+                indexDirDeleted: true,
+                sidecarReclaim: new StoreSidecarReclaimResult(6, 367_001_600, 0, null)),
+            json: true));
+
+        JsonElement reclaim = doc.RootElement.GetProperty("store_sidecar_reclaim");
+        Assert.Equal(6, reclaim.GetProperty("files_deleted").GetInt32());
+        Assert.Equal(367_001_600, reclaim.GetProperty("bytes_reclaimed").GetInt64());
+        Assert.Equal(0, reclaim.GetProperty("files_retained").GetInt32());
+        Assert.Equal(JsonValueKind.Null, reclaim.GetProperty("skip_reason").ValueKind);
+    }
+
+    [Fact]
+    public void Remove_Json_ReportsWhyASidecarReclaimWasSkipped()
+    {
+        using var doc = JsonDocument.Parse(WorkspaceRender.Remove(
+            WorkspaceRemoveResult.Removed(
+                "/other/repo/.miller",
+                workspaceId: "other-ws",
+                root: "/other/repo",
+                indexDirDeleted: true,
+                sidecarReclaim: new StoreSidecarReclaimResult(
+                    0, 0, 3, StoreSidecarReclaim.LeaseBusyReason)),
+            json: true));
+
+        JsonElement reclaim = doc.RootElement.GetProperty("store_sidecar_reclaim");
+        Assert.Equal(0, reclaim.GetProperty("files_deleted").GetInt32());
+        Assert.Equal(3, reclaim.GetProperty("files_retained").GetInt32());
+        Assert.Equal(
+            StoreSidecarReclaim.LeaseBusyReason,
+            reclaim.GetProperty("skip_reason").GetString());
+        Assert.Contains(
+            StoreSidecarReclaim.LeaseBusyReason,
+            doc.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Remove_Json_NoStoreView_StillCarriesTheReclaimObject()
+    {
+        using var doc = JsonDocument.Parse(WorkspaceRender.Remove(
+            WorkspaceRemoveResult.Removed("/other/repo/.miller"),
+            json: true));
+
+        JsonElement reclaim = doc.RootElement.GetProperty("store_sidecar_reclaim");
+        Assert.Equal(0, reclaim.GetProperty("files_deleted").GetInt32());
+        Assert.Equal(0, reclaim.GetProperty("bytes_reclaimed").GetInt64());
+        Assert.Equal(JsonValueKind.Null, reclaim.GetProperty("skip_reason").ValueKind);
+        Assert.DoesNotContain("reclaimed", doc.RootElement.GetProperty("message").GetString()!);
+    }
+
+    // ---- prune ----
+
+    [Fact]
+    public void Prune_Json_ReportsTheStoreSidecarReclaim()
+    {
+        var result = new WorkspacePruneResult(
+            DryRun: false,
+            Pruned: [new WorkspacePruneEntry("ws-gone-0001", "gone-repo", "/gone/repo")],
+            Kept: 2,
+            SidecarReclaim: new StoreSidecarReclaimResult(9, 1_024, 0, null));
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Prune(result, json: true));
+
+        Assert.Equal(2, doc.RootElement.GetProperty("kept").GetInt32());
+        JsonElement reclaim = doc.RootElement.GetProperty("store_sidecar_reclaim");
+        Assert.Equal(9, reclaim.GetProperty("files_deleted").GetInt32());
+        Assert.Equal(1_024, reclaim.GetProperty("bytes_reclaimed").GetInt64());
+        Assert.Equal(0, reclaim.GetProperty("files_retained").GetInt32());
+        Assert.Equal(JsonValueKind.Null, reclaim.GetProperty("skip_reason").ValueKind);
+    }
+
+    [Fact]
+    public void Prune_Compact_ReportsTheReclaimOnlyWhenThereIsSomethingToSay()
+    {
+        var silent = new WorkspacePruneResult(
+            DryRun: false,
+            Pruned: [new WorkspacePruneEntry("ws-gone-0001", "gone-repo", "/gone/repo")],
+            Kept: 0);
+        var loud = silent with { SidecarReclaim = new StoreSidecarReclaimResult(4, 512, 0, null) };
+
+        Assert.DoesNotContain("reclaimed", WorkspaceRender.Prune(silent, json: false));
+        Assert.Contains("reclaimed 4 store sidecar files", WorkspaceRender.Prune(loud, json: false));
+    }
 }

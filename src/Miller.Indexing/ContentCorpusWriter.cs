@@ -399,8 +399,14 @@ public static partial class ContentCorpusWriter
         }
     }
 
+    /// <summary>
+    /// The suffix of the marker that records a failed raw-text preservation beside its content sidecar. Public
+    /// because the file is Miller-owned per-view state: whoever deletes the sidecar must delete this too.
+    /// </summary>
+    public const string PreservationFailureSuffix = ".preservation-error";
+
     private static string PreservationFailurePathFor(string contentDbPath) =>
-        Path.GetFullPath(contentDbPath) + ".preservation-error";
+        Path.GetFullPath(contentDbPath) + PreservationFailureSuffix;
 
     private sealed record PreservationFailureStamp(long Length, long LastWriteUtcTicks, string Error);
 
