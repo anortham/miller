@@ -261,10 +261,10 @@ public sealed class ContinuousTestDaemonHost
     private volatile string _publishedReason = "starting";
 
     /// <summary>
-    /// When the MAIN LOOP last published, as ticks so the field can be read and written atomically. Zero
-    /// until the loop's first write, which publishes a null tick — an unproven loop, not a stalled one.
-    /// The pulse copies this value; it must never stamp one of its own, or a wedged loop would keep
-    /// reporting a fresh tick forever.
+    /// When the MAIN LOOP last MOVED, as ticks so the field can be read and written atomically. Zero until
+    /// the loop's first stamp, which publishes a null tick — an unproven loop, not a stalled one. The pulse
+    /// copies this value; it must never stamp one of its own, or a wedged loop would keep reporting a fresh
+    /// tick forever.
     /// </summary>
     private long _loopTickTicks;
 
@@ -472,6 +472,8 @@ public sealed class ContinuousTestDaemonHost
 
         while (!cancellationToken.IsCancellationRequested)
         {
+            StampLoopTick();
+
             bool stopRequested;
             try
             {
@@ -556,6 +558,11 @@ public sealed class ContinuousTestDaemonHost
                     }
                     finally
                     {
+                        // Stamped BEFORE the cell goes idle, and not after, so no pulse can read the pair
+                        // "idle activity, pre-drain tick" — the shape that reported a healthy daemon as
+                        // wedged for the run's whole duration once the run had ended.
+                        StampLoopTick();
+
                         // One drain runs every ready project. Cleared only when the whole drain returns, so a
                         // waiting caller cannot slip through the gap between two of its projects.
                         _runActivity?.EndDrain();
@@ -652,12 +659,20 @@ public sealed class ContinuousTestDaemonHost
         _publishedState = state;
         _publishedReason = reason;
 
-        // This method is the loop's ONLY write path, so stamping here is what makes the tick mean "the loop
-        // reached another publish". Stamped before the write, so a write that fails still records that the
-        // loop moved — the tick measures the loop, not the filesystem.
-        Volatile.Write(ref _loopTickTicks, _options.Clock().UtcTicks);
+        // Stamped before the write, so a write that fails still records that the loop moved — the tick
+        // measures the loop, not the filesystem.
+        StampLoopTick();
         PublishStatus(lease, state, reason);
     }
+
+    /// <summary>
+    /// The loop reached another point of its own. Stamped at the top of every pass and when a drain returns,
+    /// not only at the loop's write points: the loop publishes at most once per pass and can be parked in its
+    /// poll delay for a long time after a run, so a tick that tracked the WRITES read as lag the moment the
+    /// pulse republished the idle that followed a long run.
+    /// </summary>
+    private void StampLoopTick() =>
+        Volatile.Write(ref _loopTickTicks, _options.Clock().UtcTicks);
 
     /// <summary>
     /// Writes one status record, attaching whatever the activity cell currently reports and the main loop's
@@ -679,7 +694,11 @@ public sealed class ContinuousTestDaemonHost
 
             (CtDaemonActivity activity, CtDaemonRunProgress? run) =
                 _runActivity?.Read() ?? (CtDaemonActivity.Idle, null);
-            lease.WriteStatus(state, reason, activity, run, LoopTick());
+
+            // ONE clock stamps both halves of the pair a reader subtracts. The tick came from this clock
+            // while the record's timestamp came from TimeProvider.System, and they agreed only because both
+            // default to UtcNow.
+            lease.WriteStatus(state, reason, activity, run, LoopTick(), _options.Clock());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -687,7 +706,7 @@ public sealed class ContinuousTestDaemonHost
     }
 
     /// <summary>
-    /// The main loop's last publish, or null before its first one. Never the current time: the pulse calls
+    /// The main loop's last stamp, or null before its first one. Never the current time: the pulse calls
     /// this too, and a pulse that stamped "now" would republish a fresh tick for a loop that had stopped.
     /// </summary>
     private DateTimeOffset? LoopTick()

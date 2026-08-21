@@ -109,12 +109,26 @@ public enum CtRunActivity
 /// <summary>
 /// The run the daemon is executing right now. Absent when nothing is running.
 /// </summary>
+/// <param name="SilenceSeconds">
+/// How long the child has been silent, in whole seconds, measured by the DAEMON on its own monotonic clock —
+/// the same measurement the kill is armed from. <see cref="Activity"/> alone says only that the silence has
+/// passed the bound, never by how much, so a reader could not tell a kill that is due this instant from one
+/// that is an hour late. Null on a record from a build that predates the field.
+/// </param>
+/// <param name="ChildStallSeconds">
+/// The silence bound the daemon will kill at, in whole seconds, as THIS daemon resolved it. A reader that
+/// re-resolved <c>MILLER_CT_STALL_TIMEOUT</c> from its own environment would judge the daemon against a number
+/// the daemon never used. <c>0</c> means the guard is off and no kill is coming; null on a record from a build
+/// that predates the field.
+/// </param>
 public sealed record CtDaemonRunProgress(
     string ProjectPath,
     string RunId,
     int SelectedCaseCount,
     DateTimeOffset RunStartedAtUtc,
-    CtRunActivity Activity);
+    CtRunActivity Activity,
+    int? SilenceSeconds = null,
+    int? ChildStallSeconds = null);
 
 /// <summary>
 /// The published daemon status. <see cref="Activity"/>, <see cref="Run"/> and

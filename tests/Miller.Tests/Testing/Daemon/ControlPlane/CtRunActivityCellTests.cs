@@ -195,6 +195,45 @@ public sealed class CtRunActivityCellTests
         Assert.Equal(CtRunActivity.Quiet, RunOf(cell).Activity);
     }
 
+    /// <summary>
+    /// "Stalled" says the silence passed the bound, never by how much, so a reader could not separate a kill
+    /// that is due this instant from one that is an hour late. The cell publishes the measurement it already
+    /// makes, on the monotonic clock the kill itself is armed from.
+    /// </summary>
+    [Fact]
+    public void A_run_carries_the_childs_silence_and_the_bound_the_daemon_will_kill_at()
+    {
+        CtRunActivityCell cell = NewCell();
+        cell.BeginDrain();
+        cell.BeginRun("a.csproj", "run:1", 1);
+        cell.StampOutput();
+
+        Advance(StallBound + TimeSpan.FromMinutes(3));
+
+        CtDaemonRunProgress run = RunOf(cell);
+        Assert.Equal((int)(StallBound + TimeSpan.FromMinutes(3)).TotalSeconds, run.SilenceSeconds);
+        Assert.Equal((int)StallBound.TotalSeconds, run.ChildStallSeconds);
+    }
+
+    /// <summary>
+    /// A reader must judge the daemon against the bound the DAEMON resolved, and zero says plainly that no
+    /// kill is coming — not that the bound is unknown.
+    /// </summary>
+    [Fact]
+    public void A_guard_that_is_off_publishes_a_zero_bound()
+    {
+        CtRunActivityCell cell = NewCell(stallTimeout: Timeout.InfiniteTimeSpan);
+        cell.BeginDrain();
+        cell.BeginRun("a.csproj", "run:1", 1);
+        cell.StampOutput();
+
+        Advance(TimeSpan.FromHours(3));
+
+        CtDaemonRunProgress run = RunOf(cell);
+        Assert.Equal(0, run.ChildStallSeconds);
+        Assert.Equal((int)TimeSpan.FromHours(3).TotalSeconds, run.SilenceSeconds);
+    }
+
     [Fact]
     public void A_second_run_in_the_same_drain_replaces_the_first_ones_details()
     {

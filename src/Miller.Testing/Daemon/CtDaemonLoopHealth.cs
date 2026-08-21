@@ -58,17 +58,41 @@ public static class CtDaemonLoopHealth
     /// </summary>
     public static readonly TimeSpan DefaultLoopStallTimeout = TimeSpan.FromSeconds(90);
 
+    /// <summary>
+    /// How far past the child's silence bound the run must go before a reader calls the supervision hung.
+    ///
+    /// <para>A child reads <see cref="CtRunActivity.Stalled"/> the INSTANT its silence passes the bound, which
+    /// is the same instant the runner's own kill fires. Without a margin the verdict names a fault at the
+    /// moment the daemon is correctly handling it. The kill then waits for the child's exit grace and the
+    /// stream drain, about ten seconds together, so a minute of headroom reports only a kill that is genuinely
+    /// late.</para>
+    /// </summary>
+    public static readonly TimeSpan HungSupervisionGrace = TimeSpan.FromSeconds(60);
+
     public static CtLoopHealthVerdict Unknown(string reason) => new(CtLoopHealth.Unknown, null, reason);
 
     /// <summary>The bound this process would use, resolved from the environment.</summary>
     public static TimeSpan ResolveLoopStallTimeout() =>
-        CtEnvironment.ResolveLoopStallTimeout(
-            Environment.GetEnvironmentVariable(CtEnvironment.LoopStallTimeout),
-            DefaultLoopStallTimeout);
+        ResolveLoopStallTimeout(Environment.GetEnvironmentVariable);
 
     /// <summary>
-    /// The CHILD silence bound this process would use. The reader resolves it the same way the daemon does,
-    /// because the hung-supervision rule asks whether a kill the daemon owed has happened.
+    /// Seam for the lookup itself, so a test can prove the documented VARIABLE NAME is the one read. A test
+    /// that only calls <see cref="CtEnvironment.ResolveLoopStallTimeout(string?, TimeSpan)"/> with literal
+    /// strings would stay green through a typo in the constant.
+    /// </summary>
+    internal static TimeSpan ResolveLoopStallTimeout(Func<string, string?> readVariable)
+    {
+        ArgumentNullException.ThrowIfNull(readVariable);
+        return CtEnvironment.ResolveLoopStallTimeout(
+            readVariable(CtEnvironment.LoopStallTimeout),
+            DefaultLoopStallTimeout);
+    }
+
+    /// <summary>
+    /// The CHILD silence bound this process would use. A FALLBACK only: the daemon publishes the bound it
+    /// actually resolved, and the rule prefers that. This value stands in for a record from a build that
+    /// predates the published bound, and it can differ from the daemon's in either direction — the two
+    /// processes may have been started in different shells.
     /// </summary>
     public static TimeSpan ResolveChildStallTimeout() =>
         CtEnvironment.ResolveStallTimeout(
@@ -99,13 +123,15 @@ public static class CtDaemonLoopHealth
         if (record.LoopTickAtUtc is not { } tick)
             return Unknown("the record carries no loop tick");
 
+        // The documented kill switch turns the WHOLE detection off, hung supervision included, so it sits
+        // above both rules. Below the executing branch it silenced only half of what it promises.
+        if (!IsBounded(loopStallTimeout))
+            return Unknown("loop-stall detection is off");
+
         int lag = WholeSeconds(record.UpdatedAtUtc - tick);
 
         if (record.Activity == CtDaemonActivity.Executing)
-            return Executing(record, record.UpdatedAtUtc - tick, lag, childStallTimeout);
-
-        if (!IsBounded(loopStallTimeout))
-            return Unknown("loop-stall detection is off");
+            return Executing(record, lag, childStallTimeout);
 
         return record.UpdatedAtUtc - tick > loopStallTimeout
             ? new CtLoopHealthVerdict(
@@ -119,31 +145,48 @@ public static class CtDaemonLoopHealth
     /// An executing daemon is NEVER judged by loop lag: the loop legitimately blocks for the whole drain, so
     /// the lag IS the drain's elapsed time and a long suite would read as a wedge.
     ///
-    /// <para>The separate rule is about the kill the daemon owes itself. <see cref="CtRunActivity.Stalled"/>
-    /// is the daemon's own reading that its child passed the silence bound and the kill is due; when the
-    /// drain has then held the loop for longer than that bound and the run is still in flight, the kill did
-    /// not happen. A record with no run cannot support that claim, so it renders as executing.</para>
+    /// <para>The separate rule is about the kill the daemon owes itself, and it is measured from the CHILD'S
+    /// SILENCE, never from the drain. One drain runs every ready project, so a chatty forty-minute suite that
+    /// has only just gone quiet has a long drain and a kill that is not late at all — judged by the drain,
+    /// that daemon was named as hung at the exact moment its runner was correctly killing the child. The
+    /// claim needs the silence to have outlasted the bound by <see cref="HungSupervisionGrace"/>.</para>
+    ///
+    /// <para>Both numbers come from the RECORD: the daemon measured the silence on its own monotonic clock
+    /// and resolved the bound in the environment it was started in. A reader that re-resolved the bound from
+    /// its own environment judged the daemon against a number the daemon never used.</para>
     /// </summary>
     private static CtLoopHealthVerdict Executing(
         CtDaemonStatusRecord record,
-        TimeSpan drainElapsed,
         int lag,
         TimeSpan childStallTimeout)
     {
+        var executing = new CtLoopHealthVerdict(CtLoopHealth.Healthy, lag, "the daemon is executing a run");
         if (record.Run is not { Activity: CtRunActivity.Stalled } run)
-            return new CtLoopHealthVerdict(CtLoopHealth.Healthy, lag, "the daemon is executing a run");
+            return executing;
+
+        // The daemon's own bound; only a record that predates the field falls back to this reader's.
+        TimeSpan bound = run.ChildStallSeconds is { } recorded
+            ? TimeSpan.FromSeconds(recorded)
+            : childStallTimeout;
 
         // With the child bound off nothing will ever kill the run, so no kill is owed and none is late.
-        if (!IsBounded(childStallTimeout))
-            return new CtLoopHealthVerdict(CtLoopHealth.Healthy, lag, "the daemon is executing a run");
+        if (!IsBounded(bound))
+            return executing;
 
-        return drainElapsed > childStallTimeout
+        // "Stalled" says the silence passed the bound, never by how much. Without the measurement the claim
+        // cannot be made at all, exactly as a missing loop tick proves nothing.
+        if (run.SilenceSeconds is not { } silenceSeconds)
+            return executing;
+
+        var silence = TimeSpan.FromSeconds(silenceSeconds);
+        return silence > bound + HungSupervisionGrace
             ? new CtLoopHealthVerdict(
                 CtLoopHealth.HungSupervision,
                 lag,
-                $"the test process for {run.ProjectPath} passed its silence bound, the kill has not happened, "
-                    + $"and the run has held the loop for {Seconds(lag)}")
-            : new CtLoopHealthVerdict(CtLoopHealth.Healthy, lag, "the daemon is executing a run");
+                $"the test process for {run.ProjectPath} has been silent for {Seconds(silenceSeconds)}, past "
+                    + $"the {Seconds(WholeSeconds(bound))} bound its kill was owed at, and the run still "
+                    + $"holds the loop after {Seconds(lag)}")
+            : executing;
     }
 
     private static bool IsBounded(TimeSpan bound) =>

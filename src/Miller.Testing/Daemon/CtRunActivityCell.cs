@@ -172,6 +172,7 @@ public sealed class CtRunActivityCell
             if (_projectPath is null || _runId is null)
                 return (activity, null);
 
+            TimeSpan silence = SinceLastOutput();
             return (
                 activity,
                 new CtDaemonRunProgress(
@@ -179,9 +180,24 @@ public sealed class CtRunActivityCell
                     _runId,
                     _selectedCaseCount,
                     _runStartedAtUtc,
-                    ClassifySilence(SinceLastOutput())));
+                    ClassifySilence(silence),
+                    WholeSeconds(silence),
+                    PublishedStallSeconds()));
         }
     }
+
+    /// <summary>
+    /// The bound this daemon will kill at, or <c>0</c> when the guard is off. Published so a reader judges the
+    /// daemon against the number the daemon itself uses, rather than re-resolving
+    /// <c>MILLER_CT_STALL_TIMEOUT</c> from the reading process's own environment.
+    /// </summary>
+    private int PublishedStallSeconds() =>
+        _stallTimeout > TimeSpan.Zero && _stallTimeout != Timeout.InfiniteTimeSpan
+            ? WholeSeconds(_stallTimeout)
+            : 0;
+
+    private static int WholeSeconds(TimeSpan span) =>
+        span <= TimeSpan.Zero ? 0 : (int)Math.Min(span.TotalSeconds, int.MaxValue);
 
     private TimeSpan SinceLastOutput()
     {

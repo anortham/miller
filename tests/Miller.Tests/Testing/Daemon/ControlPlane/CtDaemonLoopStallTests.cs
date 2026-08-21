@@ -13,7 +13,7 @@ namespace Miller.Tests.Testing.Daemon.ControlPlane;
 /// drain keeps the file moving — and the pid probe proves only that the process is there. A daemon whose
 /// loop had stopped scanning therefore read as <c>running</c> for as long as the process lived.
 ///
-/// <para>The loop now stamps <c>loop_tick_at</c> on its own writes and the pulse copies that value verbatim,
+/// <para>The loop now stamps <c>loop_tick_at_utc</c> every time it moves and the pulse copies that verbatim,
 /// so one record carries two stamps from the same clock and their difference is the loop's lag. The reader's
 /// own clock never enters it, and a loaded machine slows both writers together.</para>
 /// </summary>
@@ -88,8 +88,8 @@ public sealed class CtDaemonLoopStallTests : IDisposable
 
     /// <summary>
     /// <see cref="CtRunActivity.Stalled"/> is the daemon's own reading that its child passed the silence
-    /// bound and the kill is DUE. When the drain has then held the loop for longer than that bound and the
-    /// run is still in flight, the kill did not happen — the supervision is hung, not the loop.
+    /// bound and the kill is DUE. When the child has then stayed silent well past that bound and the run is
+    /// still in flight, the kill did not happen — the supervision is hung, not the loop.
     /// </summary>
     [Fact]
     public void A_kill_that_was_owed_and_did_not_happen_is_hung_supervision()
@@ -98,7 +98,7 @@ public sealed class CtDaemonLoopStallTests : IDisposable
             Record(
                 lag: TimeSpan.FromMinutes(22),
                 activity: CtDaemonActivity.Executing,
-                run: Run(CtRunActivity.Stalled)));
+                run: Run(CtRunActivity.Stalled, silence: ChildBound + TimeSpan.FromMinutes(12))));
 
         Assert.Equal(CtLoopHealth.HungSupervision, verdict.Health);
         Assert.True(verdict.Stalled);
@@ -106,19 +106,81 @@ public sealed class CtDaemonLoopStallTests : IDisposable
     }
 
     /// <summary>
-    /// A child reaches "stalled" the instant its silence passes the bound, and the kill fires there. A run
-    /// whose drain has not yet outlasted that bound is a run whose kill is not yet late.
+    /// A child reaches "stalled" the INSTANT its silence passes the bound, which is the same instant the
+    /// runner's own kill fires. The drain elapsed cannot separate the two cases: one drain runs every ready
+    /// project, so a chatty forty-minute suite that has only just gone quiet has a long drain and a kill that
+    /// is not late at all. Judged by the drain, that healthy daemon was reported as hung supervision, and the
+    /// nudge told the operator to stop the daemon that was correctly killing its child.
     /// </summary>
     [Fact]
-    public void A_stalled_child_inside_the_kill_bound_is_not_yet_hung_supervision()
+    public void A_long_drain_whose_child_has_only_just_crossed_the_bound_is_not_hung_supervision()
     {
         CtLoopHealthVerdict verdict = Evaluate(
             Record(
-                lag: TimeSpan.FromMinutes(4),
+                lag: TimeSpan.FromMinutes(40),
+                activity: CtDaemonActivity.Executing,
+                run: Run(CtRunActivity.Stalled, silence: ChildBound + TimeSpan.FromSeconds(10))));
+
+        Assert.Equal(CtLoopHealth.Healthy, verdict.Health);
+        Assert.False(verdict.Stalled);
+    }
+
+    /// <summary>The grace is named here so a change to it is a deliberate edit to a test.</summary>
+    [Fact]
+    public void The_hung_supervision_grace_is_sixty_seconds()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(60), CtDaemonLoopHealth.HungSupervisionGrace);
+    }
+
+    /// <summary>
+    /// The daemon resolved its own child bound from the environment IT was started in. A reader in another
+    /// shell that re-resolved the bound judged the daemon against a number the daemon never used, in either
+    /// direction. The record carries the daemon's own bound, and that is the one the rule uses.
+    /// </summary>
+    [Fact]
+    public void The_daemons_own_child_bound_beats_the_readers()
+    {
+        CtLoopHealthVerdict verdict = Evaluate(
+            Record(
+                lag: TimeSpan.FromMinutes(40),
+                activity: CtDaemonActivity.Executing,
+                run: Run(
+                    CtRunActivity.Stalled,
+                    silence: TimeSpan.FromMinutes(25),
+                    childBound: TimeSpan.FromMinutes(30))));
+
+        // The reader's own bound is ten minutes, so a reader that used it would call this hung.
+        Assert.Equal(CtLoopHealth.Healthy, verdict.Health);
+    }
+
+    /// <summary>A daemon whose own guard is off owes no kill, whatever the reading process has set.</summary>
+    [Fact]
+    public void A_daemon_that_records_its_guard_as_off_never_owes_a_kill()
+    {
+        CtLoopHealthVerdict verdict = Evaluate(
+            Record(
+                lag: TimeSpan.FromHours(3),
+                activity: CtDaemonActivity.Executing,
+                run: Run(CtRunActivity.Stalled, silence: TimeSpan.FromHours(3), childBound: TimeSpan.Zero)));
+
+        Assert.Equal(CtLoopHealth.Healthy, verdict.Health);
+    }
+
+    /// <summary>
+    /// Without the daemon's own silence measurement the claim cannot be made at all: "stalled" says the
+    /// silence passed the bound, never by how much. Absence proves nothing, exactly as a missing tick does.
+    /// </summary>
+    [Fact]
+    public void A_stalled_child_with_no_silence_measurement_proves_nothing()
+    {
+        CtLoopHealthVerdict verdict = Evaluate(
+            Record(
+                lag: TimeSpan.FromMinutes(40),
                 activity: CtDaemonActivity.Executing,
                 run: Run(CtRunActivity.Stalled)));
 
         Assert.Equal(CtLoopHealth.Healthy, verdict.Health);
+        Assert.False(verdict.Stalled);
     }
 
     /// <summary>An executing record with no run cannot support the claim, so it renders as executing.</summary>
@@ -140,7 +202,7 @@ public sealed class CtDaemonLoopStallTests : IDisposable
             Record(
                 lag: TimeSpan.FromHours(3),
                 activity: CtDaemonActivity.Executing,
-                run: Run(CtRunActivity.Stalled)),
+                run: Run(CtRunActivity.Stalled, silence: TimeSpan.FromHours(3))),
             LoopBound,
             Timeout.InfiniteTimeSpan);
 
@@ -183,6 +245,26 @@ public sealed class CtDaemonLoopStallTests : IDisposable
     {
         CtLoopHealthVerdict verdict = CtDaemonLoopHealth.Evaluate(
             Record(lag: TimeSpan.FromHours(1)),
+            Timeout.InfiniteTimeSpan,
+            ChildBound);
+
+        Assert.Equal(CtLoopHealth.Unknown, verdict.Health);
+        Assert.False(verdict.Stalled);
+    }
+
+    /// <summary>
+    /// The documented switch turns the WHOLE detection off, hung supervision included. It used to sit below
+    /// the executing branch, so an operator who switched it off still got <c>loop_stalled: true</c> from a
+    /// daemon running a silent child — a kill switch that did not switch everything off.
+    /// </summary>
+    [Fact]
+    public void Detection_switched_off_silences_hung_supervision_too()
+    {
+        CtLoopHealthVerdict verdict = CtDaemonLoopHealth.Evaluate(
+            Record(
+                lag: TimeSpan.FromHours(3),
+                activity: CtDaemonActivity.Executing,
+                run: Run(CtRunActivity.Stalled, silence: TimeSpan.FromHours(3))),
             Timeout.InfiniteTimeSpan,
             ChildBound);
 
@@ -237,6 +319,53 @@ public sealed class CtDaemonLoopStallTests : IDisposable
     }
 
     /// <summary>
+    /// The name the reader actually looks up. The theory above passes literal strings to the parser, so a
+    /// typo in the constant would ship green and the documented switch would do nothing.
+    /// </summary>
+    [Fact]
+    public void The_loop_stall_bound_is_read_from_the_documented_variable_name()
+    {
+        var read = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["MILLER_CT_LOOP_STALL_TIMEOUT"] = "off",
+        };
+
+        TimeSpan resolved = CtDaemonLoopHealth.ResolveLoopStallTimeout(
+            name => read.TryGetValue(name, out string? value) ? value : null);
+
+        Assert.False(resolved > TimeSpan.Zero, "the off token left the detection bounded");
+    }
+
+    /// <summary>
+    /// End to end through the production seam: the parameterless resolve and the single-argument
+    /// <see cref="CtDaemonLoopHealth.Evaluate(CtDaemonStatusRecord?)"/> that <c>TestsCore</c> calls both read
+    /// the real process environment. Nothing else in the suite reads this variable, and it is restored before
+    /// the test returns.
+    /// </summary>
+    [Fact]
+    public void The_environment_switch_reaches_the_readers_default_path()
+    {
+        string? original = Environment.GetEnvironmentVariable(CtEnvironment.LoopStallTimeout);
+        try
+        {
+            Environment.SetEnvironmentVariable(CtEnvironment.LoopStallTimeout, "00:02:00");
+            Assert.Equal(TimeSpan.FromMinutes(2), CtDaemonLoopHealth.ResolveLoopStallTimeout());
+            Assert.Equal(
+                CtLoopHealth.Healthy,
+                CtDaemonLoopHealth.Evaluate(Record(lag: TimeSpan.FromSeconds(100))).Health);
+
+            Environment.SetEnvironmentVariable(CtEnvironment.LoopStallTimeout, "off");
+            Assert.Equal(
+                CtLoopHealth.Unknown,
+                CtDaemonLoopHealth.Evaluate(Record(lag: TimeSpan.FromHours(1))).Health);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CtEnvironment.LoopStallTimeout, original);
+        }
+    }
+
+    /// <summary>
     /// The live proof, with a real lease and real files: the main loop is parked inside its poll delay
     /// while the pulse keeps republishing. The pulse must copy the loop's last tick VERBATIM — if it
     /// stamped one of its own, a wedged loop would report a fresh tick forever and this feature would be
@@ -276,6 +405,138 @@ public sealed class CtDaemonLoopStallTests : IDisposable
             Assert.Equal(
                 CtLoopHealth.LoopStalled,
                 CtDaemonLoopHealth.Evaluate(latest, TimeSpan.FromTicks(1), ChildBound).Health);
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>
+    /// The hung-supervision rule reads two numbers off the FILE, so both must survive the round trip. A
+    /// field the serializer dropped would silence the rule everywhere and look like a healthy daemon.
+    /// </summary>
+    [Fact]
+    public void The_childs_silence_and_the_daemons_bound_survive_the_status_file()
+    {
+        WriteRecord(
+            _root,
+            Record(
+                lag: TimeSpan.FromMinutes(40),
+                activity: CtDaemonActivity.Executing,
+                run: Run(
+                    CtRunActivity.Stalled,
+                    silence: TimeSpan.FromMinutes(30),
+                    childBound: TimeSpan.FromMinutes(10))));
+
+        CtDaemonStatusRecord? read = CtDaemonLease.TryReadStatus(_root);
+
+        Assert.NotNull(read?.Run);
+        Assert.Equal(1800, read.Run.SilenceSeconds);
+        Assert.Equal(600, read.Run.ChildStallSeconds);
+        Assert.Equal(CtLoopHealth.HungSupervision, Evaluate(read).Health);
+
+        string json = File.ReadAllText(CtDaemonProtocol.StatusPath(_root));
+        Assert.Contains("\"silence_seconds\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"child_stall_seconds\"", json, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The whole feature is one subtraction, so both stamps must come from ONE clock. The tick used the
+    /// host's clock while the record's timestamp came from <see cref="TimeProvider.System"/>, and they
+    /// agreed only because both default to UtcNow — a host given a clock of its own wrote a tick from one
+    /// clock and a timestamp from another, and the lag between them meant nothing.
+    /// </summary>
+    [Fact]
+    public async Task Both_stamps_come_from_the_hosts_own_clock()
+    {
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                AcquireLease = true,
+                Enqueuer = new RecordingEnqueuer(),
+                Clock = () => Now,
+                PollInterval = TimeSpan.FromMilliseconds(5),
+                HeartbeatInterval = TimeSpan.FromSeconds(30),
+            },
+            cts.Token);
+
+        try
+        {
+            CtDaemonStatusRecord record = await WaitForStatusAsync(after: null);
+
+            Assert.Equal(Now, record.UpdatedAtUtc);
+            Assert.Equal(Now, record.LoopTickAtUtc);
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    /// <summary>
+    /// The window right after a run ends, which every healthy daemon passes through. The drain returns, the
+    /// activity cell goes back to idle, and the loop does not publish again until it has completed another
+    /// whole pass — poll delay, commands, worktree scan, one index poll per context. A pulse firing in that
+    /// window republished <c>idle</c> with the tick the loop stamped BEFORE the drain, so a reader saw the
+    /// run's whole duration as loop lag and the tool nudged the operator to stop a working daemon.
+    ///
+    /// <para>The clock advances five minutes inside the provider run, and the loop is parked in its poll
+    /// delay afterwards, so the window stands still and the record can be read without racing it.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_daemon_that_has_just_finished_a_run_is_not_reported_as_wedged()
+    {
+        DateTimeOffset start = DateTimeOffset.UtcNow;
+        var clock = new MovableClock(start);
+        ContinuousTestWorkspace workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(
+                new ClockAdvancingProvider(() => clock.Advance(TimeSpan.FromMinutes(5))),
+                store));
+        queue.Enqueue(EngineTestSupport.Change(workspace, observedAt: start));
+
+        var pollInterval = TimeSpan.FromSeconds(30);
+        var delay = new WedgeTheMainLoop(pollInterval);
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                AcquireLease = true,
+                WorkspaceId = EngineTestSupport.WorkspaceId,
+                Store = store,
+                Queue = queue,
+                Budget = CtExecutionBudget.Disabled(),
+                RunActivity = new CtRunActivityCell(ChildBound, clock.Read),
+                Clock = clock.Read,
+                PollInterval = pollInterval,
+                HeartbeatInterval = TimeSpan.FromMilliseconds(5),
+                Delay = delay.DelayAsync,
+            },
+            cts.Token);
+
+        try
+        {
+            CtDaemonStatusRecord afterTheRun = await WaitForStatusAsync(record =>
+                record.Activity == CtDaemonActivity.Idle && record.UpdatedAtUtc > start);
+
+            Assert.Equal(
+                CtLoopHealth.Healthy,
+                CtDaemonLoopHealth.Evaluate(
+                    afterTheRun,
+                    CtDaemonLoopHealth.DefaultLoopStallTimeout,
+                    ChildBound).Health);
         }
         finally
         {
@@ -325,7 +586,7 @@ public sealed class CtDaemonLoopStallTests : IDisposable
                 Record(
                     lag: TimeSpan.FromMinutes(22),
                     activity: CtDaemonActivity.Executing,
-                    run: Run(CtRunActivity.Stalled))));
+                    run: Run(CtRunActivity.Stalled, silence: ChildBound + TimeSpan.FromMinutes(12)))));
 
         using JsonDocument doc = JsonDocument.Parse(TestsCore.RenderStatusJson(result));
         Assert.True(doc.RootElement.GetProperty("daemon").GetProperty("loop_stalled").GetBoolean());
@@ -430,13 +691,26 @@ public sealed class CtDaemonLoopStallTests : IDisposable
 
     private static CtDaemonLeaseIdentity Identity() => new(4242, DateTimeOffset.UnixEpoch);
 
-    private static CtDaemonRunProgress Run(CtRunActivity activity) =>
+    /// <param name="silence">
+    /// How long the daemon says its child has been quiet. Null stands for a record from a build that
+    /// predates the measurement.
+    /// </param>
+    /// <param name="childBound">
+    /// The bound the DAEMON resolved. Null stands for a record that predates the field; zero is a daemon
+    /// whose guard is off.
+    /// </param>
+    private static CtDaemonRunProgress Run(
+        CtRunActivity activity,
+        TimeSpan? silence = null,
+        TimeSpan? childBound = null) =>
         new(
             Path.Combine("tests", "Sample.Tests.csproj"),
             "ct-run:abc",
             SelectedCaseCount: 7,
             RunStartedAtUtc: Now,
-            Activity: activity);
+            Activity: activity,
+            SilenceSeconds: silence is { } quiet ? (int)quiet.TotalSeconds : null,
+            ChildStallSeconds: childBound is { } bound ? (int)bound.TotalSeconds : null);
 
     /// <summary>
     /// One record whose two stamps are <paramref name="lag"/> apart — the pulse republished at
@@ -509,12 +783,21 @@ public sealed class CtDaemonLoopStallTests : IDisposable
         return (main, worktree);
     }
 
-    private async Task<CtDaemonStatusRecord> WaitForStatusAsync(DateTimeOffset? after)
+    /// <summary>
+    /// Waits for a record the LOOP has stamped. <see cref="CtDaemonLease.TryAcquire"/> publishes a record
+    /// before the loop's first write, and that one carries no tick — a poll that won the race against the
+    /// first loop write used to fail the caller's non-null assertion for the wrong reason.
+    /// </summary>
+    private Task<CtDaemonStatusRecord> WaitForStatusAsync(DateTimeOffset? after) =>
+        WaitForStatusAsync(record =>
+            record.LoopTickAtUtc is not null && (after is null || record.UpdatedAtUtc > after));
+
+    private async Task<CtDaemonStatusRecord> WaitForStatusAsync(Func<CtDaemonStatusRecord, bool> matches)
     {
         for (int attempt = 0; attempt < 400; attempt++)
         {
             CtDaemonStatusRecord? record = CtDaemonLease.TryReadStatus(_root);
-            if (record is not null && (after is null || record.UpdatedAtUtc > after))
+            if (record is not null && matches(record))
                 return record;
             await Task.Delay(10, TestContext.Current.CancellationToken);
         }
@@ -533,5 +816,35 @@ public sealed class CtDaemonLoopStallTests : IDisposable
             duration == pollInterval
                 ? Task.Delay(Timeout.Infinite, cancellationToken)
                 : Task.Delay(duration, cancellationToken);
+    }
+
+    /// <summary>
+    /// One wall clock the whole daemon reads: the loop's tick, the record's own timestamp, and the run
+    /// start. A test moves it by hand, so a five-minute run costs no wall time and no sleep.
+    /// </summary>
+    private sealed class MovableClock(DateTimeOffset start)
+    {
+        private long _ticks = start.UtcTicks;
+
+        public DateTimeOffset Read() => new(Interlocked.Read(ref _ticks), TimeSpan.Zero);
+
+        public void Advance(TimeSpan amount) => Interlocked.Add(ref _ticks, amount.Ticks);
+    }
+
+    /// <summary>A provider whose run takes time on the daemon's clock and then succeeds.</summary>
+    private sealed class ClockAdvancingProvider(Action onRun) : IContinuousTestProvider
+    {
+        public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
+            ContinuousTestWorkspace workspace,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ProviderTestCase>>([]);
+
+        public Task<ProviderRunResult> RunAsync(
+            ContinuousTestProviderRunRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            onRun();
+            return Task.FromResult(new ProviderRunResult(request.RunId ?? "run:1", "passed"));
+        }
     }
 }

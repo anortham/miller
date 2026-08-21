@@ -141,13 +141,25 @@ public sealed class CtDaemonLease : IDisposable
         CtDaemonActivity activity,
         CtDaemonRunProgress? run,
         DateTimeOffset? loopTickAtUtc = null,
-        TimeProvider? time = null)
-    {
-        DateTimeOffset now = (time ?? TimeProvider.System).GetUtcNow();
+        TimeProvider? time = null) =>
+        WriteStatus(state, reason, activity, run, loopTickAtUtc, (time ?? TimeProvider.System).GetUtcNow());
+
+    /// <summary>
+    /// The same publish with the write's timestamp supplied outright, so a caller that stamps
+    /// <paramref name="loopTickAtUtc"/> from its own clock can stamp <paramref name="nowUtc"/> from that SAME
+    /// clock. The lag a reader measures is the difference between the two, and a pair taken from two clocks
+    /// measures nothing.
+    /// </summary>
+    public void WriteStatus(
+        CtDaemonLifecycleState state,
+        string reason,
+        CtDaemonActivity activity,
+        CtDaemonRunProgress? run,
+        DateTimeOffset? loopTickAtUtc,
+        DateTimeOffset nowUtc) =>
         WriteStatus(
             Record.WorkspaceRoot,
-            new CtDaemonStatusRecord(state, reason, Record.Identity, now, activity, run, loopTickAtUtc));
-    }
+            new CtDaemonStatusRecord(state, reason, Record.Identity, nowUtc, activity, run, loopTickAtUtc));
 
     public void Dispose()
     {
