@@ -351,20 +351,43 @@ public sealed class TelemetryLedger : IDisposable
     /// throwing (an admin read must never fault).
     /// </para>
     /// </summary>
-    public TelemetrySummary Summarize() => Summarize(WorkspaceId);
+    public TelemetrySummary Summarize() => Summarize(WorkspaceId, windowDays: null);
 
-    public TelemetrySummary SummarizeForWorkspace(string? workspaceId) => Summarize(workspaceId);
+    public TelemetrySummary SummarizeForWorkspace(string? workspaceId) => Summarize(workspaceId, windowDays: null);
+
+    /// <summary>
+    /// Roll only the rows written in the last <paramref name="windowDays"/> days, read from this ledger's
+    /// injected clock. Retention keeps 30 days, so an unwindowed summary lets one bad day inflate the headline
+    /// p95 for a month after its cause is fixed.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="windowDays"/> is zero or negative.</exception>
+    public TelemetrySummary SummarizeRecent(int windowDays) => SummarizeRecentForWorkspace(WorkspaceId, windowDays);
+
+    /// <summary>The <see cref="SummarizeRecent"/> window applied to another workspace's rows.</summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="windowDays"/> is zero or negative.</exception>
+    public TelemetrySummary SummarizeRecentForWorkspace(string? workspaceId, int windowDays)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(windowDays);
+        return Summarize(workspaceId, windowDays);
+    }
 
     public TelemetryHealthFacts SummarizeOutcomes() => SummarizeOutcomes(WorkspaceId);
 
     public TelemetryHealthFacts SummarizeOutcomesForWorkspace(string? workspaceId) => SummarizeOutcomes(workspaceId);
 
-    private TelemetrySummary Summarize(string? workspaceId)
+    private TelemetrySummary Summarize(string? workspaceId, int? windowDays)
     {
         lock (_gate)
         {
             if (_disposed)
                 return TelemetrySummary.Empty;
+
+            // ts is ISO-8601 UTC text of a fixed width, so the window is a lexical lower bound (same comparison
+            // Prune uses). A null cutoff selects every retained row, keeping the unwindowed read unchanged.
+            object cutoff = windowDays is { } days
+                ? _clock.GetUtcNow().UtcDateTime.AddDays(-days)
+                    .ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture)
+                : DBNull.Value;
 
             // One GROUP BY for the cheap aggregates; p95 needs a per-tool ordered offset query (below).
             var stats = new List<ToolStat>();
@@ -380,11 +403,12 @@ public sealed class TelemetryLedger : IDisposable
                            SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS errors,
                            COALESCE(SUM(est_tokens), 0)          AS sum_tokens
                     FROM tool_telemetry
-                    WHERE workspace_id IS $ws
+                    WHERE workspace_id IS $ws AND ($cutoff IS NULL OR ts >= $cutoff)
                     GROUP BY tool
                     ORDER BY tool;
                     """;
                 group.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+                group.Parameters.AddWithValue("$cutoff", cutoff);
                 using var reader = group.ExecuteReader();
                 while (reader.Read())
                 {
@@ -395,7 +419,7 @@ public sealed class TelemetryLedger : IDisposable
                     long maxMs = reader.GetInt64(3);
                     long errors = reader.GetInt64(4);
                     long sumTokens = reader.GetInt64(5);
-                    long p95Ms = ComputeP95(tool, calls, workspaceId);
+                    long p95Ms = ComputeP95(tool, calls, workspaceId, cutoff);
                     stats.Add(new ToolStat(tool, calls, avgMs, p95Ms, maxMs, errors, sumTokens));
                 }
             }
@@ -405,8 +429,11 @@ public sealed class TelemetryLedger : IDisposable
             string? windowEnd = null;
             using (var totals = _connection.CreateCommand())
             {
-                totals.CommandText = "SELECT COUNT(*), MIN(ts), MAX(ts) FROM tool_telemetry WHERE workspace_id IS $ws;";
+                totals.CommandText =
+                    "SELECT COUNT(*), MIN(ts), MAX(ts) FROM tool_telemetry " +
+                    "WHERE workspace_id IS $ws AND ($cutoff IS NULL OR ts >= $cutoff);";
                 totals.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+                totals.Parameters.AddWithValue("$cutoff", cutoff);
                 using var reader = totals.ExecuteReader();
                 if (reader.Read())
                 {
@@ -416,7 +443,10 @@ public sealed class TelemetryLedger : IDisposable
                 }
             }
 
-            return new TelemetrySummary(stats, totalCalls, windowStart, windowEnd, DroppedWrites);
+            return new TelemetrySummary(stats, totalCalls, windowStart, windowEnd, DroppedWrites)
+            {
+                WindowDays = windowDays,
+            };
         }
     }
 
@@ -466,16 +496,17 @@ public sealed class TelemetryLedger : IDisposable
     /// ascending-duration ordering is the 95th-percentile value (so a single row yields its own duration, and
     /// the max row is never skipped). Caller holds <see cref="_gate"/>.
     /// </summary>
-    private long ComputeP95(string tool, long count, string? workspaceId)
+    private long ComputeP95(string tool, long count, string? workspaceId, object cutoff)
     {
         // floor((count-1)*0.95): integer math on count>=1. count is the GROUP BY count, always >= 1 here.
         long offset = (long)Math.Floor((count - 1) * 0.95);
         using var cmd = _connection.CreateCommand();
         cmd.CommandText =
             "SELECT duration_ms FROM tool_telemetry WHERE tool = $tool AND workspace_id IS $ws " +
-            "ORDER BY duration_ms ASC LIMIT 1 OFFSET $offset;";
+            "AND ($cutoff IS NULL OR ts >= $cutoff) ORDER BY duration_ms ASC LIMIT 1 OFFSET $offset;";
         cmd.Parameters.AddWithValue("$tool", tool);
         cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$cutoff", cutoff);
         cmd.Parameters.AddWithValue("$offset", offset);
         object? value = cmd.ExecuteScalar();
         return value is null or DBNull ? 0 : Convert.ToInt64(value, CultureInfo.InvariantCulture);

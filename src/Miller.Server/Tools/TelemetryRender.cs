@@ -48,9 +48,10 @@ public static class TelemetryRender
     }
 
     /// <summary>
-    /// Render the summary as a JSON object: <c>{ total_calls, window_start, window_end, dropped_writes,
-    /// tools:[{ tool, calls, avg_ms, p95_ms, max_ms, error_count, est_tokens }] }</c>. <c>window_start</c> /
-    /// <c>window_end</c> are JSON null when the ledger is empty.
+    /// Render the summary as a JSON object: <c>{ total_calls, window_start, window_end, window_days,
+    /// dropped_writes, tools:[{ tool, calls, avg_ms, p95_ms, max_ms, error_count, est_tokens }] }</c>.
+    /// <c>window_start</c> / <c>window_end</c> are JSON null when the ledger is empty; <c>window_days</c> is
+    /// JSON null when the summary covers every retained row rather than a rolling window.
     /// </summary>
     public static string Json(TelemetrySummary summary)
     {
@@ -64,6 +65,8 @@ public static class TelemetryRender
             else w.WriteString("window_start", summary.WindowStartTs);
             if (summary.WindowEndTs is null) w.WriteNull("window_end");
             else w.WriteString("window_end", summary.WindowEndTs);
+            if (summary.WindowDays is { } windowDays) w.WriteNumber("window_days", windowDays);
+            else w.WriteNull("window_days");
             w.WriteNumber("dropped_writes", summary.DroppedWrites);
 
             w.WritePropertyName("tools");

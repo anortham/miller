@@ -194,7 +194,7 @@ public sealed class LiveWorkspaceTests : IDisposable
         Assert.Contains("# workspace", output);
         Assert.Contains("symbols:", output);
         Assert.Contains("telemetry:", output);  // compact status surfaces the telemetry summary
-        Assert.Contains("top=search", output);
+        Assert.Contains("busiest=search", output);
     }
 
     [Fact]

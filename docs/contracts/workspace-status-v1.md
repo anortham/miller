@@ -94,7 +94,11 @@ continuous testing, launcher smokes, fleet inventory, and local readiness checks
   `corpus_generation`, `writer_version`, `min_reader_version`, `fusion_profile`.
 - `retained_generations`: array of `{tag, path}` for superseded generations still on disk.
 
-`telemetry` uses the same nested object shape as Miller's telemetry summary renderer.
+`telemetry` uses the same nested object shape as Miller's telemetry summary renderer. It carries
+`window_days`: the rolling window in days the rows were summarized over, or `null` when the summary covers
+every retained row. The MCP `workspace` status surface summarizes a 7-day window so one bad day does not
+inflate the headline p95 for the whole 30-day retention; `miller workspace status --json` still emits an empty
+telemetry object. The field is additive; the rest of the object shape is unchanged.
 
 ## Eros CT fields
 

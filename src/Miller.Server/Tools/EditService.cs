@@ -56,8 +56,20 @@ public sealed class EditService
     private const int MaxRenameEvidencePathBytes = 256;
     private const int MaxPartialApplyPaths = 20;
     private const int MaxDiskAnchorCandidates = 32;
-    /// <summary>The bucket for a known failure path that produced no more specific classification.</summary>
-    internal const string FailureUnknown = "unknown";
+    /// <summary>
+    /// The bucket for an <see cref="EditErrorKind"/> that <see cref="FailureReasonFor"/> has no mapping for —
+    /// a planner kind added without a bucket. It names the LAYER that failed to classify, which the old
+    /// <c>unknown</c> did not: a row stamped <c>unknown</c> said neither where nor why, so a later replay of the
+    /// telemetry could not act on it.
+    /// </summary>
+    internal const string FailureUnclassifiedPlanError = "unclassified_plan_error";
+
+    /// <summary>
+    /// The bucket for an error <see cref="EditResult"/> that reached the diagnostic/telemetry seam carrying no
+    /// bucket of its own. Every current failure path states one, so this bucket means a NEW exit skipped the
+    /// contract — and says so, instead of hiding behind <c>unknown</c>.
+    /// </summary>
+    internal const string FailureUnclassifiedResult = "unclassified_result";
 
     /// <summary>Diagnostic code for a same-text preview that produced no diff.</summary>
     private const string EmptyNoChange = "no_change";
@@ -203,7 +215,7 @@ public sealed class EditService
         return WithDiagnostic(result, json);
     }
 
-    private static EditResult WithDiagnostic(EditResult result, bool json)
+    internal static EditResult WithDiagnostic(EditResult result, bool json)
     {
         if (string.Equals(result.Outcome, "ok", StringComparison.Ordinal))
             return result;
@@ -224,7 +236,7 @@ public sealed class EditService
                     FailureApplyFailed or FailurePartialApply =>
                         ToolDiagnostic.Unavailable(result.FailureReason, DiagnosticMessage(result.Output)),
                     _ => ToolDiagnostic.InternalFailure(
-                        result.FailureReason ?? FailureUnknown,
+                        result.FailureReason ?? FailureUnclassifiedResult,
                         DiagnosticMessage(result.Output)),
                 };
         return result with
@@ -323,7 +335,7 @@ public sealed class EditService
             staleWaitPerformed = replace.StaleWaitPerformed;
             if (replace.ErrorMessage is not null)
                 return Error(replace.ErrorMessage, json,
-                    failureReason: replace.FailureReason ?? FailureUnknown) with
+                    failureReason: replace.FailureReason ?? FailureUnclassifiedResult) with
                 { StaleWaitPerformed = staleWaitPerformed };
 
             plan = replace.Plan!;
@@ -440,8 +452,8 @@ public sealed class EditService
             return Error(
                 applyResult.Message,
                 json,
-                fresh,
-                FailureApplyFailed);
+                FailureApplyFailed,
+                fresh);
         }
 
         _writeThrough.Converge([planned.FilePath]);
@@ -1325,8 +1337,8 @@ public sealed class EditService
             return Error(
                 applyResult.Message,
                 json,
-                !anyStale,
-                FailureApplyFailed);
+                FailureApplyFailed,
+                !anyStale);
         }
 
         _writeThrough.Converge(plan.PlannedEdits.Select(p => p.FilePath).ToArray());
@@ -2175,8 +2187,10 @@ public sealed class EditService
             : new EditResult(msg, false, false, null, "empty", 0, FailureTargetNotFound);
     }
 
+    // failureReason has NO default: an untyped bucket must not be reachable by forgetting an argument. Every
+    // exit states which condition it refused on, and the compiler enforces it for exits added later.
     private static EditResult Error(
-        string message, bool json, bool? indexFresh = null, string failureReason = FailureUnknown)
+        string message, bool json, string failureReason, bool? indexFresh = null)
     {
         if (json)
             return new EditResult(JsonObject(w =>
@@ -2389,13 +2403,13 @@ public sealed class EditService
         _ => "all",
     };
 
-    private static string FailureReasonFor(EditErrorKind kind) => kind switch
+    internal static string FailureReasonFor(EditErrorKind kind) => kind switch
     {
         EditErrorKind.TextNotFound => FailureNoMatch,
         EditErrorKind.InvalidSpan => FailureStaleTarget,
         EditErrorKind.BodySpanUnavailable or EditErrorKind.InvalidNewName or EditErrorKind.MissingArgument =>
             FailureInvalidRequest,
-        _ => FailureUnknown,
+        _ => FailureUnclassifiedPlanError,
     };
 
     private sealed record ReplaceTextPlanResult(

@@ -563,7 +563,7 @@ public sealed class WorkspaceTool
             return StatusResult(
                 WorkspaceRender.Status(
                     currentFacts,
-                    _ledger.Summarize(),
+                    _ledger.SummarizeRecent(TelemetryHighlights.RecentWindowDays),
                     json,
                     ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true),
                     _bootstrap.Snapshot),
@@ -588,7 +588,7 @@ public sealed class WorkspaceTool
         return StatusResult(
             WorkspaceRender.Status(
                 facts,
-                _ledger.SummarizeForWorkspace(row.WorkspaceId),
+                _ledger.SummarizeRecentForWorkspace(row.WorkspaceId, TelemetryHighlights.RecentWindowDays),
                 json,
                 leader),
             facts,

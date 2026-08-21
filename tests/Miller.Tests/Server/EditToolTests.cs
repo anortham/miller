@@ -3064,16 +3064,44 @@ public sealed class EditToolTests : IDisposable
     //
     // The invariant: every edit telemetry row that did not succeed carries a non-null, privacy-safe
     // `edit_failure_reason` bucket. The documented bucket vocabulary is exactly two shapes:
-    //   * a stable EditService bucket (below), where `unknown` means a known code path reached Error()
-    //     without a more specific bucket;
+    //   * a stable EditService bucket (below), including the two typed gap buckets
+    //     `unclassified_plan_error` (a planner error kind with no mapping) and `unclassified_result`
+    //     (an error result that carried no bucket) — each names WHICH layer failed to classify;
     //   * `unhandled_<ExceptionTypeName>`, the EditTool backstop for an exception escaping the pipeline —
     //     the exception TYPE NAME only, never its message.
     // Buckets are stable enums: no file paths, no user text, no exception messages.
     private static readonly string[] DocumentedFailureBuckets =
     [
         "no_match", "ambiguous_match", "stale_target", "invalid_request",
-        "target_not_found", "apply_failed", "unknown",
+        "target_not_found", "apply_failed", "unclassified_plan_error", "unclassified_result",
     ];
+
+    // `unknown` said nothing: a row stamped with it named neither the failing layer nor the condition, so a
+    // later replay could not act on it. Both gap buckets are typed and name their layer.
+    [Fact]
+    public void FailureReasonFor_MapsEveryPlanErrorKind_AndTypesTheUnmappedGap()
+    {
+        Assert.Equal("no_match", EditService.FailureReasonFor(EditErrorKind.TextNotFound));
+        Assert.Equal("stale_target", EditService.FailureReasonFor(EditErrorKind.InvalidSpan));
+        Assert.Equal("invalid_request", EditService.FailureReasonFor(EditErrorKind.BodySpanUnavailable));
+        Assert.Equal("invalid_request", EditService.FailureReasonFor(EditErrorKind.InvalidNewName));
+        Assert.Equal("invalid_request", EditService.FailureReasonFor(EditErrorKind.MissingArgument));
+        Assert.Equal("unclassified_plan_error", EditService.FailureReasonFor((EditErrorKind)999));
+    }
+
+    [Fact]
+    public void WithDiagnostic_ErrorResultCarryingNoBucket_IsTypedAsAnUnclassifiedResult()
+    {
+        var untyped = new EditService.EditResult(
+            "edit: something failed", Applied: false, StaleAllowed: false, IndexFresh: null,
+            Outcome: "error", ResultCount: 0);
+
+        EditService.EditResult classified = EditService.WithDiagnostic(untyped, json: false);
+
+        Assert.Equal("unclassified_result", classified.Diagnostic!.Code);
+        Assert.Contains("unclassified_result", classified.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("diagnostic_code=unknown", classified.Output, StringComparison.Ordinal);
+    }
 
     private static string StampedFailureBucket(TelemetryScope telemetry, params string[] forbiddenText)
     {

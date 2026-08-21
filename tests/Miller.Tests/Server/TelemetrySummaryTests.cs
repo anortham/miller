@@ -169,6 +169,94 @@ public sealed class TelemetrySummaryTests : IDisposable
         Assert.Equal(200, stat.MaxMs);
     }
 
+    // The headline p95 the status line shows must describe RECENT behaviour. Over the full 30-day retention one
+    // bad day inflates it for a month, and the cause is often already-retired code.
+    [Fact]
+    public void SummarizeRecent_ExcludesRowsOlderThanTheWindow()
+    {
+        var clock = new FixedClock(new DateTimeOffset(2026, 8, 21, 12, 0, 0, TimeSpan.Zero));
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1", clock: clock);
+        InsertRow("search", 9000, "error", 10, "2026-08-01T00:00:00.000Z"); // 20 days old
+        InsertRow("search", 100, "ok", 20, "2026-08-20T00:00:00.000Z");     // 1 day old
+
+        TelemetrySummary recent = ledger.SummarizeRecent(7);
+
+        Assert.Equal(1, recent.TotalCalls);
+        Assert.Equal(7, recent.WindowDays);
+        ToolStat search = Assert.Single(recent.Tools);
+        Assert.Equal(1, search.Calls);
+        Assert.Equal(100, search.P95Ms);
+        Assert.Equal(100, search.MaxMs);
+        Assert.Equal(0, search.ErrorCount);
+        Assert.Equal(20, search.SumEstTokens);
+        Assert.Equal("2026-08-20T00:00:00.000Z", recent.WindowStartTs);
+    }
+
+    [Fact]
+    public void SummarizeRecent_WindowRollsForwardWithTheClock()
+    {
+        var clock = new FixedClock(new DateTimeOffset(2026, 8, 21, 12, 0, 0, TimeSpan.Zero));
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1", clock: clock);
+        InsertRow("search", 100, "ok", 20, "2026-08-20T00:00:00.000Z");
+
+        Assert.Equal(1, ledger.SummarizeRecent(7).TotalCalls);
+
+        clock.Now = new DateTimeOffset(2026, 9, 1, 12, 0, 0, TimeSpan.Zero);
+
+        TelemetrySummary rolled = ledger.SummarizeRecent(7);
+        Assert.Equal(0, rolled.TotalCalls);
+        Assert.Empty(rolled.Tools);
+        Assert.Null(rolled.WindowStartTs);
+    }
+
+    [Fact]
+    public void Summarize_WithoutAWindow_StaysLifetimeWideAndReportsNoWindowDays()
+    {
+        var clock = new FixedClock(new DateTimeOffset(2026, 8, 21, 12, 0, 0, TimeSpan.Zero));
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1", clock: clock);
+        InsertRow("search", 9000, "error", 10, "2026-08-01T00:00:00.000Z");
+        InsertRow("search", 100, "ok", 20, "2026-08-20T00:00:00.000Z");
+
+        TelemetrySummary lifetime = ledger.Summarize();
+
+        Assert.Equal(2, lifetime.TotalCalls);
+        Assert.Null(lifetime.WindowDays);
+        Assert.Equal(9000, Assert.Single(lifetime.Tools).MaxMs);
+    }
+
+    [Fact]
+    public void SummarizeRecentForWorkspace_ScopesToTheRequestedWorkspaceAndTheWindow()
+    {
+        var clock = new FixedClock(new DateTimeOffset(2026, 8, 21, 12, 0, 0, TimeSpan.Zero));
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1", clock: clock);
+        InsertRow("target-search", 100, "ok", 10, "2026-08-20T00:00:00.000Z", workspaceId: "ws2");
+        InsertRow("target-search", 900, "ok", 10, "2026-08-01T00:00:00.000Z", workspaceId: "ws2");
+        InsertRow("current-search", 100, "ok", 10, "2026-08-20T00:00:00.000Z", workspaceId: "ws1");
+
+        TelemetrySummary summary = ledger.SummarizeRecentForWorkspace("ws2", 7);
+
+        Assert.Equal(1, summary.TotalCalls);
+        Assert.Equal(7, summary.WindowDays);
+        Assert.Equal("target-search", Assert.Single(summary.Tools).Tool);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void SummarizeRecent_RejectsANonPositiveWindow(int windowDays)
+    {
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => ledger.SummarizeRecent(windowDays));
+    }
+
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
     [Fact]
     public void SummarizeOutcomesForWorkspace_GroupsOkEmptyAndError()
     {

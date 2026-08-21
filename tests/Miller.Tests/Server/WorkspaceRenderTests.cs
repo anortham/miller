@@ -184,8 +184,80 @@ public sealed class WorkspaceRenderTests
         Assert.Contains("42", text);             // built revision
         Assert.Contains("leader", text, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("telemetry:", text);      // concise telemetry summary
-        Assert.Contains("search", text);         // top tool by p95
+        Assert.Contains("search", text);         // busiest tool by calls
         Assert.Contains("250", text);            // a telemetry metric (p95)
+    }
+
+    // The line used to label the most-called tool `top=`, which readers took to mean "the slow one". The
+    // busiest tool and the slowest tool are separate questions, so the line now answers both by name.
+    [Fact]
+    public void Status_Compact_TelemetryLine_NamesTheBusiestAndTheSlowestToolSeparately()
+    {
+        var summary = new TelemetrySummary(
+            new[]
+            {
+                new ToolStat("search", 400, 220.0, 191, 900, 3, 5000),
+                new ToolStat("inspect", 40, 1307.0, 8953, 20000, 0, 9000),
+            },
+            TotalCalls: 440, WindowStartTs: null, WindowEndTs: null, DroppedWrites: 0);
+
+        string text = WorkspaceRender.Status(Facts(), summary, json: false);
+
+        Assert.Contains("busiest=search p95=191ms", text, StringComparison.Ordinal);
+        Assert.Contains("slowest=inspect p95=8953ms", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("top=", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Compact_TelemetryLine_OmitsSlowest_WhenNoToolMeetsTheCallFloor()
+    {
+        var summary = new TelemetrySummary(
+            new[]
+            {
+                new ToolStat("search", 4, 220.0, 191, 900, 0, 5000),
+                new ToolStat("edit", 1, 90_000.0, 90_000, 90_000, 0, 10),
+            },
+            TotalCalls: 5, WindowStartTs: null, WindowEndTs: null, DroppedWrites: 0);
+
+        string text = WorkspaceRender.Status(Facts(), summary, json: false);
+
+        Assert.Contains("busiest=search p95=191ms", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("slowest=", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("90000", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Compact_TelemetryLine_OmitsSlowest_WhenItIsTheBusiestTool()
+    {
+        string text = WorkspaceRender.Status(Facts(), Telemetry, json: false);
+
+        Assert.Contains("busiest=search p95=250ms", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("slowest=", text, StringComparison.Ordinal);
+    }
+
+    // A windowed summary must SAY it is windowed; an unlabelled figure reads as lifetime behaviour.
+    [Fact]
+    public void Status_Compact_TelemetryLine_NamesTheRollingWindow()
+    {
+        string windowed = WorkspaceRender.Status(
+            Facts(), Telemetry with { WindowDays = 7 }, json: false);
+        string lifetime = WorkspaceRender.Status(Facts(), Telemetry, json: false);
+
+        Assert.Contains("telemetry: 7d  11 calls", windowed, StringComparison.Ordinal);
+        Assert.Contains("telemetry: 11 calls", lifetime, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Json_TelemetryObject_CarriesTheWindowDays()
+    {
+        JsonElement windowed = Json(
+            WorkspaceRender.Status(Facts(), Telemetry with { WindowDays = 7 }, json: true))
+            .GetProperty("telemetry");
+        JsonElement lifetime = Json(WorkspaceRender.Status(Facts(), Telemetry, json: true))
+            .GetProperty("telemetry");
+
+        Assert.Equal(7, windowed.GetProperty("window_days").GetInt32());
+        Assert.Equal(JsonValueKind.Null, lifetime.GetProperty("window_days").ValueKind);
     }
 
     [Fact]

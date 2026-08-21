@@ -18,6 +18,12 @@ public readonly record struct TelemetrySummary(
     string? WindowEndTs,
     long DroppedWrites)
 {
+    /// <summary>
+    /// The rolling window, in days, the rows were selected from; null when the summary covers every retained row.
+    /// A windowed figure MUST be rendered with its window named — an unlabelled p95 reads as lifetime behaviour.
+    /// </summary>
+    public int? WindowDays { get; init; }
+
     /// <summary>An all-zero summary (no rows). Used for the empty-ledger and disposed-ledger paths.</summary>
     public static TelemetrySummary Empty { get; } =
         new(Array.Empty<ToolStat>(), TotalCalls: 0, WindowStartTs: null, WindowEndTs: null, DroppedWrites: 0);

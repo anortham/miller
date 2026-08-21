@@ -157,7 +157,7 @@ public sealed class EditTool
                 if (result.FailureReason is not null)
                     telemetry.SetMetadata(FailureReasonMetadataKey, result.FailureReason);
                 else if (telemetry.Outcome == TelemetryOutcome.Error)
-                    telemetry.SetMetadata(FailureReasonMetadataKey, EditService.FailureUnknown);
+                    telemetry.SetMetadata(FailureReasonMetadataKey, EditService.FailureUnclassifiedResult);
                 if (telemetry.Outcome == TelemetryOutcome.Empty && result.Diagnostic is null)
                     telemetry.SetEmptyReason("edit_noop");
             }

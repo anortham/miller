@@ -864,19 +864,25 @@ public static class WorkspaceRender
         if (telemetry.Tools.Count == 0)
             return string.Empty;
 
-        ToolStat top = telemetry.Tools
-            .OrderByDescending(static tool => tool.Calls)
-            .ThenByDescending(static tool => tool.P95Ms)
-            .ThenBy(static tool => tool.Tool, StringComparer.Ordinal)
-            .First();
+        ToolStat busiest = TelemetryHighlights.Busiest(telemetry.Tools)!.Value;
+        ToolStat? slowest = TelemetryHighlights.Slowest(telemetry.Tools);
         long errors = telemetry.Tools.Sum(static tool => tool.ErrorCount);
         var sb = new StringBuilder();
-        sb.Append("telemetry: ").Append(telemetry.TotalCalls.ToString(CultureInfo.InvariantCulture))
-          .Append(" calls");
+        sb.Append("telemetry: ");
+        if (telemetry.WindowDays is { } windowDays)
+            sb.Append(windowDays.ToString(CultureInfo.InvariantCulture)).Append("d  ");
+        sb.Append(telemetry.TotalCalls.ToString(CultureInfo.InvariantCulture)).Append(" calls");
         if (errors > 0)
             sb.Append("  errors=").Append(errors.ToString(CultureInfo.InvariantCulture));
-        sb.Append("  top=").Append(top.Tool)
-          .Append(" p95=").Append(top.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms");
+        sb.Append("  busiest=").Append(busiest.Tool)
+          .Append(" p95=").Append(busiest.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms");
+        // The busiest tool is often the fastest one, so its p95 answers a different question than "what is
+        // slow here". Naming the slowest tool too costs one clause and stops the label being misread.
+        if (slowest is { } slow && !string.Equals(slow.Tool, busiest.Tool, StringComparison.Ordinal))
+        {
+            sb.Append("  slowest=").Append(slow.Tool)
+              .Append(" p95=").Append(slow.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms");
+        }
         if (telemetry.DroppedWrites > 0)
             sb.Append("  dropped=").Append(telemetry.DroppedWrites.ToString(CultureInfo.InvariantCulture));
         return sb.ToString();
