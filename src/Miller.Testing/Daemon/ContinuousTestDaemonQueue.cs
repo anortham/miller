@@ -164,7 +164,9 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         {
             // Fail closed: the staleness above is recorded, but an unknown or known-empty
             // selection never enqueues provider execution — no foreground run, no backfill,
-            // and NEVER a full-suite fallback.
+            // and NEVER a full-suite fallback. It still SUPERSEDES older pendings for the
+            // project, exactly like an executable enqueue would.
+            ReconcilePendingOnNoRun(change, selection.Outcome);
             Log($"ct enqueue no-run workspace={change.Workspace.WorkspaceId} revision={change.CurrentRevision} "
                 + $"outcome={selection.Outcome} stale={selection.StaleTestCaseIds.Count}");
             return new ContinuousTestDaemonEnqueueResult(selection, rejected);
@@ -234,6 +236,75 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         Log($"ct enqueue workspace={change.Workspace.WorkspaceId} revision={change.CurrentRevision} "
             + $"identity={change.IndexIdentity} selected={selection.SelectedTestCaseIds.Count}");
         return new ContinuousTestDaemonEnqueueResult(selection, pending);
+    }
+
+    /// <summary>
+    /// A no-run observation still supersedes older pendings for its project. Returning without
+    /// touching <see cref="_pending"/> left a run selected at an older key executable behind a
+    /// newer observation that invalidated it: it drained later, at the stale key, with the stale
+    /// id list. KnownEmpty (complete knowledge, empty delta) RE-KEYS the pendings to the new
+    /// observation — the owed run survives, commits at the new key, and the debounce resets
+    /// trailing-edge exactly as an executable merge would, so a doc-only save never cancels the
+    /// run a code save is owed. Unknown (no knowledge) DROPS them: everything is stale at the new
+    /// key, the old id list has no standing there, and the owed work stays visible as store
+    /// staleness until the next executable selection (impacted ∪ backlog) or an explicit run
+    /// rebuilds it. Either way the latest key moves, so an in-flight run's revision resolver and
+    /// the backfill begin/requeue gates see the supersession; only queued work is touched — a
+    /// healthy foreground run is never killed, and cancelling an in-flight backfill batch is the
+    /// same supersession the executable path already performs.
+    /// </summary>
+    private void ReconcilePendingOnNoRun(ContinuousTestDaemonChange change, ContinuousTestSelectionOutcome outcome)
+    {
+        PendingKey key = PendingKey.FromWorkspace(change.Workspace, ContinuousTestRunLane.Foreground);
+        PendingKey backfillKey = PendingKey.FromWorkspace(change.Workspace, ContinuousTestRunLane.Backfill);
+        lock (_lock)
+        {
+            TrackLatest(key, change.Freshness);
+            if (outcome == ContinuousTestSelectionOutcome.KnownEmpty)
+            {
+                RekeyPendingTo(key, change);
+                RekeyPendingTo(backfillKey, change);
+                return;
+            }
+
+            _pending.Remove(key);
+            _pending.Remove(backfillKey);
+            _wholeSuiteEligible.Remove(key);
+            if (_backfillCancellationByProject.Remove(key, out CancellationTokenSource? inFlightBackfill))
+                inFlightBackfill.Cancel();
+        }
+    }
+
+    /// <summary>
+    /// Re-keys one queued pending to a newer observation: same id list and lane, new revision,
+    /// identity, and trailing-edge debounce deadline. Built through the constructor, not
+    /// <c>with</c>, because the record derives its parsed revision there and a <c>with</c> on
+    /// <see cref="ContinuousTestDaemonPendingRun.CurrentRevision"/> would leave the parsed value —
+    /// and therefore <see cref="ContinuousTestDaemonPendingRun.Freshness"/> — at the old key.
+    /// Callers hold <see cref="_lock"/>.
+    /// </summary>
+    private void RekeyPendingTo(PendingKey key, ContinuousTestDaemonChange change)
+    {
+        if (!_pending.TryGetValue(key, out ContinuousTestDaemonPendingRun? existing))
+            return;
+        _pending[key] = new ContinuousTestDaemonPendingRun(
+            Workspace: existing.Workspace,
+            SelectedRevision: change.CurrentRevision,
+            CurrentRevision: change.CurrentRevision,
+            IndexIdentity: change.IndexIdentity,
+            TestCaseIds: existing.TestCaseIds,
+            FilterArguments: existing.FilterArguments,
+            Command: existing.Command,
+            Framework: existing.Framework,
+            RefreshInventory: existing.RefreshInventory,
+            ObservedAt: change.ObservedAt,
+            ReadyAt: change.ObservedAt + change.DebounceDelay)
+        {
+            Lane = existing.Lane,
+            ExcludeTraits = existing.ExcludeTraits,
+            ImpactPriority = existing.ImpactPriority,
+            CoverageMode = existing.CoverageMode,
+        };
     }
 
     public async Task<IReadOnlyList<ContinuousTestDaemonDrainResult>> DrainReadyAsync(

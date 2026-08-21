@@ -249,6 +249,82 @@ public sealed class ContinuousTestDebouncedAutoRunTests : IDisposable
     }
 
     /// <summary>
+    /// Review finding F1: a pending run enqueued at an older revision must not execute after a
+    /// NEWER observation with an Unknown selection superseded it. Unknown means everything at the
+    /// new key is stale and nothing may execute, so the older pending's id list has no standing
+    /// there — the queue must drop it, not run it at the stale key.
+    /// </summary>
+    [Fact]
+    public async Task A_pending_run_does_not_survive_a_newer_unknown_advance()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        var provider = new FakeContinuousTestProvider { RunResult = Passed("test:app", "3") };
+        ContinuousTestDaemonQueue queue = Queue(store, provider, revision: 4);
+
+        ContinuousTestDaemonEnqueueResult first = queue.Enqueue(EngineTestSupport.Change(
+            workspace, revision: "3", from: 2, to: 3, debounce: TimeSpan.FromSeconds(2), observedAt: T0));
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, first.Selection.Outcome);
+
+        ContinuousTestDaemonEnqueueResult second = queue.Enqueue(EngineTestSupport.Change(
+            workspace, revision: "4", from: 3, to: 4, changedPaths: ["src/Mystery.xyz"],
+            debounce: TimeSpan.FromSeconds(2), observedAt: T0 + TimeSpan.FromSeconds(1)));
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, second.Selection.Outcome);
+
+        DateTimeOffset longAfter = T0 + TimeSpan.FromHours(1);
+        Assert.False(queue.HasReadyWork(longAfter));
+        Assert.Empty(await queue.DrainReadyAsync(longAfter, TestContext.Current.CancellationToken));
+        Assert.Empty(provider.RunRequests);
+    }
+
+    /// <summary>
+    /// Review finding F1, the KnownEmpty side: a doc-only save (a complete impact read that
+    /// reaches no test) SUPERSEDES the pending, it does not cancel it. The owed run survives,
+    /// re-keyed to the new observation, and its debounce resets trailing-edge like any other save.
+    /// </summary>
+    [Fact]
+    public async Task A_known_empty_advance_rekeys_the_pending_run_to_the_new_observation()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        var facts = new FakeMillerFactSource { Current = new CtIndexCursor(EngineTestSupport.Identity, 4) };
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:app", "App", "src/App.cs"));
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:persistence", "Persist", "src/Persistence.cs"));
+        facts.Tests.Add(FakeMillerFactSource.Hit("test:app", "AppTests", "tests/AppTests.cs", isTest: true));
+        var provider = new FakeContinuousTestProvider { RunResult = Passed("test:app", "4") };
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            new ContinuousTestImpactSelector(store, facts),
+            new ContinuousTestCoordinator(provider, store));
+
+        ContinuousTestDaemonEnqueueResult impacted = queue.Enqueue(EngineTestSupport.Change(
+            workspace, revision: "3", from: 2, to: 3, debounce: TimeSpan.FromSeconds(2), observedAt: T0));
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, impacted.Selection.Outcome);
+
+        ContinuousTestDaemonEnqueueResult knownEmpty = queue.Enqueue(EngineTestSupport.Change(
+            workspace, revision: "4", from: 3, to: 4, changedPaths: ["src/Persistence.cs"],
+            debounce: TimeSpan.FromSeconds(2), observedAt: T0 + TimeSpan.FromSeconds(1)));
+        Assert.Equal(ContinuousTestSelectionOutcome.KnownEmpty, knownEmpty.Selection.Outcome);
+
+        // The doc-only save reset the trailing-edge timer: the first deadline passes quiet.
+        DateTimeOffset firstDeadline = T0 + TimeSpan.FromSeconds(2);
+        Assert.False(queue.HasReadyWork(firstDeadline));
+        Assert.Empty(await queue.DrainReadyAsync(firstDeadline, TestContext.Current.CancellationToken));
+        Assert.Empty(provider.RunRequests);
+
+        // The owed run survives, re-keyed to the NEW observation.
+        DateTimeOffset resetDeadline = T0 + TimeSpan.FromSeconds(3);
+        IReadOnlyList<ContinuousTestDaemonDrainResult> results =
+            await queue.DrainReadyAsync(resetDeadline, TestContext.Current.CancellationToken);
+        ContinuousTestDaemonDrainResult result = Assert.Single(results);
+        Assert.Equal("4", result.Pending.CurrentRevision);
+        ContinuousTestProviderRunRequest run = Assert.Single(provider.RunRequests);
+        Assert.Contains("test:app", run.TestCaseIds);
+    }
+
+    /// <summary>
     /// The whole fixed observation-to-execution path, through the daemon loop itself: the first
     /// poll arms the poller, the second observes a new revision with a complete changed delta,
     /// and the daemon executes the impacted set with no explicit run command.
