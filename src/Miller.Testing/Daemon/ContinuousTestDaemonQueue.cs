@@ -82,6 +82,16 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     public ContinuousTestDaemonEnqueueResult Enqueue(ContinuousTestDaemonChange change) =>
         EnqueueCore(change, requireCompleteDelta: true, explicitRun: false);
 
+    /// <summary>
+    /// The debounce lives HERE, between observation and execution, as pending-run state: staleness
+    /// and the watermark advance are applied immediately (status stays honest while the timer
+    /// counts down), but the pending's <c>ReadyAt</c> is <c>ObservedAt + DebounceDelay</c> and the
+    /// drain executes nothing before it. A newer change for the same project MERGES into the
+    /// pending and rewrites <c>ReadyAt</c> from its own observation time — trailing-edge
+    /// coalescing, so a save burst yields exactly one run after the last save's quiet period. A
+    /// change enqueued while a run executes simply becomes the next pending: it never cancels the
+    /// running suite (the stall detector owns killing).
+    /// </summary>
     private ContinuousTestDaemonEnqueueResult EnqueueCore(
         ContinuousTestDaemonChange change,
         bool requireCompleteDelta,

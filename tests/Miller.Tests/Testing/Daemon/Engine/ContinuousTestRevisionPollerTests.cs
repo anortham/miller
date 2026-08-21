@@ -253,6 +253,54 @@ public sealed class ContinuousTestRevisionPollerTests
         }
     }
 
+    /// <summary>
+    /// Carry-forward from the Task 4 review: the impact source used to drop the truncation flags of
+    /// its own fact read, so it could claim a COMPLETE impact ("Changed") off a truncated blast
+    /// radius. A truncated read must degrade to Unavailable, which the poller never enqueues and
+    /// the selector treats as Unknown — fail closed, never a silently narrow run.
+    /// </summary>
+    [Fact]
+    public async Task Miller_impact_source_reports_a_truncated_impact_read_as_unavailable()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        fixture.AddFile("file-service", "src/Service.cs");
+        fixture.AddSymbol("file-service", "cls-service", "Service", "class", "src/Service.cs");
+        string root = CreateWorkspaceRoot(fixture, out string dbPath);
+        try
+        {
+            Execute(
+                dbPath,
+                """
+                CREATE TABLE revision_file_changes (path TEXT, revision_id INTEGER, change_kind TEXT);
+                INSERT INTO revision_file_changes VALUES ('src/Service.cs', 2, 'updated');
+                INSERT INTO extraction_revisions VALUES (2);
+                """);
+            ContinuousTestRevisionObservation? observation = await new MillerArtifactRevisionSource().RefreshAsync(
+                EngineTestSupport.WorkspaceId, root, TestContext.Current.CancellationToken);
+            CtFreshnessKey current = observation!.Freshness!.Value;
+            var from = new CtFreshnessKey(current.IndexIdentity, 1);
+            var facts = new Miller.Tests.Testing.Selection.FakeCtFactSource();
+            facts.Inner.Symbols.Add(Miller.Tests.Testing.Selection.FakeMillerFactSource.Symbol(
+                "sym:service", "Service", "src/Service.cs"));
+            facts.Inner.Tests.Add(Miller.Tests.Testing.Selection.FakeMillerFactSource.Hit(
+                "test:service", "ServiceTests", "tests/ServiceTests.cs", isTest: true));
+            facts.Inner.ImpactTruncatedByLimit = true;
+
+            ContinuousTestImpactResult? impact = await new MillerFactImpactSource(_ => facts).ImpactAsync(
+                root, current, from, TestContext.Current.CancellationToken);
+
+            Assert.NotNull(impact);
+            Assert.Equal(ContinuousTestImpactOutcome.Unavailable, impact!.Outcome);
+            Assert.Equal("impact_truncated", impact.Reason);
+            Assert.Empty(impact.ImpactedTests);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
     private static string CreateWorkspaceRoot(ResolutionArtifactFixture fixture, out string dbPath)
     {
         string root = Directory.CreateTempSubdirectory("miller-ct-source-").FullName;

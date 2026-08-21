@@ -114,16 +114,56 @@ public sealed record ContinuousTestRevisionPollResult(
 /// </summary>
 public sealed class ContinuousTestRevisionPoller
 {
+    public const string DebounceEnvironmentVariable = "MILLER_CT_DEBOUNCE";
+
+    /// <summary>
+    /// Default quiet period between an observed change and its automatic run. The daemon polls the
+    /// artifact every 250 ms (<see cref="ContinuousTestDaemonHostOptions.PollInterval"/>), so two
+    /// seconds spans eight poll ticks: long enough that a multi-file save burst whose files land
+    /// across consecutive index revisions coalesces into ONE run (the queue resets the timer on
+    /// each newly enqueued change), short enough to keep the edit-to-verdict loop tight. Low
+    /// single digits per the 2026-08-21 watermark-freshness design, step 5.
+    /// </summary>
+    public static readonly TimeSpan DefaultDebounceDelay = TimeSpan.FromSeconds(2);
+
     private readonly IContinuousTestRevisionSource _source;
     private readonly IContinuousTestImpactSource? _impactSource;
+    private readonly TimeSpan _debounceDelay;
     private CtFreshnessKey? _lastFresh;
 
     public ContinuousTestRevisionPoller(
         IContinuousTestRevisionSource source,
-        IContinuousTestImpactSource? impactSource = null)
+        IContinuousTestImpactSource? impactSource = null,
+        TimeSpan? debounceDelay = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _impactSource = impactSource;
+        if (debounceDelay is { } explicitDelay && explicitDelay < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(debounceDelay));
+        _debounceDelay = debounceDelay
+            ?? ResolveDebounceDelay(Environment.GetEnvironmentVariable(DebounceEnvironmentVariable));
+    }
+
+    /// <summary>
+    /// Parses <c>MILLER_CT_DEBOUNCE</c> (seconds). A non-negative integer or decimal is honored
+    /// verbatim — <c>0</c> means run immediately. Unset, invalid, negative, or absurd (over an
+    /// hour) values fall back to <see cref="DefaultDebounceDelay"/>: a broken override must
+    /// degrade to the default, never disable or wedge the auto-run loop.
+    /// </summary>
+    public static TimeSpan ResolveDebounceDelay(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return DefaultDebounceDelay;
+        if (!double.TryParse(
+                raw.Trim(),
+                NumberStyles.AllowDecimalPoint,
+                CultureInfo.InvariantCulture,
+                out double seconds))
+        {
+            return DefaultDebounceDelay;
+        }
+
+        return seconds <= 3600d ? TimeSpan.FromSeconds(seconds) : DefaultDebounceDelay;
     }
 
     public async Task<ContinuousTestRevisionPollResult> PollAsync(
@@ -207,7 +247,7 @@ public sealed class ContinuousTestRevisionPoller
                 ImpactedSymbols: impact.ImpactedSymbols,
                 ImpactedTests: impact.ImpactedTests,
                 WorkspaceScope: false,
-                DebounceDelay: request.DebounceDelay ?? TimeSpan.Zero,
+                DebounceDelay: request.DebounceDelay ?? _debounceDelay,
                 ObservedAt: observation.ObservedAt,
                 Command: workItem.Project.Command,
                 Framework: workItem.Project.Framework,
@@ -413,6 +453,20 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
                 IReadOnlyList<CtSymbolFact> symbols = facts.SymbolsForChangedFiles(delta.ChangedPaths);
                 string[] seedIds = symbols.Select(row => row.SymbolId).Distinct(StringComparer.Ordinal).ToArray();
                 CtImpactResult impact = facts.Impact(seedIds);
+                if (impact.TruncatedByDepth || impact.TruncatedByLimit)
+                {
+                    // A truncated read is an incomplete blast radius. Claiming "Changed" off it
+                    // would let the consumer run a silently narrow selection; Unavailable makes
+                    // the poller skip the enqueue and the selector treat the delta as Unknown.
+                    return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult("", [], [], [])
+                    {
+                        Outcome = ContinuousTestImpactOutcome.Unavailable,
+                        Reason = "impact_truncated",
+                        FromRevision = delta.FromRevision,
+                        ToRevision = delta.ToRevision,
+                    });
+                }
+
                 return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult(
                     "",
                     delta.ChangedPaths,
