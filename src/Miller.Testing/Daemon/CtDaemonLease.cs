@@ -263,6 +263,16 @@ public enum CtDaemonWriteMode
     ReplaceExistingOnly,
 }
 
+/// <summary>
+/// The three operations a control-plane publish performs, injectable so the half-done
+/// <c>ReplaceFile</c> states can be exercised deterministically instead of raced. Production always
+/// uses <see cref="CtDaemonJson.SystemPublishPrimitives"/>.
+/// </summary>
+internal sealed record CtDaemonPublishPrimitives(
+    Action<string, string> Replace,
+    Action<string, string> Move,
+    Action<TimeSpan> Sleep);
+
 public static class CtDaemonJson
 {
     public static string Serialize<T>(T value, JsonTypeInfo<T> typeInfo) =>
@@ -280,10 +290,34 @@ public static class CtDaemonJson
     public static string Serialize(CtDaemonStatusRecord value) =>
         Serialize(value, CtDaemonJsonContext.Default.CtDaemonStatusRecord);
 
-    /// <summary>Bounded retries for replacing a control-plane file, matching the scan-failure journal.</summary>
+    /// <summary>Bounded retries for OPENING a control-plane file, matching the scan-failure journal.</summary>
     private const int ReplaceAttempts = 5;
 
+    /// <summary>
+    /// Bounded retries for PUBLISHING one. Wider than the open budget because the two fail for
+    /// different reasons: an open loses to the instant <c>ReplaceFile</c> holds the destination and
+    /// wins on the next try, while a publish can lose to every other writer AND to a half-done
+    /// <c>ReplaceFile</c> that has to be recovered before it can even be retried. Five attempts ran
+    /// out under full-suite load and the publish threw
+    /// (<c>Concurrent_writers_do_not_destroy_each_other_staged_bytes</c>, 2026-08-21).
+    /// </summary>
+    private const int PublishAttempts = 10;
+
     private static readonly TimeSpan ReplaceRetryDelay = TimeSpan.FromMilliseconds(20);
+
+    /// <summary>
+    /// The growing publish delay is capped here. The daemon republishes its status every 250 ms, so
+    /// an uncapped growth over ten attempts would block the pulse for seconds.
+    /// </summary>
+    private static readonly TimeSpan MaxPublishRetryDelay = TimeSpan.FromMilliseconds(80);
+
+    internal static readonly CtDaemonPublishPrimitives SystemPublishPrimitives = new(
+        // ignoreMetadataErrors: the destination's ACLs and attributes are irrelevant here; a
+        // metadata copy failure must not fail the publish of a status record.
+        Replace: (source, destination) =>
+            File.Replace(source, destination, destinationBackupFileName: null, ignoreMetadataErrors: true),
+        Move: (source, destination) => File.Move(source, destination, overwrite: true),
+        Sleep: Thread.Sleep);
 
     /// <summary>
     /// Confirmations before a control-plane file is called absent, and the wait between them. Short on
@@ -303,8 +337,12 @@ public static class CtDaemonJson
     /// gives a destination held by a scanner time to settle. This matches the jittered backoff the
     /// indexer's scan-failure journal already uses.
     /// </summary>
-    private static TimeSpan RetryDelayFor(int attempt) =>
-        (ReplaceRetryDelay * attempt) + TimeSpan.FromMilliseconds(Random.Shared.Next(0, 20));
+    private static TimeSpan RetryDelayFor(int attempt)
+    {
+        TimeSpan grown = ReplaceRetryDelay * attempt;
+        return (grown < MaxPublishRetryDelay ? grown : MaxPublishRetryDelay)
+            + TimeSpan.FromMilliseconds(Random.Shared.Next(0, 20));
+    }
 
     /// <summary>
     /// Whether the file is really absent, as opposed to momentarily unlinked by a publish in flight.
@@ -454,42 +492,76 @@ public static class CtDaemonJson
     /// <c>File.Replace</c> requires the destination to exist, so a first write is a plain move. The
     /// two are attempted in a retry loop rather than gated on a stale <c>File.Exists</c> check,
     /// because another process can create or delete the destination in between.
+    ///
+    /// <para><b>ReplaceFile can fail HALF DONE, and that is the dangerous case.</b> Windows reports
+    /// two partial outcomes: "the file to be replaced has retained its original name" (nothing
+    /// moved — a reader still sees the previous record, so the publish just waits and tries again)
+    /// and "the file to be replaced has been renamed using the backup name" (the DESTINATION NAME IS
+    /// NOW FREE — every reader at that instant finds no file at all, and the staged file is the only
+    /// copy of the record). The second one is recovered IMMEDIATELY, with no sleep and without
+    /// spending an attempt on a Replace whose destination no longer exists: the next pass takes the
+    /// Move branch and re-occupies the name. Both stay atomic for readers, because both are name
+    /// operations and neither truncates anything.</para>
     /// </summary>
     private static void MoveWithRetry(
         string tempPath,
         string finalPath,
-        CtDaemonWriteMode mode = CtDaemonWriteMode.CreateIfMissing)
+        CtDaemonWriteMode mode = CtDaemonWriteMode.CreateIfMissing) =>
+        MoveWithRetry(tempPath, finalPath, mode, SystemPublishPrimitives);
+
+    internal static void MoveWithRetry(
+        string tempPath,
+        string finalPath,
+        CtDaemonWriteMode mode,
+        CtDaemonPublishPrimitives primitives)
     {
+        ArgumentNullException.ThrowIfNull(primitives);
         for (var attempt = 1; ; attempt++)
         {
+            bool destinationExists = File.Exists(finalPath);
+            if (!destinationExists && mode == CtDaemonWriteMode.ReplaceExistingOnly)
+            {
+                // The destination vanished between the caller's probe and this call. The Move branch
+                // below would CREATE it, and with it the directory this mode must leave alone, so
+                // the second half of the guard belongs here and not only at the top.
+                return;
+            }
+
             try
             {
-                if (File.Exists(finalPath))
-                {
-                    // ignoreMetadataErrors: the destination's ACLs and attributes are irrelevant here;
-                    // a metadata copy failure must not fail the publish of a status record.
-                    File.Replace(tempPath, finalPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
-                }
-                else if (mode == CtDaemonWriteMode.ReplaceExistingOnly)
-                {
-                    // The destination vanished between the caller's probe and this call. The Move
-                    // branch below would CREATE it, and with it the directory this mode must leave
-                    // alone, so the second half of the guard belongs here and not only at the top.
-                    return;
-                }
+                // ReplaceFile is the Win32 call designed to swap a file somebody is READING, so it
+                // is the primary. On the LAST attempt a whole destination is swapped with MoveFileEx
+                // instead: one name operation has less to fail than ReplaceFile's three-step dance,
+                // and this attempt was going to throw otherwise — so the fallback either publishes
+                // the record or reports the same failure the caller would have seen anyway.
+                if (destinationExists && attempt < PublishAttempts)
+                    primitives.Replace(tempPath, finalPath);
                 else
-                {
-                    File.Move(tempPath, finalPath);
-                }
+                    primitives.Move(tempPath, finalPath);
 
                 return;
             }
             catch (Exception ex) when (
-                (ex is IOException or UnauthorizedAccessException) && attempt < ReplaceAttempts)
+                (ex is IOException or UnauthorizedAccessException) && attempt < PublishAttempts)
             {
-                // Lost the race (the destination appeared or vanished between the probe and the call),
-                // or a Defender scan is holding the freshly written temp file.
-                Thread.Sleep(RetryDelayFor(attempt));
+                if (!File.Exists(tempPath))
+                {
+                    // The staged bytes are gone, so the swap half of the operation completed and
+                    // only its bookkeeping failed. There is nothing left to retry WITH, and a retry
+                    // would raise FileNotFoundException over a record that already landed.
+                    return;
+                }
+
+                if (destinationExists && !File.Exists(finalPath))
+                {
+                    // Half done: the destination name is free and the staged file is intact. Recover
+                    // at once — a sleep here is time in which every reader finds no record at all.
+                    continue;
+                }
+
+                // Lost the race (the destination appeared or vanished between the probe and the
+                // call), or a Defender scan is holding the freshly written temp file.
+                primitives.Sleep(RetryDelayFor(attempt));
             }
         }
     }
