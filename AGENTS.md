@@ -453,7 +453,19 @@ scripts/test.ps1 all
   `family daemon at <root>`); worktree `stop` detaches that worktree only (`detached`, never a daemon kill);
   routed `run` reaches the worktree's own queue and ct.db. Explicit start only:
   `miller tests serve`, the dashboard, or MCP `tests operation=start`. Status reads never create `ct.db`,
-  never create `.miller/ct/`, and never start the daemon. **A record about a root the process is LEAVING
+  never create `.miller/ct/`, and never start the daemon.
+  **The daemon runs from a PRIVATE per-build copy, never from the install or the build output.**
+  [`CtDaemonShadowCopy`](src/Miller.Testing/Daemon/CtDaemonShadowCopy.cs) materializes the binaries under
+  `~/.miller/ct-daemon/<version>-<build stamp>` and `CtDaemonLauncher.SpawnDetached` launches THAT: a live
+  Windows process locks its own image and every DLL it loaded, so a daemon started from `bin/Release` failed
+  the next `dotnet build` with MSB3027 and blocked a plugin upgrade from overwriting the installed binary
+  (2026-08-21 user report; the only recovery was Task Manager). The key carries the executable's LENGTH and
+  LAST-WRITE TIME, not the version string alone — the version's git SHA does not move between commits, so a
+  version-only key would run stale code for a whole day of rebuilds. `.tools` is not copied (the daemon
+  carries no tools root and reads the index through `WorkspaceReadSessionFactory`), copies of other builds
+  are removed only when no live daemon runs from them, and a copy that cannot be made falls back to the
+  in-place spawn with the reason plus a `miller tests stop` nudge in the spawn result. An injected process
+  starter takes the in-place path, so no fast test copies an output directory. **A record about a root the process is LEAVING
   may only REPLACE an existing file — never create it, and never create its directory.** An attach record
   creates the adopted worktree's control plane; a detach/stop record, a released lease, and a CT log line
   do not (`CtDaemonWriteMode.ReplaceExistingOnly`). Why: the detach write recreated

@@ -107,12 +107,17 @@ public static class CtDaemonLauncher
     ///
     /// <para><paramref name="stopDaemon"/> is the seam for that stop. A test holding a real lease holds
     /// it as its OWN process, so the real stop would kill the test run.</para>
+    ///
+    /// <para><paramref name="resolveImage"/> is the seam for the private per-build copy the daemon runs
+    /// from (<see cref="CtDaemonShadowCopy"/>). It is a seam because the real one copies the whole
+    /// output directory, which no fast test may do; production leaves it null.</para>
     /// </summary>
     public static CtDaemonSpawnResult SpawnDetached(
         string workspaceRoot,
         Func<ProcessStartInfo, Process?>? startProcess = null,
         string? ownVersion = null,
-        Func<string, CtDaemonStopResult>? stopDaemon = null)
+        Func<string, CtDaemonStopResult>? stopDaemon = null,
+        Func<string, string?, CtDaemonImage>? resolveImage = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         RejectSensitiveRoot(workspaceRoot);
@@ -155,7 +160,19 @@ public static class CtDaemonLauncher
             replacedVersion = live.MillerVersion;
         }
 
-        string executable = ResolveCurrentExecutable();
+        // The daemon runs from a PRIVATE per-build copy, never from the install or the build output:
+        // a live Windows process locks its own image and every DLL it loaded, which is how a running
+        // daemon broke `dotnet build` with MSB3027 and blocked a plugin upgrade from overwriting the
+        // installed binary. A copy that cannot be made falls back to the in-place spawn and SAYS SO,
+        // because a daemon that starts and locks the install is still better than no daemon at all.
+        //
+        // The default follows the STARTER: an injected starter decides for itself what process runs
+        // and usually ignores this path entirely, so copying the whole output directory for it would
+        // be waste in production and an 83 MB tree copy inside every test that fakes a spawn.
+        Func<string, string?, CtDaemonImage> imageResolver = resolveImage
+            ?? (startProcess is null ? CtDaemonShadowCopy.Resolve : CtDaemonShadowCopy.InPlace);
+        CtDaemonImage image = imageResolver(ResolveCurrentExecutable(), ownVersion);
+        string executable = image.Executable;
         (string stdoutPath, string stderrPath) = PrepareDaemonLogPaths(root);
         ProcessStartInfo startInfo = BuildStartInfo(executable, root, stdoutPath, stderrPath);
         Func<ProcessStartInfo, Process?> starter = startProcess ?? Process.Start;
@@ -187,14 +204,26 @@ public static class CtDaemonLauncher
 
         ReleaseDaemonStandardInput(process);
         int? pid = TryReadProcessId(process);
-        return replacedVersion is null
-            ? new CtDaemonSpawnResult(CtDaemonSpawnStatus.Started, pid, executable, "started")
-            : new CtDaemonSpawnResult(
-                CtDaemonSpawnStatus.Replaced,
-                pid,
-                executable,
-                $"replaced the daemon on {replacedVersion}");
+        string baseReason = replacedVersion is null
+            ? "started"
+            : $"replaced the daemon on {replacedVersion}";
+        return new CtDaemonSpawnResult(
+            replacedVersion is null ? CtDaemonSpawnStatus.Started : CtDaemonSpawnStatus.Replaced,
+            pid,
+            executable,
+            AppendInPlaceWarning(baseReason, image));
     }
+
+    /// <summary>
+    /// The reachable error path for a daemon that had to start from the install directory. MSBuild
+    /// cannot test a file lock without spawning a process on every build, so the guidance rides the
+    /// one message the user does see: this daemon will hold the install open until it is stopped.
+    /// </summary>
+    private static string AppendInPlaceWarning(string reason, CtDaemonImage image) =>
+        image.IsShadowCopy
+            ? reason
+            : $"{reason} (running in place: {image.Reason ?? "no private copy"}; this daemon holds "
+                + "the install directory open — run `miller tests stop` before you rebuild or upgrade)";
 
     internal static void RejectSensitiveRoot(string workspaceRoot)
     {
