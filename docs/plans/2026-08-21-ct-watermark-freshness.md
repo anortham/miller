@@ -91,13 +91,13 @@ All tasks are serial: the freshness cursor (Task 1) feeds everything, `TestsCore
 **Approach:** One static helper (e.g. on `CtIndexCursor`) builds the cursor from a snapshot; adapter and poller call it. The poller's rebuild detection (`_lastIdentity` compare at `:311-313`) switches to comparing generation identity — a routine write no longer reads as a rebuild, a promote still does.
 
 **Acceptance criteria:**
-- [ ] A store write that changes no indexed file leaves the cursor of BOTH intakes identical.
-- [ ] A file-change delta advances the cursor revision but not the identity, at both intakes.
-- [ ] A simulated rebuild changes the identity; the poller reports `Rebuild: true` for it and does NOT for a routine write.
-- [ ] Same numeric revision under two different generations never compares fresh.
-- [ ] Legacy-format identity strings can never equal a new-format identity (prefix test).
-- [ ] Legacy (non-store) mode has the same properties.
-- [ ] Worker-scope verification passes; commit per commit mode.
+- [x] A store write that changes no indexed file leaves the cursor of BOTH intakes identical.
+- [x] A file-change delta advances the cursor revision but not the identity, at both intakes.
+- [x] A simulated rebuild changes the identity; the poller reports `Rebuild: true` for it and does NOT for a routine write.
+- [x] Same numeric revision under two different generations never compares fresh.
+- [x] Legacy-format identity strings can never equal a new-format identity (prefix test).
+- [x] Legacy (non-store) mode has the same properties.
+- [x] Worker-scope verification passes; commit per commit mode. (dec28c1c; family-mode identity = family+view+generation-name per live-store evidence)
 
 ### Task 2: Live status projection
 

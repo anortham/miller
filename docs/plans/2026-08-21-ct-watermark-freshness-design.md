@@ -51,8 +51,14 @@ false green.
 ### 2. `IndexGenerationIdentity` — an identity that ignores routine writes
 
 A new property beside `IndexIdentity`. It changes only when the served generation really
-changes: full rebuild or promote, store view or family change, extractor upgrade, schema
-heal. It does **not** include `store_log_sequence` or the revision counter.
+changes: generation promotion, store view or family change, extractor upgrade, schema
+heal. It does **not** include `store_log_sequence`, the revision counter, the manifest
+hash, or the manifest generation number — the live store proved all of those move on
+routine delta imports. Family-mode clarification (Task 1 evidence): an IN-PLACE store
+full import flips no identity component and keeps the revision counter monotonic; its
+invalidation rides the manifest delta / impact path, with the unknown-outcome fail-closed
+rule as the backstop. Every event that can restart or reuse the revision counter flips a
+component.
 `CtFactAdapter.cs:49` is the only place CT takes its identity, so the swap is contained.
 
 CT result freshness key becomes `(IndexGenerationIdentity, revision)`:
