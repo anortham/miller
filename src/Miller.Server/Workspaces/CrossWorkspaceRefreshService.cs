@@ -727,8 +727,8 @@ public sealed class CrossWorkspaceRefreshService
                 storeEnabled: true);
             string storeRoot = session.FamilyStoreRoot ?? throw new InvalidOperationException(
                 "The store read session did not expose its family root.");
-            _sidecarConverger.ConvergeStore(storeRoot, session);
-            return null;
+            StoreSidecarConvergenceResult result = _sidecarConverger.ConvergeStore(storeRoot, session);
+            return result.WarningText;
         }
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException

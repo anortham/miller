@@ -60,7 +60,7 @@ public sealed class StoreSidecarConvergerTests
         }
 
         Assert.Equal(["content:" + root, "search:" + root], calls);
-        Assert.Equal(31, signal.TargetRevision);
+        Assert.Equal(0, signal.TargetRevision);
     }
 
     [Fact]
@@ -98,7 +98,120 @@ public sealed class StoreSidecarConvergerTests
         }
 
         Assert.Equal(["search"], calls);
-        Assert.Equal(31, signal.TargetRevision);
+        Assert.Equal(0, signal.TargetRevision);
+    }
+
+    [Fact]
+    public void ConvergeStore_ReturnsPerSidecarOutcomesAndBoundedFailureEvidence()
+    {
+        var signal = new VectorConvergeSignal(enabled: true);
+        using var session = new FakeStoreSession();
+        var converger = new IndexerSidecarConverger(
+            searchEnabled: true,
+            (_, _, _, _) => false,
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            static path => path,
+            static path => path,
+            (_, _, _) => false,
+            NullLogger.Instance,
+            signal,
+            ensureStoreContent: (_, _) => throw new TimeoutException(new string('x', 512)),
+            ensureStoreSearch: (_, _) => true);
+
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-result-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            StoreSidecarConvergenceResult result = converger.ConvergeStore(root, session);
+
+            Assert.Equal(31, result.TargetSequence);
+            Assert.Equal("failed", result.Content.Status);
+            Assert.Equal("repaired", result.Search.Status);
+            Assert.Equal("leader_required", result.Vector.Status);
+            Assert.False(result.Content.DidWork);
+            Assert.True(result.Search.DidWork);
+            Assert.True(result.DidWork);
+            Assert.True(result.Pending);
+            Assert.True(result.LeaderRequired);
+            Assert.NotNull(result.FailureReason);
+            Assert.True(result.FailureReason!.Length <= 300);
+            Assert.DoesNotContain("resident vector drain", result.FailureReason, StringComparison.Ordinal);
+            Assert.Contains("resident vector drain", result.Vector.Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ConvergeStore_WithResidentDrain_QueuesVectorTarget()
+    {
+        var signal = new VectorConvergeSignal(enabled: true);
+        using var session = new FakeStoreSession();
+        var converger = new IndexerSidecarConverger(
+            searchEnabled: false,
+            (_, _, _, _) => false,
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            static path => path,
+            static path => path,
+            (_, _, _) => false,
+            NullLogger.Instance,
+            signal,
+            ensureStoreContent: (_, _) => false,
+            vectorDrainAvailable: static () => true);
+
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-queued-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            StoreSidecarConvergenceResult result = converger.ConvergeStore(root, session);
+
+            Assert.Equal("current", result.Content.Status);
+            Assert.Equal("disabled", result.Search.Status);
+            Assert.Equal("queued", result.Vector.Status);
+            Assert.True(result.Vector.Pending);
+            Assert.False(result.LeaderRequired);
+            Assert.True(result.Pending);
+            Assert.Equal(31, signal.TargetRevision);
+
+            StoreSidecarConvergenceResult second = converger.ConvergeStore(root, session);
+
+            Assert.Equal("queued", second.Vector.Status);
+            Assert.False(second.Vector.DidWork);
+            Assert.True(second.Vector.Pending);
+            Assert.False(second.DidWork);
+            Assert.Equal(31, signal.TargetRevision);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ConvergeStore_WithoutResidentDrainReportsLeaderRequirementSeparatelyFromFailure()
+    {
+        using var session = new FakeStoreSession();
+        var converger = NewStoreConverger((_, _) => false);
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-leader-required-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            StoreSidecarConvergenceResult result = converger.ConvergeStore(root, session);
+
+            Assert.Equal("leader_required", result.Vector.Status);
+            Assert.True(result.Vector.Pending);
+            Assert.True(result.LeaderRequired);
+            Assert.Null(result.FailureReason);
+            Assert.Contains("resident leader", result.WarningText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -140,11 +253,11 @@ public sealed class StoreSidecarConvergerTests
             ["content", "search", "metrics", "vector", "sidecar_total", "content", "search", "metrics", "vector", "sidecar_total"],
             phases.Records.Select(static phase => phase.Phase));
         Assert.All(phases.Records, static phase => Assert.True(phase.ElapsedMilliseconds >= 0));
-        Assert.Equal([true, true, true, true, true], phases.Records.Take(5).Select(static phase => phase.DidWork));
+        Assert.Equal([true, true, true, false, true], phases.Records.Take(5).Select(static phase => phase.DidWork));
         Assert.Equal([false, false, false, false, false], phases.Records.Skip(5).Select(static phase => phase.DidWork));
         Assert.All(phases.Records, static phase =>
             Assert.Equal(
-                phase.Phase is "content" or "search" ? null : 31,
+                31,
                 phase.StoreSequence));
     }
 
@@ -217,10 +330,47 @@ public sealed class StoreSidecarConvergerTests
             Directory.Delete(root, recursive: true);
         }
 
-        Assert.Equal(["content", "search"], calls);
-        Assert.Equal(["content", "search", "sidecar_total"], phases.Records.Select(static phase => phase.Phase));
+        Assert.Empty(calls);
+        Assert.Equal(["sidecar_total"], phases.Records.Select(static phase => phase.Phase));
         Assert.All(phases.Records, static phase => Assert.Null(phase.StoreSequence));
         Assert.Equal("failed", phases.Records[^1].Outcome);
+    }
+
+    [Fact]
+    public void ConvergeStore_LeaseFailureReturnsFailedEvidenceForEnabledSidecars()
+    {
+        using var session = new FakeStoreSession();
+        var signal = new VectorConvergeSignal(enabled: true);
+        var converger = new IndexerSidecarConverger(
+            searchEnabled: true,
+            (_, _, _, _) => false,
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            static path => path,
+            static path => path,
+            (_, _, _) => false,
+            NullLogger.Instance,
+            signal,
+            ensureStoreContent: (_, _) => true,
+            ensureStoreSearch: (_, _) => true);
+
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-lease-failure-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllText(root, "not a directory");
+        try
+        {
+            StoreSidecarConvergenceResult result = converger.ConvergeStore(root, session);
+
+            Assert.Equal("failed", result.Content.Status);
+            Assert.Equal("failed", result.Search.Status);
+            Assert.NotNull(result.Content.FailureReason);
+            Assert.NotNull(result.Search.FailureReason);
+            Assert.NotNull(result.FailureReason);
+            Assert.Contains("sidecar", result.WarningText, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            File.Delete(root);
+        }
     }
 
     [Fact]
@@ -254,7 +404,7 @@ public sealed class StoreSidecarConvergerTests
         }
 
         Assert.Equal(1, contentCalls);
-        Assert.Equal(31, signal.TargetRevision);
+        Assert.Equal(0, signal.TargetRevision);
     }
 
     [Fact]

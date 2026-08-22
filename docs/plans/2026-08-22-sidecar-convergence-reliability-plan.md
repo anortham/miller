@@ -87,11 +87,11 @@
 **Approach:** Keep the result record beside `IndexerSidecarConverger` so it does not become a shallow module. Record exact target sequence, did-work, pending/leader requirement, and bounded failure text per sidecar. Preserve per-sidecar failure isolation and phase telemetry.
 
 **Acceptance criteria:**
-- [ ] An unchanged refresh distinguishes current, repaired, queued, leader-required, and failed sidecars.
-- [ ] Search/content failure cannot render as a clean `Unchanged` action.
-- [ ] Vector scheduling is not reported as completion before the completeness stamp exists.
-- [ ] A one-shot or foreign refresh with no live drain reports `leader_required`, never `queued`.
-- [ ] Focused converger/refresh tests pass and the serialized worker commit is recorded.
+- [x] An unchanged refresh distinguishes current, repaired, queued, leader-required, and failed sidecars.
+- [x] Search/content failure cannot render as a clean `Unchanged` action.
+- [x] Vector scheduling is not reported as completion before the completeness stamp exists.
+- [x] A one-shot or foreign refresh with no live drain reports `leader_required`, never `queued`.
+- [x] Focused converger/refresh tests pass; the lead will record the serialized worker commit after review.
 
 ### Task 2: Bounded search/content retry
 

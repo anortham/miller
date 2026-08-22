@@ -240,7 +240,8 @@ public sealed class IndexerService : BackgroundService
             sidecar,
             contentSidecar ?? new ContentCorpusSidecar(),
             logger,
-            phaseSink: phaseSink);
+            phaseSink: phaseSink,
+            vectorDrainAvailable: () => IsLeader);
         _phaseSink = phaseSink ?? new LoggingIndexerPhaseSink(logger);
         _registryPublisher = new WorkspaceRegistryScanPublisher(logger);
         _attachFileWatchers = attachFileWatchers;
@@ -1473,7 +1474,7 @@ public sealed class IndexerService : BackgroundService
             _logger.LogInformation("Family store WAL checkpoint truncated {StoreRoot}.", pointer.StoreRoot);
     }
 
-    private void TryConvergeStoreSidecars()
+    private StoreSidecarConvergenceResult TryConvergeStoreSidecars()
     {
         BeforeSidecarConvergeForTest?.Invoke();
         WorkspaceContext workspace = _bootstrap.Workspace;
@@ -1485,10 +1486,13 @@ public sealed class IndexerService : BackgroundService
             storeEnabled: true);
         string storeRoot = session.FamilyStoreRoot ?? throw new InvalidOperationException(
             "The store read session did not expose its family root.");
-        _sidecarConverger.ConvergeStore(storeRoot, session);
+        StoreSidecarConvergenceResult result = _sidecarConverger.ConvergeStore(storeRoot, session);
+        if (result.WarningText is { } warning)
+            _logger.LogWarning("{Warning}", warning);
         long sequence = session.Snapshot.Freshness.StoreLogSequence ?? throw new InvalidOperationException(
             "The store read session did not expose its store_log sequence.");
         _registryPublisher.TryMarkScanned(workspace, workspace.WorkspaceId, sequence);
+        return result;
     }
 
     /// <summary>

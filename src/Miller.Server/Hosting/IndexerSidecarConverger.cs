@@ -5,8 +5,73 @@ using Miller.Indexing.Reads;
 
 namespace Miller.Server.Hosting;
 
+internal sealed record StoreSidecarConvergenceOutcome(
+    string Status,
+    bool DidWork,
+    bool Pending,
+    bool LeaderRequired,
+    string? Reason)
+{
+    public bool Failed => string.Equals(Status, StoreSidecarConvergenceStatuses.Failed, StringComparison.Ordinal);
+
+    public string? FailureReason => Failed ? Reason : null;
+}
+
+internal sealed record StoreSidecarConvergenceResult(
+    long TargetSequence,
+    StoreSidecarConvergenceOutcome Content,
+    StoreSidecarConvergenceOutcome Search,
+    StoreSidecarConvergenceOutcome Vector,
+    bool MetricsDidWork = false)
+{
+    public bool DidWork => Content.DidWork || Search.DidWork || Vector.DidWork || MetricsDidWork;
+
+    public bool Pending => Content.Pending || Search.Pending || Vector.Pending;
+
+    public bool LeaderRequired =>
+        Content.LeaderRequired || Search.LeaderRequired || Vector.LeaderRequired;
+
+    public string? FailureReason =>
+        BoundReason(
+            string.Join(
+                "; ",
+                new[] { Content, Search, Vector }
+                    .Where(static outcome => outcome.FailureReason is not null)
+                    .Select(static outcome => outcome.FailureReason)));
+
+    public string? WarningText =>
+        FailureReason is { Length: > 0 } failure
+            ? $"Store sidecar convergence is incomplete: {failure}"
+            : LeaderRequired
+            ? "Store sidecar convergence requires a resident leader to drain the vector target."
+            : Pending
+            ? "Store sidecar convergence is pending completion."
+            : null;
+
+    private static string? BoundReason(string reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            return null;
+        return reason.Length <= IndexerSidecarConverger.MaxFailureReasonLength
+            ? reason
+            : reason[..IndexerSidecarConverger.MaxFailureReasonLength];
+    }
+}
+
+internal static class StoreSidecarConvergenceStatuses
+{
+    public const string Disabled = "disabled";
+    public const string Current = "current";
+    public const string Repaired = "repaired";
+    public const string Queued = "queued";
+    public const string LeaderRequired = "leader_required";
+    public const string Failed = "failed";
+}
+
 internal sealed class IndexerSidecarConverger
 {
+    internal const int MaxFailureReasonLength = 300;
+
     internal delegate bool SearchConvergence(
         string symbolsDbPath,
         long revision,
@@ -24,6 +89,7 @@ internal sealed class IndexerSidecarConverger
     private readonly VectorConvergeSignal _vectorSignal;
     private readonly Func<string, IWorkspaceReadSession, bool>? _ensureStoreContent;
     private readonly Func<string, IWorkspaceReadSession, bool>? _ensureStoreSearch;
+    private readonly Func<bool> _vectorDrainAvailable;
     private readonly IIndexerPhaseSink _phaseSink;
 
     public IndexerSidecarConverger(
@@ -31,7 +97,8 @@ internal sealed class IndexerSidecarConverger
         ContentCorpusSidecar contentSidecar,
         ILogger logger,
         VectorConvergeSignal? vectorSignal = null,
-        IIndexerPhaseSink? phaseSink = null)
+        IIndexerPhaseSink? phaseSink = null,
+        Func<bool>? vectorDrainAvailable = null)
         : this(
             searchSidecar.Enabled,
             contentSidecar.EnsureBuilt,
@@ -47,7 +114,8 @@ internal sealed class IndexerSidecarConverger
             vectorSignal,
             contentSidecar.EnsureStoreCurrent,
             searchSidecar.EnsureStoreCurrent,
-            phaseSink)
+            phaseSink,
+            vectorDrainAvailable)
     {
     }
 
@@ -63,7 +131,8 @@ internal sealed class IndexerSidecarConverger
         VectorConvergeSignal? vectorSignal = null,
         Func<string, IWorkspaceReadSession, bool>? ensureStoreContent = null,
         Func<string, IWorkspaceReadSession, bool>? ensureStoreSearch = null,
-        IIndexerPhaseSink? phaseSink = null)
+        IIndexerPhaseSink? phaseSink = null,
+        Func<bool>? vectorDrainAvailable = null)
     {
         ArgumentNullException.ThrowIfNull(ensureContentBuilt);
         ArgumentNullException.ThrowIfNull(ensureSearchBuilt);
@@ -84,6 +153,7 @@ internal sealed class IndexerSidecarConverger
         _vectorSignal = vectorSignal ?? VectorConvergeSignal.Shared;
         _ensureStoreContent = ensureStoreContent;
         _ensureStoreSearch = ensureStoreSearch;
+        _vectorDrainAvailable = vectorDrainAvailable ?? (static () => false);
         _phaseSink = phaseSink ?? new LoggingIndexerPhaseSink(logger);
     }
 
@@ -142,64 +212,93 @@ internal sealed class IndexerSidecarConverger
         totalPhase.Complete(revision, didWork);
     }
 
-    public void ConvergeStore(string storeRoot, IWorkspaceReadSession session)
+    internal StoreSidecarConvergenceResult ConvergeStore(string storeRoot, IWorkspaceReadSession session)
     {
         using var totalPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.SidecarTotal);
-        bool didWork = false;
         ArgumentException.ThrowIfNullOrWhiteSpace(storeRoot);
         ArgumentNullException.ThrowIfNull(session);
         if (session.Snapshot.Mode != WorkspaceReadMode.FamilyStore)
             throw new ArgumentException("Store sidecar convergence requires a family-store read session.", nameof(session));
 
-        long? target = null;
+        long storeSequence = session.Snapshot.Freshness.StoreLogSequence
+            ?? throw new InvalidOperationException("The family-store snapshot has no store_log sequence.");
         bool contentRecorded = false;
         bool searchRecorded = false;
+        StoreSidecarConvergenceOutcome content = DisabledOutcome;
+        StoreSidecarConvergenceOutcome search = DisabledOutcome;
         try
         {
             using (FamilyStoreSidecarWriteLease.AcquireFor(storeRoot))
             {
                 if (_ensureStoreContent is not null)
                 {
-                    didWork |= ConvergeStoreSidecar(
+                    content = ConvergeStoreSidecar(
                         IndexerPhaseNames.Content,
                         () => _ensureStoreContent(storeRoot, session),
-                        target);
+                        storeSequence);
                     contentRecorded = true;
                 }
                 else
                 {
-                    _phaseSink.RecordSafely(IndexerPhaseNames.Content, TimeSpan.Zero, IndexerPhaseOutcomes.Skipped, target, false);
+                    _phaseSink.RecordSafely(IndexerPhaseNames.Content, TimeSpan.Zero, IndexerPhaseOutcomes.Skipped, storeSequence, false);
+                    content = DisabledOutcome;
                     contentRecorded = true;
                 }
 
                 if (_searchEnabled && _ensureStoreSearch is not null)
                 {
-                    didWork |= ConvergeStoreSidecar(
+                    search = ConvergeStoreSidecar(
                         IndexerPhaseNames.Search,
                         () => _ensureStoreSearch(storeRoot, session),
-                        target);
+                        storeSequence);
                     searchRecorded = true;
                 }
                 else
                 {
-                    _phaseSink.RecordSafely(IndexerPhaseNames.Search, TimeSpan.Zero, IndexerPhaseOutcomes.Skipped, target, false);
+                    _phaseSink.RecordSafely(IndexerPhaseNames.Search, TimeSpan.Zero, IndexerPhaseOutcomes.Skipped, storeSequence, false);
+                    search = DisabledOutcome;
                     searchRecorded = true;
                 }
             }
         }
         catch (Exception ex) when (IsConvergenceException(ex))
         {
-            if (!contentRecorded)
-                _phaseSink.RecordSafely(IndexerPhaseNames.Content, TimeSpan.Zero, IndexerPhaseOutcomes.Failed, target, false);
-            if (!searchRecorded)
-                _phaseSink.RecordSafely(IndexerPhaseNames.Search, TimeSpan.Zero, IndexerPhaseOutcomes.Failed, target, false);
+            if (_ensureStoreContent is not null)
+            {
+                if (!contentRecorded)
+                    _phaseSink.RecordSafely(
+                        IndexerPhaseNames.Content,
+                        TimeSpan.Zero,
+                        IndexerPhaseOutcomes.Failed,
+                        storeSequence,
+                        false);
+                content = FailedOutcome(ex);
+            }
+            else
+            {
+                content = DisabledOutcome;
+            }
+
+            if (_searchEnabled && _ensureStoreSearch is not null)
+            {
+                if (!searchRecorded)
+                    _phaseSink.RecordSafely(
+                        IndexerPhaseNames.Search,
+                        TimeSpan.Zero,
+                        IndexerPhaseOutcomes.Failed,
+                        storeSequence,
+                        false);
+                search = FailedOutcome(ex);
+            }
+            else
+            {
+                search = DisabledOutcome;
+            }
             _logger.LogWarning(ex,
                 "Family-store sidecar lease acquisition or release failed; derived sidecars will retry on the next convergence.");
         }
 
-        target = session.Snapshot.Freshness.StoreLogSequence
-            ?? throw new InvalidOperationException("The family-store snapshot has no store_log sequence.");
-        long storeSequence = target.Value;
+        bool metricsDidWork = false;
 
         using (var metricsPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.Metrics))
         {
@@ -216,35 +315,35 @@ internal sealed class IndexerSidecarConverger
                 metricsPhase.Skip(storeSequence);
             else
             {
-                bool metricsDidWork = metrics == MetricHistoryWriteResult.Recorded;
-                didWork |= metricsDidWork;
+                metricsDidWork = metrics == MetricHistoryWriteResult.Recorded;
                 metricsPhase.Complete(storeSequence, metricsDidWork);
             }
         }
 
+        StoreSidecarConvergenceOutcome vector;
         using (var vectorPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.Vector))
         {
-            long previousTarget = _vectorSignal.TargetRevision;
-            _vectorSignal.StampTarget(storeSequence, fullRebuild: false);
-            long currentTarget = _vectorSignal.TargetRevision;
-            bool vectorDidWork = currentTarget > previousTarget;
-            didWork |= vectorDidWork;
-            if (_vectorSignal.Enabled)
-                vectorPhase.Complete(storeSequence, vectorDidWork);
-            else
-                vectorPhase.Skip(storeSequence);
+            vector = ConvergeStoreVector(storeSequence, vectorPhase);
         }
-        totalPhase.Complete(storeSequence, didWork);
+
+        var result = new StoreSidecarConvergenceResult(storeSequence, content, search, vector, metricsDidWork);
+        totalPhase.Complete(storeSequence, result.DidWork);
+        return result;
     }
 
-    private bool ConvergeStoreSidecar(string kind, Func<bool> converge, long? storeSequence)
+    private StoreSidecarConvergenceOutcome ConvergeStoreSidecar(
+        string kind,
+        Func<bool> converge,
+        long? storeSequence)
     {
         using var phase = new IndexerPhaseScope(_phaseSink, kind);
         try
         {
             bool didWork = converge();
             phase.Complete(storeSequence, didWork);
-            return didWork;
+            return didWork
+                ? new(StoreSidecarConvergenceStatuses.Repaired, true, false, false, null)
+                : new(StoreSidecarConvergenceStatuses.Current, false, false, false, null);
         }
         catch (Exception ex) when (IsConvergenceException(ex))
         {
@@ -252,8 +351,59 @@ internal sealed class IndexerSidecarConverger
                 "Family-store {SidecarKind} sidecar convergence failed; it will retry on the next convergence.",
                 kind);
             phase.Fail(storeSequence);
-            return false;
+            return FailedOutcome(ex);
         }
+    }
+
+    private StoreSidecarConvergenceOutcome ConvergeStoreVector(
+        long storeSequence,
+        IndexerPhaseScope phase)
+    {
+        if (!_vectorSignal.Enabled)
+        {
+            phase.Skip(storeSequence);
+            return DisabledOutcome;
+        }
+
+        if (!_vectorDrainAvailable())
+        {
+            phase.Complete(storeSequence, false);
+            return new(
+                StoreSidecarConvergenceStatuses.LeaderRequired,
+                false,
+                true,
+                true,
+                "A resident vector drain is required to process the target.");
+        }
+
+        long previousTarget = _vectorSignal.TargetRevision;
+        _vectorSignal.StampTarget(storeSequence, fullRebuild: false);
+        long currentTarget = _vectorSignal.TargetRevision;
+        bool targetChanged = currentTarget > previousTarget;
+        phase.Complete(storeSequence, targetChanged);
+        return targetChanged
+            ? new(StoreSidecarConvergenceStatuses.Queued, true, true, false, null)
+            : new(StoreSidecarConvergenceStatuses.Queued, false, true, false, "The resident vector drain already owns this target.");
+    }
+
+    private static StoreSidecarConvergenceOutcome DisabledOutcome { get; } =
+        new(StoreSidecarConvergenceStatuses.Disabled, false, false, false, null);
+
+    private static StoreSidecarConvergenceOutcome FailedOutcome(Exception ex) =>
+        new(
+            StoreSidecarConvergenceStatuses.Failed,
+            false,
+            true,
+            false,
+            BoundFailureReason(ex.Message));
+
+    private static string BoundFailureReason(string reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            return "sidecar convergence failed";
+        return reason.Length <= MaxFailureReasonLength
+            ? reason
+            : reason[..MaxFailureReasonLength];
     }
 
     // Metric-history cheap arm: append one source='converge' snapshot AFTER the sidecar converge steps, independent
