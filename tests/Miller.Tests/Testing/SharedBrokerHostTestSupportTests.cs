@@ -121,6 +121,24 @@ public sealed class SharedBrokerHostTestSupportTests
     }
 
     [Fact]
+    public void Locate_AcceptsAnExtensionlessDottedAppHostWithItsCompanionDll()
+    {
+        string baseDirectory = Path.Combine(
+            Path.GetTempPath(), "miller-ct", "build", "ws", "proj", "gen", "out");
+        string appHost = Path.Combine(baseDirectory, "Miller.SharedBrokerTestHost");
+        var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            appHost,
+            appHost + ".dll",
+        };
+
+        string? found = SharedBrokerHostTestSupport.Locate(
+            baseDirectory, "Miller.SharedBrokerTestHost", present.Contains);
+
+        Assert.Equal(appHost, found);
+    }
+
+    [Fact]
     public void CandidatePaths_HandleATrailingSeparatorOnTheBaseDirectory()
     {
         // AppContext.BaseDirectory always ends with a separator.

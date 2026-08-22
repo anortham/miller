@@ -52,7 +52,9 @@ public static class SharedBrokerHostTestSupport
     {
         foreach (string candidate in CandidatePaths(baseDirectory, executableFileName))
         {
-            if (fileExists(candidate) && fileExists(Path.ChangeExtension(candidate, ".dll")))
+            if (fileExists(candidate) && fileExists(candidate.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                ? Path.ChangeExtension(candidate, ".dll")
+                : candidate + ".dll"))
                 return candidate;
         }
 
