@@ -515,6 +515,24 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         return results;
     }
 
+    /// <summary>
+    /// Parses one node:test junit report, PER FILE.
+    ///
+    /// <para>node's runner writes ONE junit document for the whole invocation and gives every case the same
+    /// classname — the directory the file sits in — so the report itself separates files only by the
+    /// <c>file</c> attribute it puts on each case. Folding the document into one status and one failure
+    /// message stamped that verdict on every selected file: a suite with one red file among three green
+    /// ones came back four-red, each carrying the single real assertion message (dogfood finding F9,
+    /// 2026-08-21). Each selected file now gets the verdict of ITS OWN cases, the way the jest/vitest path
+    /// already reads per-file results out of one JSON document.</para>
+    ///
+    /// <para>Two honest edges. A selected file the report never names gets NO result: the store flips a case
+    /// the run did not report back to stale, which is the truth for a file whose outcome nothing states —
+    /// far better than lending it a sibling's verdict. And cases the report leaves unattributed (no
+    /// <c>file</c> attribute, which is every case of a pre-file-attribute reporter) still fold into ONE
+    /// aggregate verdict, given only to the selected files the report could not name — a per-file result is
+    /// never overwritten by it.</para>
+    /// </summary>
     private static IReadOnlyList<ProviderCaseResult> ParseNodeJunit(
         ContinuousTestProviderRunRequest request,
         IReadOnlyList<string> testCaseIds,
@@ -524,29 +542,70 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         if (testCaseIds.Count == 0)
             return [];
 
-        var status = AggregateStatus(parsed.Cases.Select(row => row.Status));
-        var duration = parsed.Cases
-            .Select(row => row.DurationSeconds)
-            .Where(durationSeconds => durationSeconds is not null)
-            .Sum(durationSeconds => durationSeconds!.Value);
-        var failureSummary = parsed.Cases
-            .Select(row => row.FailureText)
-            .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text));
-        return testCaseIds
-            .Select(testCaseId => new ProviderCaseResult(
+        var packageRoot = PackageRoot(request.Workspace);
+        var casesByTestCaseId = new Dictionary<string, List<ParsedTestArtifactCase>>(StringComparer.Ordinal);
+        var unattributedCases = new List<ParsedTestArtifactCase>();
+        foreach (var row in parsed.Cases)
+        {
+            var relativePath = RelativePathFromReportedFile(packageRoot, row.File);
+            if (relativePath is null)
+            {
+                unattributedCases.Add(row);
+                continue;
+            }
+
+            var testCaseId = TestCaseId(relativePath);
+            if (!casesByTestCaseId.TryGetValue(testCaseId, out var fileCases))
+                casesByTestCaseId[testCaseId] = fileCases = [];
+            fileCases.Add(row);
+        }
+
+        var results = new List<ProviderCaseResult>(testCaseIds.Count);
+        foreach (var testCaseId in testCaseIds)
+        {
+            var cases = casesByTestCaseId.TryGetValue(testCaseId, out var fileCases)
+                ? fileCases
+                : unattributedCases;
+            if (cases.Count == 0)
+                continue;
+
+            results.Add(new ProviderCaseResult(
                 Id: StableId("test_result", request.Workspace.WorkspaceId, testCaseId, request.RunId),
                 TestCaseId: testCaseId,
-                Status: status,
+                Status: AggregateStatus(cases.Select(row => row.Status)),
                 ResultRevision: request.SelectedRevision,
                 IndexIdentity: request.IndexIdentity,
-                DurationSeconds: duration,
-                FailureSummary: failureSummary,
+                DurationSeconds: cases
+                    .Select(row => row.DurationSeconds)
+                    .Where(durationSeconds => durationSeconds is not null)
+                    .Sum(durationSeconds => durationSeconds!.Value),
+                FailureSummary: cases
+                    .Select(row => row.FailureText)
+                    .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text)),
                 Metadata: new Dictionary<string, object?>
                 {
                     ["artifact_path"] = artifactPath,
                     ["framework"] = RequiredFramework(request.Workspace),
-                }))
-            .ToArray();
+                }));
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// The package-relative path of a file a report named, or null when it named none or named one outside
+    /// the package. node writes the ABSOLUTE path; a relative one is read against the package root, which
+    /// is the directory the run was launched in — never the calling process's working directory.
+    /// </summary>
+    private static string? RelativePathFromReportedFile(string packageRoot, string? reportedFile)
+    {
+        if (string.IsNullOrWhiteSpace(reportedFile))
+            return null;
+
+        var path = Path.IsPathRooted(reportedFile)
+            ? reportedFile
+            : Path.Combine(packageRoot, reportedFile);
+        return RelativePathOrNull(packageRoot, path);
     }
 
     private static IEnumerable<string> AssertionStatuses(JsonElement fileResult)

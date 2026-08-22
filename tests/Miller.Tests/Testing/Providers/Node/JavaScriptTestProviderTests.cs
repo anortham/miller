@@ -565,6 +565,105 @@ public sealed class JavaScriptTestProviderTests : IDisposable
             StringComparison.Ordinal);
     }
 
+    // -------------------------------------------- per-file node:test attribution (dogfood finding F9)
+
+    /// <summary>
+    /// A partially red node:test suite. Node's junit reporter puts every file's cases in ONE report and
+    /// gives them all the same classname, so the whole report used to collapse to a single status and a
+    /// single failure message that were then stamped on every selected file — three green files read as
+    /// red, each carrying the one real assertion message (dogfood finding F9, 2026-08-21).
+    /// </summary>
+    [Fact]
+    public async Task Run_attributes_a_node_junit_failure_to_the_file_that_failed()
+    {
+        var workspace = Workspace("node-test");
+        var files = new[] { "test/a.test.js", "test/b.test.js", "test/c.test.js", "test/d.test.js" };
+        foreach (var file in files)
+            WritePackageFile(file, "test('case', () => {})");
+        var runner = new FakeTestProcessRunner();
+        runner.OnRun = command => WriteNodeJunitArtifact(command, files, failingFile: "test/d.test.js");
+        runner.Enqueue(exitCode: 1);
+        var provider = new JavaScriptTestProvider(runner);
+
+        var result = await provider.RunAsync(
+            Request(workspace, files.Select(TestCaseIdFor).ToArray()),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("failed", result.Status);
+        Assert.Equal(
+            files.Select(TestCaseIdFor).Order(StringComparer.Ordinal),
+            result.CaseResults.Select(row => row.TestCaseId).Order(StringComparer.Ordinal));
+        var failed = Assert.Single(result.CaseResults, row => row.Status == "failed");
+        Assert.Equal(TestCaseIdFor("test/d.test.js"), failed.TestCaseId);
+        Assert.Equal("test/d.test.js is not two", failed.FailureSummary);
+        Assert.All(
+            result.CaseResults.Where(row => row.TestCaseId != failed.TestCaseId),
+            row =>
+            {
+                Assert.Equal("passed", row.Status);
+                Assert.Null(row.FailureSummary);
+            });
+    }
+
+    /// <summary>
+    /// A selected file the report never names gets NO result. It must not inherit a sibling's verdict in
+    /// either direction: the store flips a case the run never reported back to stale, which is the honest
+    /// answer for a file whose outcome the report does not state.
+    /// </summary>
+    [Fact]
+    public async Task Run_leaves_a_node_test_file_the_report_never_named_unreported()
+    {
+        var workspace = Workspace("node-test");
+        var files = new[] { "test/a.test.js", "test/b.test.js", "test/missing.test.js", "test/d.test.js" };
+        foreach (var file in files)
+            WritePackageFile(file, "test('case', () => {})");
+        var reported = new[] { "test/a.test.js", "test/b.test.js", "test/d.test.js" };
+        var runner = new FakeTestProcessRunner();
+        runner.OnRun = command => WriteNodeJunitArtifact(command, reported, failingFile: "test/d.test.js");
+        runner.Enqueue(exitCode: 1);
+        var provider = new JavaScriptTestProvider(runner);
+
+        var result = await provider.RunAsync(
+            Request(workspace, files.Select(TestCaseIdFor).ToArray()),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            reported.Select(TestCaseIdFor).Order(StringComparer.Ordinal),
+            result.CaseResults.Select(row => row.TestCaseId).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(
+            result.CaseResults,
+            row => row.TestCaseId == TestCaseIdFor("test/missing.test.js"));
+    }
+
+    /// <summary>
+    /// Node's junit reporter writes the absolute path of each test file. This is the same report shape the
+    /// real runner produces, including the platform's own directory separator.
+    /// </summary>
+    private void WriteNodeJunitArtifact(
+        TestProcessCommand command,
+        IReadOnlyList<string> reportedFiles,
+        string? failingFile)
+    {
+        var outputPath = command.Arguments[command.Arguments.ToList().IndexOf("--test-reporter-destination") + 1];
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        var cases = reportedFiles.Select(file =>
+        {
+            var absolute = Path.Combine(PackageRoot, file.Replace('/', Path.DirectorySeparatorChar));
+            return string.Equals(file, failingFile, StringComparison.Ordinal)
+                ? $"""
+                     <testcase name="case" time="0.002" classname="test" file="{absolute}">
+                       <failure type="testCodeFailure" message="{file} is not two">{file} is not two</failure>
+                     </testcase>
+                   """
+                : $"""  <testcase name="case" time="0.001" classname="test" file="{absolute}" />""";
+        });
+        File.WriteAllText(
+            outputPath,
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<testsuites>\n"
+            + string.Join("\n", cases)
+            + "\n</testsuites>\n");
+    }
+
     // -------------------------------------------- chained package scripts (dogfood finding F10)
 
     /// <summary>

@@ -43,6 +43,62 @@ public sealed class JunitTestResultParserTests : IDisposable
         Assert.Equal("AssertionError: card declined", parsed.Cases[1].FailureText);
     }
 
+    /// <summary>
+    /// Node's junit reporter names the source file of every case in a <c>file</c> attribute, and puts the
+    /// same <c>classname</c> ("test", the directory) on all of them. The file attribute is therefore the
+    /// only thing in the report that tells one test file from another — without it a partially red suite
+    /// collapses to one verdict for every file (dogfood finding F9, 2026-08-21).
+    /// </summary>
+    [Fact]
+    public void Junit_parser_captures_the_file_attribute_of_each_testcase()
+    {
+        var artifact = WriteArtifact(
+            "junit_node.xml",
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <testsuites>
+              <testcase name="a ok" time="0.001" classname="test" file="/repo/test/a.test.js" />
+              <testcase name="b ok" time="0.001" classname="test" file="/repo/test/b.test.js" />
+              <testsuite name="group" time="0.002" tests="1" failures="0">
+                <testcase name="c ok" time="0.001" classname="test" file="/repo/test/c.test.js" />
+              </testsuite>
+              <testcase name="d fails" time="0.002" classname="test" file="/repo/test/d.test.js">
+                <failure type="testCodeFailure" message="one is not two">one is not two</failure>
+              </testcase>
+            </testsuites>
+            """);
+
+        var parsed = JunitTestResultParser.Parse(artifact);
+
+        Assert.Equal(
+            [
+                ("a ok", "passed", "/repo/test/a.test.js"),
+                ("b ok", "passed", "/repo/test/b.test.js"),
+                ("c ok", "passed", "/repo/test/c.test.js"),
+                ("d fails", "failed", "/repo/test/d.test.js"),
+            ],
+            parsed.Cases.Select(testCase => (testCase.Name, testCase.Status, testCase.File)).ToArray());
+        Assert.Equal("one is not two", parsed.Cases[3].FailureText);
+    }
+
+    /// <summary>A report whose cases carry no file attribute still parses; the file is simply unknown.</summary>
+    [Fact]
+    public void Junit_parser_reports_no_file_when_the_testcase_names_none()
+    {
+        var artifact = WriteArtifact(
+            "junit_nofile.xml",
+            """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuite name="node" tests="1" failures="0">
+              <testcase classname="math" name="adds" time="0.01" />
+            </testsuite>
+            """);
+
+        var parsed = JunitTestResultParser.Parse(artifact);
+
+        Assert.Null(Assert.Single(parsed.Cases).File);
+    }
+
     [Fact]
     public void Junit_parser_rejects_xml_entities()
     {
