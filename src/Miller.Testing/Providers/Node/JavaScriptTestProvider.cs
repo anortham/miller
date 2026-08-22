@@ -256,7 +256,7 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         var framework = RequiredFramework(request.Workspace);
         var packageRoot = PackageRoot(request.Workspace);
         paths.EnsureDirectories();
-        var cacheDirectory = CacheDirectory(paths);
+        var cacheDirectory = CacheDirectory(request.Workspace);
         Directory.CreateDirectory(cacheDirectory);
 
         var selectedFiles = request.TestCaseIds
@@ -1217,7 +1217,7 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         CtGenerationPaths paths)
     {
         Directory.CreateDirectory(paths.TempDirectory);
-        var cacheDirectory = CacheDirectory(paths);
+        var cacheDirectory = CacheDirectory(workspace);
         Directory.CreateDirectory(cacheDirectory);
         return new Dictionary<string, string?>(StringComparer.Ordinal)
         {
@@ -1232,8 +1232,16 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         };
     }
 
-    private static string CacheDirectory(CtGenerationPaths paths) =>
-        Path.Combine(paths.GenerationRoot, "cache");
+    /// <summary>
+    /// The transform/compile cache for vitest, jest and node, PROJECT-stable rather than per-generation.
+    ///
+    /// <para>It used to live inside the generation, so every operation started from an empty cache and
+    /// re-transformed every file — the node half of finding F7. It now sits beside the generations under the
+    /// build output root, where each framework's own cache keys decide what stays valid. Results, reports and
+    /// temp stay per-operation.</para>
+    /// </summary>
+    private static string CacheDirectory(ContinuousTestWorkspace workspace) =>
+        CtGenerationPaths.CacheDirectory(workspace, "node");
 
     private static string? TestFileFromId(string testCaseId) =>
         testCaseId.StartsWith(TestCaseIdPrefix, StringComparison.Ordinal)
