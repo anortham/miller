@@ -35,6 +35,24 @@ public static class ContinuousTestProjectInventory
         "packages",
     };
 
+    /// <summary>
+    /// Directory names that hold test DATA rather than test projects. A manifest below one of them is a
+    /// parser fixture, not a suite: the dogfood repository julie-extractors enabled
+    /// <c>fixtures/extraction/toml/cargo_deps/Cargo.toml</c> and a fixture <c>pyproject.toml</c> as real
+    /// projects, and continuous testing tried to build them.
+    ///
+    /// The list stays SMALL and LITERAL. A name that also spells a real source directory (<c>data</c>,
+    /// <c>samples</c>, <c>examples</c>) would silently stop testing a project someone ships, which is the
+    /// worse failure of the two. The rule prunes the WALK only - <see cref="Identify"/> still accepts a
+    /// path a person names, because <c>tests enable</c> carries their intent.
+    /// </summary>
+    private static readonly HashSet<string> FixtureDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "fixtures",
+        "__fixtures__",
+        "testdata",
+    };
+
     private static readonly HashSet<string> DotnetProjectExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".csproj",
@@ -42,14 +60,33 @@ public static class ContinuousTestProjectInventory
         ".vbproj",
     };
 
-    private static readonly HashSet<string> PythonProjectNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "pyproject.toml",
+    /// <summary>
+    /// Every python config file that enables a pytest project, in the order pytest ITSELF reads them
+    /// when it picks a rootdir: <c>pytest.ini</c> wins over everything (even when empty), then
+    /// <c>pyproject.toml</c>, then <c>tox.ini</c>, then <c>setup.cfg</c>. <c>setup.py</c> is no config
+    /// file at all and comes last.
+    ///
+    /// The order is load-bearing because <see cref="CollapsePytestConfigRoots"/> enables exactly ONE
+    /// project per directory and names the winner as the project path: the file Miller names is then the
+    /// file pytest reads. The dogfood repository more-itertools carries <c>pyproject.toml</c>,
+    /// <c>setup.cfg</c> and <c>tox.ini</c> side by side, and each one used to enable its own project -
+    /// three projects for one suite, so every change ran it three times.
+    /// </summary>
+    private static readonly string[] PythonProjectPriority =
+    [
         "pytest.ini",
+        "pyproject.toml",
         "tox.ini",
         "setup.cfg",
         "setup.py",
-    };
+    ];
+
+    /// <summary>
+    /// The same names as <see cref="PythonProjectPriority"/>, as a set. It is DERIVED from the ordered
+    /// list so the two can never disagree about which files enable a pytest project.
+    /// </summary>
+    private static readonly HashSet<string> PythonProjectNames =
+        new(PythonProjectPriority, StringComparer.OrdinalIgnoreCase);
 
     public static IReadOnlyList<ContinuousTestProject> Discover(string workspaceRoot, string workspaceId)
     {
@@ -73,7 +110,7 @@ public static class ContinuousTestProjectInventory
                 ExcludeTraits: excludeTraits));
         }
 
-        return projects
+        return CollapsePytestConfigRoots(SuppressCargoWorkspaceMembers(projects))
             .OrderBy(project => project.ProjectPath, StringComparer.Ordinal)
             .ToArray();
     }
@@ -228,7 +265,8 @@ public static class ContinuousTestProjectInventory
 
             foreach (string child in children)
             {
-                if (SkipDirectoryNames.Contains(Path.GetFileName(child)))
+                string childName = Path.GetFileName(child);
+                if (SkipDirectoryNames.Contains(childName) || FixtureDirectoryNames.Contains(childName))
                     continue;
                 if (IsSeparateCheckout(child, ownGitAdminDirs))
                     continue;
@@ -324,6 +362,358 @@ public static class ContinuousTestProjectInventory
 
         return false;
     }
+
+    /// <summary>
+    /// Keeps ONE pytest project for each directory: the config file highest in
+    /// <see cref="PythonProjectPriority"/>. A python package commonly carries several of these files at
+    /// once, and every one of them named the same suite - so the suite ran once per file.
+    ///
+    /// The rule is per DIRECTORY, never per repository: two independent packages stay two projects.
+    /// Nothing else is touched, so a directory that holds both a <c>pyproject.toml</c> and a
+    /// <c>package.json</c> keeps its pytest project and its javascript project.
+    /// </summary>
+    private static List<ContinuousTestProject> CollapsePytestConfigRoots(List<ContinuousTestProject> projects)
+    {
+        var winners = new Dictionary<string, ContinuousTestProject>(PathComparer);
+        foreach (ContinuousTestProject project in projects)
+        {
+            if (!PythonProjectNames.Contains(Path.GetFileName(project.ProjectPath)))
+                continue;
+            string directory = DirectoryOf(project.ProjectPath);
+            if (!winners.TryGetValue(directory, out ContinuousTestProject? standing)
+                || PytestConfigRank(project.ProjectPath) < PytestConfigRank(standing.ProjectPath))
+            {
+                winners[directory] = project;
+            }
+        }
+
+        if (winners.Count == projects.Count(static project =>
+                PythonProjectNames.Contains(Path.GetFileName(project.ProjectPath))))
+        {
+            return projects;
+        }
+
+        var kept = new List<ContinuousTestProject>(projects.Count);
+        foreach (ContinuousTestProject project in projects)
+        {
+            if (!PythonProjectNames.Contains(Path.GetFileName(project.ProjectPath)))
+            {
+                kept.Add(project);
+                continue;
+            }
+
+            if (ReferenceEquals(winners[DirectoryOf(project.ProjectPath)], project))
+                kept.Add(project);
+        }
+
+        return kept;
+    }
+
+    /// <summary>
+    /// Position of a python config file in <see cref="PythonProjectPriority"/>. A name outside the list
+    /// ranks last, which can only happen if a caller hands in a path this inventory never discovered.
+    /// </summary>
+    private static int PytestConfigRank(string path)
+    {
+        int index = Array.FindIndex(
+            PythonProjectPriority,
+            name => string.Equals(name, Path.GetFileName(path), StringComparison.OrdinalIgnoreCase));
+        return index < 0 ? int.MaxValue : index;
+    }
+
+    /// <summary>
+    /// Drops the member crates of a cargo workspace. One <c>cargo test</c> at the workspace root already
+    /// builds and runs every member, so a member's own <c>Cargo.toml</c> enabling a second project ran
+    /// the whole suite twice - once per crate and once again for the root.
+    ///
+    /// A crate is dropped only when this parser can PROVE it is a member: the workspace root names it in
+    /// <c>members</c> and does not name it in <c>exclude</c>. Everything else is kept. The two mistakes
+    /// are not equal - a kept member runs a suite twice, while a wrongly dropped crate stops being
+    /// tested at all and reports green - so every doubt (a workspace that lists no members, a glob shape
+    /// this cannot read, an unreadable manifest) resolves toward keeping the candidate.
+    /// </summary>
+    private static List<ContinuousTestProject> SuppressCargoWorkspaceMembers(List<ContinuousTestProject> projects)
+    {
+        var roots = new List<CargoWorkspaceRoot>();
+        foreach (ContinuousTestProject project in projects)
+        {
+            if (!IsCargoManifest(project.ProjectPath))
+                continue;
+            CargoWorkspaceRoot? root = TryReadCargoWorkspaceRoot(project.ProjectPath);
+            if (root is not null)
+                roots.Add(root);
+        }
+
+        if (roots.Count == 0)
+            return projects;
+
+        var kept = new List<ContinuousTestProject>(projects.Count);
+        foreach (ContinuousTestProject project in projects)
+        {
+            if (IsCargoManifest(project.ProjectPath)
+                && roots.Any(root => root.Covers(project.ProjectPath)))
+            {
+                continue;
+            }
+
+            kept.Add(project);
+        }
+
+        return kept;
+    }
+
+    private static bool IsCargoManifest(string path) =>
+        string.Equals(Path.GetFileName(path), "Cargo.toml", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The member and exclude lists of one cargo workspace root, as workspace-relative path patterns.
+    /// </summary>
+    private sealed record CargoWorkspaceRoot(
+        string Directory,
+        IReadOnlyList<string> Members,
+        IReadOnlyList<string> Exclude)
+    {
+        /// <summary>
+        /// True when a <c>cargo test</c> at this workspace root already covers
+        /// <paramref name="manifestPath"/>. The root's OWN manifest is never covered - it is the project
+        /// that does the covering.
+        /// </summary>
+        public bool Covers(string manifestPath)
+        {
+            string directory = DirectoryOf(manifestPath);
+            if (PathComparer.Equals(directory, Directory))
+                return false;
+
+            string relative = Path.GetRelativePath(Directory, directory).Replace('\\', '/');
+            if (relative.StartsWith("..", PathComparison) || Path.IsPathRooted(relative))
+                return false;
+            if (Exclude.Any(pattern => PatternCoversPath(pattern, relative)))
+                return false;
+            return Members.Any(pattern => GlobMatches(pattern, relative));
+        }
+    }
+
+    /// <summary>
+    /// Reads the <c>[workspace]</c> table out of a <c>Cargo.toml</c>, or null when the manifest declares
+    /// no workspace. The parse is deliberately literal - a line-oriented scan of the one table, not a
+    /// TOML reader - because the only question is which relative paths the workspace names.
+    ///
+    /// Only the <c>[workspace]</c> table itself counts. <c>[workspace.package]</c>,
+    /// <c>[workspace.dependencies]</c> and the rest are different tables, and a <c>members</c> key under
+    /// one of them means something else.
+    /// </summary>
+    private static CargoWorkspaceRoot? TryReadCargoWorkspaceRoot(string manifestPath)
+    {
+        string text = ReadHead(manifestPath);
+        if (text.Length == 0)
+            return null;
+
+        bool declaresWorkspace = false;
+        bool inWorkspaceTable = false;
+        var members = new List<string>();
+        var exclude = new List<string>();
+        var reader = new StringReader(text);
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            string trimmed = StripComment(line).Trim();
+            if (trimmed.Length == 0)
+                continue;
+
+            if (trimmed.StartsWith('['))
+            {
+                inWorkspaceTable = string.Equals(trimmed, "[workspace]", StringComparison.Ordinal);
+                declaresWorkspace |= inWorkspaceTable;
+                continue;
+            }
+
+            if (!inWorkspaceTable)
+                continue;
+
+            if (TryReadKey(trimmed, "members", out string? membersValue))
+                ReadPathArray(membersValue, reader, members);
+            else if (TryReadKey(trimmed, "exclude", out string? excludeValue))
+                ReadPathArray(excludeValue, reader, exclude);
+        }
+
+        return declaresWorkspace
+            ? new CargoWorkspaceRoot(DirectoryOf(manifestPath), members, exclude)
+            : null;
+    }
+
+    /// <summary>
+    /// Splits a <c>key = value</c> line, returning the value when the key matches. A key this does not
+    /// recognize is simply not read, so an unusual manifest names no members and suppresses nothing.
+    /// </summary>
+    private static bool TryReadKey(string line, string key, out string value)
+    {
+        value = string.Empty;
+        int equals = line.IndexOf('=');
+        if (equals <= 0)
+            return false;
+        if (!string.Equals(line[..equals].Trim(), key, StringComparison.Ordinal))
+            return false;
+        value = line[(equals + 1)..];
+        return true;
+    }
+
+    /// <summary>
+    /// Collects the quoted strings of a TOML array that may span several lines, stopping at the closing
+    /// bracket. An array that never closes inside the manifest head yields whatever it named so far.
+    /// </summary>
+    private static void ReadPathArray(string firstLine, StringReader reader, List<string> destination)
+    {
+        string current = firstLine;
+        while (true)
+        {
+            foreach (string entry in QuotedStrings(current))
+                destination.Add(entry);
+            if (current.Contains(']', StringComparison.Ordinal))
+                return;
+
+            string? next = reader.ReadLine();
+            if (next is null)
+                return;
+            current = StripComment(next);
+        }
+    }
+
+    /// <summary>Every single- or double-quoted string in one line of TOML.</summary>
+    private static IEnumerable<string> QuotedStrings(string line)
+    {
+        int index = 0;
+        while (index < line.Length)
+        {
+            char quote = line[index];
+            if (quote is not ('"' or '\''))
+            {
+                index++;
+                continue;
+            }
+
+            int close = line.IndexOf(quote, index + 1);
+            if (close < 0)
+                yield break;
+            yield return line[(index + 1)..close];
+            index = close + 1;
+        }
+    }
+
+    /// <summary>
+    /// Removes a trailing TOML comment. A <c>#</c> inside a quoted string is not a comment, so the scan
+    /// tracks quotes rather than cutting at the first hash.
+    /// </summary>
+    private static string StripComment(string line)
+    {
+        char quote = '\0';
+        for (int index = 0; index < line.Length; index++)
+        {
+            char ch = line[index];
+            if (quote != '\0')
+            {
+                if (ch == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch is '"' or '\'')
+                quote = ch;
+            else if (ch == '#')
+                return line[..index];
+        }
+
+        return line;
+    }
+
+    /// <summary>
+    /// True when an exclude pattern covers a path: the pattern matches it, or the path sits BELOW a
+    /// literal excluded directory. An excluded subtree is outside the workspace run, so everything in it
+    /// keeps its own project.
+    /// </summary>
+    private static bool PatternCoversPath(string pattern, string relativePath)
+    {
+        if (GlobMatches(pattern, relativePath))
+            return true;
+        string normalized = pattern.Replace('\\', '/').Trim('/');
+        return normalized.Length > 0
+            && relativePath.StartsWith(normalized + "/", PathComparison);
+    }
+
+    /// <summary>
+    /// Matches a cargo member pattern against a workspace-relative directory path. <c>*</c> matches
+    /// inside one path segment and <c>**</c> matches any run of segments, which is what cargo's glob
+    /// syntax means. A pattern carrying anything else (<c>?</c>, a character class) is NOT understood,
+    /// and an unmatched pattern keeps the candidate - see <see cref="SuppressCargoWorkspaceMembers"/>.
+    /// </summary>
+    private static bool GlobMatches(string pattern, string relativePath)
+    {
+        string normalized = pattern.Replace('\\', '/').Trim('/');
+        if (normalized.Length == 0
+            || normalized.Contains('?', StringComparison.Ordinal)
+            || normalized.Contains('[', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return MatchSegments(normalized.Split('/'), 0, relativePath.Split('/'), 0);
+    }
+
+    private static bool MatchSegments(string[] pattern, int patternIndex, string[] path, int pathIndex)
+    {
+        if (patternIndex == pattern.Length)
+            return pathIndex == path.Length;
+
+        if (string.Equals(pattern[patternIndex], "**", StringComparison.Ordinal))
+        {
+            for (int next = pathIndex; next <= path.Length; next++)
+            {
+                if (MatchSegments(pattern, patternIndex + 1, path, next))
+                    return true;
+            }
+
+            return false;
+        }
+
+        return pathIndex < path.Length
+            && SegmentMatches(pattern[patternIndex], path[pathIndex])
+            && MatchSegments(pattern, patternIndex + 1, path, pathIndex + 1);
+    }
+
+    private static bool SegmentMatches(string pattern, string segment)
+    {
+        if (!pattern.Contains('*', StringComparison.Ordinal))
+            return string.Equals(pattern, segment, PathComparison);
+
+        string[] parts = pattern.Split('*');
+        int cursor = 0;
+        for (int index = 0; index < parts.Length; index++)
+        {
+            string part = parts[index];
+            if (part.Length == 0)
+                continue;
+
+            if (index == 0)
+            {
+                if (!segment.StartsWith(part, PathComparison))
+                    return false;
+                cursor = part.Length;
+                continue;
+            }
+
+            if (index == parts.Length - 1)
+                return segment.EndsWith(part, PathComparison) && segment.Length - part.Length >= cursor;
+
+            int found = segment.IndexOf(part, cursor, PathComparison);
+            if (found < 0)
+                return false;
+            cursor = found + part.Length;
+        }
+
+        return true;
+    }
+
+    private static string DirectoryOf(string path) =>
+        Path.GetDirectoryName(Path.GetFullPath(path)) ?? Path.GetFullPath(path);
 
     private static bool IsCandidateFileName(string path)
     {
@@ -545,4 +935,7 @@ public static class ContinuousTestProjectInventory
 
     private static StringComparison PathComparison =>
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static StringComparer PathComparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }
