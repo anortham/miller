@@ -296,7 +296,7 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         var artifactPath = ResultArtifactPath(request, paths, part);
         Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
 
-        var reporterArgs = IsolationArguments(framework, cacheDirectory)
+        var reporterArgs = IsolationArguments(framework, packageRoot, cacheDirectory)
             .Concat(ReporterArguments(framework, artifactPath))
             .Concat(selectedFiles)
             .ToArray();
@@ -572,10 +572,25 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
             _ => throw UnsupportedFramework(framework, artifactPath),
         };
 
-    private static string[] IsolationArguments(string framework, string cacheDirectory) =>
+    /// <summary>
+    /// The flags that move a framework's cache into this generation's private directory.
+    ///
+    /// Vitest's dot-notation options (<c>--cache.dir</c>) arrived in vitest 1.x. Vitest 0.29.8 stops at
+    /// its CLI parser with <c>CACError: Unknown option `--cache`</c> and runs NOTHING, so every selected
+    /// file came back failed on a real 0.x workspace. The flag therefore goes on the command line only
+    /// when the INSTALLED major is 1 or newer.
+    ///
+    /// When the installed version cannot be read or parsed, the flag is omitted. The run then shares
+    /// vitest's default cache directory instead of this generation's private one, which loses cache
+    /// isolation between concurrent generations — a recoverable loss, where a rejected flag is a
+    /// guaranteed failed run.
+    /// </summary>
+    private static string[] IsolationArguments(string framework, string packageRoot, string cacheDirectory) =>
         framework switch
         {
-            "vitest" => ["--cache.dir", cacheDirectory],
+            "vitest" => InstalledPackageMajorVersion(packageRoot, "vitest") is int major && major >= 1
+                ? ["--cache.dir", cacheDirectory]
+                : [],
             "jest" => ["--cacheDirectory", cacheDirectory],
             _ => [],
         };
@@ -644,9 +659,7 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
                 || ScriptContains(root, "jest")
                 || ScriptContains(root, "vue-cli-service test:unit"))
                 return "jest";
-            if (ScriptContains(root, "node --test")
-                || ScriptContains(root, "node:test")
-                || ScriptContains(root, "--test"))
+            if (AnyScript(root, IsNodeTestRunnerCommand))
                 return "node-test";
             return null;
         }
@@ -695,9 +708,7 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
             "vitest" => command.Contains("vitest", StringComparison.OrdinalIgnoreCase),
             "jest" => command.Contains("jest", StringComparison.OrdinalIgnoreCase)
                 || command.Contains("vue-cli-service test:unit", StringComparison.OrdinalIgnoreCase),
-            "node-test" => command.Contains("node --test", StringComparison.OrdinalIgnoreCase)
-                || command.Contains("node:test", StringComparison.OrdinalIgnoreCase)
-                || command.Contains("--test", StringComparison.OrdinalIgnoreCase),
+            "node-test" => IsNodeTestRunnerCommand(command),
             _ => false,
         };
     }
@@ -801,6 +812,81 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// True when a package script command launches node's OWN test runner. The runner is named by the
+    /// <c>--test</c> flag or by the <c>node:test</c> module, so the flag is matched as a WHOLE argument:
+    /// other runners spell options that start with the same six characters
+    /// (<c>--testPathPattern</c>, <c>--testNamePattern</c>) and none of them starts node's runner. The
+    /// bare word "node" is never the signal either — <c>node build.js</c> builds.
+    ///
+    /// One rule, three readers: this decides the framework of a project whose framework is unspecified,
+    /// which package script a run goes through, and — through
+    /// <see cref="ContinuousTestProjectInventory"/> — whether the project is discovered at all. They must
+    /// not drift.
+    /// </summary>
+    internal static bool IsNodeTestRunnerCommand(string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+            return false;
+
+        if (command.Contains("node:test", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        foreach (var token in command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (string.Equals(token, "--test", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool AnyScript(JsonElement root, Func<string?, bool> predicate)
+    {
+        if (!root.TryGetProperty("scripts", out var scripts) || scripts.ValueKind != JsonValueKind.Object)
+            return false;
+
+        foreach (var script in scripts.EnumerateObject())
+        {
+            if (script.Value.ValueKind == JsonValueKind.String && predicate(script.Value.GetString()))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The major version of a package as INSTALLED under <paramref name="packageRoot"/>, or null when no
+    /// installed manifest is there and when its version cannot be read or parsed. The installed manifest
+    /// is the only honest source: a dependency range such as <c>"^0.29.8"</c> in the workspace manifest
+    /// names what was asked for, not what the install resolved.
+    /// </summary>
+    internal static int? InstalledPackageMajorVersion(string packageRoot, string packageName)
+    {
+        var manifestPath = Path.Combine(packageRoot, "node_modules", packageName, "package.json");
+        if (!File.Exists(manifestPath))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            if (!document.RootElement.TryGetProperty("version", out var version)
+                || version.ValueKind != JsonValueKind.String)
+                return null;
+
+            var text = version.GetString() ?? string.Empty;
+            var separator = text.IndexOf('.');
+            var head = separator < 0 ? text : text[..separator];
+            return int.TryParse(head, NumberStyles.None, CultureInfo.InvariantCulture, out var major)
+                ? major
+                : null;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private static bool ScriptContains(JsonElement root, string value)

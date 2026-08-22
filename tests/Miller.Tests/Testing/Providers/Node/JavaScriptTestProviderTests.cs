@@ -142,6 +142,7 @@ public sealed class JavaScriptTestProviderTests : IDisposable
     public void Build_run_command_for_vitest_uses_local_bin_and_json_output_file()
     {
         var workspace = Workspace("vitest");
+        WriteInstalledPackage("vitest", "3.2.4");
         var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
         var generation = CtGenerationPaths.ResolveLatestOrFirst(workspace);
 
@@ -160,6 +161,82 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         Assert.Equal(
             CacheDirectory(generation),
             command.Arguments[command.Arguments.ToList().IndexOf("--cache.dir") + 1]);
+    }
+
+    /// <summary>
+    /// Dot-notation CLI options arrived in vitest 1.x. Vitest 0.29.8 stops at its CLI parser with
+    /// "CACError: Unknown option `--cache`" and runs no file at all, so a real 0.x workspace reported
+    /// every selected test as failed. A 0.x install must not see the flag.
+    /// </summary>
+    [Fact]
+    public void Build_run_command_for_vitest_0x_omits_the_dot_notation_cache_option()
+    {
+        var workspace = Workspace("vitest");
+        WriteInstalledPackage("vitest", "0.29.8");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var command = provider.BuildRunCommand(Request(workspace, "js-test:src/math.test.ts"));
+
+        Assert.DoesNotContain(
+            command.Arguments,
+            argument => argument.StartsWith("--cache", StringComparison.Ordinal));
+        // Everything else about the invocation is unchanged: it still runs, and still writes the report
+        // where continuous testing reads it.
+        Assert.Equal(LocalBin("vitest"), command.FileName);
+        Assert.Contains("run", command.Arguments);
+        Assert.Contains("--reporter=json", command.Arguments);
+        Assert.Contains("--outputFile", command.Arguments);
+        Assert.Contains("src/math.test.ts", command.Arguments);
+    }
+
+    /// <summary>
+    /// 1.0.0 is the first version that accepts the flag, so the gate opens exactly there.
+    /// </summary>
+    [Fact]
+    public void Build_run_command_for_vitest_1x_passes_the_dot_notation_cache_option()
+    {
+        var workspace = Workspace("vitest");
+        WriteInstalledPackage("vitest", "1.0.0");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+        var generation = CtGenerationPaths.ResolveLatestOrFirst(workspace);
+
+        var command = provider.BuildRunCommand(Request(workspace, "js-test:src/math.test.ts"));
+
+        Assert.Contains("--cache.dir", command.Arguments);
+        Assert.Equal(
+            CacheDirectory(generation),
+            command.Arguments[command.Arguments.ToList().IndexOf("--cache.dir") + 1]);
+    }
+
+    /// <summary>
+    /// No installed manifest means no proof the flag is accepted. Omitting it costs cache isolation
+    /// between generations; passing it on a guess costs the whole run.
+    /// </summary>
+    [Fact]
+    public void Build_run_command_for_vitest_omits_the_cache_option_when_no_install_is_readable()
+    {
+        var workspace = Workspace("vitest");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var command = provider.BuildRunCommand(Request(workspace, "js-test:src/math.test.ts"));
+
+        Assert.DoesNotContain(
+            command.Arguments,
+            argument => argument.StartsWith("--cache", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Build_run_command_for_vitest_omits_the_cache_option_when_the_installed_version_is_unparseable()
+    {
+        var workspace = Workspace("vitest");
+        WriteInstalledPackage("vitest", "workspace:*");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var command = provider.BuildRunCommand(Request(workspace, "js-test:src/math.test.ts"));
+
+        Assert.DoesNotContain(
+            command.Arguments,
+            argument => argument.StartsWith("--cache", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -503,6 +580,7 @@ public sealed class JavaScriptTestProviderTests : IDisposable
     public void BuildRunCommands_keeps_a_small_selection_in_a_single_invocation()
     {
         var workspace = Workspace("vitest");
+        WriteInstalledPackage("vitest", "3.2.4");
         var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
         var request = Request(workspace, "js-test:src/math.test.ts", "js-test:src/string.spec.js");
         var generation = CtGenerationPaths.ResolveLatestOrFirst(workspace);
@@ -728,6 +806,16 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, contents);
     }
+
+    /// <summary>
+    /// Writes the manifest npm leaves at <c>node_modules/&lt;name&gt;/package.json</c>. That file is the
+    /// only honest statement of which version is installed: a dependency range in the workspace manifest
+    /// names what was asked for, not what the install resolved.
+    /// </summary>
+    private void WriteInstalledPackage(string name, string version) =>
+        WritePackageFile(
+            Path.Combine("node_modules", name, "package.json"),
+            $$"""{"name":"{{name}}","version":"{{version}}"}""");
 
     private string LocalBin(string name) =>
         Path.Combine(PackageRoot, "node_modules", ".bin", name + (OperatingSystem.IsWindows() ? ".cmd" : ""));

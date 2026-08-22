@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Miller.Indexing;
 
 namespace Miller.Testing;
@@ -364,6 +365,12 @@ public static class ContinuousTestProjectInventory
                 return true;
             }
 
+            if (DeclaresNodeTestRunnerScript(text))
+            {
+                framework = "node-test";
+                return true;
+            }
+
             framework = null;
             return false;
         }
@@ -406,6 +413,48 @@ public static class ContinuousTestProjectInventory
 
         framework = null;
         return false;
+    }
+
+    /// <summary>
+    /// True when a package manifest declares a script that runs node's OWN test runner — the framework
+    /// <see cref="JavaScriptTestProvider"/> calls <c>node-test</c> and already knows how to run. Without
+    /// this, a repository whose only suite is <c>node --test</c> enabled no continuous-test project at
+    /// all, however many test files it held.
+    ///
+    /// The manifest is parsed as JSON so that only script COMMANDS decide: a dependency NAME that happens
+    /// to carry the same text (<c>@rollup/plugin-node-resolve</c>) must never enable a project. A manifest
+    /// this cannot parse declares nothing.
+    /// </summary>
+    internal static bool DeclaresNodeTestRunnerScript(string packageJsonText)
+    {
+        if (string.IsNullOrWhiteSpace(packageJsonText))
+            return false;
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(packageJsonText);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("scripts", out JsonElement scripts)
+                || scripts.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            foreach (JsonProperty script in scripts.EnumerateObject())
+            {
+                if (script.Value.ValueKind == JsonValueKind.String
+                    && JavaScriptTestProvider.IsNodeTestRunnerCommand(script.Value.GetString()))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

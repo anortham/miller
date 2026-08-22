@@ -231,6 +231,120 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
         Assert.Empty(project.ExcludeTraits);
     }
 
+    /// <summary>
+    /// The literal manifest of C:\source\razorback. Its only test script runs node's own runner, and
+    /// before that runner was recognized the whole repository enabled zero continuous-test projects.
+    /// </summary>
+    [Fact]
+    public void Discover_identifies_a_node_test_runner_script_as_node_test()
+    {
+        WriteProject("package.json", """
+            {
+              "name": "razorback",
+              "version": "0.34.0",
+              "type": "module",
+              "scripts": {
+                "test": "node --test tests/*.test.mjs"
+              },
+              "main": "./index.js"
+            }
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal("node-test", project.Framework);
+    }
+
+    /// <summary>
+    /// The literal scripts and devDependencies of C:\source\classnames. Two things here must not confuse
+    /// the rule: a "bench" script that runs plain node, and a "node-resolve" dependency name.
+    /// </summary>
+    [Fact]
+    public void Discover_identifies_the_classnames_manifest_as_node_test()
+    {
+        WriteProject("package.json", """
+            {
+              "name": "classnames",
+              "version": "2.5.1",
+              "type": "module",
+              "scripts": {
+                "test": "node --test ./tests/*.js",
+                "bench": "node ./benchmarks/run.js",
+                "bench-browser": "rollup --plugin commonjs,json,node-resolve ./benchmarks/runInBrowser.js --file ./benchmarks/runInBrowser.bundle.js && http-server -c-1 ./benchmarks",
+                "check-types": "tsd"
+              },
+              "devDependencies": {
+                "@rollup/plugin-node-resolve": "^16.0.3",
+                "http-server": "^14.1.1",
+                "rollup": "^4.62.4"
+              }
+            }
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal("node-test", project.Framework);
+    }
+
+    /// <summary>
+    /// The word "node" is not the signal. A package whose scripts only launch node programs has no test
+    /// suite for continuous testing to run, and enabling it would report a verdict for a build script.
+    /// </summary>
+    [Fact]
+    public void Discover_skips_a_package_whose_scripts_only_run_node_programs()
+    {
+        WriteProject("package.json", """
+            {
+              "name": "tool",
+              "scripts": {
+                "build": "node build.js",
+                "start": "node ./server.js"
+              }
+            }
+            """);
+
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+    }
+
+    /// <summary>
+    /// The flag is matched as a whole argument. Other runners spell options that begin with the same six
+    /// characters, and none of them starts node's runner.
+    /// </summary>
+    [Fact]
+    public void Discover_skips_a_package_whose_test_script_only_starts_with_the_test_flag_text()
+    {
+        WriteProject("package.json", """
+            {
+              "name": "tool",
+              "scripts": {
+                "test": "some-runner --testPathPattern=unit"
+              }
+            }
+            """);
+
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+    }
+
+    /// <summary>
+    /// vitest and jest are still decided first: a repository that installs vitest and also keeps a node
+    /// script runs its suite through vitest.
+    /// </summary>
+    [Fact]
+    public void Discover_prefers_vitest_over_a_node_test_script()
+    {
+        WriteProject("package.json", """
+            {
+              "name": "app",
+              "scripts": {
+                "test": "vitest run",
+                "test:node": "node --test ./tests/*.js"
+              },
+              "devDependencies": { "vitest": "^3.2.4" }
+            }
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal("vitest", project.Framework);
+    }
+
     [Fact]
     public void Discover_stops_at_a_linked_worktree_whose_dot_git_is_a_file()
     {
