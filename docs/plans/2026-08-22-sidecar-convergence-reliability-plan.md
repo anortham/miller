@@ -216,8 +216,8 @@
 **Approach:** Run fast/Scale/semantic-soak gates on one exact tree, then exercise CLI and MCP refresh/health renderings. Treat lexical byte identity and zero semantic-off work as hard gates.
 
 **Acceptance criteria:**
-- [ ] Missing vector and stale search states converge without source changes or full extraction.
-- [ ] Refresh and health state/action output matches the work actually scheduled or completed.
-- [ ] Semantic-off zero-work and lexical byte identity are proven.
-- [ ] No retry loop, broker leak, or sidecar lease remains after shutdown.
+- [x] Missing vector and stale search states converge without source changes or full extraction.
+- [x] Refresh and health state/action output matches the work actually scheduled or completed.
+- [x] Semantic-off zero-work and lexical byte identity are proven.
+- [x] No retry loop, broker leak, or sidecar lease remains after shutdown.
 - [ ] Verification evidence is mapped in `docs/README.md`, all plan checkboxes are updated, and the serialized worker commit is recorded.
