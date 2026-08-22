@@ -201,6 +201,12 @@ public sealed class ContextToolTests
                 false,
                 false));
 
+    /// <summary>Answer a batched outgoing-evidence read from a per-symbol fake.</summary>
+    private static IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> OutgoingBatch(
+        IReadOnlyList<string> symbolIds,
+        Func<string, OutgoingReferenceEvidenceSet> read) =>
+        symbolIds.ToDictionary(id => id, read, StringComparer.Ordinal);
+
     private static OutgoingReferenceEvidenceSet ExactOutgoingSet(params OutgoingReferenceEvidence[] exact) =>
         new(
             exact,
@@ -1709,7 +1715,7 @@ public sealed class ContextToolTests
             semanticSeeds: null,
             sourceSeeds: null,
             readBody: null,
-            readOutgoing: null,
+            readOutgoingMany: null,
             json: false,
             out _,
             out _,
@@ -3492,14 +3498,16 @@ public sealed class ContextToolTests
                 ? ExtractReader.BodyReadResult.Available(
                     "static bool MatchesArtifact(path) { return Prove(path); }")
                 : ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded),
-            readOutgoing: id => id == testId
-                ? ExactOutgoingSet(ExactOutgoing(
-                    testId,
-                    subjectId,
-                    "MatchesArtifact",
-                    "tests/SymbolsArtifactIdentityTests.cs",
-                    20))
-                : ExactOutgoingSet(),
+            readOutgoingMany: ids => OutgoingBatch(
+                ids,
+                id => id == testId
+                    ? ExactOutgoingSet(ExactOutgoing(
+                        testId,
+                        subjectId,
+                        "MatchesArtifact",
+                        "tests/SymbolsArtifactIdentityTests.cs",
+                        20))
+                    : ExactOutgoingSet()),
             json: true,
             out _,
             out _);
@@ -3526,7 +3534,7 @@ public sealed class ContextToolTests
     }
 
     [Fact]
-    public void RunActionable_TermRescuePromotionReadsAtMostEightUniqueTestsDeterministically()
+    public void RunActionable_TermRescuePromotionReadsAtMostEightUniqueTestsInOneBatch()
     {
         IndexedSymbol[] symbols = Enumerable.Range(0, 12)
             .Select(index => new IndexedSymbol(
@@ -3545,11 +3553,11 @@ public sealed class ContextToolTests
         var index = MillerRepositoryIndex.Build(symbols);
         var resolver = new SmartTargetResolver(index);
 
-        static string[] RunAndRecord(
+        static string[][] RunAndRecord(
             MillerRepositoryIndex repositoryIndex,
             SmartTargetResolver targetResolver)
         {
-            var reads = new List<string>();
+            var batches = new List<string[]>();
             ContextTool.RunActionable(
                 repositoryIndex,
                 repositoryIndex.Graph,
@@ -3564,23 +3572,25 @@ public sealed class ContextToolTests
                 semanticSeeds: null,
                 sourceSeeds: null,
                 readBody: null,
-                readOutgoing: id =>
+                readOutgoingMany: ids =>
                 {
-                    reads.Add(id);
-                    return ExactOutgoingSet();
+                    batches.Add([.. ids]);
+                    return OutgoingBatch(ids, _ => ExactOutgoingSet());
                 },
                 json: true,
                 out _,
                 out _);
-            return reads.ToArray();
+            return batches.ToArray();
         }
 
-        string[] first = RunAndRecord(index, resolver);
-        string[] second = RunAndRecord(index, resolver);
+        string[][] first = RunAndRecord(index, resolver);
+        string[][] second = RunAndRecord(index, resolver);
 
+        // One read for the whole promotion set: eight promoted tests cost one round trip, not eight.
+        string[] reads = Assert.Single(first);
         Assert.Equal(first, second);
-        Assert.Equal(first.Length, first.Distinct(StringComparer.Ordinal).Count());
-        Assert.InRange(first.Length, 1, 8);
+        Assert.Equal(reads.Length, reads.Distinct(StringComparer.Ordinal).Count());
+        Assert.InRange(reads.Length, 1, 8);
     }
 
     [Fact]
@@ -3617,11 +3627,13 @@ public sealed class ContextToolTests
             semanticSeeds: null,
             sourceSeeds: null,
             readBody: null,
-            readOutgoing: _ =>
-            {
-                cancellation.Cancel();
-                return ExactOutgoingSet();
-            },
+            readOutgoingMany: ids => OutgoingBatch(
+                ids,
+                _ =>
+                {
+                    cancellation.Cancel();
+                    return ExactOutgoingSet();
+                }),
             json: true,
             out _,
             out _,
@@ -3664,11 +3676,13 @@ public sealed class ContextToolTests
             semanticSeeds: null,
             sourceSeeds: null,
             readBody: null,
-            readOutgoing: id => id == testId
-                ? ExactOutgoingSet(
-                    ExactOutgoing(testId, subjectAId, "MatchesArtifact", "tests/IdentityTests.cs", 20),
-                    ExactOutgoing(testId, subjectBId, "Unprovable", "tests/IdentityTests.cs", 25))
-                : ExactOutgoingSet(),
+            readOutgoingMany: ids => OutgoingBatch(
+                ids,
+                id => id == testId
+                    ? ExactOutgoingSet(
+                        ExactOutgoing(testId, subjectAId, "MatchesArtifact", "tests/IdentityTests.cs", 20),
+                        ExactOutgoing(testId, subjectBId, "Unprovable", "tests/IdentityTests.cs", 25))
+                    : ExactOutgoingSet()),
             json: true,
             out _,
             out _);
@@ -3719,15 +3733,17 @@ public sealed class ContextToolTests
             semanticSeeds: null,
             sourceSeeds: null,
             readBody: null,
-            readOutgoing: id => id == testId
-                ? OutgoingSet(FallbackOutgoing(
-                    "site:test:unresolved",
-                    testId,
-                    "MatchesArtifact",
-                    "tests/IdentityTests.cs",
-                    20,
-                    ReferenceKind.Call))
-                : ExactOutgoingSet(),
+            readOutgoingMany: ids => OutgoingBatch(
+                ids,
+                id => id == testId
+                    ? OutgoingSet(FallbackOutgoing(
+                        "site:test:unresolved",
+                        testId,
+                        "MatchesArtifact",
+                        "tests/IdentityTests.cs",
+                        20,
+                        ReferenceKind.Call))
+                    : ExactOutgoingSet()),
             json: true,
             out _,
             out _);
@@ -3780,14 +3796,16 @@ public sealed class ContextToolTests
             semanticSeeds: null,
             sourceSeeds: null,
             readBody: null,
-            readOutgoing: id => id == testId
-                ? ExactOutgoingSet(ExactOutgoing(
-                    testId,
-                    subjectId,
-                    "MatchesArtifact",
-                    "tests/IdentityTests.cs",
-                    20))
-                : ExactOutgoingSet(),
+            readOutgoingMany: ids => OutgoingBatch(
+                ids,
+                id => id == testId
+                    ? ExactOutgoingSet(ExactOutgoing(
+                        testId,
+                        subjectId,
+                        "MatchesArtifact",
+                        "tests/IdentityTests.cs",
+                        20))
+                    : ExactOutgoingSet()),
             json: true,
             out _,
             out _);
@@ -3845,14 +3863,16 @@ public sealed class ContextToolTests
             sourceSeeds: null,
             readBody: _ => ExtractReader.BodyReadResult.Available(
                 "static bool MatchesArtifact(path) { return Prove(path); }"),
-            readOutgoing: id => id == testId
-                ? ExactOutgoingSet(ExactOutgoing(
-                    testId,
-                    subjectId,
-                    "MatchesArtifact",
-                    "tests/IdentityTests.cs",
-                    20))
-                : ExactOutgoingSet(),
+            readOutgoingMany: ids => OutgoingBatch(
+                ids,
+                id => id == testId
+                    ? ExactOutgoingSet(ExactOutgoing(
+                        testId,
+                        subjectId,
+                        "MatchesArtifact",
+                        "tests/IdentityTests.cs",
+                        20))
+                    : ExactOutgoingSet()),
             json: true,
             out _,
             out _);
@@ -3868,6 +3888,409 @@ public sealed class ContextToolTests
                 "_subject",
                 StringComparison.Ordinal));
         Assert.Equal("partial", document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
+    }
+
+    // ---- shared query retrieval / route gate / usage-branch phases ----
+
+    private static long SearchCalls(MeasuredSymbolLookupIndex index) =>
+        index.SnapshotByFamily()[(int)SymbolLookupMethodFamily.Search].CallCount;
+
+    private static WorkspaceReadContext MeasuredContextFor(
+        MillerRepositoryIndex index,
+        MeasuredSymbolLookupIndex measured,
+        string root) =>
+        ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root) with
+        {
+            Index = measured,
+            Resolver = new SmartTargetResolver(measured),
+        };
+
+    /// <summary>
+    /// The semantic-seed gate's evidence, computed the way <c>LoadSemanticSeeds</c> computes it. The A/B below
+    /// runs it at the old limit-2 retrieval and at the shared pivot retrieval and compares rendered bundles.
+    /// </summary>
+    private static IReadOnlyList<ContextTool.ContextSemanticSeed> SeedsFromRetrieval(
+        ISymbolLookupIndex index,
+        SemanticQueryResult result,
+        string query,
+        int limit,
+        bool retrievalExcludeTests,
+        bool seedExcludeTests)
+    {
+        if (!SemanticQueryPolicy.Route(query).IsHybrid || !result.Served)
+            return [];
+
+        SymbolCandidateSet lexical = SearchTool.CollectSymbolCandidates(
+            index,
+            query,
+            SearchToolMode.Symbol,
+            limit,
+            retrievalExcludeTests);
+        var evidence = new LexicalEvidence(
+            lexical.Candidates.Count,
+            lexical.Candidates.Count > 0 ? lexical.Candidates[0].Score : 0,
+            lexical.Candidates.Count > 1 ? lexical.Candidates[1].Score : 0);
+        SemanticCandidateAdmission admission = SemanticQueryPolicy.DecideAdmission(evidence);
+        var lexicalIds = new HashSet<string>(
+            lexical.Candidates.Select(static candidate => candidate.SymbolId),
+            StringComparer.Ordinal);
+        var seeds = new List<ContextTool.ContextSemanticSeed>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (SemanticHit hit in result.Hits)
+        {
+            if (hit.SymbolId is not { } symbolId ||
+                (!admission.AllowsExpansion && !lexicalIds.Contains(symbolId)) ||
+                !seen.Add(symbolId) ||
+                index.FindBySymbolId(symbolId) is not { } symbol ||
+                (seedExcludeTests && (symbol.IsTest || IsTestPath.Check(symbol.FilePath))))
+            {
+                continue;
+            }
+
+            seeds.Add(new ContextTool.ContextSemanticSeed(symbol, hit.Rank, hit.Cosine));
+        }
+
+        return seeds;
+    }
+
+    [Fact]
+    public void Context_LexicalRouteQuery_RunsNoLexicalRetrievalInSemanticSeedPhase()
+    {
+        var (index, _) = BuildFixture();
+        var measured = new MeasuredSymbolLookupIndex(index);
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(MeasuredContextFor(index, measured, root));
+        var arm = new RecordingContextSemanticArm(
+            new SemanticQueryResult(
+                [new SemanticHit(RepoId, null, "src/OrderRepo.cs", 1, 0.91)],
+                UnavailableReason: null));
+        long searchesAtSeedPhase = -1;
+        var tool = new ContextTool(
+            provider,
+            arm,
+            new VectorSidecar(SemanticMode.On),
+            phaseObserver: phase =>
+            {
+                if (phase == "semantic_seeds")
+                    searchesAtSeedPhase = SearchCalls(measured);
+            });
+
+        _ = tool.Context("OrderService", token_budget: 1200, max_hops: 0, format: "json");
+
+        // A single-word query routes lexical-only, so the seed gate returns nothing: the retrieval it used to
+        // run before that check could never reach the output.
+        Assert.Equal(0, searchesAtSeedPhase);
+        Assert.Equal(0, arm.SymbolCalls);
+    }
+
+    [Fact]
+    public void Context_HybridRouteQuery_PivotRetrievalAddsNoIndexSearchOverTheSeedGate()
+    {
+        var (index, _) = BuildFixture();
+        var measured = new MeasuredSymbolLookupIndex(index);
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(MeasuredContextFor(index, measured, root));
+        var arm = new RecordingContextSemanticArm(
+            new SemanticQueryResult(
+                [new SemanticHit(RepoId, null, "src/OrderRepo.cs", 1, 0.91)],
+                UnavailableReason: null));
+        long searchesAtSeedPhase = -1;
+        long searchesAtQueryRetrieval = -1;
+        var tool = new ContextTool(
+            provider,
+            arm,
+            new VectorSidecar(SemanticMode.On),
+            phaseObserver: phase =>
+            {
+                if (phase == "semantic_seeds")
+                    searchesAtSeedPhase = SearchCalls(measured);
+                else if (phase == "query_retrieval")
+                    searchesAtQueryRetrieval = SearchCalls(measured);
+            });
+
+        _ = tool.Context("durable persistence boundary", token_budget: 1200, max_hops: 0, format: "json");
+
+        Assert.Equal(1, arm.SymbolCalls);
+        Assert.True(searchesAtSeedPhase > 0, "the hybrid route must retrieve for the seed gate");
+        // The seed gate now retrieves at the pivot ranker's limit, so both ask the index for the same window
+        // and the ranker's retrieval is served from this call's search cache: zero further index searches.
+        Assert.Equal(searchesAtSeedPhase, searchesAtQueryRetrieval);
+    }
+
+    [Theory]
+    [InlineData("durable persistence boundary")]
+    [InlineData("OrderService")]
+    public void SharedSeedRetrieval_RendersByteIdenticalBundle(string query)
+    {
+        var (index, resolver) = BuildFixture();
+        var result = new SemanticQueryResult(
+            [new SemanticHit(RepoId, null, "src/OrderRepo.cs", 1, 0.91)],
+            UnavailableReason: null);
+
+        string Render(IReadOnlyList<ContextTool.ContextSemanticSeed> seeds) => ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query,
+            tokenBudget: 4000,
+            maxHops: 1,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: seeds,
+            sourceSeeds: null,
+            readBody: null,
+            readOutgoingMany: ids => OutgoingBatch(ids, _ => ExactOutgoingSet()),
+            json: true,
+            out _,
+            out _);
+
+        string legacy = Render(SeedsFromRetrieval(
+            index,
+            result,
+            query,
+            limit: 2,
+            retrievalExcludeTests: false,
+            seedExcludeTests: false));
+        string shared = Render(SeedsFromRetrieval(
+            index,
+            result,
+            query,
+            limit: 10,
+            retrievalExcludeTests: false,
+            seedExcludeTests: false));
+
+        Assert.Equal(legacy, shared);
+    }
+
+    [Fact]
+    public void SharedSeedRetrieval_RendersByteIdenticalBundleWithTestSubjectPromotion()
+    {
+        const string subjectId = "0000000000000000000000000000c601";
+        const string testId = "0000000000000000000000000000c602";
+        const string seededId = "0000000000000000000000000000c603";
+        IndexedSymbol[] symbols =
+        [
+            new(0, subjectId, "MatchesArtifact", "method MatchesArtifact", "method", "csharp",
+                "src/Identity.cs", 10, 40, null, false),
+            new(1, testId,
+                "MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method", "csharp",
+                "tests/IdentityTests.cs", 10, 50, null, true),
+            new(2, seededId, "SidecarExtract", "class SidecarExtract", "class", "csharp",
+                "src/SidecarExtract.cs", 1, 20, null, false),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+        const string query = "how does unreadable artifact refuse generation proof";
+        // The seed names a symbol the promotion does not, so both reasons stay visible in the bundle.
+        var result = new SemanticQueryResult(
+            [new SemanticHit(seededId, null, "src/SidecarExtract.cs", 1, 0.88)],
+            UnavailableReason: null);
+
+        string Render(IReadOnlyList<ContextTool.ContextSemanticSeed> seeds) => ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query,
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: seeds,
+            sourceSeeds: null,
+            readBody: null,
+            readOutgoingMany: ids => OutgoingBatch(
+                ids,
+                id => id == testId
+                    ? ExactOutgoingSet(ExactOutgoing(
+                        testId,
+                        subjectId,
+                        "MatchesArtifact",
+                        "tests/IdentityTests.cs",
+                        20))
+                    : ExactOutgoingSet()),
+            json: true,
+            out _,
+            out _);
+
+        string legacy = Render(SeedsFromRetrieval(
+            index,
+            result,
+            query,
+            limit: 2,
+            retrievalExcludeTests: false,
+            seedExcludeTests: false));
+        string shared = Render(SeedsFromRetrieval(
+            index,
+            result,
+            query,
+            limit: 10,
+            retrievalExcludeTests: false,
+            seedExcludeTests: false));
+
+        Assert.Contains("_subject", shared, StringComparison.Ordinal);
+        Assert.Equal(legacy, shared);
+    }
+
+    [Fact]
+    public void RunReferenceAwareActionable_TermRescuePromotion_HonoursTheBatchReadOptOut()
+    {
+        const string subjectId = "0000000000000000000000000000c701";
+        const string testId = "0000000000000000000000000000c702";
+        IndexedSymbol[] symbols =
+        [
+            new(0, subjectId, "MatchesArtifact", "method MatchesArtifact", "method", "csharp",
+                "src/Identity.cs", 10, 40, null, false),
+            new(1, testId,
+                "MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method", "csharp",
+                "tests/IdentityTests.cs", 10, 50, null, true),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+        int batchCalls = 0;
+        int singularOutgoingCalls = 0;
+        string? previous = Environment.GetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH");
+        Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", null);
+        try
+        {
+            ContextTool.RunReferenceAwareActionable(
+                index,
+                index.Graph,
+                resolver,
+                query: "how does unreadable artifact refuse generation proof",
+                tokenBudget: 4000,
+                maxHops: 0,
+                entrySymbols: null,
+                editedFiles: null,
+                failingTest: null,
+                stackTrace: null,
+                semanticSeeds: null,
+                sourceSeeds: null,
+                readBody: null,
+                referenceDepth: 1,
+                excludeTests: false,
+                json: true,
+                readReferenceEvidence: _ => InboundSet(),
+                readOutgoingEvidence: symbol =>
+                {
+                    singularOutgoingCalls++;
+                    return symbol.SymbolId == testId
+                        ? ExactOutgoingSet(ExactOutgoing(
+                            testId,
+                            subjectId,
+                            "MatchesArtifact",
+                            "tests/IdentityTests.cs",
+                            20))
+                        : ExactOutgoingSet();
+                },
+                readContentChunks: (_, _) => [],
+                readMany: _ =>
+                {
+                    batchCalls++;
+                    return new Dictionary<string, ReferenceEvidenceBundle>(StringComparer.Ordinal);
+                },
+                out _,
+                out _);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", previous);
+        }
+
+        // The reference-aware path batches only under the existing opt-in; with it off it keeps the reader
+        // it was given, exactly as the rest of that path does.
+        Assert.Equal(0, batchCalls);
+        Assert.True(singularOutgoingCalls > 0, "promotion must still read outgoing evidence");
+    }
+
+    [Fact]
+    public void ContextWithCancellation_UsageMode_ReportsCompletedEarlyReturnPhasesInOrder()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-usage-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(EmptyIndex(), "current.db", "current-ws", root));
+        var phases = new List<string>();
+        var tool = new ContextTool(
+            provider,
+            semanticArm: null,
+            semanticSidecar: null,
+            phaseObserver: phases.Add);
+
+        _ = tool.Context("OrderService", token_budget: 100, max_hops: 0, reference_mode: "usage");
+
+        Assert.Equal(
+            [
+                "resolve",
+                "semantic_seeds",
+                "source_rescue",
+                "query_retrieval",
+                "term_retrieval",
+                "anchor_resolution",
+                "pivot_ranking",
+                "candidate_build",
+                "pivot_bodies",
+                "bundle",
+                "final_render",
+            ],
+            phases);
+    }
+
+    [Fact]
+    public void RunReferenceAwareActionableWithCancellation_ReportsCompletedNonEmptyBundlePhasesInOrder()
+    {
+        var (index, resolver) = BuildFixture();
+        var phases = new List<string>();
+
+        _ = ContextTool.RunReferenceAwareActionableWithCancellation(
+            index,
+            index.Graph,
+            resolver,
+            query: "zzz no lexical match zzz",
+            tokenBudget: 1200,
+            maxHops: 1,
+            entrySymbols: ["OrderRepo"],
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            referenceDepth: 1,
+            excludeTests: false,
+            json: false,
+            readReferenceEvidence: _ => InboundSet(),
+            readOutgoingEvidence: _ => OutgoingSet(),
+            readContentChunks: (_, _) => [],
+            readMany: null,
+            out _,
+            out _,
+            CancellationToken.None,
+            phases.Add);
+
+        Assert.Equal(
+            [
+                "query_retrieval",
+                "term_retrieval",
+                "anchor_resolution",
+                "pivot_ranking",
+                "graph_reach",
+                "symbol_hydration",
+                "file_neighbours",
+                "candidate_ordering",
+                "candidate_build",
+                "pivot_bodies",
+                "reference_items",
+                "candidate_pack",
+                "bounded_render",
+            ],
+            phases);
     }
 
     [Fact]

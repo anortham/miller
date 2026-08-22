@@ -2043,12 +2043,7 @@ public static class CliDispatch
                     readScope.Session,
                     ctx.WorkspaceRoot,
                     symbol),
-                readOutgoing: symbolId => ReferenceEvidenceReader.ReadOutgoing(
-                    readScope.Session,
-                    symbolId,
-                    new ReferenceEvidenceBounds(
-                        ContextTool.ReferenceRowsPerSymbol,
-                        ContextTool.ReferenceRowsPerSymbol)),
+                readOutgoingMany: symbolIds => ReadContextOutgoingEvidence(readScope.Session, symbolIds),
                 json, out selectedCount, out candidatesExamined);
         }
         else
@@ -2122,6 +2117,26 @@ public static class CliDispatch
         {
             return [];
         }
+    }
+
+    /// <summary>Outgoing evidence for context's term-rescue promotion set, in one batched read.</summary>
+    private static IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> ReadContextOutgoingEvidence(
+        IWorkspaceReadSession session,
+        IReadOnlyList<string> symbolIds)
+    {
+        IReadOnlyDictionary<string, ReferenceEvidenceBundle> bundles = ReferenceEvidenceReader.ReadMany(
+            session,
+            symbolIds,
+            new ReferenceEvidenceQuery(
+                new ReferenceEvidenceBounds(
+                    ContextTool.ReferenceRowsPerSymbol,
+                    ContextTool.ReferenceRowsPerSymbol)));
+        var outgoing = new Dictionary<string, OutgoingReferenceEvidenceSet>(
+            bundles.Count,
+            StringComparer.Ordinal);
+        foreach ((string symbolId, ReferenceEvidenceBundle bundle) in bundles)
+            outgoing[symbolId] = bundle.Outgoing;
+        return outgoing;
     }
 
     private static IReadOnlyList<TextContentSearchHit> ReadContextContentChunks(

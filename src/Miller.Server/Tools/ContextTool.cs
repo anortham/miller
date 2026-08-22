@@ -28,6 +28,7 @@ namespace Miller.Server.Tools;
 public sealed partial class ContextTool
 {
     private const int TermRescuePromotionReadLimit = 8;
+    private const int TermRescueRetrievalLimit = 6;
     private readonly IWorkspaceIndexProvider _workspaceProvider;
     private readonly ISemanticTextArm? _semanticArm;
     private readonly VectorSidecar? _semanticSidecar;
@@ -159,6 +160,7 @@ public sealed partial class ContextTool
             bool rescueExcludeTests = parsedReferenceMode == ReferenceMode.Usage
                 ? exclude_tests
                 : SearchTool.ResolveExcludeTests(null, query, SearchToolMode.Symbol);
+            var queryRetrieval = new ContextQueryRetrieval();
             IReadOnlyList<ContextSemanticSeed> semanticSeeds = [];
             IReadOnlyList<ContextSourceSeed> sourceSeeds = [];
             cancellationToken.ThrowIfCancellationRequested();
@@ -166,7 +168,8 @@ public sealed partial class ContextTool
                     context,
                     contextIndex,
                     query,
-                    parsedReferenceMode == ReferenceMode.Usage && exclude_tests);
+                    parsedReferenceMode == ReferenceMode.Usage && exclude_tests,
+                    queryRetrieval);
                 CompletePhase("semantic_seeds", telemetry, ref phaseStart);
                 cancellationToken.ThrowIfCancellationRequested();
                 sourceSeeds = LoadSourceRescueSeeds(
@@ -196,10 +199,7 @@ public sealed partial class ContextTool
                                 context.ReadSession,
                                 context.WorkspaceRoot,
                                 symbol),
-                            readOutgoing: symbolId => ReferenceEvidenceReader.ReadOutgoing(
-                                context.ReadSession,
-                                symbolId,
-                                new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
+                            readOutgoingMany: symbolIds => ReadOutgoingBatch(context.ReadSession, symbolIds),
                             json,
                             out selectedCount, out candidatesExamined,
                             cancellationToken,
@@ -207,7 +207,8 @@ public sealed partial class ContextTool
                                 phase,
                                 telemetry,
                                 ref phaseStart,
-                                context.ReadTelemetry));
+                                context.ReadTelemetry),
+                            queryRetrieval);
                         break;
                     case ReferenceMode.Usage:
                         output = RunReferenceAwareActionableWithCancellation(
@@ -246,7 +247,13 @@ public sealed partial class ContextTool
                                 new ReferenceEvidenceQuery(
                                     new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol))),
                             out selectedCount, out candidatesExamined,
-                            cancellationToken);
+                            cancellationToken,
+                            phase => CompletePhase(
+                                phase,
+                                telemetry,
+                                ref phaseStart,
+                                context.ReadTelemetry),
+                            queryRetrieval);
                         break;
                     default:
                         throw new ArgumentOutOfRangeException(nameof(reference_mode));
@@ -382,6 +389,27 @@ public sealed partial class ContextTool
             telemetry?.CorrelationId ?? "unmeasured");
     }
 
+    /// <summary>
+    /// Read outgoing evidence for a whole set of symbols in one round trip. Term-rescue promotion asks for up
+    /// to eight test symbols at once; one read per symbol paid the resolution load eight times over.
+    /// </summary>
+    private static IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> ReadOutgoingBatch(
+        WorkspaceReadHandle readSession,
+        IReadOnlyList<string> symbolIds)
+    {
+        IReadOnlyDictionary<string, ReferenceEvidenceBundle> bundles = ReferenceEvidenceReader.ReadMany(
+            readSession,
+            symbolIds,
+            new ReferenceEvidenceQuery(
+                new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)));
+        var outgoing = new Dictionary<string, OutgoingReferenceEvidenceSet>(
+            bundles.Count,
+            StringComparer.Ordinal);
+        foreach ((string symbolId, ReferenceEvidenceBundle bundle) in bundles)
+            outgoing[symbolId] = bundle.Outgoing;
+        return outgoing;
+    }
+
     private static IReadOnlyList<TextContentSearchHit> ReadContentChunks(
         WorkspaceReadHandle readSession,
         IReadOnlyList<IndexedSymbol> symbols,
@@ -511,11 +539,18 @@ public sealed partial class ContextTool
         _ => "3+",
     };
 
+    /// <param name="excludeTests">
+    /// Whether a test symbol may be admitted as a seed, and the test policy of the gate's own retrieval. It is
+    /// NOT the pivot ranker's policy: the two differ for an ordinary phrase query, and computing this gate's
+    /// evidence over the ranker's test-hidden population changes which semantic seeds are admitted.
+    /// </param>
+    /// <param name="retrieval">This call's shared lexical retrieval.</param>
     private IReadOnlyList<ContextSemanticSeed> LoadSemanticSeeds(
         WorkspaceReadContext context,
         ISymbolLookupIndex index,
         string query,
-        bool excludeTests)
+        bool excludeTests,
+        ContextQueryRetrieval retrieval)
     {
         if (_semanticSidecar is not { Mode: SemanticMode.On } ||
             _semanticArm is null ||
@@ -524,18 +559,18 @@ public sealed partial class ContextTool
             return [];
         }
 
-        SymbolCandidateSet lexical = SearchTool.CollectSymbolCandidates(
-            index,
-            query,
-            SearchToolMode.Symbol,
-            limit: 2,
-            excludeTests: excludeTests);
+        // Route first. A lexical route discards everything below, so nothing below may run: the retrieval it
+        // used to run ahead of this check could not reach the output.
+        if (!SemanticQueryPolicy.Route(query).IsHybrid)
+            return [];
+
+        // The pivot ranker's limit, so both retrievals issue the same index window and the second is served
+        // from this call's search cache. The test policy stays this gate's own.
+        SymbolCandidateSet lexical = retrieval.Collect(index, query, SearchSeedLimit, excludeTests);
         var evidence = new LexicalEvidence(
             lexical.Candidates.Count,
             lexical.Candidates.Count > 0 ? lexical.Candidates[0].Score : 0,
             lexical.Candidates.Count > 1 ? lexical.Candidates[1].Score : 0);
-        if (!SemanticQueryPolicy.Route(query).IsHybrid)
-            return [];
         SemanticCandidateAdmission admission = SemanticQueryPolicy.DecideAdmission(evidence);
         var lexicalIds = new HashSet<string>(
             lexical.Candidates.Select(static candidate => candidate.SymbolId),
@@ -761,7 +796,7 @@ public sealed partial class ContextTool
             semanticSeeds,
             sourceSeeds,
             readBody,
-            readOutgoing: null,
+            readOutgoingMany: null,
             json,
             out selectedCount,
             out candidatesExamined);
@@ -780,7 +815,7 @@ public sealed partial class ContextTool
         IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
         IReadOnlyList<ContextSourceSeed>? sourceSeeds,
         Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
-        Func<string, OutgoingReferenceEvidenceSet>? readOutgoing,
+        Func<IReadOnlyList<string>, IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet>>? readOutgoingMany,
         bool json,
         out int selectedCount,
         out int candidatesExamined) =>
@@ -798,7 +833,7 @@ public sealed partial class ContextTool
             semanticSeeds,
             sourceSeeds,
             readBody,
-            readOutgoing,
+            readOutgoingMany,
             json,
             out selectedCount,
             out candidatesExamined,
@@ -818,12 +853,13 @@ public sealed partial class ContextTool
         IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
         IReadOnlyList<ContextSourceSeed>? sourceSeeds,
         Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
-        Func<string, OutgoingReferenceEvidenceSet>? readOutgoing,
+        Func<IReadOnlyList<string>, IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet>>? readOutgoingMany,
         bool json,
         out int selectedCount,
         out int candidatesExamined,
         CancellationToken cancellationToken,
-        Action<string>? phaseObserver = null)
+        Action<string>? phaseObserver = null,
+        ContextQueryRetrieval? retrieval = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         IReadOnlyList<Candidate> candidates = BuildCandidates(
@@ -838,11 +874,12 @@ public sealed partial class ContextTool
             stackTrace,
             semanticSeeds,
             sourceSeeds,
-            readOutgoing,
+            readOutgoingMany,
             out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
             out candidatesExamined,
             cancellationToken,
-            phaseObserver);
+            phaseObserver,
+            retrieval);
         phaseObserver?.Invoke("candidate_build");
         candidates = AttachPivotBodies(candidates, tokenBudget, readBody, cancellationToken);
         phaseObserver?.Invoke("pivot_bodies");
@@ -1160,7 +1197,9 @@ public sealed partial class ContextTool
         Func<IReadOnlyList<IndexedSymbol>, IReadOnlyDictionary<string, ReferenceEvidenceBundle>>? readMany,
         out int selectedCount,
         out int candidatesExamined,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<string>? phaseObserver = null,
+        ContextQueryRetrieval? retrieval = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(index);
@@ -1185,24 +1224,21 @@ public sealed partial class ContextTool
             stackTrace,
             semanticSeeds,
             sourceSeeds,
-            readOutgoing: symbolId =>
-            {
-                if (index.FindBySymbolId(symbolId) is not { } symbol)
-                {
-                    return new OutgoingReferenceEvidenceSet(
-                        [],
-                        [],
-                        new OutgoingReferenceEvidenceCoverage(0, 0, 0, 0, 0, false, false));
-                }
-
-                cancellationToken.ThrowIfCancellationRequested();
-                return readOutgoingEvidence(symbol);
-            },
+            readOutgoingMany: symbolIds => ReadOutgoingForSymbols(
+                index,
+                symbolIds,
+                readOutgoingEvidence,
+                readMany,
+                cancellationToken),
             out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
             out candidatesExamined,
-            cancellationToken);
+            cancellationToken,
+            phaseObserver,
+            retrieval);
+        phaseObserver?.Invoke("candidate_build");
 
         candidates = AttachPivotBodies(candidates, tokenBudget, readBody, cancellationToken);
+        phaseObserver?.Invoke("pivot_bodies");
 
         if (candidates.Count == 0)
         {
@@ -1223,6 +1259,7 @@ public sealed partial class ContextTool
             anchorDiagnostics,
             query,
             cancellationToken);
+        phaseObserver?.Invoke("reference_items");
         var packCandidates = new List<PackCandidate<ReferenceContextItem>>(items.Count);
         foreach (ReferenceContextItem item in items)
         {
@@ -1236,19 +1273,65 @@ public sealed partial class ContextTool
         cancellationToken.ThrowIfCancellationRequested();
         IReadOnlyList<ReferenceContextItem> selected =
             ContextPacker.PackAllocated(packCandidates, tokenBudget);
+        phaseObserver?.Invoke("candidate_pack");
         Func<IReadOnlyList<ReferenceContextItem>, string> renderer = json
             ? selected => RenderReferenceJson(selected, anchorDiagnostics, query, boundOptionalFields: false)
             : selected => RenderReferenceCompact(selected, anchorDiagnostics, query);
         Func<IReadOnlyList<ReferenceContextItem>, string> boundedRenderer = json
             ? selected => RenderReferenceJson(selected, anchorDiagnostics, query, boundOptionalFields: true)
             : selected => RenderReferenceCompact(selected, anchorDiagnostics, query);
-        return RenderWithinBudget(
+        string output = RenderWithinBudget(
             selected,
             tokenBudget,
             renderer,
             boundedRenderer,
             out selectedCount,
             cancellationToken);
+        phaseObserver?.Invoke("bounded_render");
+        return output;
+    }
+
+    /// <summary>
+    /// Outgoing evidence for a set of symbols on the reference-aware path: one batched read where the caller
+    /// supplied one AND the batch opt-in is on, otherwise the per-symbol reader it already carries. The gate is
+    /// the same one <see cref="BuildReferenceItems"/> reads, so one switch still decides whether this path
+    /// batches. Ids the index cannot resolve are absent from the result, which reads the same as the empty
+    /// evidence set the caller used to synthesize.
+    /// </summary>
+    private static IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> ReadOutgoingForSymbols(
+        ISymbolLookupIndex index,
+        IReadOnlyList<string> symbolIds,
+        Func<IndexedSymbol, OutgoingReferenceEvidenceSet> readOutgoingEvidence,
+        Func<IReadOnlyList<IndexedSymbol>, IReadOnlyDictionary<string, ReferenceEvidenceBundle>>? readMany,
+        CancellationToken cancellationToken)
+    {
+        var symbols = new List<IndexedSymbol>(symbolIds.Count);
+        foreach (string symbolId in symbolIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (index.FindBySymbolId(symbolId) is { } symbol)
+                symbols.Add(symbol);
+        }
+
+        var outgoing = new Dictionary<string, OutgoingReferenceEvidenceSet>(
+            symbols.Count,
+            StringComparer.Ordinal);
+        if (symbols.Count == 0)
+            return outgoing;
+
+        if (readMany is not null && ReferenceEvidenceBatchEnabled)
+        {
+            foreach ((string symbolId, ReferenceEvidenceBundle bundle) in readMany(symbols))
+                outgoing[symbolId] = bundle.Outgoing;
+            return outgoing;
+        }
+
+        foreach (IndexedSymbol symbol in symbols)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            outgoing[symbol.SymbolId] = readOutgoingEvidence(symbol);
+        }
+        return outgoing;
     }
 
     private static string RenderWithinBudget<T>(
@@ -1431,7 +1514,7 @@ public sealed partial class ContextTool
             stackTrace,
             semanticSeeds: null,
             sourceSeeds: null,
-            readOutgoing: null,
+            readOutgoingMany: null,
             out _,
             out candidatesExamined);
 
@@ -1460,7 +1543,7 @@ public sealed partial class ContextTool
             stackTrace,
             semanticSeeds,
             sourceSeeds: null,
-            readOutgoing: null,
+            readOutgoingMany: null,
             out anchorDiagnostics,
             out candidatesExamined);
 
@@ -1490,7 +1573,7 @@ public sealed partial class ContextTool
             stackTrace,
             semanticSeeds,
             sourceSeeds,
-            readOutgoing: null,
+            readOutgoingMany: null,
             out anchorDiagnostics,
             out candidatesExamined);
 
@@ -1506,13 +1589,15 @@ public sealed partial class ContextTool
         string? stackTrace,
         IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
         IReadOnlyList<ContextSourceSeed>? sourceSeeds,
-        Func<string, OutgoingReferenceEvidenceSet>? readOutgoing,
+        Func<IReadOnlyList<string>, IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet>>? readOutgoingMany,
         out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
         out int candidatesExamined,
         CancellationToken cancellationToken = default,
-        Action<string>? phaseObserver = null)
+        Action<string>? phaseObserver = null,
+        ContextQueryRetrieval? retrieval = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        retrieval ??= new ContextQueryRetrieval();
         if (maxHops < 0) maxHops = 0;
         if (maxHops > 2) maxHops = 2;
         candidatesExamined = 0;
@@ -1562,12 +1647,7 @@ public sealed partial class ContextTool
             // Parent-query auto policy for both arms: one-word term rescue must not reintroduce
             // tests when the original natural-language query would hide them.
             bool excludeTests = SearchTool.ResolveExcludeTests(null, query, SearchToolMode.Symbol);
-            SymbolCandidateSet retrieved = SearchTool.CollectSymbolCandidates(
-                index,
-                query,
-                SearchToolMode.Symbol,
-                SearchSeedLimit,
-                excludeTests);
+            SymbolCandidateSet retrieved = retrieval.Collect(index, query, SearchSeedLimit, excludeTests);
             cancellationToken.ThrowIfCancellationRequested();
             int retrievedCount = Math.Min(retrieved.Candidates.Count, SearchSeedLimit);
             for (int rank = 0; rank < retrievedCount; rank++)
@@ -1589,14 +1669,10 @@ public sealed partial class ContextTool
             foreach (string term in queryTerms)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                SymbolCandidateSet termCandidates = SearchTool.CollectSymbolCandidates(
-                    index,
-                    term,
-                    SearchToolMode.Symbol,
-                    limit: 6,
-                    excludeTests);
+                SymbolCandidateSet termCandidates =
+                    retrieval.Collect(index, term, TermRescueRetrievalLimit, excludeTests);
                 cancellationToken.ThrowIfCancellationRequested();
-                int termCandidateCount = Math.Min(termCandidates.Candidates.Count, 6);
+                int termCandidateCount = Math.Min(termCandidates.Candidates.Count, TermRescueRetrievalLimit);
                 for (int rank = 0; rank < termCandidateCount; rank++)
                 {
                     SymbolCandidate candidate = termCandidates.Candidates[rank];
@@ -1614,13 +1690,14 @@ public sealed partial class ContextTool
             }
             phaseObserver?.Invoke("term_retrieval");
 
-            if (readOutgoing is not null && !HasTestOrDefIntent(query))
+            if (readOutgoingMany is not null && !HasTestOrDefIntent(query))
             {
                 PromoteTermRescueTestSubjects(
                     index,
                     queryTerms,
                     excludeTests,
-                    readOutgoing,
+                    readOutgoingMany,
+                    retrieval,
                     signals,
                     symbols,
                     reasons,
@@ -1900,7 +1977,8 @@ public sealed partial class ContextTool
         ISymbolLookupIndex index,
         IReadOnlyList<string> queryTerms,
         bool excludeTests,
-        Func<string, OutgoingReferenceEvidenceSet> readOutgoing,
+        Func<IReadOnlyList<string>, IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet>> readOutgoingMany,
+        ContextQueryRetrieval retrieval,
         List<ContextPivotSignal> signals,
         Dictionary<string, IndexedSymbol> symbols,
         Dictionary<string, (int Strength, int Order, string Reason, int? Line)> reasons,
@@ -1909,7 +1987,6 @@ public sealed partial class ContextTool
     {
         cancellationToken.ThrowIfCancellationRequested();
         var hits = new Dictionary<string, TermRescueTestHit>(StringComparer.Ordinal);
-        var outgoingBySymbol = new Dictionary<string, OutgoingReferenceEvidenceSet>(StringComparer.Ordinal);
 
         void Consider(
             IndexedSymbol testSymbol,
@@ -1983,13 +2060,12 @@ public sealed partial class ContextTool
             foreach (string term in queryTerms)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                SymbolCandidateSet termCandidates = SearchTool.CollectSymbolCandidates(
+                SymbolCandidateSet termCandidates = retrieval.Collect(
                     index,
                     term,
-                    SearchToolMode.Symbol,
-                    limit: 6,
+                    TermRescueRetrievalLimit,
                     excludeTests: false);
-                int termCandidateCount = Math.Min(termCandidates.Candidates.Count, 6);
+                int termCandidateCount = Math.Min(termCandidates.Candidates.Count, TermRescueRetrievalLimit);
                 for (int rank = 0; rank < termCandidateCount; rank++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -2009,32 +2085,40 @@ public sealed partial class ContextTool
             }
         }
 
-        foreach (TermRescueTestHit hit in hits.Values
-                     .OrderByDescending(static hit => hit.Strength)
-                     .ThenBy(static hit => hit.RetrievalRank)
-                     .ThenBy(static hit => hit.Test.FilePath, StringComparer.Ordinal)
-                     .ThenBy(static hit => hit.Test.StartLine)
-                     .ThenBy(static hit => hit.Test.SymbolId, StringComparer.Ordinal)
-                     .Take(TermRescuePromotionReadLimit))
+        TermRescueTestHit[] promotions = hits.Values
+            .OrderByDescending(static hit => hit.Strength)
+            .ThenBy(static hit => hit.RetrievalRank)
+            .ThenBy(static hit => hit.Test.FilePath, StringComparer.Ordinal)
+            .ThenBy(static hit => hit.Test.StartLine)
+            .ThenBy(static hit => hit.Test.SymbolId, StringComparer.Ordinal)
+            .Take(TermRescuePromotionReadLimit)
+            .ToArray();
+        if (promotions.Length == 0)
+            return;
+
+        // One read for the whole promotion set. Per-symbol reads paid the reference-resolution load once per
+        // promoted test, and the first of them pulled it in even under reference_mode=off.
+        IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> outgoingBySymbol;
+        try
+        {
+            outgoingBySymbol = readOutgoingMany(
+                Array.ConvertAll(promotions, static hit => hit.Test.SymbolId));
+        }
+        catch (Exception ex) when (
+            ex is InvalidOperationException or IOException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException
+                or Microsoft.Data.Sqlite.SqliteException)
+        {
+            // The batch is one read: a failure denies every promotion, as a per-symbol failure denied one.
+            return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        foreach (TermRescueTestHit hit in promotions)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            OutgoingReferenceEvidenceSet outgoing;
-            try
-            {
-                if (!outgoingBySymbol.TryGetValue(hit.Test.SymbolId, out outgoing!))
-                {
-                    outgoing = readOutgoing(hit.Test.SymbolId);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    outgoingBySymbol.Add(hit.Test.SymbolId, outgoing);
-                }
-            }
-            catch (Exception ex) when (
-                ex is InvalidOperationException or IOException or UnauthorizedAccessException
-                    or ArgumentException or NotSupportedException
-                    or Microsoft.Data.Sqlite.SqliteException)
-            {
+            if (!outgoingBySymbol.TryGetValue(hit.Test.SymbolId, out OutgoingReferenceEvidenceSet? outgoing))
                 continue;
-            }
 
             if (outgoing.Coverage.ExactTruncated)
                 continue;

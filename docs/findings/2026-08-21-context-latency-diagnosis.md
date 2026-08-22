@@ -194,16 +194,40 @@ cross-workspace). Instrumentation is the prerequisite for diagnosing that tail.
    review (finding 2).
 4. **Batch the term-rescue reference reads** via `ReferenceEvidenceReader.ReadMany` (same
    bounds record as the usage path).
+   **SHIPPED 2026-08-21.** The promotion set is read in ONE call: `BuildCandidates` now takes a batched
+   `readOutgoingMany` delegate instead of a per-symbol one, and the promotion loop reads the whole ordered
+   set (≤8) up front. Eight promoted tests cost 4 `ResolveQuery` scratch builds instead of 16, and a
+   promotion set that is empty reads nothing at all. The delegate replaced the single-symbol one rather than
+   sitting beside it — that call site was its only consumer, so nothing can quietly reintroduce the N+1.
+   The reference-aware (`usage`) path batches only under the existing `MILLER_CONTEXT_REFERENCE_BATCH`
+   opt-in, the same gate `BuildReferenceItems` reads; with the opt-in off it keeps its per-symbol reader.
 5. **Move the hybrid-route check above the lexical retrieval** in `LoadSemanticSeeds`
    (`:537` above `:527`) — work that cannot reach the output must not run.
+   **SHIPPED 2026-08-21.** A lexical-route query now performs zero retrievals in the seed phase, pinned by a
+   test that reads the measured index's search count at the `semantic_seeds` phase boundary.
 6. **Share one retrieval** between the semantic seed check and the pivot ranker (retrieve
    once at the larger limit; ranking output must stay byte-identical — assert it).
+   **SHIPPED 2026-08-21, amended.** The two retrievals differ in more than the limit: the seed gate asks with
+   `excludeTests` from the reference mode (false under `reference_mode=off`) while the ranker asks with
+   `SearchTool.ResolveExcludeTests`, which hides tests for an ordinary phrase query. Sharing the ranker's
+   retrieval outright therefore computes the gate's `LexicalEvidence` over a test-hidden population, which
+   flips admission and changes the rendered bundle — the A/B test caught exactly that on a fixture. What
+   shipped keeps each side's own test policy and moves the seed gate to the ranker's LIMIT, so both issue the
+   same index window and the second is served from the per-call search cache: one index search instead of
+   two. A per-call memo (`ContextQueryRetrieval`, keyed on query+limit+excludeTests) removes the remaining
+   exact duplicates, including the term-rescue retrieval the promotion path repeats. Rendered output is
+   asserted byte-identical against the old limit-2 evidence on a hybrid query, a lexical-route query, and one
+   with test-subject promotion.
 7. **Batch the edge-endpoint existence probes** (or hoist the cache) — kept, because fix 1 removes
    only the linkage arm and the Blazor arm still puts 24 edges on the path.
    **SHIPPED 2026-08-21** (`5b33eb82`), amended after review (finding 3) to prime lazily on the
    first endpoint miss instead of at load time.
 8. **Instrument the `usage` branch** with the same phase callback the off branch has, so the
    cross-workspace tail becomes diagnosable.
+   **SHIPPED 2026-08-21.** `RunReferenceAwareActionableWithCancellation` takes the same phase callback and
+   emits the candidate-build phases (`query_retrieval` … `candidate_ordering`), plus `candidate_build`,
+   `pivot_bodies`, the branch's own `reference_items`, `candidate_pack`, and `bounded_render`. Same log
+   channel, same telemetry keys, no output-contract change.
 
 **Deferred on purpose:** skipping test-subject promotion when `reference_mode=off` — it
 changes ranking; fix 4 may make it moot. Measure after fix 4, then decide.
