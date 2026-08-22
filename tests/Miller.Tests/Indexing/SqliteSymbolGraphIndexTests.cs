@@ -688,6 +688,141 @@ public sealed class SqliteSymbolGraphIndexTests
         Assert.Equal(2, telemetry.SymbolExists.Executions);
     }
 
+    // REVIEW 2026-08-21 (finding 1): the probe matches RAW metadata text, `AppendEdges` matches the UNESCAPED
+    // property name, so a JSON-escaped key spelling is the one way the two can disagree — and it would make the
+    // gate fail CLOSED, silently dropping every edge. An escaped spelling must carry a backslash, so the probe
+    // checks the parsed document for exactly those rows.
+    [Fact]
+    public void TestLinkage_EscapedLinkageKeyName_StillScansAndProducesTheEdge()
+    {
+        const string sourceId = "52700000000000000000000000000001";
+        const string testId = "52700000000000000000000000000002";
+        // "test_\u0063overage": the same property name JsonElement.TryGetProperty reports, spelled so that no
+        // raw-text match for "test_coverage" can find it.
+        const string escapedKeyMetadata =
+            "{\"test_\\u0063overage\":{\"symbol_id\":\"" + sourceId + "\",\"confidence\":0.97}}";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(sourceId, "Execute", "method", "csharp", "src/Service.cs", "void Execute()", 1, null),
+                new(testId, "ExecuteWorks", "method", "csharp", "tests/ServiceTests.cs", "void ExecuteWorks()", 1, null)
+                {
+                    IsTest = true,
+                    Metadata = escapedKeyMetadata,
+                },
+            ]);
+        using SqliteConnection connection = OpenReadOnly(fixture.DbPath);
+
+        Assert.True(TestLinkageReader.HasLinkageMetadata(connection));
+        TestLinkageReadResult result = TestLinkageReader.ReadWithProbe(connection);
+
+        Assert.True(result.Scanned);
+        GraphEdge edge = Assert.Single(result.Edges);
+        Assert.Equal(testId, edge.From);
+        Assert.Equal(sourceId, edge.To);
+    }
+
+    // REVIEW 2026-08-21 (finding 1): a backslash that is NOT part of a linkage key must still not open the gate.
+    // The parsed check runs only for rows the cheap text prefilter cannot rule out; it must not report a key the
+    // parser would not find.
+    [Fact]
+    public void TestLinkage_EscapedMetadataWithoutLinkageKeys_SkipsTheMetadataScan()
+    {
+        const string testId = "52800000000000000000000000000001";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(testId, "ExecuteWorks", "method", "csharp", "tests/ServiceTests.cs", "void ExecuteWorks()", 1, null)
+                {
+                    IsTest = true,
+                    Metadata = "{\"is_test\":true,\"display\":\"C:\\\\src\\\\test_coverage\"}",
+                },
+            ]);
+        using SqliteConnection connection = OpenReadOnly(fixture.DbPath);
+
+        TestLinkageReadResult result = TestLinkageReader.ReadWithProbe(connection);
+
+        Assert.False(result.Scanned);
+        Assert.Empty(result.Edges);
+    }
+
+    // REVIEW 2026-08-21 (finding 3): the batched endpoint prime must not run for a query that touches no
+    // supplemental edge. It used to run on every graph load, so `trace path` and dependents queries paid for
+    // endpoints they never asked about — work proportional to the index, not the question.
+    [Fact]
+    public void Reach_FrontierTouchesNoSupplementalEdge_RunsNoEndpointPrime()
+    {
+        const string sourceId = "52900000000000000000000000000001";
+        const string testId = "52900000000000000000000000000002";
+        const string unrelatedId = "52900000000000000000000000000003";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(sourceId, "Execute", "method", "csharp", "src/Service.cs", "void Execute()", 1, null),
+                new(testId, "ExecuteWorks", "method", "csharp", "tests/ServiceTests.cs", "void ExecuteWorks()", 1, null)
+                {
+                    IsTest = true,
+                    Metadata = "{\"test_coverage\":{\"symbol_id\":\"" + sourceId + "\",\"confidence\":0.97}}",
+                },
+                new(unrelatedId, "Unrelated", "method", "csharp", "src/Other.cs", "void Unrelated()", 1, null),
+            ]);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+
+        IReadOnlyList<ReachedNode> reached = sqlite.Reach([unrelatedId], 1, 10, Direction.Reverse);
+        GraphQueryTelemetrySnapshot telemetry = sqlite.QueryTelemetry;
+
+        Assert.Empty(reached);
+        Assert.Equal(1, telemetry.SupplementalEdges.Rows);
+        // One point lookup for the start id, and nothing else: the prime never ran.
+        Assert.Equal(1, telemetry.SymbolExists.Executions);
+    }
+
+    // REVIEW 2026-08-21 (finding 4): fix 2 dropped the linkage ORDER BY outright instead of re-sorting in
+    // memory, on the argument that SQLite's row order cannot reach the output. Pin that argument: the same
+    // linkage rows written in the opposite order produce identical evidence.
+    [Fact]
+    public void ReachWithEvidence_LinkageRowOrderDoesNotChangeTheOutput()
+    {
+        const string sourceId = "53000000000000000000000000000001";
+        const string firstTestId = "53000000000000000000000000000002";
+        const string secondTestId = "53000000000000000000000000000003";
+
+        static JulieDbFixture.SymbolRow TestRow(string id, string name, string coveredId) =>
+            new(id, name, "method", "csharp", "tests/ServiceTests.cs", "void " + name + "()", 1, null)
+            {
+                IsTest = true,
+                Metadata = "{\"test_coverage\":{\"symbol_id\":\"" + coveredId + "\",\"confidence\":0.97}}",
+            };
+
+        JulieDbFixture.SymbolRow source =
+            new(sourceId, "Execute", "method", "csharp", "src/Service.cs", "void Execute()", 1, null);
+        JulieDbFixture.SymbolRow first = TestRow(firstTestId, "ExecuteWorksFirst", sourceId);
+        JulieDbFixture.SymbolRow second = TestRow(secondTestId, "ExecuteWorksSecond", sourceId);
+
+        using var forward = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [source, first, second]);
+        using var reversed = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [source, second, first]);
+        using var forwardGraph = new SqliteSymbolGraphIndex(forward.DbPath);
+        using var reversedGraph = new SqliteSymbolGraphIndex(reversed.DbPath);
+
+        GraphReachResult forwardResult = forwardGraph.ReachWithEvidence([sourceId], 1, 10, Direction.Reverse);
+        GraphReachResult reversedResult = reversedGraph.ReachWithEvidence([sourceId], 1, 10, Direction.Reverse);
+
+        Assert.Equal(2, forwardResult.Nodes.Count);
+        Assert.Equal(forwardResult.Nodes, reversedResult.Nodes);
+        Assert.Equal(forwardResult.ReachedCount, reversedResult.ReachedCount);
+        Assert.Equal(forwardResult.TruncatedByDepth, reversedResult.TruncatedByDepth);
+        Assert.Equal(forwardResult.TruncatedByLimit, reversedResult.TruncatedByLimit);
+    }
+
     private static SqliteConnection OpenReadOnly(string dbPath)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder

@@ -291,6 +291,18 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         };
         ReadGraph();
         Assert.Equal(3, loadCount);
+
+        // REVIEW 2026-08-21 (finding 2): an L1 -> L3 level completion adds symbols and structural facts to a
+        // version the CURRENT manifest already pins, at an unchanged manifest generation and hash. It is the
+        // MOST frequent invalidation event on this repo's store (10,480 version_level_completed rows against
+        // 1,480 manifest_flipped), and the dropped StoreLogSequence used to be what caught it. The level stamps
+        // are the only thing left that does.
+        snapshot = snapshot with
+        {
+            Freshness = snapshot.Freshness with { LevelStampL3 = "l3-b" },
+        };
+        ReadGraph();
+        Assert.Equal(4, loadCount);
     }
 
     [Fact]

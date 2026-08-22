@@ -33,6 +33,8 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     private readonly Dictionary<string, IReadOnlyList<string>> _nameResolutionCache = new(StringComparer.Ordinal);
     private readonly Func<IReadOnlyList<GraphEdge>>? _loadSupplementalEdges;
     private IReadOnlyList<GraphEdge>? _supplementalEdges;
+    private HashSet<string>? _supplementalEndpoints;
+    private bool _supplementalEndpointsPrimed;
     private Microsoft.Data.Sqlite.SqliteConnection? _connection;
     private Microsoft.Data.Sqlite.SqliteConnection? _activeSessionConnection;
     private readonly GraphQueryTelemetry _queryTelemetry = new();
@@ -666,23 +668,52 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             ? _loadSupplementalEdges()
             : LoadSupplementalEdges();
         _queryTelemetry.SupplementalEdges.Add(_supplementalEdges.Count, Stopwatch.GetElapsedTime(started));
-        PrimeSupplementalEndpointExistence(_supplementalEdges);
         return _supplementalEdges;
     }
 
     /// <summary>
     /// Resolves every supplemental edge endpoint in ONE statement per batch instead of one
-    /// <c>SELECT 1 FROM symbols</c> per endpoint per frontier. The edge set is fixed for the life of this
-    /// instance and <see cref="_symbolExistsCache"/> starts empty on every instance (the provider builds a new
-    /// graph per call), so the per-endpoint probes were paid in full on every single call — 48 round trips for
-    /// this repo's 24 edges. The cached answers are identical to what <see cref="SymbolExists"/> would return:
-    /// an id the batch does not report is recorded as absent.
+    /// <c>SELECT 1 FROM symbols</c> per endpoint per frontier, but only once the query actually asks about an
+    /// endpoint.
     /// </summary>
+    /// <remarks>
+    /// <para>The edge set is fixed for the life of this instance and <see cref="_symbolExistsCache"/> starts
+    /// empty on every instance (the provider builds a new graph per call), so the per-endpoint probes were paid
+    /// in full on every single call — 48 round trips for this repo's 24 edges. The cached answers are identical
+    /// to what <see cref="SymbolExists"/> would return: an id the batch does not report is recorded as absent.
+    /// </para>
+    /// <para>The prime is LAZY because the calls it replaces were all short-circuited: the frontier reader asks
+    /// only about edges whose other endpoint it already holds, <c>LoadDependencies</c> only about edges leaving
+    /// the queried id, and <c>LoadDependents</c> never asks at all. Priming at load time would put work
+    /// proportional to the WHOLE edge set on queries that touch none of it — the exact shape this lane removed
+    /// from the linkage scan (2026-08-21 review, finding 3).</para>
+    /// </remarks>
+    private bool TryPrimeSupplementalEndpointExistence(string id)
+    {
+        if (_supplementalEndpointsPrimed || _supplementalEdges is null || _supplementalEdges.Count == 0)
+            return false;
+
+        // In-memory only: no statement runs unless the asked-for id is one of the endpoints.
+        if (_supplementalEndpoints is null)
+        {
+            _supplementalEndpoints = new HashSet<string>(StringComparer.Ordinal);
+            foreach (GraphEdge edge in _supplementalEdges)
+            {
+                _supplementalEndpoints.Add(edge.From);
+                _supplementalEndpoints.Add(edge.To);
+            }
+        }
+
+        if (!_supplementalEndpoints.Contains(id))
+            return false;
+
+        _supplementalEndpointsPrimed = true;
+        PrimeSupplementalEndpointExistence(_supplementalEdges);
+        return true;
+    }
+
     private void PrimeSupplementalEndpointExistence(IReadOnlyList<GraphEdge> edges)
     {
-        if (edges.Count == 0)
-            return;
-
         var pending = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (GraphEdge edge in edges)
@@ -910,6 +941,9 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     private bool SymbolExists(string id)
     {
         if (_symbolExistsCache.TryGetValue(id, out bool exists))
+            return exists;
+
+        if (TryPrimeSupplementalEndpointExistence(id) && _symbolExistsCache.TryGetValue(id, out exists))
             return exists;
 
         using var command = Connection.CreateCommand();

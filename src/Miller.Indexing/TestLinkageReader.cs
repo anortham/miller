@@ -54,11 +54,21 @@ internal static class TestLinkageReader
     }
 
     /// <summary>
-    /// True when at least one visible test symbol's metadata mentions a linkage key. The text match is a
-    /// SUPERSET of what <see cref="AppendEdges"/> accepts (it matches the key anywhere in the blob, and SQLite's
-    /// LIKE is ASCII case-insensitive), so the probe can only ever fail open: it never hides an edge the scan
-    /// would have produced.
+    /// True when at least one visible test symbol's metadata carries a linkage key.
     /// </summary>
+    /// <remarks>
+    /// <para>The two <c>LIKE</c> arms are the cheap prefilter and they already match a SUPERSET of what
+    /// <see cref="AppendEdges"/> accepts: they match the key anywhere in the blob, not only as a property name,
+    /// and SQLite's LIKE is ASCII case-insensitive while <c>TryGetProperty</c> is ordinal.</para>
+    /// <para>Raw text alone is NOT a superset, though, and that gap would make the gate fail CLOSED — the one
+    /// failure mode a gate must not have. <c>TryGetProperty</c> compares the UNESCAPED property name, so a blob
+    /// that writes one letter of the key as a JSON backslash-u escape yields an edge the raw text cannot see
+    /// (<c>TestLinkage_EscapedLinkageKeyName_StillScansAndProducesTheEdge</c> is that blob). Every such
+    /// spelling must contain a backslash (a JSON escape is the only way to write a different raw text for the
+    /// same name), so the parsed check runs for exactly the rows the prefilter cannot rule out, and the gate is
+    /// a true superset of the scan. The <c>json_valid</c> guard keeps a malformed blob from raising instead of
+    /// being skipped — <see cref="AppendEdges"/> skips it too.</para>
+    /// </remarks>
     internal static bool HasLinkageMetadata(SqliteConnection connection)
     {
         ArgumentNullException.ThrowIfNull(connection);
@@ -70,7 +80,12 @@ internal static class TestLinkageReader
             FROM symbols
             WHERE is_test = 1
               AND metadata_json IS NOT NULL
-              AND (metadata_json LIKE '%"test_linkage"%' OR metadata_json LIKE '%"test_coverage"%')
+              AND (metadata_json LIKE '%"test_linkage"%'
+                OR metadata_json LIKE '%"test_coverage"%'
+                OR (instr(metadata_json, '\') > 0
+                  AND json_valid(metadata_json)
+                  AND (json_type(metadata_json, '$.test_linkage') IS NOT NULL
+                    OR json_type(metadata_json, '$.test_coverage') IS NOT NULL)))
             LIMIT 1;
             """;
         return command.ExecuteScalar() is not null;

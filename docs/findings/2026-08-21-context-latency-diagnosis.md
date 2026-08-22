@@ -10,11 +10,16 @@ work after resolve (~6.1s of its 6.9s current-workspace p50).
 
 ## Headline
 
-The dominant cost is a **whole-index scan that produces nothing**: every context call loads
+The dominant cost was a **whole-index scan that produces nothing**: every context call loaded
 "supplemental edges" by scanning every test symbol in the view and parsing their JSON
 metadata for test-linkage keys that **no store on this machine has ever contained**. This is
 the same defect pattern the store's materialized resolution was replaced for (query-time
 resolution, 2026-08): work proportional to the index, not to the question.
+
+**Gated 2026-08-21** (commit `5b33eb82`): the linkage scan now runs only where an existence probe
+proves a linkage key exists — nowhere, today. What remains under `supplemental` is the Blazor arm,
+measured at 15 ms for the structural-fact read plus 273 ms for `BlazorComponentGraphReader`'s own
+sorted `symbols` scan; that arm produces every edge the graph uses and is out of scope here.
 
 ## Latency split (telemetry)
 
@@ -135,6 +140,12 @@ again with a different `limit`, and `ContextSearchCacheLookupIndex` keys on
 48 `SELECT 1 FROM symbols` round trips for 24 edges — the 150–667 ms floor on cache-hit
 calls.
 
+**Shipped 2026-08-21 (fix 7, commit `5b33eb82`).** One batched `IN (...)` statement per 500
+endpoints replaces the point lookups. **Amended 2026-08-21 (review finding 3):** the prime is LAZY —
+it runs on the first `Contains` miss against a supplemental endpoint, not at load time. The calls it
+replaces were all short-circuited (`LoadDependents` never probes at all), so priming eagerly would
+have put work proportional to the whole edge set onto queries that touch none of it.
+
 ### 5. The token budget is applied after all the work
 
 `BoundFinalOutput` runs at `ContextTool.cs:304`, after all retrieval, graph, and body work.
@@ -152,19 +163,45 @@ cross-workspace). Instrumentation is the prerequisite for diagnosing that tail.
    keys): scan never runs where the data does not exist (everywhere, today). The feature
    stays intact for the day julie-extract emits linkage — per the language-parity rule that
    emission lands in julie-extractors across all languages first.
-2. **Drop the pathological `ORDER BY`** from `TestLinkageReader.cs:22`; sort the rows in
-   memory. Measured 14x on the same result set; worth it even with the gate.
+   **SHIPPED 2026-08-21** (`5b33eb82`). **Hardened after review (finding 1):** raw text alone is
+   not a superset of what the parser accepts. `JsonDocument.TryGetProperty` compares the UNESCAPED
+   property name, so a blob that writes one letter of the key as a JSON backslash-u escape produces
+   an edge no `LIKE` can see — the gate would fail CLOSED and drop every edge silently. Such a
+   spelling must contain a backslash, so the probe keeps the two `LIKE` arms as a cheap prefilter
+   and adds a `json_valid`/`json_type` check for backslash rows only. Re-measured read-only against
+   the live store (2026-08-21): 32,594 test symbols carry metadata and **none of them contains a
+   backslash**, so the parsed arm runs for no row at all — old probe 199/199/204 ms, new probe
+   202/203/200 ms over three passes. An in-memory row with the escaped spelling opens the new gate
+   and did not open the old one.
+2. **Drop the pathological `ORDER BY`** from `TestLinkageReader.cs:22`. Measured 14x on the same
+   result set; worth it even with the gate.
+   **SHIPPED 2026-08-21** (`5b33eb82`) — and the sort was dropped OUTRIGHT, not moved into memory
+   as this line first proposed. Justification, verified before shipping and pinned by a test after
+   review (finding 4): both consumers fold these edges into a per-neighbour dictionary under the
+   same total tie-break over (kind priority, source priority, confidence, source, kind)
+   (`SqliteSymbolGraphIndex.AddEdge`/`CompareEdges`, `SymbolGraph.AddNeighbour`/`CompareEdge`) and
+   emit neighbours sorted by neighbour id, so two edges a row-order swap could exchange are equal
+   in every field that reaches `GraphNeighbour`. `LoadDependencies`/`LoadDependents` collect into a
+   `SortedSet`. The test writes the same linkage rows in both orders and asserts identical
+   `ReachWithEvidence` output.
 3. **Fix the supplemental-edge cache key**: the edge set depends on test symbols and bridge
    facts only; `StoreLogSequence`/`SearchStamp`/`ContentStamp`/`VectorStamp` do not belong
    in the key.
+   **SHIPPED 2026-08-21** (`5b33eb82`). The key is the manifest identity plus the index level and
+   its three level stamps. The level stamps are what catches a level completion — 10,480
+   `version_level_completed` rows against 1,480 `manifest_flipped` in this store's log, so it is the
+   most frequent invalidation event there is, and it moves NO manifest field. Pinned by a test after
+   review (finding 2).
 4. **Batch the term-rescue reference reads** via `ReferenceEvidenceReader.ReadMany` (same
    bounds record as the usage path).
 5. **Move the hybrid-route check above the lexical retrieval** in `LoadSemanticSeeds`
    (`:537` above `:527`) — work that cannot reach the output must not run.
 6. **Share one retrieval** between the semantic seed check and the pivot ranker (retrieve
    once at the larger limit; ranking output must stay byte-identical — assert it).
-7. **Batch the edge-endpoint existence probes** (or hoist the cache) — moot if fix 1 removes
-   the edges from the path, keep only if needed.
+7. **Batch the edge-endpoint existence probes** (or hoist the cache) — kept, because fix 1 removes
+   only the linkage arm and the Blazor arm still puts 24 edges on the path.
+   **SHIPPED 2026-08-21** (`5b33eb82`), amended after review (finding 3) to prime lazily on the
+   first endpoint miss instead of at load time.
 8. **Instrument the `usage` branch** with the same phase callback the off branch has, so the
    cross-workspace tail becomes diagnosable.
 
