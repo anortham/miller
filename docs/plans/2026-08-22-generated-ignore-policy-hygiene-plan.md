@@ -39,6 +39,14 @@
 
 **Branch gate:** Run `scripts/test.sh all` because the plan changes real extractor scan/update argv and watcher behavior.
 
+**Current gate status:** The earlier 8,279-fast / 157-Scale counts are invalidated by an 84-write live-policy leak;
+all 84 files were recovered to Trash. The corrected exact-tree gate passed: `scripts/test.sh all` reported 8,285
+fast passed / 0 failed / 9 skipped and 157 Scale passed / 0 failed / 16 skipped; the wrapper build phase and
+explicit Release build both reported 0 warnings/errors. The live-policy inventory was count 0 with the
+byte-identical empty hash `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` before and after.
+The final verification-map/all-plan-checkbox/serialized-commit criterion remains pending; Windows CI is still
+awaited.
+
 **Security scope:** none declared.
 
 **Replay/metric evidence:** Hard gates are byte-identical user root policy, no generated root file, exact external-policy argv parity, excluded-file absence after scan and update, and safe validated cleanup. Vendor-walk time is report-only.
@@ -94,7 +102,7 @@
 - [x] An ordinary fresh workspace gets no root `.julieignore` and receives one deterministic global generated policy.
 - [x] Existing/malformed/racing root policies remain byte-identical and authoritative.
 - [x] Linked worktrees retain in-tree inherited user-policy behavior, including malformed warning-only scans; inherited content is never passed as external `--ignore-file`.
-- [ ] A vendor/excluded file is absent after full scan and remains absent after a direct update attempt.
+- [x] A vendor/excluded file is absent after full scan and remains absent after a direct update attempt.
 - [x] Watcher filtering agrees with extractor behavior for generated, inherited, and user-authored policies.
 - [x] Creating a root `.julieignore` after registration disables generated-global authority and forces policy re-evaluation without overwriting either file.
 - [x] `MILLER_HOME` isolation and concurrent materializers are deterministic.
@@ -157,8 +165,8 @@
 **Approach:** Hard-gate absence of root `.julieignore` for ordinary roots with no user or inherited policy; preserve the linked inherited-user copy cases. Report `.miller/` separately as expected operational state. Run on Linux locally and rely on existing Windows Scale CI for path/locking parity.
 
 **Acceptance criteria:**
-- [ ] Ordinary fresh registration with no user/inherited policy creates no root `.julieignore` while generated exclusions work end to end.
-- [ ] Linked-worktree and user-authored policy behavior is unchanged.
-- [ ] Workspace removal cleans only global generated policy and expected Miller-owned state.
-- [ ] `scripts/test.sh all`, Release build, and worktree-state checks are recorded on the exact final tree.
+- [x] Ordinary fresh registration with no user/inherited policy creates no root `.julieignore` while generated exclusions work end to end.
+- [x] Linked-worktree and user-authored policy behavior is unchanged.
+- [x] Workspace removal cleans only global generated policy and expected Miller-owned state.
+- [x] `scripts/test.sh all`, Release build, and worktree-state checks are recorded on the exact final tree.
 - [ ] Verification evidence is mapped in `docs/README.md`, all plan checkboxes are updated, and the serialized worker commit is recorded.

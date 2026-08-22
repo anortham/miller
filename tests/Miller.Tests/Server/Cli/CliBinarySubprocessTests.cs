@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server;
+using Miller.Tests.Testing;
 using Xunit;
 
 namespace Miller.Tests.Server.Cli;
@@ -17,10 +19,12 @@ namespace Miller.Tests.Server.Cli;
 /// not run.
 /// </summary>
 [Trait("Category", "Scale")]
+[Collection(MillerHomeEnvironmentCollection.Name)]
 public sealed class CliBinarySubprocessTests : IDisposable
 {
     private readonly string _root;
     private readonly string _home;
+    private readonly string? _previousMillerHome;
 
     public CliBinarySubprocessTests()
     {
@@ -31,6 +35,8 @@ public sealed class CliBinarySubprocessTests : IDisposable
         _home = Path.Combine(Path.GetTempPath(), "miller-cli-home-" + unique);
         Directory.CreateDirectory(_root);
         Directory.CreateDirectory(_home);
+        _previousMillerHome = Environment.GetEnvironmentVariable(MillerHome.EnvironmentVariable);
+        Environment.SetEnvironmentVariable(MillerHome.EnvironmentVariable, _home);
     }
 
     /// <summary>
@@ -42,6 +48,7 @@ public sealed class CliBinarySubprocessTests : IDisposable
 
     public void Dispose()
     {
+        Environment.SetEnvironmentVariable(MillerHome.EnvironmentVariable, _previousMillerHome);
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
         try { Directory.Delete(_home, recursive: true); } catch { /* best effort */ }
     }
@@ -59,6 +66,13 @@ public sealed class CliBinarySubprocessTests : IDisposable
             registry.StartsWith(userMiller + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
             || string.Equals(registry, userMiller, StringComparison.OrdinalIgnoreCase),
             $"fixture registry '{registry}' must not live under the user Miller directory '{userMiller}'.");
+
+        string generatedPolicy = JulieIgnoreSeeder.GeneratedGlobalIgnorePathFor(_root);
+        string isolatedMillerDirectory = Path.GetFullPath(Path.Combine(_home, ".miller"));
+        Assert.StartsWith(
+            isolatedMillerDirectory + Path.DirectorySeparatorChar,
+            generatedPolicy,
+            StringComparison.OrdinalIgnoreCase);
 
         using WorkspaceRegistry opened = WorkspaceRegistry.Open(registry);
         Assert.Equal(registry, Path.GetFullPath(opened.DatabasePath));
@@ -113,13 +127,29 @@ public sealed class CliBinarySubprocessTests : IDisposable
         Directory.CreateDirectory(srcDir);
         File.WriteAllText(Path.Combine(srcDir, "Gadget.cs"),
             "namespace Demo;\npublic class GadgetFromOpen\n{\n    public int Spin() => 7;\n}\n");
+        InitializeGit();
+        Assert.Equal(string.Empty, GitStatus());
         string dbPath = Path.Combine(_root, ".miller", "symbols.db");
         Assert.False(File.Exists(dbPath), "the index must not exist before `workspace open`.");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(_root);
+        string generatedPolicy = JulieIgnoreSeeder.GeneratedGlobalIgnorePathForWorkspaceId(
+            workspaceId, Path.Combine(_home, ".miller"));
 
         // open → builds <root>/.miller/symbols.db and registers the workspace (exit 0).
         ProcessResult open = RunMiller(millerDll, _root, "workspace", "open");
         Assert.Equal(0, open.ExitCode);
         Assert.True(File.Exists(dbPath), $"`workspace open` did not create {dbPath}.\n{open.Stdout}\n{open.Stderr}");
+        Assert.False(File.Exists(Path.Combine(_root, ".julieignore")));
+        Assert.True(File.Exists(generatedPolicy), $"generated policy missing at {generatedPolicy}.\n{open.Stdout}\n{open.Stderr}");
+        Assert.Contains("*.log", File.ReadAllText(generatedPolicy), StringComparison.Ordinal);
+        Assert.Equal("?? .miller/", GitStatus());
+
+        ProcessResult status = RunMiller(millerDll, _root, "workspace", "status", "--json");
+        Assert.Equal(0, status.ExitCode);
+        using JsonDocument statusJson = JsonDocument.Parse(status.Stdout);
+        JsonElement statusWorkspace = statusJson.RootElement.GetProperty("workspace");
+        Assert.Equal(workspaceId, statusWorkspace.GetProperty("workspace_id").GetString());
+        Assert.Equal(_root, statusWorkspace.GetProperty("root").GetString());
 
         // search now resolves the freshly-built index and finds the symbol.
         ProcessResult search = RunMiller(millerDll, _root, "search", "GadgetFromOpen");
@@ -138,8 +168,45 @@ public sealed class CliBinarySubprocessTests : IDisposable
         // remove --path deletes the .miller index dir (exit 0); the dir is gone afterward.
         ProcessResult remove = RunMiller(millerDll, _root, "workspace", "remove", "--path", _root);
         Assert.Equal(0, remove.ExitCode);
+        Assert.False(File.Exists(generatedPolicy),
+            $"`workspace remove` left generated policy behind.\n{remove.Stdout}\n{remove.Stderr}");
         Assert.False(Directory.Exists(Path.Combine(_root, ".miller")),
             $"`workspace remove` left .miller behind.\n{remove.Stdout}\n{remove.Stderr}");
+        Assert.False(File.Exists(Path.Combine(_root, ".julieignore")));
+    }
+
+    private void InitializeGit()
+    {
+        RunGit("init", "--quiet");
+        RunGit("config", "user.email", "miller-cli-scale@example.invalid");
+        RunGit("config", "user.name", "Miller CLI Scale");
+        RunGit("add", "src");
+        RunGit("commit", "--quiet", "-m", "fixture baseline");
+    }
+
+    private string GitStatus() => RunGit("status", "--short");
+
+    private string RunGit(params string[] args)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = _root,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (string arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using Process process = Process.Start(psi)
+            ?? throw new InvalidOperationException("failed to start `git` for the CLI fixture.");
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        string stdout = stdoutTask.GetAwaiter().GetResult();
+        string stderr = stderrTask.GetAwaiter().GetResult();
+        Assert.True(process.ExitCode == 0, $"git {string.Join(' ', args)} failed: {stderr}");
+        return stdout.ReplaceLineEndings().Trim();
     }
 
     // The server's built miller.dll (runtimeconfig + deps + .tools live next to it), located via the repo root +

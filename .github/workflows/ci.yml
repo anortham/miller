@@ -178,8 +178,8 @@ jobs:
       # (known-folder home resolution, \\?\ path prefixes, unlink-while-open, a machine-global pipe), i.e.
       # invisible to ubuntu no matter how green it is. Add new Scale classes here unless they are genuinely
       # too slow for a hosted runner; the job is capped at timeout-minutes: 30.
-      - name: "Test (Windows scale smoke: leadership, WAL, full rebuild, live store, bridges, governor, rebind)"
+      - name: "Test (Windows scale smoke: leadership, WAL, full rebuild, live store, bridges, governor, rebind, ignore policy)"
         shell: pwsh
         run: >
           dotnet test Miller.slnx --no-build -c Release
-          --filter "FullyQualifiedName~VersionAwareLeadershipScaleTests|FullyQualifiedName~MultiProcessWalTests|FullyQualifiedName~FullRebuildScanScaleTests|FullyQualifiedName~StoreWorkspaceIndexProviderScaleTests|FullyQualifiedName~LiveJulieStoreClientScaleTests|FullyQualifiedName~LiveBridgeTraceTests|FullyQualifiedName~ScanGovernorContentionScaleTests|FullyQualifiedName~RebindVerbScaleTests|FullyQualifiedName~CliBinarySubprocessTests"
+          --filter "FullyQualifiedName~VersionAwareLeadershipScaleTests|FullyQualifiedName~MultiProcessWalTests|FullyQualifiedName~FullRebuildScanScaleTests|FullyQualifiedName~StoreWorkspaceIndexProviderScaleTests|FullyQualifiedName~LiveJulieStoreClientScaleTests|FullyQualifiedName~LiveBridgeTraceTests|FullyQualifiedName~ScanGovernorContentionScaleTests|FullyQualifiedName~RebindVerbScaleTests|FullyQualifiedName~WorktreeIgnorePropagationScaleTests|FullyQualifiedName~CliBinarySubprocessTests"
