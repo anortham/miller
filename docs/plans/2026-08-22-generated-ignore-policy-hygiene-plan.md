@@ -130,7 +130,7 @@
 - [x] Remove-by-ID and remove-by-path delete only the matching global policy.
 - [x] User, inherited, edited, malformed, and legacy root `.julieignore` files remain byte-identical.
 - [x] Invalid registrations cannot target arbitrary policy paths.
-- [ ] Focused removal/policy tests pass and the serialized worker commit is recorded.
+- [x] Focused removal/policy tests pass and the serialized worker commit is recorded in `b65cb17f`.
 
 ### Task 3: Real extractor and clean-checkout acceptance
 
