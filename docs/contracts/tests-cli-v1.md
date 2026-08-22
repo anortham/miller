@@ -264,6 +264,29 @@ refreshes stored exclusions.
 
 Enable and disable do not start the daemon.
 
+### `tests enable --json` / `tests disable --json`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `operation` | string | `enable` or `disable`. |
+| `enabled_count` | number | Projects enabled AFTER the call. |
+| `projects` | array | The projects enabled after the call, in the `projects[]` row shape above. |
+| `changed_count` | number | Projects whose enabled state THIS call flipped. |
+| `changed_projects` | array | Those projects, in the same row shape. `enabled` is `true` for an enable and `false` for a disable. |
+| `error` | string | Present only on a refusal (exit `3`), for example under `MILLER_CT=off`. |
+
+`changed_*` reports what the call DID; `enabled_count` / `projects` report what is left enabled. The
+two differ on a project-scoped disable: disabling 1 of 3 projects gives `changed_count: 1` and
+`enabled_count: 2`. Re-disabling an already disabled project gives `changed_count: 0`. Compact
+`tests disable` output heads the projects it turned off, then names the remainder:
+
+```
+disable 1 project(s)
+  - /repo/tests/One.Tests/One.Tests.csproj
+remaining enabled: 1
+  - /repo/tests/Two.Tests/Two.Tests.csproj
+```
+
 ## `tests run --json`
 
 | Field | Type | Meaning |
