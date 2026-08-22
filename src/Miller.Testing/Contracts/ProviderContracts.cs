@@ -148,6 +148,15 @@ public interface IContinuousTestProvider
         CancellationToken cancellationToken = default);
 }
 
+public sealed record ContinuousTestProviderChunkProgress(
+    int RequestedUniqueUnitCount,
+    int ChunkCount,
+    int CurrentPart,
+    int CurrentPartUnitCount,
+    IReadOnlyList<string> NameSamples,
+    string NameDigest,
+    bool NamesTruncated);
+
 public sealed record ContinuousTestWorkspace
 {
     public string WorkspaceId { get; init; }
@@ -200,6 +209,7 @@ public sealed record ContinuousTestProviderRunRequest
     public string? Framework { get; init; }
     public IReadOnlyDictionary<string, object?> Metadata { get; init; }
     public ContinuousTestCoverageMode CoverageMode { get; init; }
+    public Action<ContinuousTestProviderChunkProgress>? Progress { get; init; }
 
     /// <summary>
     /// This run covers EVERY test case the store knows for the project, so the provider may run the whole
@@ -228,7 +238,8 @@ public sealed record ContinuousTestProviderRunRequest
         string? Framework = null,
         IReadOnlyDictionary<string, object?>? Metadata = null,
         ContinuousTestCoverageMode CoverageMode = ContinuousTestCoverageMode.None,
-        bool WholeSuite = false)
+        bool WholeSuite = false,
+        Action<ContinuousTestProviderChunkProgress>? Progress = null)
     {
         ArgumentNullException.ThrowIfNull(Workspace);
         if (string.IsNullOrWhiteSpace(SelectedRevision))
@@ -248,6 +259,7 @@ public sealed record ContinuousTestProviderRunRequest
         this.Metadata = Metadata ?? Workspace.Metadata;
         this.CoverageMode = CoverageMode;
         this.WholeSuite = WholeSuite;
+        this.Progress = Progress;
     }
 }
 
@@ -287,6 +299,8 @@ public sealed record ContinuousTestCoordinatorRunRequest
     public Func<string>? CurrentRevisionResolver { get; init; }
     public string? RunId { get; init; }
     public ContinuousTestCoverageMode CoverageMode { get; init; }
+    public Action<ContinuousTestProviderResolution>? ProviderResolved { get; init; }
+    public Action<ContinuousTestProviderChunkProgress>? Progress { get; init; }
 
     /// <summary>
     /// This run covers EVERY test case the store knows for the project, so the provider is told it may run
@@ -323,7 +337,9 @@ public sealed record ContinuousTestCoordinatorRunRequest
         Func<string>? CurrentRevisionResolver = null,
         string? RunId = null,
         ContinuousTestCoverageMode CoverageMode = ContinuousTestCoverageMode.None,
-        bool WholeSuite = false)
+        bool WholeSuite = false,
+        Action<ContinuousTestProviderResolution>? ProviderResolved = null,
+        Action<ContinuousTestProviderChunkProgress>? Progress = null)
     {
         ArgumentNullException.ThrowIfNull(Workspace);
         if (string.IsNullOrWhiteSpace(SelectedRevision))
@@ -352,12 +368,15 @@ public sealed record ContinuousTestCoordinatorRunRequest
         this.RunId = RunId;
         this.CoverageMode = CoverageMode;
         this.WholeSuite = WholeSuite;
+        this.ProviderResolved = ProviderResolved;
+        this.Progress = Progress;
     }
 }
 
 public sealed record ContinuousTestCoordinatorRunResult(
     ProviderRunResult ProviderResult,
-    IReadOnlyList<ContinuousTestStatus> Statuses);
+    IReadOnlyList<ContinuousTestStatus> Statuses,
+    string? ProviderSource = null);
 
 public sealed record ProviderTestCase
 {

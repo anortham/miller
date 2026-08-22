@@ -71,6 +71,68 @@ public static class CtArgvChunking
         return chunks;
     }
 
+    public static ContinuousTestProviderChunkProgress Describe<T>(
+        IReadOnlyList<IReadOnlyList<T>> chunks,
+        Func<T, string> nameOf,
+        int currentPart,
+        int maxSamples = 8)
+    {
+        ArgumentNullException.ThrowIfNull(chunks);
+        ArgumentNullException.ThrowIfNull(nameOf);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxSamples, 1);
+
+        int chunkCount = chunks.Count;
+        if (chunkCount == 0)
+            throw new ArgumentException("chunks must contain at least one chunk", nameof(chunks));
+
+        if (currentPart < 1 || currentPart > chunkCount)
+            throw new ArgumentOutOfRangeException(nameof(currentPart));
+
+        var names = new List<string>();
+        var digestInput = new System.Text.StringBuilder();
+        foreach (IReadOnlyList<T> chunk in chunks)
+        {
+            if (chunk.Count == 0)
+                throw new ArgumentException("chunks must not contain empty chunks", nameof(chunks));
+
+            foreach (T unit in chunk)
+            {
+                string name = nameOf(unit);
+                if (string.IsNullOrWhiteSpace(name))
+                    throw new ArgumentException("nameOf must return a non-empty name", nameof(nameOf));
+                names.Add(name);
+                if (digestInput.Length > 0)
+                    digestInput.Append('\n');
+                digestInput.Append(name);
+            }
+        }
+
+        int uniqueCount = names.Distinct(StringComparer.Ordinal).Count();
+        if (uniqueCount != names.Count)
+            throw new ArgumentException("chunks must not duplicate selection units", nameof(chunks));
+
+        return new ContinuousTestProviderChunkProgress(
+            RequestedUniqueUnitCount: uniqueCount,
+            ChunkCount: chunkCount,
+            CurrentPart: currentPart,
+            CurrentPartUnitCount: chunks[currentPart - 1].Count,
+            NameSamples: names.Take(maxSamples).ToArray(),
+            NameDigest: Digest(digestInput.ToString()),
+            NamesTruncated: names.Count > maxSamples);
+    }
+
+    internal static ContinuousTestProviderChunkProgress DescribeEmpty()
+    {
+        return new ContinuousTestProviderChunkProgress(
+            RequestedUniqueUnitCount: 0,
+            ChunkCount: 1,
+            CurrentPart: 1,
+            CurrentPartUnitCount: 0,
+            NameSamples: [],
+            NameDigest: Digest(string.Empty),
+            NamesTruncated: false);
+    }
+
     /// <summary>
     /// Cost of one argv group: its UTF-8 bytes plus one separator per element, which is what the
     /// joined command line actually spends.
@@ -84,4 +146,8 @@ public static class CtArgvChunking
             cost += System.Text.Encoding.UTF8.GetByteCount(element) + 1;
         return cost;
     }
+
+    private static string Digest(string value) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)))
+            .ToLowerInvariant();
 }

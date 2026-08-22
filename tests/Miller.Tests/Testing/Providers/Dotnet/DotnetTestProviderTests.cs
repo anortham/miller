@@ -1633,6 +1633,40 @@ public sealed class DotnetTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_for_xunit_reports_bounded_progress_for_every_chunk()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace();
+        var ids = LongTestCaseIds(200);
+        var progress = new List<ContinuousTestProviderChunkProgress>();
+        var request = new ContinuousTestProviderRunRequest(
+            Workspace: workspace,
+            SelectedRevision: "rev-1",
+            IndexIdentity: IndexIdentity,
+            RunId: "run:xunit:progress",
+            TestCaseIds: ids,
+            Progress: progress.Add);
+        var provider = new DotnetTestProvider(runner);
+        var chunks = provider.BuildRunCommands(request).Select(SelectedMethods).ToArray();
+        Assert.True(chunks.Length > 1, "a 200-method selection cannot fit one command line");
+
+        runner.Enqueue();
+        for (var chunk = 0; chunk < chunks.Length; chunk++)
+            runner.Enqueue(XunitRunJson(chunk, chunks[chunk], failed: [], skipped: []));
+        runner.OnRun = WriteEmptyJunitArtifact;
+
+        await provider.RunAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(chunks.Length, progress.Count);
+        Assert.Equal(Enumerable.Range(1, chunks.Length), progress.Select(static row => row.CurrentPart));
+        Assert.All(progress, row => Assert.Equal(chunks.Length, row.ChunkCount));
+        Assert.Equal(chunks.Sum(static chunk => chunk.Count), progress.Sum(static row => row.CurrentPartUnitCount));
+        Assert.Equal(ids.Count, progress[0].RequestedUniqueUnitCount);
+        Assert.True(progress[0].NamesTruncated);
+        Assert.False(string.IsNullOrWhiteSpace(progress[0].NameDigest));
+    }
+
+    [Fact]
     public async Task Run_for_xunit_does_not_report_a_whole_run_skipped_for_one_all_skipped_chunk()
     {
         var runner = new FakeTestProcessRunner();

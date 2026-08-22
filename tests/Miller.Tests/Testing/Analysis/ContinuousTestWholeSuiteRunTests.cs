@@ -132,6 +132,35 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
         Assert.Equal(["test:b"], Assert.Single(provider.Requests).TestCaseIds);
     }
 
+    [Fact]
+    public async Task A_run_propagates_provider_source_and_progress_callbacks()
+    {
+        ContinuousTestWorkspace workspace = Workspace();
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCases(store, workspace, "test:a");
+        var provider = new RecordingProvider { InvokeProgress = true };
+        var coordinator = new ContinuousTestCoordinator(
+            new FixedContinuousTestProviderResolver(provider, "ct-provider:fixture"),
+            store,
+            runIdFactory: static () => "run:1");
+        string? resolvedSource = null;
+        ContinuousTestProviderChunkProgress? progress = null;
+
+        ContinuousTestCoordinatorRunResult result = await coordinator.RunSelectedAsync(
+            RunRequest(workspace, ["test:a"], wholeSuite: false) with
+            {
+                ProviderResolved = resolution => resolvedSource = resolution.ProviderSource,
+                Progress = value => progress = value,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("ct-provider:fixture", resolvedSource);
+        Assert.Equal("ct-provider:fixture", result.ProviderSource);
+        Assert.True(provider.SawProgressCallback);
+        Assert.NotNull(progress);
+        Assert.Equal(1, progress!.RequestedUniqueUnitCount);
+    }
+
     /// <summary>
     /// Contract clause (e): an IMPACT-DERIVED selection that happens to cover every known case
     /// still travels as its explicit id list. Only a workspace-scope request (a real generation
@@ -686,6 +715,10 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
     {
         public List<ContinuousTestProviderRunRequest> Requests { get; } = [];
 
+        public bool InvokeProgress { get; init; }
+
+        public bool SawProgressCallback { get; private set; }
+
         public IReadOnlyList<ProviderTestCase> DiscoverCases { get; init; } = [];
 
         public bool ThrowOnRun { get; set; }
@@ -702,6 +735,18 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
             Requests.Add(request);
             if (ThrowOnRun)
                 throw new InvalidOperationException("provider failure");
+            if (InvokeProgress && request.Progress is { } progress)
+            {
+                SawProgressCallback = true;
+                progress(new ContinuousTestProviderChunkProgress(
+                    RequestedUniqueUnitCount: request.TestCaseIds.Distinct(StringComparer.Ordinal).Count(),
+                    ChunkCount: 1,
+                    CurrentPart: 1,
+                    CurrentPartUnitCount: request.TestCaseIds.Count,
+                    NameSamples: request.TestCaseIds.Take(8).ToArray(),
+                    NameDigest: "fixture-digest",
+                    NamesTruncated: request.TestCaseIds.Count > 8));
+            }
 
             string runId = request.RunId ?? "run:1";
             return Task.FromResult(new ProviderRunResult(

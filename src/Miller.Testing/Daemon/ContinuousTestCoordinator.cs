@@ -205,6 +205,7 @@ public sealed class ContinuousTestCoordinator
         string? generationId = null;
         bool maintenanceAttempted = false;
         ContinuousTestProviderResolution resolution = _providerResolver.Resolve(request.Workspace);
+        request.ProviderResolved?.Invoke(resolution);
         bool instrumented = request.CoverageMode == ContinuousTestCoverageMode.PerTest;
         CtRevisionObservation revisionAtStart = instrumented ? _options.RevisionObserver(request) : CtRevisionObservation.Unread;
         CtRevisionObservation revisionAtEnd = CtRevisionObservation.Unread;
@@ -230,7 +231,8 @@ public sealed class ContinuousTestCoordinator
                             Command: request.Command,
                             ExcludeTraits: request.ExcludeTraits,
                             Framework: request.Framework,
-                            CoverageMode: request.CoverageMode),
+                            CoverageMode: request.CoverageMode,
+                            Progress: request.Progress),
                         providerToken),
                     "run",
                     request.Workspace,
@@ -251,7 +253,8 @@ public sealed class ContinuousTestCoordinator
                 RunMaintenanceTail(request.Workspace, generationId);
                 return new ContinuousTestCoordinatorRunResult(
                     providerResult,
-                    _store.ListContinuousTestStatuses(request.Workspace.WorkspaceId));
+                    _store.ListContinuousTestStatuses(request.Workspace.WorkspaceId),
+                    resolution.ProviderSource);
             }
 
             string currentRevision = ResolveCurrentRevision(request);
@@ -292,7 +295,8 @@ public sealed class ContinuousTestCoordinator
             RunMaintenanceTail(request.Workspace, generationId);
             return new ContinuousTestCoordinatorRunResult(
                 providerResult,
-                _store.ListContinuousTestStatuses(request.Workspace.WorkspaceId));
+                _store.ListContinuousTestStatuses(request.Workspace.WorkspaceId),
+                resolution.ProviderSource);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

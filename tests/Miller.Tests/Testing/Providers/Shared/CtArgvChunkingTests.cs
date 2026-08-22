@@ -75,6 +75,56 @@ public sealed class CtArgvChunkingTests
     }
 
     [Fact]
+    public void Chunk_facts_count_every_unit_and_bound_the_name_manifest()
+    {
+        var units = MethodUnits(250, nameLength: 46);
+        var chunks = CtArgvChunking.Chunk(units, Cost, maxUnits: 120, maxBytes: 1_000_000);
+
+        ContinuousTestProviderChunkProgress progress = CtArgvChunking.Describe(
+            chunks,
+            static unit => unit[1],
+            currentPart: 2);
+
+        Assert.Equal(250, progress.RequestedUniqueUnitCount);
+        Assert.Equal(3, progress.ChunkCount);
+        Assert.Equal(2, progress.CurrentPart);
+        Assert.Equal(120, progress.CurrentPartUnitCount);
+        Assert.Equal(8, progress.NameSamples.Count);
+        Assert.True(progress.NamesTruncated);
+        Assert.Equal(250, chunks.Sum(static chunk => chunk.Count));
+        Assert.Equal(250, chunks.SelectMany(static chunk => chunk).Select(static unit => unit[1]).Distinct().Count());
+        Assert.False(string.IsNullOrWhiteSpace(progress.NameDigest));
+    }
+
+    [Fact]
+    public void Empty_chunk_manifest_is_rejected()
+    {
+        Assert.Throws<ArgumentException>(() => CtArgvChunking.Describe(
+            Array.Empty<IReadOnlyList<string>>(),
+            static unit => unit,
+            currentPart: 1));
+    }
+
+    [Fact]
+    public void Chunk_name_digest_is_stable_and_bounded()
+    {
+        IReadOnlyList<IReadOnlyList<string>> chunks =
+        [
+            ["alpha"],
+            ["beta"],
+        ];
+
+        ContinuousTestProviderChunkProgress progress = CtArgvChunking.Describe(
+            chunks,
+            static unit => unit,
+            currentPart: 1);
+
+        Assert.Equal(64, progress.NameDigest.Length);
+        Assert.Equal("bbfb79e82216bd2db1ad2c507d44ddf80aeb12f64f9562056afe93aad43154d9", progress.NameDigest);
+        Assert.Equal(progress.NameDigest, CtArgvChunking.Describe(chunks, static unit => unit, 2).NameDigest);
+    }
+
+    [Fact]
     public void No_invocation_is_empty()
     {
         foreach (var chunk in CtArgvChunking.Chunk(MethodUnits(361), Cost))

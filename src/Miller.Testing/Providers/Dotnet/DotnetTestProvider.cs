@@ -185,6 +185,9 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             ? await StartCoverageSessionAsync(request.Workspace, paths, cancellationToken).ConfigureAwait(false)
             : null;
         var commands = BuildRunCommands(request, paths, coverage);
+        IReadOnlyList<ContinuousTestProviderChunkProgress> progress = BuildXunitChunkProgress(request);
+        if (progress.Count != commands.Count)
+            throw new InvalidOperationException("xUnit chunk progress did not match the run invocations");
         var resultArtifactPath = XunitResultArtifactPath(request, paths, commands.Count == 1 ? null : 0);
         var results = new List<TestProcessResult>(commands.Count);
         Exception? runFailure = null;
@@ -194,8 +197,11 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             // directory, and - under per-test coverage - one collector session, so running them
             // concurrently would have them overwrite each other's output and attribute each other's
             // coverage. The whole point of the CT budget is that a workspace runs one thing at a time.
-            foreach (var command in commands)
-                results.Add(await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false));
+            for (var index = 0; index < commands.Count; index++)
+            {
+                request.Progress?.Invoke(progress[index]);
+                results.Add(await _runner.RunAsync(commands[index], cancellationToken).ConfigureAwait(false));
+            }
         }
         catch (Exception exception)
         {
@@ -536,13 +542,19 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         CancellationToken cancellationToken)
     {
         var invocations = BuildGenericRunCommands(request, paths, targetPath);
+        IReadOnlyList<ContinuousTestProviderChunkProgress> progress =
+            BuildGenericChunkProgress(request, paths, targetPath);
+        if (progress.Count != invocations.Count)
+            throw new InvalidOperationException("generic chunk progress did not match the run invocations");
         var parsed = new List<ProviderRunResult>(invocations.Count);
         var diagnostics = new List<string>();
 
         // Sequential on purpose, exactly as the xunit path: the invocations share one built test
         // assembly and one generation directory, and the CT budget lets one workspace run at a time.
-        foreach (var invocation in invocations)
+        for (var index = 0; index < invocations.Count; index++)
         {
+            request.Progress?.Invoke(progress[index]);
+            GenericInvocation invocation = invocations[index];
             var result = await _runner.RunAsync(invocation.Command, cancellationToken).ConfigureAwait(false);
 
             // An empty or missing artifact is LOCAL to the chunk that produced it. vstest writes the TRX
@@ -603,6 +615,60 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             CoverageArtifacts = DiscoverCoverageArtifacts(paths),
             GenerationId = paths.GenerationId,
         };
+    }
+
+    private static IReadOnlyList<ContinuousTestProviderChunkProgress> BuildXunitChunkProgress(
+        ContinuousTestProviderRunRequest request)
+    {
+        if (request.FilterArguments.Count > 0 || request.WholeSuite)
+            return SingleSelectionProgress(request.TestCaseIds);
+
+        IReadOnlyList<IReadOnlyList<string>> units = XunitSelectionUnits(request);
+        if (units.Count == 0)
+            return SingleSelectionProgress(request.TestCaseIds);
+
+        IReadOnlyList<IReadOnlyList<IReadOnlyList<string>>> chunks =
+            CtArgvChunking.Chunk(units, CtArgvChunking.ArgvCost);
+        return Enumerable.Range(1, chunks.Count)
+            .Select(part => CtArgvChunking.Describe(chunks, static unit => unit[^1], part))
+            .ToArray();
+    }
+
+    private IReadOnlyList<ContinuousTestProviderChunkProgress> BuildGenericChunkProgress(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        string targetPath)
+    {
+        if (request.FilterArguments.Count > 0 || request.WholeSuite)
+            return SingleSelectionProgress(request.TestCaseIds);
+
+        var exclusionExpression = GenericExclusionFilter(
+            request.Framework ?? request.Workspace.Framework,
+            request.ExcludeTraits);
+        IReadOnlyList<GenericSelectionUnit> units = GenericSelectionUnits(request);
+        if (units.Count == 0)
+            return SingleSelectionProgress(request.TestCaseIds);
+
+        string runHash = TrxRunHash(request);
+        var chunks = CtArgvChunking.Chunk(
+            units,
+            static unit => GenericFilterTermCost(unit.Term),
+            maxUnits: GenericMaxTermsPerInvocation,
+            maxBytes: GenericSelectionBudget(paths, targetPath, runHash, exclusionExpression));
+        return Enumerable.Range(1, chunks.Count)
+            .Select(part => CtArgvChunking.Describe(chunks, static unit => unit.Term, part))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<ContinuousTestProviderChunkProgress> SingleSelectionProgress(
+        IReadOnlyList<string> testCaseIds)
+    {
+        IReadOnlyList<string> uniqueIds = testCaseIds.Distinct(StringComparer.Ordinal).ToArray();
+        if (uniqueIds.Count == 0)
+            return [CtArgvChunking.DescribeEmpty()];
+
+        IReadOnlyList<IReadOnlyList<string>> chunks = [uniqueIds];
+        return [CtArgvChunking.Describe(chunks, static id => id, currentPart: 1)];
     }
 
     private const string NoSelectedResultsMessage =
