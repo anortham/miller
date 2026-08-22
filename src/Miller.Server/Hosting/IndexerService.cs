@@ -13,6 +13,88 @@ using Miller.Server;
 
 namespace Miller.Server.Hosting;
 
+internal readonly record struct StoreSidecarRetryTarget(
+    string FamilyId,
+    string ViewId,
+    string StoreInstanceId,
+    string GenerationName,
+    long StoreSequence)
+{
+    internal static StoreSidecarRetryTarget FromSnapshot(WorkspaceReadSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.Mode != WorkspaceReadMode.FamilyStore ||
+            snapshot.Freshness.StoreLogSequence is not { } sequence ||
+            string.IsNullOrWhiteSpace(snapshot.Freshness.StoreInstanceId) ||
+            string.IsNullOrWhiteSpace(snapshot.Freshness.ViewId) ||
+            string.IsNullOrWhiteSpace(snapshot.Freshness.GenerationName))
+        {
+            throw new ArgumentException("The family-store snapshot has no complete sidecar retry target.", nameof(snapshot));
+        }
+
+        return new(
+            snapshot.ArtifactOrStoreId,
+            snapshot.Freshness.ViewId,
+            snapshot.Freshness.StoreInstanceId,
+            snapshot.Freshness.GenerationName,
+            sequence);
+    }
+}
+
+internal readonly record struct StoreSidecarRetryProbe(
+    StoreSidecarRetryTarget Target,
+    bool NeedsRetry);
+
+internal sealed class StoreSidecarRetryState
+{
+    private static readonly TimeSpan[] RetryIntervals =
+    [
+        TimeSpan.FromSeconds(5),
+        TimeSpan.FromSeconds(15),
+        TimeSpan.FromSeconds(30),
+    ];
+
+    private StoreSidecarRetryTarget? _target;
+    private DateTimeOffset _nextAttemptUtc;
+    private int _failedAttempts;
+
+    internal StoreSidecarRetryTarget? Target => _target;
+    internal int FailedAttempts => _failedAttempts;
+    internal DateTimeOffset? NextAttemptUtc => _target is null ? null : _nextAttemptUtc;
+
+    internal void Observe(StoreSidecarRetryTarget target, DateTimeOffset now)
+    {
+        if (_target == target)
+            return;
+
+        bool observedTarget = _target is not null;
+        _target = target;
+        _failedAttempts = 0;
+        _nextAttemptUtc = observedTarget ? now : now + RetryIntervals[0];
+    }
+
+    internal bool IsDue(StoreSidecarRetryTarget target, DateTimeOffset now)
+    {
+        Observe(target, now);
+        return now >= _nextAttemptUtc;
+    }
+
+    internal void RecordFailure(StoreSidecarRetryTarget target, DateTimeOffset now)
+    {
+        if (_target != target)
+        {
+            Observe(target, now);
+            return;
+        }
+
+        _failedAttempts = Math.Min(_failedAttempts + 1, RetryIntervals.Length);
+        _nextAttemptUtc = now + RetryIntervals[Math.Min(_failedAttempts, RetryIntervals.Length - 1)];
+    }
+
+    internal void Clear() =>
+        (_target, _nextAttemptUtc, _failedAttempts) = (null, default, 0);
+}
+
 /// <summary>
 /// The leader-gated file watcher (m3-design decision-1, §Components/3, implementation-order step 9). On start
 /// each <c>miller</c> instance tries to acquire the cross-process <see cref="SingleWriterLock"/> for the
@@ -83,6 +165,15 @@ public sealed class IndexerService : BackgroundService
     private DateTime _nextWalCheckpointUtc;
     private readonly TimeSpan _leaderRetryInterval;
     private readonly bool _attachFileWatchers;
+    private readonly SymbolSearchSidecar _searchSidecar;
+    private readonly ContentCorpusSidecar _contentSidecar;
+    private readonly Func<DateTimeOffset> _clock;
+    private readonly StoreSidecarRetryState _storeSidecarRetry = new();
+    private readonly Func<bool> _storeSidecarRetryEnabled;
+    private readonly Func<bool> _storeSidecarRetryLeader;
+    private readonly Func<WorkspaceContext, StoreSidecarRetryProbe>? _inspectStoreSidecarsForTest;
+    private readonly Func<WorkspaceContext, StoreSidecarRetryTarget, StoreSidecarConvergenceResult>?
+        _convergeStoreSidecarsForTest;
 
     // Current-workspace sidecar convergence. THIS instance — the writer-lock leader — is the one safe writer for
     // the CURRENT workspace's content.db/search.db, so convergence runs after scans and per-file updates under
@@ -217,7 +308,12 @@ public sealed class IndexerService : BackgroundService
         TimeSpan? scanGovernorWait = null,
         TimeSpan? opsGateWait = null,
         Func<WorkspaceContext, string?>? readIndexLevel = null,
-        IIndexerPhaseSink? phaseSink = null)
+        IIndexerPhaseSink? phaseSink = null,
+        Func<WorkspaceContext, StoreSidecarRetryProbe>? inspectStoreSidecarsForTest = null,
+        Func<WorkspaceContext, StoreSidecarRetryTarget, StoreSidecarConvergenceResult>?
+            convergeStoreSidecarsForTest = null,
+        Func<bool>? storeSidecarRetryEnabledForTest = null,
+        Func<bool>? storeSidecarRetryLeaderForTest = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -236,9 +332,11 @@ public sealed class IndexerService : BackgroundService
         _drainFullScanRequests = drainFullScanRequests ?? LeaderScanRequestQueue.DrainFullScanRequests;
         _drainFileConvergeRequests = drainFileConvergeRequests ?? LeaderScanRequestQueue.DrainFileConvergeRequests;
         _leaderRetryInterval = leaderRetryInterval;
+        _searchSidecar = sidecar;
+        _contentSidecar = contentSidecar ?? new ContentCorpusSidecar();
         _sidecarConverger = new IndexerSidecarConverger(
             sidecar,
-            contentSidecar ?? new ContentCorpusSidecar(),
+            _contentSidecar,
             logger,
             phaseSink: phaseSink,
             vectorDrainAvailable: () => IsLeader);
@@ -266,6 +364,12 @@ public sealed class IndexerService : BackgroundService
         // Default = NO gate (null set). Unit tests reach this ctor; the gate's process probe must never run
         // in the fast suite, so only the public production ctor binds the real catalog fetch.
         _fetchSupportedExtensions = fetchSupportedExtensions ?? (static _ => null);
+        _clock = leadershipClock;
+        _storeSidecarRetryEnabled = storeSidecarRetryEnabledForTest
+            ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
+        _storeSidecarRetryLeader = storeSidecarRetryLeaderForTest ?? (() => IsLeader);
+        _inspectStoreSidecarsForTest = inspectStoreSidecarsForTest;
+        _convergeStoreSidecarsForTest = convergeStoreSidecarsForTest;
         // Default = OFF, so no fast test ever opens a lease under the real user-global ~/.miller.
         _governor = scanGovernor ?? ScanGovernor.Disabled();
         _governorWait = scanGovernorWait ?? DefaultScanAdmissionWait;
@@ -719,6 +823,7 @@ public sealed class IndexerService : BackgroundService
             else
             {
                 TryIdleFreshnessStampCatchUp(workspace);
+                TryRetryStoreSidecarsOnIdle(workspace);
             }
 
             if (usedWholeRepoScan)
@@ -1476,7 +1581,6 @@ public sealed class IndexerService : BackgroundService
 
     private StoreSidecarConvergenceResult TryConvergeStoreSidecars()
     {
-        BeforeSidecarConvergeForTest?.Invoke();
         WorkspaceContext workspace = _bootstrap.Workspace;
         string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
         using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
@@ -1484,16 +1588,102 @@ public sealed class IndexerService : BackgroundService
             workspaceRoot,
             workspace.WorkspaceId,
             storeEnabled: true);
+        return TryConvergeStoreSidecars(workspace, session);
+    }
+
+    private StoreSidecarConvergenceResult TryConvergeStoreSidecars(
+        WorkspaceContext workspace,
+        WorkspaceReadHandle session)
+    {
+        BeforeSidecarConvergeForTest?.Invoke();
         string storeRoot = session.FamilyStoreRoot ?? throw new InvalidOperationException(
             "The store read session did not expose its family root.");
         StoreSidecarConvergenceResult result = _sidecarConverger.ConvergeStore(storeRoot, session);
         if (result.WarningText is { } warning)
             _logger.LogWarning("{Warning}", warning);
+        StoreSidecarRetryTarget target = StoreSidecarRetryTarget.FromSnapshot(session.Snapshot);
+        if (result.Content.Failed || result.Search.Failed)
+            _storeSidecarRetry.RecordFailure(target, _clock());
+        else
+            _storeSidecarRetry.Clear();
         long sequence = session.Snapshot.Freshness.StoreLogSequence ?? throw new InvalidOperationException(
             "The store read session did not expose its store_log sequence.");
         _registryPublisher.TryMarkScanned(workspace, workspace.WorkspaceId, sequence);
         return result;
     }
+
+    private void TryRetryStoreSidecarsOnIdle(WorkspaceContext workspace)
+    {
+        if (!_storeSidecarRetryEnabled())
+        {
+            _storeSidecarRetry.Clear();
+            return;
+        }
+
+        if (!_storeSidecarRetryLeader())
+            return;
+
+        if (_inspectStoreSidecarsForTest is { } inspect && _convergeStoreSidecarsForTest is { } converge)
+        {
+            StoreSidecarRetryProbe probe = inspect(workspace);
+            if (!probe.NeedsRetry)
+            {
+                _storeSidecarRetry.Clear();
+                return;
+            }
+
+            DateTimeOffset probeTime = _clock();
+            if (!_storeSidecarRetry.IsDue(probe.Target, probeTime))
+                return;
+
+            BeforeSidecarConvergeForTest?.Invoke();
+            StoreSidecarConvergenceResult result = converge(workspace, probe.Target);
+            if (result.Content.Failed || result.Search.Failed)
+                _storeSidecarRetry.RecordFailure(probe.Target, _clock());
+            else
+                _storeSidecarRetry.Clear();
+            return;
+        }
+
+        StoreSidecarRetryTarget? target = null;
+        DateTimeOffset now = _clock();
+        try
+        {
+            string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                workspace.CanonicalExtractDbPath ?? workspace.ExtractDbPath,
+                workspaceRoot,
+                workspace.WorkspaceId,
+                storeEnabled: true);
+            string storeRoot = session.FamilyStoreRoot ?? throw new InvalidOperationException(
+                "The store read session did not expose its family root.");
+            target = StoreSidecarRetryTarget.FromSnapshot(session.Snapshot);
+            StoreSidecarRetryTarget retryTarget = target.Value;
+            ContentCorpusFacts content = _contentSidecar.InspectStore(storeRoot, session.Snapshot);
+            SearchSidecarFacts search = _searchSidecar.InspectStore(storeRoot, session.Snapshot);
+            if (!NeedsStoreSidecarRetry(content.State) && !NeedsStoreSidecarRetry(search.State))
+            {
+                _storeSidecarRetry.Clear();
+                return;
+            }
+
+            if (!_storeSidecarRetry.IsDue(retryTarget, now))
+                return;
+
+            _ = TryConvergeStoreSidecars(workspace, session);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException or TimeoutException or IncompatibleExtractException)
+        {
+            if (target is { } retryTarget)
+                _storeSidecarRetry.RecordFailure(retryTarget, now);
+            _logger.LogDebug(ex, "Idle store sidecar retry failed; the bounded retry schedule remains armed.");
+        }
+    }
+
+    private static bool NeedsStoreSidecarRetry(string state) =>
+        state is "missing" or "stale" or "unreadable" or "converging";
 
     /// <summary>
     /// Test seam: publish a fake <see cref="IExtractOps"/> as THIS instance's leader ops AND build the dispatch

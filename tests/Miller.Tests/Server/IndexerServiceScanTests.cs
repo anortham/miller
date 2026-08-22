@@ -53,6 +53,198 @@ public sealed class IndexerServiceScanTests : IDisposable
         }
     }
 
+    [Fact]
+    public void StoreSidecarRetryState_UsesBoundedTargetAwareIntervals()
+    {
+        var state = new StoreSidecarRetryState();
+        var target = new StoreSidecarRetryTarget("family", "view", "instance", "gen-001", 7);
+        DateTimeOffset start = new(2026, 8, 22, 18, 0, 0, TimeSpan.Zero);
+
+        Assert.False(state.IsDue(target, start));
+        Assert.False(state.IsDue(target, start.AddSeconds(4)));
+        Assert.True(state.IsDue(target, start.AddSeconds(5)));
+
+        state.RecordFailure(target, start.AddSeconds(5));
+        Assert.False(state.IsDue(target, start.AddSeconds(19)));
+        Assert.True(state.IsDue(target, start.AddSeconds(20)));
+
+        state.RecordFailure(target, start.AddSeconds(20));
+        Assert.False(state.IsDue(target, start.AddSeconds(49)));
+        Assert.True(state.IsDue(target, start.AddSeconds(50)));
+
+        state.RecordFailure(target, start.AddSeconds(50));
+        Assert.False(state.IsDue(target, start.AddSeconds(79)));
+        Assert.True(state.IsDue(target, start.AddSeconds(80)));
+        Assert.Equal(3, state.FailedAttempts);
+    }
+
+    [Fact]
+    public void StoreSidecarRetryState_NewTargetResetsBackoff_AndClearDropsIt()
+    {
+        var state = new StoreSidecarRetryState();
+        var target = new StoreSidecarRetryTarget("family", "view", "instance", "gen-001", 7);
+        var newer = target with { StoreSequence = 8 };
+        DateTimeOffset start = new(2026, 8, 22, 18, 0, 0, TimeSpan.Zero);
+
+        state.RecordFailure(target, start);
+        state.RecordFailure(target, start.AddSeconds(5));
+        Assert.Equal(1, state.FailedAttempts);
+
+        Assert.True(state.IsDue(newer, start.AddSeconds(6)));
+        Assert.Equal(newer, state.Target);
+        Assert.Equal(0, state.FailedAttempts);
+
+        var differentGeneration = newer with { GenerationName = "gen-002", StoreSequence = 9 };
+        Assert.True(state.IsDue(differentGeneration, start.AddSeconds(6)));
+        Assert.Equal(differentGeneration, state.Target);
+
+        state.Clear();
+        Assert.Null(state.Target);
+        Assert.Null(state.NextAttemptUtc);
+        Assert.Equal(0, state.FailedAttempts);
+    }
+
+    [Fact]
+    public void IdleStoreSidecarRetry_ArmsThenConvergesOnceAndClears()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-sidecar-retry-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            WorkspaceContext workspace = CreateWorkspace(dir);
+            var target = new StoreSidecarRetryTarget("family", "view", "instance", "gen-001", 7);
+            DateTimeOffset now = new(2026, 8, 22, 18, 0, 0, TimeSpan.Zero);
+            bool needsRetry = true;
+            int inspectCalls = 0;
+            int convergenceCalls = 0;
+            var service = NewSeededService(
+                workspace,
+                SymbolSearchSidecar.Disabled,
+                clock: () => now,
+                storeSidecarRetryEnabledForTest: () => true,
+                storeSidecarRetryLeaderForTest: () => true,
+                inspectStoreSidecarsForTest: _ =>
+                {
+                    inspectCalls++;
+                    return new StoreSidecarRetryProbe(target, needsRetry);
+                },
+                convergeStoreSidecarsForTest: (_, observedTarget) =>
+                {
+                    Assert.Equal(target, observedTarget);
+                    convergenceCalls++;
+                    needsRetry = false;
+                    var current = new StoreSidecarConvergenceOutcome(
+                        StoreSidecarConvergenceStatuses.Current, false, false, false, null);
+                    return new StoreSidecarConvergenceResult(
+                        observedTarget.StoreSequence, current, current, current);
+                });
+            service.PublishOpsForTest(new RecordingScanOps());
+            int publishedConvergences = 0;
+            service.BeforeSidecarConvergeForTest = () => publishedConvergences++;
+            string millerDir = Path.Combine(workspace.CanonicalRoot!, ".miller");
+
+            service.RunDrainTickForTest(millerDir);
+            Assert.Equal(0, publishedConvergences);
+            Assert.Equal(0, convergenceCalls);
+
+            now = now.AddSeconds(4);
+            service.RunDrainTickForTest(millerDir);
+            Assert.Equal(0, publishedConvergences);
+            Assert.Equal(0, convergenceCalls);
+
+            now = now.AddSeconds(1);
+            service.RunDrainTickForTest(millerDir);
+            Assert.Equal(1, publishedConvergences);
+            Assert.Equal(1, convergenceCalls);
+
+            service.RunDrainTickForTest(millerDir);
+            Assert.Equal(1, publishedConvergences);
+            Assert.Equal(1, convergenceCalls);
+            Assert.Equal(4, inspectCalls);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void IdleStoreSidecarRetry_WhenNotLeader_SkipsInspection()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-sidecar-retry-reader-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            WorkspaceContext workspace = CreateWorkspace(dir);
+            var target = new StoreSidecarRetryTarget("family", "view", "instance", "gen-001", 7);
+            int inspectCalls = 0;
+            int convergenceCalls = 0;
+            var service = NewSeededService(
+                workspace,
+                SymbolSearchSidecar.Disabled,
+                storeSidecarRetryLeaderForTest: () => false,
+                inspectStoreSidecarsForTest: _ =>
+                {
+                    inspectCalls++;
+                    return new StoreSidecarRetryProbe(target, NeedsRetry: true);
+                },
+                convergeStoreSidecarsForTest: (_, _) =>
+                {
+                    convergenceCalls++;
+                    throw new Xunit.Sdk.XunitException("A non-leader must not converge sidecars.");
+                });
+            service.PublishOpsForTest(new RecordingScanOps());
+
+            service.RunDrainTickForTest(Path.Combine(workspace.CanonicalRoot!, ".miller"));
+
+            Assert.Equal(0, inspectCalls);
+            Assert.Equal(0, convergenceCalls);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void IdleStoreSidecarRetry_WhenStoreDisabled_SkipsInspection()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-sidecar-retry-disabled-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            WorkspaceContext workspace = CreateWorkspace(dir);
+            var target = new StoreSidecarRetryTarget("family", "view", "instance", "gen-001", 7);
+            int inspectCalls = 0;
+            int convergenceCalls = 0;
+            var service = NewSeededService(
+                workspace,
+                SymbolSearchSidecar.Disabled,
+                storeSidecarRetryEnabledForTest: () => false,
+                storeSidecarRetryLeaderForTest: () => true,
+                inspectStoreSidecarsForTest: _ =>
+                {
+                    inspectCalls++;
+                    return new StoreSidecarRetryProbe(target, NeedsRetry: true);
+                },
+                convergeStoreSidecarsForTest: (_, _) =>
+                {
+                    convergenceCalls++;
+                    throw new Xunit.Sdk.XunitException("Store-disabled mode must not converge sidecars.");
+                });
+            service.PublishOpsForTest(new RecordingScanOps());
+
+            service.RunDrainTickForTest(Path.Combine(workspace.CanonicalRoot!, ".miller"));
+
+            Assert.Equal(0, inspectCalls);
+            Assert.Equal(0, convergenceCalls);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
     /// <summary>A fake <see cref="IExtractOps"/> recording the force value of each scan; can be told to throw.</summary>
     private sealed class RecordingScanOps : IExtractOps
     {
@@ -241,7 +433,13 @@ public sealed class IndexerServiceScanTests : IDisposable
         Func<string, FullScanDrainResult>? drainFullScanRequests = null,
         Func<string?>? ownExtractorVersion = null,
         TimeSpan? opsGateWait = null,
-        IIndexerPhaseSink? phaseSink = null)
+        IIndexerPhaseSink? phaseSink = null,
+        Func<DateTimeOffset>? clock = null,
+        Func<WorkspaceContext, StoreSidecarRetryProbe>? inspectStoreSidecarsForTest = null,
+        Func<WorkspaceContext, StoreSidecarRetryTarget, StoreSidecarConvergenceResult>?
+            convergeStoreSidecarsForTest = null,
+        Func<bool>? storeSidecarRetryEnabledForTest = null,
+        Func<bool>? storeSidecarRetryLeaderForTest = null)
     {
         string tempHome = Path.GetDirectoryName(Path.GetDirectoryName(workspace.RegistryDbPath))!;
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
@@ -250,7 +448,9 @@ public sealed class IndexerServiceScanTests : IDisposable
             workspace,
             new IndexHolder(MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()), builtRevision: 0));
         if (drainFileConvergeRequests is null && scanGovernor is null && drainFullScanRequests is null &&
-            ownExtractorVersion is null && opsGateWait is null && phaseSink is null)
+            ownExtractorVersion is null && opsGateWait is null && phaseSink is null && clock is null &&
+            inspectStoreSidecarsForTest is null && convergeStoreSidecarsForTest is null &&
+            storeSidecarRetryEnabledForTest is null && storeSidecarRetryLeaderForTest is null)
             return new IndexerService(
                 bootstrap, NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, sidecar);
         return new IndexerService(
@@ -268,7 +468,12 @@ public sealed class IndexerServiceScanTests : IDisposable
             scanGovernor: scanGovernor,
             scanGovernorWait: scanGovernorWait,
             opsGateWait: opsGateWait,
-            phaseSink: phaseSink);
+            phaseSink: phaseSink,
+            clock: clock,
+            inspectStoreSidecarsForTest: inspectStoreSidecarsForTest,
+            convergeStoreSidecarsForTest: convergeStoreSidecarsForTest,
+            storeSidecarRetryEnabledForTest: storeSidecarRetryEnabledForTest,
+            storeSidecarRetryLeaderForTest: storeSidecarRetryLeaderForTest);
     }
 
     private static IndexerService NewStartedService(

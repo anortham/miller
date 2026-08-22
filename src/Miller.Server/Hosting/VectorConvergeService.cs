@@ -177,6 +177,9 @@ internal sealed record VectorConvergeSnapshot(
     IReadOnlyList<string> ChangedPaths,
     bool FullPass = false);
 
+/// <summary>The durable store target and whether the vector sidecar has published its exact stamp for it.</summary>
+internal sealed record VectorDesiredState(long TargetRevision, bool IsExact);
+
 /// <summary>One embedded unit ready to commit.</summary>
 internal sealed record VectorCommit(VectorWorkUnit Unit, sbyte[] Embedding);
 
@@ -245,6 +248,7 @@ public sealed class VectorConvergeService : BackgroundService
     private readonly VectorLiveReaderRegistry _readerRegistry;
     private readonly TimeSpan _heldRetryDelay;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
+    private readonly Func<WorkspaceContext, VectorDesiredState?> _readDesiredState;
 
     private SemanticEmbeddingSession? _session;
     private IVectorGenerationGc? _gc;
@@ -285,7 +289,8 @@ public sealed class VectorConvergeService : BackgroundService
         Func<WorkspaceContext, IVectorGenerationGc?>? openGc = null,
         VectorLiveReaderRegistry? readerRegistry = null,
         TimeSpan? heldRetryDelay = null,
-        Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null,
+        Func<WorkspaceContext, VectorDesiredState?>? readDesiredState = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(sidecar);
@@ -311,6 +316,7 @@ public sealed class VectorConvergeService : BackgroundService
         _readerRegistry = readerRegistry ?? VectorLiveReaderRegistry.Shared;
         _heldRetryDelay = heldRetryDelay ?? TimeSpan.FromMinutes(5);
         _delay = delay ?? (static (span, token) => Task.Delay(span, token));
+        _readDesiredState = readDesiredState ?? ReadDesiredState;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -325,6 +331,11 @@ public sealed class VectorConvergeService : BackgroundService
 
         try
         {
+            await _bootstrap.WaitUntilBoundAsync(stoppingToken).ConfigureAwait(false);
+            WorkspaceContext workspace = _bootstrap.Workspace;
+
+            StampMissingDesiredState(workspace);
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
@@ -339,6 +350,10 @@ public sealed class VectorConvergeService : BackgroundService
                 // A real wake supersedes any scheduled held-cursor retry: it either produced this wake or renders
                 // the pending one redundant. Cancelling first keeps at most one retry alive and never double-drains.
                 CancelPendingRetry();
+
+                if (TryGetWorkspace() is { } currentWorkspace &&
+                    TryReadDesiredState(currentWorkspace) is { IsExact: true })
+                    continue;
 
                 try
                 {
@@ -499,7 +514,17 @@ public sealed class VectorConvergeService : BackgroundService
         try
         {
             await _delay(_heldRetryDelay, cts.Token).ConfigureAwait(false);
-            _signal.StampTarget(target, fullRebuild: false);
+
+            long retryTarget = target;
+            if (TryGetWorkspace() is { } workspace && TryReadDesiredState(workspace) is { } desired)
+            {
+                if (desired.IsExact)
+                    return;
+                if (desired.TargetRevision > 0)
+                    retryTarget = desired.TargetRevision;
+            }
+
+            _signal.StampTarget(retryTarget, fullRebuild: false);
         }
         catch (OperationCanceledException)
         {
@@ -518,6 +543,45 @@ public sealed class VectorConvergeService : BackgroundService
             cts.Cancel();
             cts.Dispose();
         }
+    }
+
+    private void StampMissingDesiredState(WorkspaceContext workspace)
+    {
+        if (TryReadDesiredState(workspace) is { IsExact: false, TargetRevision: > 0 } desired)
+            _signal.StampTarget(desired.TargetRevision, fullRebuild: false);
+    }
+
+    private VectorDesiredState? TryReadDesiredState(WorkspaceContext workspace)
+    {
+        try
+        {
+            return _readDesiredState(workspace);
+        }
+        catch (Exception ex) when (IsConvergeException(ex))
+        {
+            _logger.LogDebug(ex, "Could not probe the vector completeness stamp; the next index wake retries.");
+            return null;
+        }
+    }
+
+    private static VectorDesiredState? ReadDesiredState(WorkspaceContext workspace)
+    {
+        if (!WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+            return null;
+
+        string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+            workspace.CanonicalExtractDbPath ?? Path.Combine(workspaceRoot, ".miller", "symbols.db"),
+            workspaceRoot,
+            workspace.WorkspaceId,
+            storeEnabled: true);
+        WorkspaceReadSnapshot snapshot = session.Snapshot;
+        if (session.FamilyStoreRoot is not { } storeRoot || snapshot.Freshness.StoreLogSequence is not { } target)
+            return null;
+
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Vector, snapshot);
+        string path = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Vector, snapshot.ViewId);
+        return new VectorDesiredState(target, StoreSidecarCatalog.IsCurrent(path, expected));
     }
 
     /// <summary>
@@ -677,6 +741,7 @@ public sealed class VectorConvergeService : BackgroundService
         // disk-blocked or circuit-open pause the superseded artifact carried.
         if (state.Promoted)
         {
+            _signal.StampTarget(_signal.TargetRevision, fullRebuild: false);
             if (reopenAfterPromote?.Invoke() is not { } reopened)
                 return [symbols];
 

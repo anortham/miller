@@ -119,11 +119,11 @@
 **Approach:** Store retry state in the singleton resident `IndexerService`, not `WorkspaceIndexProvider` or another transient. Coalesce one in-flight attempt and use the current view/sequence as the retry key.
 
 **Acceptance criteria:**
-- [ ] A quiet unchanged workspace repairs a stale search/content sidecar without a file nudge.
-- [ ] Repeated failure follows the bounded schedule and never attempts more than once per due interval.
-- [ ] A newer store target resets retry immediately; success clears it.
-- [ ] Last-good/lagging reads and semantic-off behavior remain unchanged.
-- [ ] Focused indexer/search tests pass and the change is handed to the lead per `parallel-lead-commit`.
+- [x] A quiet unchanged workspace repairs a stale search/content sidecar without a file nudge.
+- [x] Repeated failure follows the bounded schedule and never attempts more than once per due interval.
+- [x] A newer store target resets retry immediately; success clears it.
+- [x] Last-good/lagging reads and semantic-off behavior remain unchanged.
+- [x] Focused indexer/search tests pass; the lead will record the parallel batch commit after review.
 
 ### Task 3: Resident vector desired-state reconciliation
 
@@ -150,11 +150,11 @@
 **Approach:** Read bootstrap getters only inside `ExecuteAsync`. Probe only while incomplete; stop embed, cursor, and retry work immediately when exact completeness is published. Preserve the existing bounded `WarmBrokerAsync` startup unless semantic mode is off so status does not regress to `not_started` during long indexing.
 
 **Acceptance criteria:**
-- [ ] A resident leader repairs a missing completeness stamp on a static workspace without `workspace refresh` or a file nudge.
-- [ ] Shadow rebuild completion wakes the held chunk lane and reaches one exact completeness stamp.
-- [ ] Restart with an already-current stamp performs no re-embedding or cursor/retry work while retaining bounded broker warmup.
-- [ ] `MILLER_SEMANTIC=off` opens no vector state, broker, or retry work.
-- [ ] Focused vector/off tests pass and the change is handed to the lead per `parallel-lead-commit`.
+- [x] A resident leader repairs a missing completeness stamp on a static workspace without `workspace refresh` or a file nudge.
+- [x] Shadow rebuild completion wakes the held chunk lane and reaches one exact completeness stamp.
+- [x] Restart with an already-current stamp performs no re-embedding or cursor/retry work while retaining bounded broker warmup.
+- [x] `MILLER_SEMANTIC=off` opens no vector state, broker, or retry work.
+- [x] Focused vector/off tests pass; the lead will record the parallel batch commit after review.
 
 ### Task 4: Actionable refresh and health rendering
 

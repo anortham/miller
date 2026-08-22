@@ -1231,6 +1231,138 @@ public sealed class VectorConvergeServiceTests
     }
 
     [Fact]
+    public async Task Start_MissingCompletenessStamp_ProbesTheStoreAndWakesBeforeTheFirstWait()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-start-probe-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var port = new FakePort { SymbolUnits = [Card("a", "src/A.cs", "card a")] };
+            var signal = new VectorConvergeSignal(enabled: true);
+            int probes = 0;
+            IndexBootstrapService bootstrap = IsolatedBootstrap();
+            bootstrap.SeedForTest(
+                WorkspaceAt(root, symbols), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+            await using var session = new SemanticEmbeddingSession(
+                FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            var service = new VectorConvergeService(
+                bootstrap,
+                new VectorSidecar(SemanticMode.On),
+                signal,
+                NullLogger.Instance,
+                _ => port,
+                _ => session,
+                () => DateTimeOffset.UnixEpoch,
+                readDesiredState: _ =>
+                {
+                    probes++;
+                    return new VectorDesiredState(5, IsExact: false);
+                });
+
+            await service.StartAsync(CancellationToken.None);
+            await WaitUntil(() => port.Commits.Count > 0);
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.True(probes >= 1);
+            Assert.Equal(5, signal.TargetRevision);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Start_CurrentCompletenessStamp_DoesNotOpenVectorStateOrDrain()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-start-current-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var signal = new VectorConvergeSignal(enabled: true);
+            int probes = 0;
+            int opens = 0;
+            var probeCompleted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            IndexBootstrapService bootstrap = IsolatedBootstrap();
+            bootstrap.SeedForTest(
+                WorkspaceAt(root, symbols), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+            var service = new VectorConvergeService(
+                bootstrap,
+                new VectorSidecar(SemanticMode.On),
+                signal,
+                NullLogger.Instance,
+                _ =>
+                {
+                    opens++;
+                    return null;
+                },
+                _ => throw new InvalidOperationException("the current stamp must not open an embedding session"),
+                () => DateTimeOffset.UnixEpoch,
+                readDesiredState: _ =>
+                {
+                    probes++;
+                    probeCompleted.TrySetResult();
+                    return new VectorDesiredState(5, IsExact: true);
+                });
+
+            await service.StartAsync(CancellationToken.None);
+            await probeCompleted.Task.WaitAsync(TestContext.Current.CancellationToken);
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.Equal(1, probes);
+            Assert.Equal(0, opens);
+            Assert.Equal(0, signal.TargetRevision);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Start_SemanticOff_DoesNotProbeTheStoreOrOpenVectorState()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-start-off-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            int probes = 0;
+            int opens = 0;
+            IndexBootstrapService bootstrap = IsolatedBootstrap();
+            bootstrap.SeedForTest(
+                WorkspaceAt(root, symbols), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+            var service = new VectorConvergeService(
+                bootstrap,
+                new VectorSidecar(SemanticMode.Off),
+                new VectorConvergeSignal(enabled: false),
+                NullLogger.Instance,
+                _ =>
+                {
+                    opens++;
+                    return null;
+                },
+                _ => throw new InvalidOperationException("semantic-off must not open an embedding session"),
+                () => DateTimeOffset.UnixEpoch,
+                readDesiredState: _ =>
+                {
+                    probes++;
+                    return new VectorDesiredState(5, IsExact: false);
+                });
+
+            await service.StartAsync(CancellationToken.None);
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.Equal(0, probes);
+            Assert.Equal(0, opens);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Drain_OnALeaderWake_RunsGcWithActiveReadinessFromThePortAndTheLiveReaderTags()
     {
         string root = Directory.CreateTempSubdirectory("miller-vec-gc-").FullName;
@@ -1817,6 +1949,60 @@ public sealed class VectorConvergeServiceTests
     }
 
     [Fact]
+    public async Task Drain_ShadowPromotion_StampsAnotherWakeForTheChunkLane()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-shadow-wake-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var live = new FakePort
+            {
+                SymbolSnapshot = new VectorConvergeSnapshot(
+                    Artifact,
+                    5,
+                    DeltaHistoryComplete: false,
+                    ["src/A.cs"]),
+            };
+            var shadow = new FakePort
+            {
+                SymbolUnits = [Card("a", "src/A.cs", "card a")],
+            };
+            var signal = new VectorConvergeSignal(enabled: true);
+            signal.StampTarget(5, fullRebuild: false);
+            await signal.WaitAsync(TestContext.Current.CancellationToken);
+            int opens = 0;
+            IndexBootstrapService bootstrap = IsolatedBootstrap();
+            bootstrap.SeedForTest(
+                WorkspaceAt(root, symbols), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+            await using var session = new SemanticEmbeddingSession(
+                FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            var service = new VectorConvergeService(
+                bootstrap,
+                new VectorSidecar(SemanticMode.On),
+                signal,
+                NullLogger.Instance,
+                _ =>
+                {
+                    opens++;
+                    return live;
+                },
+                _ => session,
+                () => DateTimeOffset.UnixEpoch,
+                openShadow: _ => new FakeShadowRebuilder(shadow));
+
+            await service.DrainOnceAsync(TestContext.Current.CancellationToken);
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+            await signal.WaitAsync(timeout.Token);
+            Assert.Equal(2, opens);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task HeldChunkCursorOnAQuietWorkspace_ReDrainsAfterTheRetryDelayWithNoExternalStamp()
     {
         string root = Directory.CreateTempSubdirectory("miller-vec-retry-").FullName;
@@ -1876,6 +2062,59 @@ public sealed class VectorConvergeServiceTests
 
             Assert.True(gate.Canceled);
             Assert.Equal(1, gate.RequestCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HeldChunkCursor_WhenCompletenessBecomesExact_SuppressesThePendingRetry()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-retry-current-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var port = DeferredChunkPort();
+            var signal = new VectorConvergeSignal(enabled: true);
+            var gate = new DelayGate();
+            int opens = 0;
+            int probes = 0;
+            VectorDesiredState desiredState = new(5, IsExact: false);
+            await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            IndexBootstrapService bootstrap = IsolatedBootstrap();
+            bootstrap.SeedForTest(
+                WorkspaceAt(root, symbols), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+            VectorConvergeService service = new(
+                bootstrap,
+                new VectorSidecar(SemanticMode.On),
+                signal,
+                NullLogger.Instance,
+                _ =>
+                {
+                    opens++;
+                    return port;
+                },
+                _ => session,
+                () => DateTimeOffset.UnixEpoch,
+                heldRetryDelay: TimeSpan.FromMinutes(5),
+                delay: gate.DelayAsync,
+                readDesiredState: _ =>
+                {
+                    probes++;
+                    return desiredState;
+                });
+
+            await service.StartAsync(CancellationToken.None);
+            await gate.Requested.WaitAsync(TestContext.Current.CancellationToken);
+            desiredState = desiredState with { IsExact = true };
+            gate.Release();
+            await WaitUntil(() => probes >= 3);
+            await Task.Yield();
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.Equal(1, opens);
         }
         finally
         {
