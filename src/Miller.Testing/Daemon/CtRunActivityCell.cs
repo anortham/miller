@@ -32,6 +32,7 @@ public sealed class CtRunActivityCell
     /// operator watching the file sees the run slow down rather than only see it die.
     /// </summary>
     private const double ActiveFraction = 0.25;
+    private const int MaxActivityNameSamples = 8;
 
     /// <summary>
     /// The bound used for the <see cref="CtRunActivity"/> wording when the stall guard is switched off. The
@@ -51,7 +52,11 @@ public sealed class CtRunActivityCell
     private string? _runId;
     private int _selectedCaseCount;
     private DateTimeOffset _runStartedAtUtc;
+    private long _runStartedTicks;
     private long _lastOutputTicks;
+    private string? _providerSource;
+    private ContinuousTestDaemonSelectionFacts? _selection;
+    private ContinuousTestProviderChunkProgress? _chunkProgress;
 
     // Written outside the gate by the stream drain loops; volatile so a publish on another thread cannot
     // keep reporting "starting" after the child has spoken.
@@ -125,7 +130,11 @@ public sealed class CtRunActivityCell
     }
 
     /// <summary>A provider run started. Replaces any previous run's details.</summary>
-    public void BeginRun(string projectPath, string runId, int selectedCaseCount)
+    public void BeginRun(
+        string projectPath,
+        string runId,
+        int selectedCaseCount,
+        ContinuousTestDaemonSelectionFacts? selection = null)
     {
         lock (_gate)
         {
@@ -133,8 +142,42 @@ public sealed class CtRunActivityCell
             _runId = runId;
             _selectedCaseCount = selectedCaseCount;
             _runStartedAtUtc = _clock();
-            _lastOutputTicks = _timestamp();
+            long startedTicks = _timestamp();
+            _runStartedTicks = startedTicks;
+            _lastOutputTicks = startedTicks;
             _sawOutput = false;
+            _providerSource = null;
+            _selection = selection;
+            _chunkProgress = null;
+        }
+    }
+
+    /// <summary>The provider resolver identified the implementation that will execute this run.</summary>
+    public void SetProviderSource(string providerSource)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerSource);
+        lock (_gate)
+        {
+            if (_runId is not null)
+                _providerSource = providerSource;
+        }
+    }
+
+    /// <summary>Publishes the current bounded provider chunk facts for the run.</summary>
+    public void SetChunkProgress(ContinuousTestProviderChunkProgress progress)
+    {
+        ArgumentNullException.ThrowIfNull(progress);
+        lock (_gate)
+        {
+            if (_runId is null)
+                return;
+
+            IReadOnlyList<string> names = progress.NameSamples.Take(MaxActivityNameSamples).ToArray();
+            _chunkProgress = progress with
+            {
+                NameSamples = names,
+                NamesTruncated = progress.NamesTruncated || progress.NameSamples.Count > names.Count,
+            };
         }
     }
 
@@ -173,6 +216,8 @@ public sealed class CtRunActivityCell
                 return (activity, null);
 
             TimeSpan silence = SinceLastOutput();
+            TimeSpan elapsed = SinceRunStart();
+            ContinuousTestProviderChunkProgress? chunk = _chunkProgress;
             return (
                 activity,
                 new CtDaemonRunProgress(
@@ -182,7 +227,17 @@ public sealed class CtRunActivityCell
                     _runStartedAtUtc,
                     ClassifySilence(silence),
                     WholeSeconds(silence),
-                    PublishedStallSeconds()));
+                    PublishedStallSeconds(),
+                    _providerSource,
+                    _selection,
+                    elapsed.TotalSeconds,
+                    chunk?.RequestedUniqueUnitCount,
+                    chunk?.ChunkCount,
+                    chunk?.CurrentPart,
+                    chunk?.CurrentPartUnitCount,
+                    chunk?.NameSamples,
+                    chunk?.NameDigest,
+                    chunk?.NamesTruncated));
         }
     }
 
@@ -207,11 +262,23 @@ public sealed class CtRunActivityCell
             : TimeSpan.FromSeconds(elapsed / (double)Stopwatch.Frequency);
     }
 
+    private TimeSpan SinceRunStart()
+    {
+        long elapsed = _timestamp() - _runStartedTicks;
+        return elapsed <= 0
+            ? TimeSpan.Zero
+            : TimeSpan.FromSeconds(elapsed / (double)Stopwatch.Frequency);
+    }
+
     private void ClearRun()
     {
         _projectPath = null;
         _runId = null;
         _selectedCaseCount = 0;
+        _runStartedTicks = 0;
+        _providerSource = null;
+        _selection = null;
+        _chunkProgress = null;
         _sawOutput = false;
     }
 

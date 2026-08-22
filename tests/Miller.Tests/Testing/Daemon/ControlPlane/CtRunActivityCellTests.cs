@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Miller.Testing;
 using Xunit;
 
@@ -252,6 +253,99 @@ public sealed class CtRunActivityCellTests
 
         // The first run's output must not make the second one look like it has already spoken.
         Assert.Equal(CtRunActivity.Starting, run.Activity);
+    }
+
+    [Fact]
+    public void A_run_persists_selection_provider_elapsed_and_bounded_chunk_facts()
+    {
+        var startedAt = new DateTimeOffset(2026, 8, 22, 9, 30, 0, TimeSpan.Zero);
+        var selection = new ContinuousTestDaemonSelectionFacts(
+            ContinuousTestSelectionOutcome.WorkspaceScope,
+            ContinuousTestRunLane.Foreground,
+            KnownCount: 200,
+            PreTrimSelectedCount: 200,
+            PostTrimSelectedCount: 200,
+            RetainedRedCount: 2,
+            CoversEveryKnownCase: true,
+            Eligible: true,
+            ReasonCode: "eligible",
+            SelectionDigest: "selection-digest");
+        CtRunActivityCell cell = NewCell(clock: () => startedAt);
+        cell.BeginDrain();
+        cell.BeginRun("a.csproj", "run:1", 200, selection);
+        cell.SetProviderSource("ct-provider:fixture");
+        cell.SetChunkProgress(new ContinuousTestProviderChunkProgress(
+            RequestedUniqueUnitCount: 200,
+            ChunkCount: 4,
+            CurrentPart: 2,
+            CurrentPartUnitCount: 50,
+            NameSamples: Enumerable.Range(1, 12).Select(index => $"test:{index}").ToArray(),
+            NameDigest: "name-digest",
+            NamesTruncated: false));
+
+        Advance(TimeSpan.FromSeconds(7));
+
+        CtDaemonRunProgress run = RunOf(cell);
+        Assert.Equal("ct-provider:fixture", run.ProviderSource);
+        Assert.Equal(selection, run.Selection);
+        Assert.Equal(7, run.ElapsedSeconds);
+        Assert.Equal(200, run.RequestedUniqueUnitCount);
+        Assert.Equal(4, run.ChunkCount);
+        Assert.Equal(2, run.CurrentPart);
+        Assert.Equal(50, run.CurrentPartUnitCount);
+        Assert.Equal(Enumerable.Range(1, 8).Select(index => $"test:{index}"), run.NameSamples);
+        Assert.Equal("name-digest", run.NameDigest);
+        Assert.True(run.NamesTruncated);
+        Assert.Equal("run:1", run.RunId);
+        Assert.Equal(startedAt, run.RunStartedAtUtc);
+    }
+
+    [Fact]
+    public void Old_activity_json_reads_and_absent_new_fields_are_omitted()
+    {
+        const string oldJson = """
+            {
+              "project_path": "a.csproj",
+              "run_id": "run:1",
+              "selected_case_count": 1,
+              "run_started_at_utc": "2026-08-22T09:30:00+00:00",
+              "activity": "starting",
+              "silence_seconds": null,
+              "child_stall_seconds": null
+            }
+            """;
+
+        CtDaemonRunProgress run = Assert.IsType<CtDaemonRunProgress>(
+            JsonSerializer.Deserialize(oldJson, CtDaemonJsonContext.Default.CtDaemonRunProgress));
+        Assert.Null(run.ProviderSource);
+        Assert.Null(run.Selection);
+        Assert.Null(run.ElapsedSeconds);
+        Assert.Null(run.RequestedUniqueUnitCount);
+        Assert.Null(run.ChunkCount);
+        Assert.Null(run.CurrentPart);
+        Assert.Null(run.CurrentPartUnitCount);
+        Assert.Null(run.NameSamples);
+        Assert.Null(run.NameDigest);
+        Assert.Null(run.NamesTruncated);
+
+        string serialized = JsonSerializer.Serialize(
+            new CtDaemonRunProgress(
+                "a.csproj",
+                "run:1",
+                1,
+                new DateTimeOffset(2026, 8, 22, 9, 30, 0, TimeSpan.Zero),
+                CtRunActivity.Starting),
+            CtDaemonJsonContext.Default.CtDaemonRunProgress);
+        Assert.DoesNotContain("provider_source", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("selection", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("elapsed_seconds", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("requested_unique_unit_count", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("chunk_count", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("current_part", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("current_part_unit_count", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("name_samples", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("name_digest", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("names_truncated", serialized, StringComparison.Ordinal);
     }
 
     private CtRunActivityCell NewCell(TimeSpan? stallTimeout = null, Func<DateTimeOffset>? clock = null) =>

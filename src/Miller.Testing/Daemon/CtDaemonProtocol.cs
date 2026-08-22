@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Text.Json.Serialization;
 using Miller.Indexing;
 
 namespace Miller.Testing;
@@ -128,7 +129,27 @@ public sealed record CtDaemonRunProgress(
     DateTimeOffset RunStartedAtUtc,
     CtRunActivity Activity,
     int? SilenceSeconds = null,
-    int? ChildStallSeconds = null);
+    int? ChildStallSeconds = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ProviderSource = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    ContinuousTestDaemonSelectionFacts? Selection = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? ElapsedSeconds = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? RequestedUniqueUnitCount = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? ChunkCount = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? CurrentPart = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? CurrentPartUnitCount = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<string>? NameSamples = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? NameDigest = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    bool? NamesTruncated = null);
 
 /// <summary>
 /// The published daemon status. <see cref="Activity"/>, <see cref="Run"/> and

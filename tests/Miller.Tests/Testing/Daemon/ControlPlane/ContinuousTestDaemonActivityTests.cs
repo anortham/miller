@@ -30,7 +30,7 @@ public sealed class ContinuousTestDaemonActivityTests : IDisposable
         using Harness harness = StartWithBlockingRun();
         try
         {
-            await harness.Provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            await harness.ProviderStarted.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             CtDaemonStatusRecord status = await harness.WaitForStatusAsync(
                 record => record.Run is not null,
                 "no run reached the status file");
@@ -57,7 +57,7 @@ public sealed class ContinuousTestDaemonActivityTests : IDisposable
         using Harness harness = StartWithBlockingRun();
         try
         {
-            await harness.Provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            await harness.ProviderStarted.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             CtDaemonStatusRecord first = await harness.WaitForStatusAsync(
                 record => record.Activity == CtDaemonActivity.Executing,
                 "the daemon never published an executing status");
@@ -87,7 +87,7 @@ public sealed class ContinuousTestDaemonActivityTests : IDisposable
         using Harness harness = StartWithBlockingRun();
         try
         {
-            await harness.Provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            await harness.ProviderStarted.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             // Waits for the RUN, not merely for "executing": the main loop publishes the executing status
             // before the queue starts the child, so a wait on the activity alone races the run details.
             await harness.WaitForStatusAsync(
@@ -110,7 +110,7 @@ public sealed class ContinuousTestDaemonActivityTests : IDisposable
     public async Task A_stopped_daemon_publishes_no_activity_and_no_run()
     {
         using Harness harness = StartWithBlockingRun();
-        await harness.Provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await harness.ProviderStarted.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         await harness.WaitForStatusAsync(
             record => record.Activity == CtDaemonActivity.Executing,
             "the daemon never published an executing status");
@@ -124,7 +124,42 @@ public sealed class ContinuousTestDaemonActivityTests : IDisposable
         Assert.Null(status.Run);
     }
 
-    private Harness StartWithBlockingRun()
+    [Fact]
+    public async Task A_blocking_run_publishes_provider_selection_and_advancing_chunks()
+    {
+        using ProgressBlockingProvider provider = new();
+        using Harness harness = StartWithBlockingRun(provider, caseCount: 2, providerSource: "ct-provider:fixture");
+        try
+        {
+            await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            CtDaemonStatusRecord first = await harness.WaitForStatusAsync(
+                record => record.Run is { ProviderSource: "ct-provider:fixture", CurrentPart: 1 },
+                "the daemon never published provider and first chunk facts");
+            CtDaemonRunProgress firstRun = Assert.IsType<CtDaemonRunProgress>(first.Run);
+
+            CtDaemonStatusRecord later = await harness.WaitForStatusAsync(
+                record => record.Run is { CurrentPart: 2 },
+                "the daemon never published the next chunk");
+            CtDaemonRunProgress laterRun = Assert.IsType<CtDaemonRunProgress>(later.Run);
+
+            Assert.Equal(firstRun.RunId, laterRun.RunId);
+            Assert.Equal(firstRun.RunStartedAtUtc, laterRun.RunStartedAtUtc);
+            Assert.Equal(firstRun.Selection, laterRun.Selection);
+            Assert.Equal(2, laterRun.RequestedUniqueUnitCount);
+            Assert.Equal(2, laterRun.ChunkCount);
+            Assert.Equal(2, laterRun.CurrentPartUnitCount);
+            Assert.Equal(["test:app:part2"], laterRun.NameSamples);
+        }
+        finally
+        {
+            await harness.StopAsync();
+        }
+    }
+
+    private Harness StartWithBlockingRun(
+        IContinuousTestProvider? providerOverride = null,
+        int caseCount = 1,
+        string providerSource = "ct-provider:dotnet")
     {
         // ShouldConstructEngine gates the out-of-process read path on the workspace opt-in marker.
         Directory.CreateDirectory(Path.Combine(_root, CtSchema.MillerDirectoryName));
@@ -132,14 +167,15 @@ public sealed class ContinuousTestDaemonActivityTests : IDisposable
 
         ContinuousTestWorkspace workspace = EngineTestSupport.Workspace(_root);
         var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
-        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        for (var index = 0; index < caseCount; index++)
+            store.PutTestCase(EngineTestSupport.Case(index == 0 ? "test:app" : $"test:app:{index}", workspace.ProjectPath));
 
-        var provider = new FakeContinuousTestProvider { BlockUntilCanceled = true };
+        IContinuousTestProvider provider = providerOverride ?? new FakeContinuousTestProvider { BlockUntilCanceled = true };
         var activity = new CtRunActivityCell(TimeSpan.FromMinutes(10));
         var queue = new ContinuousTestDaemonQueue(
             store,
             EngineTestSupport.Selector(store),
-            new ContinuousTestCoordinator(provider, store),
+            new ContinuousTestCoordinator(new FixedContinuousTestProviderResolver(provider, providerSource), store),
             runActivity: activity);
         queue.Enqueue(EngineTestSupport.Change(workspace));
 
@@ -168,14 +204,21 @@ public sealed class ContinuousTestDaemonActivityTests : IDisposable
     private sealed class Harness(
         string root,
         ContinuousTestWorkspace workspace,
-        FakeContinuousTestProvider provider,
+        IContinuousTestProvider provider,
         ContinuousTestStore store,
         CancellationTokenSource cancellation,
         Task<ContinuousTestDaemonSnapshot> run) : IDisposable
     {
         public ContinuousTestWorkspace Workspace => workspace;
 
-        public FakeContinuousTestProvider Provider => provider;
+        public IContinuousTestProvider Provider => provider;
+
+        public Task ProviderStarted => provider switch
+        {
+            FakeContinuousTestProvider fake => fake.Started.Task,
+            ProgressBlockingProvider progress => progress.Started.Task,
+            _ => throw new InvalidOperationException("activity provider has no start signal")
+        };
 
         public async Task StopAsync()
         {
@@ -207,6 +250,47 @@ public sealed class ContinuousTestDaemonActivityTests : IDisposable
         {
             cancellation.Dispose();
             store.Dispose();
+        }
+    }
+
+    private sealed class ProgressBlockingProvider : IContinuousTestProvider, IDisposable
+    {
+        public TaskCompletionSource<ContinuousTestProviderRunRequest> Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
+            ContinuousTestWorkspace workspace,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ProviderTestCase>>([]);
+
+        public async Task<ProviderRunResult> RunAsync(
+            ContinuousTestProviderRunRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Started.TrySetResult(request);
+            request.Progress?.Invoke(new ContinuousTestProviderChunkProgress(
+                RequestedUniqueUnitCount: request.TestCaseIds.Count,
+                ChunkCount: 2,
+                CurrentPart: 1,
+                CurrentPartUnitCount: request.TestCaseIds.Count,
+                NameSamples: ["test:app:part1"],
+                NameDigest: "part1",
+                NamesTruncated: false));
+            await Task.Delay(50, cancellationToken);
+            request.Progress?.Invoke(new ContinuousTestProviderChunkProgress(
+                RequestedUniqueUnitCount: request.TestCaseIds.Count,
+                ChunkCount: 2,
+                CurrentPart: 2,
+                CurrentPartUnitCount: request.TestCaseIds.Count,
+                NameSamples: ["test:app:part2"],
+                NameDigest: "part2",
+                NamesTruncated: false));
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return new ProviderRunResult(request.RunId ?? "run:1", "passed");
+        }
+
+        public void Dispose()
+        {
         }
     }
 }

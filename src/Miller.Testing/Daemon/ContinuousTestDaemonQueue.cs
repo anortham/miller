@@ -412,7 +412,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 _runActivity?.BeginRun(
                     readyPending.Workspace.ProjectPath,
                     runId,
-                    readyPending.TestCaseIds.Count);
+                    readyPending.TestCaseIds.Count,
+                    selectionFacts);
                 try
                 {
                     ContinuousTestCoordinatorRunResult coordinatorResult = await _coordinator.RunSelectedAsync(
@@ -429,7 +430,9 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                             CurrentRevisionResolver: () => LatestRevisionStringFor(key, readyPending.CurrentRevision),
                             RunId: runId,
                             CoverageMode: readyPending.CoverageMode,
-                            WholeSuite: wholeSuite),
+                            WholeSuite: wholeSuite,
+                            ProviderResolved: resolution => _runActivity?.SetProviderSource(resolution.ProviderSource),
+                            Progress: progress => _runActivity?.SetChunkProgress(progress)),
                         drainToken).ConfigureAwait(false);
 
                     ClearRunFailureRetry(key);

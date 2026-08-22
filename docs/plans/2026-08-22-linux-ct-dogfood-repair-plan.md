@@ -181,10 +181,10 @@
 **Approach:** Keep `CtArgvChunking` generic across .NET, Node, Python, and generic providers. Use optional activity fields for compatibility with older daemon records; do not infer provider names from file extensions in the renderer.
 
 **Acceptance criteria:**
-- [ ] Run activity names the resolved provider, run ID, start time, elapsed time, selection reason/digest, total chunks, current part, and bounded names when available.
-- [ ] Chunk totals prove no selection unit is dropped, duplicated, or split across flag/value boundaries.
-- [ ] Old activity JSON remains readable and optional fields are omitted when absent.
-- [ ] Focused chunk/provider/activity tests pass and the serialized worker commit is recorded.
+- [x] Run activity names the resolved provider, run ID, start time, elapsed time, selection reason/digest, total chunks, current part, and bounded names when available.
+- [x] Chunk totals prove no selection unit is dropped, duplicated, or split across flag/value boundaries.
+- [x] Old activity JSON remains readable and optional fields are omitted when absent.
+- [x] Focused chunk/provider/activity tests pass and the serialized worker commit is recorded.
 
 ### Task 5: Honest start/wait and additive rendering
 
