@@ -9,6 +9,23 @@ namespace Miller.Tests.Server;
 
 public sealed class TestsWaitOutcomeTests
 {
+    public static IEnumerable<object[]> PublicationCases =>
+    [
+        [CtDaemonPublicationReadiness.Ready, "ready"],
+        [CtDaemonPublicationReadiness.NotPublishedWithinGrace, "not_published_within_grace"],
+        [CtDaemonPublicationReadiness.DaemonExitedBeforePublish, "daemon_exited_before_publish"],
+    ];
+
+    public static IEnumerable<object[]> WaitRenderingCases =>
+    [
+        [TestsWaitState.Completed, true, "completed"],
+        [TestsWaitState.QueuedTimeout, false, "queued_timeout"],
+        [TestsWaitState.NotPickedUp, false, "not_picked_up"],
+        [TestsWaitState.WaitTimeout, false, "wait_timeout"],
+        [TestsWaitState.DaemonStopped, false, "daemon_stopped"],
+        [TestsWaitState.LeaseLost, false, "lease_lost"],
+    ];
+
     public static IEnumerable<object[]> WaitCases =>
     [
         [
@@ -199,6 +216,118 @@ public sealed class TestsWaitOutcomeTests
         {
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
+    }
+
+    [Theory]
+    [MemberData(nameof(PublicationCases))]
+    public void Serve_rendering_reports_publication_readiness_and_elapsed(
+        CtDaemonPublicationReadiness readiness,
+        string expectedReadiness)
+    {
+        TestsServeResult result = new(
+            0,
+            "started",
+            null,
+            42,
+            new CtDaemonPublicationResult(readiness, TimeSpan.FromSeconds(1.25)));
+
+        using JsonDocument json = JsonDocument.Parse(result.Render(json: true));
+        JsonElement publication = json.RootElement.GetProperty("publication");
+        Assert.Equal(expectedReadiness, publication.GetProperty("readiness").GetString());
+        Assert.Equal(1.25, publication.GetProperty("elapsed_seconds").GetDouble());
+
+        string compact = result.Render(json: false);
+        Assert.Contains($"publication: {expectedReadiness}", compact, StringComparison.Ordinal);
+        Assert.Contains("elapsed=1.25s", compact, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [MemberData(nameof(WaitRenderingCases))]
+    public void Run_rendering_reports_every_wait_state_and_correlation(
+        TestsWaitState state,
+        bool waitComplete,
+        string expectedState)
+    {
+        TestsRunResult result = new(
+            ExitCode: 0,
+            Execution: CtRunExecution.Daemon,
+            Verdict: ContinuousTestVerdict.Unknown,
+            Reason: "accepted",
+            Waited: true,
+            Selected: null,
+            Wait: new TestsWaitResult(
+                waitComplete,
+                state,
+                2.5,
+                600,
+                "command-1",
+                "run-1"));
+
+        using JsonDocument json = JsonDocument.Parse(result.Render(json: true));
+        JsonElement wait = json.RootElement.GetProperty("wait");
+        Assert.Equal(waitComplete, wait.GetProperty("wait_complete").GetBoolean());
+        Assert.Equal(expectedState, wait.GetProperty("state").GetString());
+        Assert.Equal(2.5, wait.GetProperty("elapsed_seconds").GetDouble());
+        Assert.Equal(600, wait.GetProperty("timeout_seconds").GetDouble());
+        Assert.Equal("command-1", wait.GetProperty("command_id").GetString());
+        Assert.Equal("run-1", wait.GetProperty("run_id").GetString());
+
+        string compact = result.Render(json: false);
+        Assert.Contains($"wait: {expectedState}", compact, StringComparison.Ordinal);
+        Assert.Contains($"complete={(waitComplete ? "true" : "false")}", compact, StringComparison.Ordinal);
+        Assert.Contains("elapsed=2.5s/600s", compact, StringComparison.Ordinal);
+        Assert.Contains("command=command-1", compact, StringComparison.Ordinal);
+        Assert.Contains("run=run-1", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Incomplete_wait_compact_output_cannot_look_like_a_final_result()
+    {
+        TestsRunResult result = new(
+            0,
+            CtRunExecution.Daemon,
+            ContinuousTestVerdict.Unknown,
+            "accepted",
+            true,
+            null,
+            Wait: new TestsWaitResult(
+                false,
+                TestsWaitState.NotPickedUp,
+                3,
+                600,
+                "command-2",
+                null));
+
+        string compact = result.Render(json: false);
+
+        Assert.Contains("wait: not_picked_up complete=false", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("wait: completed", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Absent_publication_keeps_legacy_serve_output_bytes()
+    {
+        TestsServeResult result = new(0, "started", null, null);
+
+        Assert.Equal("{\"status\":\"started\",\"reason\":null,\"pid\":null}", result.Render(json: true));
+        Assert.Equal("tests serve started", result.Render(json: false));
+    }
+
+    [Fact]
+    public void Absent_wait_keeps_legacy_run_output_bytes()
+    {
+        TestsRunResult result = new(
+            0,
+            CtRunExecution.Daemon,
+            ContinuousTestVerdict.Green,
+            null,
+            false,
+            null);
+
+        Assert.Equal(
+            "{\"execution\":\"daemon\",\"verdict\":\"green\",\"reason\":null,\"waited\":false,\"paused\":false,\"selected\":null}",
+            result.Render(json: true));
+        Assert.Equal("tests run daemon verdict=green", result.Render(json: false));
     }
 
     private static TestsCoreRequest Request(

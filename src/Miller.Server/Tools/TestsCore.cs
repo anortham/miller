@@ -980,14 +980,31 @@ public static class TestsCore
                 writer.WriteNumber("pid", pid);
             else
                 writer.WriteNull("pid");
+            if (result.Publication is { } publication)
+            {
+                writer.WritePropertyName("publication");
+                writer.WriteStartObject();
+                writer.WriteString("readiness", Snake(publication.Readiness.ToString()));
+                writer.WriteNumber("elapsed_seconds", publication.Elapsed.TotalSeconds);
+                writer.WriteEndObject();
+            }
             writer.WriteEndObject();
         }
 
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    internal static string RenderServeCompact(TestsServeResult result) =>
-        result.Reason is null ? $"tests serve {result.Status}" : $"tests serve {result.Status}: {result.Reason}";
+    internal static string RenderServeCompact(TestsServeResult result)
+    {
+        string output = result.Reason is null ? $"tests serve {result.Status}" : $"tests serve {result.Status}: {result.Reason}";
+        if (result.Publication is { } publication)
+        {
+            output += $" publication: {Snake(publication.Readiness.ToString())}"
+                + $" elapsed={FormatSeconds(publication.Elapsed.TotalSeconds)}s";
+        }
+
+        return output;
+    }
 
     internal static string RenderStopJson(TestsStopResult result)
     {
@@ -1025,6 +1042,21 @@ public static class TestsCore
             writer.WriteBoolean("paused", result.Paused);
             writer.WritePropertyName("selected");
             WriteSelected(writer, result.Selected);
+            if (result.Wait is { } wait)
+            {
+                writer.WritePropertyName("wait");
+                writer.WriteStartObject();
+                writer.WriteBoolean("wait_complete", wait.WaitComplete);
+                writer.WriteString("state", Snake(wait.State.ToString()));
+                writer.WriteNumber("elapsed_seconds", wait.ElapsedSeconds);
+                writer.WriteNumber("timeout_seconds", wait.TimeoutSeconds);
+                writer.WriteString("command_id", wait.CommandId);
+                if (wait.RunId is null)
+                    writer.WriteNull("run_id");
+                else
+                    writer.WriteString("run_id", wait.RunId);
+                writer.WriteEndObject();
+            }
             writer.WriteEndObject();
         }
 
@@ -1035,7 +1067,15 @@ public static class TestsCore
     {
         string execution = result.Execution == CtRunExecution.Daemon ? "daemon" : "foreground";
         string state = result.Paused ? " paused" : string.Empty;
-        return $"tests run {execution}{state} verdict={Snake(result.Verdict.ToString())} {(result.Reason ?? string.Empty)}".TrimEnd();
+        string output = $"tests run {execution}{state} verdict={Snake(result.Verdict.ToString())} {(result.Reason ?? string.Empty)}".TrimEnd();
+        if (result.Wait is { } wait)
+        {
+            output += $" wait: {Snake(wait.State.ToString())} complete={(wait.WaitComplete ? "true" : "false")}"
+                + $" elapsed={FormatSeconds(wait.ElapsedSeconds)}s/{FormatSeconds(wait.TimeoutSeconds)}s"
+                + $" command={wait.CommandId} run={wait.RunId ?? "-"}";
+        }
+
+        return output;
     }
 
     internal static string RenderFailuresJson(TestsFailuresResult result)
@@ -1561,6 +1601,8 @@ public static class TestsCore
 
         return sb.ToString();
     }
+
+    private static string FormatSeconds(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
 
     private interface IOwnedFactSource : IMillerFactSource, IDisposable;
 

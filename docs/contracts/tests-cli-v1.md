@@ -315,6 +315,18 @@ remaining enabled: 1
 | `waited` | bool | `true` when `--wait` was supplied. |
 | `paused` | bool | `true` when another workspace held the user-global execution budget, so this run executed nothing. |
 | `selected` | object \| null | Same shape as status `selected`. |
+| `wait` | object \| absent | Present when `--wait` was requested. Reports activity completion and correlation, not a verdict transition. |
+
+`wait`, when present, has this shape:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `wait.wait_complete` | bool | `true` only after the daemon observed the accepted run executing and then observed the live daemon idle. |
+| `wait.state` | string | Lower-snake wait outcome: `completed`, `queued_timeout`, `not_picked_up`, `wait_timeout`, `daemon_stopped`, or `lease_lost`. |
+| `wait.elapsed_seconds` | number | Time spent observing the daemon activity. |
+| `wait.timeout_seconds` | number | Bound used by this caller. The CLI default is 600 seconds. |
+| `wait.command_id` | string | Accepted command-channel id. |
+| `wait.run_id` | string \| null | Run id observed in daemon activity, or null when the run was never identified. |
 
 A live daemon receives `run` on the file command channel. With no daemon, Miller runs a foreground
 one-shot in the calling process.
@@ -364,10 +376,15 @@ standing verdict for the whole length of the run that is about to replace it.
 `--wait` waits for the daemon to FINISH the accepted run, then reports whatever verdict is true at
 that moment. It does not wait for a verdict VALUE: accepting a run marks the selected cases stale,
 which makes the verdict `partial` immediately, so a wait on the value returned within milliseconds
-and reported a mid-run answer as the result. The wait tests `daemon.activity` instead, and ends on
-the first of four bounded conditions — the daemon goes idle, it stops, its lease dies, or a limit
-expires. Queued work that another workspace's execution budget is blocking is waited on for 30
-seconds and then reported as still queued, rather than holding the caller for the whole timeout.
+and reported a mid-run answer as the result. The wait tests `daemon.activity` instead. The CLI keeps
+its ten-minute (`600` second) completion bound and ends with one of six typed outcomes: the daemon
+observed execution followed by live-daemon idle (`completed`), queued work exceeded its queue bound
+(`queued_timeout`), the run was never picked up (`not_picked_up`), the wait bound expired
+(`wait_timeout`), the daemon stopped (`daemon_stopped`), or its lease disappeared (`lease_lost`).
+Only `completed` has `wait_complete: true`; every other state is an in-progress or early-exit report,
+never a final verdict claim. Queued work that another workspace's execution budget is blocking is
+waited on for 30 seconds and then reported as still queued, rather than holding the caller for the
+whole timeout.
 
 At most one workspace executes tests at a time. When another workspace already holds that budget,
 this run executes NOTHING and reports `paused: true`, `verdict: "unknown"`, `waited: false`,
@@ -419,7 +436,10 @@ runs `ContinuousTestDaemonHost.RunAsync`. It refuses when the workspace is not e
 returns `already_stopped` and creates nothing.
 
 `serve --json` reports `status` (`started`, `alreadyrunning`, `replaced`, `failed`, `refused`),
-`reason` (string or null), and `pid` (number or null). `stop --json` reports `status` and `reason`.
+`reason` (string or null), and `pid` (number or null). A successful process launch may also carry
+`publication`, an object with `readiness` (`ready`, `not_published_within_grace`, or
+`daemon_exited_before_publish`) and `elapsed_seconds`. Publication lag is an accepted start; it is
+not rendered as a confirmed dead daemon. `stop --json` reports `status` and `reason`.
 
 An explicit start from a build the live daemon is NOT running replaces that daemon: Miller stops it
 through the same stop command channel, starts this build in its place, and reports
