@@ -301,6 +301,22 @@ remaining enabled: 1
 A live daemon receives `run` on the file command channel. With no daemon, Miller runs a foreground
 one-shot in the calling process.
 
+Exit `0` on the daemon path requires an ACKNOWLEDGEMENT from that daemon. The channel gives three
+answers and each picks a different branch:
+
+- **Acknowledged.** The daemon holds the request. `execution: "daemon"`, exit `0`, and the verdict is
+  the one that is true when the submit returns (`--wait` waits for the run to finish first).
+- **No daemon.** The lease died between the disposition read and the submit, so nothing holds the
+  request. Miller falls through to the foreground one-shot — the same run the caller would have
+  gotten had the disposition seen no lease — and reports `execution: "foreground_one_shot"` with that
+  run's own verdict, reason, and exit code.
+- **Unacknowledged or rejected.** The five-second ack wait expired (`reason: "unacked"`), or the
+  daemon refused the request (`reason` carries its own words). This process knows nothing about a
+  run, so the payload reports `execution: "daemon"`, exit `3`, `verdict: "unknown"`, `waited: false`,
+  and `selected: null` — never the standing store verdict, which would describe a run that may never
+  have started. There is no foreground retry here: an unacked request has most likely reached the
+  daemon, and a duplicate would run the suite twice.
+
 ### What an explicit run selects
 
 An explicit run (`miller tests run`, MCP `tests operation=run`, the daemon `run` command) executes
@@ -450,4 +466,5 @@ same instant as the kill would otherwise report success for a run that never fin
 ## Exit codes
 
 Same process-level contract as [`cli-eros-v1.md`](cli-eros-v1.md): `0` success, `2` usage, `3`
-operational refusal (not enabled, spawn failed, stop failed), `1` unexpected.
+operational refusal (not enabled, spawn failed, stop failed, run submit not acknowledged), `1`
+unexpected.

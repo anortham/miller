@@ -25,13 +25,20 @@ namespace Miller.Server.Tools;
 /// pinning the served generation. <c>Providers</c> replaces the default five-provider factory, so a
 /// drain can be observed without spawning <c>dotnet test</c>. Both are null in production.
 /// </para>
+/// <para>
+/// <c>SubmitRun</c> replaces <see cref="CtDaemonRouting.SubmitRun"/>; it is called with the endpoint
+/// root and the target workspace root. It exists because the three answers the channel gives - an
+/// acknowledgement, a dead endpoint, and a five-second ack timeout - each pick a different branch,
+/// and a test must reach the timeout branch without waiting five seconds for it. Null in production.
+/// </para>
 /// </summary>
 public sealed record TestsCoreHooks(
     Func<ProcessStartInfo, Process?>? StartProcess = null,
     Func<TestsForegroundRunRequest, TestsRunOutcome>? ForegroundRun = null,
     CtExecutionBudget? Budget = null,
     Func<string, string, IMillerFactSource>? OpenFacts = null,
-    IContinuousTestProviderResolver? Providers = null);
+    IContinuousTestProviderResolver? Providers = null,
+    Func<string, string, CtRunResult>? SubmitRun = null);
 
 public sealed record TestsForegroundRunRequest(
     string WorkspaceRoot,
@@ -626,17 +633,47 @@ public static class TestsCore
             // submits there, with its own root in the payload, and its command reaches its own
             // context's queue and ct.db.
             string endpointRoot = disposition.EndpointRoot ?? root;
-            CtRunResult submitted = CtDaemonRouting.SubmitRun(endpointRoot, root, "run");
-            TestsStatusResult status = request.Wait
-                ? WaitForDaemonToSettle(request, endpointRoot)
-                : Status(request);
-            return new TestsRunResult(
-                submitted.Ack is { State: CtDaemonCommandState.Rejected } ? 3 : 0,
-                CtRunExecution.Daemon,
-                status.Verdict,
-                submitted.Reason ?? submitted.Ack?.Reason,
-                request.Wait,
-                status.Selected);
+            CtRunResult submitted = request.Hooks?.SubmitRun is { } submit
+                ? submit(endpointRoot, root)
+                : CtDaemonRouting.SubmitRun(endpointRoot, root, "run");
+
+            // The lease died between the disposition read and the submit, so NOTHING holds the
+            // request. Fall through to the foreground one-shot the caller would have gotten had the
+            // disposition seen no lease. The channel answers that with ForegroundOneShot, so this
+            // reads its own verdict rather than matching its reason text.
+            if (submitted.Execution == CtRunExecution.Daemon)
+            {
+                // An ACKNOWLEDGED ack is the only proof a daemon took the request. A null ack - the
+                // five-second ack timeout, which a daemon whose loop is inside a whole-suite drain
+                // reaches easily - and a rejection both leave this process knowing nothing about a
+                // run. Reporting exit 0 plus the standing store verdict then describes a run that
+                // may never have started, and `tests run --json` promises the exit code and
+                // `verdict` as the two fields a script reads. Same rule as the paused path below:
+                // verdict unknown, null selected, the channel reason in the payload. An unacked
+                // submit does NOT fall through to a foreground run - the daemon most likely HAS the
+                // request, and a duplicate would run the suite twice.
+                if (submitted.Ack is not { State: CtDaemonCommandState.Acknowledged })
+                {
+                    return new TestsRunResult(
+                        ExitCode: 3,
+                        Execution: CtRunExecution.Daemon,
+                        Verdict: ContinuousTestVerdict.Unknown,
+                        Reason: submitted.Reason ?? submitted.Ack?.Reason ?? "not acknowledged",
+                        Waited: false,
+                        Selected: null);
+                }
+
+                TestsStatusResult status = request.Wait
+                    ? WaitForDaemonToSettle(request, endpointRoot)
+                    : Status(request);
+                return new TestsRunResult(
+                    0,
+                    CtRunExecution.Daemon,
+                    status.Verdict,
+                    submitted.Reason ?? submitted.Ack?.Reason,
+                    request.Wait,
+                    status.Selected);
+            }
         }
 
         TestsRunOutcome outcome;
