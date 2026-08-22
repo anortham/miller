@@ -268,10 +268,38 @@ public static class ContinuousTestProjectInventory
                 string childName = Path.GetFileName(child);
                 if (SkipDirectoryNames.Contains(childName) || FixtureDirectoryNames.Contains(childName))
                     continue;
+                if (IsReparsePoint(child))
+                    continue;
                 if (IsSeparateCheckout(child, ownGitAdminDirs))
                     continue;
                 pending.Push(child);
             }
+        }
+    }
+
+    /// <summary>
+    /// True when <paramref name="directory"/> is a junction, a directory symlink, or any other reparse
+    /// point, which the walk must not descend into.
+    ///
+    /// A reparse point re-enters a tree the walk has already covered, so ONE physical project is
+    /// discovered under several logical paths and each copy becomes a separately enabled project that
+    /// builds and runs on every change. A link that points at its own ancestor repeats that per loop
+    /// level - 63 copies of one project, measured. The containment checks stay LOGICAL; only the descent
+    /// is refused, which is the same guard the indexing walk applies.
+    ///
+    /// A dangling or unreadable link throws here, and that answers SKIP: the walk cannot enumerate a
+    /// directory it cannot read anyway, and the two exception kinds are the ones the walk already treats
+    /// as "move on".
+    /// </summary>
+    private static bool IsReparsePoint(string directory)
+    {
+        try
+        {
+            return (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
         }
     }
 

@@ -108,7 +108,14 @@ public sealed class ContinuousTestStoreApplier
             throw new ArgumentOutOfRangeException(nameof(Revision), "must not be negative");
         ArgumentNullException.ThrowIfNull(Result);
 
-        List<ContinuousTestResult> results = Result.CaseResults
+        // Fold rows that share a test case id BEFORE they reach the store. Every provider crosses this
+        // one method, and several of them report two rows for one case: a delay-enumerated xUnit theory
+        // emits one test-case-starting event for all its data rows, and a TRX file lists several rows
+        // under one test name. The stored id below is derived from (workspace, case, run), so those rows
+        // collide, and the store overwrites on conflict — a passing row written after a failing sibling
+        // recorded GREEN over a real failure. Worst-wins is the same policy the artifact import path has
+        // always applied; it lives in CtResultFold so both paths keep one answer.
+        IReadOnlyList<ContinuousTestResult> results = CtResultFold.MergeWorstWins(Result.CaseResults
             .Select(row =>
             {
                 var metadata = new Dictionary<string, object?>(row.Metadata, StringComparer.Ordinal)
@@ -127,8 +134,7 @@ public sealed class ContinuousTestStoreApplier
                     DurationSeconds: row.DurationSeconds,
                     FailureSummary: row.FailureSummary,
                     Metadata: metadata);
-            })
-            .ToList();
+            }));
 
         var completion = new ContinuousTestRunCompletion(
             WorkspaceId: WorkspaceId,

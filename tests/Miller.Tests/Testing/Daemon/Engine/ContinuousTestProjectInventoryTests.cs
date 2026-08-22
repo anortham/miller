@@ -373,6 +373,67 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
     }
 
     /// <summary>
+    /// A directory reparse point - a Windows junction, a symlink - re-enters a tree the walk has already
+    /// covered, so ONE physical project is discovered under several logical paths. Each copy becomes a
+    /// separately enabled project that builds and runs on every change; a link pointing at its own
+    /// ancestor multiplies that per loop level. The indexing walk already skips reparse points
+    /// (<c>BlazorNamespaceCatalog</c>), and this walk must too.
+    ///
+    /// The link here points at a SIBLING subtree rather than at an ancestor, because it proves the same
+    /// guard without asking an unguarded walk to recurse until the platform path limit stops it.
+    /// </summary>
+    [Fact]
+    public void Discover_does_not_follow_a_reparse_point_into_a_tree_it_already_walked()
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", XunitProject);
+        if (!TryCreateDirectoryLink(Path.Combine(_root, "mirror"), Path.Combine(_root, "tests")))
+            Assert.Skip("This machine cannot create a directory reparse point.");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.DoesNotContain("mirror", project.ProjectPath, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Creates a directory reparse point, or reports false when this machine forbids every shape of one.
+    /// Windows refuses a directory SYMLINK to a caller without Developer Mode or elevation, but it allows
+    /// a JUNCTION to any caller, and a junction carries the same <c>ReparsePoint</c> attribute the guard
+    /// reads. The attribute is verified rather than assumed, so a link that lands as a plain directory
+    /// skips the test instead of passing it vacuously.
+    /// </summary>
+    private static bool TryCreateDirectoryLink(string link, string target)
+    {
+        try
+        {
+            Directory.CreateSymbolicLink(link, target);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (!OperatingSystem.IsWindows() || !TryCreateJunction(link, target))
+                return false;
+        }
+
+        return Directory.Exists(link) && (File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0;
+    }
+
+    private static bool TryCreateJunction(string link, string target)
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            ArgumentList = { "/c", "mklink", "/J", link, target },
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        });
+        if (process is null)
+            return false;
+
+        process.WaitForExit(TimeSpan.FromSeconds(30));
+        return process.HasExited && process.ExitCode == 0;
+    }
+
+    /// <summary>
     /// A submodule is part of THIS build: its source is in this working tree and this workspace's index
     /// covers it, so a developer who breaks one of its tests has to see the verdict go red. Dropping it
     /// because it carries a <c>.git</c> marker made continuous testing report green for a repository
