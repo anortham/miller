@@ -5,6 +5,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [`plans/2026-08-22-linux-ct-dogfood-repair-plan.md`](plans/2026-08-22-linux-ct-dogfood-repair-plan.md) - execution plan for the Linux v1.21.0 CT findings: deterministic .NET referenced-project outputs, portable Linux fixtures, bounded selection/chunk facts, honest start/wait behavior, and additive run metadata.
+- [`plans/2026-08-22-sidecar-convergence-reliability-plan.md`](plans/2026-08-22-sidecar-convergence-reliability-plan.md) - execution plan for unchanged-refresh and quiet-workspace sidecar repair: typed convergence outcomes, bounded search/content retries, resident vector desired-state reconciliation, and actionable health output.
+- [`plans/2026-08-22-generated-ignore-policy-hygiene-plan.md`](plans/2026-08-22-generated-ignore-policy-hygiene-plan.md) - execution plan to preserve scan/update/watcher exclusions without creating a top-level `.julieignore` in newly registered workspaces.
 - [`contracts/tests-cli-v1.md`](contracts/tests-cli-v1.md) - active continuous-testing CLI JSON contract: `tests status|run|enable|disable|serve|stop`.
 - [`findings/2026-08-22-v1.21.0-review-campaign.md`](findings/2026-08-22-v1.21.0-review-campaign.md) - pre-release cross-model review (codex + grok, adversarial + security) of v1.20.1..HEAD: 24 raw findings, 6 verified mediums fixed (false-green fold, unacked-run honesty, sticky-impact backoff, command-file crash loop, VSTest escaping, bounded output), campaign closed clean.
 - [`findings/2026-08-21-ct-cross-repo-dogfood.md`](findings/2026-08-21-ct-cross-repo-dogfood.md) - CT provider matrix proven on real repos before the v1.21.0 announcement: findings F1-F13, fix batches 1-3, jest field-proven, F7 build-cache fix shipped; F7a/F11/F12/F13 open.
