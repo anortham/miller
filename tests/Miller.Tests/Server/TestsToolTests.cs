@@ -120,6 +120,116 @@ public sealed class TestsToolTests : IDisposable
         Assert.DoesNotContain("daemon_build:", TestsCore.RenderStatusCompact(result), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Status_renderers_expose_bounded_daemon_run_facts()
+    {
+        var selection = new ContinuousTestDaemonSelectionFacts(
+            ContinuousTestSelectionOutcome.WorkspaceScope,
+            ContinuousTestRunLane.Foreground,
+            KnownCount: 200,
+            PreTrimSelectedCount: 205,
+            PostTrimSelectedCount: 200,
+            RetainedRedCount: 2,
+            CoversEveryKnownCase: true,
+            Eligible: true,
+            ReasonCode: "eligible",
+            SelectionDigest: "selection-digest");
+        var run = new CtDaemonRunProgress(
+            ProjectPath: "/repo/Sample.Tests.csproj",
+            RunId: "run:42",
+            SelectedCaseCount: 200,
+            RunStartedAtUtc: new DateTimeOffset(2026, 8, 22, 9, 30, 0, TimeSpan.Zero),
+            Activity: CtRunActivity.Active,
+            ProviderSource: "dotnet:xunit",
+            Selection: selection,
+            ElapsedSeconds: 7.5,
+            RequestedUniqueUnitCount: 200,
+            ChunkCount: 4,
+            CurrentPart: 2,
+            CurrentPartUnitCount: 50,
+            NameSamples: Enumerable.Range(1, 12).Select(index => $"test:{index}").ToArray(),
+            NameDigest: "name-digest",
+            NamesTruncated: true);
+        var result = StatusWithRun(run);
+
+        using JsonDocument document = JsonDocument.Parse(TestsCore.RenderStatusJson(result));
+        JsonElement daemonRun = document.RootElement.GetProperty("daemon").GetProperty("run");
+        Assert.Equal("dotnet:xunit", daemonRun.GetProperty("provider").GetString());
+        JsonElement renderedSelection = daemonRun.GetProperty("selection");
+        Assert.Equal("workspace_scope", renderedSelection.GetProperty("scope").GetString());
+        Assert.Equal("foreground", renderedSelection.GetProperty("lane").GetString());
+        Assert.Equal(200, renderedSelection.GetProperty("known_count").GetInt32());
+        Assert.Equal(205, renderedSelection.GetProperty("pre_trim_selected_count").GetInt32());
+        Assert.Equal(200, renderedSelection.GetProperty("post_trim_selected_count").GetInt32());
+        Assert.Equal(2, renderedSelection.GetProperty("retained_red_count").GetInt32());
+        Assert.True(renderedSelection.GetProperty("covers_every_known_case").GetBoolean());
+        Assert.True(renderedSelection.GetProperty("eligible").GetBoolean());
+        Assert.Equal("eligible", renderedSelection.GetProperty("reason_code").GetString());
+        Assert.Equal("selection-digest", renderedSelection.GetProperty("selection_digest").GetString());
+        Assert.Equal(7.5, daemonRun.GetProperty("elapsed_seconds").GetDouble());
+        Assert.Equal(200, daemonRun.GetProperty("requested_unique_unit_count").GetInt32());
+        Assert.Equal(4, daemonRun.GetProperty("chunk_count").GetInt32());
+        Assert.Equal(2, daemonRun.GetProperty("current_part").GetInt32());
+        Assert.Equal(50, daemonRun.GetProperty("current_part_unit_count").GetInt32());
+        Assert.Equal(8, daemonRun.GetProperty("case_names").GetArrayLength());
+        Assert.True(daemonRun.GetProperty("names_truncated").GetBoolean());
+        Assert.Equal("name-digest", daemonRun.GetProperty("name_digest").GetString());
+
+        string compact = TestsCore.RenderStatusCompact(result);
+        Assert.Contains("provider: dotnet:xunit", compact, StringComparison.Ordinal);
+        Assert.Contains("selection: scope=workspace_scope lane=foreground known=200", compact, StringComparison.Ordinal);
+        Assert.Contains("pre_trim=205 post_trim=200 retained_red=2", compact, StringComparison.Ordinal);
+        Assert.Contains("progress: elapsed=7.5s requested=200 chunks=4 part=2/4 units=50", compact, StringComparison.Ordinal);
+        Assert.Contains("case_names: test:1, test:2, test:3, test:4, test:5, test:6, test:7, test:8", compact, StringComparison.Ordinal);
+        Assert.Contains("names_truncated: true", compact, StringComparison.Ordinal);
+        Assert.Contains("name_digest: name-digest", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_renderers_keep_old_bytes_when_daemon_run_facts_are_absent()
+    {
+        var result = new TestsStatusResult(
+            Enabled: true,
+            KillSwitchOff: false,
+            Projects: [],
+            DaemonState: CtDaemonLifecycleState.Running,
+            DaemonReason: "idle",
+            Verdict: ContinuousTestVerdict.Green,
+            Selected: null,
+            StaleCount: 0,
+            SelectedCount: 0,
+            LastRun: null,
+            BudgetHolder: null,
+            DaemonActivity: CtDaemonActivity.Executing,
+            DaemonRun: new CtDaemonRunProgress(
+                "/repo/Sample.Tests.csproj",
+                "run:42",
+                2,
+                new DateTimeOffset(2026, 8, 22, 9, 30, 0, TimeSpan.Zero),
+                CtRunActivity.Active),
+            DaemonVersion: CtDaemonVersion.Evaluate("1.0.0+own", "1.0.0+own"));
+
+        Assert.Equal(
+            "# tests\nenabled: true\ndaemon: running (idle)\nactivity: executing\n"
+            + "  run: /repo/Sample.Tests.csproj cases=2 started=2026-08-22T09:30:00.0000000+00:00 child=active\n"
+            + "verdict: green\nselected: none (no live index)\nstale: 0\nlast_run: -\n"
+            + "budget: -\nprojects: 0",
+            TestsCore.RenderStatusCompact(result));
+
+        Assert.Equal(
+            "{\"schema_version\":1,\"miller_version\":\"1.0.0+own\",\"enabled\":true,"
+            + "\"kill_switch\":false,\"projects\":[],\"daemon\":{\"state\":\"running\","
+            + "\"reason\":\"idle\",\"running\":true,\"paused\":false,\"activity\":\"executing\","
+            + "\"run\":{\"project_path\":\"/repo/Sample.Tests.csproj\",\"run_id\":\"run:42\","
+            + "\"selected_case_count\":2,\"started_at\":\"2026-08-22T09:30:00.0000000+00:00\","
+            + "\"child\":\"active\"},\"miller_version\":\"1.0.0+own\",\"version_match\":\"same\","
+            + "\"version_mismatch\":false,\"version_reason\":\"the daemon runs this build (1.0.0+own)\","
+            + "\"loop_stalled\":false,\"loop_stall_seconds\":null},\"verdict\":\"green\","
+            + "\"selected\":null,\"stale_count\":0,\"selected_count\":0,\"last_run\":null,"
+            + "\"budget_holder\":null}",
+            TestsCore.RenderStatusJson(result));
+    }
+
     /// <summary>
     /// Two builds of the SAME release — two worktrees of one repo on different commits — is a
     /// symmetric verdict: each reads the other as build_differs. Miller must report it and must NOT
@@ -157,6 +267,22 @@ public sealed class TestsToolTests : IDisposable
             LastRun: null,
             BudgetHolder: null,
             DaemonVersion: version);
+
+    private static TestsStatusResult StatusWithRun(CtDaemonRunProgress run) =>
+        new(
+            Enabled: true,
+            KillSwitchOff: false,
+            Projects: [],
+            DaemonState: CtDaemonLifecycleState.Running,
+            DaemonReason: "executing",
+            Verdict: ContinuousTestVerdict.Partial,
+            Selected: null,
+            StaleCount: 1,
+            SelectedCount: 200,
+            LastRun: null,
+            BudgetHolder: null,
+            DaemonActivity: CtDaemonActivity.Executing,
+            DaemonRun: run);
 
     [Fact]
     public void Status_OnNeverEnabledWorkspace_StartsNothingAndCreatesNoState()
@@ -393,6 +519,61 @@ public sealed class TestsToolTests : IDisposable
         Assert.Equal(30, root.GetProperty("total").GetInt32());
         Assert.Equal(20, root.GetProperty("offset").GetInt32());
         Assert.Equal(5, root.GetProperty("truncated").GetInt32());
+    }
+
+    [Fact]
+    public void Failure_renderers_expose_available_bounded_correlation_facts()
+    {
+        var row = new ContinuousTestStatus(
+            WorkspaceId: "workspace",
+            TestCaseId: "xunit:Sample.Tests.Fails",
+            State: ContinuousTestState.Red,
+            IndexIdentity: "gen-2",
+            Revision: 42,
+            LastRunRevision: "41",
+            RunningRunId: "run:42",
+            RunningRevision: "42",
+            LastResultStatus: "failed",
+            LastResultAt: new DateTimeOffset(2026, 8, 22, 9, 31, 0, TimeSpan.Zero),
+            FailureSummary: "boom");
+        var result = new TestsFailuresResult([row], Truncated: 0, Total: 1);
+
+        using JsonDocument document = JsonDocument.Parse(result.Render(json: true));
+        JsonElement rendered = document.RootElement.GetProperty("failures")[0];
+        Assert.Equal("run:42", rendered.GetProperty("running_run_id").GetString());
+        Assert.Equal("42", rendered.GetProperty("running_revision").GetString());
+        Assert.Equal("41", rendered.GetProperty("last_run_revision").GetString());
+        Assert.Equal("failed", rendered.GetProperty("last_result_status").GetString());
+        Assert.Equal("2026-08-22T09:31:00.0000000+00:00", rendered.GetProperty("last_result_at").GetString());
+
+        string compact = result.Render(json: false);
+        Assert.Contains("running_run_id=run:42", compact, StringComparison.Ordinal);
+        Assert.Contains("running_revision=42", compact, StringComparison.Ordinal);
+        Assert.Contains("last_run_revision=41", compact, StringComparison.Ordinal);
+        Assert.Contains("last_result_status=failed", compact, StringComparison.Ordinal);
+        Assert.Contains("last_result_at=2026-08-22T09:31:00.0000000+00:00", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Failure_renderers_keep_old_bytes_when_correlation_is_absent()
+    {
+        var row = new ContinuousTestStatus(
+            WorkspaceId: "workspace",
+            TestCaseId: "xunit:Sample.Tests.Fails",
+            State: ContinuousTestState.Red,
+            IndexIdentity: "gen-2",
+            Revision: 42,
+            FailureSummary: "boom");
+        var result = new TestsFailuresResult([row], Truncated: 0, Total: 1);
+
+        Assert.Equal(
+            "# tests failures (1)\n  - xunit:Sample.Tests.Fails: boom",
+            result.Render(json: false));
+        Assert.Equal(
+            "{\"failures\":[{\"test_case_id\":\"xunit:Sample.Tests.Fails\","
+            + "\"state\":\"red\",\"index_identity\":\"gen-2\",\"revision\":42,"
+            + "\"failure_summary\":\"boom\"}],\"truncated\":0,\"total\":1,\"offset\":0}",
+            result.Render(json: true));
     }
 
     [Fact]

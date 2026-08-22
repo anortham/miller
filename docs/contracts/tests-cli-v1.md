@@ -88,6 +88,36 @@ explicit (`tests serve` / MCP `start`).
 | `last_run` | string \| null | Latest `test_runs` timestamp, or `null`. |
 | `budget_holder` | object \| null | User-global execution-budget owner, or `null` when idle. |
 
+When a run is in flight, these optional bounded facts are present when the daemon published them. Older
+daemon records omit them, which preserves the older response bytes:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `daemon.run.provider` | string | Provider identity selected for this run, as resolved by the daemon. |
+| `daemon.run.selection` | object | Bounded selection facts captured when the run was admitted. |
+| `daemon.run.selection.scope` | string | `unknown`, `impacted`, `known_empty`, or `workspace_scope`. |
+| `daemon.run.selection.lane` | string | `foreground`, `backfill`, or `maintenance`. |
+| `daemon.run.selection.known_count` | number | Known test cases at selection time. |
+| `daemon.run.selection.pre_trim_selected_count` | number | Selected cases before fresh-result trimming. |
+| `daemon.run.selection.post_trim_selected_count` | number | Selected cases after fresh-result trimming. |
+| `daemon.run.selection.retained_red_count` | number | Red cases retained in the selection. |
+| `daemon.run.selection.covers_every_known_case` | bool | Whether the selection covers the complete known inventory. |
+| `daemon.run.selection.eligible` | bool | Whether the selection passed the provider execution gate. |
+| `daemon.run.selection.reason_code` | string | Bounded reason for the selection decision. |
+| `daemon.run.selection.selection_digest` | string | Deterministic digest of the selected case IDs. |
+| `daemon.run.elapsed_seconds` | number | Seconds since the daemon started the run. |
+| `daemon.run.requested_unique_unit_count` | number | Distinct provider units requested for this run. |
+| `daemon.run.chunk_count` | number | Total provider chunks for the run. |
+| `daemon.run.current_part` | number | One-based current chunk number. Compact output renders it as `part=current_part/chunk_count` when both are present. |
+| `daemon.run.current_part_unit_count` | number | Provider units in the current chunk. |
+| `daemon.run.case_names` | string[] | At most eight bounded provider case-name samples. |
+| `daemon.run.names_truncated` | bool | `true` when the provider had more case names than the bounded sample. |
+| `daemon.run.name_digest` | string | Deterministic digest of the provider case-name manifest. |
+
+The compact renderer prints the same facts as bounded nested run lines. It never expands
+`case_names` beyond eight entries. Optional facts are omitted when absent; no provider or selection
+facts are inferred from project paths or private database state.
+
 `projects[]` rows:
 
 | Field | Type | Meaning |
@@ -423,6 +453,18 @@ The example above is the LAST page: 21 red cases, 20 skipped, one row returned, 
 | `truncated` | number | Red cases remaining AFTER this page. |
 | `total` | number | All red cases at the current key. |
 | `offset` | number | Cases skipped before this page. |
+
+Failure rows may also carry these bounded correlation facts when the status row has them. They are
+correlation only: the failure renderer does not query private daemon or provider state and does not
+invent provider metadata.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `failures[].running_run_id` | string | Run currently associated with the case, when one is active. |
+| `failures[].running_revision` | string | Revision associated with the active run. |
+| `failures[].last_run_revision` | string | Revision recorded for the latest completed run. |
+| `failures[].last_result_status` | string | Last stored provider result status. |
+| `failures[].last_result_at` | string | ISO-8601 UTC time of the last stored result. |
 
 `--limit` defaults to 20 and is clamped to 1-200; `--offset` defaults to 0. The ceiling is a page
 size, not the end of the list — `--offset` reaches everything past it. Compact output names the next

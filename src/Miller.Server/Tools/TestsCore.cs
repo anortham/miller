@@ -204,6 +204,7 @@ public static class TestsCore
     public const int JsonSchemaVersion = 1;
     public const string StatusContractName = "tests_status";
     public const string StatusContractDoc = "docs/contracts/tests-cli-v1.md";
+    private const int MaxDaemonActivityNames = 8;
     private const string TestsUsage =
         "miller tests <status|failures|serve|run|enable|disable|stop> [--json] [--wait] [--limit N] [--offset N] "
         + "[--project PATH] [--workspace-id SELECTOR] [--workspace DIR]";
@@ -785,6 +786,58 @@ public static class TestsCore
         writer.WriteNumber("selected_case_count", run.SelectedCaseCount);
         writer.WriteString("started_at", run.RunStartedAtUtc.ToString("O", CultureInfo.InvariantCulture));
         writer.WriteString("child", Snake(run.Activity.ToString()));
+        if (run.ProviderSource is { } provider)
+            writer.WriteString("provider", provider);
+        if (run.Selection is { } selection)
+        {
+            writer.WritePropertyName("selection");
+            WriteDaemonSelection(writer, selection);
+        }
+
+        if (run.ElapsedSeconds is { } elapsed)
+            writer.WriteNumber("elapsed_seconds", elapsed);
+        if (run.RequestedUniqueUnitCount is { } requested)
+            writer.WriteNumber("requested_unique_unit_count", requested);
+        if (run.ChunkCount is { } chunks)
+            writer.WriteNumber("chunk_count", chunks);
+        if (run.CurrentPart is { } part)
+            writer.WriteNumber("current_part", part);
+        if (run.CurrentPartUnitCount is { } partUnits)
+            writer.WriteNumber("current_part_unit_count", partUnits);
+        if (run.NameSamples is { } names)
+        {
+            IReadOnlyList<string> boundedNames = names.Take(MaxDaemonActivityNames).ToArray();
+            writer.WritePropertyName("case_names");
+            writer.WriteStartArray();
+            foreach (string name in boundedNames)
+                writer.WriteStringValue(name);
+            writer.WriteEndArray();
+            if (run.NamesTruncated is not null || names.Count > boundedNames.Count)
+                writer.WriteBoolean("names_truncated", (run.NamesTruncated ?? false) || names.Count > boundedNames.Count);
+        }
+        else if (run.NamesTruncated is { } truncated)
+        {
+            writer.WriteBoolean("names_truncated", truncated);
+        }
+
+        if (run.NameDigest is { } digest)
+            writer.WriteString("name_digest", digest);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteDaemonSelection(Utf8JsonWriter writer, ContinuousTestDaemonSelectionFacts selection)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("scope", Snake(selection.Scope.ToString()));
+        writer.WriteString("lane", Snake(selection.Lane.ToString()));
+        writer.WriteNumber("known_count", selection.KnownCount);
+        writer.WriteNumber("pre_trim_selected_count", selection.PreTrimSelectedCount);
+        writer.WriteNumber("post_trim_selected_count", selection.PostTrimSelectedCount);
+        writer.WriteNumber("retained_red_count", selection.RetainedRedCount);
+        writer.WriteBoolean("covers_every_known_case", selection.CoversEveryKnownCase);
+        writer.WriteBoolean("eligible", selection.Eligible);
+        writer.WriteString("reason_code", selection.ReasonCode);
+        writer.WriteString("selection_digest", selection.SelectionDigest);
         writer.WriteEndObject();
     }
 
@@ -894,6 +947,7 @@ public static class TestsCore
             sb.AppendLine($"  run: {running.ProjectPath} cases="
                 + running.SelectedCaseCount.ToString(CultureInfo.InvariantCulture)
                 + $" started={running.RunStartedAtUtc:O} child={Snake(running.Activity.ToString())}");
+            AppendDaemonRunFacts(sb, running);
         }
         // Only when a live daemon disagrees with this build. The reason names both builds, so the
         // line needs no second copy of the version.
@@ -916,6 +970,63 @@ public static class TestsCore
         foreach (TestsStatusProject project in result.Projects)
             sb.AppendLine($"  - {project.ProjectPath} ({project.Framework ?? "unknown"})");
         return sb.ToString().TrimEnd();
+    }
+
+    private static void AppendDaemonRunFacts(StringBuilder sb, CtDaemonRunProgress run)
+    {
+        if (run.ProviderSource is { } provider)
+            sb.AppendLine("    provider: " + provider);
+        if (run.Selection is { } selection)
+        {
+            sb.AppendLine("    selection: scope=" + Snake(selection.Scope.ToString())
+                + " lane=" + Snake(selection.Lane.ToString())
+                + " known=" + selection.KnownCount.ToString(CultureInfo.InvariantCulture)
+                + " pre_trim=" + selection.PreTrimSelectedCount.ToString(CultureInfo.InvariantCulture)
+                + " post_trim=" + selection.PostTrimSelectedCount.ToString(CultureInfo.InvariantCulture)
+                + " retained_red=" + selection.RetainedRedCount.ToString(CultureInfo.InvariantCulture)
+                + " covers_all=" + (selection.CoversEveryKnownCase ? "true" : "false")
+                + " eligible=" + (selection.Eligible ? "true" : "false")
+                + " reason=" + selection.ReasonCode
+                + " digest=" + selection.SelectionDigest);
+        }
+
+        if (run.ElapsedSeconds is not null
+            || run.RequestedUniqueUnitCount is not null
+            || run.ChunkCount is not null
+            || run.CurrentPart is not null
+            || run.CurrentPartUnitCount is not null)
+        {
+            sb.Append("    progress:");
+            if (run.ElapsedSeconds is { } elapsedSeconds)
+                sb.Append(" elapsed=" + FormatSeconds(elapsedSeconds) + "s");
+            if (run.RequestedUniqueUnitCount is { } requested)
+                sb.Append(" requested=" + requested.ToString(CultureInfo.InvariantCulture));
+            if (run.ChunkCount is { } chunks)
+                sb.Append(" chunks=" + chunks.ToString(CultureInfo.InvariantCulture));
+            if (run.CurrentPart is { } part && run.ChunkCount is { } totalChunks)
+                sb.Append(" part=" + part.ToString(CultureInfo.InvariantCulture)
+                    + "/" + totalChunks.ToString(CultureInfo.InvariantCulture));
+            else if (run.CurrentPart is { } partOnly)
+                sb.Append(" part=" + partOnly.ToString(CultureInfo.InvariantCulture));
+            if (run.CurrentPartUnitCount is { } partUnits)
+                sb.Append(" units=" + partUnits.ToString(CultureInfo.InvariantCulture));
+            sb.AppendLine();
+        }
+
+        if (run.NameSamples is { } names)
+        {
+            IReadOnlyList<string> boundedNames = names.Take(MaxDaemonActivityNames).ToArray();
+            sb.AppendLine("    case_names: " + string.Join(", ", boundedNames));
+            if (run.NamesTruncated is not null || names.Count > boundedNames.Count)
+                sb.AppendLine("    names_truncated: " + (((run.NamesTruncated ?? false) || names.Count > boundedNames.Count) ? "true" : "false"));
+        }
+        else if (run.NamesTruncated is { } truncated)
+        {
+            sb.AppendLine("    names_truncated: " + (truncated ? "true" : "false"));
+        }
+
+        if (run.NameDigest is { } digest)
+            sb.AppendLine("    name_digest: " + digest);
     }
 
     internal static string RenderMutationJson(TestsMutationResult result)
@@ -1097,6 +1208,7 @@ public static class TestsCore
                     writer.WriteNull("failure_summary");
                 else
                     writer.WriteString("failure_summary", row.FailureSummary);
+                WriteFailureCorrelation(writer, row);
                 writer.WriteEndObject();
             }
 
@@ -1118,7 +1230,11 @@ public static class TestsCore
             ? $"# tests failures ({shown} of {result.Total.ToString(CultureInfo.InvariantCulture)})"
             : $"# tests failures ({shown})");
         foreach (ContinuousTestStatus row in result.Failures)
-            sb.AppendLine($"  - {row.TestCaseId}: {row.FailureSummary ?? row.State.ToString()}");
+        {
+            sb.Append("  - ").Append(row.TestCaseId).Append(": ").Append(row.FailureSummary ?? row.State.ToString());
+            AppendFailureCorrelation(sb, row);
+            sb.AppendLine();
+        }
         if (result.Truncated > 0)
         {
             // Names the next offset, so the reader can ask for the rest instead of only learning it exists.
@@ -1128,6 +1244,34 @@ public static class TestsCore
         }
 
         return sb.ToString().TrimEnd();
+    }
+
+    private static void WriteFailureCorrelation(Utf8JsonWriter writer, ContinuousTestStatus row)
+    {
+        if (row.RunningRunId is { } runningRunId)
+            writer.WriteString("running_run_id", runningRunId);
+        if (row.RunningRevision is { } runningRevision)
+            writer.WriteString("running_revision", runningRevision);
+        if (row.LastRunRevision is { } lastRunRevision)
+            writer.WriteString("last_run_revision", lastRunRevision);
+        if (row.LastResultStatus is { } lastResultStatus)
+            writer.WriteString("last_result_status", lastResultStatus);
+        if (row.LastResultAt is { } lastResultAt)
+            writer.WriteString("last_result_at", lastResultAt.ToString("O", CultureInfo.InvariantCulture));
+    }
+
+    private static void AppendFailureCorrelation(StringBuilder sb, ContinuousTestStatus row)
+    {
+        if (row.RunningRunId is { } runningRunId)
+            sb.Append(" running_run_id=").Append(runningRunId);
+        if (row.RunningRevision is { } runningRevision)
+            sb.Append(" running_revision=").Append(runningRevision);
+        if (row.LastRunRevision is { } lastRunRevision)
+            sb.Append(" last_run_revision=").Append(lastRunRevision);
+        if (row.LastResultStatus is { } lastResultStatus)
+            sb.Append(" last_result_status=").Append(lastResultStatus);
+        if (row.LastResultAt is { } lastResultAt)
+            sb.Append(" last_result_at=").Append(lastResultAt.ToString("O", CultureInfo.InvariantCulture));
     }
 
     /// <summary>
