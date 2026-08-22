@@ -113,6 +113,35 @@ announcement (the docs already carry that constraint). Environment note: the fir
 failed on missing `pnpm` and surfaced only as `partial` with the reason in the daemon log —
 a visible failure reason on the run result would have saved a diagnosis step.
 
+## Fix batch 2 (2026-08-22, merged at `05e5e524`)
+
+Five findings were fixed in parallel worktree lanes and merged; unit-proven, not yet re-proven on
+the dogfood repos:
+
+- **F3 FIXED:** discovery keeps one pytest project per directory, choosing the config file pytest
+  itself reads first (`pytest.ini` > `pyproject.toml` > `tox.ini` > `setup.cfg` > `setup.py`).
+- **F4 FIXED:** a `Cargo.toml` proven to be a `[workspace]` member is dropped (the root run covers
+  it; every parse doubt keeps the candidate), and the walk prunes `fixtures`/`__fixtures__`/
+  `testdata` directories. The real julie-extractors layout goes from 6 discovered manifests to 1.
+- **F5 FIXED:** `tests disable` heads the projects it turned OFF and names the remainder on a
+  `remaining enabled:` line; JSON adds `changed_count`/`changed_projects` without changing any
+  existing field's meaning (`docs/contracts/tests-cli-v1.md` updated).
+- **F8 FIXED:** node-test case discovery follows Node's own documented default patterns (copied
+  verbatim from nodejs.org; note `test/` singular — `tests/` is NOT in Node's default set), and a
+  script that names positional paths/globs REPLACES the defaults exactly as on node's command
+  line — which is what covers classnames' `node --test ./tests/*.js`.
+- **F10 FIXED:** the provider refuses to append reporter args to a script that cannot deliver
+  them — a chained script, a `run <name>` fragment of a chained `test` entry point (the actual
+  vercel/ms shape: script matching used to pick the `test:edge` half alone), or a node-test script
+  that already names a positional path (Node stops reading options there; measured, not assumed).
+  Refused scripts run the local runner binary directly; a missing binary or a spawn failure
+  (e.g. missing pnpm) fails the run with a visible reason instead of a false red.
+
+Still open: F7 (fresh generation rebuilt per explicit run — needs its own design pass), F9
+(partial-red node-test attribution — needs a partially-red discriminator repo). Known follow-up
+from the F10 lane: a daemon auto-run spawn failure still reaches ct.db only as a daemon log line;
+a run-level reason surface needs a schema column + contract change.
+
 ## What the fail-safes got right
 
 CT never lied green. F2 surfaced as red with failure rows; F6 surfaced as `partial` with
