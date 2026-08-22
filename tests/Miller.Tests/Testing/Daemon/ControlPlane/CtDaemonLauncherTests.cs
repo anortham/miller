@@ -114,7 +114,8 @@ public sealed class CtDaemonLauncherTests : IDisposable
                 {
                     stopped.Add(root);
                     return new CtDaemonStopResult(CtDaemonStopStatus.Stopped, "stopped");
-                });
+                },
+                publication: NoWaitPublication());
 
             Assert.Equal(CtDaemonSpawnStatus.Replaced, result.Status);
             Assert.Single(stopped);
@@ -223,7 +224,7 @@ public sealed class CtDaemonLauncherTests : IDisposable
             {
                 captured = info;
                 return holder;
-            });
+            }, publication: NoWaitPublication());
 
             Assert.Equal(CtDaemonSpawnStatus.Started, result.Status);
             Assert.NotNull(captured);
@@ -263,6 +264,133 @@ public sealed class CtDaemonLauncherTests : IDisposable
     }
 
     [Fact]
+    public void SpawnDetached_ReportsReadyAfterLeaseAndStatusPublication()
+    {
+        using Process holder = StartStub();
+        try
+        {
+            CtDaemonLeaseIdentity identity = IdentityOf(holder);
+            CtDaemonLeaseRecord lease = new(identity, DateTimeOffset.UtcNow, _root, "test");
+            CtDaemonStatusRecord status = new(
+                CtDaemonLifecycleState.Running,
+                "status-only",
+                identity,
+                DateTimeOffset.UtcNow);
+
+            CtDaemonSpawnResult result = CtDaemonLauncher.SpawnDetached(
+                _root,
+                startProcess: _ => holder,
+                publication: new CtDaemonPublicationProbe
+                {
+                    ReadLease = _ => lease,
+                    ReadStatus = _ => status,
+                    IsProcessLive = _ => true,
+                    Grace = TimeSpan.FromSeconds(2),
+                    PollInterval = TimeSpan.FromMilliseconds(1),
+                });
+
+            Assert.Equal(CtDaemonSpawnStatus.Started, result.Status);
+            Assert.Equal(CtDaemonPublicationReadiness.Ready, result.Publication?.Readiness);
+            Assert.Contains("started", result.Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (!holder.HasExited)
+                holder.Kill(entireProcessTree: true);
+        }
+    }
+
+    [Fact]
+    public void SpawnDetached_ReportsPublicationLagWithoutChangingSpawnAcceptance()
+    {
+        using Process holder = StartStub();
+        var clock = new ManualTimeProvider();
+        try
+        {
+            CtDaemonSpawnResult result = CtDaemonLauncher.SpawnDetached(
+                _root,
+                startProcess: _ => holder,
+                publication: new CtDaemonPublicationProbe
+                {
+                    Clock = clock,
+                    ReadLease = _ => null,
+                    ReadStatus = _ => null,
+                    IsProcessLive = _ => true,
+                    Grace = TimeSpan.FromSeconds(2),
+                    PollInterval = TimeSpan.FromMilliseconds(25),
+                    Delay = clock.Advance,
+                });
+
+            Assert.Equal(CtDaemonSpawnStatus.Started, result.Status);
+            Assert.Equal(
+                CtDaemonPublicationReadiness.NotPublishedWithinGrace,
+                result.Publication?.Readiness);
+            Assert.Contains("started", result.Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (!holder.HasExited)
+                holder.Kill(entireProcessTree: true);
+        }
+    }
+
+    [Fact]
+    public void SpawnDetached_ReportsEarlyExitBeforePublication()
+    {
+        using Process holder = StartStub();
+        try
+        {
+            CtDaemonSpawnResult result = CtDaemonLauncher.SpawnDetached(
+                _root,
+                startProcess: _ => holder,
+                publication: new CtDaemonPublicationProbe
+                {
+                    ReadLease = _ => null,
+                    ReadStatus = _ => null,
+                    IsProcessLive = _ => false,
+                    Grace = TimeSpan.FromSeconds(2),
+                    PollInterval = TimeSpan.FromMilliseconds(1),
+                });
+
+            Assert.Equal(CtDaemonSpawnStatus.Started, result.Status);
+            Assert.Equal(
+                CtDaemonPublicationReadiness.DaemonExitedBeforePublish,
+                result.Publication?.Readiness);
+            Assert.Contains("started", result.Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (!holder.HasExited)
+                holder.Kill(entireProcessTree: true);
+        }
+    }
+
+    [Fact]
+    public void SpawnDetached_RejectsNonPositivePublicationPollInterval()
+    {
+        foreach (TimeSpan pollInterval in new[] { TimeSpan.Zero, TimeSpan.FromMilliseconds(-1) })
+        {
+            using Process holder = StartStub();
+            try
+            {
+                Assert.Throws<ArgumentOutOfRangeException>(() => CtDaemonLauncher.SpawnDetached(
+                    _root,
+                    startProcess: _ => holder,
+                    publication: new CtDaemonPublicationProbe
+                    {
+                        Grace = TimeSpan.FromSeconds(1),
+                        PollInterval = pollInterval,
+                    }));
+            }
+            finally
+            {
+                if (!holder.HasExited)
+                    holder.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    [Fact]
     public void SpawnDetached_RunsTheDaemonOutsideTheWorkspaceTree()
     {
         ProcessStartInfo? captured = null;
@@ -270,7 +398,7 @@ public sealed class CtDaemonLauncherTests : IDisposable
         {
             captured = info;
             return null;
-        });
+        }, publication: NoWaitPublication());
 
         Assert.Equal(CtDaemonSpawnStatus.Failed, result.Status);
         Assert.NotNull(captured);
@@ -323,7 +451,7 @@ public sealed class CtDaemonLauncherTests : IDisposable
         {
             captured = info;
             return null;
-        });
+        }, publication: NoWaitPublication());
 
         Assert.NotNull(captured);
         Assert.False(captured.UseShellExecute);
@@ -368,7 +496,7 @@ public sealed class CtDaemonLauncherTests : IDisposable
                 stub.ArgumentList.Add($"ping -n 3 127.0.0.1 >nul & echo {marker}");
                 daemon = Process.Start(stub);
                 return daemon;
-            });
+            }, publication: NoWaitPublication());
 
             Assert.Equal(CtDaemonSpawnStatus.Started, result.Status);
 
@@ -498,6 +626,28 @@ public sealed class CtDaemonLauncherTests : IDisposable
 
     private static string StartArguments(ProcessStartInfo info) =>
         string.Join(' ', info.ArgumentList.Count > 0 ? info.ArgumentList : [info.Arguments]);
+
+    private static CtDaemonLeaseIdentity IdentityOf(Process process) =>
+        new(process.Id, new DateTimeOffset(process.StartTime.ToUniversalTime()));
+
+    private static CtDaemonPublicationProbe NoWaitPublication() => new()
+    {
+        Grace = TimeSpan.Zero,
+        PollInterval = TimeSpan.FromMilliseconds(1),
+        ReadLease = _ => null,
+        ReadStatus = _ => null,
+        IsProcessLive = _ => true,
+    };
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+
+        public override long GetTimestamp() => _timestamp;
+
+        public void Advance(TimeSpan duration) =>
+            _timestamp += (long)(duration.TotalSeconds * Stopwatch.Frequency);
+    }
 }
 
 /// <summary>

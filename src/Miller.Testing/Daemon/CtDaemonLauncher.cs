@@ -20,11 +20,40 @@ public enum CtDaemonSpawnStatus
     Refused,
 }
 
+public enum CtDaemonPublicationReadiness
+{
+    Ready,
+    NotPublishedWithinGrace,
+    DaemonExitedBeforePublish,
+}
+
+public sealed record CtDaemonPublicationResult(
+    CtDaemonPublicationReadiness Readiness,
+    TimeSpan Elapsed);
+
+public sealed class CtDaemonPublicationProbe
+{
+    public TimeSpan Grace { get; init; } = TimeSpan.FromSeconds(2);
+
+    public TimeSpan PollInterval { get; init; } = TimeSpan.FromMilliseconds(25);
+
+    public Func<string, CtDaemonLeaseRecord?>? ReadLease { get; init; }
+
+    public Func<string, CtDaemonStatusRecord?>? ReadStatus { get; init; }
+
+    public Func<int, bool>? IsProcessLive { get; init; }
+
+    public TimeProvider? Clock { get; init; }
+
+    public Action<TimeSpan>? Delay { get; init; }
+}
+
 public sealed record CtDaemonSpawnResult(
     CtDaemonSpawnStatus Status,
     int? ProcessId,
     string? Executable,
-    string? Reason);
+    string? Reason,
+    CtDaemonPublicationResult? Publication = null);
 
 public enum CtRunExecution
 {
@@ -117,7 +146,8 @@ public static class CtDaemonLauncher
         Func<ProcessStartInfo, Process?>? startProcess = null,
         string? ownVersion = null,
         Func<string, CtDaemonStopResult>? stopDaemon = null,
-        Func<string, string?, CtDaemonImage>? resolveImage = null)
+        Func<string, string?, CtDaemonImage>? resolveImage = null,
+        CtDaemonPublicationProbe? publication = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         RejectSensitiveRoot(workspaceRoot);
@@ -207,12 +237,86 @@ public static class CtDaemonLauncher
         string baseReason = replacedVersion is null
             ? "started"
             : $"replaced the daemon on {replacedVersion}";
+        CtDaemonPublicationProbe probe = publication ?? new CtDaemonPublicationProbe();
+        CtDaemonPublicationResult published = ObservePublication(root, pid, probe);
         return new CtDaemonSpawnResult(
             replacedVersion is null ? CtDaemonSpawnStatus.Started : CtDaemonSpawnStatus.Replaced,
             pid,
             executable,
-            AppendInPlaceWarning(baseReason, image));
+            AppendInPlaceWarning(baseReason, image),
+            published);
     }
+
+    private static CtDaemonPublicationResult ObservePublication(
+        string workspaceRoot,
+        int? processId,
+        CtDaemonPublicationProbe options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.Grace < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(options.Grace));
+        if (options.PollInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(options.PollInterval));
+
+        Func<string, CtDaemonLeaseRecord?> readLease =
+            options.ReadLease ?? (root => CtDaemonLease.TryReadLive(root));
+        Func<string, CtDaemonStatusRecord?> readStatus =
+            options.ReadStatus ?? (root => CtDaemonLease.TryReadStatus(root));
+        Func<int, bool> isProcessLive = options.IsProcessLive ?? IsProcessLive;
+        TimeProvider clock = options.Clock ?? TimeProvider.System;
+        Action<TimeSpan> delay = options.Delay ?? Delay;
+        long started = clock.GetTimestamp();
+
+        while (true)
+        {
+            CtDaemonLeaseRecord? lease = readLease(workspaceRoot);
+            CtDaemonStatusRecord? status = readStatus(workspaceRoot);
+            if (IsPublished(lease, status))
+                return new CtDaemonPublicationResult(
+                    CtDaemonPublicationReadiness.Ready,
+                    clock.GetElapsedTime(started));
+
+            if (processId is { } pid && !isProcessLive(pid))
+                return new CtDaemonPublicationResult(
+                    CtDaemonPublicationReadiness.DaemonExitedBeforePublish,
+                    clock.GetElapsedTime(started));
+
+            TimeSpan elapsed = clock.GetElapsedTime(started);
+            if (elapsed >= options.Grace)
+                return new CtDaemonPublicationResult(
+                    CtDaemonPublicationReadiness.NotPublishedWithinGrace,
+                    elapsed);
+
+            TimeSpan remaining = options.Grace - elapsed;
+            TimeSpan wait = remaining < options.PollInterval ? remaining : options.PollInterval;
+            if (wait > TimeSpan.Zero)
+                delay(wait);
+            else
+                Thread.Yield();
+        }
+    }
+
+    private static bool IsPublished(CtDaemonLeaseRecord? lease, CtDaemonStatusRecord? status) =>
+        lease is not null
+        && status is not null
+        && status.State is CtDaemonLifecycleState.Running or CtDaemonLifecycleState.Paused
+        && status.Identity == lease.Identity;
+
+    private static bool IsProcessLive(int processId)
+    {
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or InvalidOperationException or NotSupportedException or Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static void Delay(TimeSpan duration) => Thread.Sleep(duration);
 
     /// <summary>
     /// The reachable error path for a daemon that had to start from the install directory. MSBuild
