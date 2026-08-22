@@ -104,7 +104,12 @@ public sealed record TestsMutationResult(
     string Operation,
     int EnabledCount,
     IReadOnlyList<TestsStatusProject> Projects,
-    string? Error)
+    string? Error,
+    // ChangedProjects: the projects whose enabled state THIS call flipped — turned on by an enable,
+    // turned off by a disable. EnabledCount and Projects report the enabled set left AFTER the call,
+    // which is not what a disable did: reporting only that is how a disable of 1 of 3 projects
+    // printed the other 2 under a "disable" heading. Null means none.
+    IReadOnlyList<TestsStatusProject>? ChangedProjects = null)
 {
     public string Render(bool json) => json ? TestsCore.RenderMutationJson(this) : TestsCore.RenderMutationCompact(this);
 }
@@ -369,6 +374,9 @@ public static class TestsCore
             File.Delete(tombstone);
 
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        HashSet<string> enabledBefore = store.ListContinuousTestProjects(workspaceId)
+            .Select(static project => project.ProjectPath)
+            .ToHashSet(StringComparer.Ordinal);
         store.Transaction(() =>
         {
             foreach (ContinuousTestProject project in discovered)
@@ -376,7 +384,17 @@ public static class TestsCore
         });
 
         IReadOnlyList<ContinuousTestProject> enabled = store.ListContinuousTestProjects(workspaceId);
-        return new TestsMutationResult(0, "enable", enabled.Count, enabled.Select(ToStatusProject).ToArray(), null);
+        TestsStatusProject[] turnedOn = enabled
+            .Where(project => !enabledBefore.Contains(project.ProjectPath))
+            .Select(ToStatusProject)
+            .ToArray();
+        return new TestsMutationResult(
+            0,
+            "enable",
+            enabled.Count,
+            enabled.Select(ToStatusProject).ToArray(),
+            null,
+            turnedOn);
     }
 
     public static TestsMutationResult Disable(TestsCoreRequest request)
@@ -393,6 +411,7 @@ public static class TestsCore
 
         string workspaceId = ResolveWorkspaceId(request, root);
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        IReadOnlyList<ContinuousTestProject> enabledBefore = store.ListContinuousTestProjects(workspaceId);
         if (!string.IsNullOrWhiteSpace(request.ProjectPath))
         {
             if (!TryResolveProject(root, request.ProjectPath, out string full, out string? error))
@@ -420,12 +439,22 @@ public static class TestsCore
             File.WriteAllText(tombstone, string.Empty);
         }
 
+        // Report what the call DID, not only what survived it. The disabled set is the enabled rows
+        // that this call left un-enabled; their rows now read disabled, so the rendered projects say so.
+        HashSet<string> stillEnabled = remaining
+            .Select(static project => project.ProjectPath)
+            .ToHashSet(StringComparer.Ordinal);
+        TestsStatusProject[] turnedOff = enabledBefore
+            .Where(project => !stillEnabled.Contains(project.ProjectPath))
+            .Select(static project => ToStatusProject(project with { Enabled = false }))
+            .ToArray();
         return new TestsMutationResult(
             0,
             "disable",
             remaining.Count,
             remaining.Select(ToStatusProject).ToArray(),
-            null);
+            null,
+            turnedOff);
     }
 
     public static TestsServeResult Start(TestsCoreRequest request)
@@ -825,6 +854,10 @@ public static class TestsCore
             writer.WriteNumber("enabled_count", result.EnabledCount);
             writer.WritePropertyName("projects");
             WriteProjects(writer, result.Projects);
+            IReadOnlyList<TestsStatusProject> changed = result.ChangedProjects ?? [];
+            writer.WriteNumber("changed_count", changed.Count);
+            writer.WritePropertyName("changed_projects");
+            WriteProjects(writer, changed);
             if (result.Error is not null)
                 writer.WriteString("error", result.Error);
             writer.WriteEndObject();
@@ -838,6 +871,20 @@ public static class TestsCore
         if (result.Error is not null)
             return result.Error;
         var sb = new StringBuilder();
+        if (string.Equals(result.Operation, "disable", StringComparison.Ordinal))
+        {
+            // The heading counts what the call turned OFF. It used to count the projects that stayed
+            // enabled, so disabling 1 of 3 read "disable 2 project(s)" over the other two.
+            IReadOnlyList<TestsStatusProject> turnedOff = result.ChangedProjects ?? [];
+            sb.AppendLine($"disable {turnedOff.Count.ToString(CultureInfo.InvariantCulture)} project(s)");
+            foreach (TestsStatusProject project in turnedOff)
+                sb.AppendLine($"  - {project.ProjectPath}");
+            sb.AppendLine($"remaining enabled: {result.EnabledCount.ToString(CultureInfo.InvariantCulture)}");
+            foreach (TestsStatusProject project in result.Projects)
+                sb.AppendLine($"  - {project.ProjectPath}");
+            return sb.ToString().TrimEnd();
+        }
+
         sb.AppendLine($"{result.Operation} {result.EnabledCount.ToString(CultureInfo.InvariantCulture)} project(s)");
         foreach (TestsStatusProject project in result.Projects)
             sb.AppendLine($"  - {project.ProjectPath}");

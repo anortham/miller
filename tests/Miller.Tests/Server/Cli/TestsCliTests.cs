@@ -223,6 +223,110 @@ public sealed class TestsCliTests : IDisposable
     }
 
     [Fact]
+    public void Disable_ProjectScoped_Json_ReportsTheProjectItTurnedOff()
+    {
+        string first = WriteTestProject("tests/One.Tests/One.Tests.csproj");
+        string second = WriteTestProject("tests/Two.Tests/Two.Tests.csproj");
+        Assert.Equal(0, Run("tests", "enable").Code);
+
+        var (code, outText, errText) = Run("tests", "disable", "--project", first, "--json");
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("disable", root.GetProperty("operation").GetString());
+        // What the call DID: it turned one project off.
+        Assert.Equal(1, root.GetProperty("changed_count").GetInt32());
+        JsonElement changed = Assert.Single(root.GetProperty("changed_projects").EnumerateArray());
+        Assert.Equal(Path.GetFullPath(first), changed.GetProperty("project_path").GetString());
+        Assert.False(changed.GetProperty("enabled").GetBoolean());
+        // What is left: the other project stays enabled.
+        Assert.Equal(1, root.GetProperty("enabled_count").GetInt32());
+        JsonElement remaining = Assert.Single(root.GetProperty("projects").EnumerateArray());
+        Assert.Equal(Path.GetFullPath(second), remaining.GetProperty("project_path").GetString());
+        Assert.True(remaining.GetProperty("enabled").GetBoolean());
+    }
+
+    [Fact]
+    public void Disable_ProjectScoped_Compact_HeadsWhatItDisabledAndLabelsTheRemainder()
+    {
+        string first = WriteTestProject("tests/One.Tests/One.Tests.csproj");
+        string second = WriteTestProject("tests/Two.Tests/Two.Tests.csproj");
+        Assert.Equal(0, Run("tests", "enable").Code);
+
+        var (code, outText, errText) = Run("tests", "disable", "--project", first);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        string[] lines = CompactLines(outText);
+        Assert.Equal("disable 1 project(s)", lines[0]);
+        Assert.Equal("  - " + Path.GetFullPath(first), lines[1]);
+        Assert.Equal("remaining enabled: 1", lines[2]);
+        Assert.Equal("  - " + Path.GetFullPath(second), lines[3]);
+        Assert.Equal(4, lines.Length);
+    }
+
+    [Fact]
+    public void Disable_WholeWorkspace_Compact_CountsEveryProjectItTurnedOff()
+    {
+        string first = WriteTestProject("tests/One.Tests/One.Tests.csproj");
+        string second = WriteTestProject("tests/Two.Tests/Two.Tests.csproj");
+        Assert.Equal(0, Run("tests", "enable").Code);
+
+        var (code, outText, errText) = Run("tests", "disable");
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        string[] lines = CompactLines(outText);
+        Assert.Equal("disable 2 project(s)", lines[0]);
+        Assert.Contains("  - " + Path.GetFullPath(first), lines);
+        Assert.Contains("  - " + Path.GetFullPath(second), lines);
+        Assert.Equal("remaining enabled: 0", lines[3]);
+        Assert.Equal(4, lines.Length);
+    }
+
+    [Fact]
+    public void Disable_OfAnAlreadyDisabledProject_ReportsNoChange()
+    {
+        string project = WriteTestProject();
+        Assert.Equal(0, Run("tests", "enable").Code);
+        Assert.Equal(0, Run("tests", "disable", "--project", project).Code);
+
+        var (code, outText, errText) = Run("tests", "disable", "--project", project, "--json");
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal(0, doc.RootElement.GetProperty("changed_count").GetInt32());
+        Assert.Empty(doc.RootElement.GetProperty("changed_projects").EnumerateArray());
+        Assert.Equal(0, doc.RootElement.GetProperty("enabled_count").GetInt32());
+    }
+
+    [Fact]
+    public void Enable_Json_ReportsWhatItTurnedOnBesideEverythingEnabled()
+    {
+        WriteTestProject("tests/One.Tests/One.Tests.csproj");
+        Assert.Equal(0, Run("tests", "enable").Code);
+        string second = WriteTestProject("tests/Two.Tests/Two.Tests.csproj");
+
+        var (code, outText, errText) = Run("tests", "enable", "--json");
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("enable", root.GetProperty("operation").GetString());
+        // Both projects are enabled now; only the second one was turned on by this call.
+        Assert.Equal(2, root.GetProperty("enabled_count").GetInt32());
+        Assert.Equal(2, root.GetProperty("projects").GetArrayLength());
+        Assert.Equal(1, root.GetProperty("changed_count").GetInt32());
+        JsonElement changed = Assert.Single(root.GetProperty("changed_projects").EnumerateArray());
+        Assert.Equal(Path.GetFullPath(second), changed.GetProperty("project_path").GetString());
+        Assert.True(changed.GetProperty("enabled").GetBoolean());
+    }
+
+    [Fact]
     public void Run_WithoutDaemon_IsForegroundOneShot()
     {
         WriteTestProject();
@@ -450,6 +554,9 @@ public sealed class TestsCliTests : IDisposable
                 ]));
         }
     }
+
+    private static string[] CompactLines(string output) =>
+        output.Trim().Split('\n').Select(static line => line.TrimEnd('\r')).ToArray();
 
     private (int Code, string Out, string Err) Run(params string[] args) => Run(hooks: null, args);
 
