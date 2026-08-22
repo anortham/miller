@@ -25,6 +25,61 @@ internal enum SymbolLookupMethodFamily
     ResolveIndexedFilePath,
 }
 
+/// <summary>
+/// Which lookup index answered the symbol lookups one read measured. It rides beside the per-method counts so a
+/// FindByName burst is attributable from telemetry alone. The 2026-08-21 context latency diagnosis recorded two
+/// bursts of 468 FindByName calls at 13.0 s and could not tell the on-disk FTS search sidecar from the in-memory
+/// generation projection, because nothing said which one served the read (open question 3).
+/// </summary>
+internal enum SymbolLookupBackend
+{
+    /// <summary>No route claimed a backend for this wrapper. Absence of a claim, never a guess at one.</summary>
+    Unattributed,
+
+    /// <summary>The on-disk FTS search sidecar answered.</summary>
+    SearchSidecar,
+
+    /// <summary>The in-memory whole-generation <c>SymbolSearchProjection</c> answered.</summary>
+    SessionProjection,
+
+    /// <summary>
+    /// A search sidecar that LAGS the live generation supplied the recall, and every returned row was re-read
+    /// from the live artifact (<see cref="LaggingSidecarSymbolLookup"/>). It is its own value because that read
+    /// pays both costs; calling it a plain sidecar read would hide the live re-read.
+    /// </summary>
+    LaggingSidecar,
+
+    /// <summary>
+    /// One measuring wrapper served more than one backend, so its counts belong to neither. Recorded rather than
+    /// resolved: a wrapper that mixed indexes must say so instead of naming one it cannot prove.
+    /// </summary>
+    Mixed,
+}
+
+internal static class SymbolLookupBackends
+{
+    /// <summary>The stable name written to the log line and the telemetry metadata.</summary>
+    internal static string Name(SymbolLookupBackend backend) => backend switch
+    {
+        SymbolLookupBackend.SearchSidecar => "search_sidecar",
+        SymbolLookupBackend.SessionProjection => "session_projection",
+        SymbolLookupBackend.LaggingSidecar => "lagging_sidecar",
+        SymbolLookupBackend.Mixed => "mixed",
+        _ => "unattributed",
+    };
+
+    /// <summary>
+    /// Fold a new claim into the standing one. An unclaimed wrapper takes the claim, a repeated claim keeps it,
+    /// and two different claims become <see cref="SymbolLookupBackend.Mixed"/>.
+    /// </summary>
+    internal static SymbolLookupBackend Merge(SymbolLookupBackend current, SymbolLookupBackend declared)
+    {
+        if (declared == SymbolLookupBackend.Unattributed || current == declared)
+            return current;
+        return current == SymbolLookupBackend.Unattributed ? declared : SymbolLookupBackend.Mixed;
+    }
+}
+
 internal enum ContextLookupPhase
 {
     SourceRescue,
@@ -180,8 +235,13 @@ internal sealed record SymbolLookupTelemetrySnapshot(
         ResolveIndexedFilePath.CallCount;
 }
 
+/// <param name="LookupBackend">
+/// Which lookup index answered the calls in <paramref name="Delta"/>. It travels in the same record as the
+/// per-method counts so a FindByName burst names its own index.
+/// </param>
 internal sealed record ContextLookupPhaseObservation(
     ContextLookupPhase Phase,
+    SymbolLookupBackend LookupBackend,
     SymbolLookupTelemetrySnapshot Delta,
     SymbolLookupTelemetrySnapshot Total,
     SearchRequestTelemetrySnapshot SearchDelta,
@@ -250,6 +310,9 @@ internal sealed class ReadPhaseTelemetry
 
     public int ProviderCacheEntries { get; }
 
+    /// <summary>Which lookup index answered every measured call on this read.</summary>
+    public SymbolLookupBackend LookupBackend => _lookup.Backend;
+
     public long LookupCallCount => Delta(_lookup.Snapshot(), _lookupBaseline).CallCount;
 
     public long LookupElapsedMilliseconds =>
@@ -276,6 +339,7 @@ internal sealed class ReadPhaseTelemetry
             _textContentIndexResolveTelemetry.Snapshot();
         var observation = new ContextLookupPhaseObservation(
             phase,
+            _lookup.Backend,
             LookupTelemetry(current, _lookupPhaseBaseline),
             LookupTelemetry(current, _lookupFamilyBaseline),
             SearchTelemetryDelta(searchCurrent, _searchPhaseBaseline),
@@ -706,10 +770,38 @@ internal sealed class SearchRequestTelemetryCollector
     }
 }
 
-internal sealed class MeasuredSymbolLookupIndex(ISymbolLookupIndex inner) : ISymbolLookupIndex
+/// <param name="backend">
+/// Which index <paramref name="inner"/> is. It defaults to <see cref="SymbolLookupBackend.Unattributed"/> so an
+/// undeclared wrapper reports absence of a claim rather than a guess; the production routes all declare through
+/// <c>WorkspaceIndexProvider.MeasureFamilyLookup</c>.
+/// </param>
+internal sealed class MeasuredSymbolLookupIndex(
+    ISymbolLookupIndex inner,
+    SymbolLookupBackend backend = SymbolLookupBackend.Unattributed) : ISymbolLookupIndex
 {
     private readonly long[] _elapsedTicks = new long[Enum.GetValues<SymbolLookupMethodFamily>().Length];
     private readonly long[] _callCounts = new long[Enum.GetValues<SymbolLookupMethodFamily>().Length];
+    private int _backend = (int)backend;
+
+    /// <summary>Which lookup index this wrapper measures, or <c>Mixed</c> when two routes claimed it apart.</summary>
+    internal SymbolLookupBackend Backend => (SymbolLookupBackend)Volatile.Read(ref _backend);
+
+    /// <summary>
+    /// Claim this wrapper for one backend. A cached wrapper is reached by several routes, so the claim FOLDS:
+    /// a repeat keeps the standing value and a conflict becomes <see cref="SymbolLookupBackend.Mixed"/>.
+    /// </summary>
+    internal void DeclareBackend(SymbolLookupBackend declared)
+    {
+        while (true)
+        {
+            int current = Volatile.Read(ref _backend);
+            var merged = SymbolLookupBackends.Merge((SymbolLookupBackend)current, declared);
+            if (merged == (SymbolLookupBackend)current)
+                return;
+            if (Interlocked.CompareExchange(ref _backend, (int)merged, current) == current)
+                return;
+        }
+    }
 
     public int DocumentCount => Measure(SymbolLookupMethodFamily.DocumentCount, () => inner.DocumentCount);
 

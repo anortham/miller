@@ -443,13 +443,17 @@ public sealed class WorkspaceIndexProvider
                 return GetOrAddSymbolSearchCache(
                     storeKey,
                     () => new CachedSymbolSearch(
-                        MeasureFamilyLookup(_openStoreSymbolSearch(readSession)),
+                        MeasureFamilyLookup(
+                            _openStoreSymbolSearch(readSession),
+                            SymbolLookupBackend.SearchSidecar),
                         IsSidecar: true)).Index;
             }
             return GetOrAddSymbolSearchCache(
                 storeKey,
                 () => new CachedSymbolSearch(
-                    MeasureFamilyLookup(_loadSessionSymbolSearch(readSession)),
+                    MeasureFamilyLookup(
+                        _loadSessionSymbolSearch(readSession),
+                        SymbolLookupBackend.SessionProjection),
                     IsSidecar: false)).Index;
         }
 
@@ -567,16 +571,25 @@ public sealed class WorkspaceIndexProvider
             ISymbolLookupIndex sidecarIndex = GetOrAddSymbolSearchCache(
                 servedKey,
                 () => new CachedSymbolSearch(
-                    MeasureFamilyLookup(_openStoreSymbolSearch(readSession)),
+                    MeasureFamilyLookup(
+                        _openStoreSymbolSearch(readSession),
+                        SymbolLookupBackend.SearchSidecar),
                     IsSidecar: true)).Index;
+            // A lagging sidecar answers the recall and re-reads every row from the live artifact, so the read pays
+            // both costs and gets its own backend name. A current one is served straight through and is a plain
+            // sidecar read.
             return MeasureFamilyLookup(
-                LaggingSidecarSymbolLookup.Wrap(sidecarIndex, served.Lagging, readSession));
+                LaggingSidecarSymbolLookup.Wrap(sidecarIndex, served.Lagging, readSession),
+                served.Lagging ? SymbolLookupBackend.LaggingSidecar : SymbolLookupBackend.SearchSidecar);
         }
 
         CacheKey key = KeyFor(workspaceId, readSession.Snapshot);
         return GetOrAddSymbolReadCache(
             key,
-            () => new CachedSymbolRead(MeasureFamilyLookup(_loadSessionSymbolSearch(readSession)))).Index;
+            () => new CachedSymbolRead(
+                MeasureFamilyLookup(
+                    _loadSessionSymbolSearch(readSession),
+                    SymbolLookupBackend.SessionProjection))).Index;
     }
 
     /// <summary>
@@ -658,7 +671,9 @@ public sealed class WorkspaceIndexProvider
                 cached = GetOrAddSymbolSearchCache(
                     key,
                     () => new CachedSymbolSearch(
-                        MeasureFamilyLookup(_openStoreSymbolSearch(readSession)),
+                        MeasureFamilyLookup(
+                            _openStoreSymbolSearch(readSession),
+                            SymbolLookupBackend.SearchSidecar),
                         IsSidecar: true));
             }
             else if (familyStore)
@@ -666,7 +681,9 @@ public sealed class WorkspaceIndexProvider
                 cached = GetOrAddSymbolSearchCache(
                     key,
                     () => new CachedSymbolSearch(
-                        MeasureFamilyLookup(_loadSessionSymbolSearch(readSession)),
+                        MeasureFamilyLookup(
+                            _loadSessionSymbolSearch(readSession),
+                            SymbolLookupBackend.SessionProjection),
                         IsSidecar: false));
             }
             else
@@ -1769,8 +1786,23 @@ public sealed class WorkspaceIndexProvider
         return new ReadPhaseTelemetry(lookup, graph, cache.TotalEntries);
     }
 
-    private static MeasuredSymbolLookupIndex MeasureFamilyLookup(ISymbolLookupIndex index) =>
-        index as MeasuredSymbolLookupIndex ?? new MeasuredSymbolLookupIndex(index);
+    /// <summary>
+    /// Wrap a family-store lookup in its measuring wrapper and RECORD which index it is, so the read telemetry
+    /// can attribute a lookup burst to the search sidecar or to the in-memory generation projection. The wrapper
+    /// is cached and several routes reach the same instance, so the claim folds rather than overwrites: a repeat
+    /// keeps the standing value and a conflict is reported as <c>Mixed</c>.
+    /// </summary>
+    private static MeasuredSymbolLookupIndex MeasureFamilyLookup(
+        ISymbolLookupIndex index,
+        SymbolLookupBackend backend)
+    {
+        if (index is MeasuredSymbolLookupIndex measured)
+        {
+            measured.DeclareBackend(backend);
+            return measured;
+        }
+        return new MeasuredSymbolLookupIndex(index, backend);
+    }
 
     private static void ObserveGraphStatement(GraphStatementObservation observation)
     {

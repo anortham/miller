@@ -452,6 +452,62 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             static family => Assert.True(family.ElapsedMilliseconds >= 0));
     }
 
+    /// <summary>
+    /// Open question 3 of the 2026-08-21 context latency diagnosis: two FindByName bursts of 468 calls at 13.0 s
+    /// could not be attributed, because nothing recorded WHICH lookup index answered. The phase record now names
+    /// the backend beside the per-method counts, so the next burst is attributable from telemetry alone.
+    /// </summary>
+    [Fact]
+    public void LookupPhaseTelemetryNamesTheLookupBackendBesideTheFindByNameDelta()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        var measured = new MeasuredSymbolLookupIndex(
+            SymbolSearchProjectionLoader.Load(fixture.DbPath),
+            SymbolLookupBackend.SessionProjection);
+        var telemetry = new ReadPhaseTelemetry(measured, graph: null, providerCacheEntries: 0);
+
+        _ = measured.FindByName("TargetType");
+        _ = measured.FindByName("TargetType");
+        ContextLookupPhaseObservation observation =
+            telemetry.CompleteLookupPhase(ContextLookupPhase.AnchorResolution);
+
+        Assert.Equal(2, observation.Delta.FindByName.CallCount);
+        Assert.Equal(SymbolLookupBackend.SessionProjection, observation.LookupBackend);
+        Assert.Equal(SymbolLookupBackend.SessionProjection, telemetry.LookupBackend);
+        Assert.Equal("session_projection", SymbolLookupBackends.Name(observation.LookupBackend));
+    }
+
+    /// <summary>
+    /// A measuring wrapper that two routes claim for different indexes must not pick one and look authoritative.
+    /// It records "mixed", so a phase whose counts could have come from either index says so instead of naming a
+    /// backend it cannot prove. An unclaimed wrapper reports absence of a claim, never a guess at one.
+    /// </summary>
+    [Fact]
+    public void MeasuredLookupBackendReportsMixedWhenTwoRoutesClaimOneWrapperForDifferentIndexes()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        var measured = new MeasuredSymbolLookupIndex(SymbolSearchProjectionLoader.Load(fixture.DbPath));
+
+        Assert.Equal(SymbolLookupBackend.Unattributed, measured.Backend);
+        Assert.Equal("unattributed", SymbolLookupBackends.Name(measured.Backend));
+
+        measured.DeclareBackend(SymbolLookupBackend.SearchSidecar);
+        Assert.Equal(SymbolLookupBackend.SearchSidecar, measured.Backend);
+
+        measured.DeclareBackend(SymbolLookupBackend.SearchSidecar);
+        Assert.Equal(SymbolLookupBackend.SearchSidecar, measured.Backend);
+
+        measured.DeclareBackend(SymbolLookupBackend.Unattributed);
+        Assert.Equal(SymbolLookupBackend.SearchSidecar, measured.Backend);
+
+        measured.DeclareBackend(SymbolLookupBackend.SessionProjection);
+        Assert.Equal(SymbolLookupBackend.Mixed, measured.Backend);
+        Assert.Equal("mixed", SymbolLookupBackends.Name(measured.Backend));
+
+        measured.DeclareBackend(SymbolLookupBackend.SearchSidecar);
+        Assert.Equal(SymbolLookupBackend.Mixed, measured.Backend);
+    }
+
     [Fact]
     public void LookupPhaseTelemetryClassifiesSearchRequestsWithoutExposingQueries()
     {
@@ -1545,6 +1601,124 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
 
         Assert.Single(context.Index.FindByName("TargetType"));
+    }
+
+    /// <summary>
+    /// The experiment for open question 3 of the 2026-08-21 context latency diagnosis. A FindByName burst is only
+    /// attributable if the read says which index answered it, so every named read records its lookup backend and
+    /// the read telemetry carries the name. This is the sidecar case: the served stamp equals the live snapshot.
+    /// </summary>
+    [Fact]
+    public void ResolveSymbolRead_FamilyStoreCurrentSidecar_RecordsTheSearchSidecarAsTheLookupBackend()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("backend-cur");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-a", storeLogSequence: 21);
+        WriteLastGoodSearchSidecar(root, target, live);
+
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: sidecar,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            loadSessionSymbolSearch: _ =>
+                throw new InvalidOperationException("the generation projection was not expected"),
+            openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
+        using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "backend-cur.db"), "target-ws", root);
+        using TelemetryScope scope = ledger.Measure("inspect", op: null);
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
+        Assert.Single(context.Index.FindByName("TargetType"));
+        ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
+
+        Assert.Equal(SymbolLookupBackend.SearchSidecar, context.ReadTelemetry!.LookupBackend);
+        using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
+        Assert.Equal("search_sidecar", metadata.RootElement.GetProperty("read_lookup_backend").GetString());
+    }
+
+    /// <summary>
+    /// The projection case of the same experiment: with the sidecar opted out, the whole-generation in-memory
+    /// projection answers, and the record must say so rather than borrowing the sidecar's name.
+    /// </summary>
+    [Fact]
+    public void ResolveSymbolRead_FamilyStoreSidecarOptOut_RecordsTheSessionProjectionAsTheLookupBackend()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("backend-off");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-b", storeLogSequence: 21);
+        WriteLastGoodSearchSidecar(root, target, lastGood);
+
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: SymbolSearchSidecar.Disabled,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(live)),
+            loadSessionSymbolSearch: _ => SymbolSearchProjectionLoader.Load(target.DbPath),
+            openStoreSymbolSearch: _ =>
+                throw new InvalidOperationException("the opt-out path must not open the sidecar"));
+        using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "backend-off.db"), "target-ws", root);
+        using TelemetryScope scope = ledger.Measure("inspect", op: null);
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
+        Assert.Single(context.Index.FindByName("TargetType"));
+        ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
+
+        Assert.Equal(SymbolLookupBackend.SessionProjection, context.ReadTelemetry!.LookupBackend);
+        using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
+        Assert.Equal("session_projection", metadata.RootElement.GetProperty("read_lookup_backend").GetString());
+    }
+
+    /// <summary>
+    /// The third case of the same experiment. A sidecar that LAGS the live generation supplies the recall while
+    /// every returned row is re-read from the live artifact, so the read pays both costs. It gets its own name:
+    /// calling it "search sidecar" would hide the live re-read that a slow burst may be made of.
+    /// </summary>
+    [Fact]
+    public void ResolveSymbolRead_FamilyStoreLastGood_RecordsTheLaggingSidecarAsTheLookupBackend()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("backend-lag");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
+        WorkspaceReadSnapshot live = StoreSnapshot(root, "manifest-b", storeLogSequence: 21);
+        WriteLastGoodSearchSidecar(root, target, lastGood);
+
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            sidecar: sidecar,
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(live, target.DbPath)),
+            loadSessionSymbolSearch: _ =>
+                throw new InvalidOperationException("the generation projection was not expected"),
+            openStoreSymbolSearch: session => sidecar.OpenStoreRequired(root, session.Snapshot));
+        using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "backend-lag.db"), "target-ws", root);
+        using TelemetryScope scope = ledger.Measure("inspect", op: null);
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
+        Assert.Single(context.Index.FindByName("TargetType"));
+        ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
+
+        Assert.Equal(SymbolLookupBackend.LaggingSidecar, context.ReadTelemetry!.LookupBackend);
+        using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
+        Assert.Equal("lagging_sidecar", metadata.RootElement.GetProperty("read_lookup_backend").GetString());
     }
 
     [Fact]

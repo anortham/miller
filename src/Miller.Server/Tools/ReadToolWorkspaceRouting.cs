@@ -212,6 +212,9 @@ internal static class ReadToolWorkspaceRouting
         telemetry.SetMetadata("read_resolve_ms", readTelemetry.ResolveElapsedMilliseconds);
         telemetry.SetMetadata("read_lookup_count", readTelemetry.LookupCallCount);
         telemetry.SetMetadata("read_lookup_ms", readTelemetry.LookupElapsedMilliseconds);
+        telemetry.SetMetadata(
+            "read_lookup_backend",
+            SymbolLookupBackends.Name(readTelemetry.LookupBackend));
         telemetry.SetMetadata("read_graph_count", readTelemetry.GraphCallCount);
         telemetry.SetMetadata("read_graph_ms", readTelemetry.GraphElapsedMilliseconds);
         telemetry.SetMetadata("read_provider_cache_entries", readTelemetry.ProviderCacheEntries);

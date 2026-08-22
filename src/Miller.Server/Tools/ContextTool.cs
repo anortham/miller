@@ -380,7 +380,8 @@ public sealed partial class ContextTool
                 readTelemetry.CompleteLookupPhase(completedLookupPhase);
             _lookupPhaseObserver?.Invoke(observation);
             Serilog.Log.Information(
-                "Context lookup phase {ContextLookupPhase} completed with delta {@ContextLookupDelta} " +
+                "Context lookup phase {ContextLookupPhase} on lookup backend {ContextLookupBackend} " +
+                "completed with delta {@ContextLookupDelta} " +
                 "and total {@ContextLookupTotal}, search delta {@ContextSearchDelta}, " +
                 "search total {@ContextSearchTotal}, FTS search delta {@ContextFtsSearchDelta}, " +
                 "FTS search total {@ContextFtsSearchTotal}, content FTS search delta {@ContextFtsTextSearchDelta}, " +
@@ -388,6 +389,7 @@ public sealed partial class ContextTool
                 "{@ContextTextContentIndexResolveDelta}, and content index resolve total " +
                 "{@ContextTextContentIndexResolveTotal} for cid {CorrelationId}",
                 completedLookupPhase,
+                SymbolLookupBackends.Name(observation.LookupBackend),
                 observation.Delta,
                 observation.Total,
                 observation.SearchDelta,
