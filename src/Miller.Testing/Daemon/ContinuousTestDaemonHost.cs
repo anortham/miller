@@ -144,6 +144,12 @@ public sealed class ContinuousTestWorkspaceContext : IDisposable
 
     internal CtDegradationBackoff Backoff { get; } = new();
 
+    /// <summary>
+    /// How long this context's poll has answered "the delta is unreadable" in a row, and the plain
+    /// reason to publish once that run is long enough to mean automatic runs have stopped.
+    /// </summary>
+    internal CtUnavailableDeltaTracker Unavailable { get; } = new();
+
     internal CtFreshnessKey? StartedAt;
 
     internal CtFreshnessKey? LatestFreshness;
@@ -220,6 +226,20 @@ public sealed class ContinuousTestDaemonHost
     /// </summary>
     private const int MaxAdoptedStatusAttempts = 12;
 
+    /// <summary>
+    /// What a request file whose name is not a legal command id is renamed to. It keeps the original
+    /// name for a person to read and leaves the <c>*.request.json</c> listing, so the drain cannot
+    /// pick it up again.
+    /// </summary>
+    private const string RejectedRequestSuffix = ".rejected";
+
+    /// <summary>
+    /// The poll answer that says the impact of the interval could not be read. Named here because the
+    /// loop's reading of it is a decision, not a log string: see the poll path in
+    /// <see cref="PollContextAsync"/>.
+    /// </summary>
+    private const string UnavailableDeltaReason = "unavailable_delta";
+
     private readonly string _workspaceRoot;
     private readonly ContinuousTestDaemonHostOptions _options;
     private readonly CtExecutionBudget _budget;
@@ -254,6 +274,14 @@ public sealed class ContinuousTestDaemonHost
     /// bounded by the command directory.
     /// </summary>
     private readonly HashSet<string> _acknowledged = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Request files this loop has already reported as badly named, so the report is written once
+    /// rather than on every pass. Pruned each pass to the files still on disk, like
+    /// <see cref="_acknowledged"/>, so a long-running daemon cannot grow it without bound.
+    /// </summary>
+    private readonly HashSet<string> _malformedRequests = new(StringComparer.Ordinal);
+
     private DateTimeOffset _runStartedAtUtc;
 
     // Read by the pulse task while the main loop writes them. Volatile rather than locked: a republish that
@@ -591,7 +619,13 @@ public sealed class ContinuousTestDaemonHost
             else
             {
                 _runActivity?.EnterIdle();
-                string reason = _primary.StartedAt is null ? "status-only" : "idle";
+
+                // A daemon whose poll is stuck says so. "idle" is true but useless here: the loop is
+                // idle BECAUSE it cannot read the delta, and a reader who is waiting for an automatic
+                // run has no other way to learn that. The reason string is what `tests status` prints
+                // as daemon.reason, so no new key is needed for the answer to reach a person.
+                string reason = _primary.Unavailable.StuckReason
+                    ?? (_primary.StartedAt is null ? "status-only" : "idle");
                 TryWriteStatus(lease, CtDaemonLifecycleState.Running, reason);
                 Publish(Evaluate(reason, CtDaemonLifecycleState.Running, executing: false));
             }
@@ -784,10 +818,18 @@ public sealed class ContinuousTestDaemonHost
         if (!Directory.Exists(commandDir))
             return false;
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seenMalformed = new HashSet<string>(StringComparer.Ordinal);
         foreach (string path in Directory.EnumerateFiles(commandDir, "*.request.json"))
         {
             cancellationToken.ThrowIfCancellationRequested();
             string id = Path.GetFileName(path)[..^".request.json".Length];
+            if (!CtDaemonProtocol.IsCommandId(id))
+            {
+                seenMalformed.Add(path);
+                RejectMalformedRequestFile(path);
+                continue;
+            }
+
             seen.Add(id);
             if (_acknowledged.Contains(id) || CtCommandChannel.TryReadAck(_workspaceRoot, id) is not null)
                 continue;
@@ -819,7 +861,42 @@ public sealed class ContinuousTestDaemonHost
         }
 
         _acknowledged.IntersectWith(seen);
+        _malformedRequests.IntersectWith(seenMalformed);
         return false;
+    }
+
+    /// <summary>
+    /// Moves a request file whose NAME is not a legal command id out of the drain's way.
+    ///
+    /// <para>The stem is the command id everywhere else in the protocol, and every protocol path
+    /// REFUSES an id outside <c>^[A-Za-z0-9._-]+$</c> by throwing. That throw used to escape from the
+    /// acknowledgement probe, which runs BEFORE the per-command guard below, so one file called
+    /// <c>bad name.request.json</c> killed the daemon — and the file stays on disk, so every restart
+    /// died on it again. Moving it aside is the only repair that holds: the bad id must never reach a
+    /// protocol path at all, and the reject acknowledgement the guard writes is itself a protocol path,
+    /// so rejecting it as a poisonous request would throw in exactly the same place.</para>
+    ///
+    /// <para>The suffix leaves the file readable for a person and outside the <c>*.request.json</c>
+    /// listing, so the drain never sees it again. A move that cannot happen (a held file, a read-only
+    /// directory) costs one skip per pass and nothing else — the loop lives, which is the whole
+    /// point.</para>
+    /// </summary>
+    private void RejectMalformedRequestFile(string path)
+    {
+        bool moved = false;
+        try
+        {
+            File.Move(path, path + RejectedRequestSuffix, overwrite: true);
+            moved = true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+
+        // Reported once per file. A successful move makes the path unrepeatable anyway; a failed one
+        // would otherwise write the same line four times a second forever.
+        if (_malformedRequests.Add(path))
+            Diagnostic($"ct command file rejected name={Path.GetFileName(path)} moved={moved}");
     }
 
     /// <summary>
@@ -1035,10 +1112,34 @@ public sealed class ContinuousTestDaemonHost
                 context.StartedAt ??= freshness;
                 context.LatestFreshness = freshness;
                 context.Queue?.ObserveFreshRevision(context.WorkspaceId, freshness);
+
+                // An unavailable delta is the one answer that is neither a success nor the word
+                // "degraded", and it is STICKY: the poller may not absorb an interval whose impact it
+                // could not read, so the same unreadable interval comes back every 250 ms. Recording
+                // that as a healthy poll left a daemon that looked fine at 4 Hz while automatic runs
+                // had silently stopped. A run of them is treated as a degradation instead — of the
+                // POLL only, so work accepted at an earlier readable base still drains.
+                bool unavailable = string.Equals(poll.Reason, UnavailableDeltaReason, StringComparison.Ordinal);
+                bool stuck = unavailable && context.Unavailable.RecordUnavailable(poll.DeltaReason);
+                if (!unavailable)
+                    context.Unavailable.RecordOther();
+
                 if (string.Equals(poll.Reason, "degraded", StringComparison.Ordinal))
                 {
                     context.Backoff.RecordDegraded();
                     context.Watch.RecordError("degraded");
+                }
+                else if (stuck)
+                {
+                    context.Backoff.RecordPollDegraded();
+
+                    // Degraded watch health reads as Unknown, which is the honest verdict here: the
+                    // daemon cannot say what the unread interval changed, so it cannot stand behind a
+                    // green it recorded before that interval.
+                    context.Watch.RecordError(
+                        string.IsNullOrWhiteSpace(poll.DeltaReason)
+                            ? UnavailableDeltaReason
+                            : poll.DeltaReason);
                 }
                 else
                 {
@@ -1048,6 +1149,7 @@ public sealed class ContinuousTestDaemonHost
             }
             else
             {
+                context.Unavailable.RecordOther();
                 context.Backoff.RecordDegraded();
                 context.Watch.RecordError(poll.Reason);
             }
