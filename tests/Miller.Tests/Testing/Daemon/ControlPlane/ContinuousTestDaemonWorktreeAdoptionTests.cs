@@ -312,16 +312,30 @@ public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
                 freshness: new CtFreshnessKey("gen-1", 2),
                 targetWorkspaceRoot: WorktreeRoot);
 
+            IReadOnlyList<ContinuousTestStatus>? routedStatuses = null;
+            CtDaemonCommandAck? routedAck = null;
             await WaitForAsync(
-                () => wtStore.ListContinuousTestStatuses(wtId).Count > 0,
+                () =>
+                {
+                    IReadOnlyList<ContinuousTestStatus> statuses =
+                        wtStore.ListContinuousTestStatuses(wtId);
+                    CtDaemonCommandAck? ack = CtCommandChannel.TryReadAck(MainRoot, request.CommandId);
+                    if (statuses.Count == 0 ||
+                        ack is not { State: CtDaemonCommandState.Acknowledged, Reason: "run" })
+                        return false;
+
+                    routedStatuses = statuses;
+                    routedAck = ack;
+                    return true;
+                },
                 "the routed run to land a status in the worktree store");
 
-            // The run landed in the WORKTREE's ct.db under the worktree's id...
-            Assert.NotEmpty(wtStore.ListContinuousTestStatuses(wtId));
+            Assert.NotNull(routedStatuses);
+            Assert.NotEmpty(routedStatuses);
             Assert.True(File.Exists(CtSchema.DbPathFor(WorktreeRoot)));
-            Assert.Equal("run", CtCommandChannel.TryReadAck(MainRoot, request.CommandId)?.Reason);
+            Assert.Equal(CtDaemonCommandState.Acknowledged, routedAck?.State);
+            Assert.Equal("run", routedAck?.Reason);
 
-            // ...and nothing crossed into the primary context: no main ct.db, no primary enqueue.
             Assert.False(File.Exists(CtSchema.DbPathFor(MainRoot)));
             Assert.Empty(primaryEnqueuer.Changes);
         }
