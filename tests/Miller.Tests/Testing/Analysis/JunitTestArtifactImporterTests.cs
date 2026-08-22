@@ -554,9 +554,9 @@ public sealed class JunitTestArtifactImporterTests : IDisposable
             SourceArtifactId: "artifact:1",
             Metadata: new Dictionary<string, object?>());
 
-        IReadOnlyList<ContinuousTestResult> redThenGreen = JunitTestArtifactImporter.MergeWorstWins(
+        IReadOnlyList<ContinuousTestResult> redThenGreen = CtResultFold.MergeWorstWins(
             [Row("failed", "row 2 expected 4"), Row("passed", null)]);
-        IReadOnlyList<ContinuousTestResult> greenThenRed = JunitTestArtifactImporter.MergeWorstWins(
+        IReadOnlyList<ContinuousTestResult> greenThenRed = CtResultFold.MergeWorstWins(
             [Row("passed", null), Row("failed", "row 2 expected 4")]);
 
         // One row survives, it is the red one, and it keeps the text that names the failing data row —
@@ -590,7 +590,7 @@ public sealed class JunitTestArtifactImporterTests : IDisposable
             SourceArtifactId: "artifact:1",
             Metadata: new Dictionary<string, object?>());
 
-        IReadOnlyList<ContinuousTestResult> merged = JunitTestArtifactImporter.MergeWorstWins(
+        IReadOnlyList<ContinuousTestResult> merged = CtResultFold.MergeWorstWins(
             [Row("result:a", "passed"), Row("result:b", "failed"), Row("result:c", "skipped")]);
 
         Assert.Equal(["result:a", "result:b", "result:c"], merged.Select(row => row.Id));

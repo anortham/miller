@@ -226,6 +226,97 @@ public sealed class ContinuousTestStoreApplierTests : IDisposable
             results.Select(row => (string)row.Metadata["provider_result_id"]!).ToArray());
     }
 
+    /// <summary>
+    /// The false-green path every provider crosses. A delay-enumerated xUnit theory emits ONE
+    /// test-case-starting event, so every data row arrives as a separate <see cref="ProviderCaseResult"/>
+    /// under the SAME test case id; a TRX file with two rows of one test name does the same. The stored
+    /// result id is derived from (workspace, case, run), so the rows collide, and writing them in order let
+    /// the LAST row win — a passing row after a failing one published GREEN over a real failure.
+    /// </summary>
+    [Theory]
+    // The order the provider listed them in must not change the verdict.
+    [InlineData("failed", "passed")]
+    [InlineData("passed", "failed")]
+    public void Duplicate_case_ids_in_one_run_keep_the_failing_verdict(string first, string second)
+    {
+        using var store = new ContinuousTestStore(_dbPath);
+        ContinuousTestStatus status = RunTwoRowsOfOneCase(store, first, second);
+
+        Assert.Equal(ContinuousTestState.Red, status.State);
+        Assert.Equal("failed", status.LastResultStatus);
+        // The failure text is the only thing that names WHICH data row broke, so the kept row carries it
+        // even when the failing row lost the write order.
+        Assert.Equal("row 2 expected 4", status.FailureSummary);
+
+        ContinuousTestResult stored = Assert.Single(store.ListTestResults(Workspace));
+        Assert.Equal("failed", stored.Status);
+    }
+
+    /// <summary>
+    /// The fold must not manufacture a failure: two green rows of one case stay green, and stay ONE row.
+    /// </summary>
+    [Fact]
+    public void Duplicate_case_ids_that_all_passed_stay_green()
+    {
+        using var store = new ContinuousTestStore(_dbPath);
+        ContinuousTestStatus status = RunTwoRowsOfOneCase(store, "passed", "passed");
+
+        Assert.Equal(ContinuousTestState.Green, status.State);
+        Assert.Equal("passed", status.LastResultStatus);
+        ContinuousTestResult stored = Assert.Single(store.ListTestResults(Workspace));
+        Assert.Equal("passed", stored.Status);
+        // Single-row semantics are kept, not summed: the surviving row reports its own duration.
+        Assert.Equal(0.5, stored.DurationSeconds);
+    }
+
+    /// <summary>
+    /// Runs one discovered case whose provider reported TWO result rows, and returns the stored state.
+    /// </summary>
+    private ContinuousTestStatus RunTwoRowsOfOneCase(ContinuousTestStore store, string first, string second)
+    {
+        var applier = new ContinuousTestStoreApplier(store);
+        applier.ApplyDiscovery(
+            Workspace,
+            [
+                new ProviderTestCase(
+                    Id: "test:theory",
+                    DisplayName: "Adds",
+                    FullyQualifiedName: "Sample.Tests.Adds",
+                    Selector: "Sample.Tests.Adds"),
+            ]);
+        applier.StartRun(new ContinuousTestProviderRunStart(
+            WorkspaceId: Workspace,
+            RunId: "run:1",
+            SelectedRevision: "1",
+            IndexIdentity: Identity,
+            Revision: 1,
+            SelectedTestCaseIds: ["test:theory"]));
+
+        ProviderCaseResult Row(string providerResultId, string status) => new(
+            Id: providerResultId,
+            TestCaseId: "test:theory",
+            Status: status,
+            ResultRevision: "1",
+            IndexIdentity: Identity,
+            DurationSeconds: 0.5,
+            FailureSummary: status == "failed" ? "row 2 expected 4" : null);
+
+        applier.CompleteRun(
+            WorkspaceId: Workspace,
+            SelectedRevision: "1",
+            CurrentRevision: "1",
+            IndexIdentity: Identity,
+            Revision: 1,
+            Result: new ProviderRunResult(
+                RunId: "run:1",
+                Status: first == "failed" || second == "failed" ? "failed" : "passed",
+                StartedAt: null,
+                EndedAt: DateTimeOffset.Parse("2026-06-14T01:00:02Z"),
+                CaseResults: [Row("provider-result:row-1", first), Row("provider-result:row-2", second)]));
+
+        return Assert.Single(store.ListContinuousTestStatuses(Workspace));
+    }
+
     [Fact]
     public void Store_applier_preserves_stale_state_when_revision_moves_during_run()
     {
