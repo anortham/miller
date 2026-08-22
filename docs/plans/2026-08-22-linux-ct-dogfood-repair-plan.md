@@ -252,8 +252,8 @@
 **Approach:** Treat correctness fields as hard gates and elapsed time as report-only. Confirm the helper-host failures and Linux fixture failures are gone, and compare the Miller chunk path against the newly exposed whole-suite reason rather than assuming chunking itself is a defect.
 
 **Acceptance criteria:**
-- [ ] Miller CT has no missing helper-host or Linux-fixture failures and leaves no stale cases caused by those defects.
-- [ ] JavaScript and Python remain green with their original CT state restored.
-- [ ] No daemon or global execution-budget lease remains.
+- [x] Miller CT has no missing helper-host or Linux-fixture failures and leaves no stale cases caused by those defects.
+- [x] JavaScript and Python remain green with their original CT state restored.
+- [x] No daemon or global execution-budget lease remains.
 - [ ] `scripts/test.sh all`, Release build, and worktree-state checks are recorded on the exact final tree.
-- [ ] Verification evidence is mapped in `docs/README.md`, all plan checkboxes are updated, and the serialized worker commit is recorded.
+- [x] Verification evidence is mapped in `docs/README.md`, all plan checkboxes are updated, and the serialized worker commit is recorded.
