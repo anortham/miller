@@ -35,6 +35,24 @@ public sealed class TestProcessRunnerOptions
     public TimeSpan OutputStallTimeout { get; init; } = TimeSpan.FromMinutes(10);
 
     /// <summary>
+    /// The most characters a run retains from EACH of the child's output streams.
+    ///
+    /// <para>Without a bound there is none at all. The stall guard above bounds SILENCE, so a chatty process
+    /// never trips it, and the only total bound is the 30-minute provider window: a test that logs at 10MB/s
+    /// grew about 18GB of UTF-16 text inside the CT daemon before it died. What the cap keeps is a head plus a
+    /// rolling tail joined by one elision marker (<see cref="BoundedOutputBuffer"/>), because a failure summary
+    /// reads the first line and the failure detail is at the end.</para>
+    ///
+    /// <para>The default is deliberately generous - a real junit/TRX/JSON run of a large suite is a few
+    /// megabytes of text, and result ARTIFACTS are files on disk rather than stdout. The two providers that DO
+    /// parse results from stdout (xunit JSONL, cargo test) refuse a truncated stream outright rather than
+    /// parse it, so the cap can never quietly change a verdict.</para>
+    ///
+    /// <para>Zero or a negative value disables the bound and restores the unbounded capture.</para>
+    /// </summary>
+    public int MaxCapturedCharactersPerStream { get; init; } = 8 * 1024 * 1024;
+
+    /// <summary>
     /// Where a run reports containment or shutdown that DEGRADED without failing: a job object that could not be
     /// attached, a priority that could not be lowered, a child that outlived its exit grace period. Every one of
     /// those used to be swallowed or thrown. Swallowed, an uncontained provider looked exactly like a contained
@@ -385,11 +403,25 @@ public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProce
             : string.IsNullOrEmpty(collected.StandardError)
                 ? reason
                 : collected.StandardError + Environment.NewLine + reason;
-        return new TestProcessResult(StallExitCode, collected?.StandardOutput ?? string.Empty, standardError);
+        return new TestProcessResult(
+            StallExitCode,
+            collected?.StandardOutput ?? string.Empty,
+            standardError,
+            collected?.StandardOutputTruncated ?? false,
+            collected?.StandardErrorTruncated ?? false);
     }
 
-    private static async Task DrainAsync(StreamReader reader, StringBuilder buffer, Action onOutput)
+    /// <summary>
+    /// Read one stream to EOF into a bounded buffer. Takes a <see cref="TextReader"/> rather than the child's
+    /// <see cref="StreamReader"/> so a test can drive the loop with more text than the cap allows, which is the
+    /// only way to prove the buffer stays bounded and the stall clock keeps stamping past the cap.
+    /// </summary>
+    internal static async Task DrainAsync(TextReader reader, BoundedOutputBuffer buffer, Action onOutput)
     {
+        ArgumentNullException.ThrowIfNull(reader);
+        ArgumentNullException.ThrowIfNull(buffer);
+        ArgumentNullException.ThrowIfNull(onOutput);
+
         var chunk = new char[4096];
         while (true)
         {
@@ -415,18 +447,13 @@ public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProce
             if (read <= 0)
                 return;
 
-            // Stamp BEFORE appending. The stall clock must advance the moment the child speaks, not after this
-            // loop wins a lock that a slow reader of the same buffer may hold.
+            // Stamp BEFORE appending, and stamp on EVERY read even after the cap is reached. The stall clock
+            // must advance the moment the child speaks, not after this loop wins a lock that a slow reader of
+            // the same buffer may hold - and a chatty process that has filled its buffer is still live, so a
+            // stamp skipped at the cap would have the stall guard kill it as wedged.
             onOutput();
-            lock (buffer)
-                buffer.Append(chunk, 0, read);
+            buffer.Append(chunk, 0, read);
         }
-    }
-
-    private static string Snapshot(StringBuilder buffer)
-    {
-        lock (buffer)
-            return buffer.ToString();
     }
 
     /// <summary>
@@ -515,8 +542,8 @@ public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProce
         private readonly string _executable;
         private readonly int _processId;
         private readonly TestProcessRunnerOptions _options;
-        private readonly StringBuilder _standardOutputBuffer = new();
-        private readonly StringBuilder _standardErrorBuffer = new();
+        private readonly BoundedOutputBuffer _standardOutputBuffer;
+        private readonly BoundedOutputBuffer _standardErrorBuffer;
         private readonly Task _standardOutput;
         private readonly Task _standardError;
         private readonly object _containmentGate = new();
@@ -539,6 +566,8 @@ public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProce
             _options = options;
             _containment = containment;
             _lastOutputTicks = Stopwatch.GetTimestamp();
+            _standardOutputBuffer = new BoundedOutputBuffer(options.MaxCapturedCharactersPerStream);
+            _standardErrorBuffer = new BoundedOutputBuffer(options.MaxCapturedCharactersPerStream);
             _standardOutput = DrainAsync(process.StandardOutput, _standardOutputBuffer, StampOutput);
             _standardError = DrainAsync(process.StandardError, _standardErrorBuffer, StampOutput);
         }
@@ -589,8 +618,10 @@ public sealed class TestProcessRunner : ITestProcessRunner, ITestBackgroundProce
 
             return new TestProcessResult(
                 _process.ExitCode,
-                Snapshot(_standardOutputBuffer),
-                Snapshot(_standardErrorBuffer));
+                _standardOutputBuffer.Snapshot(),
+                _standardErrorBuffer.Snapshot(),
+                _standardOutputBuffer.Truncated,
+                _standardErrorBuffer.Truncated);
         }
 
         public void TerminateProcessTree()
