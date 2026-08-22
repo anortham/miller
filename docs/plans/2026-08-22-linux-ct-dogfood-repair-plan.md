@@ -255,5 +255,5 @@
 - [x] Miller CT has no missing helper-host or Linux-fixture failures and leaves no stale cases caused by those defects.
 - [x] JavaScript and Python remain green with their original CT state restored.
 - [x] No daemon or global execution-budget lease remains.
-- [ ] `scripts/test.sh all`, Release build, and worktree-state checks are recorded on the exact final tree.
+- [x] `scripts/test.sh all`, Release build, and worktree-state checks are recorded on the exact final tree.
 - [x] Verification evidence is mapped in `docs/README.md`, all plan checkboxes are updated, and the serialized worker commit is recorded.

@@ -5,6 +5,7 @@ Platform: Linux
 Branch: `plan/linux-dogfood-fixes`
 Worktree: `/home/murphy/source/miller/.worktrees/linux-dogfood-fixes-plan`
 Branch HEAD at the branch-gate replay: `1c4d770d`
+Post-commit HEAD: `34aa2842`
 Helper locator: `c35fe7af`
 
 ## Outcome
@@ -13,7 +14,8 @@ The repaired continuous-testing lifecycle passed the Linux Miller, Razorback, an
 replays. Miller's helper-host and Linux-fixture defects were isolated and fixed; the final Miller
 status was green with `selected_count=8191`, `stale_count=0`, and no failures. The required
 `scripts/test.sh all` rerun on the corrected test tree was green. The composite acceptance
-criterion remains open solely for the post-commit clean worktree-state check.
+criterion is complete: the post-commit clean worktree-state check passed, and CT Task 6 is complete.
+The source tree was unchanged by the docs-only commit, so the suite was not rerun after that commit.
 
 ## Launcher and Miller replay
 
@@ -59,8 +61,7 @@ index revision moved from 566 to 1126 and the more-itertools revision moved from
 At replay capture, the main checkout was `/home/murphy/source/miller` on `main` at `da6be63f`,
 clean; before this documentation packet, the task worktree was
 `/home/murphy/source/miller/.worktrees/linux-dogfood-fixes-plan` on `plan/linux-dogfood-fixes` at
-`1c4d770d`, clean. This documentation packet intentionally leaves the task worktree dirty until
-the lead commits the evidence, map, plan-status, and ignored ledger updates.
+`1c4d770d`, clean. The docs packet was then committed; its post-commit inventory is recorded below.
 
 ## Branch-gate replay
 
@@ -74,10 +75,10 @@ The rerun on that changed test tree passed 8,232 fast tests, failed 0, and skipp
 test duration 51 seconds, wrapper wall 55 seconds). Scale passed 154, failed 0, and skipped 16
 (170 total; 52 seconds). The wrapper's Release builds had 0 warnings and 0 errors. The explicit
 `dotnet build Miller.slnx -c Release --no-restore` then passed at `1c4d770d` in 2.45 seconds with
-0 warnings and 0 errors. The plan's composite exact-tree criterion remains pending solely for the
-post-commit clean worktree-state check.
+0 warnings and 0 errors. The post-commit clean worktree-state check below closes the plan's
+composite exact-tree criterion.
 
-## Pre-commit state
+## Pre-commit and post-commit state
 
 The pre-commit inventory was the task worktree
 `/home/murphy/source/miller/.worktrees/linux-dogfood-fixes-plan`, branch
@@ -85,10 +86,12 @@ The pre-commit inventory was the task worktree
 `docs/README.md`, `docs/plans/2026-08-22-linux-ct-dogfood-repair-plan.md`, and
 `docs/findings/2026-08-22-linux-ct-dogfood-repair-verification.md`. The ignored Razorback progress
 ledger was also intentionally updated. The main checkout `/home/murphy/source/miller` was clean on
-`main` at `da6be63f`. `git worktree list` contained only the main checkout and this task worktree.
+`main` at `da6be63f`. After the docs-only commit, the task worktree was at `34aa2842` with
+`git status --short --branch` clean; the main checkout remained clean, `git worktree list` still
+contained only the main checkout and this task worktree, and `pgrep` found no `ct-daemon` process.
+The post-commit check therefore passed without requiring another suite run.
 
-## Remaining branch gate
+## Closure
 
-The `scripts/test.sh all` portion and explicit Release build are green on `1c4d770d`. The composite
-criterion remains pending solely for the post-commit clean worktree-state check; no claim is made
-here that that final check has passed.
+The `scripts/test.sh all` portion and explicit Release build are green on unchanged source at
+`1c4d770d`; the post-commit clean state is confirmed at `34aa2842`. CT Task 6 is complete.
