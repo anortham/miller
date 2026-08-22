@@ -166,6 +166,8 @@ public sealed partial class ContextTool
             int selectedCount;
             int candidatesExamined;
             string output;
+            // Written by the usage branch's read window, read by the reference_items phase stamp below.
+            ContextReferenceReadCounts? referenceReadCounts = null;
             ReferenceMode parsedReferenceMode = ParseReferenceMode(reference_mode);
             bool rescueExcludeTests = parsedReferenceMode == ReferenceMode.Usage
                 ? exclude_tests
@@ -262,8 +264,10 @@ public sealed partial class ContextTool
                                 phase,
                                 telemetry,
                                 ref phaseStart,
-                                context.ReadTelemetry),
-                            queryRetrieval);
+                                context.ReadTelemetry,
+                                phase == "reference_items" ? referenceReadCounts : null),
+                            queryRetrieval,
+                            referenceReadObserver: counts => referenceReadCounts = counts);
                         break;
                     default:
                         throw new ArgumentOutOfRangeException(nameof(reference_mode));
@@ -355,12 +359,18 @@ public sealed partial class ContextTool
         string phase,
         TelemetryScope? telemetry,
         ref long phaseStart,
-        ReadPhaseTelemetry? readTelemetry = null)
+        ReadPhaseTelemetry? readTelemetry = null,
+        ContextReferenceReadCounts? referenceReadCounts = null)
     {
         long elapsedMs = Math.Max(0, (long)Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
         phaseStart = Stopwatch.GetTimestamp();
         telemetry?.SetMetadata("context_phase", phase);
         telemetry?.SetMetadata("context_phase_elapsed_ms", elapsedMs);
+        if (referenceReadCounts is { } counts)
+        {
+            telemetry?.SetMetadata("reference_candidates_read", counts.CandidatesRead);
+            telemetry?.SetMetadata("reference_candidates_skipped", counts.CandidatesSkipped);
+        }
         _phaseObserver?.Invoke(phase);
         ContextLookupPhase? lookupPhase = phase switch
         {
@@ -402,6 +412,22 @@ public sealed partial class ContextTool
                 observation.TextContentIndexResolveTotal,
                 telemetry?.CorrelationId ?? "unmeasured");
         }
+        if (referenceReadCounts is { } readCounts)
+        {
+            // The reference phase reports the read window it used, so the budget's effect on WORK is
+            // measurable next to the phase time instead of only in the rendered output.
+            Serilog.Log.Information(
+                "Context phase {ContextPhase} completed in {ContextPhaseElapsedMs} ms " +
+                "after reading evidence for {ContextReferenceCandidatesRead} candidates and skipping " +
+                "{ContextReferenceCandidatesSkipped} beyond the token budget for cid {CorrelationId}",
+                phase,
+                elapsedMs,
+                readCounts.CandidatesRead,
+                readCounts.CandidatesSkipped,
+                telemetry?.CorrelationId ?? "unmeasured");
+            return;
+        }
+
         Serilog.Log.Information(
             "Context phase {ContextPhase} completed in {ContextPhaseElapsedMs} ms for cid {CorrelationId}",
             phase,
@@ -494,6 +520,28 @@ public sealed partial class ContextTool
     private const int ReachCap = 500;
     internal const int ReferenceRowsPerSymbol = 12;
     internal const string ReferenceEvidenceBatchEnvironmentVariable = "MILLER_CONTEXT_REFERENCE_BATCH";
+    /// <summary>
+    /// How many budgets' worth of packable evidence the usage branch builds before it stops reading. The
+    /// packer keeps only <c>token_budget</c> worth of items, so reading every candidate paid for evidence the
+    /// answer threw away; the branch now reads in candidate order and stops once the material it already
+    /// holds is this multiple of the budget. The factor is the whole safety margin: the packer skips an item
+    /// that overflows and keeps scanning, so a cheap late candidate can still land after an expensive early
+    /// one, and a window of exactly one budget would drop it. Two budgets of material buys that room while
+    /// keeping the work proportional to the budget.
+    /// </summary>
+    internal const int ReferenceReadOverscanFactor = 2;
+    /// <summary>
+    /// Candidates per batched evidence read. Reads go out one chunk at a time so the stop condition is
+    /// checked between chunks, never per symbol — a per-symbol loop is the N+1 the batched reader exists to
+    /// remove. The first chunk always runs, so a bundle never renders with zero evidence.
+    /// </summary>
+    internal const int ReferenceReadChunkSize = 8;
+    /// <summary>
+    /// The <see cref="ReferenceAllocationTier"/> of an identifier item — the last tier the read window can
+    /// still add to. Everything above it (a non-pivot symbol item) is built for every candidate without a
+    /// read, so it is outside the window's control and outside the overscan measurement.
+    /// </summary>
+    private const int IdentifierAllocationTier = 2;
     internal const int ContentChunksPerSymbol = 2;
     /// <summary>Term-rescue <see cref="ContextPivotSignal.AnchorStrength"/> ceiling (below full-query affinity band).</summary>
     internal const int TermRescueStrengthCap = 18;
@@ -1223,7 +1271,8 @@ public sealed partial class ContextTool
         out int candidatesExamined,
         CancellationToken cancellationToken,
         Action<string>? phaseObserver = null,
-        ContextQueryRetrieval? retrieval = null)
+        ContextQueryRetrieval? retrieval = null,
+        Action<ContextReferenceReadCounts>? referenceReadObserver = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(index);
@@ -1282,7 +1331,9 @@ public sealed partial class ContextTool
             json,
             anchorDiagnostics,
             query,
+            out ContextReferenceReadCounts readCounts,
             cancellationToken);
+        referenceReadObserver?.Invoke(readCounts);
         phaseObserver?.Invoke("reference_items");
         var packCandidates = new List<PackCandidate<ReferenceContextItem>>(items.Count);
         foreach (ReferenceContextItem item in items)
@@ -2534,6 +2585,7 @@ public sealed partial class ContextTool
         bool json,
         IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
         string query,
+        out ContextReferenceReadCounts readCounts,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -2623,119 +2675,160 @@ public sealed partial class ContextTool
             TokenEstimator.Count(minimumEvidenceOutput) <= renderBudget &&
             TokenEstimator.Count(fixedOutput) <= renderBudget;
 
-        if (referenceDepth >= 1 && evidenceFits)
+        int candidatesRead = 0;
+        int candidatesSkipped = 0;
+        if (referenceDepth >= 1 && !evidenceFits)
         {
-            IReadOnlyDictionary<string, ReferenceEvidenceBundle>? evidenceById = null;
-            if (readMany is not null && ReferenceEvidenceBatchEnabled)
+            // The budget cannot carry one identifier beside the fixed items, so every candidate's evidence is
+            // skipped. That is a budget decision like the read window's, so it is reported the same way.
+            candidatesSkipped = usableCandidates.Length;
+        }
+        else if (referenceDepth >= 1)
+        {
+            // The token budget bounds the WORK, not only the output. Evidence is read in candidate order, one
+            // batched chunk at a time, and the loop stops once the material already built overscans the budget
+            // by ReferenceReadOverscanFactor — the packer would drop that tail anyway, and reading it cost a
+            // per-symbol round trip per candidate. The measurement counts only the tiers the window can still
+            // add to: a non-pivot symbol item is built for every candidate without any read, so counting it
+            // would let a wide candidate set close the window before a single identifier was read.
+            long overscanCeiling = (long)tokenBudget * ReferenceReadOverscanFactor;
+            long packableCost = 0;
+            foreach (ReferenceContextItem built in items)
+                packableCost += PackableCost(built);
+
+            for (int start = 0; start < usableCandidates.Length; start += ReferenceReadChunkSize)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                evidenceById = readMany(symbols);
-                ArgumentNullException.ThrowIfNull(evidenceById);
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-
-            foreach (Candidate candidate in usableCandidates)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                IndexedSymbol symbol = candidate.Symbol;
-                OutgoingReferenceEvidenceSet outgoing;
-                ReferenceEvidenceSet inbound;
-                if (evidenceById is not null)
+                // The first chunk always runs, so a bundle never renders with zero evidence.
+                if (start > 0 && packableCost >= overscanCeiling)
                 {
-                    if (!evidenceById.TryGetValue(symbol.SymbolId, out ReferenceEvidenceBundle? evidence))
-                        continue;
-                    outgoing = evidence.Outgoing;
-                    inbound = evidence.Inbound;
-                }
-                else
-                {
-                    outgoing = readOutgoingEvidence(symbol);
-                    inbound = readReferenceEvidence(symbol);
+                    candidatesSkipped = usableCandidates.Length - start;
+                    break;
                 }
 
-                cancellationToken.ThrowIfCancellationRequested();
-                foreach (OutgoingReferenceEvidence callee in outgoing.Exact)
+                int chunkLength = Math.Min(ReferenceReadChunkSize, usableCandidates.Length - start);
+                int builtBeforeChunk = items.Count;
+                IReadOnlyDictionary<string, ReferenceEvidenceBundle>? evidenceById = null;
+                if (readMany is not null && ReferenceEvidenceBatchEnabled)
                 {
+                    var chunkSymbols = new IndexedSymbol[chunkLength];
+                    for (int offset = 0; offset < chunkLength; offset++)
+                        chunkSymbols[offset] = usableCandidates[start + offset].Symbol;
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (excludeTests && IsTestPath.Check(callee.FilePath))
-                        continue;
-                    AddItem(new ReferenceContextItem(
-                        ItemType: "identifier",
-                        Reason: IsCallLike(callee.Kind) ? "callee" : "dependency",
-                        Confidence: "exact",
-                        Name: callee.TargetName,
-                        Kind: callee.SourceKind,
-                        File: callee.FilePath,
-                        Line: callee.StartLine ?? 0,
-                        ContainingSymbolId: callee.ContainingSymbolId,
-                        TargetSymbolId: callee.TargetSymbolId,
-                        ResolutionStatus: "exact",
-                        Provenance: EvidenceSourceLabel(callee.Source),
-                        EvidenceConfidence: callee.Confidence));
+                    evidenceById = readMany(chunkSymbols);
+                    ArgumentNullException.ThrowIfNull(evidenceById);
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
 
-                foreach (OutgoingReferenceEvidence callee in outgoing.Fallback)
+                for (int index = start; index < start + chunkLength; index++)
                 {
+                    Candidate candidate = usableCandidates[index];
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (excludeTests && IsTestPath.Check(callee.FilePath))
-                        continue;
-                    AddItem(new ReferenceContextItem(
-                        ItemType: "identifier",
-                        Reason: IsCallLike(callee.Kind) ? "unresolved_callee" : "unresolved_dependency",
-                        Confidence: "fallback",
-                        Name: callee.TargetName,
-                        Kind: callee.SourceKind,
-                        File: callee.FilePath,
-                        Line: callee.StartLine ?? 0,
-                        ContainingSymbolId: callee.ContainingSymbolId,
-                        ResolutionStatus: "fallback",
-                        Provenance: EvidenceSourceLabel(callee.Source),
-                        EvidenceConfidence: callee.Confidence));
+                    IndexedSymbol symbol = candidate.Symbol;
+                    OutgoingReferenceEvidenceSet outgoing;
+                    ReferenceEvidenceSet inbound;
+                    if (evidenceById is not null)
+                    {
+                        if (!evidenceById.TryGetValue(symbol.SymbolId, out ReferenceEvidenceBundle? evidence))
+                            continue;
+                        outgoing = evidence.Outgoing;
+                        inbound = evidence.Inbound;
+                    }
+                    else
+                    {
+                        outgoing = readOutgoingEvidence(symbol);
+                        inbound = readReferenceEvidence(symbol);
+                    }
+
+                    cancellationToken.ThrowIfCancellationRequested();
+                    foreach (OutgoingReferenceEvidence callee in outgoing.Exact)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (excludeTests && IsTestPath.Check(callee.FilePath))
+                            continue;
+                        AddItem(new ReferenceContextItem(
+                            ItemType: "identifier",
+                            Reason: IsCallLike(callee.Kind) ? "callee" : "dependency",
+                            Confidence: "exact",
+                            Name: callee.TargetName,
+                            Kind: callee.SourceKind,
+                            File: callee.FilePath,
+                            Line: callee.StartLine ?? 0,
+                            ContainingSymbolId: callee.ContainingSymbolId,
+                            TargetSymbolId: callee.TargetSymbolId,
+                            ResolutionStatus: "exact",
+                            Provenance: EvidenceSourceLabel(callee.Source),
+                            EvidenceConfidence: callee.Confidence));
+                    }
+
+                    foreach (OutgoingReferenceEvidence callee in outgoing.Fallback)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (excludeTests && IsTestPath.Check(callee.FilePath))
+                            continue;
+                        AddItem(new ReferenceContextItem(
+                            ItemType: "identifier",
+                            Reason: IsCallLike(callee.Kind) ? "unresolved_callee" : "unresolved_dependency",
+                            Confidence: "fallback",
+                            Name: callee.TargetName,
+                            Kind: callee.SourceKind,
+                            File: callee.FilePath,
+                            Line: callee.StartLine ?? 0,
+                            ContainingSymbolId: callee.ContainingSymbolId,
+                            ResolutionStatus: "fallback",
+                            Provenance: EvidenceSourceLabel(callee.Source),
+                            EvidenceConfidence: callee.Confidence));
+                    }
+
+                    cancellationToken.ThrowIfCancellationRequested();
+                    foreach (ReferenceEvidence reference in inbound.Exact)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (excludeTests && IsTestPath.Check(reference.FilePath))
+                            continue;
+                        AddItem(new ReferenceContextItem(
+                            ItemType: "identifier",
+                            Reason: "reference",
+                            Confidence: "exact",
+                            Name: symbol.Name,
+                            Kind: reference.SourceKind,
+                            File: reference.FilePath,
+                            Line: reference.StartLine ?? 0,
+                            ContainingSymbolId: reference.ContainingSymbolId,
+                            TargetSymbolId: reference.TargetSymbolId,
+                            ResolutionStatus: "exact",
+                            Provenance: EvidenceSourceLabel(reference.Source),
+                            EvidenceConfidence: reference.Confidence));
+                    }
+
+                    foreach (ReferenceEvidence reference in inbound.Fallback)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (excludeTests && IsTestPath.Check(reference.FilePath))
+                            continue;
+                        AddItem(new ReferenceContextItem(
+                            ItemType: "identifier",
+                            Reason: "possible_reference",
+                            Confidence: "fallback",
+                            Name: symbol.Name,
+                            Kind: reference.SourceKind,
+                            File: reference.FilePath,
+                            Line: reference.StartLine ?? 0,
+                            ContainingSymbolId: reference.ContainingSymbolId,
+                            TargetSymbolId: reference.TargetSymbolId,
+                            ResolutionStatus: "fallback",
+                            Provenance: EvidenceSourceLabel(reference.Source),
+                            EvidenceConfidence: reference.Confidence));
+                    }
                 }
 
-                cancellationToken.ThrowIfCancellationRequested();
-                foreach (ReferenceEvidence reference in inbound.Exact)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (excludeTests && IsTestPath.Check(reference.FilePath))
-                        continue;
-                    AddItem(new ReferenceContextItem(
-                        ItemType: "identifier",
-                        Reason: "reference",
-                        Confidence: "exact",
-                        Name: symbol.Name,
-                        Kind: reference.SourceKind,
-                        File: reference.FilePath,
-                        Line: reference.StartLine ?? 0,
-                        ContainingSymbolId: reference.ContainingSymbolId,
-                        TargetSymbolId: reference.TargetSymbolId,
-                        ResolutionStatus: "exact",
-                        Provenance: EvidenceSourceLabel(reference.Source),
-                        EvidenceConfidence: reference.Confidence));
-                }
-
-                foreach (ReferenceEvidence reference in inbound.Fallback)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (excludeTests && IsTestPath.Check(reference.FilePath))
-                        continue;
-                    AddItem(new ReferenceContextItem(
-                        ItemType: "identifier",
-                        Reason: "possible_reference",
-                        Confidence: "fallback",
-                        Name: symbol.Name,
-                        Kind: reference.SourceKind,
-                        File: reference.FilePath,
-                        Line: reference.StartLine ?? 0,
-                        ContainingSymbolId: reference.ContainingSymbolId,
-                        TargetSymbolId: reference.TargetSymbolId,
-                        ResolutionStatus: "fallback",
-                        Provenance: EvidenceSourceLabel(reference.Source),
-                        EvidenceConfidence: reference.Confidence));
-                }
+                for (int built = builtBeforeChunk; built < items.Count; built++)
+                    packableCost += PackableCost(items[built]);
+                candidatesRead += chunkLength;
             }
         }
 
+        readCounts = new ContextReferenceReadCounts(candidatesRead, candidatesSkipped);
         return items;
 
         void AddItem(ReferenceContextItem item)
@@ -2751,7 +2844,21 @@ public sealed partial class ContextTool
             if (seen.Add(key))
                 items.Add(item);
         }
+
+        static long PackableCost(ReferenceContextItem item) =>
+            ReferenceAllocationTier(item) <= IdentifierAllocationTier
+                ? TokenEstimator.Count(ReferenceCostLine(item))
+                : 0;
     }
+
+    /// <summary>
+    /// How many candidates the usage branch read reference evidence for, and how many the token budget left
+    /// unread. A skip is a budget decision, not a failure: the packer keeps only one budget of items, so the
+    /// unread tail would have been dropped after it was paid for.
+    /// </summary>
+    /// <param name="CandidatesRead">Candidates whose evidence was read.</param>
+    /// <param name="CandidatesSkipped">Candidates the budget left unread; 0 when evidence was not requested.</param>
+    internal readonly record struct ContextReferenceReadCounts(int CandidatesRead, int CandidatesSkipped);
 
     // ---------- identifier-token extraction (failing_test / stack_trace) ----------
 
@@ -3227,7 +3334,7 @@ public sealed partial class ContextTool
             "implementation" => 0,
             "symbol" when item.Hop == 0 => 0,
             "content_chunk" => 1,
-            "identifier" => 2,
+            "identifier" => IdentifierAllocationTier,
             _ => 3,
         };
 

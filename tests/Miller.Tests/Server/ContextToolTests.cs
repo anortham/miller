@@ -26,6 +26,47 @@ public sealed class ContextToolTests
     private const string UnrelatedId = "00000000000000000000000000000004";
     private const string TestId = "00000000000000000000000000000005";
 
+    /// <summary>
+    /// The usage bundle the ten-neighbour hub fixture rendered at the default 2000-token budget BEFORE the
+    /// budget-bounded read window existed — captured verbatim from that build, so it is the A/B expectation
+    /// for a window that covers every candidate. The lines are literal text, not a call back into the
+    /// renderer, so a render change has to be re-approved here rather than agreeing with itself.
+    /// </summary>
+    private static string FullReadUsageBundleAtDefaultBudget()
+    {
+        var lines = new List<string>
+        {
+            "# context bundle (22)",
+            "src/PaymentHub.cs:",
+            "  :1 PaymentHub class reason=entry_symbol confidence=exact hop=0  class PaymentHub role=pivot",
+        };
+        for (int ordinal = 0; ordinal < 10; ordinal++)
+        {
+            lines.Add($"src/neighbours/Neighbour{ordinal:D3}.cs:");
+            lines.Add(
+                $"  :1 PaymentNeighbour{ordinal:D3} class reason=graph_neighbor confidence=exact hop=1  " +
+                $"class PaymentNeighbour{ordinal:D3} role=neighbour");
+        }
+
+        lines.Add("src/callers/PaymentHubCaller0.cs:");
+        lines.Add(
+            "  :10 PaymentHub call reason=possible_reference confidence=fallback resolution=fallback " +
+            "source=name_fallback evidence_confidence=0.50");
+        for (int ordinal = 0; ordinal < 10; ordinal++)
+        {
+            lines.Add($"src/callers/PaymentNeighbour{ordinal:D3}Caller0.cs:");
+            lines.Add(
+                $"  :10 PaymentNeighbour{ordinal:D3} call reason=possible_reference confidence=fallback " +
+                "resolution=fallback source=name_fallback evidence_confidence=0.50");
+        }
+
+        lines.Add("## disposition");
+        lines.Add("evidence=partial  reason=symbol_and_relation_evidence_only");
+        lines.Add("## next inspect");
+        lines.Add("inspect(target=\"PaymentHub\", scope=\"src/PaymentHub.cs\", depth=\"overview\")");
+        return string.Join("\n", lines);
+    }
+
     // A dependency cluster around "order processing":
     //   OrderController depends on OrderService   (Controller → Service)
     //   OrderService    depends on OrderRepo       (Service → Repo)
@@ -58,6 +99,61 @@ public sealed class ContextToolTests
 
     private static MillerRepositoryIndex EmptyIndex() =>
         MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>(), Array.Empty<GraphEdge>());
+
+    private const string HubId = "000000000000000000000000000000aa";
+
+    private static string HubNeighbourId(int ordinal) => "b" + ordinal.ToString("D31");
+
+    /// <summary>
+    /// One pivot plus <paramref name="neighbourCount"/> graph neighbours, each in its own file. The usage
+    /// branch reads reference evidence once per candidate, so this fixture sizes that read set on demand.
+    /// </summary>
+    private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildHubFixture(int neighbourCount)
+    {
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, HubId, "PaymentHub", "class PaymentHub", "class", "csharp",
+                "src/PaymentHub.cs", 1, 40, null, false),
+        };
+        var edges = new List<GraphEdge>(neighbourCount);
+        for (int ordinal = 0; ordinal < neighbourCount; ordinal++)
+        {
+            string id = HubNeighbourId(ordinal);
+            symbols.Add(new IndexedSymbol(
+                ordinal + 1,
+                id,
+                $"PaymentNeighbour{ordinal:D3}",
+                $"class PaymentNeighbour{ordinal:D3}",
+                "class",
+                "csharp",
+                $"src/neighbours/Neighbour{ordinal:D3}.cs",
+                1,
+                20,
+                null,
+                false));
+            edges.Add(new GraphEdge(HubId, id, "uses"));
+        }
+
+        var index = MillerRepositoryIndex.Build(symbols, edges);
+        return (index, new SmartTargetResolver(index));
+    }
+
+    /// <summary>Inbound evidence whose sites are unique per symbol, so no two candidates dedup together.</summary>
+    private static ReferenceEvidenceSet HubInbound(IndexedSymbol symbol, int siteCount)
+    {
+        var sites = new ReferenceEvidence[siteCount];
+        for (int site = 0; site < siteCount; site++)
+        {
+            sites[site] = FallbackInbound(
+                $"site:{symbol.SymbolId}:{site}",
+                null,
+                $"src/callers/{symbol.Name}Caller{site}.cs",
+                10 + site,
+                ReferenceKind.Call);
+        }
+
+        return InboundSet(sites);
+    }
 
     private static TextContentSearchHit SourceHit(
         string path,
@@ -4309,6 +4405,190 @@ public sealed class ContextToolTests
                 "bounded_render",
             ],
             phases);
+    }
+
+    /// <summary>
+    /// The token budget bounds the WORK, not only the output. With a tight budget and many candidates the
+    /// branch stops reading once the material it holds overscans the budget, so it pays for a bounded read
+    /// set instead of every candidate. Mutation proof: remove the stop and this asserts 121 reads, not 8.
+    /// </summary>
+    [Fact]
+    public void RunReferenceAware_UsageBranch_StopsEvidenceReadsOnceBuiltItemsOverscanBudget()
+    {
+        var (index, resolver) = BuildHubFixture(120);
+        var read = new List<string>();
+
+        _ = ContextTool.RunReferenceAwareActionableWithCancellation(
+            index,
+            index.Graph,
+            resolver,
+            query: string.Empty,
+            tokenBudget: 100,
+            maxHops: 1,
+            entrySymbols: [HubId],
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            referenceDepth: 1,
+            excludeTests: false,
+            json: false,
+            readReferenceEvidence: symbol =>
+            {
+                read.Add(symbol.SymbolId);
+                return HubInbound(symbol, siteCount: 4);
+            },
+            readOutgoingEvidence: _ => OutgoingSet(),
+            readContentChunks: (_, _) => [],
+            readMany: null,
+            out _,
+            out int candidatesExamined,
+            CancellationToken.None);
+
+        Assert.Equal(121, candidatesExamined);
+        Assert.Equal(ContextTool.ReferenceReadChunkSize, read.Count);
+        Assert.Equal(read.Count, read.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    /// <summary>
+    /// At the default budget on a fixture the overscan window covers, every candidate is still read and the
+    /// rendered bundle is byte-identical to the full-read output captured before the window existed.
+    /// </summary>
+    [Fact]
+    public void RunReferenceAware_UsageBranch_AtDefaultBudgetReadsEveryCandidateAndRendersUnchanged()
+    {
+        var (index, resolver) = BuildHubFixture(10);
+        var read = new List<string>();
+
+        string output = ContextTool.RunReferenceAwareActionableWithCancellation(
+            index,
+            index.Graph,
+            resolver,
+            query: string.Empty,
+            tokenBudget: 2000,
+            maxHops: 1,
+            entrySymbols: [HubId],
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            referenceDepth: 1,
+            excludeTests: false,
+            json: false,
+            readReferenceEvidence: symbol =>
+            {
+                read.Add(symbol.SymbolId);
+                return HubInbound(symbol, siteCount: 1);
+            },
+            readOutgoingEvidence: _ => OutgoingSet(),
+            readContentChunks: (_, _) => [],
+            readMany: null,
+            out _,
+            out _,
+            CancellationToken.None);
+
+        Assert.Equal(11, read.Count);
+        Assert.Equal(FullReadUsageBundleAtDefaultBudget(), output);
+    }
+
+    /// <summary>Excluded tests are filtered before any read, so a filtered candidate costs nothing.</summary>
+    [Fact]
+    public void RunReferenceAware_UsageBranch_NeverReadsEvidenceForExcludedTestCandidates()
+    {
+        var (index, resolver) = BuildFixture();
+        var read = new List<string>();
+
+        _ = ContextTool.RunReferenceAwareActionableWithCancellation(
+            index,
+            index.Graph,
+            resolver,
+            query: string.Empty,
+            tokenBudget: 2000,
+            maxHops: 1,
+            entrySymbols: [ServiceId],
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            referenceDepth: 1,
+            excludeTests: true,
+            json: false,
+            readReferenceEvidence: symbol =>
+            {
+                read.Add(symbol.SymbolId);
+                return InboundSet();
+            },
+            readOutgoingEvidence: _ => OutgoingSet(),
+            readContentChunks: (_, _) => [],
+            readMany: null,
+            out _,
+            out _,
+            CancellationToken.None);
+
+        Assert.NotEmpty(read);
+        Assert.DoesNotContain(TestId, read);
+    }
+
+    /// <summary>
+    /// Reads reach the batched reader as chunks of candidates, never one symbol at a time, and at the default
+    /// budget on this fixture every chunk runs.
+    /// </summary>
+    [Fact]
+    public void RunReferenceAware_UsageBranch_ReadsEvidenceInBatchedChunks()
+    {
+        var (index, resolver) = BuildHubFixture(20);
+        var batchSizes = new List<int>();
+        string? previous = Environment.GetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH");
+        Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", "on");
+        try
+        {
+            _ = ContextTool.RunReferenceAwareActionable(
+                index,
+                index.Graph,
+                resolver,
+                query: string.Empty,
+                tokenBudget: 2000,
+                maxHops: 1,
+                entrySymbols: [HubId],
+                editedFiles: null,
+                failingTest: null,
+                stackTrace: null,
+                semanticSeeds: null,
+                sourceSeeds: null,
+                readBody: null,
+                referenceDepth: 1,
+                excludeTests: false,
+                json: false,
+                readReferenceEvidence: _ => throw new InvalidOperationException("singular inbound read"),
+                readOutgoingEvidence: _ => throw new InvalidOperationException("singular outgoing read"),
+                readContentChunks: (_, _) => [],
+                readMany: symbols =>
+                {
+                    batchSizes.Add(symbols.Count);
+                    return symbols.ToDictionary(
+                        static symbol => symbol.SymbolId,
+                        symbol => new ReferenceEvidenceBundle(
+                            HubInbound(symbol, siteCount: 1),
+                            OutgoingSet(),
+                            new Dictionary<ReferenceKind, ReferenceEvidenceSet>(),
+                            new Dictionary<ReferenceKind, OutgoingReferenceEvidenceSet>()),
+                        StringComparer.Ordinal);
+                },
+                out _,
+                out _);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MILLER_CONTEXT_REFERENCE_BATCH", previous);
+        }
+
+        Assert.Equal([8, 8, 5], batchSizes);
     }
 
     [Fact]
