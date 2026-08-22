@@ -75,6 +75,34 @@ Diagnosed with filesystem-level proof (read-only Opus investigation, 2026-08-22)
 explicit run on julie-extractors rebuilds ~8 GB from scratch (3.5 min) before any test could
 run. Separate fix; not yet scoped.
 
+## Fix validation (2026-08-22, Debug build `4cd268b8`, daemon/one-shot paths)
+
+All three blocking fixes were validated end to end on the real repos that exposed them:
+
+- **F1 (node-test discovery):** razorback now enables 1 project (was 0); classnames enables 1.
+  razorback's run verdict is red and HONEST — its own `npm test` fails at baseline with a real
+  assertion error.
+- **F2 (vitest 0.x):** rasd-vue-library-2 went from 47/47 failed-at-the-parser to 46 green and
+  exactly 1 red — `RDataGrid.spec.ts`, which fails identically under a plain local
+  `vitest run` (a genuine repo failure, correctly attributed with the real assertion message).
+- **F6 (Rust whole-suite):** julie-extractors executed all 4,173 cases (stale 4,173 → 0,
+  results committed) with 4,172 green and one red: the pre-existing
+  `maintenance_heartbeat_fails_closed_after_lease_takeover` wall-clock flake on a busy
+  machine, reported with the real panic text. Before the fix the same run committed ZERO
+  results.
+
+Two new findings from validation:
+
+**F8 — node-test case discovery needs `.test.`/`.spec.` file naming.**
+classnames' suite lives in `tests/*.js` (63 passing tests at baseline), and CT discovers 0
+cases — verdict honestly `unknown`, but a real node-test repo with that layout gets no
+coverage. Needs either directory-aware case discovery or a documented naming requirement.
+
+**F9 — per-file failure attribution on a partially-red node-test suite is unverified.**
+razorback's run marked all 34 files failed with the npm banner as every summary; the baseline
+shows a genuinely red suite, but whether individually-green files are over-marked red needs a
+partially-red discriminator (classnames cannot serve — see F8).
+
 ## What the fail-safes got right
 
 CT never lied green. F2 surfaced as red with failure rows; F6 surfaced as `partial` with
