@@ -129,13 +129,20 @@ public static class JunitTestResultParser
         return ("passed", null);
     }
 
+    /// <summary>
+    /// The xunit-native status map is fail-closed: only a recognized pass reads green. <c>NotRun</c> is
+    /// xunit v3's spelling for a case that never executed, which is a skip. Anything else — a status a
+    /// future runner invents, or a <c>test</c> element carrying no <c>result</c> attribute at all — is an
+    /// error, because a case whose outcome Miller cannot read has not proved itself green.
+    /// </summary>
     private static string XunitStatus(string? value) =>
         (value ?? "").ToLowerInvariant() switch
         {
             "pass" or "passed" => "passed",
             "fail" or "failed" => "failed",
             "skip" or "skipped" => "skipped",
-            _ => "passed",
+            "notrun" => "skipped",
+            _ => "errored",
         };
 
     private static string Selector(string? className, string name, string path) =>

@@ -975,7 +975,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             }
         }
 
-        var escaped = selector.Replace(",", "%2C", StringComparison.Ordinal);
+        var escaped = VsTestFilterValue.Escape(selector);
         return $"{GenericFilterProperty(selector)}{filterOperator}{escaped}";
     }
 
@@ -996,7 +996,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         var clauses = excludeTraits
             .Select(TraitValue)
             .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Select(value => $"{property}!={value}")
+            .Select(value => $"{property}!={VsTestFilterValue.Escape(value)}")
             .ToArray();
         return clauses.Length > 0 ? string.Join("&", clauses) : null;
     }

@@ -116,6 +116,51 @@ public sealed class JunitTestResultParserTests : IDisposable
         Assert.Equal("Expected decline reason", parsed.Cases[1].FailureText);
     }
 
+    /// <summary>
+    /// The xunit-native status map is fail-closed. <c>NotRun</c> (xunit v3) is a skip, and anything the
+    /// map does not know — a new runner status, or a <c>test</c> element with no <c>result</c> attribute
+    /// at all — reads as an error, never as a pass. A green verdict must be earned by a recognized pass.
+    /// </summary>
+    [Fact]
+    public void Xunit_parser_reads_notrun_as_skipped_and_unknown_or_missing_status_as_errored()
+    {
+        var artifact = WriteArtifact(
+            "xunit_unknown_status.xml",
+            """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <assembly name="Payments.Tests" test-framework="xUnit.net" total="4">
+              <collection name="Payments">
+                <test name="Payments.Tests.ChargeTests.Approves"
+                      type="Payments.Tests.ChargeTests"
+                      method="Approves"
+                      result="Pass" />
+                <test name="Payments.Tests.ChargeTests.NeverRan"
+                      type="Payments.Tests.ChargeTests"
+                      method="NeverRan"
+                      result="NotRun" />
+                <test name="Payments.Tests.ChargeTests.Invented"
+                      type="Payments.Tests.ChargeTests"
+                      method="Invented"
+                      result="SomethingNew" />
+                <test name="Payments.Tests.ChargeTests.NoResultAttribute"
+                      type="Payments.Tests.ChargeTests"
+                      method="NoResultAttribute" />
+              </collection>
+            </assembly>
+            """);
+
+        var parsed = JunitTestResultParser.Parse(artifact);
+
+        Assert.Equal(
+            [
+                ("Approves", "passed"),
+                ("NeverRan", "skipped"),
+                ("Invented", "errored"),
+                ("NoResultAttribute", "errored"),
+            ],
+            parsed.Cases.Select(testCase => (testCase.Name, testCase.Status)).ToArray());
+    }
+
     private string WriteArtifact(string name, string content)
     {
         var path = Path.Combine(_dir, name);
