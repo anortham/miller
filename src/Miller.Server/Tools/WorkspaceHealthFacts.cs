@@ -346,6 +346,8 @@ public sealed record WorkspaceHealthFacts(
         if (vectors is null || string.Equals(vectors.State, "disabled", StringComparison.OrdinalIgnoreCase))
             return;
 
+        var vectorActions = new List<string>();
+
         if (string.Equals(vectors.State, "ready", StringComparison.OrdinalIgnoreCase))
         {
             string? failure = new[] { vectors.SymbolCursor?.LastError, vectors.ChunkCursor?.LastError }
@@ -356,7 +358,7 @@ public sealed record WorkspaceHealthFacts(
                     "vectors_failed",
                     "usable_with_warnings",
                     $"vector convergence reported a failure: {failure}"));
-                recommended.Add(isLeader
+                vectorActions.Add(isLeader
                     ? "retry vector convergence with bounded backoff and inspect vector convergence diagnostics"
                     : "open or keep a resident Miller leader running, then inspect vector convergence diagnostics");
             }
@@ -375,11 +377,12 @@ public sealed record WorkspaceHealthFacts(
                     "vectors_stale",
                     "usable_with_warnings",
                     $"vector convergence is behind revision {lagging.TargetRevision}{pending}"));
-                recommended.Add(isLeader
+                vectorActions.Add(isLeader
                     ? "wait for this resident Miller leader to finish vector convergence"
                     : "open or keep a resident Miller leader running so vector convergence can complete");
             }
 
+            recommended.InsertRange(0, vectorActions);
             return;
         }
 
@@ -389,7 +392,8 @@ public sealed record WorkspaceHealthFacts(
                 ? "vector retrieval is model-not-prepared"
                 : $"vector retrieval is model-not-prepared: {vectors.Reason}";
             warnings.Add(new HealthWarning("vectors_model_not_prepared", "degraded", modelMessage));
-            recommended.Add("run `miller semantic prepare` to install the selected embedding model");
+            vectorActions.Add("run `miller semantic prepare` to install the selected embedding model");
+            recommended.InsertRange(0, vectorActions);
             return;
         }
 
@@ -403,17 +407,19 @@ public sealed record WorkspaceHealthFacts(
             vectors.Reason?.Contains("no vector artifact exists", StringComparison.OrdinalIgnoreCase) == true;
         if (noArtifact)
         {
-            recommended.Add(
-                "if vectors have never converged here, install the embedding model with `miller semantic prepare` " +
-                "— a refresh alone cannot download it");
-            recommended.Add(isLeader
+            vectorActions.Add(isLeader
                 ? "wait for this resident Miller leader to finish vector convergence after preparing the model"
                 : "open or keep a resident Miller leader running after preparing the model");
+            vectorActions.Add(
+                "if vectors have never converged here, install the embedding model with `miller semantic prepare` " +
+                "— a refresh alone cannot download it");
         }
         else
-            recommended.Add(isLeader
+            vectorActions.Add(isLeader
                 ? "retry vector convergence with bounded backoff and inspect vector convergence diagnostics"
                 : "open or keep a resident Miller leader running so vector convergence can complete");
+
+        recommended.InsertRange(0, vectorActions);
     }
 
     private static HealthState StateFrom(WorkspaceFacts statusFacts, IReadOnlyList<HealthWarning> warnings)

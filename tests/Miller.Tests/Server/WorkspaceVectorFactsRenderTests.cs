@@ -328,6 +328,30 @@ public sealed class WorkspaceVectorFactsRenderTests
     }
 
     [Fact]
+    public void Health_MissingVectorStamp_PrioritizesLeaderActionOverCapabilityDiagnostics()
+    {
+        WorkspaceExtractionHealthFacts extraction = EmptyExtractionHealth() with
+        {
+            CapabilityGaps = HealthFactSection<CapabilityGapGroup>.FromRows(
+                [new CapabilityGapGroup("typescript", "relationships", "open", 1)]),
+        };
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            Facts(new VectorSidecarFacts(
+                "unavailable",
+                "/repo/.miller/vectors.db",
+                "Vector artifact has no completeness stamp for the current view"), isLeader: false),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(OkCount: 1, EmptyCount: 0, ErrorCount: 0),
+            extraction);
+
+        Assert.StartsWith("open or keep a resident Miller leader", health.RecommendedActions[0], StringComparison.Ordinal);
+        Assert.Contains(health.RecommendedActions, action =>
+            action.Contains("capability gaps", StringComparison.Ordinal));
+        Assert.DoesNotContain(health.RecommendedActions, action =>
+            action.Contains("workspace refresh", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Health_VectorFailureWithLeader_RecommendsBoundedRetryAndDiagnostics()
     {
         WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
@@ -361,6 +385,7 @@ public sealed class WorkspaceVectorFactsRenderTests
         Assert.Equal("degraded", warning.Severity);
         Assert.Contains("vector retrieval is unavailable", warning.Message, StringComparison.Ordinal);
         Assert.Contains(health.RecommendedActions, action => action.Contains("resident Miller leader", StringComparison.Ordinal));
+        Assert.StartsWith("wait for this resident Miller leader", health.RecommendedActions[0], StringComparison.Ordinal);
         Assert.Equal(HealthState.Degraded, health.State);
     }
 
