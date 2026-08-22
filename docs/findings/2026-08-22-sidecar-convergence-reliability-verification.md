@@ -81,5 +81,5 @@ exact tree:
 - the post-soak process check found no isolated `/tmp` soak process (only the check command itself).
 
 These gates complete the no-retry-loop, broker-leak, and sidecar-lease-after-shutdown criterion.
-The final documentation/commit criterion remains pending only because the lead has not yet recorded
-the serialized Task 5 commit and final state.
+The serialized Task 5 documentation commit is `bc3f0263`. Only documentation changed after the
+exact-tree gates, so those gates were not rerun.

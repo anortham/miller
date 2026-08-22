@@ -220,4 +220,4 @@
 - [x] Refresh and health state/action output matches the work actually scheduled or completed.
 - [x] Semantic-off zero-work and lexical byte identity are proven.
 - [x] No retry loop, broker leak, or sidecar lease remains after shutdown.
-- [ ] Verification evidence is mapped in `docs/README.md`, all plan checkboxes are updated, and the serialized worker commit is recorded.
+- [x] Verification evidence is mapped in `docs/README.md`, all plan checkboxes are updated, and the serialized worker commit is recorded.
