@@ -315,10 +315,33 @@ than re-diagnosing it from scratch. The same note is on
    answered instead of the FTS sidecar — would be a search-sidecar availability bug, not a
    context bug. Experiment: log which lookup index answered (`IsSidecar`) beside the phase
    delta.
+   **EXPERIMENT SHIPPED 2026-08-21, still unanswered — it needs the next burst.** Every
+   family-store read now claims a `SymbolLookupBackend` where the index is chosen
+   (`WorkspaceIndexProvider.MeasureFamilyLookup`), and the claim rides on the measuring wrapper
+   that already counts the calls, so the count and the index that produced it cannot come apart.
+   Two surfaces carry it: the `Context lookup phase …` log line reports
+   `ContextLookupBackend` beside the `FindByName` delta, and the read telemetry metadata carries
+   `read_lookup_backend` beside `read_lookup_count`/`read_lookup_ms`. Four values, no guessing:
+   `search_sidecar`, `session_projection`, `lagging_sidecar` (the sidecar supplied the recall and
+   every row was re-read from the live artifact — the read pays both costs, so it is not filed
+   under the plain sidecar), and `mixed` when one wrapper served two backends. An undeclared
+   wrapper reports `unattributed` rather than a guess. The hypothesis is confirmed if the next
+   burst reads `session_projection`.
 4. **What makes cross-workspace `usage` calls cost 113–519 s?** Fix 8 is the experiment.
-5. **Does the CLI `inspect --depth overview` / `trace refs` ~4.9 s drop once the
-   bounded-fact-cache fix lands?** Re-run after; if under 1 s, the remaining CLI context
-   cost after fix 1 is accounted for.
+   **PARTIAL ANSWER (2026-08-21, first instrumented runs at HEAD `3c8ab6ce`):** two identical
+   MCP calls (`reference_mode=usage`, workspace `julie-extractors`) cost 27.8 s then 21.1 s.
+   The tail is one phase: `reference_items` at 17.1 s cold and **16.2 s warm — a per-call
+   cost, not a one-time load**. Everything the caches cover got cheap on the second call
+   (`resolve` 3.1 s → absent, `anchor_resolution` 5.3 s → 1.1 s, `graph_reach` 1.9 s →
+   0.4 s), so the usage-branch enrichment itself does ~16 s of work per call on this
+   generation. The same query from the one-shot CLI (bounded facts) finished in 8.3 s total.
+   Next experiment: sub-phase the `reference_items` arm (fact-slice reads vs identifier
+   streaming vs rendering) to name the 16 s.
+5. ~~Does the CLI `inspect --depth overview` / `trace refs` ~4.9 s drop once the
+   bounded-fact-cache fix lands?~~ **ANSWERED: yes.** Measured at HEAD `3c8ab6ce` on
+   2026-08-21 (Release binary, warm store): `inspect ContextTool --depth overview` 1.08 s,
+   `trace refs ContextTool` 1.25 s. The ~4 s whole-generation load is gone; the remaining
+   ~1 s is process start plus the bounded per-file read.
 
 ## Related
 
