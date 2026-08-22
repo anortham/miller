@@ -1,9 +1,9 @@
 ---
 id: ct-sidecar-direction
 title: CT sidecar direction
-status: active
+status: completed
 created: 2026-08-19T01:19:24.556Z
-updated: 2026-08-22T08:39:53.207Z
+updated: 2026-08-22T23:12:02.793Z
 tags:
   - ct-sidecar
   - direction
