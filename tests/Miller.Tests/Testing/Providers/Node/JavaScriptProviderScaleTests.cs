@@ -133,6 +133,87 @@ public sealed class JavaScriptProviderScaleTests : IDisposable
         Assert.Equal(testCase.Id, caseResult.TestCaseId);
     }
 
+    /// <summary>
+    /// The partially red suite, against the real runner: three green files and one red, all reported in
+    /// ONE junit document because node's runner writes one report per invocation. The red must land on the
+    /// file that failed and nowhere else, with the real assertion message on that file alone (dogfood
+    /// finding F9, 2026-08-21).
+    /// </summary>
+    [Fact]
+    public async Task Node_smoke_marks_only_the_failing_file_red_in_a_partially_red_suite()
+    {
+        CtProviderTestSupport.RequireNode();
+        var ct = TestContext.Current.CancellationToken;
+        var packageRoot = Path.Combine(_dir, "partial");
+        Directory.CreateDirectory(Path.Combine(packageRoot, "test"));
+        await File.WriteAllTextAsync(
+            Path.Combine(packageRoot, "package.json"),
+            """{"type":"module"}""",
+            ct);
+        foreach (var name in new[] { "a", "b", "c" })
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(packageRoot, "test", name + ".test.js"),
+                $$"""
+                import test from 'node:test';
+                import assert from 'node:assert/strict';
+
+                test('{{name}} passes', () => {
+                  assert.equal(1 + 1, 2);
+                });
+                """,
+                ct);
+        }
+
+        await File.WriteAllTextAsync(
+            Path.Combine(packageRoot, "test", "d.test.js"),
+            """
+            import test from 'node:test';
+            import assert from 'node:assert/strict';
+
+            test('d fails', () => {
+              assert.equal(1, 2, 'miller-f9-only-this-file');
+            });
+            """,
+            ct);
+
+        var workspace = new ContinuousTestWorkspace(
+            WorkspaceId: "ws:scale-partial",
+            WorkspaceRoot: packageRoot,
+            ProjectPath: Path.Combine(packageRoot, "package.json"),
+            BuildOutputRoot: Path.Combine(_dir, "state", "workspaces", "ws-partial", "ct-build"),
+            Framework: "node-test");
+        _ctTemps.Add(CtTempPaths.ForWorkspace(workspace));
+
+        var provider = new JavaScriptTestProvider(new TestProcessRunner());
+        var discovered = await provider.DiscoverAsync(workspace, ct);
+        Assert.Equal(
+            ["test/a.test.js", "test/b.test.js", "test/c.test.js", "test/d.test.js"],
+            discovered.Select(row => row.Selector).Order(StringComparer.Ordinal).ToArray());
+
+        var result = await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: workspace,
+                SelectedRevision: "12",
+                IndexIdentity: "store:scale-identity",
+                RunId: "run:scale-partial",
+                TestCaseIds: discovered.Select(row => row.Id).ToArray()),
+            ct);
+
+        Assert.Equal("failed", result.Status);
+        Assert.Equal(4, result.CaseResults.Count);
+        var failed = Assert.Single(result.CaseResults, row => row.Status == "failed");
+        Assert.Equal("js-test:test/d.test.js", failed.TestCaseId);
+        Assert.Contains("miller-f9-only-this-file", failed.FailureSummary);
+        Assert.All(
+            result.CaseResults.Where(row => row.TestCaseId != failed.TestCaseId),
+            row =>
+            {
+                Assert.Equal("passed", row.Status);
+                Assert.Null(row.FailureSummary);
+            });
+    }
+
     private static void BestEffortDelete(string path)
     {
         try

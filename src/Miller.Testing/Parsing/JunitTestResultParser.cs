@@ -19,6 +19,14 @@ public sealed record ParsedTestArtifactRun(
     string Framework,
     IReadOnlyList<ParsedTestArtifactCase> Cases);
 
+/// <summary>
+/// One case from a junit/xunit report.
+///
+/// <para><paramref name="File"/> is the source file the reporter named on the case, verbatim and usually
+/// absolute, or null when the report names none. It is the only per-file signal some reporters give:
+/// node's junit reporter writes one document for the whole run and puts the SAME classname on every case,
+/// so without this attribute a partially red node:test suite cannot be told apart file by file.</para>
+/// </summary>
 public sealed record ParsedTestArtifactCase(
     string SuiteName,
     string? ClassName,
@@ -27,7 +35,8 @@ public sealed record ParsedTestArtifactCase(
     string Framework,
     string Status,
     double? DurationSeconds,
-    string? FailureText);
+    string? FailureText,
+    string? File = null);
 
 public static class JunitTestResultParser
 {
@@ -88,7 +97,8 @@ public static class JunitTestResultParser
                     Framework: framework,
                     Status: status,
                     DurationSeconds: Duration(AttributeValue(testcase, "time")),
-                    FailureText: failureText);
+                    FailureText: failureText,
+                    File: NullIfBlank(AttributeValue(testcase, "file")));
             })
             .ToArray();
         return new ParsedTestArtifactRun(framework, cases);
@@ -183,6 +193,9 @@ public static class JunitTestResultParser
         var separator = value.LastIndexOf('.');
         return separator < 0 ? value : value[(separator + 1)..];
     }
+
+    private static string? NullIfBlank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
 
     private static XElement? Child(XElement element, string localName) =>
         element.Elements().FirstOrDefault(child => string.Equals(child.Name.LocalName, localName, StringComparison.Ordinal));
