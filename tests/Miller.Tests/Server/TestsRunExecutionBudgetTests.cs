@@ -249,7 +249,13 @@ public sealed class TestsRunExecutionBudgetTests : IDisposable
 
         TestsRunResult first = TestsCore.Run(DrainRequest(budget, ledger, provider));
         Assert.Equal(ContinuousTestVerdict.Green, first.Verdict);
-        Assert.Empty(provider.RunRequests[^1].TestCaseIds);
+        // A run covering every known case travels as the full list plus the whole-suite FLAG. Blanking the
+        // list said the same thing to providers that parse a result artifact, and nothing at all to a
+        // provider driven by the list itself (dogfood finding F6).
+        Assert.Equal(
+            [TwoCaseProvider.CaseA, TwoCaseProvider.CaseB],
+            provider.RunRequests[^1].TestCaseIds.Order(StringComparer.Ordinal).ToArray());
+        Assert.True(provider.RunRequests[^1].WholeSuite);
 
         string workspaceId = WorkspaceId.FromCanonicalRoot(_root);
         using (var store = new ContinuousTestStore(CtSchema.DbPathFor(_root)))
@@ -498,11 +504,9 @@ public sealed class TestsRunExecutionBudgetTests : IDisposable
             LiveFactSourcesAtRun = _ledger.Live;
             RunRequest = request;
 
-            // An EMPTY selection means "run the whole assembly", which is how a run covering every known
-            // case is expressed. A real provider then reports whatever the assembly ran, parsed out of its
-            // TRX or stdout - it does not echo the selection back. Modelling that matters: a double that
-            // derives its results FROM the selection reports nothing for a whole-suite run, and the verdict
-            // reads Partial for a run that actually passed everything.
+            // A real provider reports whatever the assembly ran, parsed out of its TRX or stdout, so the
+            // fallback covers a request that carries no ids at all. A whole-suite run now carries the full
+            // list beside its flag, so the ordinary branch answers for it.
             IReadOnlyList<string> reported = request.TestCaseIds.Count > 0
                 ? request.TestCaseIds
                 : [SampleTestCaseId];

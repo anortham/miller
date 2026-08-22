@@ -218,6 +218,18 @@ public sealed class RustTestProvider : IContinuousTestProvider
         var manifestPath = Path.Combine(projectRoot, ProjectSelector);
         EnsureGenerationDirectories(paths);
 
+        // GUARD. Without a custom command this provider's plan IS the id list: no ids and no whole-suite
+        // flag means no cargo process would start, and an empty result set reads as "passed". A run must
+        // never return empty-and-passed, so an unrunnable request fails loudly instead (finding F6).
+        if (request.TestCaseIds.Count == 0
+            && !request.WholeSuite
+            && string.IsNullOrWhiteSpace(request.Command ?? request.Workspace.Command))
+        {
+            throw new ContinuousTestProviderException(
+                "cargo run request selected no test cases, carried no whole-suite flag and named no custom " +
+                "command, so it would execute nothing.");
+        }
+
         var results = new List<ProviderCaseResult>();
 
         async Task<(TestProcessResult Result, double Wall)> RunAndLog(TestProcessCommand command)
@@ -324,7 +336,12 @@ public sealed class RustTestProvider : IContinuousTestProvider
 
         // Full-target: an aggregate whole-target case runs the target unfiltered; any per-test cases
         // selected alongside it are attributed by name from the same output.
-        if (hasWholeTarget)
+        //
+        // A WHOLE-SUITE run takes the same path for every group. It already covers every case the target
+        // holds, so `-- --exact <names…>` would only spell out the target's own inventory and chunk it
+        // across extra processes (63 unfiltered invocations against 90 chunked ones on julie-extractors).
+        // Attribution is unchanged: each per-test case is still matched by its libtest name.
+        if (request.WholeSuite || hasWholeTarget)
         {
             var (result, _) = await runAndLog(RunCommand(request.Workspace, paths, manifestPath, group.Package, selector, filters: null))
                 .ConfigureAwait(false);

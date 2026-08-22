@@ -657,6 +657,11 @@ public sealed class ContinuousTestCoordinatorLifecycleLogTests : IDisposable
         Assert.True(store.MarkCtGenerationReapEligible(workspace.BuildOutputRoot, GenerationId, OwnerToken));
     }
 
+    /// <summary>
+    /// Verdicts DERIVE from the selection. A stub that claims "passed" while reporting a verdict for
+    /// nothing is the shape the coordinator now refuses to record, because a provider that executes no
+    /// process looks exactly like it.
+    /// </summary>
     private sealed class StubContinuousTestProvider : IContinuousTestProvider
     {
         public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
@@ -666,7 +671,20 @@ public sealed class ContinuousTestCoordinatorLifecycleLogTests : IDisposable
 
         public Task<ProviderRunResult> RunAsync(
             ContinuousTestProviderRunRequest request,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(new ProviderRunResult(request.RunId ?? "run:1", "passed"));
+            CancellationToken cancellationToken = default)
+        {
+            string runId = request.RunId ?? "run:1";
+            return Task.FromResult(new ProviderRunResult(
+                runId,
+                "passed",
+                CaseResults: request.TestCaseIds
+                    .Select(testCaseId => new ProviderCaseResult(
+                        Id: $"{runId}:{testCaseId}",
+                        TestCaseId: testCaseId,
+                        Status: "passed",
+                        ResultRevision: request.SelectedRevision,
+                        IndexIdentity: request.IndexIdentity))
+                    .ToArray()));
+        }
     }
 }

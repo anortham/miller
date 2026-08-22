@@ -271,10 +271,11 @@ public sealed class PythonTestProvider : IContinuousTestProvider
         Directory.CreateDirectory(CacheDirectory(paths));
 
         IReadOnlyList<PytestSelectionUnit> units = SelectionUnits(request);
-        if (units.Count == 0)
+        if (request.WholeSuite || units.Count == 0)
         {
-            // Nothing selectable: pytest runs whatever the project configures, exactly as before. The
-            // request's ids still ride along so an outright launch failure is reported against them.
+            // A whole-suite run, or nothing selectable: pytest runs whatever the project configures,
+            // exactly as before. The request's ids still ride along so an outright launch failure is
+            // reported against them.
             return [BuildInvocation(request, paths, runKey, [], request.TestCaseIds, part: null)];
         }
 

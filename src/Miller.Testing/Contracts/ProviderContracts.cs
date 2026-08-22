@@ -170,6 +170,21 @@ public sealed record ContinuousTestProviderRunRequest
     public IReadOnlyDictionary<string, object?> Metadata { get; init; }
     public ContinuousTestCoverageMode CoverageMode { get; init; }
 
+    /// <summary>
+    /// This run covers EVERY test case the store knows for the project, so the provider may run the whole
+    /// assembly once instead of spending the selection on argv.
+    ///
+    /// <para><see cref="TestCaseIds"/> STILL carries the full list. An earlier shape said "whole suite" by
+    /// handing the provider an EMPTY list, which every result-artifact provider read as "run everything" —
+    /// but the cargo provider's run loop is driven by the id list itself, so an empty list started no
+    /// process at all, reported "passed" over zero results, and left every case stale. A flag says the same
+    /// thing without taking the plan away (2026-08-21 dogfood finding F6).</para>
+    ///
+    /// <para>It is set only when the selection covers everything. Running a whole assembly for three
+    /// impacted tests is the same mistake in the other direction.</para>
+    /// </summary>
+    public bool WholeSuite { get; init; }
+
     public ContinuousTestProviderRunRequest(
         ContinuousTestWorkspace Workspace,
         string SelectedRevision,
@@ -181,7 +196,8 @@ public sealed record ContinuousTestProviderRunRequest
         IReadOnlyList<string>? ExcludeTraits = null,
         string? Framework = null,
         IReadOnlyDictionary<string, object?>? Metadata = null,
-        ContinuousTestCoverageMode CoverageMode = ContinuousTestCoverageMode.None)
+        ContinuousTestCoverageMode CoverageMode = ContinuousTestCoverageMode.None,
+        bool WholeSuite = false)
     {
         ArgumentNullException.ThrowIfNull(Workspace);
         if (string.IsNullOrWhiteSpace(SelectedRevision))
@@ -200,6 +216,7 @@ public sealed record ContinuousTestProviderRunRequest
         this.Framework = Framework ?? Workspace.Framework;
         this.Metadata = Metadata ?? Workspace.Metadata;
         this.CoverageMode = CoverageMode;
+        this.WholeSuite = WholeSuite;
     }
 }
 
@@ -241,19 +258,19 @@ public sealed record ContinuousTestCoordinatorRunRequest
     public ContinuousTestCoverageMode CoverageMode { get; init; }
 
     /// <summary>
-    /// This run covers EVERY test case the store knows for the project, so the provider is told to run the
-    /// whole assembly instead of being handed the case list.
+    /// This run covers EVERY test case the store knows for the project, so the provider is told it may run
+    /// the whole assembly instead of spending the case list on argv.
     ///
     /// <para>Both express the same run. The difference is cost. A per-case selection becomes one
     /// <c>-method</c> pair per id, and Miller's own ~6,000 cases then exceed the command-line limit and split
     /// into roughly 50 processes, each paying host startup and discovery again: 6+ minutes for a subset that
-    /// <c>dotnet test</c> runs in 25 seconds. Handing the provider an empty selection runs the same tests once,
-    /// under the seeded trait exclusions.</para>
+    /// <c>dotnet test</c> runs in 25 seconds. One unfiltered run covers the same tests once, under the seeded
+    /// trait exclusions.</para>
     ///
-    /// <para><see cref="TestCaseIds"/> STILL carries the full list, because that is what the run intends to
-    /// cover and what the verdict rows must record. Only the provider's argv changes. Losing the list here
-    /// would make a whole-suite run claim to have selected nothing, and freshness at the composite key would
-    /// go quietly wrong.</para>
+    /// <para><see cref="TestCaseIds"/> STILL carries the full list, and so does the provider request. Only
+    /// the provider's argv changes. Losing the list would make a whole-suite run claim to have selected
+    /// nothing, freshness at the composite key would go quietly wrong, and a provider whose run loop is
+    /// driven by the list (cargo) would execute nothing at all.</para>
     ///
     /// <para>It is set only when the selection covers everything. A workspace-scope run whose already-fresh
     /// cases were dropped may be down to a handful of ids, and running a whole assembly for three tests is the

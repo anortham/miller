@@ -216,6 +216,71 @@ public sealed class RustTestProviderTests : IDisposable
         Assert.All(result.CaseResults, r => Assert.Equal("passed", r.Status));
     }
 
+    /// <summary>
+    /// Without a custom command this provider's PLAN is the id list, so a request that carries neither ids
+    /// nor the whole-suite flag can start no cargo process at all. It used to return zero results with the
+    /// status "passed", and the store then flipped every selected case back to stale — a rust workspace
+    /// could never go green (dogfood finding F6, 2026-08-21). The run must fail loudly instead, and it must
+    /// fail before it launches anything.
+    /// </summary>
+    [Fact]
+    public async Task Run_with_no_selection_and_no_command_throws_and_starts_no_process()
+    {
+        var runner = new ScriptedTestProcessRunner(command =>
+            throw new InvalidOperationException($"no process may start: {command.ToDisplayString()}"));
+        var provider = new RustTestProvider(runner);
+
+        await Assert.ThrowsAsync<ContinuousTestProviderException>(
+            () => provider.RunAsync(Request(Workspace(null)), TestContext.Current.CancellationToken));
+
+        Assert.Empty(runner.Calls);
+    }
+
+    /// <summary>
+    /// A whole-suite run covers every case the target holds, so the group runs UNFILTERED: spelling the
+    /// target's own inventory into <c>-- --exact</c> only chunks it across extra processes. Attribution is
+    /// unchanged — each selected id still gets its verdict from its libtest name in the same output.
+    /// </summary>
+    [Fact]
+    public async Task Whole_suite_run_runs_the_target_unfiltered_and_still_attributes_every_case()
+    {
+        var runner = new ScriptedTestProcessRunner(command =>
+            ScriptedTestProcessRunner.Has(command, "--no-run")
+                ? new TestProcessResult(0, string.Empty, string.Empty)
+                : new TestProcessResult(
+                    0,
+                    "running 2 tests\n"
+                    + "test tests::add_works ... ok\n"
+                    + "test tests::add_zero ... ok\n\n"
+                    + "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n",
+                    string.Empty));
+        var provider = new RustTestProvider(runner);
+
+        var result = await provider.RunAsync(
+            Request(
+                Workspace(null),
+                "rust-test:adder::lib/adder::tests::add_works",
+                "rust-test:adder::lib/adder::tests::add_zero") with { WholeSuite = true },
+            TestContext.Current.CancellationToken);
+
+        var run = runner.Calls.Single(c => !ScriptedTestProcessRunner.Has(c, "--no-run"));
+        Assert.True(ScriptedTestProcessRunner.HasPair(run, "-p", "adder"));
+        Assert.Contains("--lib", run.Arguments);
+        Assert.DoesNotContain("--exact", run.Arguments);
+        Assert.DoesNotContain("tests::add_works", run.Arguments);
+        Assert.DoesNotContain("tests::add_zero", run.Arguments);
+
+        Assert.Equal(
+            new[]
+            {
+                "rust-test:adder::lib/adder::tests::add_works",
+                "rust-test:adder::lib/adder::tests::add_zero",
+            },
+            result.CaseResults.Select(row => row.TestCaseId).Order(StringComparer.Ordinal).ToArray());
+        Assert.All(result.CaseResults, row => Assert.Equal("passed", row.Status));
+        Assert.Equal("passed", result.Status);
+    }
+
     // ---------------------------------------------------------------- run: degradation tiers
 
     [Fact]

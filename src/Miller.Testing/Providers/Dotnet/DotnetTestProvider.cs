@@ -351,8 +351,11 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         if (request.FilterArguments.Count > 0)
             return [BuildXunitRunCommand(request, paths, coverage, request.FilterArguments, part: null)];
 
+        // A whole-suite run covers every known case, so it runs the assembly ONCE with no selection argv —
+        // the same command an empty selection has always produced. The request still carries the full id
+        // list; only the argv is unfiltered.
         IReadOnlyList<IReadOnlyList<string>> units = XunitSelectionUnits(request);
-        if (units.Count == 0)
+        if (request.WholeSuite || units.Count == 0)
             return [BuildXunitRunCommand(request, paths, coverage, [], part: null)];
 
         IReadOnlyList<IReadOnlyList<IReadOnlyList<string>>> chunks =
@@ -739,10 +742,11 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             request.Framework ?? request.Workspace.Framework,
             request.ExcludeTraits);
         var units = GenericSelectionUnits(request);
-        if (units.Count == 0)
+        if (request.WholeSuite || units.Count == 0)
         {
-            // Nothing selectable: vstest runs whatever the exclusion filter leaves, exactly as before.
-            // The request's ids still ride along so an outright launch failure is reported against them.
+            // A whole-suite run, or nothing selectable: vstest runs whatever the exclusion filter leaves,
+            // exactly as before. The request's ids still ride along so an outright launch failure is
+            // reported against them.
             return
             [
                 BuildGenericInvocation(

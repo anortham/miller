@@ -6,13 +6,19 @@ using Xunit;
 namespace Miller.Tests.Testing.Analysis;
 
 /// <summary>
-/// A run that covers every known test case is handed to the provider as an EMPTY selection, so the provider
-/// runs the whole assembly once under its seeded trait exclusions.
+/// A run that covers every known test case is handed to the provider as the FULL selection plus a
+/// <c>WholeSuite</c> flag, so the provider may run the whole assembly once under its seeded trait
+/// exclusions without losing the plan.
 ///
 /// <para>Both forms express the same run; only the cost differs. A per-case selection becomes one
 /// <c>-method</c> pair per id, and Miller's own ~6,000 cases then exceed the command-line limit and split into
 /// roughly 50 processes, each paying host startup and discovery again — 6+ minutes for a subset that
 /// <c>dotnet test</c> runs in 25 seconds.</para>
+///
+/// <para>The flag replaced an EMPTY id list. Blanking the list read as "run everything" only to providers
+/// that attribute from a result artifact; the cargo provider's run loop is driven by the list itself, so it
+/// started no process, reported "passed" over zero results, and left 4,173 cases stale forever (dogfood
+/// finding F6, 2026-08-21).</para>
 ///
 /// <para>The dangerous half is bookkeeping, not speed. The run must still RECORD that it covered every case,
 /// or freshness at the composite <c>(index_identity, revision)</c> key goes quietly wrong and a complete run
@@ -34,8 +40,12 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
         try { Directory.Delete(_root + "-build", recursive: true); } catch (IOException) { }
     }
 
+    /// <summary>
+    /// The flag travels; the plan does NOT get taken away. A provider whose run loop is driven by the id
+    /// list must still be able to execute the run it was asked for.
+    /// </summary>
     [Fact]
-    public async Task A_whole_suite_run_hands_the_provider_an_empty_selection()
+    public async Task A_whole_suite_run_hands_the_provider_the_full_selection_and_the_flag()
     {
         ContinuousTestWorkspace workspace = Workspace();
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
@@ -47,7 +57,35 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
             RunRequest(workspace, ["test:a", "test:b", "test:c"], wholeSuite: true),
             TestContext.Current.CancellationToken);
 
-        Assert.Empty(Assert.Single(provider.Requests).TestCaseIds);
+        ContinuousTestProviderRunRequest sent = Assert.Single(provider.Requests);
+        Assert.Equal(["test:a", "test:b", "test:c"], sent.TestCaseIds);
+        Assert.True(sent.WholeSuite);
+    }
+
+    /// <summary>
+    /// FAIL-SAFE. A provider that reports a verdict for NOTHING it was asked to run knows nothing about
+    /// those tests, so the coordinator must not record a completed run. This is the net that would have
+    /// caught F6 on the first cargo run instead of after a 3.5-minute "passed" that executed no process.
+    /// </summary>
+    [Fact]
+    public async Task A_run_that_reports_no_result_for_a_non_empty_selection_is_not_recorded_passed()
+    {
+        ContinuousTestWorkspace workspace = Workspace();
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCases(store, workspace, "test:a", "test:b");
+        var coordinator = new ContinuousTestCoordinator(
+            new SilentProvider(), store, runIdFactory: static () => "run:1");
+
+        await Assert.ThrowsAsync<ContinuousTestProviderException>(() => coordinator.RunSelectedAsync(
+            RunRequest(workspace, ["test:a", "test:b"], wholeSuite: true),
+            TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(
+            store.ListTestRuns(WorkspaceId),
+            row => string.Equals(row.Status, "passed", StringComparison.OrdinalIgnoreCase));
+        Assert.All(
+            store.ListContinuousTestStatuses(WorkspaceId),
+            row => Assert.NotEqual(ContinuousTestState.Green, row.State));
     }
 
     /// <summary>
@@ -148,7 +186,9 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
             ObservedAt: DateTimeOffset.UtcNow.AddSeconds(-1)));
         await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
 
-        Assert.Empty(Assert.Single(provider.Requests).TestCaseIds);
+        ContinuousTestProviderRunRequest sent = Assert.Single(provider.Requests);
+        Assert.Equal(["test:a", "test:b", "test:c"], sent.TestCaseIds.Order(StringComparer.Ordinal).ToArray());
+        Assert.True(sent.WholeSuite);
     }
 
     /// <summary>
@@ -240,7 +280,7 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
             store,
             SelectorFor(store),
             new ContinuousTestCoordinator(
-                new RecordingProvider { DiscoverCases = ProviderCases("test:red"), PassCases = true },
+                new RecordingProvider { DiscoverCases = ProviderCases("test:red") },
                 store,
                 runIdFactory: static () => "run:1"));
 
@@ -526,18 +566,17 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// A provider whose verdicts DERIVE from the selection it was handed, the way every real provider's
+    /// do. The earlier fake reported results regardless of the selection — and a fake that answers for
+    /// tests it was never asked to run cannot notice a provider that runs nothing, which is exactly how
+    /// the blanked-id-list bug shipped.
+    /// </summary>
     private sealed class RecordingProvider : IContinuousTestProvider
     {
         public List<ContinuousTestProviderRunRequest> Requests { get; } = [];
 
         public IReadOnlyList<ProviderTestCase> DiscoverCases { get; init; } = [];
-
-        /// <summary>
-        /// Report each requested case as passed. Off by default: most tests here assert what the
-        /// provider was TOLD to run, and a provider that also records verdicts would move rows the
-        /// assertions read.
-        /// </summary>
-        public bool PassCases { get; init; }
 
         public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
             ContinuousTestWorkspace workspace,
@@ -550,16 +589,10 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
         {
             Requests.Add(request);
             string runId = request.RunId ?? "run:1";
-            if (!PassCases)
-                return Task.FromResult(new ProviderRunResult(runId, "passed"));
-
-            IReadOnlyList<string> covered = request.TestCaseIds.Count > 0
-                ? request.TestCaseIds
-                : DiscoverCases.Select(discovered => discovered.Id).ToArray();
             return Task.FromResult(new ProviderRunResult(
                 runId,
                 "passed",
-                CaseResults: covered
+                CaseResults: request.TestCaseIds
                     .Select(id => new ProviderCaseResult(
                         Id: $"{runId}:{id}",
                         TestCaseId: id,
@@ -568,5 +601,19 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
                         IndexIdentity: request.IndexIdentity))
                     .ToArray()));
         }
+    }
+
+    /// <summary>A provider that claims "passed" and reports a verdict for nothing — the F6 shape.</summary>
+    private sealed class SilentProvider : IContinuousTestProvider
+    {
+        public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
+            ContinuousTestWorkspace workspace,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ProviderTestCase>>([]);
+
+        public Task<ProviderRunResult> RunAsync(
+            ContinuousTestProviderRunRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ProviderRunResult(request.RunId ?? "run:1", "passed"));
     }
 }

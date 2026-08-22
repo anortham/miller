@@ -224,9 +224,9 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        // An empty file selection is the unfiltered whole-suite run. It carries no selection argv, so
-        // there is nothing to chunk and it keeps the whole request's ids.
-        if (selectedFiles.Length == 0)
+        // A whole-suite run, or an empty file selection, is the unfiltered run. It carries no selection
+        // argv, so there is nothing to chunk and it keeps the whole request's ids.
+        if (request.WholeSuite || selectedFiles.Length == 0)
         {
             return [BuildInvocation(
                 request, paths, framework, packageRoot, cacheDirectory, [], request.TestCaseIds, part: null)];

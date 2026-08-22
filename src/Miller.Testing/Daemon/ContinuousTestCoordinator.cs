@@ -206,11 +206,13 @@ public sealed class ContinuousTestCoordinator
                         SelectedRevision: request.SelectedRevision,
                         IndexIdentity: request.IndexIdentity,
                         RunId: runId,
-                        // The ONLY place the whole-suite flag changes anything. An empty selection is how every
-                        // provider already says "run the whole assembly under the seeded exclusions", so this
-                        // needs no provider change - and the applier above still recorded the full id list, so
-                        // the run's intent and its verdict rows stay in step.
-                        TestCaseIds: request.WholeSuite ? [] : request.TestCaseIds,
+                        // The whole-suite form travels as a FLAG beside the full list, never as a blanked
+                        // list. Blanking it read as "run the whole assembly" only to providers that
+                        // attribute from a result artifact; the cargo provider's run loop is driven by the
+                        // list itself, so an empty list started no process, returned "passed" over zero
+                        // results, and left every case stale forever (dogfood finding F6, 2026-08-21).
+                        TestCaseIds: request.TestCaseIds,
+                        WholeSuite: request.WholeSuite,
                         FilterArguments: request.FilterArguments,
                         Command: request.Command,
                         ExcludeTraits: request.ExcludeTraits,
@@ -245,6 +247,16 @@ public sealed class ContinuousTestCoordinator
 
             if (!TryImportProviderResultArtifact(request, providerResult, currentRevision))
             {
+                // FAIL-SAFE. A run that selected cases and produced a verdict for NONE of them, with no
+                // result artifact to import either, knows nothing about those tests. Recording it as a
+                // completed run is how a provider that executed no process at all reported "passed" over
+                // 4,173 cargo cases (dogfood finding F6). An honest failure records the run failed and
+                // leaves every selected case stale, which is what actually happened.
+                if (providerResult.CaseResults.Count == 0 && request.TestCaseIds.Count > 0)
+                    throw new ContinuousTestProviderException(
+                        $"The {request.Framework ?? request.Workspace.Framework ?? "test"} run selected " +
+                        $"{request.TestCaseIds.Count} test case(s) and reported a result for none of them.");
+
                 _applier.CompleteRun(
                     WorkspaceId: request.Workspace.WorkspaceId,
                     SelectedRevision: request.SelectedRevision,
