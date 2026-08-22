@@ -88,9 +88,10 @@ processes were absent); unrelated resident `miller serve` processes were not tou
 ## Pending branch evidence
 
 The pre-correction combined Scale filter was 15 passed, 0 failed, 0 skipped; it is retained as historical
-focused evidence only. The corrected exact-tree gate is recorded below. The final verification-map,
-all-plan-checkbox, and serialized-commit criterion remains pending. Both affected Scale classes are now in the
-Windows Scale smoke allowlist; verification awaits Windows CI and no Windows result is claimed here.
+focused evidence only. Task 3 and the test-home isolation correction were serialized in commit `8dc3fa66`.
+Only this documentation closure follows; the corrected exact-tree gate below is reused without rerunning it.
+Both affected Scale classes are now in the Windows Scale smoke allowlist; verification awaits Windows CI and no
+Windows result is claimed here.
 
 ## Test-home isolation correction
 
@@ -116,7 +117,8 @@ below.
 
 ## Corrected exact-tree branch gate
 
-The replacement gate ran after the test-home isolation correction on the exact source/test/configuration tree.
+The replacement gate ran after the test-home isolation correction on the exact source/test/configuration tree and
+is recorded on serialized commit `8dc3fa66`.
 No source, test, or configuration changes followed that gate; this finding, plan, and ledger update is
 documentation-only.
 
@@ -131,4 +133,4 @@ documentation-only.
 This replaces the invalidated 8,279-fast/157-Scale result. The earlier 84 leaked policy files remain
 recoverable under the documented `miller-ignore-full-suite-recovery-20260822-` Trash prefix; the four-file recovery
 from the pre-correction focused replay remains separately documented above. The Windows result is still
-awaiting CI.
+awaiting CI. Only documentation closure follows this serialized commit; no gate is rerun here.

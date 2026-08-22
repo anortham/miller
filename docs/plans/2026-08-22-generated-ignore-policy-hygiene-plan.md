@@ -44,8 +44,8 @@ all 84 files were recovered to Trash. The corrected exact-tree gate passed: `scr
 fast passed / 0 failed / 9 skipped and 157 Scale passed / 0 failed / 16 skipped; the wrapper build phase and
 explicit Release build both reported 0 warnings/errors. The live-policy inventory was count 0 with the
 byte-identical empty hash `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` before and after.
-The final verification-map/all-plan-checkbox/serialized-commit criterion remains pending; Windows CI is still
-awaited.
+The final verification-map/all-plan-checkbox/serialized-commit criterion is complete on serialized commit
+`8dc3fa66`; Windows CI is still awaited and no Windows result is claimed here.
 
 **Security scope:** none declared.
 
@@ -169,4 +169,4 @@ awaited.
 - [x] Linked-worktree and user-authored policy behavior is unchanged.
 - [x] Workspace removal cleans only global generated policy and expected Miller-owned state.
 - [x] `scripts/test.sh all`, Release build, and worktree-state checks are recorded on the exact final tree.
-- [ ] Verification evidence is mapped in `docs/README.md`, all plan checkboxes are updated, and the serialized worker commit is recorded.
+- [x] Verification evidence is mapped in `docs/README.md`, all plan checkboxes are updated, and the serialized worker commit is recorded in `8dc3fa66`.
