@@ -22,6 +22,8 @@ public sealed class TestProcessStallTests
     /// length, because once the child finishes its clock grows for an honest reason.
     /// </summary>
     private static readonly TimeSpan SamplingWindow = TimeSpan.FromSeconds(6);
+    private static readonly TimeSpan ChattyDuration = SamplingWindow + SamplingWindow / 2;
+    private static readonly TimeSpan ChattyInterval = TimeSpan.FromMilliseconds(100);
 
     [Fact]
     public async Task A_silent_process_is_killed_once_its_stall_timeout_elapses()
@@ -174,72 +176,48 @@ public sealed class TestProcessStallTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
     }
 
-    /// <summary>
-    /// The stub tests above prove the POLICY. This one proves the WIRING, with a real child: the drain loop
-    /// must actually stamp the clock the policy reads. An unwired signal would leave
-    /// <c>SinceLastOutput</c> pinned at construction, and the guard would kill every long run instead of only
-    /// the wedged ones - the exact failure mode this guard exists to avoid.
-    /// </summary>
     [Fact]
     public async Task A_real_child_that_keeps_printing_keeps_its_stall_clock_near_zero()
     {
         var runner = new TestProcessRunner();
         await using ITestBackgroundProcess process = runner.Start(ChattyChild());
 
-        // TWO samples, taken well past the child's own print interval. One sample cannot tell a clock that is
-        // stamped on every line from one that was stamped once at construction: at any single instant both
-        // read "some time since the start". A never-stamped clock reads the TOTAL elapsed time, so it would
-        // report about 2s here and about 4s below. A stamped clock stays inside the print interval no matter
-        // how long the run goes on. The bound is on the interval, not on the difference between the samples,
-        // because where each sample lands inside the child's 1s cycle is not something a test can control.
-        TimeSpan interval = TimeSpan.FromSeconds(1.4);
-
-        // Sampling starts at the child's FIRST line, not when Start returns. Starting a process is not
-        // instant: on a loaded machine cmd.exe and ping together need longer than the print interval just
-        // to reach their first line, and a sample taken before then reported startup latency as a stalled
-        // clock. This wait cannot hide the defect the test hunts, because a clock that is never stamped
-        // only ever GROWS - it would never come back under the interval, and the wait would fail instead.
-        //
-        // The budget is well inside the child's own run length, because the four seconds of sampling below
-        // still have to fit before the child finishes and its clock starts growing for an honest reason.
-        var startup = Stopwatch.StartNew();
-        while (process.SinceLastOutput >= interval)
+        try
         {
+            TimeSpan interval = TimeSpan.FromSeconds(1.4);
+            var startup = Stopwatch.StartNew();
+            while (process.SinceLastOutput >= interval)
+            {
+                Assert.True(
+                    startup.Elapsed < TimeSpan.FromSeconds(10),
+                    "the child never produced a line the drain loop stamped: the stall clock only grew, "
+                    + $"reaching {process.SinceLastOutput} in {startup.Elapsed}.");
+                await Task.Delay(50, TestContext.Current.CancellationToken);
+            }
+
+            var elapsed = Stopwatch.StartNew();
+            var samples = new List<TimeSpan>();
+            while (elapsed.Elapsed < SamplingWindow)
+            {
+                samples.Add(process.SinceLastOutput);
+                await Task.Delay(100, TestContext.Current.CancellationToken);
+            }
+
+            TimeSpan total = elapsed.Elapsed;
+            TimeSpan highest = samples.Max();
+
+            Assert.True(total >= SamplingWindow, $"the samples only spanned {total}");
             Assert.True(
-                startup.Elapsed < TimeSpan.FromSeconds(10),
-                "the child never produced a line the drain loop stamped: the stall clock only grew, "
-                + $"reaching {process.SinceLastOutput} in {startup.Elapsed}.");
-            await Task.Delay(50, TestContext.Current.CancellationToken);
+                highest < total / 2,
+                $"the stall clock climbed to {highest} across a {total} window while the child printed every "
+                + $"second ({samples.Count} reads, lowest {samples.Min()}). It is tracking total elapsed time, not "
+                + "the last output, so the drain loop is not stamping it - and the guard would kill healthy long "
+                + "runs.");
         }
-
-        // The discriminator is GROWTH against elapsed time, not where any single read lands in the child's
-        // print cycle. A clock that is never re-stamped reads the whole time since the process started, so it
-        // tracks the sampling window 1:1; a stamped clock stays inside the print interval no matter how long
-        // the run goes on. Comparing the HIGHEST read against half the window says exactly that, and says it
-        // without depending on sampling granularity - which is what made two point reads flaky here. A loaded
-        // machine starves this loop badly enough to turn 100ms delays into whole seconds, so any rule that
-        // needs a specific read to land at a specific moment will fail on a busy build agent.
-        var elapsed = Stopwatch.StartNew();
-        var samples = new List<TimeSpan>();
-        while (elapsed.Elapsed < SamplingWindow)
+        finally
         {
-            samples.Add(process.SinceLastOutput);
-            await Task.Delay(100, TestContext.Current.CancellationToken);
+            process.TerminateProcessTree();
         }
-
-        TimeSpan total = elapsed.Elapsed;
-        TimeSpan highest = samples.Max();
-
-        process.TerminateProcessTree();
-
-        // Guard the guard: if the child stopped printing early, no sample proves anything.
-        Assert.True(total >= SamplingWindow, $"the samples only spanned {total}");
-        Assert.True(
-            highest < total / 2,
-            $"the stall clock climbed to {highest} across a {total} window while the child printed every "
-            + $"second ({samples.Count} reads, lowest {samples.Min()}). It is tracking total elapsed time, not "
-            + "the last output, so the drain loop is not stamping it - and the guard would kill healthy long "
-            + "runs.");
     }
 
     /// <summary>
@@ -292,10 +270,31 @@ public sealed class TestProcessStallTests
         Assert.Equal(TimeSpan.Parse(expected, System.Globalization.CultureInfo.InvariantCulture), resolved);
     }
 
-    private static TestProcessCommand ChattyChild() =>
-        OperatingSystem.IsWindows()
-            ? new TestProcessCommand("cmd.exe", ["/c", "ping", "-n", "20", "127.0.0.1"], Path.GetTempPath())
-            : new TestProcessCommand("/bin/sh", ["-c", "i=0; while [ $i -lt 20 ]; do echo tick; sleep 0.1; i=$((i+1)); done"], Path.GetTempPath());
+    private static TestProcessCommand ChattyChild()
+    {
+        int iterations = (int)Math.Ceiling(ChattyDuration.TotalMilliseconds / ChattyInterval.TotalMilliseconds);
+        int pingCount = (int)Math.Ceiling(ChattyDuration.TotalSeconds) + 1;
+        string intervalSeconds = ChattyInterval.TotalSeconds
+            .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return OperatingSystem.IsWindows()
+            ? new TestProcessCommand(
+                "cmd.exe",
+                [
+                    "/c",
+                    "ping",
+                    "-n",
+                    pingCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    "127.0.0.1",
+                ],
+                Path.GetTempPath())
+            : new TestProcessCommand(
+                "/bin/sh",
+                [
+                    "-c",
+                    $"i=0; while [ $i -lt {iterations} ]; do echo tick; sleep {intervalSeconds}; i=$((i+1)); done",
+                ],
+                Path.GetTempPath());
+    }
 
     private static TestProcessCommand SilentChild() =>
         OperatingSystem.IsWindows()

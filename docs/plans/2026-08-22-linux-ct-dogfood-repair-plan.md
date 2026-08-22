@@ -114,10 +114,10 @@
 **Approach:** Keep production code unchanged unless the corrected fixture proves a real defect. Every spawned fixture process must be condition-waited, bounded, and cleaned in `finally`.
 
 **Acceptance criteria:**
-- [ ] The shadow-copy test proves a live image is retained and an idle image is removed on Linux and Windows.
-- [ ] The stall test emits for the entire sampling window and keeps the observed silence near zero.
-- [ ] Repeating each focused class three times is green without timing-threshold inflation.
-- [ ] Focused tests pass and the change is handed to the lead per `parallel-lead-commit`.
+- [x] The shadow-copy test proves a live image is retained and an idle image is removed on Linux and Windows.
+- [x] The stall test emits for the entire sampling window and keeps the observed silence near zero.
+- [x] Repeating each focused class three times is green without timing-threshold inflation.
+- [x] Focused tests pass and the change is handed to the lead per `parallel-lead-commit`.
 
 ### Task 3: Selection eligibility diagnostics
 

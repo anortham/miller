@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Miller.Testing;
 using Xunit;
 
@@ -239,13 +240,55 @@ public sealed class CtDaemonShadowCopyTests : IDisposable
 
         Assert.True(CtDaemonShadowCopy.IsIdleCopy(copy, "miller.exe"));
 
-        // The sharing shape a running process's image has on Windows.
-        using (new FileStream(image, FileMode.Open, FileAccess.Read, FileShare.Read))
+        if (OperatingSystem.IsWindows())
         {
-            Assert.Equal(!OperatingSystem.IsWindows(), CtDaemonShadowCopy.IsIdleCopy(copy, "miller.exe"));
+            using (new FileStream(image, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                Assert.False(CtDaemonShadowCopy.IsIdleCopy(copy, "miller.exe"));
+            }
+        }
+        else
+        {
+            string source = new[] { "/bin/sleep", "/usr/bin/sleep" }
+                .FirstOrDefault(File.Exists)
+                ?? throw new InvalidOperationException("No native sleep executable is available.");
+
+            File.Copy(source, image, overwrite: true);
+            File.SetUnixFileMode(image, File.GetUnixFileMode(source));
+
+            var start = new ProcessStartInfo(image)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            start.ArgumentList.Add("30");
+
+            using Process process = Process.Start(start)
+                ?? throw new InvalidOperationException("The copied executable did not start.");
+            var wait = Stopwatch.StartNew();
+            try
+            {
+                while (CtDaemonShadowCopy.IsIdleCopy(copy, "miller.exe"))
+                {
+                    Assert.True(
+                        wait.Elapsed < TimeSpan.FromSeconds(5),
+                        "the copied executable never became a live image.");
+                    Thread.Sleep(25);
+                }
+
+                Assert.False(CtDaemonShadowCopy.IsIdleCopy(copy, "miller.exe"));
+            }
+            finally
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+
+                Assert.True(process.WaitForExit(5_000), "the copied executable did not exit after cleanup.");
+            }
         }
 
-        // A copy with no executable is unusable, so nothing can be running from it.
         File.Delete(image);
         Assert.True(CtDaemonShadowCopy.IsIdleCopy(copy, "miller.exe"));
     }
