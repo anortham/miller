@@ -13,6 +13,10 @@ namespace Miller.Server.Tools;
 [McpServerToolType]
 public sealed class TestsTool
 {
+    private const int McpWaitSecondsDefault = 240;
+    private const int McpWaitSecondsMinimum = 1;
+    private const int McpWaitSecondsMaximum = 240;
+
     private readonly WorkspaceContext _workspace;
     private readonly TestsCoreHooks? _hooks;
 
@@ -39,8 +43,10 @@ public sealed class TestsTool
         string operation = "status",
         [Description("Output format: compact|json. Default compact.")]
         string format = "compact",
-        [Description("For operation=run, wait for a green/red/partial verdict. Default false.")]
+        [Description("For operation=run, wait for daemon activity completion. Default false.")]
         bool wait = false,
+        [Description("For operation=run with wait=true, timeout in seconds. Default 240; allowed range 1-240.")]
+        int? wait_seconds = null,
         [Description("Test project path for enable/disable, relative to the workspace or absolute. Optional.")]
         string? project = null,
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
@@ -69,10 +75,24 @@ public sealed class TestsTool
                     "tests operation must be status|failures|start|stop|enable|disable|run."));
             }
 
+            if (wait_seconds is not null && (normalized != "run" || !wait))
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "invalid_wait_seconds",
+                    "tests wait_seconds is only valid when operation=run and wait=true."));
+            }
+
+            if (wait_seconds is < McpWaitSecondsMinimum or > McpWaitSecondsMaximum)
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "invalid_wait_seconds",
+                    $"tests wait_seconds must be between {McpWaitSecondsMinimum} and {McpWaitSecondsMaximum} seconds."));
+            }
+
             if (telemetry is not null)
                 telemetry.Op = normalized;
 
-            TestsCoreRequest request = CreateRequest(workspace_id, json, wait, project);
+            TestsCoreRequest request = CreateRequest(workspace_id, json, wait, wait_seconds, project);
             string output;
             string? hint;
             switch (normalized)
@@ -163,7 +183,7 @@ public sealed class TestsTool
         }
     }
 
-    private TestsCoreRequest CreateRequest(string? workspaceId, bool json, bool wait, string? project)
+    private TestsCoreRequest CreateRequest(string? workspaceId, bool json, bool wait, int? waitSeconds, string? project)
     {
         (string root, string? id) = ResolveWorkspace(workspaceId);
         return new TestsCoreRequest(
@@ -175,7 +195,10 @@ public sealed class TestsTool
             Hooks: _hooks,
             Json: json,
             Wait: wait,
-            ProjectPath: project);
+            ProjectPath: project,
+            WaitTimeout: wait
+                ? TimeSpan.FromSeconds(waitSeconds ?? McpWaitSecondsDefault)
+                : null);
     }
 
     private (string Root, string? WorkspaceId) ResolveWorkspace(string? workspaceId)

@@ -74,11 +74,30 @@ Current `json_commands` include:
 | `patterns export --jsonl` | Bulk-export structural fact rows for fleet code-shape inventory. |
 | `dashboard --json` | Start/reuse the local dashboard helper and return its URL. |
 | `tests status --json` | Continuous-test status: enabled projects, daemon running/paused + reason, aggregate verdict, selected `(index_identity, revision)`, stale counts, last run, and budget holder. Creates nothing. See [`tests-cli-v1.md`](tests-cli-v1.md). |
-| `tests run --json` | Request a CT run: live daemon uses the command channel; otherwise a foreground one-shot. `--wait` waits for a verdict. See [`tests-cli-v1.md`](tests-cli-v1.md). |
+| `tests run --json` | Request a CT run: live daemon uses the command channel; otherwise a foreground one-shot. `--wait` observes daemon activity completion and reports a typed wait outcome, not a verdict transition. See [`tests-cli-v1.md`](tests-cli-v1.md). |
 | `capabilities --json` | Discover this contract surface. |
 
 `capabilities --json` reports `optional_features.reference_aware_context=true` when `context --reference-mode usage`
 is available.
+
+### MCP continuous-testing contract
+
+The existing MCP `tests` tool is an additive agent-facing mapping over the same schema-1 CT
+objects. `operation=run` accepts `wait=true`; unlike the CLI's ten-minute bound, MCP wait defaults
+to **240 seconds** so an agent call remains bounded. The optional integer `wait_seconds` is valid
+only with `operation=run` and `wait=true`, and is inclusive **1-240**; invalid values or contexts
+return `invalid_wait_seconds`. `wait=true` observes daemon activity completion, not a green/red/
+partial verdict value, and the `wait` object carries all six states, elapsed/timeout seconds,
+command/run correlation, and `wait_complete` (true only for `completed`). `operation=start`
+exposes bounded publication readiness (`ready`, `not_published_within_grace`, or
+`daemon_exited_before_publish`).
+
+The MCP status and run responses expose bounded provider/activity, selection, chunk, case-name,
+digest, correlation, stale, and verdict fields described in [`tests-cli-v1.md`](tests-cli-v1.md).
+The run response retains the latest bounded activity snapshot after the daemon becomes idle. Failure
+responses expose only correlation facts available on their status rows; they do not expose or infer
+provider facts. Optional fields remain omitted when unavailable, and the schema version and existing
+fields do not change. CLI parsing and its 600-second `--wait` default remain unchanged.
 
 `capabilities --json` advertises impact through three additive, independent feature strings:
 

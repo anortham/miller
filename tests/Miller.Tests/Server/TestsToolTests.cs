@@ -425,6 +425,74 @@ public sealed class TestsToolTests : IDisposable
         Assert.False(Directory.Exists(CtDaemonProtocol.RootDirectory(_root)));
     }
 
+    [Theory]
+    [InlineData(null, 240)]
+    [InlineData(1, 1)]
+    [InlineData(240, 240)]
+    public void Mcp_wait_uses_a_240_second_default_and_accepts_bounded_overrides(int? requested, int expected)
+    {
+        using JsonDocument document = JsonDocument.Parse(RunDaemonThroughTool(wait: true, requested));
+
+        JsonElement wait = document.RootElement.GetProperty("wait");
+        Assert.Equal(expected, wait.GetProperty("timeout_seconds").GetDouble());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(241)]
+    public void Mcp_wait_rejects_timeout_outside_the_1_to_240_second_range(int requested)
+    {
+        string output = CreateTool().Tests(operation: "run", format: "json", wait: true, wait_seconds: requested);
+
+        Assert.Contains("wait_seconds", output, StringComparison.Ordinal);
+        Assert.Contains("1 and 240", output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("status", true)]
+    [InlineData("run", false)]
+    public void Mcp_wait_seconds_requires_run_with_wait(string operation, bool wait)
+    {
+        string output = CreateTool().Tests(operation: operation, format: "json", wait: wait, wait_seconds: 1);
+
+        Assert.Contains("wait_seconds", output, StringComparison.Ordinal);
+        Assert.Contains("operation=run and wait=true", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Mcp_run_without_wait_keeps_wait_fact_absent()
+    {
+        using JsonDocument document = JsonDocument.Parse(RunDaemonThroughTool(wait: false, requested: null));
+
+        Assert.False(document.RootElement.TryGetProperty("wait", out _));
+        Assert.False(document.RootElement.GetProperty("waited").GetBoolean());
+    }
+
+    [Fact]
+    public void Mcp_tool_metadata_describes_activity_waiting_and_timeout_bounds()
+    {
+        var method = typeof(TestsTool).GetMethod(nameof(TestsTool.Tests))!;
+        string methodDescription = method.GetCustomAttributes(typeof(System.ComponentModel.DescriptionAttribute), false)
+            .Cast<System.ComponentModel.DescriptionAttribute>()
+            .Single()
+            .Description;
+        var wait = method.GetParameters().Single(parameter => parameter.Name == "wait");
+        string waitDescription = wait.GetCustomAttributes(typeof(System.ComponentModel.DescriptionAttribute), false)
+            .Cast<System.ComponentModel.DescriptionAttribute>()
+            .Single()
+            .Description;
+        var waitSeconds = method.GetParameters().Single(parameter => parameter.Name == "wait_seconds");
+        string parameterDescription = waitSeconds.GetCustomAttributes(typeof(System.ComponentModel.DescriptionAttribute), false)
+            .Cast<System.ComponentModel.DescriptionAttribute>()
+            .Single()
+            .Description;
+
+        Assert.NotNull(methodDescription);
+        Assert.Contains("activity completion", waitDescription, StringComparison.Ordinal);
+        Assert.DoesNotContain("green/red/partial", waitDescription, StringComparison.Ordinal);
+        Assert.Contains("1-240", parameterDescription, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void CompactOutput_CarriesNextStepHint_JsonDoesNot()
     {
@@ -723,6 +791,62 @@ public sealed class TestsToolTests : IDisposable
             WorkspaceId: _workspace.WorkspaceId,
             MillerHome: Path.GetDirectoryName(_workspace.RegistryDbPath),
             Hooks: hooks);
+
+    private string RunDaemonThroughTool(bool wait, int? requested)
+    {
+        using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "test");
+        Assert.NotNull(lease);
+        var clock = new ManualTimeProvider();
+        var hooks = new TestsCoreHooks(
+            SubmitRun: (_, _) => new CtRunResult(
+                CtRunExecution.Daemon,
+                new CtDaemonCommandAck(
+                    "command-tool",
+                    CtDaemonCommandState.Acknowledged,
+                    DateTimeOffset.UnixEpoch,
+                    "accepted"),
+                null))
+        {
+            WaitProbe = new TestsWaitProbe(
+                ReadStatus: _ => ExecutingSnapshot("run-tool"),
+                IsLeaseLive: _ => true,
+                Clock: clock,
+                Delay: clock.Advance),
+        };
+
+        return new TestsTool(_workspace, hooks).Tests(
+            operation: "run",
+            format: "json",
+            wait: wait,
+            wait_seconds: requested);
+    }
+
+    private static ContinuousTestDaemonSnapshot ExecutingSnapshot(string runId) => new(
+        CtDaemonLifecycleState.Running,
+        "executing",
+        ContinuousTestVerdict.Unknown,
+        null,
+        0,
+        0,
+        Enabled: true,
+        Executing: true,
+        Activity: CtDaemonActivity.Executing,
+        Run: new CtDaemonRunProgress(
+            "tests/Sample.Tests.csproj",
+            runId,
+            1,
+            DateTimeOffset.UnixEpoch,
+            CtRunActivity.Active));
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+
+        public override long GetTimestamp() => _timestamp;
+
+        public void Advance(TimeSpan duration) =>
+            _timestamp += (long)(duration.TotalSeconds * Stopwatch.Frequency);
+    }
 
     private string WriteTestProject(string relativePath = "tests/Sample.Tests/Sample.Tests.csproj")
     {

@@ -175,6 +175,66 @@ public sealed class TestsWaitOutcomeTests
     }
 
     [Fact]
+    public void Completed_wait_retains_bounded_run_facts_after_the_final_idle_snapshot()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-wait-run-facts-").FullName;
+        var clock = new ManualTimeProvider();
+        CtDaemonRunProgress run = RunFacts();
+        var snapshots = new[] { Executing(run), Idle() };
+        int readIndex = 0;
+        try
+        {
+            using CtDaemonLease? lease = CtDaemonLease.TryAcquire(root, "test");
+            Assert.NotNull(lease);
+            TestsRunResult result = RunWithSnapshots(
+                root,
+                _ => snapshots[Math.Min(readIndex++, snapshots.Length - 1)],
+                clock,
+                TimeSpan.FromSeconds(10));
+
+            Assert.NotNull(result.Wait?.Run);
+            Assert.Equal("dotnet:xunit", result.Wait.Run.ProviderSource);
+            using JsonDocument document = JsonDocument.Parse(result.Render(json: true));
+            AssertRenderedRunFacts(document.RootElement.GetProperty("run"));
+            string compact = result.Render(json: false);
+            Assert.Contains("provider: dotnet:xunit", compact, StringComparison.Ordinal);
+            Assert.Contains("progress: elapsed=7.5s requested=200 chunks=4 part=2/4 units=50", compact, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void False_wait_retains_bounded_run_facts_after_execution_was_observed()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-wait-run-timeout-").FullName;
+        var clock = new ManualTimeProvider();
+        CtDaemonRunProgress run = RunFacts();
+        try
+        {
+            using CtDaemonLease? lease = CtDaemonLease.TryAcquire(root, "test");
+            Assert.NotNull(lease);
+            TestsRunResult result = RunWithSnapshots(
+                root,
+                _ => Executing(run),
+                clock,
+                TimeSpan.FromSeconds(1));
+
+            Assert.Equal(TestsWaitState.WaitTimeout, result.Wait?.State);
+            Assert.False(result.Wait?.WaitComplete);
+            Assert.NotNull(result.Wait?.Run);
+            using JsonDocument document = JsonDocument.Parse(result.Render(json: true));
+            AssertRenderedRunFacts(document.RootElement.GetProperty("run"));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public void Start_maps_publication_readiness_from_an_injected_probe()
     {
         string root = Directory.CreateTempSubdirectory("miller-start-readiness-").FullName;
@@ -330,6 +390,30 @@ public sealed class TestsWaitOutcomeTests
         Assert.Equal("tests run daemon verdict=green", result.Render(json: false));
     }
 
+    [Fact]
+    public void Absent_wait_run_facts_keep_existing_bytes()
+    {
+        TestsRunResult result = new(
+            0,
+            CtRunExecution.Daemon,
+            ContinuousTestVerdict.Unknown,
+            "accepted",
+            true,
+            null,
+            Wait: new TestsWaitResult(
+                false,
+                TestsWaitState.NotPickedUp,
+                3,
+                600,
+                "command-2",
+                null));
+
+        Assert.Equal(
+            "{\"execution\":\"daemon\",\"verdict\":\"unknown\",\"reason\":\"accepted\",\"waited\":true,\"paused\":false,\"selected\":null,\"wait\":{"+
+            "\"wait_complete\":false,\"state\":\"not_picked_up\",\"elapsed_seconds\":3,\"timeout_seconds\":600,\"command_id\":\"command-2\",\"run_id\":null}}",
+            result.Render(json: true));
+    }
+
     private static TestsCoreRequest Request(
         string root,
         bool wait,
@@ -342,7 +426,14 @@ public sealed class TestsWaitOutcomeTests
             WaitTimeout: waitTimeout,
             Hooks: hooks);
 
-    private static ContinuousTestDaemonSnapshot Executing(string runId) => new(
+    private static ContinuousTestDaemonSnapshot Executing(string runId) => Executing(new CtDaemonRunProgress(
+        "tests/Sample.Tests.csproj",
+        runId,
+        1,
+        DateTimeOffset.UnixEpoch,
+        CtRunActivity.Active));
+
+    private static ContinuousTestDaemonSnapshot Executing(CtDaemonRunProgress run) => new(
         CtDaemonLifecycleState.Running,
         "executing",
         ContinuousTestVerdict.Unknown,
@@ -352,12 +443,82 @@ public sealed class TestsWaitOutcomeTests
         Enabled: true,
         Executing: true,
         Activity: CtDaemonActivity.Executing,
-        Run: new CtDaemonRunProgress(
+        Run: run);
+
+    private static CtDaemonRunProgress RunFacts()
+    {
+        var selection = new ContinuousTestDaemonSelectionFacts(
+            ContinuousTestSelectionOutcome.WorkspaceScope,
+            ContinuousTestRunLane.Foreground,
+            KnownCount: 200,
+            PreTrimSelectedCount: 205,
+            PostTrimSelectedCount: 200,
+            RetainedRedCount: 2,
+            CoversEveryKnownCase: true,
+            Eligible: true,
+            ReasonCode: "eligible",
+            SelectionDigest: "selection-digest");
+        return new CtDaemonRunProgress(
             "tests/Sample.Tests.csproj",
-            runId,
-            1,
+            "run:facts",
+            200,
             DateTimeOffset.UnixEpoch,
-            CtRunActivity.Active));
+            CtRunActivity.Active,
+            ProviderSource: "dotnet:xunit",
+            Selection: selection,
+            ElapsedSeconds: 7.5,
+            RequestedUniqueUnitCount: 200,
+            ChunkCount: 4,
+            CurrentPart: 2,
+            CurrentPartUnitCount: 50,
+            NameSamples: Enumerable.Range(1, 12).Select(index => $"test:{index}").ToArray(),
+            NameDigest: "name-digest",
+            NamesTruncated: true);
+    }
+
+    private static TestsRunResult RunWithSnapshots(
+        string root,
+        Func<string, ContinuousTestDaemonSnapshot> readStatus,
+        ManualTimeProvider clock,
+        TimeSpan timeout)
+    {
+        const string commandId = "command-facts";
+        TestsCoreRequest request = Request(
+            root,
+            wait: true,
+            waitTimeout: timeout,
+            hooks: new TestsCoreHooks(
+                SubmitRun: (_, _) => new CtRunResult(
+                    CtRunExecution.Daemon,
+                    new CtDaemonCommandAck(
+                        commandId,
+                        CtDaemonCommandState.Acknowledged,
+                        DateTimeOffset.UnixEpoch,
+                        "accepted"),
+                    null))
+            {
+                WaitProbe = new TestsWaitProbe(
+                    ReadStatus: readStatus,
+                    IsLeaseLive: _ => true,
+                    Clock: clock,
+                    Delay: clock.Advance),
+            });
+        return TestsCore.Run(request);
+    }
+
+    private static void AssertRenderedRunFacts(JsonElement run)
+    {
+        Assert.Equal("dotnet:xunit", run.GetProperty("provider").GetString());
+        Assert.Equal("workspace_scope", run.GetProperty("selection").GetProperty("scope").GetString());
+        Assert.Equal(7.5, run.GetProperty("elapsed_seconds").GetDouble());
+        Assert.Equal(200, run.GetProperty("requested_unique_unit_count").GetInt32());
+        Assert.Equal(4, run.GetProperty("chunk_count").GetInt32());
+        Assert.Equal(2, run.GetProperty("current_part").GetInt32());
+        Assert.Equal(50, run.GetProperty("current_part_unit_count").GetInt32());
+        Assert.Equal(8, run.GetProperty("case_names").GetArrayLength());
+        Assert.True(run.GetProperty("names_truncated").GetBoolean());
+        Assert.Equal("name-digest", run.GetProperty("name_digest").GetString());
+    }
 
     private static ContinuousTestDaemonSnapshot Queued() => new(
         CtDaemonLifecycleState.Running,

@@ -21,6 +21,34 @@ explicit (`tests serve` / MCP `start`).
 `capabilities --json` advertises this contract as `tests_status` (`schema_version` 1) and lists
 `tests status --json` plus `tests run --json` in `json_commands`.
 
+## MCP `tests` tool
+
+The existing `tests` MCP tool uses the same schema-1 status, run, failure, and start/stop result
+objects as the CLI. Its `operation` values are `status` (default), `failures`, `start`, `stop`,
+`enable`, `disable`, and `run`; `format` is `compact` or `json`; `workspace_id`, `project`,
+`limit`, and `offset` retain their CLI meanings.
+
+`wait` is accepted for `operation=run` and defaults to `false`. When `wait=true`, it observes
+daemon activity completion, not a verdict value. `wait_seconds` is an optional integer accepted
+only with `operation=run` and `wait=true`; it defaults to **240 seconds** and must be in the
+inclusive range **1-240**. A supplied value outside that range, or supplied for another operation
+or with `wait=false`, is refused with `invalid_wait_seconds`. The CLI keeps its independent
+600-second (`10` minute) completion default and has no `wait_seconds` option.
+
+The MCP `run` response uses the `tests run --json` shape. With `wait=true`, its `wait` object
+reports `wait_complete`, one of the six typed states (`completed`, `queued_timeout`,
+`not_picked_up`, `wait_timeout`, `daemon_stopped`, or `lease_lost`), elapsed/timeout seconds,
+the accepted command id, and the observed run id. Only `completed` has `wait_complete: true`.
+When the wait observed a non-null activity snapshot, the response also carries an optional top-level
+`run` object with the bounded provider, selection, elapsed, requested/chunk/current-part counts,
+case-name samples, truncation flag, and name digest described under `tests run --json` below. This
+retained object remains available after the final daemon snapshot becomes idle.
+The MCP `start` response carries the optional publication readiness object with `ready`,
+`not_published_within_grace`, or `daemon_exited_before_publish`. Status, run, and failure
+responses retain the bounded activity/provider and correlation fields documented below. Failure
+responses expose only correlation facts available on their status rows; they do not expose or infer
+provider, selection, or chunk facts. Absent optional facts remain absent for compatibility.
+
 ## `tests status --json`
 
 ```json
@@ -357,6 +385,23 @@ remaining enabled: 1
 | `wait.timeout_seconds` | number | Bound used by this caller. The CLI default is 600 seconds. |
 | `wait.command_id` | string | Accepted command-channel id. |
 | `wait.run_id` | string \| null | Run id observed in daemon activity, or null when the run was never identified. |
+
+When the wait observed a run snapshot, the top-level optional `run` object carries only bounded
+activity facts; it does not duplicate project paths, command-line arguments, or other unbounded
+provider data:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `run.provider` | string | Provider identity resolved for the run. |
+| `run.selection` | object | Bounded selection facts in the same shape as `daemon.run.selection`. |
+| `run.elapsed_seconds` | number | Daemon-reported elapsed time for the run. |
+| `run.requested_unique_unit_count` | number | Distinct provider units requested. |
+| `run.chunk_count` | number | Total provider chunks. |
+| `run.current_part` | number | One-based current chunk number from the retained snapshot. |
+| `run.current_part_unit_count` | number | Provider units in the retained current chunk. |
+| `run.case_names` | string[] | At most eight bounded provider case-name samples. |
+| `run.names_truncated` | bool | Whether the provider had more case names than the bounded sample. |
+| `run.name_digest` | string | Deterministic digest of the provider case-name manifest. |
 
 A live daemon receives `run` on the file command channel. With no daemon, Miller runs a foreground
 one-shot in the calling process.

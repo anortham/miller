@@ -218,15 +218,15 @@
 
 **What to build:** After a successful spawn, observe lease/status publication for up to two seconds and report `ready`, `not_published_within_grace`, or `daemon_exited_before_publish` without changing the meaning of process-launch acceptance. Return a typed wait object for every completion or early-exit path with `wait_complete`, wait state, elapsed/timeout, command ID, and run ID; never present queued, not-picked-up, timed-out, stopped, or lease-lost snapshots as final.
 
-**Approach:** Add `wait_seconds` only to the existing MCP operation. Keep CLI's ten-minute behavior. Correct the MCP parameter description and both public contracts so wait follows daemon activity rather than verdict value. Render optional `provider`, `selection`, `elapsed_seconds`, `wait`, bounded `case_names`, `names_truncated`, and digest objects across status/run/failures, preserving current fields, enums, compact limits, and schema version.
+**Approach:** Add `wait_seconds` only to the existing MCP operation. Keep CLI's ten-minute behavior. Correct the MCP parameter description and both public contracts so wait follows daemon activity rather than verdict value. Render optional provider/activity facts across status and run, retain the latest bounded run snapshot after wait completion, and keep failure output to available correlation facts, preserving current fields, enums, compact limits, and schema version.
 
 **Acceptance criteria:**
-- [ ] A started daemon never immediately renders as a confirmed dead daemon solely because publication lagged.
-- [ ] Every non-settled exit has `wait_complete=false` and its exact state; only observed execution followed by live-daemon idle has `wait_complete=true`.
-- [ ] MCP `wait=true` returns an honest in-progress response by 240 seconds when a run continues; CLI completion waiting remains ten minutes.
-- [ ] Status/run/failure JSON exposes bounded correlation and provider facts without direct DB inspection.
-- [ ] Old response assertions remain byte-identical when optional facts are absent.
-- [ ] Focused server/control-plane/contract tests pass and the serialized worker commit is recorded.
+- [x] A started daemon never immediately renders as a confirmed dead daemon solely because publication lagged.
+- [x] Every non-settled exit has `wait_complete=false` and its exact state; only observed execution followed by live-daemon idle has `wait_complete=true`.
+- [x] MCP `wait=true` returns an honest in-progress response by 240 seconds when a run continues; CLI completion waiting remains ten minutes.
+- [x] Status/run JSON exposes bounded correlation and provider/activity facts without direct DB inspection; failure JSON exposes available correlation only.
+- [x] Old response assertions remain byte-identical when optional facts are absent.
+- [x] Focused server/control-plane/contract tests pass and the serialized worker commit is recorded.
 
 ### Task 6: Linux cross-provider acceptance
 

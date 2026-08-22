@@ -179,7 +179,9 @@ public sealed record TestsWaitResult(
     double ElapsedSeconds,
     double TimeoutSeconds,
     string CommandId,
-    string? RunId);
+    string? RunId,
+    [property: JsonIgnore]
+    CtDaemonRunProgress? Run = null);
 
 /// <summary>
 /// <paramref name="Truncated"/> is how many red cases are left AFTER this page. <paramref name="Total"/> and
@@ -786,6 +788,24 @@ public static class TestsCore
         writer.WriteNumber("selected_case_count", run.SelectedCaseCount);
         writer.WriteString("started_at", run.RunStartedAtUtc.ToString("O", CultureInfo.InvariantCulture));
         writer.WriteString("child", Snake(run.Activity.ToString()));
+        WriteDaemonRunFacts(writer, run);
+        writer.WriteEndObject();
+    }
+
+    private static bool HasDaemonRunFacts(CtDaemonRunProgress run) =>
+        run.ProviderSource is not null
+        || run.Selection is not null
+        || run.ElapsedSeconds is not null
+        || run.RequestedUniqueUnitCount is not null
+        || run.ChunkCount is not null
+        || run.CurrentPart is not null
+        || run.CurrentPartUnitCount is not null
+        || run.NameSamples is not null
+        || run.NamesTruncated is not null
+        || run.NameDigest is not null;
+
+    private static void WriteDaemonRunFacts(Utf8JsonWriter writer, CtDaemonRunProgress run)
+    {
         if (run.ProviderSource is { } provider)
             writer.WriteString("provider", provider);
         if (run.Selection is { } selection)
@@ -822,7 +842,6 @@ public static class TestsCore
 
         if (run.NameDigest is { } digest)
             writer.WriteString("name_digest", digest);
-        writer.WriteEndObject();
     }
 
     private static void WriteDaemonSelection(Utf8JsonWriter writer, ContinuousTestDaemonSelectionFacts selection)
@@ -972,13 +991,13 @@ public static class TestsCore
         return sb.ToString().TrimEnd();
     }
 
-    private static void AppendDaemonRunFacts(StringBuilder sb, CtDaemonRunProgress run)
+    private static void AppendDaemonRunFacts(StringBuilder sb, CtDaemonRunProgress run, string indent = "    ")
     {
         if (run.ProviderSource is { } provider)
-            sb.AppendLine("    provider: " + provider);
+            sb.AppendLine(indent + "provider: " + provider);
         if (run.Selection is { } selection)
         {
-            sb.AppendLine("    selection: scope=" + Snake(selection.Scope.ToString())
+            sb.AppendLine(indent + "selection: scope=" + Snake(selection.Scope.ToString())
                 + " lane=" + Snake(selection.Lane.ToString())
                 + " known=" + selection.KnownCount.ToString(CultureInfo.InvariantCulture)
                 + " pre_trim=" + selection.PreTrimSelectedCount.ToString(CultureInfo.InvariantCulture)
@@ -996,7 +1015,7 @@ public static class TestsCore
             || run.CurrentPart is not null
             || run.CurrentPartUnitCount is not null)
         {
-            sb.Append("    progress:");
+            sb.Append(indent + "progress:");
             if (run.ElapsedSeconds is { } elapsedSeconds)
                 sb.Append(" elapsed=" + FormatSeconds(elapsedSeconds) + "s");
             if (run.RequestedUniqueUnitCount is { } requested)
@@ -1016,17 +1035,17 @@ public static class TestsCore
         if (run.NameSamples is { } names)
         {
             IReadOnlyList<string> boundedNames = names.Take(MaxDaemonActivityNames).ToArray();
-            sb.AppendLine("    case_names: " + string.Join(", ", boundedNames));
+            sb.AppendLine(indent + "case_names: " + string.Join(", ", boundedNames));
             if (run.NamesTruncated is not null || names.Count > boundedNames.Count)
-                sb.AppendLine("    names_truncated: " + (((run.NamesTruncated ?? false) || names.Count > boundedNames.Count) ? "true" : "false"));
+                sb.AppendLine(indent + "names_truncated: " + (((run.NamesTruncated ?? false) || names.Count > boundedNames.Count) ? "true" : "false"));
         }
         else if (run.NamesTruncated is { } truncated)
         {
-            sb.AppendLine("    names_truncated: " + (truncated ? "true" : "false"));
+            sb.AppendLine(indent + "names_truncated: " + (truncated ? "true" : "false"));
         }
 
         if (run.NameDigest is { } digest)
-            sb.AppendLine("    name_digest: " + digest);
+            sb.AppendLine(indent + "name_digest: " + digest);
     }
 
     internal static string RenderMutationJson(TestsMutationResult result)
@@ -1153,6 +1172,13 @@ public static class TestsCore
             writer.WriteBoolean("paused", result.Paused);
             writer.WritePropertyName("selected");
             WriteSelected(writer, result.Selected);
+            if (result.Wait?.Run is { } run && HasDaemonRunFacts(run))
+            {
+                writer.WritePropertyName("run");
+                writer.WriteStartObject();
+                WriteDaemonRunFacts(writer, run);
+                writer.WriteEndObject();
+            }
             if (result.Wait is { } wait)
             {
                 writer.WritePropertyName("wait");
@@ -1184,6 +1210,14 @@ public static class TestsCore
             output += $" wait: {Snake(wait.State.ToString())} complete={(wait.WaitComplete ? "true" : "false")}"
                 + $" elapsed={FormatSeconds(wait.ElapsedSeconds)}s/{FormatSeconds(wait.TimeoutSeconds)}s"
                 + $" command={wait.CommandId} run={wait.RunId ?? "-"}";
+        }
+
+        if (result.Wait?.Run is { } run && HasDaemonRunFacts(run))
+        {
+            var facts = new StringBuilder();
+            facts.AppendLine("run:");
+            AppendDaemonRunFacts(facts, run, "  ");
+            output += "\n" + facts.ToString().TrimEnd();
         }
 
         return output;
@@ -1420,6 +1454,7 @@ public static class TestsCore
         ContinuousTestDaemonSnapshot snapshot = readStatus(endpointRoot);
         bool sawExecuting = false;
         string? runId = null;
+        CtDaemonRunProgress? run = null;
 
         while (true)
         {
@@ -1431,13 +1466,16 @@ public static class TestsCore
                 lastLivenessProbe = clock.GetTimestamp();
             }
 
-            if (IsExecuting(snapshot))
-                runId ??= snapshot.Run?.RunId;
+            if (snapshot.Run is { } currentRun)
+            {
+                run = currentRun;
+                runId ??= currentRun.RunId;
+            }
 
             if (snapshot.State == CtDaemonLifecycleState.Stopped)
-                return WaitResult(request, TestsWaitState.DaemonStopped, false, elapsed, timeout, commandId, runId);
+                return WaitResult(request, TestsWaitState.DaemonStopped, false, elapsed, timeout, commandId, runId, run);
             if (!leaseLive)
-                return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId);
+                return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run);
 
             if (IsExecuting(snapshot))
             {
@@ -1449,22 +1487,22 @@ public static class TestsCore
                 runId ??= snapshot.Run?.RunId;
                 queuedAt ??= clock.GetTimestamp();
                 if (clock.GetElapsedTime(queuedAt.Value) >= QueuedWaitLimit)
-                    return WaitResult(request, TestsWaitState.QueuedTimeout, false, elapsed, timeout, commandId, runId);
+                    return WaitResult(request, TestsWaitState.QueuedTimeout, false, elapsed, timeout, commandId, runId, run);
             }
             else if (sawExecuting || elapsed >= RunPickupGrace)
             {
                 if (sawExecuting)
                 {
                     if (isLeaseLive(endpointRoot))
-                        return WaitResult(request, TestsWaitState.Completed, true, elapsed, timeout, commandId, runId);
-                    return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId);
+                        return WaitResult(request, TestsWaitState.Completed, true, elapsed, timeout, commandId, runId, run);
+                    return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId, run);
                 }
 
-                return WaitResult(request, TestsWaitState.NotPickedUp, false, elapsed, timeout, commandId, runId);
+                return WaitResult(request, TestsWaitState.NotPickedUp, false, elapsed, timeout, commandId, runId, run);
             }
 
             if (elapsed >= timeout)
-                return WaitResult(request, TestsWaitState.WaitTimeout, false, elapsed, timeout, commandId, runId);
+                return WaitResult(request, TestsWaitState.WaitTimeout, false, elapsed, timeout, commandId, runId, run);
 
             TimeSpan remaining = timeout - elapsed;
             delay(remaining < WaitPollInterval ? remaining : WaitPollInterval);
@@ -1479,7 +1517,8 @@ public static class TestsCore
         TimeSpan elapsed,
         TimeSpan timeout,
         string commandId,
-        string? runId) =>
+        string? runId,
+        CtDaemonRunProgress? run) =>
         (
             Status(request),
             new TestsWaitResult(
@@ -1488,7 +1527,8 @@ public static class TestsCore
                 elapsed.TotalSeconds,
                 timeout.TotalSeconds,
                 commandId,
-                runId));
+                runId,
+                run));
 
     /// <summary>
     /// A run is in flight. The activity field is authoritative; the reason string is the fallback for a
