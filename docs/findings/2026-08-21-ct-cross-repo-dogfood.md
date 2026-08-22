@@ -103,6 +103,16 @@ razorback's run marked all 34 files failed with the npm banner as every summary;
 shows a genuinely red suite, but whether individually-green files are over-marked red needs a
 partially-red discriminator (classnames cannot serve — see F8).
 
+**F10 — a chained package test script breaks the jest run (false red).**
+`vercel/ms` (jest, script `pnpm run test:nodejs && pnpm run test:edge`) passes both halves at
+baseline (167 tests each) but CT marks all 4 files red with the `test:edge` npm banner as the
+summary. The provider routes a jest project through its package script and appends
+reporter/isolation args; a compound `a && b` script does not deliver those args to the jest
+invocation that needs them. jest therefore stays "supported, not field-proven" in the
+announcement (the docs already carry that constraint). Environment note: the first attempt
+failed on missing `pnpm` and surfaced only as `partial` with the reason in the daemon log —
+a visible failure reason on the run result would have saved a diagnosis step.
+
 ## What the fail-safes got right
 
 CT never lied green. F2 surfaced as red with failure rows; F6 surfaced as `partial` with
