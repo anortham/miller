@@ -25,7 +25,7 @@ across files, SQL DDL/DML shapes, and owned grammar forks (Razor, T-SQL, C#) whe
 gaps. The full argument is
 [hand-written extractors, not query files](https://anortham.github.io/julie-extractors/extractors.html).
 
-> **Current release: [v1.20.1](https://github.com/anortham/miller/releases/tag/v1.20.1)** ·
+> **Current release: [v1.21.0](https://github.com/anortham/miller/releases/tag/v1.21.0)** ·
 > Website: [anortham.github.io/miller](https://anortham.github.io/miller/)
 
 ## Quickstart
@@ -63,10 +63,10 @@ never starts the daemon.
 
 Every other install path is covered step by step in [docs/install.md](docs/install.md):
 
-- **Manual binary:** download a platform archive directly — [macOS arm64](https://github.com/anortham/miller/releases/download/v1.20.1/miller-1.20.1-aarch64-apple-darwin.tar.gz),
-  [macOS x64](https://github.com/anortham/miller/releases/download/v1.20.1/miller-1.20.1-x86_64-apple-darwin.tar.gz),
-  [Linux x64](https://github.com/anortham/miller/releases/download/v1.20.1/miller-1.20.1-x86_64-unknown-linux-gnu.tar.gz),
-  or [Windows x64](https://github.com/anortham/miller/releases/download/v1.20.1/miller-1.20.1-x86_64-pc-windows-msvc.zip). Verify the matching `.sha256`
+- **Manual binary:** download a platform archive directly — [macOS arm64](https://github.com/anortham/miller/releases/download/v1.21.0/miller-1.21.0-aarch64-apple-darwin.tar.gz),
+  [macOS x64](https://github.com/anortham/miller/releases/download/v1.21.0/miller-1.21.0-x86_64-apple-darwin.tar.gz),
+  [Linux x64](https://github.com/anortham/miller/releases/download/v1.21.0/miller-1.21.0-x86_64-unknown-linux-gnu.tar.gz),
+  or [Windows x64](https://github.com/anortham/miller/releases/download/v1.21.0/miller-1.21.0-x86_64-pc-windows-msvc.zip). Verify the matching `.sha256`
   sidecar, extract it, and point your MCP client at the binary. No .NET SDK or Node.js required.
 - **Any other MCP harness:** same binary, plus a routing block from `miller rules --harness <name>`.
 - **Source checkout (development):** needs the .NET 10 SDK, then
@@ -224,7 +224,7 @@ optimistic green. An index rebuild changes the generation identity, which stales
 | .NET | `dotnet`, `xunit`, `nunit`, `mstest` | yes — Miller's own suite |
 | Rust | `cargo` | yes — `julie-extractors`, 4,173 cases |
 | Python | `pytest` | yes — `more-itertools`, 736 tests |
-| JavaScript and TypeScript | `vitest`, `jest`, `node-test` | `vitest` and `node-test` yes; `jest` has test-fixture coverage only |
+| JavaScript and TypeScript | `vitest`, `jest`, `node-test` | yes — `jest` proven on `vercel/ms` (runs the suite once, under jest's default environment) |
 
 `miller tests enable` discovers projects from the files already in the repo: test-signal `.csproj`
 files, `Cargo.toml`, `package.json`, and the usual Python config files. JavaScript and Python cases are
