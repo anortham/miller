@@ -74,7 +74,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
             .ConfigureAwait(false);
         if (metaResult.ExitCode != 0)
             throw new ContinuousTestProviderException(DiscoveryFailureReason(metaResult, "cargo metadata"));
-        var metadata = CargoMetadata.Parse(metaResult.StandardOutput);
+        var metadata = CargoMetadata.Parse(metaResult.RequireCompleteStandardOutput("cargo metadata"));
 
         // 2. explicit build gate — a compile failure here feeds RecordDiscoveryFailure (self-recovers).
         var buildResult = await _runner.RunAsync(BuildGateCommand(workspace, paths, manifestPath), cancellationToken)
@@ -92,7 +92,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
                 var listResult = await _runner
                     .RunAsync(ListCommand(workspace, paths, manifestPath, package.Name, target.SelectorArgs()), cancellationToken)
                     .ConfigureAwait(false);
-                var testNames = CargoTestList.ParseTestNames(listResult.StandardOutput);
+                var testNames = CargoTestList.ParseTestNames(listResult.RequireCompleteStandardOutput("The cargo test listing"));
                 if (testNames.Count > 0)
                 {
                     foreach (var name in testNames)
@@ -255,7 +255,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         if (!string.IsNullOrWhiteSpace(request.Command ?? request.Workspace.Command))
         {
             var (customResult, customWall) = await RunAndLog(BuildCustomCommand(request, paths)).ConfigureAwait(false);
-            var customOutput = CargoTestOutput.Parse(customResult.StandardOutput);
+            var customOutput = CargoTestOutput.Parse(customResult.RequireCompleteStandardOutput("The cargo test run"));
             ThrowIfHarnessCrash(customResult, customOutput, artifactPath);
             foreach (var id in request.TestCaseIds)
                 results.Add(AggregateResult(request, runId, id, customResult, customOutput));
@@ -279,7 +279,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         {
             var (legacyResult, legacyWall) = await RunAndLog(WorkspaceCommand(request.Workspace, paths, manifestPath))
                 .ConfigureAwait(false);
-            var legacyOutput = CargoTestOutput.Parse(legacyResult.StandardOutput);
+            var legacyOutput = CargoTestOutput.Parse(legacyResult.RequireCompleteStandardOutput("The cargo test run"));
             ThrowIfHarnessCrash(legacyResult, legacyOutput, artifactPath);
             foreach (var id in legacy)
                 results.Add(AggregateResult(request, runId, id, legacyResult, legacyOutput));
@@ -324,7 +324,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         {
             var (docResult, _) = await runAndLog(RunCommand(request.Workspace, paths, manifestPath, group.Package, selector, filters: null))
                 .ConfigureAwait(false);
-            var docOutput = CargoTestOutput.Parse(docResult.StandardOutput);
+            var docOutput = CargoTestOutput.Parse(docResult.RequireCompleteStandardOutput("The cargo doc-test run"));
             ThrowIfHarnessCrash(docResult, docOutput, artifactPath);
             foreach (var runCase in group.Cases)
                 results.Add(AggregateResult(request, runId, runCase.Id, docResult, docOutput));
@@ -345,7 +345,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         {
             var (result, _) = await runAndLog(RunCommand(request.Workspace, paths, manifestPath, group.Package, selector, filters: null))
                 .ConfigureAwait(false);
-            var output = CargoTestOutput.Parse(result.StandardOutput);
+            var output = CargoTestOutput.Parse(result.RequireCompleteStandardOutput("The cargo test run"));
             ThrowIfHarnessCrash(result, output, artifactPath);
             var requested = perTestNames.ToHashSet(StringComparer.Ordinal);
             var unrequested = output.ResultsByName.Keys.Count(name => !requested.Contains(name));
@@ -366,7 +366,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         {
             var (result, _) = await runAndLog(RunCommand(request.Workspace, paths, manifestPath, group.Package, selector, chunk))
                 .ConfigureAwait(false);
-            var output = CargoTestOutput.Parse(result.StandardOutput);
+            var output = CargoTestOutput.Parse(result.RequireCompleteStandardOutput("The cargo test run"));
             ThrowIfHarnessCrash(result, output, artifactPath);
             var chunkSet = chunk.ToHashSet(StringComparer.Ordinal);
             var unrequested = output.ResultsByName.Keys.Count(name => !chunkSet.Contains(name));
@@ -763,7 +763,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
                 ResultArtifactPath = File.Exists(artifactPath) ? artifactPath : null,
             };
 
-        var packagesByManifest = CargoMetadata.Parse(metadataResult.StandardOutput).WorkspaceMembers
+        var packagesByManifest = CargoMetadata.Parse(metadataResult.RequireCompleteStandardOutput("cargo metadata")).WorkspaceMembers
             .ToDictionary(package => Path.GetFullPath(package.ManifestPath), package => package.Name, PathStringComparer);
 
         var buildProfileDir = Path.Combine(CoverageRoot(paths), "build");
@@ -776,7 +776,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
                 ResultArtifactPath = File.Exists(artifactPath) ? artifactPath : null,
             };
 
-        var executables = TestExecutables(gate.StandardOutput, packagesByManifest);
+        var executables = TestExecutables(gate.RequireCompleteStandardOutput("The cargo build"), packagesByManifest);
 
         var results = new List<ProviderCaseResult>();
         var artifacts = new List<ProviderCoverageArtifact>();
@@ -789,7 +789,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
             var (result, _) = await runAndLog(
                     InstrumentedRunCommand(workspace, paths, manifestPath, runCase.Parsed, profileDir))
                 .ConfigureAwait(false);
-            var output = CargoTestOutput.Parse(result.StandardOutput);
+            var output = CargoTestOutput.Parse(result.RequireCompleteStandardOutput("The cargo test run"));
             ThrowIfHarnessCrash(result, output, artifactPath);
             if (!output.ResultsByName.ContainsKey(runCase.Parsed.TestName!))
             {
@@ -853,7 +853,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
                     WorkspaceEnvironment(workspace, paths))))
             .ConfigureAwait(false);
 
-        var libDir = libDirResult.StandardOutput?.Trim();
+        var libDir = libDirResult.RequireCompleteStandardOutput("The rustc target-libdir probe").Trim();
         if (libDirResult.ExitCode != 0 || string.IsNullOrWhiteSpace(libDir))
             throw UnsupportedCoverage("this toolchain (rustc --print target-libdir failed)");
 
@@ -912,7 +912,8 @@ public sealed class RustTestProvider : IContinuousTestProvider
 
         return exportResult.ExitCode != 0
             ? []
-            : CoveredWorkspaceFiles(exportResult.StandardOutput, workspace.WorkspaceRoot);
+            : CoveredWorkspaceFiles(
+                exportResult.RequireCompleteStandardOutput("The coverage export"), workspace.WorkspaceRoot);
     }
 
     /// <summary>

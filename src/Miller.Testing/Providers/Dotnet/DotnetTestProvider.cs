@@ -154,9 +154,10 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         if (GenericFramework(workspace.Framework) is { } framework)
             return ParseGenericDiscoveryDiagnostic(diagnosticPath!, framework) is { Count: > 0 } cases
                 ? cases
-                : ParseGenericDiscovery(result.StandardOutput, framework);
+                : ParseGenericDiscovery(
+                    result.RequireCompleteStandardOutput("Test discovery"), framework);
 
-        return ParseDiscovery(result.StandardOutput);
+        return ParseDiscovery(result.RequireCompleteStandardOutput("Test discovery"));
     }
 
     private async Task<ProviderRunResult> RunInGenerationAsync(
@@ -1461,11 +1462,16 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         string selectedRevision,
         string indexIdentity)
     {
+        // The xunit contract carries the run's results on stdout, one JSONL event per line, and the parser
+        // skips a line it cannot read. A capped stream would therefore drop cases in silence and could report
+        // a red run as green, so a truncated invocation fails the run instead of being parsed.
         if (results.Count == 1)
-            return ParseRun(results[0].StandardOutput, selectedRevision, indexIdentity);
+            return ParseRun(
+                results[0].RequireCompleteStandardOutput("The test run"), selectedRevision, indexIdentity);
 
         return MergeRunResults(results
-            .Select(invocation => ParseRun(invocation.StandardOutput, selectedRevision, indexIdentity))
+            .Select(invocation => ParseRun(
+                invocation.RequireCompleteStandardOutput("The test run"), selectedRevision, indexIdentity))
             .ToArray());
     }
 

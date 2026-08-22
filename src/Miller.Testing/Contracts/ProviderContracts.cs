@@ -67,10 +67,41 @@ public sealed record TestProcessCommand
         value.Contains(' ', StringComparison.Ordinal) ? $"\"{value}\"" : value;
 }
 
+/// <summary>
+/// One finished child process, as its provider sees it. The two truncation flags say whether the runner's
+/// per-stream capture cap elided part of that text; the retained text is a head plus a rolling tail, which is
+/// everything a human-facing failure summary needs and NOT enough to parse results from.
+/// </summary>
 public sealed record TestProcessResult(
     int ExitCode,
     string StandardOutput,
-    string StandardError);
+    string StandardError,
+    bool StandardOutputTruncated = false,
+    bool StandardErrorTruncated = false)
+{
+    /// <summary>
+    /// The standard output, guaranteed complete — the accessor every parser that reads RESULTS or an
+    /// INVENTORY from stdout must use.
+    ///
+    /// <para>Both such parsers tolerate lines they do not recognise: the xunit JSONL path skips a line it
+    /// cannot parse, and the cargo path ignores any line matching no pattern. So an elided middle would not
+    /// fail — it would silently drop test cases, under-report failures, and could turn a red run green. A
+    /// truncated stream is therefore refused here. Correctness beats memory: a loud failure an operator can
+    /// act on is the honest outcome, and the cap is generous enough that a real run never reaches it.</para>
+    /// </summary>
+    /// <param name="context">What produced the output, named in the failure message.</param>
+    public string RequireCompleteStandardOutput(string context)
+    {
+        if (!StandardOutputTruncated)
+            return StandardOutput;
+
+        throw new ContinuousTestProviderException(
+            $"{context} wrote more standard output than the capture cap retains, so part of it was elided. "
+            + "Results read from a partial stream would silently omit test cases, so the run fails instead. "
+            + "Reduce the console output of the tests, or raise "
+            + "TestProcessRunnerOptions.MaxCapturedCharactersPerStream.");
+    }
+}
 
 public interface ITestProcessRunner
 {
