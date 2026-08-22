@@ -99,7 +99,7 @@
 - [x] Creating a root `.julieignore` after registration disables generated-global authority and forces policy re-evaluation without overwriting either file.
 - [x] `MILLER_HOME` isolation and concurrent materializers are deterministic.
 - [x] ADR-0006 records ownership, source precedence, malformed inherited compatibility, consumer parity, and cleanup rules.
-- [ ] Focused materializer/scan/update/watcher tests pass and the serialized worker commit is recorded.
+- [x] Focused materializer/scan/update/watcher tests pass and the serialized worker commit is recorded in `7d499d54`.
 
 ### Task 2: Safe lifecycle and migration behavior
 
