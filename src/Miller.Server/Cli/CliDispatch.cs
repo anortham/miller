@@ -2120,24 +2120,20 @@ public static class CliDispatch
     }
 
     /// <summary>Outgoing evidence for context's term-rescue promotion set, in one batched read.</summary>
+    /// <summary>
+    /// The CLI mirror of <c>ContextTool.ReadOutgoingBatch</c>: one outgoing-only batch read, with an id the
+    /// read session cannot resolve absent from the result rather than denying the whole promotion set.
+    /// </summary>
     private static IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> ReadContextOutgoingEvidence(
         IWorkspaceReadSession session,
-        IReadOnlyList<string> symbolIds)
-    {
-        IReadOnlyDictionary<string, ReferenceEvidenceBundle> bundles = ReferenceEvidenceReader.ReadMany(
+        IReadOnlyList<string> symbolIds) =>
+        ReferenceEvidenceReader.ReadOutgoingMany(
             session,
             symbolIds,
             new ReferenceEvidenceQuery(
                 new ReferenceEvidenceBounds(
                     ContextTool.ReferenceRowsPerSymbol,
                     ContextTool.ReferenceRowsPerSymbol)));
-        var outgoing = new Dictionary<string, OutgoingReferenceEvidenceSet>(
-            bundles.Count,
-            StringComparer.Ordinal);
-        foreach ((string symbolId, ReferenceEvidenceBundle bundle) in bundles)
-            outgoing[symbolId] = bundle.Outgoing;
-        return outgoing;
-    }
 
     private static IReadOnlyList<TextContentSearchHit> ReadContextContentChunks(
         WorkspaceContext context,

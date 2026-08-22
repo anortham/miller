@@ -29,6 +29,16 @@ public sealed partial class ContextTool
 {
     private const int TermRescuePromotionReadLimit = 8;
     private const int TermRescueRetrievalLimit = 6;
+
+    /// <summary>
+    /// The lexical window the semantic-seed gate judges. It is NOT the pivot ranker's window, and widening it to
+    /// share one retrieval is NOT free: the gate keeps the retrieved ids as the membership set that admits a
+    /// semantic hit under <c>RerankOnly</c> admission, and <c>CollectSymbolCandidates</c> returns everything the
+    /// over-fetch window scored rather than truncating to the limit. A wider window therefore admits semantic
+    /// seeds the narrow one drops and changes the rendered bundle. Any change here is a ranking change and needs
+    /// its own approval and baseline.
+    /// </summary>
+    private const int SemanticSeedGateLimit = 2;
     private readonly IWorkspaceIndexProvider _workspaceProvider;
     private readonly ISemanticTextArm? _semanticArm;
     private readonly VectorSidecar? _semanticSidecar;
@@ -160,7 +170,7 @@ public sealed partial class ContextTool
             bool rescueExcludeTests = parsedReferenceMode == ReferenceMode.Usage
                 ? exclude_tests
                 : SearchTool.ResolveExcludeTests(null, query, SearchToolMode.Symbol);
-            var queryRetrieval = new ContextQueryRetrieval();
+            var queryRetrieval = new ContextQueryRetrieval(contextIndex);
             IReadOnlyList<ContextSemanticSeed> semanticSeeds = [];
             IReadOnlyList<ContextSourceSeed> sourceSeeds = [];
             cancellationToken.ThrowIfCancellationRequested();
@@ -258,7 +268,15 @@ public sealed partial class ContextTool
                     default:
                         throw new ArgumentOutOfRangeException(nameof(reference_mode));
                 }
-            CompletePhase("bundle", telemetry, ref phaseStart);
+            // The usage branch used to report its WHOLE cost under "bundle" because it had no inner phases. Now
+            // that it reports them, this stamp measures only what is left after its last inner phase — a
+            // different quantity under the same name, which a trend across the instrumentation boundary would
+            // read as a collapse. So the usage branch's remainder gets its own key; the off branch has always
+            // reported the remainder here, so its key does not move.
+            CompletePhase(
+                parsedReferenceMode == ReferenceMode.Usage ? "bundle_remainder" : "bundle",
+                telemetry,
+                ref phaseStart);
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
             ToolDiagnostic? diagnostic = null;
             if (selectedCount == 0)
@@ -393,22 +411,26 @@ public sealed partial class ContextTool
     /// Read outgoing evidence for a whole set of symbols in one round trip. Term-rescue promotion asks for up
     /// to eight test symbols at once; one read per symbol paid the resolution load eight times over.
     /// </summary>
+    /// <remarks>
+    /// It reads the OUTGOING batch, not the full bundle: this path keeps only <c>Outgoing</c>, and the bundle
+    /// read adds an inbound resolution pass plus a name lookup and a same-name definition count per symbol — on
+    /// the default <c>reference_mode=off</c> path, which the batch exists to make cheaper. That entry point also
+    /// skips an id the read session cannot resolve instead of throwing, so one symbol the search sidecar names
+    /// and the served view no longer has cannot deny the whole promotion set.
+    /// <para>
+    /// There is no off-switch here, and <c>MILLER_CONTEXT_REFERENCE_BATCH</c> does not reach it. That switch
+    /// picks between two live implementations on the usage path; here the batch replaced its only caller, so a
+    /// switch would have nothing to switch to and could only restore the N+1 this fix removed.
+    /// </para>
+    /// </remarks>
     private static IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> ReadOutgoingBatch(
         WorkspaceReadHandle readSession,
-        IReadOnlyList<string> symbolIds)
-    {
-        IReadOnlyDictionary<string, ReferenceEvidenceBundle> bundles = ReferenceEvidenceReader.ReadMany(
+        IReadOnlyList<string> symbolIds) =>
+        ReferenceEvidenceReader.ReadOutgoingMany(
             readSession,
             symbolIds,
             new ReferenceEvidenceQuery(
                 new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)));
-        var outgoing = new Dictionary<string, OutgoingReferenceEvidenceSet>(
-            bundles.Count,
-            StringComparer.Ordinal);
-        foreach ((string symbolId, ReferenceEvidenceBundle bundle) in bundles)
-            outgoing[symbolId] = bundle.Outgoing;
-        return outgoing;
-    }
 
     private static IReadOnlyList<TextContentSearchHit> ReadContentChunks(
         WorkspaceReadHandle readSession,
@@ -564,9 +586,9 @@ public sealed partial class ContextTool
         if (!SemanticQueryPolicy.Route(query).IsHybrid)
             return [];
 
-        // The pivot ranker's limit, so both retrievals issue the same index window and the second is served
-        // from this call's search cache. The test policy stays this gate's own.
-        SymbolCandidateSet lexical = retrieval.Collect(index, query, SearchSeedLimit, excludeTests);
+        // The gate's OWN narrow window and its OWN test policy. See SemanticSeedGateLimit: the retrieved ids
+        // gate semantic admission, so this limit is a ranking input, not a performance knob.
+        SymbolCandidateSet lexical = retrieval.Collect(query, SemanticSeedGateLimit, excludeTests);
         var evidence = new LexicalEvidence(
             lexical.Candidates.Count,
             lexical.Candidates.Count > 0 ? lexical.Candidates[0].Score : 0,
@@ -1597,7 +1619,7 @@ public sealed partial class ContextTool
         ContextQueryRetrieval? retrieval = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        retrieval ??= new ContextQueryRetrieval();
+        retrieval = ContextQueryRetrieval.For(index, retrieval);
         if (maxHops < 0) maxHops = 0;
         if (maxHops > 2) maxHops = 2;
         candidatesExamined = 0;
@@ -1647,7 +1669,7 @@ public sealed partial class ContextTool
             // Parent-query auto policy for both arms: one-word term rescue must not reintroduce
             // tests when the original natural-language query would hide them.
             bool excludeTests = SearchTool.ResolveExcludeTests(null, query, SearchToolMode.Symbol);
-            SymbolCandidateSet retrieved = retrieval.Collect(index, query, SearchSeedLimit, excludeTests);
+            SymbolCandidateSet retrieved = retrieval.Collect(query, SearchSeedLimit, excludeTests);
             cancellationToken.ThrowIfCancellationRequested();
             int retrievedCount = Math.Min(retrieved.Candidates.Count, SearchSeedLimit);
             for (int rank = 0; rank < retrievedCount; rank++)
@@ -1670,7 +1692,7 @@ public sealed partial class ContextTool
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 SymbolCandidateSet termCandidates =
-                    retrieval.Collect(index, term, TermRescueRetrievalLimit, excludeTests);
+                    retrieval.Collect(term, TermRescueRetrievalLimit, excludeTests);
                 cancellationToken.ThrowIfCancellationRequested();
                 int termCandidateCount = Math.Min(termCandidates.Candidates.Count, TermRescueRetrievalLimit);
                 for (int rank = 0; rank < termCandidateCount; rank++)
@@ -2061,7 +2083,6 @@ public sealed partial class ContextTool
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 SymbolCandidateSet termCandidates = retrieval.Collect(
-                    index,
                     term,
                     TermRescueRetrievalLimit,
                     excludeTests: false);

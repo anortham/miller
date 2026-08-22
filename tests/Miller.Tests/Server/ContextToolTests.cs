@@ -3594,6 +3594,74 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void RunActionable_TermRescuePromotion_KeepsThePromotionsTheBatchCouldResolve()
+    {
+        const string firstSubjectId = "0000000000000000000000000000c801";
+        const string firstTestId = "0000000000000000000000000000c802";
+        const string secondSubjectId = "0000000000000000000000000000c803";
+        const string secondTestId = "0000000000000000000000000000c804";
+        // The subjects carry none of the query's words, so only promotion can put them in the bundle.
+        IndexedSymbol[] symbols =
+        [
+            new(0, firstSubjectId, "GuardOne", "method GuardOne", "method", "csharp",
+                "src/GuardOne.cs", 10, 40, null, false),
+            new(1, firstTestId,
+                "UnreadableArtifact_Refuses", "method UnreadableArtifact_Refuses", "method", "csharp",
+                "tests/ArtifactTests.cs", 10, 50, null, true),
+            new(2, secondSubjectId, "GuardTwo", "method GuardTwo", "method", "csharp",
+                "src/GuardTwo.cs", 10, 40, null, false),
+            new(3, secondTestId,
+                "MissingLease_Expires", "method MissingLease_Expires", "method", "csharp",
+                "tests/LeaseTests.cs", 10, 50, null, true),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+
+        // The read session no longer has the first test — the search sidecar can name a symbol the served view
+        // dropped. The batch omits it; every other promotion in the same batch must still land.
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            "how does the unreadable artifact refuse when the missing lease expires",
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            readOutgoingMany: ids => ids
+                .Where(id => id != firstTestId)
+                .ToDictionary(
+                    id => id,
+                    id => id == secondTestId
+                        ? ExactOutgoingSet(ExactOutgoing(
+                            secondTestId,
+                            secondSubjectId,
+                            "GuardTwo",
+                            "tests/LeaseTests.cs",
+                            20))
+                        : ExactOutgoingSet(),
+                    StringComparer.Ordinal),
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement[] items = document.RootElement.GetProperty("bundle").EnumerateArray().ToArray();
+        Assert.Contains(
+            items,
+            item => item.GetProperty("symbol_id").GetString() == secondSubjectId &&
+                    (item.GetProperty("reason").GetString() ?? string.Empty).EndsWith(
+                        "_subject",
+                        StringComparison.Ordinal));
+        Assert.DoesNotContain(items, item => item.GetProperty("symbol_id").GetString() == firstSubjectId);
+    }
+
+    [Fact]
     public void RunActionable_CancellationDuringCandidateEnrichment_StopsPipeline()
     {
         const string testId = "0000000000000000000000000000e001";
@@ -3906,51 +3974,36 @@ public sealed class ContextToolTests
         };
 
     /// <summary>
-    /// The semantic-seed gate's evidence, computed the way <c>LoadSemanticSeeds</c> computes it. The A/B below
-    /// runs it at the old limit-2 retrieval and at the shared pivot retrieval and compares rendered bundles.
+    /// A lexical population wider than the seed gate's over-fetch window, so the gate's limit is observable.
+    /// <c>CollectSymbolCandidates</c> does not truncate to its limit — the limit only sets the over-fetch
+    /// window (limit * 4 + 10) — so limit 2 scores 18 rows and limit 10 scores 50. A fixture with fewer than 19
+    /// matching symbols returns the SAME rows at both limits and can prove nothing about the window.
     /// </summary>
-    private static IReadOnlyList<ContextTool.ContextSemanticSeed> SeedsFromRetrieval(
-        ISymbolLookupIndex index,
-        SemanticQueryResult result,
-        string query,
-        int limit,
-        bool retrievalExcludeTests,
-        bool seedExcludeTests)
+    private static MillerRepositoryIndex WideLexicalFixture()
     {
-        if (!SemanticQueryPolicy.Route(query).IsHybrid || !result.Served)
-            return [];
-
-        SymbolCandidateSet lexical = SearchTool.CollectSymbolCandidates(
-            index,
-            query,
-            SearchToolMode.Symbol,
-            limit,
-            retrievalExcludeTests);
-        var evidence = new LexicalEvidence(
-            lexical.Candidates.Count,
-            lexical.Candidates.Count > 0 ? lexical.Candidates[0].Score : 0,
-            lexical.Candidates.Count > 1 ? lexical.Candidates[1].Score : 0);
-        SemanticCandidateAdmission admission = SemanticQueryPolicy.DecideAdmission(evidence);
-        var lexicalIds = new HashSet<string>(
-            lexical.Candidates.Select(static candidate => candidate.SymbolId),
-            StringComparer.Ordinal);
-        var seeds = new List<ContextTool.ContextSemanticSeed>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (SemanticHit hit in result.Hits)
+        var symbols = new List<IndexedSymbol>
         {
-            if (hit.SymbolId is not { } symbolId ||
-                (!admission.AllowsExpansion && !lexicalIds.Contains(symbolId)) ||
-                !seen.Add(symbolId) ||
-                index.FindBySymbolId(symbolId) is not { } symbol ||
-                (seedExcludeTests && (symbol.IsTest || IsTestPath.Check(symbol.FilePath))))
-            {
-                continue;
-            }
-
-            seeds.Add(new ContextTool.ContextSemanticSeed(symbol, hit.Rank, hit.Cosine));
+            new(0, "0000000000000000000000000000d001", "OrderServicePersistOrders",
+                "class OrderServicePersistOrders", "class", "csharp",
+                "src/OrderServicePersistOrders.cs", 1, 40, null, false),
+        };
+        for (int index = 0; index < 42; index++)
+        {
+            symbols.Add(new IndexedSymbol(
+                index + 1,
+                $"0000000000000000000000000000e{index:d3}",
+                $"OrderThing{index}",
+                $"class OrderThing{index}",
+                "class",
+                "csharp",
+                $"src/OrderThing{index}.cs",
+                1,
+                10,
+                null,
+                false));
         }
 
-        return seeds;
+        return MillerRepositoryIndex.Build(symbols);
     }
 
     [Fact]
@@ -3984,7 +4037,7 @@ public sealed class ContextToolTests
     }
 
     [Fact]
-    public void Context_HybridRouteQuery_PivotRetrievalAddsNoIndexSearchOverTheSeedGate()
+    public void Context_HybridRouteQuery_RetrievesOncePerDistinctWindow()
     {
         var (index, _) = BuildFixture();
         var measured = new MeasuredSymbolLookupIndex(index);
@@ -4012,90 +4065,47 @@ public sealed class ContextToolTests
 
         Assert.Equal(1, arm.SymbolCalls);
         Assert.True(searchesAtSeedPhase > 0, "the hybrid route must retrieve for the seed gate");
-        // The seed gate now retrieves at the pivot ranker's limit, so both ask the index for the same window
-        // and the ranker's retrieval is served from this call's search cache: zero further index searches.
-        Assert.Equal(searchesAtSeedPhase, searchesAtQueryRetrieval);
-    }
-
-    [Theory]
-    [InlineData("durable persistence boundary")]
-    [InlineData("OrderService")]
-    public void SharedSeedRetrieval_RendersByteIdenticalBundle(string query)
-    {
-        var (index, resolver) = BuildFixture();
-        var result = new SemanticQueryResult(
-            [new SemanticHit(RepoId, null, "src/OrderRepo.cs", 1, 0.91)],
-            UnavailableReason: null);
-
-        string Render(IReadOnlyList<ContextTool.ContextSemanticSeed> seeds) => ContextTool.RunActionable(
-            index,
-            index.Graph,
-            resolver,
-            query,
-            tokenBudget: 4000,
-            maxHops: 1,
-            entrySymbols: null,
-            editedFiles: null,
-            failingTest: null,
-            stackTrace: null,
-            semanticSeeds: seeds,
-            sourceSeeds: null,
-            readBody: null,
-            readOutgoingMany: ids => OutgoingBatch(ids, _ => ExactOutgoingSet()),
-            json: true,
-            out _,
-            out _);
-
-        string legacy = Render(SeedsFromRetrieval(
-            index,
-            result,
-            query,
-            limit: 2,
-            retrievalExcludeTests: false,
-            seedExcludeTests: false));
-        string shared = Render(SeedsFromRetrieval(
-            index,
-            result,
-            query,
-            limit: 10,
-            retrievalExcludeTests: false,
-            seedExcludeTests: false));
-
-        Assert.Equal(legacy, shared);
+        // The seed gate and the pivot ranker ask for DIFFERENT windows (2 and 10), so each pays its own index
+        // search. They must NOT be collapsed into one: the gate keeps its retrieved ids as the membership set
+        // that admits a semantic hit, so the ranker's wider window would admit seeds the gate has to drop.
+        Assert.True(
+            searchesAtQueryRetrieval > searchesAtSeedPhase,
+            "the pivot ranker must retrieve its own window rather than reuse the gate's");
     }
 
     [Fact]
-    public void SharedSeedRetrieval_RendersByteIdenticalBundleWithTestSubjectPromotion()
+    public void Context_RerankOnlyAdmission_RefusesASemanticSeedOutsideTheNarrowSeedWindow()
     {
-        const string subjectId = "0000000000000000000000000000c601";
-        const string testId = "0000000000000000000000000000c602";
-        const string seededId = "0000000000000000000000000000c603";
-        IndexedSymbol[] symbols =
-        [
-            new(0, subjectId, "MatchesArtifact", "method MatchesArtifact", "method", "csharp",
-                "src/Identity.cs", 10, 40, null, false),
-            new(1, testId,
-                "MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
-                "method MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
-                "method", "csharp",
-                "tests/IdentityTests.cs", 10, 50, null, true),
-            new(2, seededId, "SidecarExtract", "class SidecarExtract", "class", "csharp",
-                "src/SidecarExtract.cs", 1, 20, null, false),
-        ];
-        var index = MillerRepositoryIndex.Build(symbols);
+        const string query = "how does the order service persist orders";
+        MillerRepositoryIndex index = WideLexicalFixture();
         var resolver = new SmartTargetResolver(index);
-        const string query = "how does unreadable artifact refuse generation proof";
-        // The seed names a symbol the promotion does not, so both reasons stay visible in the bundle.
-        var result = new SemanticQueryResult(
-            [new SemanticHit(seededId, null, "src/SidecarExtract.cs", 1, 0.88)],
-            UnavailableReason: null);
 
-        string Render(IReadOnlyList<ContextTool.ContextSemanticSeed> seeds) => ContextTool.RunActionable(
+        SymbolCandidateSet narrow = SearchTool.CollectSymbolCandidates(
+            index, query, SearchToolMode.Symbol, limit: 2, excludeTests: false);
+        SymbolCandidateSet wide = SearchTool.CollectSymbolCandidates(
+            index, query, SearchToolMode.Symbol, limit: 10, excludeTests: false);
+        Assert.True(narrow.Candidates.Count > 1, "the gate's admission rule needs a runner-up");
+        Assert.True(wide.Candidates.Count > narrow.Candidates.Count, "the wide window must add rows");
+        // RerankOnly is the shape the window matters in: a semantic hit enters only when the gate's own
+        // retrieved ids contain it, so a wider retrieval admits hits the narrow one drops.
+        Assert.False(
+            SemanticQueryPolicy.DecideAdmission(new LexicalEvidence(
+                narrow.Candidates.Count,
+                narrow.Candidates[0].Score,
+                narrow.Candidates[1].Score)).AllowsExpansion,
+            "the fixture must produce RerankOnly admission");
+        var narrowIds = new HashSet<string>(
+            narrow.Candidates.Select(static candidate => candidate.SymbolId),
+            StringComparer.Ordinal);
+        // Pick a symbol the wide window carries, the narrow window drops, and that the bundle does not already
+        // hold: admitting it as a seed must CHANGE the rendered bundle, or asserting the bundle is unchanged
+        // proves nothing.
+        string Render(IReadOnlyList<ContextTool.ContextSemanticSeed>? seeds) => ContextTool.RunActionable(
             index,
             index.Graph,
             resolver,
             query,
-            tokenBudget: 4000,
+            tokenBudget: ToolOutputBudget.ContextMcpMaxTokens,
             maxHops: 0,
             entrySymbols: null,
             editedFiles: null,
@@ -4104,37 +4114,43 @@ public sealed class ContextToolTests
             semanticSeeds: seeds,
             sourceSeeds: null,
             readBody: null,
-            readOutgoingMany: ids => OutgoingBatch(
-                ids,
-                id => id == testId
-                    ? ExactOutgoingSet(ExactOutgoing(
-                        testId,
-                        subjectId,
-                        "MatchesArtifact",
-                        "tests/IdentityTests.cs",
-                        20))
-                    : ExactOutgoingSet()),
+            readOutgoingMany: null,
             json: true,
             out _,
             out _);
+        string unseeded = Render(null);
+        IndexedSymbol? far = null;
+        for (int position = wide.Candidates.Count - 1; position >= 0 && far is null; position--)
+        {
+            string candidateId = wide.Candidates[position].SymbolId;
+            if (narrowIds.Contains(candidateId) ||
+                unseeded.Contains(candidateId, StringComparison.Ordinal) ||
+                index.FindBySymbolId(candidateId) is not { } candidate)
+            {
+                continue;
+            }
 
-        string legacy = Render(SeedsFromRetrieval(
-            index,
-            result,
-            query,
-            limit: 2,
-            retrievalExcludeTests: false,
-            seedExcludeTests: false));
-        string shared = Render(SeedsFromRetrieval(
-            index,
-            result,
-            query,
-            limit: 10,
-            retrievalExcludeTests: false,
-            seedExcludeTests: false));
+            if (Render([new ContextTool.ContextSemanticSeed(candidate, 1, 0.91)]) != unseeded)
+                far = candidate;
+        }
 
-        Assert.Contains("_subject", shared, StringComparison.Ordinal);
-        Assert.Equal(legacy, shared);
+        Assert.True(far is not null, "the fixture must carry a symbol only the wide window would admit");
+
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        string WithSemanticHits(params SemanticHit[] hits) => new ContextTool(
+            provider,
+            new RecordingContextSemanticArm(new SemanticQueryResult(hits, UnavailableReason: null)),
+            new VectorSidecar(SemanticMode.On))
+            .Context(query, token_budget: ToolOutputBudget.ContextMcpMaxTokens, max_hops: 0, format: "json");
+
+        // The gate judges the narrow window, so this hit never becomes a seed and the bundle is the one the
+        // query alone produces. Widening the gate's limit admits it and changes the bundle — that is a ranking
+        // change, not a shared retrieval.
+        Assert.Equal(
+            WithSemanticHits(),
+            WithSemanticHits(new SemanticHit(far!.SymbolId, null, far.FilePath, 1, 0.91)));
     }
 
     [Fact]
@@ -4236,7 +4252,9 @@ public sealed class ContextToolTests
                 "pivot_ranking",
                 "candidate_build",
                 "pivot_bodies",
-                "bundle",
+                // NOT "bundle": that key timed the WHOLE usage branch before the branch reported inner phases,
+                // and reusing it for the leftover would read as a collapse in any trend across the change.
+                "bundle_remainder",
                 "final_render",
             ],
             phases);

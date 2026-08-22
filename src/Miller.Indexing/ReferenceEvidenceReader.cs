@@ -255,6 +255,109 @@ public static partial class ReferenceEvidenceReader
             ReadManyResolved(ReaderFor(session, connection), connection, orderedIds, query, observationOptions));
     }
 
+    /// <summary>
+    /// Read bounded OUTGOING evidence for several symbols from one snapshot, skipping ids this snapshot does
+    /// not have.
+    /// </summary>
+    /// <remarks>
+    /// Outgoing-only, and that is the point: <see cref="ReadMany"/> also runs the whole inbound resolution pass
+    /// plus a name lookup and a same-name definition count per symbol, and a caller that keeps only
+    /// <c>Outgoing</c> pays for all of it and throws it away.
+    /// <para>
+    /// An id the snapshot cannot resolve is ABSENT from the result instead of an exception. The batch is one
+    /// read for the whole set, so a throw would deny every symbol in it; the per-symbol reader denied only the
+    /// offending id. Callers name symbols from the search sidecar, which may still name a symbol the read
+    /// session's view no longer has.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> ReadOutgoingMany(
+        IWorkspaceReadSession session,
+        IReadOnlyList<string> symbolIds,
+        ReferenceEvidenceQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(symbolIds);
+        query.Validate();
+
+        var orderedIds = new List<string>(symbolIds.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string symbolId in symbolIds)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
+            if (seen.Add(symbolId))
+                orderedIds.Add(symbolId);
+        }
+
+        if (orderedIds.Count == 0)
+            return new Dictionary<string, OutgoingReferenceEvidenceSet>(StringComparer.Ordinal);
+
+        return session.Read(connection =>
+            ReadOutgoingManyResolved(ReaderFor(session, connection), connection, orderedIds, query));
+    }
+
+    private static IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> ReadOutgoingManyResolved(
+        QueryTimeResolutionReader reader,
+        SqliteConnection connection,
+        IReadOnlyList<string> orderedIds,
+        ReferenceEvidenceQuery query)
+    {
+        var result = new Dictionary<string, OutgoingReferenceEvidenceSet>(
+            orderedIds.Count,
+            StringComparer.Ordinal);
+        HashSet<string> present = ReadPresentSymbolIds(connection, orderedIds);
+        var known = new List<string>(present.Count);
+        foreach (string symbolId in orderedIds)
+        {
+            if (present.Contains(symbolId))
+                known.Add(symbolId);
+        }
+
+        if (known.Count == 0)
+            return result;
+
+        Dictionary<string, List<OutgoingReferenceEvidence>> exact = reader.ReadOutgoingExact(connection, known);
+        Dictionary<string, List<OutgoingReferenceEvidence>> fallback = reader.ReadOutgoingFallback(connection, known);
+        ReferenceEvidenceSnapshot snapshot = ReadSnapshot(connection);
+        foreach (string symbolId in known)
+        {
+            result[symbolId] = BuildOutgoingSet(
+                exact.GetValueOrDefault(symbolId, []),
+                fallback.GetValueOrDefault(symbolId, []),
+                query,
+                snapshot);
+        }
+
+        return result;
+    }
+
+    /// <summary>Which of <paramref name="orderedIds"/> this snapshot's symbols table has, in chunked batches.</summary>
+    private static HashSet<string> ReadPresentSymbolIds(
+        SqliteConnection connection,
+        IReadOnlyList<string> orderedIds)
+    {
+        var present = new HashSet<string>(StringComparer.Ordinal);
+        for (int offset = 0; offset < orderedIds.Count; offset += ReadManyChunkSize)
+        {
+            int count = Math.Min(ReadManyChunkSize, orderedIds.Count - offset);
+            using SqliteCommand command = connection.CreateCommand();
+            var parameters = new string[count];
+            for (int index = 0; index < count; index++)
+            {
+                string parameter = "$symbol" + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                parameters[index] = parameter;
+                command.Parameters.AddWithValue(parameter, orderedIds[offset + index]);
+            }
+
+            command.CommandText =
+                "SELECT symbol_id FROM symbols WHERE symbol_id IN (" + string.Join(", ", parameters) + ");";
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+                present.Add(reader.GetString(0));
+        }
+
+        return present;
+    }
+
     /// <summary>Read exact inbound sites and separately typed fallback candidates for one symbol.</summary>
     public static ReferenceEvidenceSet Read(
         string dbPath,

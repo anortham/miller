@@ -835,6 +835,84 @@ public sealed class ReferenceEvidenceReaderTests
     }
 
     [Fact]
+    public void ReadOutgoingMany_MatchesTheSingularOutgoingReadForEveryKnownSymbol()
+    {
+        using JulieDbFixture fixture = OutgoingFixture();
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(fixture.DbPath);
+        ReferenceEvidenceQuery query = new(new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+        string[] symbolIds = [FirstCallerId, SecondCallerId, FirstTargetId];
+
+        IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> actual =
+            ReferenceEvidenceReader.ReadOutgoingMany(session, symbolIds, query);
+
+        Assert.Equal(symbolIds, actual.Keys);
+        foreach (string symbolId in symbolIds)
+        {
+            Assert.Equal(
+                JsonSerializer.Serialize(ReferenceEvidenceReader.ReadOutgoing(session, symbolId, query)),
+                JsonSerializer.Serialize(actual[symbolId]));
+        }
+    }
+
+    [Fact]
+    public void ReadOutgoingMany_ASymbolThisSnapshotDoesNotHave_IsAbsentAndDeniesNoOtherSymbol()
+    {
+        using JulieDbFixture fixture = OutgoingFixture();
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(fixture.DbPath);
+        ReferenceEvidenceQuery query = new(new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+        const string unknownId = "90000000000000000000000000000009";
+
+        IReadOnlyDictionary<string, OutgoingReferenceEvidenceSet> actual = ReferenceEvidenceReader.ReadOutgoingMany(
+            session,
+            [unknownId, FirstCallerId],
+            query);
+
+        // A batch is one read for the whole set, so throwing on one id would deny every promotion in it. The
+        // caller names symbols from the search sidecar, which can still name a symbol the served view dropped.
+        Assert.DoesNotContain(unknownId, actual.Keys);
+        Assert.NotEmpty(actual[FirstCallerId].Fallback);
+        Assert.Equal(
+            JsonSerializer.Serialize(ReferenceEvidenceReader.ReadOutgoing(session, FirstCallerId, query)),
+            JsonSerializer.Serialize(actual[FirstCallerId]));
+    }
+
+    private static JulieDbFixture OutgoingFixture()
+    {
+        var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "First", "method", "csharp", "src/First.cs", "void First()", 1, null),
+                new(SecondTargetId, "Second", "method", "csharp", "src/Second.cs", "void Second()", 1, null),
+                new(FirstCallerId, "FirstCaller", "method", "csharp", "src/FirstCaller.cs", "void FirstCaller()", 1, null),
+                new(SecondCallerId, "SecondCaller", "method", "csharp", "src/SecondCaller.cs", "void SecondCaller()", 1, null),
+            ],
+            identifiers:
+            [
+                new("identifier-first-1", "First", "call", "csharp", "src/FirstCaller.cs", 10, FirstCallerId)
+                {
+                    StartByte = 100,
+                    EndByte = 105,
+                    TargetSymbolId = FirstTargetId,
+                },
+                new("identifier-first-2", "Missing", "call", "csharp", "src/FirstCaller.cs", 11, FirstCallerId)
+                {
+                    StartByte = 110,
+                    EndByte = 117,
+                },
+                new("identifier-second-1", "Second", "call", "csharp", "src/SecondCaller.cs", 20, SecondCallerId)
+                {
+                    StartByte = 200,
+                    EndByte = 206,
+                    TargetSymbolId = SecondTargetId,
+                },
+            ]);
+        fixture.AddIdentifierResolution("identifier-first-1", FirstTargetId);
+        fixture.AddIdentifierResolution("identifier-second-1", SecondTargetId);
+        return fixture;
+    }
+
+    [Fact]
     public void ReadMany_TargetInfoReadsAreChunkedBeyondTheReadManyChunkSize()
     {
         string[] symbolIds = Enumerable.Range(0, 1001)

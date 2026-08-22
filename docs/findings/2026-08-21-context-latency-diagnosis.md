@@ -47,6 +47,13 @@ split, not an estimate):
 | symbol_hydration … bounded_render | 15 | 0–4 | ≤13 | ≤15 | 243 | 0.1% |
 | bundle (`usage` calls only) | 18 | 0 | 13787 | 90602 | 113749 | 39.6% |
 
+**The `bundle` row above is a pre-fix-8 measurement and has no successor under that name.** It timed the
+WHOLE reference-aware branch because the branch reported no inner phases. Fix 8 gave it the same phases the
+off branch has, so what is left at the end of a usage call is only the remainder after `bounded_render` —
+near zero. A trend that kept reading `bundle` across that boundary would show a collapse that is a renaming,
+not a speed-up. The usage branch's terminal stamp is therefore `bundle_remainder`; the off branch keeps
+`bundle`, where it always meant the remainder.
+
 Inside `graph_reach`, the graph statement log shows `supplemental` owns it: 35 statements,
 sum 68,391 ms. Bimodal: 15 of 35 calls missed the cache and paid mean 4,447 ms; the rest
 paid 0–667 ms. Every call returned exactly 24 edges for a 4-id frontier.
@@ -201,23 +208,47 @@ cross-workspace). Instrumentation is the prerequisite for diagnosing that tail.
    sitting beside it — that call site was its only consumer, so nothing can quietly reintroduce the N+1.
    The reference-aware (`usage`) path batches only under the existing `MILLER_CONTEXT_REFERENCE_BATCH`
    opt-in, the same gate `BuildReferenceItems` reads; with the opt-in off it keeps its per-symbol reader.
+   **Amended after review (findings 3, 4 and 6):** the batch reads OUTGOING evidence only, through the new
+   `ReferenceEvidenceReader.ReadOutgoingMany`. The first version called `ReadMany`, which also runs the whole
+   inbound resolution pass plus a name lookup and a same-name `COUNT(*)` per symbol — work this path discards,
+   paid on the `reference_mode=off` path the batch exists to make cheaper. No before/after latency was
+   measured for this fix, and none is claimed: the counter tests prove one read where there were eight, not a
+   time. `ReadMany` also threw `ArgumentException` for any id missing from `symbols`, and one read for the
+   whole set turned that into a denial of all ≤8 promotions where the per-symbol reader dropped only the
+   offending id — reachable in normal operation, because the promotion ids come from the search sidecar and
+   inspect/context now serve a readable LAST-GOOD sidecar that can name a symbol the served view no longer
+   has. `ReadOutgoingMany` filters the ids against the snapshot first and leaves an unresolvable one ABSENT
+   from the result. `MILLER_CONTEXT_REFERENCE_BATCH` deliberately does not reach this path: that switch picks
+   between two live implementations on the usage path, while here the batch replaced its only caller, so a
+   switch could only restore the N+1 this fix removed.
 5. **Move the hybrid-route check above the lexical retrieval** in `LoadSemanticSeeds`
    (`:537` above `:527`) — work that cannot reach the output must not run.
    **SHIPPED 2026-08-21.** A lexical-route query now performs zero retrievals in the seed phase, pinned by a
    test that reads the measured index's search count at the `semantic_seeds` phase boundary.
 6. **Share one retrieval** between the semantic seed check and the pivot ranker (retrieve
    once at the larger limit; ranking output must stay byte-identical — assert it).
-   **SHIPPED 2026-08-21, amended.** The two retrievals differ in more than the limit: the seed gate asks with
-   `excludeTests` from the reference mode (false under `reference_mode=off`) while the ranker asks with
-   `SearchTool.ResolveExcludeTests`, which hides tests for an ordinary phrase query. Sharing the ranker's
-   retrieval outright therefore computes the gate's `LexicalEvidence` over a test-hidden population, which
-   flips admission and changes the rendered bundle — the A/B test caught exactly that on a fixture. What
-   shipped keeps each side's own test policy and moves the seed gate to the ranker's LIMIT, so both issue the
-   same index window and the second is served from the per-call search cache: one index search instead of
-   two. A per-call memo (`ContextQueryRetrieval`, keyed on query+limit+excludeTests) removes the remaining
-   exact duplicates, including the term-rescue retrieval the promotion path repeats. Rendered output is
-   asserted byte-identical against the old limit-2 evidence on a hybrid query, a lexical-route query, and one
-   with test-subject promotion.
+   **WITHDRAWN 2026-08-21 (review finding 1). The two retrievals cannot be shared; the seed gate keeps its
+   own limit of 2.** Two separate obstacles, found in that order:
+   - The gate asks with `excludeTests` from the reference mode (false under `reference_mode=off`) while the
+     ranker asks with `SearchTool.ResolveExcludeTests`, which hides tests for an ordinary phrase query.
+     Computing the gate's `LexicalEvidence` over a test-hidden population flips admission and changes the
+     bundle. The first attempt kept each side's own test policy and moved only the LIMIT.
+   - Moving the limit is not byte-identical either, and that is the decisive one. The gate keeps its
+     retrieved ids as `lexicalIds`, the membership set that admits a semantic hit whenever admission is
+     `RerankOnly` (≥2 hits, top ≥ 1.25× runner-up — a common shape on a real repo).
+     `CollectSymbolCandidates` does NOT truncate to the limit: the limit only sets the over-fetch window
+     (`min(limit*4+10, 500)`), so limit 2 returns 18 rows and limit 10 returns 43 on the same 43-symbol
+     query. A semantic hit on a symbol only in the wide set is dropped at 2 and admitted at 10, and the
+     rendered bundle changes. The residual-risk note first written here named the hit bucket and the score
+     ratio and MISSED this mechanism; both stay identical across the two windows, `lexicalIds` does not.
+   What remains of this fix is the per-call memo (`ContextQueryRetrieval`, keyed on query+limit+excludeTests
+   over ONE index), which removes the exact duplicate retrievals — chiefly the term-rescue retrievals the
+   promotion path repeats. The gate and the ranker each pay for their own window, as they did before. The
+   claim of byte-identical rendering under a shared window is withdrawn, and the three A/B tests that carried
+   it were replaced: they used 3–6-symbol fixtures, where both windows return every symbol, and they compared
+   a hand-copy of the gate rather than the gate. `Context_RerankOnlyAdmission_RefusesASemanticSeedOutsideThe
+   NarrowSeedWindow` drives the real `ContextTool.Context` over a 43-symbol fixture, proves the fixture
+   discriminating (admitting the far seed DOES change the bundle), and fails if the gate's limit is widened.
 7. **Batch the edge-endpoint existence probes** (or hoist the cache) — kept, because fix 1 removes
    only the linkage arm and the Blazor arm still puts 24 edges on the path.
    **SHIPPED 2026-08-21** (`5b33eb82`), amended after review (finding 3) to prime lazily on the
@@ -227,7 +258,12 @@ cross-workspace). Instrumentation is the prerequisite for diagnosing that tail.
    **SHIPPED 2026-08-21.** `RunReferenceAwareActionableWithCancellation` takes the same phase callback and
    emits the candidate-build phases (`query_retrieval` … `candidate_ordering`), plus `candidate_build`,
    `pivot_bodies`, the branch's own `reference_items`, `candidate_pack`, and `bounded_render`. Same log
-   channel, same telemetry keys, no output-contract change.
+   channel, no change to the tool's output contract.
+   **Amended after review (finding 5): one telemetry key DID change meaning and was renamed for it.** The
+   terminal `bundle` stamp used to time the whole usage branch (the 39.6% row in the latency table above);
+   with inner phases reporting, it measures only the leftover after `bounded_render`. A usage call now stamps
+   `bundle_remainder` instead, so no trend reads a rename as a collapse. The off branch, where `bundle`
+   always meant the leftover, keeps the name.
 
 **Deferred on purpose:** skipping test-subject promotion when `reference_mode=off` — it
 changes ranking; fix 4 may make it moot. Measure after fix 4, then decide.
