@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server.Tools;
 using Miller.Testing;
@@ -689,18 +690,11 @@ public sealed class CtDaemonLauncherServeScaleTests : IDisposable
     [Fact]
     public void ServeLauncherExitsFirst_AndTheDaemonStillWritesToTheCtLogFile()
     {
-        Assert.SkipWhen(
-            !OperatingSystem.IsWindows(),
-            "the launcher-owned-capture hole is Windows-only; the Unix branch redirects through /bin/sh.");
         string miller = RequireMillerBinary();
 
-        // Opt the workspace in, and give the revision poller the minimal artifact it reads. Neither is the
-        // subject of this test — they only let the daemon reach its normal idle loop.
         File.WriteAllText(ContinuousTestPolicy.EnabledMarkerPath(_root), string.Empty);
         ScaleTestSupport.WriteFreshnessArtifact(_root, "artifact-" + Guid.NewGuid().ToString("N"), 1);
 
-        // The launcher. WaitForExit returns only once this process is GONE, so everything after this line
-        // happens with no launcher alive to drain a pipe.
         (int serveExit, string serveOutput) = RunMiller(miller, ["tests", "serve", "--workspace", _root, "--json"]);
         Assert.True(serveExit == 0, $"`miller tests serve` exited {serveExit}: {serveOutput}");
 
@@ -710,16 +704,17 @@ public sealed class CtDaemonLauncherServeScaleTests : IDisposable
             "the daemon never took the lease, so this test cannot ask it to write. Logs so far:\n"
             + ReadLogs());
 
-        // Everything the daemon has written up to here happened while the launcher MIGHT still have been
-        // alive. Only growth after this snapshot proves the capture outlived the launcher.
+        using JsonDocument serveJson = JsonDocument.Parse(serveOutput);
+        Assert.Equal(
+            "ready",
+            serveJson.RootElement.GetProperty("publication").GetProperty("readiness").GetString());
+        Assert.Equal(daemonPid.Value, serveJson.RootElement.GetProperty("pid").GetInt32());
+
         long before = LogBytes();
 
         (int stopExit, string stopOutput) = RunMiller(miller, ["tests", "stop", "--workspace", _root, "--json"]);
         Assert.True(stopExit == 0, $"`miller tests stop` exited {stopExit}: {stopOutput}");
 
-        // On its way out the daemon writes its final line to stdout (or, if it fails, `ct-daemon failed: …`
-        // to stderr). Either lands in .miller/ct only if the FILE owns the capture. With the pump running in
-        // the launcher, both handles closed when `tests serve` exited seconds ago and nothing can arrive.
         Assert.True(
             WaitForLogGrowth(before, TimeSpan.FromSeconds(30)),
             "the daemon wrote nothing to .miller/ct/daemon.out.log or daemon.err.log after the launcher "

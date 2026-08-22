@@ -592,9 +592,9 @@ verb="$3"
 stdout_path="$4"
 stderr_path="$5"
 if [ -n "$arg" ]; then
-  nohup "$exe" "$arg" "$verb" >>"$stdout_path" 2>>"$stderr_path" </dev/null &
+  exec nohup "$exe" "$arg" "$verb" >>"$stdout_path" 2>>"$stderr_path" </dev/null
 else
-  nohup "$exe" "$verb" >>"$stdout_path" 2>>"$stderr_path" </dev/null &
+  exec nohup "$exe" "$verb" >>"$stdout_path" 2>>"$stderr_path" </dev/null
 fi
 """;
 }
