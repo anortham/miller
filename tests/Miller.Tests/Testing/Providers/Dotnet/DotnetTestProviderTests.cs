@@ -57,7 +57,7 @@ public sealed class DotnetTestProviderTests : IDisposable
 
         var listCommand = runner.Calls[1];
         Assert.Equal(
-            Path.Combine(generation.OutDir, "Sample.Tests" + ExecutableExtension()),
+            Path.Combine(generation.OutDir, "Sample.Tests", "Sample.Tests" + ExecutableExtension()),
             listCommand.FileName);
         Assert.Equal(DotnetTestProvider.TestExecutablePath(workspace), listCommand.FileName);
         Assert.Equal(workspace.WorkspaceRoot, listCommand.WorkingDirectory);
@@ -92,7 +92,7 @@ public sealed class DotnetTestProviderTests : IDisposable
         var runner = new FakeTestProcessRunner();
         var workspace = Workspace("mstest");
         var generation = FirstGeneration(workspace);
-        var targetPath = Path.Combine(generation.OutDir, "Custom.Assembly.dll");
+        var targetPath = Path.Combine(generation.OutDir, "Sample.Tests", "Custom.Assembly.dll");
         runner.Enqueue();
         runner.Enqueue(targetPath);
         runner.Enqueue(
@@ -127,6 +127,7 @@ public sealed class DotnetTestProviderTests : IDisposable
         var targetQuery = runner.Calls[1];
         Assert.Contains("-getProperty:TargetPath", targetQuery.Arguments);
         Assert.Contains($"-p:OutDir={generation.OutDir}", targetQuery.Arguments);
+        Assert.Contains("-p:GenerateProjectSpecificOutputFolder=true", targetQuery.Arguments);
 
         var listCommand = runner.Calls[2];
         Assert.Equal("test", listCommand.Arguments[0]);
@@ -143,7 +144,7 @@ public sealed class DotnetTestProviderTests : IDisposable
         var runner = new FakeTestProcessRunner();
         var workspace = Workspace("nunit");
         var generation = FirstGeneration(workspace);
-        var targetPath = Path.Combine(generation.OutDir, "Custom.Assembly.dll");
+        var targetPath = Path.Combine(generation.OutDir, "Sample.Tests", "Custom.Assembly.dll");
         runner.Enqueue();
         runner.Enqueue(targetPath);
         runner.Enqueue(
@@ -195,7 +196,7 @@ public sealed class DotnetTestProviderTests : IDisposable
     {
         var runner = new FakeTestProcessRunner();
         var workspace = Workspace("nunit");
-        var targetPath = Path.Combine(FirstGeneration(workspace).OutDir, "Sample.Tests.dll");
+        var targetPath = Path.Combine(FirstGeneration(workspace).OutDir, "Sample.Tests", "Sample.Tests.dll");
         runner.Enqueue();
         runner.Enqueue(targetPath);
         runner.Enqueue(
@@ -247,7 +248,7 @@ public sealed class DotnetTestProviderTests : IDisposable
         var runner = new FakeTestProcessRunner();
         var workspace = Workspace("nunit");
         runner.Enqueue();
-        runner.Enqueue(Path.Combine(FirstGeneration(workspace).OutDir, "Missing.Tests.dll"));
+        runner.Enqueue(Path.Combine(FirstGeneration(workspace).OutDir, "Sample.Tests", "Missing.Tests.dll"));
         var provider = new DotnetTestProvider(runner);
 
         var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
@@ -408,7 +409,7 @@ public sealed class DotnetTestProviderTests : IDisposable
         AssertUsesCtBuildIsolation(runner.Calls[0].Arguments, workspace, generation);
         var runCommand = runner.Calls[1];
         Assert.Equal(
-            Path.Combine(generation.OutDir, "Sample.Tests" + ExecutableExtension()),
+            Path.Combine(generation.OutDir, "Sample.Tests", "Sample.Tests" + ExecutableExtension()),
             runCommand.FileName);
         AssertContainsAdjacentPair(runCommand.Arguments, "-method", "Sample.Tests.Passes");
         Assert.Equal(workspace.WorkspaceRoot, runCommand.Environment[CtEnvironment.WorkspaceRoot]);
@@ -478,7 +479,7 @@ public sealed class DotnetTestProviderTests : IDisposable
         var runner = new FakeTestProcessRunner();
         var workspace = Workspace("nunit");
         var generation = FirstGeneration(workspace);
-        var targetPath = Path.Combine(generation.OutDir, "Custom.Assembly.dll");
+        var targetPath = Path.Combine(generation.OutDir, "Sample.Tests", "Custom.Assembly.dll");
         runner.Enqueue();
         runner.Enqueue(targetPath);
         runner.Enqueue(exitCode: 1);
@@ -615,6 +616,23 @@ public sealed class DotnetTestProviderTests : IDisposable
             ["-list", "full/json", "-noLogo", "-noColor", "-preEnumerateTheories"],
             command.Arguments.Take(5).ToArray());
         AssertContainsAdjacentPair(command.Arguments, "-trait-", "Category=Scale");
+    }
+
+    [Fact]
+    public void BuildRunCommand_uses_project_specific_generation_output()
+    {
+        var provider = new DotnetTestProvider(new FakeTestProcessRunner());
+        var workspace = Workspace();
+        var generation = FirstGeneration(workspace);
+
+        var command = provider.BuildRunCommand(Request(workspace));
+
+        Assert.Equal(
+            Path.Combine(
+                generation.OutDir,
+                "Sample.Tests",
+                "Sample.Tests" + ExecutableExtension()),
+            command.FileName);
     }
 
     [Fact]
@@ -805,9 +823,10 @@ public sealed class DotnetTestProviderTests : IDisposable
         {
             if (command.Arguments.FirstOrDefault() == "build")
             {
-                Directory.CreateDirectory(generation.OutDir);
-                File.WriteAllText(Path.Combine(generation.OutDir, "Sample.Tests.dll"), string.Empty);
-                File.WriteAllText(Path.Combine(generation.OutDir, "Sample.Tests.pdb"), string.Empty);
+                var projectOutput = Path.Combine(generation.OutDir, "Sample.Tests");
+                Directory.CreateDirectory(projectOutput);
+                File.WriteAllText(Path.Combine(projectOutput, "Sample.Tests.dll"), string.Empty);
+                File.WriteAllText(Path.Combine(projectOutput, "Sample.Tests.pdb"), string.Empty);
                 return;
             }
 
@@ -845,6 +864,17 @@ public sealed class DotnetTestProviderTests : IDisposable
         Assert.Equal(generation.GenerationId, result.GenerationId);
         Assert.Contains("-parallel", run.Arguments);
         Assert.Equal(ProcessPriorityClass.BelowNormal, run.ProcessPriority);
+    }
+
+    [Fact]
+    public void BuildProjectCommand_enables_project_specific_output_folders()
+    {
+        var provider = new DotnetTestProvider(new FakeTestProcessRunner());
+        var workspace = Workspace();
+
+        var command = provider.BuildProjectCommand(workspace);
+
+        Assert.Contains("-p:GenerateProjectSpecificOutputFolder=true", command.Arguments);
     }
 
     [Fact]
@@ -913,7 +943,10 @@ public sealed class DotnetTestProviderTests : IDisposable
         // would move both sides together and the claim "byte-identical to before" would prove nothing.
         var single = Assert.Single(commands);
         Assert.Equal(
-            Path.Combine(FirstGeneration(workspace).OutDir, "Sample.Tests" + ExecutableExtension()),
+            Path.Combine(
+                FirstGeneration(workspace).OutDir,
+                "Sample.Tests",
+                "Sample.Tests" + ExecutableExtension()),
             single.FileName);
         Assert.Equal(
             [
@@ -1102,7 +1135,7 @@ public sealed class DotnetTestProviderTests : IDisposable
         Assert.Equal(
             [
                 "test",
-                Path.Combine(generation.OutDir, "Sample.Tests.dll"),
+                Path.Combine(generation.OutDir, "Sample.Tests", "Sample.Tests.dll"),
                 "--nologo",
                 "--results-directory",
                 generation.ResultsDirectory,
@@ -1244,7 +1277,7 @@ public sealed class DotnetTestProviderTests : IDisposable
         var runner = new FakeTestProcessRunner();
         var workspace = Workspace("mstest");
         var generation = FirstGeneration(workspace);
-        var targetPath = Path.Combine(generation.OutDir, "Custom.Assembly.dll");
+        var targetPath = Path.Combine(generation.OutDir, "Sample.Tests", "Custom.Assembly.dll");
         var ids = LongGenericTestCaseIds(500);
         var failingTestName = ids[^1]["mstest:".Length..];
         runner.Enqueue();
@@ -1362,7 +1395,7 @@ public sealed class DotnetTestProviderTests : IDisposable
     {
         var runner = new FakeTestProcessRunner();
         var workspace = Workspace("mstest");
-        var targetPath = Path.Combine(FirstGeneration(workspace).OutDir, "Custom.Assembly.dll");
+        var targetPath = Path.Combine(FirstGeneration(workspace).OutDir, "Sample.Tests", "Custom.Assembly.dll");
         var ids = LongGenericTestCaseIds(500);
         runner.Enqueue();
         runner.Enqueue(targetPath);
@@ -1441,7 +1474,7 @@ public sealed class DotnetTestProviderTests : IDisposable
     {
         var runner = new FakeTestProcessRunner();
         var workspace = Workspace("mstest");
-        var targetPath = Path.Combine(FirstGeneration(workspace).OutDir, "Custom.Assembly.dll");
+        var targetPath = Path.Combine(FirstGeneration(workspace).OutDir, "Sample.Tests", "Custom.Assembly.dll");
         var ids = LongGenericTestCaseIds(500);
         runner.Enqueue();
         runner.Enqueue(targetPath);
@@ -1501,7 +1534,7 @@ public sealed class DotnetTestProviderTests : IDisposable
     {
         var runner = new FakeTestProcessRunner();
         var workspace = Workspace("mstest");
-        var targetPath = Path.Combine(FirstGeneration(workspace).OutDir, "Custom.Assembly.dll");
+        var targetPath = Path.Combine(FirstGeneration(workspace).OutDir, "Sample.Tests", "Custom.Assembly.dll");
         runner.Enqueue();
         runner.Enqueue(targetPath);
         runner.Enqueue(standardError: "Sample.Tests.csproj : error MSB1009: Project file does not exist.", exitCode: 1);
@@ -1690,9 +1723,10 @@ public sealed class DotnetTestProviderTests : IDisposable
         {
             if (command.Arguments.FirstOrDefault() == "build")
             {
-                Directory.CreateDirectory(generation.OutDir);
-                File.WriteAllText(Path.Combine(generation.OutDir, "Sample.Tests.dll"), string.Empty);
-                File.WriteAllText(Path.Combine(generation.OutDir, "Sample.Tests.pdb"), string.Empty);
+                var projectOutput = Path.Combine(generation.OutDir, "Sample.Tests");
+                Directory.CreateDirectory(projectOutput);
+                File.WriteAllText(Path.Combine(projectOutput, "Sample.Tests.dll"), string.Empty);
+                File.WriteAllText(Path.Combine(projectOutput, "Sample.Tests.pdb"), string.Empty);
                 return;
             }
 
@@ -1880,6 +1914,7 @@ public sealed class DotnetTestProviderTests : IDisposable
         Assert.Contains("-nr:false", arguments);
         Assert.Contains("--artifacts-path", arguments);
         Assert.Contains(buildRoot, arguments);
+        Assert.Contains("-p:GenerateProjectSpecificOutputFolder=true", arguments);
         Assert.Contains($"-p:OutDir={generation.OutDir}", arguments);
         Assert.Contains($"-p:ResultsDirectory={generation.ResultsDirectory}", arguments);
         Assert.Contains($"-bl:{generation.BinlogPath};ProjectImports=None", arguments);

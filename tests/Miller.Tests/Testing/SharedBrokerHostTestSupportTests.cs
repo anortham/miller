@@ -7,14 +7,28 @@ public sealed class SharedBrokerHostTestSupportTests
     [Fact]
     public void CandidatePaths_ProbeTheTestOutputDirectoryFirst()
     {
-        // The CT dotnet provider builds with a global OutDir, so every project in the
-        // graph — the broker host included — lands flat in the generation's out\ folder.
         string baseDirectory = Path.Combine(
             Path.GetTempPath(), "miller-ct", "build", "ws", "proj", "gen", "out");
 
         var candidates = SharedBrokerHostTestSupport.CandidatePaths(baseDirectory, "host.exe");
 
         Assert.Equal(Path.Combine(baseDirectory, "host.exe"), candidates[0]);
+    }
+
+    [Fact]
+    public void CandidatePaths_ProbeGeneratedSiblingProjectOutputBeforeRepoFallback()
+    {
+        string baseDirectory = Path.Combine(
+            Path.GetTempPath(), "miller-ct", "build", "ws", "proj", "gen", "out", "Miller.Tests");
+
+        var candidates = SharedBrokerHostTestSupport.CandidatePaths(baseDirectory, "host.exe");
+
+        Assert.Equal(
+            Path.Combine(
+                Path.GetDirectoryName(baseDirectory)!,
+                "Miller.SharedBrokerTestHost",
+                "host.exe"),
+            candidates[1]);
     }
 
     [Fact]
@@ -75,6 +89,26 @@ public sealed class SharedBrokerHostTestSupportTests
         string baseDirectory = Path.Combine(
             Path.GetTempPath(), "miller-ct", "build", "ws", "proj", "gen", "out");
         string siblingExe = Path.Combine(baseDirectory, "host.exe");
+        var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            siblingExe,
+            Path.ChangeExtension(siblingExe, ".dll"),
+        };
+
+        string? found = SharedBrokerHostTestSupport.Locate(baseDirectory, "host.exe", present.Contains);
+
+        Assert.Equal(siblingExe, found);
+    }
+
+    [Fact]
+    public void Locate_AcceptsGeneratedSiblingProjectOutputWhenItsDllIsBesideIt()
+    {
+        string baseDirectory = Path.Combine(
+            Path.GetTempPath(), "miller-ct", "build", "ws", "proj", "gen", "out", "Miller.Tests");
+        string siblingExe = Path.Combine(
+            Path.GetDirectoryName(baseDirectory)!,
+            "Miller.SharedBrokerTestHost",
+            "host.exe");
         var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             siblingExe,

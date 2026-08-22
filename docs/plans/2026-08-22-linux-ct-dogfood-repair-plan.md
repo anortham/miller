@@ -86,10 +86,10 @@
 **Approach:** Add one internal project-output path helper and use it in build, discover, run, target-path evaluation, and recursive instrumentable-assembly discovery. Extend `DotnetProviderScaleTests` with a temporary test project that references an executable project using `ReferenceOutputAssembly=false`; assert both output pairs exist and the helper launches. Retain repo-layout fallback in `SharedBrokerHostTestSupport` for ordinary `scripts/test.sh` runs.
 
 **Acceptance criteria:**
-- [ ] A generic referenced executable and its companion DLL are colocated in a separate generation subdirectory on Linux and Windows.
-- [ ] xUnit, MSTest, NUnit, coverage discovery, generation reaping, and the stable compiler cache retain their existing contracts.
-- [ ] The generic Scale fixture launches the referenced helper from the project-specific generation path.
-- [ ] Focused provider/support tests and the assigned Scale test pass; the change is handed to the lead per `parallel-lead-commit`.
+- [x] A generic referenced executable and its companion DLL are colocated in a separate generation subdirectory on Linux and Windows.
+- [x] xUnit, MSTest, NUnit, coverage discovery, generation reaping, and the stable compiler cache retain their existing contracts.
+- [x] The generic Scale fixture launches the referenced helper from the project-specific generation path.
+- [x] Focused provider/support tests and the assigned Scale test pass; the change is handed to the lead per `parallel-lead-commit`.
 
 ### Task 2: Correct Linux-only fixtures
 

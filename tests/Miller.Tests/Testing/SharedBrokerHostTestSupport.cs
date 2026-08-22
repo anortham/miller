@@ -6,8 +6,8 @@ namespace Miller.Tests.Testing;
 /// Locates the <c>Miller.SharedBrokerTestHost</c> executable for tests that spawn it. The host is
 /// built by a <c>ProjectReference</c> with <c>ReferenceOutputAssembly=false</c>, so its location
 /// depends on the build layout: a repo build puts it in its own <c>bin</c> tree beside
-/// <c>Miller.Tests</c>, while a flattened build (the CT dotnet provider passes a global
-/// <c>-p:OutDir</c>) drops it next to the test assembly itself. Probe the flat layout first, then
+/// <c>Miller.Tests</c>, while a CT build puts each project in a sibling directory under the
+/// generation output root. Probe the test output directory first, then the generated sibling, then
 /// the repo layout. Before this helper existed the locator was copy-pasted into two test classes
 /// and knew only the repo layout, so every broker test failed under continuous testing.
 /// </summary>
@@ -32,6 +32,10 @@ public static class SharedBrokerHostTestSupport
         var candidates = new List<string>
         {
             Path.Combine(Path.GetFullPath(baseDirectory), executableFileName),
+            Path.Combine(
+                Path.GetFullPath(Path.Combine(baseDirectory, "..")),
+                "Miller.SharedBrokerTestHost",
+                executableFileName),
         };
         candidates.AddRange(new[] { configuration, "Release", "Debug" }
             .Distinct(StringComparer.Ordinal)

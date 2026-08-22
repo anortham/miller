@@ -258,6 +258,107 @@ public sealed class DotnetProviderScaleTests : IDisposable
             Assert.True(result.GenerationId!.Length <= 16);
     }
 
+    [Fact]
+    public async Task Generic_build_places_reference_output_assembly_false_helper_in_a_launchable_project_folder()
+    {
+        CtProviderTestSupport.RequireDotnet();
+        var ct = TestContext.Current.CancellationToken;
+        var workspaceRoot = Path.Combine(_dir, "reference-output-repo");
+        var testProjectDir = Path.Combine(workspaceRoot, "tests", "Sample.Tests");
+        var helperProjectDir = Path.Combine(workspaceRoot, "tools", "Helper");
+        Directory.CreateDirectory(testProjectDir);
+        Directory.CreateDirectory(helperProjectDir);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(testProjectDir, "Sample.Tests.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+                <OutputType>Exe</OutputType>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="xunit.v3" Version="3.2.2" />
+                <ProjectReference Include="../../tools/Helper/Helper.csproj" ReferenceOutputAssembly="false" />
+              </ItemGroup>
+            </Project>
+            """,
+            ct);
+        await File.WriteAllTextAsync(
+            Path.Combine(testProjectDir, "CalculatorTests.cs"),
+            """
+            using Xunit;
+
+            namespace Sample.Tests;
+
+            public sealed class CalculatorTests
+            {
+                [Fact]
+                public void Adds() => Assert.Equal(2, 1 + 1);
+            }
+            """,
+            ct);
+        await File.WriteAllTextAsync(
+            Path.Combine(helperProjectDir, "Helper.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <OutputType>Exe</OutputType>
+              </PropertyGroup>
+            </Project>
+            """,
+            ct);
+        await File.WriteAllTextAsync(
+            Path.Combine(helperProjectDir, "Program.cs"),
+            "System.Console.WriteLine(\"helper-ran\");",
+            ct);
+
+        var workspace = new ContinuousTestWorkspace(
+            WorkspaceId: "ws:reference-output",
+            WorkspaceRoot: workspaceRoot,
+            ProjectPath: Path.Combine(testProjectDir, "Sample.Tests.csproj"),
+            BuildOutputRoot: Path.Combine(_dir, "state", "workspaces", "ws-safe", "ct-build"));
+        _ctTemps.Add(CtTempPaths.ForWorkspace(workspace));
+        var provider = new DotnetTestProvider(new TestProcessRunner());
+
+        var testCase = Assert.Single(await provider.DiscoverAsync(workspace, ct));
+        var result = await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: workspace,
+                SelectedRevision: "1",
+                IndexIdentity: "store:reference-output",
+                RunId: "run:reference-output",
+                TestCaseIds: [testCase.Id]),
+            ct);
+
+        Assert.Equal("passed", result.Status);
+        Assert.NotNull(result.GenerationId);
+        var generation = CtGenerationPaths.For(workspace, result.GenerationId!);
+        var helperDirectory = Path.Combine(generation.OutDir, "Helper");
+        var helperExecutable = Path.Combine(
+            helperDirectory,
+            "Helper" + (OperatingSystem.IsWindows() ? ".exe" : string.Empty));
+        var helperAssembly = Path.Combine(helperDirectory, "Helper.dll");
+        Assert.True(File.Exists(helperExecutable));
+        Assert.True(File.Exists(helperAssembly));
+
+        var startInfo = new ProcessStartInfo(helperExecutable)
+        {
+            WorkingDirectory = helperDirectory,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        };
+        using var process = Process.Start(startInfo);
+        Assert.NotNull(process);
+        string output = await process!.StandardOutput.ReadToEndAsync(ct);
+        await process.WaitForExitAsync(ct);
+        Assert.Equal(0, process.ExitCode);
+        Assert.Equal("helper-ran", output.Trim());
+    }
+
     private TestProcessCommand BuildBlockingTreeCommand(string rootPidPath, string childPidPath)
     {
         if (OperatingSystem.IsWindows())

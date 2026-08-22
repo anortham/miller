@@ -465,11 +465,16 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
 
     private static string TestExecutablePath(ContinuousTestWorkspace workspace, CtGenerationPaths paths) =>
         Path.Combine(
-            paths.OutDir,
+            ProjectOutputDirectory(paths, workspace.ProjectPath),
             Path.GetFileNameWithoutExtension(workspace.ProjectPath) + ExecutableExtension());
 
     private static string TestAssemblyPath(ContinuousTestWorkspace workspace, CtGenerationPaths paths) =>
-        Path.Combine(paths.OutDir, Path.GetFileNameWithoutExtension(workspace.ProjectPath) + ".dll");
+        Path.Combine(
+            ProjectOutputDirectory(paths, workspace.ProjectPath),
+            Path.GetFileNameWithoutExtension(workspace.ProjectPath) + ".dll");
+
+    internal static string ProjectOutputDirectory(CtGenerationPaths paths, string projectPath) =>
+        Path.Combine(paths.OutDir, Path.GetFileNameWithoutExtension(projectPath));
 
     private static string ExecutableExtension() => OperatingSystem.IsWindows() ? ".exe" : "";
 
@@ -1096,6 +1101,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             workspace.BuildOutputRoot,
             "-nr:false",
             $"-p:OutDir={paths.OutDir}",
+            "-p:GenerateProjectSpecificOutputFolder=true",
             $"-p:ResultsDirectory={paths.ResultsDirectory}",
             $"-bl:{paths.BinlogPath};ProjectImports=None",
         };
@@ -1132,6 +1138,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
                 "-nologo",
                 "-getProperty:TargetPath",
                 $"-p:OutDir={paths.OutDir}",
+                "-p:GenerateProjectSpecificOutputFolder=true",
                 $"-p:ResultsDirectory={paths.ResultsDirectory}",
             ],
             workspace.WorkspaceRoot,
@@ -1148,14 +1155,15 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             throw new ContinuousTestProviderException("Test target-path evaluation returned an empty TargetPath.");
 
         var targetPath = Path.GetFullPath(evaluatedPath, workspace.WorkspaceRoot);
-        var relativePath = Path.GetRelativePath(Path.GetFullPath(workspace.BuildOutputRoot), targetPath);
+        var projectOutputDirectory = ProjectOutputDirectory(paths, workspace.ProjectPath);
+        var relativePath = Path.GetRelativePath(Path.GetFullPath(projectOutputDirectory), targetPath);
         if (Path.IsPathRooted(relativePath)
             || relativePath == ".."
             || relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
             || relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
         {
             throw new ContinuousTestProviderException(
-                $"Evaluated test TargetPath '{targetPath}' is outside CT build root '{workspace.BuildOutputRoot}'.");
+                $"Evaluated test TargetPath '{targetPath}' is outside CT project output '{projectOutputDirectory}'.");
         }
         if (!File.Exists(targetPath))
             throw new ContinuousTestProviderException(
@@ -1874,7 +1882,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         var coverageDirectory = Path.Combine(paths.ResultsDirectory, CoverageDirectoryName);
         Directory.CreateDirectory(coverageDirectory);
 
-        foreach (var assembly in InstrumentableAssemblies(paths))
+        foreach (var assembly in InstrumentableAssemblies(paths, workspace.ProjectPath))
         {
             await RunCoverageCommandAsync(
                 workspace,
@@ -2060,17 +2068,20 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
     /// intersecting changed files with a test's covered set, so a test that does not cover its own
     /// source file would never be selected when that file changes.
     /// </remarks>
-    private static IReadOnlyList<string> InstrumentableAssemblies(CtGenerationPaths paths)
+    private static IReadOnlyList<string> InstrumentableAssemblies(
+        CtGenerationPaths paths,
+        string projectPath)
     {
+        var outputRoot = Path.GetDirectoryName(ProjectOutputDirectory(paths, projectPath))!;
         var assemblies = Directory
-            .EnumerateFiles(paths.OutDir, "*.dll")
+            .EnumerateFiles(outputRoot, "*.dll", SearchOption.AllDirectories)
             .Where(path => File.Exists(Path.ChangeExtension(path, ".pdb")))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
         if (assemblies.Length == 0)
             throw new ContinuousTestProviderException(
                 $"Per-test coverage found no instrumentable assemblies (a '*.dll' with a sibling '*.pdb') " +
-                $"under '{paths.OutDir}'.");
+                $"under '{outputRoot}'.");
 
         return assemblies;
     }
