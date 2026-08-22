@@ -137,10 +137,60 @@ the dogfood repos:
   Refused scripts run the local runner binary directly; a missing binary or a spawn failure
   (e.g. missing pnpm) fails the run with a visible reason instead of a false red.
 
-Still open: F7 (fresh generation rebuilt per explicit run — needs its own design pass), F9
-(partial-red node-test attribution — needs a partially-red discriminator repo). Known follow-up
-from the F10 lane: a daemon auto-run spawn failure still reaches ct.db only as a daemon log line;
-a run-level reason surface needs a schema column + contract change.
+## Fix batch 3 and field proofs (2026-08-22)
+
+**F10 FIELD-PROVEN — jest upgrades from "supported, not field-proven".** vercel/ms re-run under
+the merged fix: baseline green (`test:nodejs` 167 + `test:edge` 167), CT verdict green twice over
+fresh `ct.db`s — 4/4 suites, 167/167 cases, `failure_summary` NULL on every row. Process capture
+shows the local `node_modules/.bin/jest` binary invoked directly with the cache/reporter args and
+ZERO pnpm/npm processes; the jest JSON report was written and parsed. One honest coverage limit,
+documented rather than fixed: CT invokes jest once under the default environment, so it covers the
+167-test suite once, not the 334 executions the repo's chained script gets by running the suite
+under both the node and `@edge-runtime/jest-environment` environments.
+
+**F9 CONFIRMED, then FIXED.** A purpose-built discriminator repo (4 node-test files under `test/`:
+3 green, 1 red) came back ALL FOUR red, each carrying the one real assertion message — the npm
+banner was gone (F10's fix worked), but `ParseNodeJunit` collapsed the whole report to one status
+plus the first failure text and stamped that pair on every per-file case id, and
+`JunitTestResultParser` never read the `file` attribute Node writes on each `<testcase>` (the only
+per-file signal; `classname` is just the directory). Fixed test-first (merge `edef1af8`): the
+parser captures `file`, the provider groups per file the way the jest/vitest JSON path always has,
+a selected file the report never names goes honestly stale via the unreported-case path, and a
+report with no `file` attributes anywhere (older reporters) keeps the old aggregate behavior
+exactly. New multi-file partially-red fast + Scale fixtures pin it.
+
+**F7 DESIGNED, then FIXED.** Design pass
+([`docs/plans/2026-08-22-ct-f7-per-run-rebuild-design.md`](../plans/2026-08-22-ct-f7-per-run-rebuild-design.md))
+found F7 is two defects: F7a, forced rediscovery on every explicit run (small), and F7b, the
+dominant cost — the generation directory IS the cargo cache (`CARGO_TARGET_DIR`), so every
+operation compiles the crate graph into an empty directory and the reap deletes the warm result.
+Option A shipped (merge `0b08903d`): the compiler caches move to a project-stable
+`<BuildOutputRoot>/cache/<tool>` beside the generations (the split `DotnetTestProvider` always had
+via `--artifacts-path`); results, reports, coverage claims, and temp stay per-generation. Coverage
+acceptance from the shared cache is scoped by write time against a filesystem-stamped run epoch;
+the cache counts against the disk budget; the reap never touches it; two consecutive provider
+failures wipe it and retry once (the recovery the per-generation directory used to provide).
+Instrumented builds get their own `cache/cargo-coverage` (different `RUSTFLAGS` re-fingerprint the
+whole graph). Deliberately NOT built: a coarse toolchain/lockfile fingerprint guard — cargo's own
+fingerprints invalidate correctly and incrementally, and the two-failure wipe covers a poisoned
+cache. F7a (skipping rediscovery) stays a follow-up; the design doc records why it must not ship
+first: the explicit run is currently the only inventory-refresh path.
+
+Small findings from the validation lanes (recorded, not yet fixed):
+
+- **F11 — `tests run --wait` does not wait for the execution budget.** With the user-global budget
+  held by another workspace it returns immediately (`verdict: unknown`, `reason: "execution budget
+  held"`, `waited: false`, `paused: true`). Both validation lanes had to poll by hand; `--wait`
+  waits for a verdict, not for the budget.
+- **F12 — budget-pause temp directories are never reaped.** ~116 orphan `miller-ct-budget-pause-*`
+  directories in `%TEMP%` dated 2026-08-19, created on budget waits and never cleaned.
+- **F13 — CLI paper cuts.** `workspace open <path>` rejects the positional form (`--path` required);
+  `workspace remove` leaves an untracked `.julieignore` behind in the removed root.
+
+Still open: F7a (skip rediscovery — follow-up gated on a new inventory-refresh trigger, see the
+design doc), F11, F12, F13. Known follow-up from the F10 lane: a daemon auto-run spawn failure
+still reaches ct.db only as a daemon log line; a run-level reason surface needs a schema column +
+contract change.
 
 ## What the fail-safes got right
 
