@@ -128,6 +128,7 @@ public sealed record ContinuousTestDaemonPendingRun
     public DateTimeOffset ObservedAt { get; init; }
     public DateTimeOffset ReadyAt { get; init; }
     public ContinuousTestRunLane Lane { get; init; } = ContinuousTestRunLane.Foreground;
+    public ContinuousTestSelectionOutcome Scope { get; init; } = ContinuousTestSelectionOutcome.Unknown;
 
     /// <summary>
     /// This pending came from a USER-REQUESTED run (<c>tests run</c>, MCP <c>operation=run</c>, the
@@ -194,10 +195,24 @@ public static class ContinuousTestImpactPriority
         confidence <= 0 ? 100 : Math.Clamp(100 - (int)Math.Round(confidence * 100), 0, 100);
 }
 
+/// <summary>Bounded facts captured at drain time for the provider selection and whole-suite gate.</summary>
+public sealed record ContinuousTestDaemonSelectionFacts(
+    ContinuousTestSelectionOutcome Scope,
+    ContinuousTestRunLane Lane,
+    int KnownCount,
+    int PreTrimSelectedCount,
+    int PostTrimSelectedCount,
+    int RetainedRedCount,
+    bool CoversEveryKnownCase,
+    bool Eligible,
+    string ReasonCode,
+    string SelectionDigest);
+
 public sealed record ContinuousTestDaemonEnqueueResult(
     ContinuousTestSelectionResult Selection,
     ContinuousTestDaemonPendingRun Pending);
 
 public sealed record ContinuousTestDaemonDrainResult(
     ContinuousTestDaemonPendingRun Pending,
-    ContinuousTestCoordinatorRunResult CoordinatorResult);
+    ContinuousTestCoordinatorRunResult CoordinatorResult,
+    ContinuousTestDaemonSelectionFacts SelectionFacts);

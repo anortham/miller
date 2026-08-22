@@ -153,9 +153,47 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
             new ContinuousTestCoordinator(provider, store, runIdFactory: static () => "run:1"));
 
         queue.Enqueue(EngineTestSupport.Change(workspace, debounce: TimeSpan.Zero));
-        await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+        IReadOnlyList<ContinuousTestDaemonDrainResult> drained =
+            await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
 
         Assert.Equal(["test:app"], Assert.Single(provider.Requests).TestCaseIds);
+        ContinuousTestDaemonSelectionFacts facts = Assert.Single(drained).SelectionFacts;
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, facts.Scope);
+        Assert.Equal(1, facts.KnownCount);
+        Assert.Equal(1, facts.PreTrimSelectedCount);
+        Assert.Equal(1, facts.PostTrimSelectedCount);
+        Assert.True(facts.CoversEveryKnownCase);
+        Assert.False(facts.Eligible);
+        Assert.Equal("impact_scope", facts.ReasonCode);
+    }
+
+    [Fact]
+    public async Task An_empty_inventory_reports_inventory_empty_without_whole_suite()
+    {
+        ContinuousTestWorkspace workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        var provider = new RecordingProvider();
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(provider, store, runIdFactory: static () => "run:1"));
+
+        ContinuousTestDaemonEnqueueResult enqueued =
+            queue.Enqueue(EngineTestSupport.Change(workspace, debounce: TimeSpan.Zero));
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, enqueued.Selection.Outcome);
+        store.PutTestCase(EngineTestSupport.Case(
+            "test:app",
+            Path.Combine(_root, "other", "Other.Tests.csproj")));
+
+        IReadOnlyList<ContinuousTestDaemonDrainResult> drained =
+            await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+
+        ContinuousTestDaemonSelectionFacts facts = Assert.Single(drained).SelectionFacts;
+        Assert.Equal(0, facts.KnownCount);
+        Assert.False(facts.CoversEveryKnownCase);
+        Assert.False(facts.Eligible);
+        Assert.Equal("inventory_empty", facts.ReasonCode);
     }
 
     /// <summary>
@@ -184,11 +222,59 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
             Identity,
             WorkspaceScope: true,
             ObservedAt: DateTimeOffset.UtcNow.AddSeconds(-1)));
-        await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+        IReadOnlyList<ContinuousTestDaemonDrainResult> drained =
+            await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
 
         ContinuousTestProviderRunRequest sent = Assert.Single(provider.Requests);
         Assert.Equal(["test:a", "test:b", "test:c"], sent.TestCaseIds.Order(StringComparer.Ordinal).ToArray());
         Assert.True(sent.WholeSuite);
+        ContinuousTestDaemonSelectionFacts facts = Assert.Single(drained).SelectionFacts;
+        Assert.Equal(ContinuousTestSelectionOutcome.WorkspaceScope, facts.Scope);
+        Assert.Equal(ContinuousTestRunLane.Foreground, facts.Lane);
+        Assert.Equal(3, facts.KnownCount);
+        Assert.Equal(3, facts.PreTrimSelectedCount);
+        Assert.Equal(3, facts.PostTrimSelectedCount);
+        Assert.Equal(0, facts.RetainedRedCount);
+        Assert.True(facts.CoversEveryKnownCase);
+        Assert.True(facts.Eligible);
+        Assert.Equal("eligible", facts.ReasonCode);
+        Assert.Equal("5b57e9b32e63762eae11cb57", facts.SelectionDigest);
+    }
+
+    [Fact]
+    public async Task A_foreground_retry_reports_eligibility_gate_after_workspace_failure()
+    {
+        ContinuousTestWorkspace workspace = Workspace();
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCases(store, workspace, "test:a", "test:b");
+        var provider = new RecordingProvider
+        {
+            DiscoverCases = ProviderCases("test:a", "test:b"),
+            ThrowOnRun = true,
+        };
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            SelectorFor(store),
+            new ContinuousTestCoordinator(provider, store, runIdFactory: static () => "run:1"));
+
+        queue.EnqueueExplicit(new ContinuousTestDaemonChange(
+            workspace,
+            "2",
+            Identity,
+            WorkspaceScope: true,
+            ObservedAt: DateTimeOffset.UtcNow.AddSeconds(-1)));
+        await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+        Assert.Single(provider.Requests);
+
+        provider.ThrowOnRun = false;
+        IReadOnlyList<ContinuousTestDaemonDrainResult> drained =
+            await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+
+        ContinuousTestDaemonSelectionFacts facts = Assert.Single(drained).SelectionFacts;
+        Assert.Equal(ContinuousTestSelectionOutcome.WorkspaceScope, facts.Scope);
+        Assert.True(facts.CoversEveryKnownCase);
+        Assert.False(facts.Eligible);
+        Assert.Equal("eligibility_gate", facts.ReasonCode);
     }
 
     /// <summary>
@@ -218,11 +304,19 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
             Identity,
             WorkspaceScope: true,
             ObservedAt: DateTimeOffset.UtcNow.AddSeconds(-1)));
-        await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+        IReadOnlyList<ContinuousTestDaemonDrainResult> drained =
+            await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
 
         // The enqueue itself must not destroy the committed-fresh row.
         Assert.DoesNotContain("test:fresh", enqueued.Selection.StaleTestCaseIds);
         Assert.Equal(["test:stale"], Assert.Single(provider.Requests).TestCaseIds);
+        ContinuousTestDaemonSelectionFacts facts = Assert.Single(drained).SelectionFacts;
+        Assert.Equal(2, facts.KnownCount);
+        Assert.Equal(1, facts.PreTrimSelectedCount);
+        Assert.Equal(1, facts.PostTrimSelectedCount);
+        Assert.False(facts.CoversEveryKnownCase);
+        Assert.False(facts.Eligible);
+        Assert.Equal("coverage_incomplete", facts.ReasonCode);
         ContinuousTestStatus fresh = Assert.Single(
             store.ListContinuousTestStatuses(WorkspaceId),
             row => row.TestCaseId == "test:fresh");
@@ -258,10 +352,19 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
             Identity,
             WorkspaceScope: true,
             ObservedAt: DateTimeOffset.UtcNow.AddSeconds(-1)));
-        await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+        IReadOnlyList<ContinuousTestDaemonDrainResult> drained =
+            await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
 
         // The red is re-run; the green beside it still has nothing to prove.
         Assert.Equal(["test:red"], Assert.Single(provider.Requests).TestCaseIds);
+        ContinuousTestDaemonSelectionFacts facts = Assert.Single(drained).SelectionFacts;
+        Assert.Equal(2, facts.KnownCount);
+        Assert.Equal(1, facts.PreTrimSelectedCount);
+        Assert.Equal(1, facts.PostTrimSelectedCount);
+        Assert.Equal(1, facts.RetainedRedCount);
+        Assert.False(facts.CoversEveryKnownCase);
+        Assert.False(facts.Eligible);
+        Assert.Equal("coverage_incomplete", facts.ReasonCode);
     }
 
     /// <summary>
@@ -428,7 +531,8 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
 
         ContinuousTestDaemonEnqueueResult enqueued =
             queue.Enqueue(EngineTestSupport.Change(workspace, debounce: TimeSpan.Zero));
-        await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+        IReadOnlyList<ContinuousTestDaemonDrainResult> drained =
+            await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
 
         // Guard the premise: this test says nothing unless the selection really is a strict subset. A second
         // case in the SAME test file is selected too, and the run is then correctly a whole-suite one.
@@ -440,6 +544,12 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
         Assert.NotEmpty(provider.Requests);
         Assert.All(provider.Requests, request => Assert.NotEmpty(request.TestCaseIds));
         Assert.Contains(provider.Requests, request => request.TestCaseIds.SequenceEqual(["test:app"]));
+        Assert.Contains(
+            drained,
+            result => result.SelectionFacts.Lane == ContinuousTestRunLane.Backfill
+                && result.SelectionFacts.KnownCount == 2
+                && !result.SelectionFacts.Eligible
+                && result.SelectionFacts.ReasonCode == "backfill_lane");
     }
 
     private static ContinuousTestCoordinatorRunRequest RunRequest(
@@ -578,6 +688,8 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
 
         public IReadOnlyList<ProviderTestCase> DiscoverCases { get; init; } = [];
 
+        public bool ThrowOnRun { get; set; }
+
         public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
             ContinuousTestWorkspace workspace,
             CancellationToken cancellationToken = default) =>
@@ -588,6 +700,9 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
+            if (ThrowOnRun)
+                throw new InvalidOperationException("provider failure");
+
             string runId = request.RunId ?? "run:1";
             return Task.FromResult(new ProviderRunResult(
                 runId,

@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Miller.Testing;
 
@@ -7,6 +9,12 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     private const int MaxFlakyRetryAttempts = 1;
     private const int BackfillBatchSize = 32;
     private const string DiscoveryFailureKind = "ct-project-discovery-failure";
+    private const string SelectionReasonEligible = "eligible";
+    private const string SelectionReasonImpactScope = "impact_scope";
+    private const string SelectionReasonBackfill = "backfill_lane";
+    private const string SelectionReasonInventoryEmpty = "inventory_empty";
+    private const string SelectionReasonCoverageIncomplete = "coverage_incomplete";
+    private const string SelectionReasonEligibilityGate = "eligibility_gate";
 
     private readonly ContinuousTestStore _store;
     private readonly ContinuousTestImpactSelector _selector;
@@ -24,10 +32,10 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     private readonly Dictionary<PendingKey, ContinuousTestDaemonPendingRun> _pending = [];
 
     /// <summary>
-    /// Foreground pendings whose selection is PURELY workspace-scope-derived. Only these may
-    /// collapse to the whole-suite provider form; an impact-derived selection that happens to
-    /// cover every known case still travels as its explicit id list (contract clause e). A merge
-    /// with any impact-derived enqueue clears the mark.
+    /// Foreground pendings whose latest executable selection is workspace-scope-derived. Only these may
+    /// collapse to the whole-suite provider form; an impact-derived selection that happens to cover every
+    /// known case still travels as its explicit id list (contract clause e). An impact enqueue clears the
+    /// mark, while a later workspace-scope request restores it because that request reselects the full scope.
     /// </summary>
     private readonly HashSet<PendingKey> _wholeSuiteEligible = [];
     private readonly Dictionary<RetryKey, int> _retryAttempts = [];
@@ -209,7 +217,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                     .ToArray();
             }
 
-            if (change.WorkspaceScope && (!merged || _wholeSuiteEligible.Contains(key)))
+            if (change.WorkspaceScope)
                 _wholeSuiteEligible.Add(key);
             else
                 _wholeSuiteEligible.Remove(key);
@@ -234,6 +242,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 // KEEPS the mark - a user asked for this run, and a later automatic change arriving
                 // during the debounce does not withdraw the request.
                 ExplicitRun = explicitRun || (merged && existing!.ExplicitRun),
+                Scope = selection.Outcome,
             };
             _pending[key] = pending;
 
@@ -326,6 +335,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             ImpactPriority = existing.ImpactPriority,
             CoverageMode = existing.CoverageMode,
             ExplicitRun = existing.ExplicitRun,
+            Scope = existing.Scope,
         };
     }
 
@@ -354,6 +364,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 if (readyPending.TestCaseIds.Count == 0)
                     continue;
 
+                int preTrimSelectedCount = readyPending.TestCaseIds.Count;
                 IReadOnlyList<string> survivors = DropFreshAt(
                     readyPending.Workspace.WorkspaceId,
                     readyPending.Workspace.ProjectPath,
@@ -378,6 +389,22 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                     readyPending = readyPending with { TestCaseIds = survivors };
                 }
 
+                CoverageCheck coverage = CoversEveryKnownCase(readyPending);
+                bool wholeSuite = wholeSuiteEligible && coverage.CoversEveryKnownCase;
+                var selectionFacts = new ContinuousTestDaemonSelectionFacts(
+                    Scope: readyPending.Scope,
+                    Lane: readyPending.Lane,
+                    KnownCount: coverage.KnownCount,
+                    PreTrimSelectedCount: preTrimSelectedCount,
+                    PostTrimSelectedCount: readyPending.TestCaseIds.Count,
+                    RetainedRedCount: CountRedCases(
+                        readyPending.Workspace.WorkspaceId,
+                        readyPending.TestCaseIds,
+                        readyPending.ExplicitRun),
+                    CoversEveryKnownCase: coverage.CoversEveryKnownCase,
+                    Eligible: wholeSuite,
+                    ReasonCode: SelectionReason(readyPending, wholeSuite, coverage),
+                    SelectionDigest: SelectionDigest(readyPending.TestCaseIds));
                 string runId = NewRunId();
 
                 // The daemon blocks here for the whole run. Without this the published status froze at the
@@ -402,7 +429,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                             CurrentRevisionResolver: () => LatestRevisionStringFor(key, readyPending.CurrentRevision),
                             RunId: runId,
                             CoverageMode: readyPending.CoverageMode,
-                            WholeSuite: wholeSuiteEligible && CoversEveryKnownCase(readyPending)),
+                            WholeSuite: wholeSuite),
                         drainToken).ConfigureAwait(false);
 
                     ClearRunFailureRetry(key);
@@ -410,7 +437,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                     RequeueBackfillRemainder(key, pending, remainder, now);
                     NotifyCtStateChanged(readyPending.Workspace.WorkspaceId);
                     LogRunCompletion(readyPending, coordinatorResult);
-                    results.Add(new ContinuousTestDaemonDrainResult(readyPending, coordinatorResult));
+                    results.Add(new ContinuousTestDaemonDrainResult(readyPending, coordinatorResult, selectionFacts));
                 }
                 catch (OperationCanceledException) when (
                     pending.Lane == ContinuousTestRunLane.Backfill
@@ -496,9 +523,9 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     }
 
     /// <summary>
-    /// True when this run's selection covers EVERY test case the store knows for the project, which is what
-    /// lets the coordinator hand the provider an empty selection and run the whole assembly once instead of
-    /// chunking ~6,000 <c>-method</c> pairs across ~50 processes.
+    /// Reads the known inventory and reports whether this run's selection covers EVERY provider-managed
+    /// test case. A whole-suite run keeps the complete ID list beside its flag; the provider may use that
+    /// flag to run the assembly once instead of chunking ~6,000 <c>-method</c> pairs across ~50 processes.
     ///
     /// <para>Coverage alone is NOT permission. The drain also requires the pending to be
     /// workspace-scope-derived (<see cref="_wholeSuiteEligible"/>): an impact-derived selection
@@ -516,11 +543,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     /// provider to run the whole assembly on that basis would execute an entire suite that no selection
     /// asked for.</para>
     /// </summary>
-    private bool CoversEveryKnownCase(ContinuousTestDaemonPendingRun pending)
+    private CoverageCheck CoversEveryKnownCase(ContinuousTestDaemonPendingRun pending)
     {
-        if (pending.Lane == ContinuousTestRunLane.Backfill)
-            return false;
-
         HashSet<string> known;
         try
         {
@@ -532,17 +556,75 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         }
         catch (Exception)
         {
-            // Unreadable inventory is not proof of coverage. Fall back to the per-case selection, which is
-            // slower and always correct.
-            return false;
+            return new CoverageCheck(0, false, CoverageAvailability.Unavailable);
         }
 
         if (known.Count == 0)
-            return false;
+            return new CoverageCheck(0, false, CoverageAvailability.Empty);
 
         var selected = pending.TestCaseIds.ToHashSet(StringComparer.Ordinal);
-        return selected.IsSupersetOf(known);
+        bool coversEveryKnownCase =
+            pending.Lane != ContinuousTestRunLane.Backfill && selected.IsSupersetOf(known);
+        return new CoverageCheck(known.Count, coversEveryKnownCase, CoverageAvailability.Known);
     }
+
+    private int CountRedCases(string workspaceId, IReadOnlyList<string> testCaseIds, bool keepRed)
+    {
+        if (!keepRed || testCaseIds.Count == 0)
+            return 0;
+
+        try
+        {
+            HashSet<string> selected = testCaseIds.ToHashSet(StringComparer.Ordinal);
+            return _store.ListContinuousTestStatuses(workspaceId)
+                .Count(status => selected.Contains(status.TestCaseId) && status.State == ContinuousTestState.Red);
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    private static string SelectionReason(
+        ContinuousTestDaemonPendingRun pending,
+        bool wholeSuite,
+        CoverageCheck coverage)
+    {
+        if (wholeSuite)
+            return SelectionReasonEligible;
+        if (pending.Lane == ContinuousTestRunLane.Backfill)
+            return SelectionReasonBackfill;
+        if (coverage.Availability == CoverageAvailability.Empty)
+            return SelectionReasonInventoryEmpty;
+        if (coverage.Availability == CoverageAvailability.Unavailable)
+            return SelectionReasonCoverageIncomplete;
+        if (pending.Scope != ContinuousTestSelectionOutcome.WorkspaceScope)
+            return SelectionReasonImpactScope;
+        if (!coverage.CoversEveryKnownCase)
+            return SelectionReasonCoverageIncomplete;
+        return SelectionReasonEligibilityGate;
+    }
+
+    private static string SelectionDigest(IReadOnlyList<string> testCaseIds)
+    {
+        string normalized = string.Join('\n', testCaseIds.Order(StringComparer.Ordinal));
+        if (normalized.Length > 0)
+            normalized += '\n';
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
+        return Convert.ToHexString(digest).ToLowerInvariant()[..24];
+    }
+
+    private enum CoverageAvailability
+    {
+        Unavailable,
+        Empty,
+        Known,
+    }
+
+    private readonly record struct CoverageCheck(
+        int KnownCount,
+        bool CoversEveryKnownCase,
+        CoverageAvailability Availability);
 
     private IReadOnlyList<string> SelectForegroundTestCaseIds(
         ContinuousTestDaemonChange change,

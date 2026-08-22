@@ -372,6 +372,40 @@ public sealed class ContinuousTestDebouncedAutoRunTests : IDisposable
         try { await run; } catch (OperationCanceledException) { }
     }
 
+    [Fact]
+    public async Task An_explicit_workspace_run_merged_over_impact_pending_remains_whole_suite_eligible()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        store.PutTestCase(EngineTestSupport.Case("test:other", workspace.ProjectPath, "tests/OtherTests.cs"));
+        var provider = new FakeContinuousTestProvider
+        {
+            DiscoverCases = ProviderCases("test:app", "test:other"),
+            RunResult = PassedMany("2", "test:app", "test:other"),
+        };
+        ContinuousTestDaemonQueue queue = Queue(store, provider, revision: 2);
+
+        ContinuousTestDaemonEnqueueResult impacted = queue.Enqueue(
+            EngineTestSupport.Change(workspace, revision: "2", debounce: TimeSpan.Zero));
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, impacted.Selection.Outcome);
+
+        queue.EnqueueExplicit(new ContinuousTestDaemonChange(
+            workspace,
+            "2",
+            EngineTestSupport.Identity,
+            WorkspaceScope: true,
+            ObservedAt: DateTimeOffset.UtcNow));
+        IReadOnlyList<ContinuousTestDaemonDrainResult> drained =
+            await queue.DrainReadyAsync(DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+
+        Assert.True(Assert.Single(provider.RunRequests).WholeSuite);
+        ContinuousTestDaemonSelectionFacts facts = Assert.Single(drained).SelectionFacts;
+        Assert.Equal(ContinuousTestSelectionOutcome.WorkspaceScope, facts.Scope);
+        Assert.True(facts.Eligible);
+        Assert.Equal("eligible", facts.ReasonCode);
+    }
+
     private static ContinuousTestDaemonQueue Queue(
         ContinuousTestStore store,
         IContinuousTestProvider provider,
@@ -422,6 +456,32 @@ public sealed class ContinuousTestDebouncedAutoRunTests : IDisposable
             [
                 new ProviderCaseResult("r1", testCaseId, "passed", revision, EngineTestSupport.Identity),
             ]);
+
+    private static ProviderRunResult PassedMany(string revision, params string[] testCaseIds) =>
+        new(
+            "run:1",
+            "passed",
+            CaseResults: testCaseIds
+                .Select((testCaseId, index) => new ProviderCaseResult(
+                    $"r{index}",
+                    testCaseId,
+                    "passed",
+                    revision,
+                    EngineTestSupport.Identity))
+                .ToArray());
+
+    private static IReadOnlyList<ProviderTestCase> ProviderCases(params string[] testCaseIds) =>
+        testCaseIds
+            .Select(testCaseId => new ProviderTestCase(
+                testCaseId,
+                testCaseId,
+                $"App.Tests.{testCaseId}",
+                $"App.Tests.{testCaseId}",
+                Framework: "xunit",
+                SourcePath: testCaseId == "test:other"
+                    ? "tests/OtherTests.cs"
+                    : "tests/AppTests.cs"))
+            .ToArray();
 
     private static void CommitGreen(ContinuousTestStore store, string testCaseId, long revision)
     {

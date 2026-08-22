@@ -144,10 +144,10 @@
 **Approach:** Compute diagnostics where `DrainReadyAsync` already owns the policy decision. Add explicit coverage for an explicit workspace run merged over an impact-derived pending run; do not change eligibility until that test proves the merge currently loses a legitimate workspace-scope signal.
 
 **Acceptance criteria:**
-- [ ] Every `WholeSuite=false` run has one bounded, deterministic reason code.
-- [ ] Existing fresh, red, backfill, unknown, and impact-derived behavior remains unchanged.
-- [ ] Focused tests distinguish every intentional partial-selection reason without listing case names.
-- [ ] Focused whole-suite/debounce tests pass and the change is handed to the lead per `parallel-lead-commit`.
+- [x] Every `WholeSuite=false` run has one bounded, deterministic reason code.
+- [x] Existing fresh, red, backfill, unknown, and impact-derived behavior remains unchanged.
+- [x] Focused tests distinguish every intentional partial-selection reason without listing case names.
+- [x] Focused whole-suite/debounce tests pass and the change is handed to the lead per `parallel-lead-commit`.
 
 ### Task 4: Provider/chunk run facts
 
