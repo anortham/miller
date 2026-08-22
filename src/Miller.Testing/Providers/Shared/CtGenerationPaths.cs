@@ -26,6 +26,13 @@ public sealed record CtGenerationPaths(
 
     internal const string ReapSuffixPrefix = ".reap-";
 
+    /// <summary>
+    /// The one directory under a build output root that is NOT per-operation: it holds the compiler caches
+    /// (cargo's target directory, node's compile cache). It cannot collide with a generation, because
+    /// <see cref="IsGenerationId"/> accepts only 'g' plus twelve lowercase hex characters.
+    /// </summary>
+    internal const string CacheRootDirectoryName = "cache";
+
     public void EnsureDirectories()
     {
         Directory.CreateDirectory(OutDir);
@@ -67,6 +74,40 @@ public sealed record CtGenerationPaths(
         throw new IOException(
             $"could not claim a continuous-test generation under {workspace.BuildOutputRoot} after {MaxAllocationAttempts} attempts");
     }
+
+    /// <summary>
+    /// The project-stable cache root, beside the per-operation generations under one build output root.
+    ///
+    /// <para><b>Why it is not per-generation.</b> For cargo the generation directory WAS
+    /// <c>CARGO_TARGET_DIR</c>, so every CT operation compiled the whole crate graph into an empty
+    /// directory and the reap deleted the warm cache straight after (finding F7: about 3.5 minutes and
+    /// 8 GB per explicit run on julie-extractors). The dotnet provider has always kept its intermediates
+    /// shared through <c>--artifacts-path &lt;BuildOutputRoot&gt;</c>; this is the same split for the
+    /// other providers.</para>
+    ///
+    /// <para><b>What it is keyed by.</b> The build output root, which is
+    /// <c>(workspace hash, project hash)</c>. Two worktrees of one repo have different workspace ids and
+    /// therefore different caches — correct, because they can hold different source states.</para>
+    ///
+    /// <para><b>What it never holds.</b> A verdict, a result artifact or a coverage claim. Only a
+    /// compiler's own cache, which is invalidated by the compiler's own fingerprints.</para>
+    /// </summary>
+    public static string CacheRoot(ContinuousTestWorkspace workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        return Path.Combine(workspace.BuildOutputRoot, CacheRootDirectoryName);
+    }
+
+    /// <summary>One tool's project-stable cache directory under <see cref="CacheRoot"/>.</summary>
+    public static string CacheDirectory(ContinuousTestWorkspace workspace, string tool)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tool);
+        return Path.Combine(CacheRoot(workspace), tool);
+    }
+
+    /// <summary>Whether a directory name under a build output root is the project-stable cache root.</summary>
+    public static bool IsCacheRootDirectoryName(string? directoryName) =>
+        string.Equals(directoryName, CacheRootDirectoryName, StringComparison.Ordinal);
 
     public static CtGenerationPaths ResolveLatestOrFirst(ContinuousTestWorkspace workspace)
     {

@@ -491,7 +491,7 @@ public sealed class RustTestProviderTests : IDisposable
             TestContext.Current.CancellationToken);
 
         Assert.Equal(2, runner.Calls.Count);
-        Assert.All(runner.Calls, call => AssertUsesGeneration(call, generation));
+        Assert.All(runner.Calls, call => AssertUsesGeneration(call, workspace, generation));
         Assert.Equal(FirstGeneration(workspace).GenerationId, result.GenerationId);
         Assert.Equal(
             Path.Combine(generation.ResultsDirectory, Path.GetFileName(result.ResultArtifactPath!)),
@@ -541,7 +541,7 @@ public sealed class RustTestProviderTests : IDisposable
 
         await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
 
-        Assert.All(runner.Calls, call => AssertUsesGeneration(call, generation));
+        Assert.All(runner.Calls, call => AssertUsesGeneration(call, workspace, generation));
         Assert.Equal(
             5,
             runner.Calls.Count(call => ScriptedTestProcessRunner.Has(call, "--target-dir")));
@@ -579,19 +579,67 @@ public sealed class RustTestProviderTests : IDisposable
         Assert.NotEqual(first.ResultArtifactPath, second.ResultArtifactPath);
     }
 
+    /// <summary>
+    /// Two operations on one project reuse ONE cargo cache — that is the whole point of finding F7 — while
+    /// each keeps its own generation for results, logs and temp.
+    /// </summary>
     [Fact]
-    public async Task Run_ignores_coverage_artifacts_outside_its_own_generation()
+    public async Task Two_discover_run_cycles_share_one_cargo_cache_and_allocate_two_generations()
+    {
+        var runner = CycleRunner();
+        var provider = new RustTestProvider(runner);
+        var workspace = Workspace(null);
+        var request = Request(workspace, "rust-test:adder::lib/adder::tests::add_works");
+
+        await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        var first = await provider.RunAsync(request, TestContext.Current.CancellationToken);
+        await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        var second = await provider.RunAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            CargoCache(workspace),
+            Assert.Single(runner.Calls
+                .Select(call => call.Environment["CARGO_TARGET_DIR"]!)
+                .Distinct(StringComparer.Ordinal)));
+        Assert.All(
+            runner.Calls.Where(call => ScriptedTestProcessRunner.Has(call, "--target-dir")),
+            call => Assert.True(ScriptedTestProcessRunner.HasPair(call, "--target-dir", CargoCache(workspace))));
+        Assert.NotEqual(first.GenerationId, second.GenerationId);
+        Assert.Equal(2, GenerationDirectories(workspace).Count);
+        Assert.True(Directory.Exists(CargoCache(workspace)));
+    }
+
+    /// <summary>
+    /// The cargo cache outlives one run, so a coverage file the PREVIOUS run left there is not this run's
+    /// evidence. Acceptance is scoped by write time against a stamp taken before the first cargo process.
+    /// </summary>
+    [Fact]
+    public async Task Run_ignores_a_previous_runs_coverage_left_in_the_shared_cargo_cache()
     {
         var workspace = Workspace(null);
-        var stale = CtGenerationPaths.Allocate(workspace);
-        stale.EnsureDirectories();
-        var staleCoverage = Path.Combine(stale.GenerationRoot, "target", "lcov.info");
+        var staleCoverage = Path.Combine(CargoCache(workspace), "lcov.info");
         Directory.CreateDirectory(Path.GetDirectoryName(staleCoverage)!);
         await File.WriteAllTextAsync(staleCoverage, "TN:\n", TestContext.Current.CancellationToken);
+        File.SetLastWriteTimeUtc(staleCoverage, DateTime.UtcNow.AddHours(-1));
         Directory.CreateDirectory(ProjectRoot);
         var projectCoverage = Path.Combine(ProjectRoot, "lcov.info");
         await File.WriteAllTextAsync(projectCoverage, "TN:\n", TestContext.Current.CancellationToken);
 
+        var provider = new RustTestProvider(PassingRunner());
+
+        var result = await provider.RunAsync(
+            Request(workspace, "rust-test:adder::lib/adder::tests::add_works"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.CoverageArtifacts);
+        Assert.True(File.Exists(staleCoverage));
+        Assert.True(File.Exists(projectCoverage));
+    }
+
+    [Fact]
+    public async Task Run_reports_coverage_its_own_processes_wrote_into_the_shared_cargo_cache()
+    {
+        var workspace = Workspace(null);
         var runner = new ScriptedTestProcessRunner(command =>
         {
             if (ScriptedTestProcessRunner.Has(command, "--no-run"))
@@ -611,14 +659,10 @@ public sealed class RustTestProviderTests : IDisposable
             Request(workspace, "rust-test:adder::lib/adder::tests::add_works"),
             TestContext.Current.CancellationToken);
 
-        var fresh = CtGenerationPaths.For(workspace, CtGenerationPaths.IdForOrdinal(workspace, 2));
-        Assert.Equal(CtGenerationPaths.IdForOrdinal(workspace, 2), result.GenerationId);
         var artifact = Assert.Single(result.CoverageArtifacts);
-        Assert.Equal(Path.Combine(fresh.GenerationRoot, "target", "lcov.info"), artifact.ArtifactPath);
+        Assert.Equal(Path.Combine(CargoCache(workspace), "lcov.info"), artifact.ArtifactPath);
         Assert.Equal("lcov", artifact.Parser);
-        Assert.Equal(fresh.GenerationRoot, artifact.ArtifactRoot);
-        Assert.True(File.Exists(staleCoverage));
-        Assert.True(File.Exists(projectCoverage));
+        Assert.Equal(CargoCache(workspace), artifact.ArtifactRoot);
     }
 
     // ---------------------------------------------------------------- BuildRunCommand
@@ -636,7 +680,7 @@ public sealed class RustTestProviderTests : IDisposable
         Assert.Contains("--workspace", command.Arguments);
         Assert.Equal(workspace.WorkspaceRoot, command.Environment[CtEnvironment.WorkspaceRoot]);
         Assert.Equal("never", command.Environment["CARGO_TERM_COLOR"]);
-        AssertUsesGeneration(command, CtGenerationPaths.ResolveLatestOrFirst(workspace));
+        AssertUsesGeneration(command, workspace, CtGenerationPaths.ResolveLatestOrFirst(workspace));
     }
 
     [Fact]
@@ -698,6 +742,32 @@ public sealed class RustTestProviderTests : IDisposable
             Path.Combine(generation.GenerationRoot, "coverage", "build", "%p.profraw"),
             gate.Environment["LLVM_PROFILE_FILE"]);
         Assert.Equal(ProcessPriorityClass.BelowNormal, gate.ProcessPriority);
+    }
+
+    /// <summary>
+    /// An instrumented build sets different RUSTFLAGS, and cargo re-fingerprints the WHOLE crate graph when
+    /// they change. Sharing one cache directory with the plain runs would therefore rebuild everything on
+    /// every switch between the two modes — the cost finding F7 removed. Coverage gets its own project-stable
+    /// cache, so both modes stay warm.
+    /// </summary>
+    [Fact]
+    public async Task Per_test_coverage_uses_a_separate_project_stable_cache_from_plain_runs()
+    {
+        var runner = CoverageRunner();
+        var provider = new RustTestProvider(runner);
+        var workspace = Workspace(null);
+
+        await provider.RunAsync(
+            CoverageRequest(workspace, "rust-test:adder::lib/adder::tests::add_works"),
+            TestContext.Current.CancellationToken);
+
+        var cargoCalls = runner.Calls.Where(c => c.FileName == "cargo" && ScriptedTestProcessRunner.Has(c, "test"));
+        Assert.All(cargoCalls, call =>
+        {
+            Assert.Equal(CargoCoverageCache(workspace), call.Environment["CARGO_TARGET_DIR"]);
+            Assert.True(ScriptedTestProcessRunner.HasPair(call, "--target-dir", CargoCoverageCache(workspace)));
+        });
+        Assert.NotEqual(CargoCache(workspace), CargoCoverageCache(workspace));
     }
 
     [Fact]
@@ -770,7 +840,7 @@ public sealed class RustTestProviderTests : IDisposable
         Assert.Contains($"-instr-profile={merged}", export.Arguments);
         Assert.Contains("-format=text", export.Arguments);
         Assert.Contains("-summary-only", export.Arguments);
-        Assert.True(ScriptedTestProcessRunner.HasPair(export, "-object", AdderExecutable(generation)));
+        Assert.True(ScriptedTestProcessRunner.HasPair(export, "-object", AdderExecutable(workspace)));
         Assert.Equal(ProcessPriorityClass.BelowNormal, export.ProcessPriority);
     }
 
@@ -996,6 +1066,29 @@ public sealed class RustTestProviderTests : IDisposable
         throw new InvalidOperationException($"unscripted command: {command.ToDisplayString()}");
     });
 
+    /// <summary>A runner that answers the whole discover-then-run cycle: metadata, build gate, list, run.</summary>
+    private ScriptedTestProcessRunner CycleRunner() => new(command =>
+    {
+        if (ScriptedTestProcessRunner.Has(command, "metadata"))
+            return new TestProcessResult(0, MetadataJson(), string.Empty);
+        if (ScriptedTestProcessRunner.Has(command, "--no-run"))
+            return new TestProcessResult(0, string.Empty, "    Finished `test` profile in 0.20s\n");
+        if (ScriptedTestProcessRunner.Has(command, "--list"))
+            return new TestProcessResult(0, "tests::add_works: test\n", string.Empty);
+        return PassedOneTest();
+    });
+
+    private static ScriptedTestProcessRunner PassingRunner() => new(command =>
+        ScriptedTestProcessRunner.Has(command, "--no-run")
+            ? new TestProcessResult(0, string.Empty, string.Empty)
+            : PassedOneTest());
+
+    private static TestProcessResult PassedOneTest() =>
+        new(0,
+            "running 1 test\ntest tests::add_works ... ok\n\n"
+            + "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n",
+            string.Empty);
+
     private ScriptedTestProcessRunner CoverageRunner(
         string? exportJson = null,
         int exportExitCode = 0,
@@ -1092,8 +1185,8 @@ public sealed class RustTestProviderTests : IDisposable
         });
     }
 
-    private string AdderExecutable(CtGenerationPaths generation) =>
-        Path.Combine(generation.GenerationRoot, "target", "debug", "deps", "adder-1a2b3c");
+    private static string AdderExecutable(ContinuousTestWorkspace workspace) =>
+        Path.Combine(CargoCoverageCache(workspace), "debug", "deps", "adder-1a2b3c");
 
     private string ToolchainLibDir() => Path.Combine(_dir, "toolchain", "lib", "rustlib", "host", "lib");
 
@@ -1130,9 +1223,18 @@ public sealed class RustTestProviderTests : IDisposable
         """;
     }
 
-    private static void AssertUsesGeneration(TestProcessCommand command, CtGenerationPaths generation)
+    /// <summary>
+    /// Results, logs and temp are PER-OPERATION; the compiler cache is PROJECT-STABLE. The cargo target
+    /// directory used to live inside the generation, so every operation compiled the whole crate graph
+    /// into an empty directory (finding F7). It now sits beside the generations under the build output
+    /// root, identical for every allocation on this project.
+    /// </summary>
+    private static void AssertUsesGeneration(
+        TestProcessCommand command,
+        ContinuousTestWorkspace workspace,
+        CtGenerationPaths generation)
     {
-        var targetDir = Path.Combine(generation.GenerationRoot, "target");
+        var targetDir = CargoCache(workspace);
         Assert.Equal(targetDir, command.Environment["CARGO_TARGET_DIR"]);
         if (ScriptedTestProcessRunner.Has(command, "--target-dir"))
             Assert.True(ScriptedTestProcessRunner.HasPair(command, "--target-dir", targetDir));
@@ -1140,6 +1242,12 @@ public sealed class RustTestProviderTests : IDisposable
         Assert.Equal(generation.TempDirectory, command.Environment["TMP"]);
         Assert.Equal(generation.TempDirectory, command.Environment["TEMP"]);
     }
+
+    private static string CargoCache(ContinuousTestWorkspace workspace) =>
+        CtGenerationPaths.CacheDirectory(workspace, "cargo");
+
+    private static string CargoCoverageCache(ContinuousTestWorkspace workspace) =>
+        CtGenerationPaths.CacheDirectory(workspace, "cargo-coverage");
 
     private static CtGenerationPaths FirstGeneration(ContinuousTestWorkspace workspace) =>
         CtGenerationPaths.For(workspace, CtGenerationPaths.IdForOrdinal(workspace, 1));

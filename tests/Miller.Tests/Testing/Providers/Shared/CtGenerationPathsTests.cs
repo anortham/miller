@@ -17,6 +17,27 @@ public sealed class CtGenerationPathsTests : IDisposable
         BestEffortDelete(_dir);
     }
 
+    /// <summary>
+    /// The compiler cache is PROJECT-stable, not per-operation (finding F7). Its directory name can never
+    /// collide with a generation: <see cref="CtGenerationPaths.IsGenerationId"/> accepts only 'g' plus
+    /// twelve lowercase hex characters.
+    /// </summary>
+    [Fact]
+    public void The_cache_root_is_stable_beside_the_generations_and_is_not_a_generation_id()
+    {
+        var workspace = Workspace();
+
+        var first = CtGenerationPaths.Allocate(workspace);
+        var second = CtGenerationPaths.Allocate(workspace);
+
+        Assert.Equal(Path.Combine(workspace.BuildOutputRoot, "cache"), CtGenerationPaths.CacheRoot(workspace));
+        Assert.Equal(
+            Path.Combine(workspace.BuildOutputRoot, "cache", "cargo"),
+            CtGenerationPaths.CacheDirectory(workspace, "cargo"));
+        Assert.NotEqual(first.GenerationRoot, second.GenerationRoot);
+        Assert.False(CtGenerationPaths.IsGenerationId("cache"));
+    }
+
     [Fact]
     public void Allocate_uses_short_hashed_generation_ids()
     {

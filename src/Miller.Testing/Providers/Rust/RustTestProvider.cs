@@ -20,6 +20,15 @@ public sealed class RustTestProvider : IContinuousTestProvider
 {
     private const string ProjectSelector = "Cargo.toml";
 
+    // The project-stable cache directories under <BuildOutputRoot>/cache. Plain and instrumented builds are
+    // kept apart because their RUSTFLAGS differ and cargo would re-fingerprint the whole graph on each switch.
+    private const string CargoCacheTool = "cargo";
+    private const string CargoCoverageCacheTool = "cargo-coverage";
+
+    // Written into the generation root before the first cargo process starts. Coverage files the shared cache
+    // already held are older than this stamp, so they can never be read as this run's evidence.
+    private const string RunEpochMarkerFileName = ".run-epoch";
+
     // Windows argv cap (first-class): a partial group whose --exact filter list exceeds either bound
     // is chunked into multiple invocations of the same target — never dropped, never widened to an
     // unfiltered superset (whose extra results could not be safely committed and would waste minutes).
@@ -67,7 +76,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
     {
         var projectRoot = ProjectRoot(workspace);
         var manifestPath = Path.Combine(projectRoot, ProjectSelector);
-        EnsureGenerationDirectories(paths);
+        EnsureGenerationDirectories(workspace, paths);
 
         // 1. cargo metadata — enumerate workspace members + targets (keyed off test/doctest booleans).
         var metaResult = await _runner.RunAsync(MetadataCommand(workspace, paths, manifestPath), cancellationToken)
@@ -216,7 +225,8 @@ public sealed class RustTestProvider : IContinuousTestProvider
 
         var projectRoot = ProjectRoot(request.Workspace);
         var manifestPath = Path.Combine(projectRoot, ProjectSelector);
-        EnsureGenerationDirectories(paths);
+        EnsureGenerationDirectories(request.Workspace, paths);
+        var runEpochUtc = StampRunEpoch(paths);
 
         // GUARD. Without a custom command this provider's plan IS the id list: no ids and no whole-suite
         // flag means no cargo process would start, and an empty result set reads as "passed". A run must
@@ -247,7 +257,8 @@ public sealed class RustTestProvider : IContinuousTestProvider
         if (request.CoverageMode == ContinuousTestCoverageMode.PerTest)
         {
             return await RunPerTestCoverageAsync(
-                    request, paths, runId, started, manifestPath, artifactPath, RunAndLog, cancellationToken)
+                    request, paths, runId, started, runEpochUtc, manifestPath, artifactPath, RunAndLog,
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -259,7 +270,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
             ThrowIfHarnessCrash(customResult, customOutput, artifactPath);
             foreach (var id in request.TestCaseIds)
                 results.Add(AggregateResult(request, runId, id, customResult, customOutput));
-            return RunResult(request, paths, runId, started, results, artifactPath);
+            return RunResult(request, paths, runId, started, runEpochUtc, results, artifactPath);
         }
 
         var parseable = new List<RunCase>();
@@ -304,7 +315,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
             }
         }
 
-        return RunResult(request, paths, runId, started, results, artifactPath);
+        return RunResult(request, paths, runId, started, runEpochUtc, results, artifactPath);
     }
 
     private async Task RunGroupAsync(
@@ -448,6 +459,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         CtGenerationPaths paths,
         string runId,
         DateTimeOffset started,
+        DateTime runEpochUtc,
         IReadOnlyList<ProviderCaseResult> results,
         string artifactPath,
         IReadOnlyList<ProviderCoverageArtifact>? coverageArtifacts = null) =>
@@ -458,7 +470,8 @@ public sealed class RustTestProvider : IContinuousTestProvider
             EndedAt: DateTimeOffset.UtcNow,
             CaseResults: results,
             ResultArtifactPath: File.Exists(artifactPath) ? artifactPath : null,
-            CoverageArtifacts: coverageArtifacts ?? DiscoverCoverageArtifacts(paths))
+            CoverageArtifacts:
+                coverageArtifacts ?? DiscoverCoverageArtifacts(request.Workspace, paths, runEpochUtc))
         {
             GenerationId = paths.GenerationId,
         };
@@ -481,7 +494,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
     {
         var projectRoot = ProjectRoot(request.Workspace);
         var manifestPath = Path.Combine(projectRoot, ProjectSelector);
-        EnsureGenerationDirectories(paths);
+        EnsureGenerationDirectories(request.Workspace, paths);
 
         if (!string.IsNullOrWhiteSpace(request.Command ?? request.Workspace.Command))
             return BuildCustomCommand(request, paths);
@@ -524,7 +537,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
             FileName: "cargo",
             Arguments:
             [
-                "test", "--no-run", "--workspace", "--manifest-path", manifestPath, "--target-dir", TargetDir(paths),
+                "test", "--no-run", "--workspace", "--manifest-path", manifestPath, "--target-dir", TargetDir(workspace),
             ],
             WorkingDirectory: ProjectRoot(workspace),
             Environment: WorkspaceEnvironment(workspace, paths));
@@ -541,7 +554,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         args.Add("--manifest-path");
         args.Add(manifestPath);
         args.Add("--target-dir");
-        args.Add(TargetDir(paths));
+        args.Add(TargetDir(workspace));
         args.Add("--");
         args.Add("--list");
         args.Add("--format");
@@ -562,7 +575,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         args.Add("--manifest-path");
         args.Add(manifestPath);
         args.Add("--target-dir");
-        args.Add(TargetDir(paths));
+        args.Add(TargetDir(workspace));
         args.Add("--no-fail-fast");
         if (filters is { Count: > 0 })
         {
@@ -580,7 +593,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
             FileName: "cargo",
             Arguments:
             [
-                "test", "--manifest-path", manifestPath, "--target-dir", TargetDir(paths), "--no-fail-fast", "--workspace",
+                "test", "--manifest-path", manifestPath, "--target-dir", TargetDir(workspace), "--no-fail-fast", "--workspace",
             ],
             WorkingDirectory: ProjectRoot(workspace),
             Environment: WorkspaceEnvironment(workspace, paths));
@@ -589,7 +602,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
     {
         var projectRoot = ProjectRoot(request.Workspace);
         var manifestPath = Path.Combine(projectRoot, ProjectSelector);
-        EnsureGenerationDirectories(paths);
+        EnsureGenerationDirectories(request.Workspace, paths);
 
         var parts = SplitCommand((request.Command ?? request.Workspace.Command)!);
         if (parts.Count == 0)
@@ -605,7 +618,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         if (!ContainsOption(args, "--target-dir"))
         {
             args.Add("--target-dir");
-            args.Add(TargetDir(paths));
+            args.Add(TargetDir(request.Workspace));
         }
 
         return new(parts[0], args, projectRoot, WorkspaceEnvironment(request.Workspace, paths));
@@ -738,6 +751,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         CtGenerationPaths paths,
         string runId,
         DateTimeOffset started,
+        DateTime runEpochUtc,
         string manifestPath,
         string artifactPath,
         Func<TestProcessCommand, Task<(TestProcessResult Result, double Wall)>> runAndLog,
@@ -811,7 +825,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         }
 
         DeleteDirectory(buildProfileDir);
-        return RunResult(request, paths, runId, started, results, artifactPath, artifacts);
+        return RunResult(request, paths, runId, started, runEpochUtc, results, artifactPath, artifacts);
     }
 
     /// <summary>
@@ -1069,7 +1083,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
             FileName: "cargo",
             Arguments:
             [
-                "test", "--no-run", "--workspace", "--manifest-path", manifestPath, "--target-dir", TargetDir(paths),
+                "test", "--no-run", "--workspace", "--manifest-path", manifestPath, "--target-dir", CoverageTargetDir(workspace),
                 "--message-format=json",
             ],
             WorkingDirectory: ProjectRoot(workspace),
@@ -1087,7 +1101,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
         args.Add("--manifest-path");
         args.Add(manifestPath);
         args.Add("--target-dir");
-        args.Add(TargetDir(paths));
+        args.Add(CoverageTargetDir(workspace));
         args.Add("--no-fail-fast");
         args.Add("--");
         args.Add("--exact");
@@ -1109,6 +1123,9 @@ public sealed class RustTestProvider : IContinuousTestProvider
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var entry in WorkspaceEnvironment(workspace, paths))
             environment[entry.Key] = entry.Value;
+        // Instrumented builds carry different RUSTFLAGS, so they get their own project-stable cache.
+        Directory.CreateDirectory(CoverageTargetDir(workspace));
+        environment["CARGO_TARGET_DIR"] = CoverageTargetDir(workspace);
         foreach (var entry in RustCoverageFlagPolicy.Create(ProjectRoot(workspace)))
             environment[entry.Key] = entry.Value;
         environment[ProfileFileVariable] = Path.Combine(profileDir, "%p.profraw");
@@ -1141,21 +1158,40 @@ public sealed class RustTestProvider : IContinuousTestProvider
     // ---------------------------------------------------------------- coverage / artifact
 
     /// <summary>
-    /// Coverage scan of the operation's own generation only — a cargo profile writes its lcov/cobertura
-    /// under <c>CARGO_TARGET_DIR</c>, which is generation-scoped, so a run can never adopt an older
-    /// generation's (or a stale project-root) coverage file and report it as this run's evidence.
+    /// Coverage scan over two roots with two different rules.
+    ///
+    /// <para>The GENERATION root is per-operation, so everything found there belongs to this run.</para>
+    ///
+    /// <para>The cargo cache is PROJECT-stable and outlives the run, so a lcov/cobertura file it already held
+    /// is the PREVIOUS run's evidence. Acceptance there is scoped by write time against
+    /// <paramref name="runEpochUtc"/>, the stamp taken from the filesystem before the first cargo process
+    /// started. Both roots sit under one build output root, hence on one volume, so the two timestamps carry
+    /// the same granularity and a file written after the stamp can never read older than it.</para>
     /// </summary>
-    private static IReadOnlyList<ProviderCoverageArtifact> DiscoverCoverageArtifacts(CtGenerationPaths generation)
+    private static IReadOnlyList<ProviderCoverageArtifact> DiscoverCoverageArtifacts(
+        ContinuousTestWorkspace workspace,
+        CtGenerationPaths generation,
+        DateTime runEpochUtc)
     {
-        if (!Directory.Exists(generation.GenerationRoot))
-            return [];
-
         var artifacts = new List<ProviderCoverageArtifact>();
         var paths = new HashSet<string>(PathStringComparer);
-        AddCoverageArtifacts(artifacts, paths, generation.GenerationRoot, "lcov.info", "lcov");
-        AddCoverageArtifacts(artifacts, paths, generation.GenerationRoot, "cobertura.xml", "cobertura");
-        AddCoverageArtifacts(artifacts, paths, generation.GenerationRoot, "*.cobertura.xml", "cobertura");
+        AddCoverageRoot(artifacts, paths, generation.GenerationRoot, acceptedAfterUtc: null);
+        AddCoverageRoot(artifacts, paths, TargetDir(workspace), acceptedAfterUtc: runEpochUtc);
         return artifacts;
+    }
+
+    private static void AddCoverageRoot(
+        List<ProviderCoverageArtifact> artifacts,
+        HashSet<string> paths,
+        string artifactRoot,
+        DateTime? acceptedAfterUtc)
+    {
+        if (!Directory.Exists(artifactRoot))
+            return;
+
+        AddCoverageArtifacts(artifacts, paths, artifactRoot, "lcov.info", "lcov", acceptedAfterUtc);
+        AddCoverageArtifacts(artifacts, paths, artifactRoot, "cobertura.xml", "cobertura", acceptedAfterUtc);
+        AddCoverageArtifacts(artifacts, paths, artifactRoot, "*.cobertura.xml", "cobertura", acceptedAfterUtc);
     }
 
     private static void AddCoverageArtifacts(
@@ -1163,7 +1199,8 @@ public sealed class RustTestProvider : IContinuousTestProvider
         HashSet<string> paths,
         string artifactRoot,
         string pattern,
-        string parser)
+        string parser,
+        DateTime? acceptedAfterUtc)
     {
         foreach (var path in Directory.EnumerateFiles(artifactRoot, pattern, SearchOption.AllDirectories))
         {
@@ -1171,7 +1208,43 @@ public sealed class RustTestProvider : IContinuousTestProvider
             if (!paths.Add(fullPath))
                 continue;
 
+            if (acceptedAfterUtc is { } floor && !WrittenAtOrAfter(fullPath, floor))
+                continue;
+
             artifacts.Add(new ProviderCoverageArtifact(fullPath, parser, artifactRoot));
+        }
+    }
+
+    private static bool WrittenAtOrAfter(string path, DateTime floorUtc)
+    {
+        try
+        {
+            return File.GetLastWriteTimeUtc(path) >= floorUtc;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A stamp that cannot be read is not proof the file belongs to this run.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Stamps this run's coverage epoch from the FILESYSTEM rather than from the clock: a marker file in the
+    /// generation root is written before the first cargo process starts, and its own last-write time is the
+    /// floor. The clock is only the fallback for a marker that cannot be written.
+    /// </summary>
+    private static DateTime StampRunEpoch(CtGenerationPaths paths)
+    {
+        var marker = Path.Combine(paths.GenerationRoot, RunEpochMarkerFileName);
+        try
+        {
+            Directory.CreateDirectory(paths.GenerationRoot);
+            File.WriteAllBytes(marker, []);
+            return File.GetLastWriteTimeUtc(marker);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return DateTime.UtcNow;
         }
     }
 
@@ -1281,15 +1354,37 @@ public sealed class RustTestProvider : IContinuousTestProvider
             ResultArtifactPath = exception.ResultArtifactPath,
         };
 
-    private static void EnsureGenerationDirectories(CtGenerationPaths paths)
+    private static void EnsureGenerationDirectories(ContinuousTestWorkspace workspace, CtGenerationPaths paths)
     {
         paths.EnsureDirectories();
-        Directory.CreateDirectory(TargetDir(paths));
+        Directory.CreateDirectory(TargetDir(workspace));
     }
 
-    // Cargo documents target/ as a shared internal cache with no cross-process stability contract, so
-    // each generation gets its own: a dying test process can never collide with the next run's rebuild.
-    private static string TargetDir(CtGenerationPaths paths) => Path.Combine(paths.GenerationRoot, "target");
+    /// <summary>
+    /// Cargo's target directory, PROJECT-stable rather than per-generation.
+    ///
+    /// <para><b>Why it moved.</b> It used to sit inside the generation, so every CT operation handed cargo an
+    /// empty cache and cargo recompiled the whole crate graph — about 3.5 minutes and 8 GB per explicit run
+    /// on julie-extractors — and the reap then deleted the warm result (finding F7). Cargo is built to keep
+    /// this directory across invocations and invalidates it by its own file fingerprints, exactly as it does
+    /// in a developer's checkout.</para>
+    ///
+    /// <para><b>What replaced the old guarantee.</b> The per-generation directory existed so a dying test
+    /// process could not corrupt the next run's build. That job now belongs to the coordinator: two
+    /// consecutive build failures wipe this directory and retry once, and the stall detector already kills a
+    /// wedged process tree before it can hold the cache open for long.</para>
+    /// </summary>
+    private static string TargetDir(ContinuousTestWorkspace workspace) =>
+        CtGenerationPaths.CacheDirectory(workspace, CargoCacheTool);
+
+    /// <summary>
+    /// The instrumented (coverage) builds get their OWN project-stable cache. An instrumented build sets
+    /// different <c>RUSTFLAGS</c>, and cargo re-fingerprints the whole crate graph when they change, so one
+    /// shared directory would rebuild everything on every switch between the two modes — the very cost this
+    /// split removes. Two directories keep both modes warm.
+    /// </summary>
+    private static string CoverageTargetDir(ContinuousTestWorkspace workspace) =>
+        CtGenerationPaths.CacheDirectory(workspace, CargoCoverageCacheTool);
 
     private static IReadOnlyDictionary<string, string?> WorkspaceEnvironment(
         ContinuousTestWorkspace workspace,
@@ -1302,7 +1397,7 @@ public sealed class RustTestProvider : IContinuousTestProvider
             // Removed, not merely unset: the test process inherits it from the daemon, and a `miller` CLI
             // verb run inside a test would bind the DAEMON's workspace. See DotnetTestProvider for the note.
             [CtEnvironment.DaemonWorkspaceRoot] = null,
-            ["CARGO_TARGET_DIR"] = TargetDir(paths),
+            ["CARGO_TARGET_DIR"] = TargetDir(workspace),
             // Parseable libtest lines must never be ANSI-wrapped.
             ["CARGO_TERM_COLOR"] = "never",
             ["TMPDIR"] = paths.TempDirectory,

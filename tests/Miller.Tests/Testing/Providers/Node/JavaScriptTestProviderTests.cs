@@ -160,7 +160,7 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         AssertUsesGeneration(command, workspace, generation, artifactPath);
         Assert.Contains("--cache.dir", command.Arguments);
         Assert.Equal(
-            CacheDirectory(generation),
+            CacheDirectory(workspace),
             command.Arguments[command.Arguments.ToList().IndexOf("--cache.dir") + 1]);
     }
 
@@ -205,7 +205,7 @@ public sealed class JavaScriptTestProviderTests : IDisposable
 
         Assert.Contains("--cache.dir", command.Arguments);
         Assert.Equal(
-            CacheDirectory(generation),
+            CacheDirectory(workspace),
             command.Arguments[command.Arguments.ToList().IndexOf("--cache.dir") + 1]);
     }
 
@@ -259,7 +259,7 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         AssertUsesGeneration(command, workspace, generation, artifactPath);
         Assert.Contains("--cacheDirectory", command.Arguments);
         Assert.Equal(
-            CacheDirectory(generation),
+            CacheDirectory(workspace),
             command.Arguments[command.Arguments.ToList().IndexOf("--cacheDirectory") + 1]);
     }
 
@@ -282,7 +282,7 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         var artifactPath = command.Arguments[command.Arguments.ToList().IndexOf("--test-reporter-destination") + 1];
         Assert.EndsWith(".xml", artifactPath, StringComparison.Ordinal);
         AssertUsesGeneration(command, workspace, generation, artifactPath);
-        Assert.Equal(CacheDirectory(generation), command.Environment["NODE_COMPILE_CACHE"]);
+        Assert.Equal(CacheDirectory(workspace), command.Environment["NODE_COMPILE_CACHE"]);
     }
 
     [Fact]
@@ -608,7 +608,7 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         Assert.Contains("--outputFile", command.Arguments);
         Assert.Contains("src/index.test.ts", command.Arguments);
         Assert.Equal(
-            CacheDirectory(generation),
+            CacheDirectory(workspace),
             command.Arguments[command.Arguments.ToList().IndexOf("--cacheDirectory") + 1]);
     }
 
@@ -903,7 +903,7 @@ public sealed class JavaScriptTestProviderTests : IDisposable
             {
                 "run",
                 "--cache.dir",
-                CacheDirectory(generation),
+                CacheDirectory(workspace),
                 "--reporter=json",
                 "--outputFile",
                 ExpectedResultArtifactPath(generation, "json"),
@@ -1168,8 +1168,10 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         Assert.False(Directory.Exists(repoTestResults));
     }
 
-    private static string CacheDirectory(CtGenerationPaths generation) =>
-        Path.Combine(generation.GenerationRoot, "cache");
+    // PROJECT-stable, not per-generation: a fresh cache directory per operation made every run a cold
+    // compile (finding F7). It sits beside the generations under the build output root.
+    private static string CacheDirectory(ContinuousTestWorkspace workspace) =>
+        CtGenerationPaths.CacheDirectory(workspace, "node");
 
     private static CtGenerationPaths FirstGeneration(ContinuousTestWorkspace workspace) =>
         CtGenerationPaths.For(workspace, CtGenerationPaths.IdForOrdinal(workspace, 1));

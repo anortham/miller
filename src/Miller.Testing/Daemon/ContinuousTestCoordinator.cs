@@ -54,6 +54,15 @@ public sealed class ContinuousTestCoordinator
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> ProjectGates =
         new(BuildOutputRootComparer);
 
+    /// <summary>
+    /// Consecutive provider failures per build output root, the trigger for wiping the project-stable build
+    /// cache. In-memory on purpose: the daemon holds ONE coordinator for its whole life, which is where a
+    /// build that keeps failing actually accumulates. A one-shot CLI process never reaches two in a row and
+    /// therefore never wipes — the right answer for a caller who cannot know whether the last failure came
+    /// from the cache or from the tree.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, int> _buildCacheFailures = new(BuildOutputRootComparer);
+
     private readonly IContinuousTestProviderResolver _providerResolver;
     private readonly ContinuousTestStore _store;
     private readonly ContinuousTestStoreApplier _applier;
@@ -141,12 +150,14 @@ public sealed class ContinuousTestCoordinator
         IReadOnlyList<ProviderTestCase> testCases;
         try
         {
-            testCases = await ExecuteProviderOperationAsync(
-                providerToken => resolution.Provider.DiscoverAsync(request.Workspace, providerToken),
-                "discovery",
+            testCases = await ExecuteWithBuildCacheRecoveryAsync(
                 request.Workspace,
-                request.Workspace.Framework,
-                cancellationToken).ConfigureAwait(false);
+                () => ExecuteProviderOperationAsync(
+                    providerToken => resolution.Provider.DiscoverAsync(request.Workspace, providerToken),
+                    "discovery",
+                    request.Workspace,
+                    request.Workspace.Framework,
+                    cancellationToken)).ConfigureAwait(false);
         }
         catch (ContinuousTestProviderException providerException)
         {
@@ -199,30 +210,32 @@ public sealed class ContinuousTestCoordinator
         CtRevisionObservation revisionAtEnd = CtRevisionObservation.Unread;
         try
         {
-            providerResult = await ExecuteProviderOperationAsync(
-                providerToken => resolution.Provider.RunAsync(
-                    new ContinuousTestProviderRunRequest(
-                        Workspace: request.Workspace,
-                        SelectedRevision: request.SelectedRevision,
-                        IndexIdentity: request.IndexIdentity,
-                        RunId: runId,
-                        // The whole-suite form travels as a FLAG beside the full list, never as a blanked
-                        // list. Blanking it read as "run the whole assembly" only to providers that
-                        // attribute from a result artifact; the cargo provider's run loop is driven by the
-                        // list itself, so an empty list started no process, returned "passed" over zero
-                        // results, and left every case stale forever (dogfood finding F6, 2026-08-21).
-                        TestCaseIds: request.TestCaseIds,
-                        WholeSuite: request.WholeSuite,
-                        FilterArguments: request.FilterArguments,
-                        Command: request.Command,
-                        ExcludeTraits: request.ExcludeTraits,
-                        Framework: request.Framework,
-                        CoverageMode: request.CoverageMode),
-                    providerToken),
-                "run",
+            providerResult = await ExecuteWithBuildCacheRecoveryAsync(
                 request.Workspace,
-                request.Framework ?? request.Workspace.Framework,
-                cancellationToken).ConfigureAwait(false);
+                () => ExecuteProviderOperationAsync(
+                    providerToken => resolution.Provider.RunAsync(
+                        new ContinuousTestProviderRunRequest(
+                            Workspace: request.Workspace,
+                            SelectedRevision: request.SelectedRevision,
+                            IndexIdentity: request.IndexIdentity,
+                            RunId: runId,
+                            // The whole-suite form travels as a FLAG beside the full list, never as a blanked
+                            // list. Blanking it read as "run the whole assembly" only to providers that
+                            // attribute from a result artifact; the cargo provider's run loop is driven by
+                            // the list itself, so an empty list started no process, returned "passed" over
+                            // zero results, and left every case stale forever (finding F6, 2026-08-21).
+                            TestCaseIds: request.TestCaseIds,
+                            WholeSuite: request.WholeSuite,
+                            FilterArguments: request.FilterArguments,
+                            Command: request.Command,
+                            ExcludeTraits: request.ExcludeTraits,
+                            Framework: request.Framework,
+                            CoverageMode: request.CoverageMode),
+                        providerToken),
+                    "run",
+                    request.Workspace,
+                    request.Framework ?? request.Workspace.Framework,
+                    cancellationToken)).ConfigureAwait(false);
             generationId = providerResult.GenerationId;
             if (instrumented)
                 revisionAtEnd = _options.RevisionObserver(request);
@@ -354,6 +367,67 @@ public sealed class ContinuousTestCoordinator
         RunMaintenanceTail(request.Workspace, activeGenerationId: null);
     }
 
+    /// <summary>
+    /// Runs one provider operation, and gives a build that has now failed TWICE IN A ROW a clean cache to try
+    /// once more against.
+    ///
+    /// <para><b>Why two, not one.</b> A single failure is ordinary — a compile error in the tree fails exactly
+    /// this way — and wiping on it would turn every red build into a cold rebuild. Two in a row is the point
+    /// where a poisoned cache becomes the more likely explanation.</para>
+    ///
+    /// <para><b>Why this is safe.</b> The cache holds no verdict. A wrong cache can only produce a build
+    /// failure, which is already visible and already self-recovers; the wipe just shortens that recovery. The
+    /// streak resets on the wipe, so a project that always fails wipes at most every second attempt rather
+    /// than on every one.</para>
+    ///
+    /// <para>This replaces the guarantee the per-generation target directory used to give: a fresh directory
+    /// per operation could sidestep a file a dying test process still held.</para>
+    /// </summary>
+    private async Task<T> ExecuteWithBuildCacheRecoveryAsync<T>(
+        ContinuousTestWorkspace workspace,
+        Func<Task<T>> operation)
+    {
+        try
+        {
+            T value = await operation().ConfigureAwait(false);
+            _buildCacheFailures.TryRemove(workspace.BuildOutputRoot, out _);
+            return value;
+        }
+        catch (ContinuousTestProviderException) when (RecordBuildFailureAndAskForWipe(workspace))
+        {
+            // Handled below: the filter has already reset the streak, so the retry cannot loop.
+        }
+
+        WipeBuildCache(workspace);
+        T retried = await operation().ConfigureAwait(false);
+        _buildCacheFailures.TryRemove(workspace.BuildOutputRoot, out _);
+        return retried;
+    }
+
+    private bool RecordBuildFailureAndAskForWipe(ContinuousTestWorkspace workspace)
+    {
+        int streak = _buildCacheFailures.AddOrUpdate(workspace.BuildOutputRoot, 1, static (_, count) => count + 1);
+        if (streak < 2)
+            return false;
+
+        _buildCacheFailures.TryRemove(workspace.BuildOutputRoot, out _);
+        return true;
+    }
+
+    private void WipeBuildCache(ContinuousTestWorkspace workspace)
+    {
+        string cacheRoot = CtGenerationPaths.CacheRoot(workspace);
+        if (!Directory.Exists(cacheRoot))
+            return;
+
+        // The same rename-then-delete the generation reap uses: the rename is the atomic part, and a delete
+        // that cannot finish leaves a ".reap-" remnant the maintenance tail sweeps later.
+        bool removed = _options.ReapGenerationDirectory(cacheRoot);
+        _lifecycleLog?.Invoke(removed
+            ? $"build_cache_wiped root={workspace.BuildOutputRoot}"
+            : $"build_cache_wipe_failed root={workspace.BuildOutputRoot}");
+    }
+
     private static SemaphoreSlim ProjectGate(ContinuousTestWorkspace workspace) =>
         ProjectGates.GetOrAdd(workspace.BuildOutputRoot, static _ => new SemaphoreSlim(1, 1));
 
@@ -412,6 +486,8 @@ public sealed class ContinuousTestCoordinator
             ?.GenerationId;
         string? newestDirectory = NewestGenerationDirectory(buildOutputRoot);
 
+        // Only generation-shaped directories are candidates, so the project-stable cache root is never a
+        // reap target: a future run depends on it, and CtGenerationPaths.IsGenerationId cannot match "cache".
         foreach (CtGenerationRecord generation in generations)
         {
             if (generation.State is not (CtGenerationStates.Complete or CtGenerationStates.ReapEligible))
@@ -603,8 +679,15 @@ public sealed class ContinuousTestCoordinator
         return tempBytes is null ? null : total + tempBytes.Value;
     }
 
+    /// <summary>
+    /// What the generation disk budget counts under one build output root: the per-operation generations,
+    /// the remnants of a reap that could not finish, AND the project-stable cache root. The cache is the
+    /// LARGEST directory a cargo project holds (about 8 GB on julie-extractors), so leaving it out would
+    /// make the 20 GB budget blind to the thing most likely to blow it.
+    /// </summary>
     private static bool IsGenerationContent(string directoryName) =>
         CtGenerationPaths.IsGenerationId(directoryName)
+        || CtGenerationPaths.IsCacheRootDirectoryName(directoryName)
         || directoryName.Contains(CtGenerationPaths.ReapSuffixPrefix, StringComparison.Ordinal);
 
     private static IReadOnlyList<string>? TryDirectoryNames(string directory)
