@@ -91,14 +91,14 @@
 **Approach:** Write generated policy to a same-directory temporary file and atomically replace only Miller-owned global policy. Pass `--ignore-file` only for `generated_global`. Keep one policy-preparation call per operation, load the same generated path in `WorkspaceIgnorePolicy`, and continue watching root `.julieignore` creation/change so a later user-authored file forces full policy recomputation and becomes authoritative. Retain testable race hooks and never claim or clean a root file based on its header.
 
 **Acceptance criteria:**
-- [ ] An ordinary fresh workspace gets no root `.julieignore` and receives one deterministic global generated policy.
-- [ ] Existing/malformed/racing root policies remain byte-identical and authoritative.
-- [ ] Linked worktrees retain in-tree inherited user-policy behavior, including malformed warning-only scans; inherited content is never passed as external `--ignore-file`.
+- [x] An ordinary fresh workspace gets no root `.julieignore` and receives one deterministic global generated policy.
+- [x] Existing/malformed/racing root policies remain byte-identical and authoritative.
+- [x] Linked worktrees retain in-tree inherited user-policy behavior, including malformed warning-only scans; inherited content is never passed as external `--ignore-file`.
 - [ ] A vendor/excluded file is absent after full scan and remains absent after a direct update attempt.
-- [ ] Watcher filtering agrees with extractor behavior for generated, inherited, and user-authored policies.
-- [ ] Creating a root `.julieignore` after registration disables generated-global authority and forces policy re-evaluation without overwriting either file.
-- [ ] `MILLER_HOME` isolation and concurrent materializers are deterministic.
-- [ ] ADR-0006 records ownership, source precedence, malformed inherited compatibility, consumer parity, and cleanup rules.
+- [x] Watcher filtering agrees with extractor behavior for generated, inherited, and user-authored policies.
+- [x] Creating a root `.julieignore` after registration disables generated-global authority and forces policy re-evaluation without overwriting either file.
+- [x] `MILLER_HOME` isolation and concurrent materializers are deterministic.
+- [x] ADR-0006 records ownership, source precedence, malformed inherited compatibility, consumer parity, and cleanup rules.
 - [ ] Focused materializer/scan/update/watcher tests pass and the serialized worker commit is recorded.
 
 ### Task 2: Safe lifecycle and migration behavior

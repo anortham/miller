@@ -1,3 +1,5 @@
+using Miller.Indexing;
+
 namespace Miller.Server.Hosting;
 
 /// <summary>
@@ -105,6 +107,13 @@ public static class WatchPathFilter
     }
 
     public static bool ShouldProcess(string root, string absolutePath, IReadOnlySet<string>? supportedExtensions)
+        => ShouldProcess(root, absolutePath, supportedExtensions, MillerHome.ResolveMillerDirectory());
+
+    internal static bool ShouldProcess(
+        string root,
+        string absolutePath,
+        IReadOnlySet<string>? supportedExtensions,
+        string millerDirectory)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(absolutePath);
@@ -115,7 +124,7 @@ public static class WatchPathFilter
             return false;
         if (HasUnsupportedExtension(absolutePath, supportedExtensions))
             return false;
-        return !WorkspaceIgnorePolicy.IsIgnored(root, absolutePath);
+        return !WorkspaceIgnorePolicy.IsIgnored(root, absolutePath, millerDirectory);
     }
 
     /// <summary>

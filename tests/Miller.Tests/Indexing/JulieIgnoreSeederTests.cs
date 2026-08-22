@@ -5,12 +5,10 @@ using Xunit;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Pins the <c>.julieignore</c> seeding edge (the consumer-side port of julie's
-/// <c>generate_julieignore_file()</c>): written once when absent, NEVER overwritten or appended, as either the
-/// baseline + detected-vendor generation or, for a linked worktree that has none, an in-tree COPY of the main
-/// checkout's file. In-tree is the load-bearing part — the same file governs the scan, later single-file
-/// updates, and the watcher, which is why the watcher's own filter is asserted here. Tiny temp trees — fast
-/// suite (the same pattern as <c>WatchPathFilterTests</c>; no subprocess anywhere on this path).
+/// Pins effective <c>.julieignore</c> policy ownership: user and inherited policy stays in-tree, while a fresh
+/// ordinary root receives deterministic baseline/vendor bytes under an isolated Miller-home policy directory.
+/// Tiny temp trees — fast suite (the same pattern as <c>WatchPathFilterTests</c>; no subprocess anywhere on this
+/// path).
 /// </summary>
 public sealed class JulieIgnoreSeederTests
 {
@@ -53,6 +51,160 @@ public sealed class JulieIgnoreSeederTests
         return worktree;
     }
 
+    private static EffectiveIgnorePolicy Prepare(string root, string? millerHome = null)
+    {
+        string home = millerHome ?? System.IO.Path.Combine(
+            System.IO.Path.GetDirectoryName(root)!, "miller-home-" + Guid.NewGuid().ToString("N"));
+        EffectiveIgnorePolicy? policy = JulieIgnoreSeeder.PreparePolicy(
+            root, WorkspaceId.FromCanonicalRoot(Path.GetFullPath(root)), home);
+        Assert.NotNull(policy);
+        return policy!;
+    }
+
+    [Fact]
+    public void PreparePolicy_PlainRoot_UsesDeterministicGlobalPolicyWithoutWritingRoot()
+    {
+        using var temp = new TempDir();
+        string millerHome = System.IO.Path.Combine(temp.Path, "miller-home");
+        string root = System.IO.Path.Combine(temp.Path, "repo");
+        Directory.CreateDirectory(root);
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+
+        EffectiveIgnorePolicy? policyMaybe = JulieIgnoreSeeder.PreparePolicy(root, workspaceId, millerHome);
+        Assert.NotNull(policyMaybe);
+        EffectiveIgnorePolicy policy = policyMaybe!;
+        Assert.Equal(IgnorePolicySource.GeneratedGlobal, policy.Source);
+        Assert.True(policy.WroteNewBytes);
+        Assert.False(File.Exists(System.IO.Path.Combine(root, ".julieignore")));
+        Assert.Equal(
+            System.IO.Path.Combine(millerHome, "ignore-policies", workspaceId + ".julieignore"),
+            policy.Path);
+        Assert.Equal(policy.ContentHash, JulieIgnoreSeeder.ContentHash(File.ReadAllBytes(policy.Path)));
+
+        EffectiveIgnorePolicy? secondMaybe = JulieIgnoreSeeder.PreparePolicy(root, workspaceId, millerHome);
+        Assert.NotNull(secondMaybe);
+        EffectiveIgnorePolicy second = secondMaybe!;
+        Assert.False(second.WroteNewBytes);
+        Assert.Equal(policy.ContentHash, second.ContentHash);
+        Assert.Equal(File.ReadAllBytes(policy.Path), File.ReadAllBytes(second.Path));
+    }
+
+    [Fact]
+    public void PreparePolicy_UserRootWinsAndNeverCreatesGlobalPolicy()
+    {
+        using var temp = new TempDir();
+        string millerHome = System.IO.Path.Combine(temp.Path, "miller-home");
+        string root = System.IO.Path.Combine(temp.Path, "repo");
+        Directory.CreateDirectory(root);
+        string userPath = System.IO.Path.Combine(root, ".julieignore");
+        const string UserContent = "# user\ngenerated/\n";
+        File.WriteAllText(userPath, UserContent);
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+
+        EffectiveIgnorePolicy? policyMaybe = JulieIgnoreSeeder.PreparePolicy(root, workspaceId, millerHome);
+        Assert.NotNull(policyMaybe);
+        EffectiveIgnorePolicy policy = policyMaybe!;
+        Assert.Equal(IgnorePolicySource.UserRoot, policy.Source);
+        Assert.False(policy.WroteNewBytes);
+        Assert.Equal(Path.GetFullPath(userPath), policy.Path);
+        Assert.Equal(UserContent, File.ReadAllText(userPath));
+        Assert.False(File.Exists(
+            System.IO.Path.Combine(millerHome, "ignore-policies", workspaceId + ".julieignore")));
+    }
+
+    [Fact]
+    public void PreparePolicy_LinkedWorktreeRetainsMalformedInheritedCopyInTree()
+    {
+        using var temp = new TempDir();
+        string millerHome = System.IO.Path.Combine(temp.Path, "miller-home");
+        string worktree = LinkedWorktree(temp.Path, "a{b\n");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(worktree);
+
+        EffectiveIgnorePolicy? policyMaybe = JulieIgnoreSeeder.PreparePolicy(worktree, workspaceId, millerHome);
+        Assert.NotNull(policyMaybe);
+        EffectiveIgnorePolicy policy = policyMaybe!;
+        Assert.Equal(IgnorePolicySource.InheritedRootCopy, policy.Source);
+        Assert.True(policy.WroteNewBytes);
+        Assert.Equal(Path.GetFullPath(System.IO.Path.Combine(worktree, ".julieignore")), policy.Path);
+        Assert.Contains("a{b", File.ReadAllText(policy.Path), StringComparison.Ordinal);
+        Assert.False(File.Exists(
+            System.IO.Path.Combine(millerHome, "ignore-policies", workspaceId + ".julieignore")));
+    }
+
+    [Fact]
+    public void PreparePolicy_MainCheckoutPolicyAppearingDuringRenderWinsOverGeneratedPublication()
+    {
+        using var temp = new TempDir();
+        string worktree = LinkedWorktree(temp.Path, mainIgnoreContents: null);
+        string mainPolicy = Path.Combine(temp.Path, "main", ".julieignore");
+        string millerHome = Path.Combine(temp.Path, "miller-home");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(worktree);
+
+        EffectiveIgnorePolicy? policy = JulieIgnoreSeeder.PreparePolicy(
+            worktree,
+            workspaceId,
+            millerHome,
+            betweenProbeAndCreate: () => File.WriteAllText(mainPolicy, "generated/\n"));
+
+        Assert.NotNull(policy);
+        Assert.Equal(IgnorePolicySource.InheritedRootCopy, policy!.Source);
+        Assert.Contains("generated/", File.ReadAllText(Path.Combine(worktree, ".julieignore")), StringComparison.Ordinal);
+        Assert.False(File.Exists(
+            Path.Combine(millerHome, "ignore-policies", workspaceId + ".julieignore")));
+    }
+
+    [Fact]
+    public void ResolvePolicyForUpdate_DoesNotWalkOrMaterializeMissingGeneratedPolicy()
+    {
+        using var temp = new TempDir();
+        string root = Path.Combine(temp.Path, "repo");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(Path.Combine(root, "node_modules", "package"));
+        string millerHome = Path.Combine(temp.Path, "miller-home");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+
+        EffectiveIgnorePolicy? policy = JulieIgnoreSeeder.ResolvePolicyForUpdate(
+            root, workspaceId, millerHome);
+
+        Assert.Null(policy);
+        Assert.False(Directory.Exists(millerHome));
+        Assert.False(File.Exists(Path.Combine(root, ".julieignore")));
+    }
+
+    [Fact]
+    public void ResolvePolicyForUpdate_LinkedMainPolicyCreatesOnlyTheInheritedSnapshot()
+    {
+        using var temp = new TempDir();
+        string worktree = LinkedWorktree(temp.Path, "a{b\n");
+        File.Delete(Path.Combine(worktree, ".julieignore"));
+        string millerHome = Path.Combine(temp.Path, "miller-home");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(worktree);
+
+        EffectiveIgnorePolicy? policy = JulieIgnoreSeeder.ResolvePolicyForUpdate(
+            worktree, workspaceId, millerHome);
+
+        Assert.NotNull(policy);
+        Assert.Equal(IgnorePolicySource.InheritedRootCopy, policy!.Source);
+        Assert.Contains("a{b", File.ReadAllText(Path.Combine(worktree, ".julieignore")), StringComparison.Ordinal);
+        Assert.False(Directory.Exists(millerHome));
+        Assert.False(File.Exists(
+            Path.Combine(millerHome, "ignore-policies", workspaceId + ".julieignore")));
+    }
+
+    [Fact]
+    public void PreparePolicy_RejectsAWorkspaceIdForAnotherRoot()
+    {
+        using var temp = new TempDir();
+        string root = Path.Combine(temp.Path, "repo");
+        Directory.CreateDirectory(root);
+        string millerHome = Path.Combine(temp.Path, "miller-home");
+        string wrongId = WorkspaceId.FromCanonicalRoot(Path.Combine(temp.Path, "other"));
+
+        Assert.Throws<ArgumentException>(() =>
+            JulieIgnoreSeeder.PreparePolicy(root, wrongId, millerHome));
+        Assert.False(Directory.Exists(millerHome));
+    }
+
     [Fact]
     public void EnsureSeeded_NoExistingFile_WritesBaselineAndDetectedVendorDirs()
     {
@@ -63,12 +215,15 @@ public sealed class JulieIgnoreSeederTests
             "node_modules/a/1.js", "node_modules/a/2.js", "node_modules/b/3.js",
             "node_modules/b/4.js", "node_modules/c/5.js", "node_modules/c/6.js");
 
-        Assert.True(JulieIgnoreSeeder.EnsureSeeded(temp.Path));
+        EffectiveIgnorePolicy policy = Prepare(temp.Path);
 
-        string content = File.ReadAllText(System.IO.Path.Combine(temp.Path, ".julieignore"));
+        string content = File.ReadAllText(policy.Path);
+        Assert.False(File.Exists(System.IO.Path.Combine(temp.Path, ".julieignore")));
         Assert.StartsWith("# .julieignore", content, StringComparison.Ordinal);
         Assert.Contains("Generated by Miller", content, StringComparison.Ordinal);
-        Assert.Contains("Edit freely", content, StringComparison.Ordinal);
+        Assert.Contains("owned by Miller", content, StringComparison.Ordinal);
+        Assert.Contains("Create .julieignore at the workspace root", content, StringComparison.Ordinal);
+        Assert.DoesNotContain("Edit freely", content, StringComparison.Ordinal);
         Assert.Contains("\n*.log\n", content, StringComparison.Ordinal);
         Assert.Contains("\n.miller/\n", content, StringComparison.Ordinal);
         Assert.Contains("\nnode_modules/\n", content, StringComparison.Ordinal);
@@ -83,7 +238,7 @@ public sealed class JulieIgnoreSeederTests
         const string UserAuthored = "# mine — hands off\nonly_this/\n";
         File.WriteAllText(ignorePath, UserAuthored);
 
-        Assert.False(JulieIgnoreSeeder.EnsureSeeded(temp.Path));
+        Assert.False(Prepare(temp.Path).WroteNewBytes);
 
         Assert.Equal(UserAuthored, File.ReadAllText(ignorePath)); // byte-for-byte untouched
     }
@@ -94,11 +249,12 @@ public sealed class JulieIgnoreSeederTests
         using var temp = new TempDir();
         WriteTree(temp.Path, "src/main.cs");
 
-        Assert.True(JulieIgnoreSeeder.EnsureSeeded(temp.Path));
-        string first = File.ReadAllText(System.IO.Path.Combine(temp.Path, ".julieignore"));
+        string millerHome = Path.Combine(temp.Path, "miller-home");
+        EffectiveIgnorePolicy first = Prepare(temp.Path, millerHome);
+        EffectiveIgnorePolicy second = Prepare(temp.Path, millerHome);
 
-        Assert.False(JulieIgnoreSeeder.EnsureSeeded(temp.Path));
-        Assert.Equal(first, File.ReadAllText(System.IO.Path.Combine(temp.Path, ".julieignore")));
+        Assert.False(second.WroteNewBytes);
+        Assert.Equal(first.ContentHash, second.ContentHash);
     }
 
     [Fact]
@@ -109,12 +265,15 @@ public sealed class JulieIgnoreSeederTests
         string ignorePath = System.IO.Path.Combine(temp.Path, ".julieignore");
         const string UserAuthored = "# mine — hands off\nonly_this/\n";
 
-        bool seeded = JulieIgnoreSeeder.EnsureSeeded(
+        string millerHome = Path.Combine(temp.Path, "miller-home");
+        EffectiveIgnorePolicy? policy = JulieIgnoreSeeder.PreparePolicy(
             temp.Path,
-            betweenProbeAndCreate: () => File.WriteAllText(ignorePath, UserAuthored),
-            readAllText: null);
+            WorkspaceId.FromCanonicalRoot(temp.Path),
+            millerHome,
+            betweenProbeAndCreate: () => File.WriteAllText(ignorePath, UserAuthored));
 
-        Assert.False(seeded);
+        Assert.NotNull(policy);
+        Assert.Equal(IgnorePolicySource.UserRoot, policy!.Source);
         Assert.Equal(UserAuthored, File.ReadAllText(ignorePath));
     }
 
@@ -124,6 +283,7 @@ public sealed class JulieIgnoreSeederTests
         using var temp = new TempDir();
         WriteTree(temp.Path, "src/main.cs");
         const int Racers = 8;
+        string millerHome = Path.Combine(temp.Path, "miller-home");
         using var start = new Barrier(Racers);
         var seeded = new bool[Racers];
         var racers = new Thread[Racers];
@@ -134,7 +294,8 @@ public sealed class JulieIgnoreSeederTests
             racers[i] = new Thread(() =>
             {
                 start.SignalAndWait();
-                seeded[index] = JulieIgnoreSeeder.EnsureSeeded(temp.Path);
+                seeded[index] = JulieIgnoreSeeder.PreparePolicy(
+                    temp.Path, WorkspaceId.FromCanonicalRoot(temp.Path), millerHome)!.WroteNewBytes;
             })
             { IsBackground = true };
             racers[i].Start();
@@ -165,9 +326,9 @@ public sealed class JulieIgnoreSeederTests
             "dist/a/1.js", "dist/a/2.js", "dist/b/3.js", "dist/b/4.js", "dist/c/5.js", "dist/c/6.js",
             "src/main.cs");
 
-        Assert.True(JulieIgnoreSeeder.EnsureSeeded(temp.Path));
+        EffectiveIgnorePolicy policy = Prepare(temp.Path);
 
-        string content = File.ReadAllText(System.IO.Path.Combine(temp.Path, ".julieignore"));
+        string content = File.ReadAllText(policy.Path);
         Assert.Contains("\ndist/\n", content, StringComparison.Ordinal);
         Assert.DoesNotContain(".git", content, StringComparison.Ordinal);
     }
@@ -186,9 +347,9 @@ public sealed class JulieIgnoreSeederTests
             ".claude/worktrees/other/out/c/5.js", ".claude/worktrees/other/out/c/6.js",
             "src/main.cs");
 
-        Assert.True(JulieIgnoreSeeder.EnsureSeeded(temp.Path));
+        EffectiveIgnorePolicy policy = Prepare(temp.Path);
 
-        string content = File.ReadAllText(System.IO.Path.Combine(temp.Path, ".julieignore"));
+        string content = File.ReadAllText(policy.Path);
         Assert.DoesNotContain("worktrees", content, StringComparison.Ordinal);
     }
 
@@ -207,8 +368,6 @@ public sealed class JulieIgnoreSeederTests
             System.IO.Path.Combine(temp.Path, "main", ".julieignore"), content, StringComparison.Ordinal);
     }
 
-    // The create is exclusive, so whatever this call writes is never revisited. Seeding the generated baseline
-    // over an unreadable-but-present main file would make one transient read error a permanent policy swap.
     [Fact]
     public void EnsureSeeded_LinkedWorktreeWhoseMainIgnoreFileCannotBeRead_WritesNothingAndRetriesLater()
     {
@@ -216,15 +375,18 @@ public sealed class JulieIgnoreSeederTests
         string worktree = LinkedWorktree(temp.Path, "generated/\nsecrets/\n");
         string ignorePath = System.IO.Path.Combine(worktree, ".julieignore");
 
-        bool seeded = JulieIgnoreSeeder.EnsureSeeded(
+        string millerHome = Path.Combine(temp.Path, "miller-home");
+        EffectiveIgnorePolicy? policy = JulieIgnoreSeeder.PreparePolicy(
             worktree,
-            betweenProbeAndCreate: null,
+            WorkspaceId.FromCanonicalRoot(worktree),
+            millerHome,
             readAllText: _ => throw new IOException("main checkout file is momentarily unreadable"));
 
-        Assert.False(seeded);
+        Assert.Null(policy);
         Assert.False(File.Exists(ignorePath));
 
-        Assert.True(JulieIgnoreSeeder.EnsureSeeded(worktree));
+        Assert.True(JulieIgnoreSeeder.PreparePolicy(
+            worktree, WorkspaceId.FromCanonicalRoot(worktree), millerHome)!.WroteNewBytes);
         Assert.Contains("secrets/", File.ReadAllText(ignorePath), StringComparison.Ordinal);
     }
 
@@ -272,9 +434,10 @@ public sealed class JulieIgnoreSeederTests
         using var temp = new TempDir();
         string worktree = LinkedWorktree(temp.Path, mainIgnoreContents: null);
 
-        Assert.True(JulieIgnoreSeeder.EnsureSeeded(worktree));
+        EffectiveIgnorePolicy policy = Prepare(worktree);
 
-        string content = File.ReadAllText(System.IO.Path.Combine(worktree, ".julieignore"));
+        string content = File.ReadAllText(policy.Path);
+        Assert.Equal(IgnorePolicySource.GeneratedGlobal, policy.Source);
         Assert.Contains("Generated by Miller", content, StringComparison.Ordinal);
         foreach (string pattern in VendorScan.BaselinePatterns)
             Assert.Contains(pattern, content, StringComparison.Ordinal);
@@ -286,9 +449,10 @@ public sealed class JulieIgnoreSeederTests
         using var temp = new TempDir();
         Directory.CreateDirectory(System.IO.Path.Combine(temp.Path, ".git"));
 
-        Assert.True(JulieIgnoreSeeder.EnsureSeeded(temp.Path));
+        EffectiveIgnorePolicy policy = Prepare(temp.Path);
 
-        string content = File.ReadAllText(System.IO.Path.Combine(temp.Path, ".julieignore"));
+        string content = File.ReadAllText(policy.Path);
+        Assert.Equal(IgnorePolicySource.GeneratedGlobal, policy.Source);
         Assert.Contains("Generated by Miller", content, StringComparison.Ordinal);
         Assert.DoesNotContain("main checkout", content, StringComparison.Ordinal);
     }
@@ -473,7 +637,7 @@ public sealed class JulieIgnoreSeederTests
             Array.Empty<string>(), new DateTime(2026, 6, 11, 0, 0, 0, DateTimeKind.Utc));
 
         Assert.StartsWith("# .julieignore", content, StringComparison.Ordinal);
-        Assert.Contains("Generated by Miller on 2026-06-11", content, StringComparison.Ordinal);
+        Assert.Contains("Generated by Miller", content, StringComparison.Ordinal);
         Assert.Contains("\n*.log\n", content, StringComparison.Ordinal);
         Assert.Contains("\n.miller/\n", content, StringComparison.Ordinal);
         Assert.DoesNotContain("Auto-detected", content, StringComparison.Ordinal);

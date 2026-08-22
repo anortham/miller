@@ -3,7 +3,8 @@ using System.Text;
 namespace Miller.Indexing;
 
 /// <summary>
-/// Miller's own <c>--ignore-file</c> contribution to a julie-extract invocation.
+/// Miller's own <c>--ignore-file</c> contribution to a julie-extract invocation. User-authored and inherited
+/// policy remains in-tree; only the generated global policy is eligible for this external list.
 ///
 /// <para><b>The invariant file.</b> <c>&lt;root&gt;/.miller/invariant.julieignore</c> is generated before every
 /// scan and passed LAST, which makes its exclusions decisive over every in-tree
@@ -72,7 +73,8 @@ public static class ScanIgnorePolicy
 
     /// <summary>
     /// Rewrite the invariant file and return the ordered <c>--ignore-file</c> list for a scan, or an empty list
-    /// when it could not be written — index hygiene must never break the scan that asked for it.
+    /// when it could not be written — index hygiene must never break the scan that asked for it. The overload
+    /// taking an <see cref="EffectiveIgnorePolicy"/> places only a generated global policy before the invariant.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="workspaceRoot"/> is null or blank.</exception>
     public static IReadOnlyList<string> PrepareForScan(string workspaceRoot)
@@ -83,9 +85,21 @@ public static class ScanIgnorePolicy
             : Array.Empty<string>();
     }
 
+    public static IReadOnlyList<string> PrepareForScan(
+        string workspaceRoot, EffectiveIgnorePolicy? policy)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        var paths = new List<string>();
+        if (UsesGeneratedPolicy(workspaceRoot, policy))
+            paths.Add(policy!.Path);
+        if (WriteInvariantIgnoreFile(workspaceRoot) is { } invariant)
+            paths.Add(invariant);
+        return paths;
+    }
+
     /// <summary>
-    /// The <c>--ignore-file</c> list for a single-file <c>update</c>: the invariant file if a scan has already
-    /// written it, else empty. julie-extract's contract is that an <c>update</c> can never insert rows for a
+    /// The <c>--ignore-file</c> list for a single-file <c>update</c>: the generated global policy, when active,
+    /// followed by the invariant file if a scan has already written it, else empty. julie-extract's contract is that an <c>update</c> can never insert rows for a
     /// file a fresh <c>scan</c> would not produce, and the invariant exclusions are decisive only when passed —
     /// verified: an <c>update</c> targeting a <c>.worktrees/</c> file writes its symbols WITHOUT this flag and
     /// reports <c>unsupported</c> with it. Never WRITES the file: every workspace reaches its first update
@@ -98,6 +112,25 @@ public static class ScanIgnorePolicy
         string path = InvariantIgnorePathFor(workspaceRoot);
         return File.Exists(path) ? new[] { path } : Array.Empty<string>();
     }
+
+    public static IReadOnlyList<string> ForFileUpdate(
+        string workspaceRoot, EffectiveIgnorePolicy? policy)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        var paths = new List<string>();
+        if (UsesGeneratedPolicy(workspaceRoot, policy))
+            paths.Add(policy!.Path);
+        string invariant = InvariantIgnorePathFor(workspaceRoot);
+        if (File.Exists(invariant))
+            paths.Add(invariant);
+        return paths;
+    }
+
+    private static bool UsesGeneratedPolicy(string workspaceRoot, EffectiveIgnorePolicy? policy) =>
+        policy?.Source == IgnorePolicySource.GeneratedGlobal
+        && !File.Exists(Path.Combine(workspaceRoot, JulieIgnoreSeeder.WorkspaceIgnoreFileName))
+        && JulieIgnoreSeeder.ResolveInheritedIgnoreFile(workspaceRoot) is null
+        && File.Exists(policy.Path);
 
     /// <summary>
     /// Rewrite <c>&lt;root&gt;/.miller/invariant.julieignore</c> from <see cref="RenderInvariantContent"/> and

@@ -17,6 +17,7 @@ internal sealed class IndexerWatcherSet : IDisposable
     private FileSystemWatcher? _fileWatcher;
     private FileSystemWatcher? _directoryWatcher;
     private FileSystemWatcher? _gitHeadWatcher;
+    private FileSystemWatcher? _generatedIgnorePolicyWatcher;
     private readonly List<FileSystemWatcher> _ancestorIgnorePolicyWatchers = new();
 
     private IndexerWatcherSet(IndexerWatcherCallbacks callbacks) => _callbacks = callbacks;
@@ -24,6 +25,7 @@ internal sealed class IndexerWatcherSet : IDisposable
     public bool HasFileWatcher => _fileWatcher is not null;
     public bool HasDirectoryWatcher => _directoryWatcher is not null;
     public bool HasGitHeadWatcher => _gitHeadWatcher is not null;
+    public bool HasGeneratedIgnorePolicyWatcher => _generatedIgnorePolicyWatcher is not null;
 
     /// <summary>
     /// The git directory whose <c>HEAD</c> this set watches, or null when no HEAD watcher is attached. For a
@@ -35,16 +37,21 @@ internal sealed class IndexerWatcherSet : IDisposable
     public int AncestorIgnorePolicyWatcherCount => _ancestorIgnorePolicyWatchers.Count;
 
     public static IndexerWatcherSet Attach(string canonicalRoot, IndexerWatcherCallbacks callbacks)
+        => Attach(canonicalRoot, callbacks, MillerHome.ResolveMillerDirectory());
+
+    internal static IndexerWatcherSet Attach(
+        string canonicalRoot, IndexerWatcherCallbacks callbacks, string millerDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
         ArgumentNullException.ThrowIfNull(callbacks);
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDirectory);
 
         var watchers = new IndexerWatcherSet(callbacks);
-        watchers.AttachCore(canonicalRoot);
+        watchers.AttachCore(canonicalRoot, millerDirectory);
         return watchers;
     }
 
-    private void AttachCore(string canonicalRoot)
+    private void AttachCore(string canonicalRoot, string millerDirectory)
     {
         _fileWatcher = new FileSystemWatcher(canonicalRoot)
         {
@@ -92,6 +99,37 @@ internal sealed class IndexerWatcherSet : IDisposable
             _gitHeadWatcher.Created += _callbacks.HeadChanged;
             _gitHeadWatcher.Renamed += OnHeadRenamed;
             _gitHeadWatcher.EnableRaisingEvents = true;
+        }
+
+        string workspaceId = WorkspaceId.FromCanonicalRoot(Path.GetFullPath(canonicalRoot));
+        string generatedPolicy = JulieIgnoreSeeder.GeneratedGlobalIgnorePathForWorkspaceId(
+            workspaceId, millerDirectory);
+        bool generatedEligible = !File.Exists(
+                Path.Combine(canonicalRoot, JulieIgnoreSeeder.WorkspaceIgnoreFileName))
+            && JulieIgnoreSeeder.ResolveInheritedIgnoreFile(canonicalRoot) is null;
+        if (generatedEligible && Path.GetDirectoryName(generatedPolicy) is { } generatedDirectory)
+        {
+            try
+            {
+                Directory.CreateDirectory(generatedDirectory);
+                _generatedIgnorePolicyWatcher = new FileSystemWatcher(
+                    generatedDirectory, Path.GetFileName(generatedPolicy))
+                {
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+                };
+                _generatedIgnorePolicyWatcher.Changed += _callbacks.IgnorePolicyChanged;
+                _generatedIgnorePolicyWatcher.Created += _callbacks.IgnorePolicyChanged;
+                _generatedIgnorePolicyWatcher.Deleted += _callbacks.IgnorePolicyChanged;
+                _generatedIgnorePolicyWatcher.Renamed += OnIgnorePolicyRenamed;
+                _generatedIgnorePolicyWatcher.EnableRaisingEvents = true;
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException or System.Security.SecurityException
+                   or NotSupportedException)
+            {
+                _generatedIgnorePolicyWatcher?.Dispose();
+                _generatedIgnorePolicyWatcher = null;
+            }
         }
 
         foreach (string ignoreFile in WorkspaceIgnorePolicy.AncestorGitignoreFilesOutsideRoot(canonicalRoot))
@@ -144,6 +182,16 @@ internal sealed class IndexerWatcherSet : IDisposable
             _gitHeadWatcher.Renamed -= OnHeadRenamed;
             _gitHeadWatcher.Dispose();
             _gitHeadWatcher = null;
+        }
+        if (_generatedIgnorePolicyWatcher is not null)
+        {
+            _generatedIgnorePolicyWatcher.EnableRaisingEvents = false;
+            _generatedIgnorePolicyWatcher.Changed -= _callbacks.IgnorePolicyChanged;
+            _generatedIgnorePolicyWatcher.Created -= _callbacks.IgnorePolicyChanged;
+            _generatedIgnorePolicyWatcher.Deleted -= _callbacks.IgnorePolicyChanged;
+            _generatedIgnorePolicyWatcher.Renamed -= OnIgnorePolicyRenamed;
+            _generatedIgnorePolicyWatcher.Dispose();
+            _generatedIgnorePolicyWatcher = null;
         }
         foreach (var watcher in _ancestorIgnorePolicyWatchers)
         {

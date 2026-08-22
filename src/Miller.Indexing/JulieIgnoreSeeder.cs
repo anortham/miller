@@ -1,20 +1,36 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Miller.Indexing;
 
+/// <summary>The owner of an effective ignore policy and the consumer path used for it.</summary>
+public enum IgnorePolicySource
+{
+    UserRoot,
+    InheritedRootCopy,
+    GeneratedGlobal,
+}
+
+/// <summary>Immutable policy identity shared by scan, update, and watcher preparation.</summary>
+public sealed record EffectiveIgnorePolicy(
+    IgnorePolicySource Source,
+    string Path,
+    string ContentHash,
+    bool WroteNewBytes);
+
 /// <summary>
 /// The filesystem edge for <see cref="VendorScan"/> — the consumer-side port of julie's
-/// <c>generate_julieignore_file()</c>. When a workspace root has NO <c>.julieignore</c>, it writes one, and the
-/// seeded file then flows everywhere ignore policy already flows: julie-extract reads it from the root on full
-/// scans AND on single-file <c>update</c>s, and the watcher's <c>WorkspaceIgnorePolicy</c> reads the same file
-/// for live events. In-tree is the ONLY placement with that property.
+/// <c>generate_julieignore_file()</c>. It resolves one immutable effective-policy descriptor for full scans,
+/// single-file updates, and watcher matching. User policy remains in-tree; only Miller's generated baseline/vendor
+/// policy is materialized globally under Miller home and passed as an external ignore file.
 ///
 /// <para><b>Two shapes.</b> A LINKED WORKTREE with no <c>.julieignore</c> of its own whose main checkout has
 /// one is seeded with a COPY of that file behind a generated header (<see cref="RenderInheritedContent"/>) —
 /// <c>git worktree add</c> hands over the committed tree, but the interesting ignore file is usually
 /// uncommitted (Miller seeds one; users write local ones) and exists only in the main checkout. Every other
-/// root is seeded with the baseline noise patterns plus auto-detected vendor directories
-/// (<see cref="RenderContent"/>). No root comes out of a scan without an in-tree policy.</para>
+/// root is represented by a deterministic global policy containing baseline noise patterns plus auto-detected
+/// vendor directories (<see cref="RenderContent"/>). No generated root file is created.</para>
 ///
 /// <para><b>Why a copy rather than <c>--ignore-file</c>.</b> Pointing julie-extract at the main checkout's file
 /// leaves the worktree with no in-tree policy at all, and the watcher only loads <c>.julieignore</c> at or under
@@ -39,16 +55,19 @@ namespace Miller.Indexing;
 /// SILENT: it is carried out of the walk and rendered as a warning block in the generated file, so a root whose
 /// detection was truncated says so where the user reads the result.</para>
 ///
-/// <para>Contract: NEVER overwrites or appends to an existing <c>.julieignore</c> (a user-authored file is
-/// authoritative; deleting the generated one and rescanning regenerates from scratch). Best-effort: any I/O
-/// failure returns false rather than throwing — seeding hygiene must never break the scan that triggered it.
-/// The pure pieces (<see cref="RenderContent"/>, <see cref="RenderInheritedContent"/>,
-/// <see cref="VendorScan"/>) are fast-suite-testable; only the walk/write here touches the real filesystem.</para>
+/// <para>Contract: NEVER overwrites or appends to an existing root <c>.julieignore</c> (a user-authored file is
+/// authoritative). Generated policy bytes are deterministic and atomically materialized under Miller home;
+/// a root-policy race is rechecked before that write. The pure pieces (<see cref="RenderContent"/>,
+/// <see cref="RenderInheritedContent"/>, <see cref="VendorScan"/>) are fast-suite-testable; only the walk/write
+/// here touches the real filesystem.</para>
 /// </summary>
 public static class JulieIgnoreSeeder
 {
-    /// <summary>The workspace-root ignore file julie-extract reads in-tree and this seeder writes.</summary>
+    /// <summary>The workspace-root ignore file julie-extract reads in-tree.</summary>
     public const string WorkspaceIgnoreFileName = ".julieignore";
+
+    private const string GeneratedPolicyDirectoryName = "ignore-policies";
+    private static readonly ConcurrentDictionary<string, object> MaterializationGates = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Bound on the files the detection walk collects as content evidence. Vendor-named trees are pruned
@@ -81,55 +100,267 @@ public static class JulieIgnoreSeeder
     };
 
     /// <summary>
-    /// Seed <c>&lt;workspaceRoot&gt;/.julieignore</c> when none exists — a copy of the main checkout's file for
-    /// a linked worktree that inherits one, else the baseline + detected-vendor generation. Returns true only
-    /// when a new file was written; false when one already exists (never overwritten), the root is missing, or
-    /// any I/O step failed (best-effort — never throws).
+    /// Prepare effective ignore policy for <paramref name="workspaceRoot"/>. A linked worktree that inherits a
+    /// user file receives the existing exclusive in-tree copy; otherwise generated baseline/vendor bytes are
+    /// materialized under Miller home. Returns true only when preparation wrote new bytes; it never creates a
+    /// generated root policy.
     /// </summary>
     /// <remarks>
-    /// The file is created EXCLUSIVELY (<see cref="FileMode.CreateNew"/>), not written over the earlier
-    /// <see cref="File.Exists(string)"/> answer. Detection walks a whole repository between the two, and
-    /// <see cref="File.WriteAllText(string, string?)"/> TRUNCATES — so two Miller processes bootstrapping the same
-    /// fresh worktree (the ordinary fleet case), or a user authoring their own <c>.julieignore</c> inside that
-    /// window, had authoritative scan input silently replaced by generated content. With an exclusive create the
-    /// racing creator wins and this call becomes a no-op returning false: an already-existing file is an EXPECTED
-    /// outcome of the race, not an error, and it reaches the same never-throw exit as every other I/O failure.
+    /// The linked-worktree copy is created exclusively. Generated policy uses a same-directory temporary file and
+    /// atomic replace/move after comparing bytes; user root-policy existence is checked again after detection/render.
     /// </remarks>
     /// <exception cref="ArgumentException"><paramref name="workspaceRoot"/> is null or blank.</exception>
-    public static bool EnsureSeeded(string workspaceRoot) =>
-        EnsureSeeded(workspaceRoot, betweenProbeAndCreate: null, readAllText: null);
+    public static bool EnsureSeeded(string workspaceRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        string root = Path.GetFullPath(workspaceRoot);
+        return PreparePolicy(root, WorkspaceId.FromCanonicalRoot(root))?.WroteNewBytes == true;
+    }
 
     /// <summary>
-    /// <see cref="EnsureSeeded(string)"/> with a hook fired after the existence probe and the content render, and
-    /// before the exclusive create — the seam that lets the race window be occupied deterministically instead of
-    /// hoped for — plus an injectable reader for the inherited source, so an unreadable main-checkout file can be
-    /// exercised without depending on platform locking semantics. Not used in production.
+    /// <see cref="EnsureSeeded(string)"/> with a hook fired before policy materialization and an injectable reader
+    /// for the inherited source. Not used in production.
     /// </summary>
     internal static bool EnsureSeeded(
         string workspaceRoot, Action? betweenProbeAndCreate, Func<string, string>? readAllText)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        string root = Path.GetFullPath(workspaceRoot);
+        return PreparePolicy(
+            root,
+            WorkspaceId.FromCanonicalRoot(root),
+            MillerHome.ResolveMillerDirectory(),
+            betweenProbeAndCreate,
+            readAllText)?.WroteNewBytes == true;
+    }
+
+    public static EffectiveIgnorePolicy? PreparePolicy(string workspaceRoot, string workspaceId) =>
+        PreparePolicy(workspaceRoot, workspaceId, MillerHome.ResolveMillerDirectory(), null, null);
+
+    internal static EffectiveIgnorePolicy? PreparePolicy(
+        string workspaceRoot,
+        string workspaceId,
+        string millerDirectory,
+        Action? betweenProbeAndCreate = null,
+        Func<string, string>? readAllText = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDirectory);
+
+        string root = Path.GetFullPath(workspaceRoot);
+        ValidateWorkspaceId(root, workspaceId);
+        if (!Directory.Exists(root))
+            return null;
+
+        string rootPolicy = Path.Combine(root, WorkspaceIgnoreFileName);
+        if (File.Exists(rootPolicy))
+            return DescribeExisting(IgnorePolicySource.UserRoot, rootPolicy);
+
+        string? inherited = ResolveInheritedIgnoreFile(root);
+        if (inherited is not null)
+            return TryPrepareInheritedCopy(rootPolicy, inherited, readAllText, betweenProbeAndCreate);
+
+        DetectionResult detection = Detect(root);
+        string generated = RenderContent(detection.VendorDirectories, DateTime.UnixEpoch, detection.Truncated);
+        string generatedPath = GeneratedGlobalIgnorePathForWorkspaceId(workspaceId, millerDirectory);
+
+        betweenProbeAndCreate?.Invoke();
+        if (File.Exists(rootPolicy))
+            return DescribeExisting(IgnorePolicySource.UserRoot, rootPolicy);
+
+        if (ResolveInheritedIgnoreFile(root) is { } inheritedAfterRender)
+            return TryPrepareInheritedCopy(rootPolicy, inheritedAfterRender, readAllText, null);
+
+        bool materialized = TryMaterializeGenerated(generatedPath, generated);
+        return DescribeExisting(IgnorePolicySource.GeneratedGlobal, generatedPath, materialized);
+    }
+
+    /// <summary>
+    /// Resolve policy for a direct update without walking or materializing generated policy. A resident workspace
+    /// has already prepared policy during its scan lifecycle; an absent generated file therefore returns null
+    /// and leaves only the invariant update controls in place. A linked worktree may establish its required
+    /// inherited in-tree snapshot, including malformed bytes, because external user policy is not safe.
+    /// </summary>
+    public static EffectiveIgnorePolicy? ResolvePolicyForUpdate(string workspaceRoot, string workspaceId) =>
+        ResolvePolicyForUpdate(workspaceRoot, workspaceId, MillerHome.ResolveMillerDirectory());
+
+    internal static EffectiveIgnorePolicy? ResolvePolicyForUpdate(
+        string workspaceRoot, string workspaceId, string millerDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDirectory);
+
+        string root = Path.GetFullPath(workspaceRoot);
+        ValidateWorkspaceId(root, workspaceId);
+        if (!Directory.Exists(root))
+            return null;
+
+        string rootPolicy = Path.Combine(root, WorkspaceIgnoreFileName);
+        if (File.Exists(rootPolicy))
+            return DescribeExisting(IgnorePolicySource.UserRoot, rootPolicy);
+
+        if (ResolveInheritedIgnoreFile(root) is { } inherited)
+            return TryPrepareInheritedCopy(rootPolicy, inherited, readAllText: null, betweenProbeAndCreate: null);
+
+        string generatedPath = GeneratedGlobalIgnorePathForWorkspaceId(workspaceId, millerDirectory);
+        return File.Exists(generatedPath)
+            ? DescribeExisting(IgnorePolicySource.GeneratedGlobal, generatedPath)
+            : null;
+    }
+
+    public static string GeneratedGlobalIgnorePathFor(string workspaceRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        string root = Path.GetFullPath(workspaceRoot);
+        return GeneratedGlobalIgnorePathForWorkspaceId(WorkspaceId.FromCanonicalRoot(root));
+    }
+
+    public static string GeneratedGlobalIgnorePathForWorkspaceId(string workspaceId) =>
+        GeneratedGlobalIgnorePathForWorkspaceId(workspaceId, MillerHome.ResolveMillerDirectory());
+
+    internal static string GeneratedGlobalIgnorePathForWorkspaceId(string workspaceId, string millerDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDirectory);
+        if (workspaceId.Any(char.IsWhiteSpace)
+            || workspaceId.Contains(Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            || workspaceId.Contains(Path.AltDirectorySeparatorChar, StringComparison.Ordinal)
+            || workspaceId.Contains(':', StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Workspace id must be a single path-safe identifier.", nameof(workspaceId));
+        }
+
+        return Path.Combine(
+            Path.GetFullPath(millerDirectory),
+            GeneratedPolicyDirectoryName,
+            workspaceId + WorkspaceIgnoreFileName);
+    }
+
+    internal static string ContentHash(byte[] content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        return Convert.ToHexStringLower(SHA256.HashData(content));
+    }
+
+    private static void ValidateWorkspaceId(string root, string workspaceId)
+    {
+        string expected = WorkspaceId.FromCanonicalRoot(root);
+        if (!string.Equals(expected, workspaceId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Workspace id '{workspaceId}' does not match the canonical root '{root}'.", nameof(workspaceId));
+        }
+    }
+
+    private static EffectiveIgnorePolicy? TryPrepareInheritedCopy(
+        string rootPolicy,
+        string inherited,
+        Func<string, string>? readAllText,
+        Action? betweenProbeAndCreate)
+    {
+        string content;
         try
         {
-            string ignorePath = Path.Combine(workspaceRoot, WorkspaceIgnoreFileName);
-            if (File.Exists(ignorePath) || !Directory.Exists(workspaceRoot))
-                return false;
+            content = RenderInheritedContent(inherited, (readAllText ?? File.ReadAllText)(inherited));
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or System.Security.SecurityException
+               or NotSupportedException)
+        {
+            return null;
+        }
 
-            if (!TryRenderSeedContent(workspaceRoot, readAllText ?? File.ReadAllText, out string content))
-                return false;
+        betweenProbeAndCreate?.Invoke();
+        if (File.Exists(rootPolicy))
+            return DescribeExisting(IgnorePolicySource.UserRoot, rootPolicy);
 
-            betweenProbeAndCreate?.Invoke();
+        if (!TryCreateRootPolicy(rootPolicy, content, out bool wroteNewBytes))
+            return File.Exists(rootPolicy)
+                ? DescribeExisting(IgnorePolicySource.UserRoot, rootPolicy)
+                : null;
+        return DescribeExisting(IgnorePolicySource.InheritedRootCopy, rootPolicy, wroteNewBytes);
+    }
 
-            using var stream = new FileStream(ignorePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            using var writer = new StreamWriter(stream);
+
+    private static EffectiveIgnorePolicy? DescribeExisting(
+        IgnorePolicySource source, string path, bool wroteNewBytes = false)
+    {
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            return new EffectiveIgnorePolicy(source, Path.GetFullPath(path), ContentHash(bytes), wroteNewBytes);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or System.Security.SecurityException
+               or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static bool TryCreateRootPolicy(string path, string content, out bool wroteNewBytes)
+    {
+        wroteNewBytes = false;
+        try
+        {
+            using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             writer.Write(content);
+            wroteNewBytes = true;
             return true;
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or System.Security.SecurityException
                or NotSupportedException)
         {
-            return false; // hygiene must never break the scan that triggered it
+            return false;
+        }
+    }
+
+    private static bool TryMaterializeGenerated(string path, string content)
+    {
+        byte[] desired = Encoding.UTF8.GetBytes(content);
+        string fullPath = Path.GetFullPath(path);
+        object gate = MaterializationGates.GetOrAdd(fullPath, static _ => new object());
+        lock (gate)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(fullPath)!;
+                Directory.CreateDirectory(directory);
+                if (File.Exists(fullPath) && File.ReadAllBytes(fullPath).AsSpan().SequenceEqual(desired))
+                    return false;
+
+                string temporary = fullPath + ".tmp-" + Guid.NewGuid().ToString("N");
+                File.WriteAllBytes(temporary, desired);
+                try
+                {
+                    if (File.Exists(fullPath))
+                        File.Replace(temporary, fullPath, destinationBackupFileName: null);
+                    else
+                        File.Move(temporary, fullPath);
+                    return true;
+                }
+                finally
+                {
+                    try
+                    {
+                        if (File.Exists(temporary))
+                            File.Delete(temporary);
+                    }
+                    catch (IOException)
+                    {
+                    }
+                }
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException or System.Security.SecurityException
+                   or NotSupportedException)
+            {
+                return false;
+            }
         }
     }
 
@@ -164,49 +395,6 @@ public static class JulieIgnoreSeeder
     }
 
     /// <summary>
-    /// What to seed: the main checkout's file copied verbatim when this root inherits one, else the baseline +
-    /// detected-vendor generation. False means SEED NOTHING.
-    ///
-    /// <para>False is returned only for a source that exists and could not be read. Falling back to the
-    /// generated baseline there looks harmless and is not: the create is exclusive, so the file it writes is
-    /// never revisited, and one transient read error would permanently replace the main checkout's ignore rules
-    /// with a generic baseline — the worktree then indexes everything the repository deliberately excludes, for
-    /// as long as that worktree exists, silently. Writing nothing keeps the failure retryable on the next
-    /// scan.</para>
-    ///
-    /// <para>An absent source is a different answer: there is genuinely nothing to inherit (not a linked
-    /// worktree, or the main checkout has no file), and the generated seed is the correct content.</para>
-    /// </summary>
-    private static bool TryRenderSeedContent(
-        string workspaceRoot, Func<string, string> readAllText, out string content)
-    {
-        if (ResolveInheritedIgnoreFile(workspaceRoot) is not { } source)
-        {
-            content = GeneratedContent(workspaceRoot);
-            return true;
-        }
-
-        try
-        {
-            content = RenderInheritedContent(source, readAllText(source));
-            return true;
-        }
-        catch (Exception ex) when (
-            ex is IOException or UnauthorizedAccessException or System.Security.SecurityException
-               or NotSupportedException)
-        {
-            content = string.Empty;
-            return false;
-        }
-    }
-
-    private static string GeneratedContent(string workspaceRoot)
-    {
-        DetectionResult detection = Detect(workspaceRoot);
-        return RenderContent(detection.VendorDirectories, DateTime.UtcNow, detection.Truncated);
-    }
-
-    /// <summary>
     /// Pure renderer for the inherited copy: a header naming <paramref name="sourcePath"/> and stating the
     /// snapshot limitation, then <paramref name="sourceContent"/> verbatim. Copied unchanged so the worktree's
     /// policy is exactly the main checkout's; a malformed pattern in it degrades to julie-extract's in-tree
@@ -233,10 +421,11 @@ public static class JulieIgnoreSeeder
     }
 
     /// <summary>
-    /// Pure renderer for the generated file: a short generated-by/edit-freely header, an explicit warning when
+    /// Pure renderer for the generated file: a short generated-by/ownership header, an explicit warning when
     /// <paramref name="detectionTruncated"/>, the baseline noise patterns
     /// (<see cref="VendorScan.BaselinePatterns"/>), and the detected vendor directories as gitignore-style
-    /// <c>dir/</c> patterns. <paramref name="generatedAtUtc"/> is injected for determinism.
+    /// <c>dir/</c> patterns. The retained <paramref name="generatedAtUtc"/> parameter does not enter the bytes,
+    /// keeping generated policy hashes deterministic.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="vendorDirectories"/> is null.</exception>
     public static string RenderContent(
@@ -245,13 +434,13 @@ public static class JulieIgnoreSeeder
         ArgumentNullException.ThrowIfNull(vendorDirectories);
 
         var sb = new StringBuilder();
-        string date = generatedAtUtc.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        _ = generatedAtUtc;
         sb.Append("# .julieignore — code-intelligence exclusion patterns (gitignore syntax)\n");
-        sb.Append("# Generated by Miller on ").Append(date).Append(": no .julieignore existed, so Miller\n");
+        sb.Append("# Generated by Miller: no .julieignore existed, so Miller\n");
         sb.Append("# seeded baseline noise patterns plus auto-detected vendor/build directories.\n");
-        sb.Append("# Edit freely — Miller never overwrites or appends to this file. Excluded files\n");
-        sb.Append("# stay out of symbol extraction and search; delete a line to re-include its files\n");
-        sb.Append("# on the next scan. To opt out entirely, keep an empty .julieignore.\n");
+        sb.Append("# This global policy is generated and owned by Miller; Miller may rewrite it as the workspace changes.\n");
+        sb.Append("# Create .julieignore at the workspace root for custom rules. Excluded files stay out\n");
+        sb.Append("# of symbol extraction and search. To opt out of generated rules, create an empty root file.\n");
 
         if (detectionTruncated)
         {

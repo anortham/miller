@@ -126,6 +126,17 @@ public sealed class JulieExtractRunnerTests
     }
 
     [Fact]
+    public void BuildScanArgs_GeneratedPolicyIsTheOnlyExternalUserPolicy()
+    {
+        var args = JulieExtractRunner.BuildScanArgs(
+            AbsDb, AbsRoot, force: false, jobs: 4,
+            ignoreFiles: new[] { "/home/miller/.miller/ignore-policies/workspace.julieignore" });
+
+        Assert.Equal(1, args.Count(value => value == "--ignore-file"));
+        Assert.Contains("/home/miller/.miller/ignore-policies/workspace.julieignore", args);
+    }
+
+    [Fact]
     public void BuildScanArgs_BlankIgnoreFile_Throws() =>
         Assert.Throws<ArgumentException>(
             () => JulieExtractRunner.BuildScanArgs(

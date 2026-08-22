@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using Miller.Indexing;
 
 namespace Miller.Server.Hosting;
 
@@ -13,6 +14,9 @@ internal static class WorkspaceIgnorePolicy
     private static readonly char[] SeparatorChars = ['/', '\\'];
 
     public static bool IsIgnored(string root, string absolutePath)
+        => IsIgnored(root, absolutePath, MillerHome.ResolveMillerDirectory());
+
+    internal static bool IsIgnored(string root, string absolutePath, string millerDirectory)
     {
         string fullRoot;
         string fullPath;
@@ -38,7 +42,7 @@ internal static class WorkspaceIgnorePolicy
             : Path.GetDirectoryName(fullPath) ?? fullRoot;
 
         var ignored = false;
-        foreach (var rule in LoadRules(fullRoot, targetDirectory))
+        foreach (var rule in LoadRules(fullRoot, targetDirectory, millerDirectory))
         {
             if (rule.IsMatch(fullPath))
                 ignored = !rule.Negated;
@@ -91,7 +95,8 @@ internal static class WorkspaceIgnorePolicy
             .ToArray();
     }
 
-    private static IEnumerable<IgnoreRule> LoadRules(string fullRoot, string targetDirectory)
+    private static IEnumerable<IgnoreRule> LoadRules(
+        string fullRoot, string targetDirectory, string millerDirectory)
     {
         string gitRoot = FindGitRoot(fullRoot) ?? fullRoot;
         if (!IsUnderOrEqual(gitRoot, targetDirectory))
@@ -107,6 +112,15 @@ internal static class WorkspaceIgnorePolicy
                 foreach (var rule in LoadFile(Path.Combine(directory, ".julieignore"), directory))
                     yield return rule;
             }
+        }
+
+        if (!File.Exists(Path.Combine(fullRoot, JulieIgnoreSeeder.WorkspaceIgnoreFileName))
+            && JulieIgnoreSeeder.ResolveInheritedIgnoreFile(fullRoot) is null)
+        {
+            string generated = JulieIgnoreSeeder.GeneratedGlobalIgnorePathForWorkspaceId(
+                WorkspaceId.FromCanonicalRoot(fullRoot), millerDirectory);
+            foreach (var rule in LoadFile(generated, fullRoot))
+                yield return rule;
         }
     }
 

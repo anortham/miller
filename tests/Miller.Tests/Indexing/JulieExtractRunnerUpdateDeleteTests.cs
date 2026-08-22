@@ -55,6 +55,29 @@ public sealed class JulieExtractRunnerUpdateDeleteTests
     }
 
     [Fact]
+    public void BuildUpdateArgs_CarriesGeneratedPolicyBeforeInvariant()
+    {
+        var args = JulieExtractRunner.BuildUpdateArgs(
+            AbsDb,
+            AbsRoot,
+            AbsFile,
+            new[]
+            {
+                "/home/miller/.miller/ignore-policies/workspace.julieignore",
+                "/abs/work/.miller/invariant.julieignore",
+            });
+
+        int first = args.ToList().IndexOf("--ignore-file");
+        Assert.Equal(
+            new[]
+            {
+                "/home/miller/.miller/ignore-policies/workspace.julieignore",
+                "/abs/work/.miller/invariant.julieignore",
+            },
+            args.Skip(first + 1).Where(value => value != "--ignore-file").ToArray());
+    }
+
+    [Fact]
     public void BuildUpdateArgs_BlankIgnoreFile_Throws() =>
         Assert.Throws<ArgumentException>(
             () => JulieExtractRunner.BuildUpdateArgs(AbsDb, AbsRoot, AbsFile, new[] { "  " }));

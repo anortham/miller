@@ -112,6 +112,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     private readonly Func<StoreFamilyBinding, StoreWorkspaceState?> _readState;
     private readonly Func<string> _mintRequestId;
     private readonly StoreRequestJournal? _requestJournal;
+    private readonly string _millerDirectory;
     private readonly HashSet<string> _replayedImportRequestIds = new(StringComparer.Ordinal);
     private readonly string? _fromArtifact;
     private readonly IIndexerPhaseSink _phaseSink;
@@ -132,7 +133,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             readState,
             mintRequestId,
             fromArtifact,
-            NullIndexerPhaseSink.Instance)
+            NullIndexerPhaseSink.Instance,
+            millerDirectory: null)
     {
     }
 
@@ -144,7 +146,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         Func<string>? mintRequestId,
         string? fromArtifact,
         IIndexerPhaseSink? phaseSink = null,
-        Func<StoreTreeDelta>? inspectTree = null)
+        Func<StoreTreeDelta>? inspectTree = null,
+        string? millerDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(client);
@@ -159,6 +162,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             ? new StoreRequestJournal(binding.WorkspaceRoot)
             : null;
         _fromArtifact = fromArtifact;
+        _millerDirectory = Path.GetFullPath(millerDirectory ?? MillerHome.ResolveMillerDirectory());
         _phaseSink = phaseSink ?? NullIndexerPhaseSink.Instance;
         _inspectTree = inspectTree;
     }
@@ -891,18 +895,17 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
 
     private StoreScanControls ScanControls(int jobs, bool prepareForScan)
     {
-        IReadOnlyList<string> ignoreFiles;
-        if (prepareForScan)
-        {
-            JulieIgnoreSeeder.EnsureSeeded(_binding.WorkspaceRoot);
-            ignoreFiles = ScanIgnorePolicy.PrepareForScan(_binding.WorkspaceRoot);
-        }
-        else
-        {
-            ignoreFiles = ScanIgnorePolicy.ForFileUpdate(_binding.WorkspaceRoot);
-        }
+        string workspaceRoot = Path.GetFullPath(_binding.WorkspaceRoot);
+        EffectiveIgnorePolicy? policy = prepareForScan
+            ? JulieIgnoreSeeder.PreparePolicy(
+                workspaceRoot, WorkspaceId.FromCanonicalRoot(workspaceRoot), _millerDirectory)
+            : JulieIgnoreSeeder.ResolvePolicyForUpdate(
+                workspaceRoot, WorkspaceId.FromCanonicalRoot(workspaceRoot), _millerDirectory);
+        IReadOnlyList<string> ignoreFiles = prepareForScan
+            ? ScanIgnorePolicy.PrepareForScan(workspaceRoot, policy)
+            : ScanIgnorePolicy.ForFileUpdate(workspaceRoot, policy);
         ExtractSupervision supervision = ExtractSupervisionPolicy.For(
-            Path.Combine(_binding.WorkspaceRoot, ".miller", "symbols.db"));
+            Path.Combine(workspaceRoot, ".miller", "symbols.db"));
         if (_requestJournal is not null && supervision.SpoolDirectory is { } spoolDirectory)
             Directory.CreateDirectory(spoolDirectory);
         return new StoreScanControls(

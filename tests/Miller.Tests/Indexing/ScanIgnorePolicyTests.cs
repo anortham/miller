@@ -110,4 +110,98 @@ public sealed class ScanIgnorePolicyTests : IDisposable
         Assert.Empty(ScanIgnorePolicy.ForFileUpdate(root));
         Assert.False(File.Exists(ScanIgnorePolicy.InvariantIgnorePathFor(root)));
     }
+
+    [Fact]
+    public void PrepareForScan_GeneratedPolicyComesBeforeInvariantPolicy()
+    {
+        string root = NewDirectory("generated");
+        string millerHome = NewDirectory("miller-home");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+        EffectiveIgnorePolicy? policyMaybe = JulieIgnoreSeeder.PreparePolicy(root, workspaceId, millerHome);
+        Assert.NotNull(policyMaybe);
+        EffectiveIgnorePolicy policy = policyMaybe!;
+
+        IReadOnlyList<string> paths = ScanIgnorePolicy.PrepareForScan(root, policy);
+
+        Assert.Equal(new[] { policy.Path, ScanIgnorePolicy.InvariantIgnorePathFor(root) }, paths);
+    }
+
+    [Fact]
+    public void ForFileUpdate_UserPolicyNeverBecomesExternalIgnoreFile()
+    {
+        string root = NewDirectory("user");
+        string userPath = Path.Combine(root, ".julieignore");
+        File.WriteAllText(userPath, "generated/\n");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+        EffectiveIgnorePolicy? policyMaybe = JulieIgnoreSeeder.PreparePolicy(
+            root, workspaceId, NewDirectory("miller-home"));
+        Assert.NotNull(policyMaybe);
+        EffectiveIgnorePolicy policy = policyMaybe!;
+        ScanIgnorePolicy.PrepareForScan(root, policy);
+
+        Assert.Equal(new[] { ScanIgnorePolicy.InvariantIgnorePathFor(root) },
+            ScanIgnorePolicy.ForFileUpdate(root, policy));
+    }
+
+    [Fact]
+    public void ForFileUpdate_GeneratedPolicyComesBeforeInvariantPolicy()
+    {
+        string root = NewDirectory("generated-update");
+        string millerHome = NewDirectory("miller-home-update");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+        EffectiveIgnorePolicy? policyMaybe = JulieIgnoreSeeder.PreparePolicy(root, workspaceId, millerHome);
+        Assert.NotNull(policyMaybe);
+        EffectiveIgnorePolicy policy = policyMaybe!;
+        ScanIgnorePolicy.PrepareForScan(root, policy);
+
+        Assert.Equal(
+            new[] { policy.Path, ScanIgnorePolicy.InvariantIgnorePathFor(root) },
+            ScanIgnorePolicy.ForFileUpdate(root, policy));
+    }
+
+    [Fact]
+    public void PrepareForScan_RootPolicyCreatedAfterMaterializationDisablesGlobalPolicy()
+    {
+        string root = NewDirectory("root-takeover");
+        string millerHome = NewDirectory("miller-home-takeover");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+        EffectiveIgnorePolicy? policyMaybe = JulieIgnoreSeeder.PreparePolicy(root, workspaceId, millerHome);
+        Assert.NotNull(policyMaybe);
+        EffectiveIgnorePolicy policy = policyMaybe!;
+        File.WriteAllText(Path.Combine(root, ".julieignore"), "user_only/\n");
+
+        IReadOnlyList<string> paths = ScanIgnorePolicy.PrepareForScan(root, policy);
+
+        Assert.Equal(new[] { ScanIgnorePolicy.InvariantIgnorePathFor(root) }, paths);
+        Assert.Equal("user_only/\n", File.ReadAllText(Path.Combine(root, ".julieignore")));
+    }
+
+    [Fact]
+    public void PrepareForScan_StaleGeneratedDescriptorIsRejectedWhenInheritedPolicyAppears()
+    {
+        string container = NewDirectory("linked-stale");
+        string main = Path.Combine(container, "main");
+        string admin = Path.Combine(main, ".git", "worktrees", "feature");
+        string root = Path.Combine(container, "wt-feature");
+        Directory.CreateDirectory(admin);
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, ".git"), $"gitdir: {admin}\n");
+        File.WriteAllText(Path.Combine(admin, "commondir"), "../..\n");
+        File.WriteAllText(Path.Combine(main, ".julieignore"), "main_only/\n");
+
+        string millerHome = NewDirectory("miller-home-stale");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+        string generatedPath = JulieIgnoreSeeder.GeneratedGlobalIgnorePathForWorkspaceId(workspaceId, millerHome);
+        Directory.CreateDirectory(Path.GetDirectoryName(generatedPath)!);
+        File.WriteAllText(generatedPath, "generated/\n");
+        var stale = new EffectiveIgnorePolicy(
+            IgnorePolicySource.GeneratedGlobal,
+            generatedPath,
+            JulieIgnoreSeeder.ContentHash(File.ReadAllBytes(generatedPath)),
+            false);
+
+        IReadOnlyList<string> paths = ScanIgnorePolicy.PrepareForScan(root, stale);
+
+        Assert.Equal(new[] { ScanIgnorePolicy.InvariantIgnorePathFor(root) }, paths);
+    }
 }

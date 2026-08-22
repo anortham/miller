@@ -1,3 +1,4 @@
+using Miller.Indexing;
 using Miller.Server.Hosting;
 using Xunit;
 
@@ -317,6 +318,24 @@ public sealed class WatchPathFilterTests
         Assert.False(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "julie_ignored.rs")));
         Assert.False(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "julie_dir", "a.rs")));
         Assert.True(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "src", "keep.rs")));
+    }
+
+    [Fact]
+    public void ShouldProcess_GeneratedGlobalPolicyUsesWorkspaceRootAsPatternBase()
+    {
+        using var temp = new TempDir();
+        string root = temp.Path;
+        string millerHome = Path.Combine(root, "miller-home");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+        EffectiveIgnorePolicy? policyMaybe = JulieIgnoreSeeder.PreparePolicy(root, workspaceId, millerHome);
+        Assert.NotNull(policyMaybe);
+        EffectiveIgnorePolicy policy = policyMaybe!;
+        File.WriteAllText(policy.Path, "generated/\n");
+
+        Assert.False(WatchPathFilter.ShouldProcess(
+            root, Path.Combine(root, "generated", "file.rs"), supportedExtensions: null, millerDirectory: millerHome));
+        Assert.True(WatchPathFilter.ShouldProcess(
+            root, Path.Combine(root, "src", "keep.rs"), supportedExtensions: null, millerDirectory: millerHome));
     }
 
     [Fact]

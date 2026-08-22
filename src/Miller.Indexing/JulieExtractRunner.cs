@@ -507,10 +507,10 @@ public sealed class JulieExtractRunner
     ///
     /// <para>Every scan carries Miller's generated invariant ignore file last, which makes its exclusions
     /// decisive over in-tree policy (<see cref="ScanIgnorePolicy"/>). Nothing user-authored is ever passed that
-    /// way: a root with no <c>.julieignore</c> is seeded with one IN-TREE first — a copy of the main checkout's
-    /// file for a linked worktree, else the baseline + detected-vendor generation
-    /// (<see cref="JulieIgnoreSeeder"/>) — so the same policy governs this scan, later single-file updates, and
-    /// the watcher, and a malformed user pattern stays a warning instead of failing the scan.</para>
+    /// way. A linked worktree still receives an in-tree inherited copy for warning-only malformed-policy
+    /// compatibility; otherwise the generated baseline/vendor policy is materialized under Miller home and
+    /// passed before the invariant. The same descriptor governs this scan, later single-file updates, and the
+    /// watcher.</para>
     /// </summary>
     public ExtractReport Scan(
         string root, string db, bool force = false, int? jobs = null,
@@ -529,9 +529,11 @@ public sealed class JulieExtractRunner
         // Consumer-side index hygiene, BEFORE the scan so julie-extract's own in-tree ignore handling applies it
         // on this very scan. Scan is the one chokepoint every indexing path funnels through (server bootstrap,
         // leader startup/refresh, MCP `workspace open` prime, CLI `workspace open` via the cross-workspace
-        // refresh), so CLI and server both get it. Best-effort and never-overwrite (see JulieIgnoreSeeder).
-        JulieIgnoreSeeder.EnsureSeeded(absRoot);
-        IReadOnlyList<string> ignoreFiles = ScanIgnorePolicy.PrepareForScan(absRoot);
+        // refresh), so CLI and server both get it. User and inherited policies stay in-tree; only Miller's
+        // generated policy is eligible for the external ignore-file list.
+        EffectiveIgnorePolicy? policy = JulieIgnoreSeeder.PreparePolicy(
+            absRoot, WorkspaceId.FromCanonicalRoot(absRoot));
+        IReadOnlyList<string> ignoreFiles = ScanIgnorePolicy.PrepareForScan(absRoot, policy);
         ExtractSupervision supervision = ExtractSupervisionPolicy.For(absDb);
 
         if (!force || ForceScanInPlace())
@@ -688,17 +690,21 @@ public sealed class JulieExtractRunner
     /// preserve the verified-fact-4 fix: a non-canonical <c>--db</c>/<c>--root</c>/<c>--file</c> under a
     /// symlinked workspace trips julie's outside-root validation. The bootstrap canonicalizes the db ONCE and
     /// passes it here verbatim. Routes through the same <see cref="Run"/> → <see cref="Interpret"/> → version
-    /// cross-check as <see cref="Scan"/>; the exit-code contract is identical. Carries the scan's invariant
-    /// ignore file (<see cref="ScanIgnorePolicy.ForFileUpdate"/>) so an event for a path the scan excluded
-    /// cannot re-insert its rows.
+    /// cross-check as <see cref="Scan"/>; the exit-code contract is identical. Reuses the already-materialized
+    /// scan policy through the read-only resolver and carries the generated and invariant ignore files
+    /// (<see cref="ScanIgnorePolicy.ForFileUpdate"/>) so an event for a path the scan excluded cannot re-insert
+    /// its rows. It does not run the vendor detection walk or materialize a new generated policy.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="canonicalDb"/> is null/blank or not an absolute path.</exception>
     public ExtractReport Update(string canonicalRoot, string canonicalDb, string canonicalFile)
     {
         RequireCanonicalDb(canonicalDb);
         ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
+        string root = Path.GetFullPath(canonicalRoot);
+        EffectiveIgnorePolicy? policy = JulieIgnoreSeeder.ResolvePolicyForUpdate(
+            root, WorkspaceId.FromCanonicalRoot(root));
         return Run(BuildUpdateArgs(
-            canonicalDb, canonicalRoot, canonicalFile, ScanIgnorePolicy.ForFileUpdate(canonicalRoot)));
+            canonicalDb, canonicalRoot, canonicalFile, ScanIgnorePolicy.ForFileUpdate(root, policy)));
     }
 
     /// <summary>

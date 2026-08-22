@@ -1041,6 +1041,7 @@ public sealed class StoreWorkspaceCoordinatorTests
     public void NewFamilyImportPassesMillersInvariantIgnoreFile()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-store-ignore-" + Guid.NewGuid().ToString("N"));
+        string millerHome = Path.Combine(root, "miller-home");
         Directory.CreateDirectory(root);
         try
         {
@@ -1056,13 +1057,19 @@ public sealed class StoreWorkspaceCoordinatorTests
                 () => IndexLevelPolicy.Progressive,
                 _ => new StoreWorkspaceState(1, "l1"),
                 () => "request-ignore",
-                fromArtifact: null);
+                fromArtifact: null,
+                phaseSink: null,
+                inspectTree: null,
+                millerDirectory: millerHome);
 
             coordinator.Scan(jobs: 1);
 
             StoreImportRequest request = Assert.IsType<StoreImportRequest>(client.SingleRequest);
+            string generated = JulieIgnoreSeeder.GeneratedGlobalIgnorePathForWorkspaceId(
+                WorkspaceId.FromCanonicalRoot(root), millerHome);
             string invariant = ScanIgnorePolicy.InvariantIgnorePathFor(root);
-            Assert.Equal([invariant], request.Scan.IgnoreFiles);
+            Assert.Equal([generated, invariant], request.Scan.IgnoreFiles);
+            Assert.False(File.Exists(Path.Combine(root, ".julieignore")));
             Assert.Contains(".worktrees/", File.ReadAllText(invariant), StringComparison.Ordinal);
         }
         finally
@@ -1076,6 +1083,7 @@ public sealed class StoreWorkspaceCoordinatorTests
     public void ExistingInvariantIgnoreFileIsPassedToStoreUpdates()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-store-update-ignore-" + Guid.NewGuid().ToString("N"));
+        string millerHome = Path.Combine(root, "miller-home");
         Directory.CreateDirectory(Path.Combine(root, ".miller"));
         try
         {
@@ -1084,6 +1092,10 @@ public sealed class StoreWorkspaceCoordinatorTests
             string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
             string invariant = ScanIgnorePolicy.InvariantIgnorePathFor(canonicalRoot);
             File.WriteAllText(invariant, ScanIgnorePolicy.RenderInvariantContent());
+            string generated = JulieIgnoreSeeder.GeneratedGlobalIgnorePathForWorkspaceId(
+                WorkspaceId.FromCanonicalRoot(canonicalRoot), millerHome);
+            Directory.CreateDirectory(Path.GetDirectoryName(generated)!);
+            File.WriteAllText(generated, "generated/\n");
             var client = new RecordingStoreClient(StoreOperation.Update);
             var coordinator = new StoreWorkspaceCoordinator(
                 Binding with
@@ -1094,12 +1106,16 @@ public sealed class StoreWorkspaceCoordinatorTests
                 client,
                 () => IndexLevelPolicy.Progressive,
                 _ => new StoreWorkspaceState(1, "l1"),
-                () => "request-update-ignore");
+                () => "request-update-ignore",
+                fromArtifact: null,
+                phaseSink: null,
+                inspectTree: null,
+                millerDirectory: millerHome);
 
             coordinator.Update(Path.Combine(canonicalRoot, "src", "a.cs"));
 
             StoreUpdateRequest request = Assert.IsType<StoreUpdateRequest>(client.SingleRequest);
-            Assert.Equal([invariant], request.Scan.IgnoreFiles);
+            Assert.Equal([generated, invariant], request.Scan.IgnoreFiles);
         }
         finally
         {
