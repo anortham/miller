@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Testing;
@@ -38,7 +39,18 @@ public sealed record TestsCoreHooks(
     CtExecutionBudget? Budget = null,
     Func<string, string, IMillerFactSource>? OpenFacts = null,
     IContinuousTestProviderResolver? Providers = null,
-    Func<string, string, CtRunResult>? SubmitRun = null);
+    Func<string, string, CtRunResult>? SubmitRun = null)
+{
+    internal TestsWaitProbe? WaitProbe { get; init; }
+
+    internal CtDaemonPublicationProbe? PublicationProbe { get; init; }
+}
+
+internal sealed record TestsWaitProbe(
+    Func<string, ContinuousTestDaemonSnapshot>? ReadStatus = null,
+    Func<string, bool>? IsLeaseLive = null,
+    TimeProvider? Clock = null,
+    Action<TimeSpan>? Delay = null);
 
 public sealed record TestsForegroundRunRequest(
     string WorkspaceRoot,
@@ -125,7 +137,9 @@ public sealed record TestsServeResult(
     int ExitCode,
     string Status,
     string? Reason,
-    int? ProcessId)
+    int? ProcessId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    CtDaemonPublicationResult? Publication = null)
 {
     public string Render(bool json) => json ? TestsCore.RenderServeJson(this) : TestsCore.RenderServeCompact(this);
 }
@@ -142,10 +156,30 @@ public sealed record TestsRunResult(
     string? Reason,
     bool Waited,
     CtFreshnessKey? Selected,
-    bool Paused = false)
+    bool Paused = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    TestsWaitResult? Wait = null)
 {
     public string Render(bool json) => json ? TestsCore.RenderRunJson(this) : TestsCore.RenderRunCompact(this);
 }
+
+public enum TestsWaitState
+{
+    Completed,
+    QueuedTimeout,
+    NotPickedUp,
+    WaitTimeout,
+    DaemonStopped,
+    LeaseLost,
+}
+
+public sealed record TestsWaitResult(
+    bool WaitComplete,
+    TestsWaitState State,
+    double ElapsedSeconds,
+    double TimeoutSeconds,
+    string CommandId,
+    string? RunId);
 
 /// <summary>
 /// <paramref name="Truncated"/> is how many red cases are left AFTER this page. <paramref name="Total"/> and
@@ -482,7 +516,8 @@ public static class TestsCore
         CtDaemonSpawnResult spawned = CtDaemonLauncher.SpawnDetached(
             anchor,
             request.Hooks?.StartProcess,
-            request.MillerVersion ?? MillerVersion.Current);
+            request.MillerVersion ?? MillerVersion.Current,
+            publication: request.Hooks?.PublicationProbe);
         int exit = spawned.Status is CtDaemonSpawnStatus.Started
             or CtDaemonSpawnStatus.AlreadyRunning
             or CtDaemonSpawnStatus.Replaced ? 0 : 3;
@@ -498,7 +533,8 @@ public static class TestsCore
             exit,
             spawned.Status.ToString().ToLowerInvariant(),
             reason,
-            spawned.ProcessId);
+            spawned.ProcessId,
+            spawned.Publication);
     }
 
     public static TestsServeResult ServeHost(TestsCoreRequest request)
@@ -663,16 +699,17 @@ public static class TestsCore
                         Selected: null);
                 }
 
-                TestsStatusResult status = request.Wait
-                    ? WaitForDaemonToSettle(request, endpointRoot)
-                    : Status(request);
+                (TestsStatusResult status, TestsWaitResult? wait) = request.Wait
+                    ? WaitForDaemonToSettle(request, endpointRoot, submitted.Ack.CommandId)
+                    : (Status(request), null);
                 return new TestsRunResult(
                     0,
                     CtRunExecution.Daemon,
                     status.Verdict,
                     submitted.Reason ?? submitted.Ack?.Reason,
                     request.Wait,
-                    status.Selected);
+                    status.Selected,
+                    Wait: wait);
             }
         }
 
@@ -1169,7 +1206,8 @@ public static class TestsCore
     /// This wait tests daemon ACTIVITY instead, so a run that is genuinely partial at rest still returns
     /// partial, and one that is partial because it just started does not.</para>
     ///
-    /// <para>Four ways out, all bounded: the daemon goes idle, it stops, its lease dies, or a limit expires.
+    /// <para>Six ways out, all bounded: the run completes, remains queued, is never picked up, reaches its
+    /// wait limit, stops, or loses its lease.
     /// It never waits on a value that the work itself might never produce.</para>
     /// </summary>
     /// <summary>
@@ -1177,61 +1215,96 @@ public static class TestsCore
     /// daemon, that is the repo's main checkout, whose status file carries the live per-poll
     /// activity. The returned verdict always comes from the requested workspace's own store.
     /// </summary>
-    private static TestsStatusResult WaitForDaemonToSettle(TestsCoreRequest request, string endpointRoot)
+    private static (TestsStatusResult Status, TestsWaitResult Wait) WaitForDaemonToSettle(
+        TestsCoreRequest request,
+        string endpointRoot,
+        string commandId)
     {
         TimeSpan timeout = request.WaitTimeout ?? TimeSpan.FromMinutes(10);
-        var clock = Stopwatch.StartNew();
-        var queued = new Stopwatch();
-        var sinceLivenessProbe = Stopwatch.StartNew();
-        ContinuousTestDaemonSnapshot snapshot = ContinuousTestDaemonHost.ReadStatus(endpointRoot);
+        TestsWaitProbe probe = request.Hooks?.WaitProbe ?? new TestsWaitProbe();
+        Func<string, ContinuousTestDaemonSnapshot> readStatus =
+            probe.ReadStatus ?? ContinuousTestDaemonHost.ReadStatus;
+        Func<string, bool> isLeaseLive =
+            probe.IsLeaseLive ?? (root => CtDaemonLease.TryReadLive(root) is not null);
+        TimeProvider clock = probe.Clock ?? TimeProvider.System;
+        Action<TimeSpan> delay = probe.Delay ?? (duration => Thread.Sleep(duration));
+        long started = clock.GetTimestamp();
+        long? queuedAt = null;
+        long lastLivenessProbe = started;
+        bool leaseLive = true;
+        bool leaseProbed = false;
+        ContinuousTestDaemonSnapshot snapshot = readStatus(endpointRoot);
         bool sawExecuting = false;
+        string? runId = null;
 
         while (true)
         {
+            TimeSpan elapsed = clock.GetElapsedTime(started);
+            if (!leaseProbed || clock.GetElapsedTime(lastLivenessProbe) >= LivenessProbeInterval)
+            {
+                leaseLive = isLeaseLive(endpointRoot);
+                leaseProbed = true;
+                lastLivenessProbe = clock.GetTimestamp();
+            }
+
+            if (IsExecuting(snapshot))
+                runId ??= snapshot.Run?.RunId;
+
+            if (snapshot.State == CtDaemonLifecycleState.Stopped)
+                return WaitResult(request, TestsWaitState.DaemonStopped, false, elapsed, timeout, commandId, runId);
+            if (!leaseLive)
+                return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId);
+
             if (IsExecuting(snapshot))
             {
                 sawExecuting = true;
-                queued.Reset();
+                queuedAt = null;
             }
             else if (IsQueued(snapshot))
             {
-                // Ready work that another workspace's budget lease is blocking. Bounded on its own, because
-                // the holder may keep the slot for as long as its own suite takes, and reporting
-                // "still queued" now beats stalling the caller for the whole timeout.
-                if (!queued.IsRunning)
-                    queued.Restart();
-                if (queued.Elapsed >= QueuedWaitLimit)
-                    return Status(request);
+                runId ??= snapshot.Run?.RunId;
+                queuedAt ??= clock.GetTimestamp();
+                if (clock.GetElapsedTime(queuedAt.Value) >= QueuedWaitLimit)
+                    return WaitResult(request, TestsWaitState.QueuedTimeout, false, elapsed, timeout, commandId, runId);
             }
-            else if (sawExecuting || clock.Elapsed >= RunPickupGrace)
+            else if (sawExecuting || elapsed >= RunPickupGrace)
             {
-                // Settled. Before the grace expires an idle reading means the daemon has not picked the run
-                // up yet, not that it finished — the daemon publishes its status once per poll interval.
-                return Status(request);
+                if (sawExecuting)
+                {
+                    if (isLeaseLive(endpointRoot))
+                        return WaitResult(request, TestsWaitState.Completed, true, elapsed, timeout, commandId, runId);
+                    return WaitResult(request, TestsWaitState.LeaseLost, false, elapsed, timeout, commandId, runId);
+                }
+
+                return WaitResult(request, TestsWaitState.NotPickedUp, false, elapsed, timeout, commandId, runId);
             }
 
-            if (snapshot.State == CtDaemonLifecycleState.Stopped)
-                return Status(request);
-            if (clock.Elapsed >= timeout)
-                return Status(request);
+            if (elapsed >= timeout)
+                return WaitResult(request, TestsWaitState.WaitTimeout, false, elapsed, timeout, commandId, runId);
 
-            // A daemon that died mid-run leaves its last status file behind. Without this the wait would read
-            // "executing" from a dead process until the whole timeout expired.
-            //
-            // Probed on its own slower clock: it reads the lease file and asks the OS about a process, and a
-            // dead daemon stays dead, so doing it on every 50 ms poll would cost twelve thousand process
-            // lookups across a full wait to learn the same thing.
-            if (sinceLivenessProbe.Elapsed >= LivenessProbeInterval)
-            {
-                sinceLivenessProbe.Restart();
-                if (CtDaemonLease.TryReadLive(endpointRoot) is null)
-                    return Status(request);
-            }
-
-            Thread.Sleep(WaitPollInterval);
-            snapshot = ContinuousTestDaemonHost.ReadStatus(endpointRoot);
+            TimeSpan remaining = timeout - elapsed;
+            delay(remaining < WaitPollInterval ? remaining : WaitPollInterval);
+            snapshot = readStatus(endpointRoot);
         }
     }
+
+    private static (TestsStatusResult Status, TestsWaitResult Wait) WaitResult(
+        TestsCoreRequest request,
+        TestsWaitState state,
+        bool complete,
+        TimeSpan elapsed,
+        TimeSpan timeout,
+        string commandId,
+        string? runId) =>
+        (
+            Status(request),
+            new TestsWaitResult(
+                complete,
+                state,
+                elapsed.TotalSeconds,
+                timeout.TotalSeconds,
+                commandId,
+                runId));
 
     /// <summary>
     /// A run is in flight. The activity field is authoritative; the reason string is the fallback for a
