@@ -445,6 +445,198 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
     }
 
     /// <summary>
+    /// One directory is ONE pytest project. The dogfood repository more-itertools carries
+    /// <c>pyproject.toml</c>, <c>setup.cfg</c> and <c>tox.ini</c> side by side, and each one enabled its
+    /// own project - so the same suite ran three times per change.
+    /// </summary>
+    [Fact]
+    public void Discover_enables_one_pytest_project_for_a_directory_with_several_config_files()
+    {
+        WriteProject("pyproject.toml", "[tool.pytest.ini_options]");
+        WriteProject("setup.cfg", "[tool:pytest]");
+        WriteProject("tox.ini", "[pytest]");
+        WriteProject("setup.py", "from setuptools import setup");
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal("pytest", project.Framework);
+        Assert.Equal("pyproject.toml", Path.GetFileName(project.ProjectPath));
+    }
+
+    /// <summary>
+    /// The winner follows pytest's own rootdir precedence, so the file Miller names is the file pytest
+    /// reads: <c>pytest.ini</c> beats every other config file, even an empty one.
+    /// </summary>
+    [Fact]
+    public void Discover_prefers_the_config_file_pytest_itself_reads_first()
+    {
+        WriteProject("pytest.ini", "[pytest]");
+        WriteProject("pyproject.toml", "[tool.pytest.ini_options]");
+        WriteProject("tox.ini", "[pytest]");
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal("pytest.ini", Path.GetFileName(project.ProjectPath));
+    }
+
+    /// <summary>
+    /// The dedupe is per DIRECTORY, not per repository: two independent python packages stay two
+    /// projects.
+    /// </summary>
+    [Fact]
+    public void Discover_keeps_one_pytest_project_for_each_directory()
+    {
+        WriteProject("libs/alpha/pyproject.toml", "[tool.pytest.ini_options]");
+        WriteProject("libs/alpha/setup.cfg", "[tool:pytest]");
+        WriteProject("libs/beta/pyproject.toml", "[tool.pytest.ini_options]");
+
+        var projects = ContinuousTestProjectInventory.Discover(_root, "ws:1");
+
+        Assert.Equal(2, projects.Count);
+        Assert.All(projects, project => Assert.Equal("pyproject.toml", Path.GetFileName(project.ProjectPath)));
+    }
+
+    /// <summary>
+    /// A cargo workspace run already builds and tests every member crate, so a member's own
+    /// <c>Cargo.toml</c> must not enable a second project. The dogfood repository julie-extractors
+    /// listed its four member crates beside the workspace root and ran the whole suite twice.
+    /// </summary>
+    [Fact]
+    public void Discover_skips_the_member_crates_of_a_cargo_workspace()
+    {
+        WriteProject("Cargo.toml", """
+            [workspace]
+            members = [
+                "crates/julie-extract-cli",
+                "crates/julie-extractors",
+                "xtask",
+            ]
+            resolver = "2"
+            """);
+        WriteProject("crates/julie-extract-cli/Cargo.toml", "[package]\nname = \"cli\"\n");
+        WriteProject("crates/julie-extractors/Cargo.toml", "[package]\nname = \"extractors\"\n");
+        WriteProject("xtask/Cargo.toml", "[package]\nname = \"xtask\"\n");
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal("cargo", project.Framework);
+        Assert.Equal(Path.Combine(_root, "Cargo.toml"), project.ProjectPath);
+    }
+
+    /// <summary>A member list is a glob list; <c>crates/*</c> names every crate below <c>crates</c>.</summary>
+    [Fact]
+    public void Discover_skips_member_crates_named_by_a_glob()
+    {
+        WriteProject("Cargo.toml", """
+            [workspace]
+            members = ["crates/*"]
+            """);
+        WriteProject("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+        WriteProject("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal(Path.Combine(_root, "Cargo.toml"), project.ProjectPath);
+    }
+
+    /// <summary>
+    /// An excluded crate is NOT part of the workspace run, so dropping it would stop testing it. The
+    /// exclude list therefore wins over a member glob that also matches it.
+    /// </summary>
+    [Fact]
+    public void Discover_keeps_a_crate_the_workspace_excludes()
+    {
+        WriteProject("Cargo.toml", """
+            [workspace]
+            members = ["crates/*"]
+            exclude = ["crates/standalone"]
+            """);
+        WriteProject("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+        WriteProject("crates/standalone/Cargo.toml", "[package]\nname = \"standalone\"\n");
+
+        var projects = ContinuousTestProjectInventory.Discover(_root, "ws:1");
+
+        Assert.Equal(2, projects.Count);
+        Assert.Contains(
+            projects,
+            project => project.ProjectPath == Path.Combine(_root, "crates", "standalone", "Cargo.toml"));
+    }
+
+    /// <summary>
+    /// When the workspace table names no members, cargo infers them from path dependencies - which this
+    /// parser does not read. Keeping every candidate runs a suite twice; dropping one stops testing it,
+    /// so the doubt resolves toward keeping.
+    /// </summary>
+    [Fact]
+    public void Discover_keeps_every_crate_when_the_workspace_names_no_members()
+    {
+        WriteProject("Cargo.toml", """
+            [workspace]
+            resolver = "2"
+            """);
+        WriteProject("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+
+        Assert.Equal(2, ContinuousTestProjectInventory.Discover(_root, "ws:1").Count);
+    }
+
+    /// <summary>
+    /// A crate that is not a member of any workspace keeps its own project, however deep it sits.
+    /// </summary>
+    [Fact]
+    public void Discover_keeps_a_crate_that_no_workspace_lists()
+    {
+        WriteProject("Cargo.toml", """
+            [workspace]
+            members = ["crates/alpha"]
+            """);
+        WriteProject("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+        WriteProject("tools/standalone/Cargo.toml", "[package]\nname = \"standalone\"\n");
+
+        var projects = ContinuousTestProjectInventory.Discover(_root, "ws:1");
+
+        Assert.Equal(2, projects.Count);
+        Assert.Contains(
+            projects,
+            project => project.ProjectPath == Path.Combine(_root, "tools", "standalone", "Cargo.toml"));
+    }
+
+    /// <summary>
+    /// A manifest under a fixtures directory is test DATA. The dogfood repository julie-extractors
+    /// enabled <c>fixtures/extraction/toml/cargo_deps/Cargo.toml</c> as a project and CT tried to build
+    /// a parser fixture.
+    /// </summary>
+    [Theory]
+    [InlineData("fixtures")]
+    [InlineData("__fixtures__")]
+    [InlineData("testdata")]
+    public void Discover_skips_a_manifest_that_is_test_data(string fixtureSegment)
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", XunitProject);
+        WriteProject($"{fixtureSegment}/extraction/toml/cargo_deps/Cargo.toml", "[package]\nname = \"x\"\n");
+        WriteProject($"{fixtureSegment}/python/pyproject.toml", "[tool.pytest.ini_options]");
+        WriteProject($"src/{fixtureSegment}/nested/package.json", """
+            { "name": "f", "devDependencies": { "vitest": "^3.2.4" } }
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal("App.Tests.csproj", Path.GetFileName(project.ProjectPath));
+    }
+
+    /// <summary>
+    /// The fixture rule guards the WALK, not a path the user typed. <c>tests enable</c> names one file,
+    /// and a person who names it means it.
+    /// </summary>
+    [Fact]
+    public void Identify_still_accepts_a_fixture_path_the_user_names()
+    {
+        WriteProject("fixtures/python/pyproject.toml", "[tool.pytest.ini_options]");
+
+        ContinuousTestProject? project = ContinuousTestProjectInventory.Identify(
+            _root,
+            "ws:1",
+            Path.Combine(_root, "fixtures", "python", "pyproject.toml"));
+
+        Assert.NotNull(project);
+        Assert.Equal("pytest", project.Framework);
+    }
+
+    /// <summary>
     /// `git init` writes <c>.git</c> as a DIRECTORY, which is what makes this root the owner of the
     /// <c>.git/modules/&lt;name&gt;</c> directories its submodules point at.
     /// </summary>
