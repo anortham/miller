@@ -687,6 +687,67 @@ public sealed class DotnetTestProviderTests : IDisposable
         Assert.Equal("TestCategory!=Scale", FilterValue(command.Arguments));
     }
 
+    /// <summary>
+    /// An mstest DataRow/DynamicData display name keeps its parentheses in the selector — unlike nunit,
+    /// which truncates at the first one — so the term must escape them. Bare parentheses inside a term
+    /// are grouping to vstest, and the composed <c>(terms)&amp;exclusion</c> expression either fails to
+    /// parse (a false red) or selects a different set than the caller asked for.
+    /// </summary>
+    [Fact]
+    public void BuildRunCommand_mstest_escapes_filter_metacharacters_in_a_parameterized_display_name()
+    {
+        var provider = new DotnetTestProvider(new FakeTestProcessRunner());
+
+        var command = provider.BuildRunCommand(new ContinuousTestProviderRunRequest(
+            Workspace: Workspace("mstest"),
+            SelectedRevision: "rev-1",
+            IndexIdentity: IndexIdentity,
+            TestCaseIds: ["mstest:Sample.Tests.CalculatorTests.Cases (1,2)"]));
+
+        Assert.Equal(
+            "FullyQualifiedName=Sample.Tests.CalculatorTests.Cases \\(1%2C2\\)",
+            FilterValue(command.Arguments));
+    }
+
+    /// <summary>Trait values reach the exclusion clause verbatim, so they need the same escaping.</summary>
+    [Fact]
+    public void BuildRunCommand_mstest_escapes_filter_metacharacters_in_a_trait_exclusion()
+    {
+        var provider = new DotnetTestProvider(new FakeTestProcessRunner());
+        var workspace = Workspace("mstest", excludeTraits: ["Category=Slow&Flaky (nightly)"]);
+
+        var command = provider.BuildRunCommand(new ContinuousTestProviderRunRequest(
+            Workspace: workspace,
+            SelectedRevision: "rev-1",
+            IndexIdentity: IndexIdentity));
+
+        Assert.Equal("TestCategory!=Slow\\&Flaky \\(nightly\\)", FilterValue(command.Arguments));
+    }
+
+    /// <summary>
+    /// nunit truncates a parameterized selector at the first parenthesis before the term is built, so
+    /// escaping must leave that path byte-identical: nothing reserved survives the truncation.
+    /// </summary>
+    [Fact]
+    public void BuildRunCommand_nunit_truncation_is_unchanged_by_escaping()
+    {
+        var provider = new DotnetTestProvider(new FakeTestProcessRunner());
+
+        var command = provider.BuildRunCommand(new ContinuousTestProviderRunRequest(
+            Workspace: Workspace("nunit"),
+            SelectedRevision: "rev-1",
+            IndexIdentity: IndexIdentity,
+            TestCaseIds:
+            [
+                "nunit:Sample.Tests.CalculatorTests.Adds",
+                "nunit:Sample.Tests.CalculatorTests.Cases(\"one.txt\",Sample.Model)",
+            ]));
+
+        Assert.Equal(
+            "FullyQualifiedName=Sample.Tests.CalculatorTests.Adds|FullyQualifiedName=Sample.Tests.CalculatorTests.Cases",
+            FilterValue(command.Arguments));
+    }
+
     [Fact]
     public async Task Run_pertest_rejects_generic_frameworks()
     {
