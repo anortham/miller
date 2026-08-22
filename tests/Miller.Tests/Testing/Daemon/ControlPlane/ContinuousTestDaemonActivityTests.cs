@@ -136,6 +136,7 @@ public sealed class ContinuousTestDaemonActivityTests : IDisposable
                 record => record.Run is { ProviderSource: "ct-provider:fixture", CurrentPart: 1 },
                 "the daemon never published provider and first chunk facts");
             CtDaemonRunProgress firstRun = Assert.IsType<CtDaemonRunProgress>(first.Run);
+            provider.ReleasePartTwo();
 
             CtDaemonStatusRecord later = await harness.WaitForStatusAsync(
                 record => record.Run is { CurrentPart: 2 },
@@ -147,8 +148,14 @@ public sealed class ContinuousTestDaemonActivityTests : IDisposable
             Assert.Equal(firstRun.Selection, laterRun.Selection);
             Assert.Equal(2, laterRun.RequestedUniqueUnitCount);
             Assert.Equal(2, laterRun.ChunkCount);
-            Assert.Equal(2, laterRun.CurrentPartUnitCount);
-            Assert.Equal(["test:app:part2"], laterRun.NameSamples);
+            Assert.Equal(1, firstRun.CurrentPartUnitCount);
+            Assert.Equal(1, laterRun.CurrentPartUnitCount);
+            Assert.Equal(
+                laterRun.RequestedUniqueUnitCount,
+                firstRun.CurrentPartUnitCount!.Value + laterRun.CurrentPartUnitCount!.Value);
+            Assert.Equal(firstRun.NameDigest, laterRun.NameDigest);
+            Assert.Equal(firstRun.NameSamples, laterRun.NameSamples);
+            Assert.Equal(["test:app", "test:app:1"], laterRun.NameSamples);
         }
         finally
         {
@@ -258,6 +265,9 @@ public sealed class ContinuousTestDaemonActivityTests : IDisposable
         public TaskCompletionSource<ContinuousTestProviderRunRequest> Started { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        private TaskCompletionSource PartTwoRelease { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
             ContinuousTestWorkspace workspace,
             CancellationToken cancellationToken = default) =>
@@ -272,22 +282,24 @@ public sealed class ContinuousTestDaemonActivityTests : IDisposable
                 RequestedUniqueUnitCount: request.TestCaseIds.Count,
                 ChunkCount: 2,
                 CurrentPart: 1,
-                CurrentPartUnitCount: request.TestCaseIds.Count,
-                NameSamples: ["test:app:part1"],
-                NameDigest: "part1",
+                CurrentPartUnitCount: 1,
+                NameSamples: ["test:app", "test:app:1"],
+                NameDigest: "selection-digest",
                 NamesTruncated: false));
-            await Task.Delay(50, cancellationToken);
+            await PartTwoRelease.Task.WaitAsync(cancellationToken);
             request.Progress?.Invoke(new ContinuousTestProviderChunkProgress(
                 RequestedUniqueUnitCount: request.TestCaseIds.Count,
                 ChunkCount: 2,
                 CurrentPart: 2,
-                CurrentPartUnitCount: request.TestCaseIds.Count,
-                NameSamples: ["test:app:part2"],
-                NameDigest: "part2",
+                CurrentPartUnitCount: 1,
+                NameSamples: ["test:app", "test:app:1"],
+                NameDigest: "selection-digest",
                 NamesTruncated: false));
             await Task.Delay(Timeout.Infinite, cancellationToken);
             return new ProviderRunResult(request.RunId ?? "run:1", "passed");
         }
+
+        public void ReleasePartTwo() => PartTwoRelease.TrySetResult();
 
         public void Dispose()
         {
