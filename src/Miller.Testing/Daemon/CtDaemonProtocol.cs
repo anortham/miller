@@ -211,6 +211,18 @@ public static class CtDaemonProtocol
     public static string CommandAckPath(string workspaceRoot, string commandId) =>
         Path.Combine(CommandDirectory(workspaceRoot), $"{RequireCommandId(commandId)}.ack.json");
 
+    /// <summary>
+    /// Whether <paramref name="commandId"/> is a legal command id — the SAME rule
+    /// <see cref="RequireCommandId"/> enforces by throwing.
+    ///
+    /// <para>A reader that discovers ids by listing the command directory needs to ASK this question,
+    /// because the file name is chosen by whoever wrote the file and the answer decides whether the id
+    /// may touch a protocol path at all. Asking by catching the throw does not work: the throw escapes
+    /// on the first path call, which is what killed the daemon on one badly named file.</para>
+    /// </summary>
+    public static bool IsCommandId(string? commandId) =>
+        !string.IsNullOrWhiteSpace(commandId) && CommandIdPattern.IsMatch(commandId);
+
     private static string RequireRoot(string workspaceRoot)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot))

@@ -125,6 +125,24 @@ as stopped from every worktree it served. (Why: observed live on 2026-08-21 — 
 process was gone, `tests stop` answered `already_stopped`, and status still reported
 `daemon: running, idle`.)
 
+### A paused automatic run says why
+
+`daemon.reason` names the cause when the daemon has stopped running tests by itself. The case that
+needs it: the poller reads the impact of each index interval, and an interval it cannot read (a
+change too widely used for the impact bound, a bridge error) answers `unavailable_delta`. That
+answer is correct and it is a fail-safe — nothing is selected and nothing is absorbed — but it is
+STICKY, because the poller must not step over an interval it could not read. So the same unreadable
+interval comes back on every 250 ms tick, and automatic runs stop.
+
+After eight such answers in a row the daemon slows that poll to the same jittered cadence a degraded
+index gets, and publishes a reason of the form `auto-runs paused: impact unavailable
+(<delta reason>)`. Work already accepted at an earlier, readable base still drains: the unreadable
+interval says nothing about it. Selection, watermarks, and the never-enqueue-on-unknown rule are
+unchanged — this only bounds the poll and reports the cause. `tests run` still executes on request.
+
+No key is added: `daemon.reason` already carries the daemon's reason and its wording is not a
+contract.
+
 ### Daemon build version
 
 `daemon.miller_version` is the build the LIVE daemon runs, read from its `daemon.lease.json`. The
