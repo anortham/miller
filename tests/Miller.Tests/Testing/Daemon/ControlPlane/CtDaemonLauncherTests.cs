@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Miller.Indexing;
@@ -298,6 +299,51 @@ public sealed class CtDaemonLauncherTests : IDisposable
         {
             if (!holder.HasExited)
                 holder.Kill(entireProcessTree: true);
+        }
+    }
+
+    [Fact]
+    public void SpawnDetached_OnUnixWithoutSetsid_StillLaunchesDaemon()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        string tools = Path.Combine(_root, "fallback-tools");
+        Directory.CreateDirectory(tools);
+        string marker = Path.Combine(_root, "fallback.marker");
+        string nohup = Path.Combine(tools, "nohup");
+        string daemon = Path.Combine(_root, "fallback-daemon.sh");
+        WriteExecutable(nohup, "#!/bin/sh\nexec \"$@\"\n");
+        WriteExecutable(
+            daemon,
+            "#!/bin/sh\nprintf '%s' \"$1\" > \"$MILLER_CT_FALLBACK_MARKER\"\n/bin/sleep 1\n");
+
+        Process? process = null;
+        try
+        {
+            CtDaemonSpawnResult result = CtDaemonLauncher.SpawnDetached(
+                _root,
+                startProcess: info =>
+                {
+                    info.Environment["PATH"] = tools;
+                    info.Environment["MILLER_CT_FALLBACK_MARKER"] = marker;
+                    process = Process.Start(info);
+                    return process;
+                },
+                resolveImage: (_, _) => new CtDaemonImage(daemon, false, "test"),
+                publication: NoWaitPublication());
+
+            Assert.Equal(CtDaemonSpawnStatus.Started, result.Status);
+            Assert.NotNull(process);
+            Assert.True(
+                SpinWait.SpinUntil(() => File.Exists(marker), TimeSpan.FromSeconds(5)),
+                "the daemon did not execute through the no-setsid fallback");
+            Assert.Equal("ct-daemon", File.ReadAllText(marker));
+        }
+        finally
+        {
+            if (process is { HasExited: false })
+                process.Kill(entireProcessTree: true);
         }
     }
 
@@ -603,6 +649,17 @@ public sealed class CtDaemonLauncherTests : IDisposable
         return Process.Start(info) ?? throw new InvalidOperationException("stub process did not start");
     }
 
+    private static void WriteExecutable(string path, string contents)
+    {
+        File.WriteAllText(path, contents);
+        if (OperatingSystem.IsWindows())
+            return;
+
+        File.SetUnixFileMode(
+            path,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
     [Fact]
     public void RunWithNoDaemon_IsForegroundOneShot_AndDoesNotSpawn()
     {
@@ -720,6 +777,54 @@ public sealed class CtDaemonLauncherServeScaleTests : IDisposable
             "the daemon wrote nothing to .miller/ct/daemon.out.log or daemon.err.log after the launcher "
             + "process exited, so `miller tests serve` still leaves no startup diagnostic. Logs:\n"
             + ReadLogs());
+    }
+
+    [Fact]
+    public void UnixLauncherProcessGroupExit_DoesNotKillDaemon()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        string miller = RequireMillerBinary();
+
+        File.WriteAllText(ContinuousTestPolicy.EnabledMarkerPath(_root), string.Empty);
+        ScaleTestSupport.WriteFreshnessArtifact(_root, "artifact-" + Guid.NewGuid().ToString("N"), 1);
+
+        string launcherGroupPath = Path.Combine(_work, "launcher-group.pid");
+        (Process launcher, StringBuilder serveOutput) = StartLauncher(miller, launcherGroupPath);
+        using (launcher)
+        {
+            try
+            {
+                int launcherGroupId = WaitForGroupId(launcherGroupPath, TimeSpan.FromSeconds(5));
+                launcher.StandardInput.WriteLine("start");
+                launcher.StandardInput.Close();
+
+                int? daemonPid = WaitForLiveDaemon(TimeSpan.FromSeconds(30));
+                Assert.True(
+                    daemonPid is not null,
+                    "the daemon never took the lease, so this test cannot exercise process-group teardown. "
+                    + ReadLogs());
+                Assert.True(
+                    WaitForOutput(serveOutput, "\"publication\":{\"readiness\":\"ready\"", TimeSpan.FromSeconds(30)),
+                    $"serve output did not publish readiness: {ReadOutput(serveOutput)}");
+
+                using (JsonDocument serveJson = JsonDocument.Parse(ReadOutput(serveOutput)))
+                    Assert.Equal(daemonPid.Value, serveJson.RootElement.GetProperty("pid").GetInt32());
+
+                Assert.NotEqual(GetSessionId(launcherGroupId), GetSessionId(daemonPid.Value));
+                Assert.NotEqual(launcherGroupId, GetProcessGroup(daemonPid.Value));
+                Assert.Equal(0, KillProcessGroup(-launcherGroupId, 9));
+                Assert.True(
+                    WaitForProcess(daemonPid.Value, TimeSpan.FromSeconds(5)),
+                    "the daemon died when its launcher process group was torn down. Logs:\n" + ReadLogs());
+            }
+            finally
+            {
+                if (!launcher.HasExited)
+                    launcher.Kill(entireProcessTree: true);
+            }
+        }
     }
 
     private int? WaitForLiveDaemon(TimeSpan timeout)
@@ -843,6 +948,108 @@ public sealed class CtDaemonLauncherServeScaleTests : IDisposable
             $"miller {string.Join(' ', args)} did not exit within 120s");
         return (process.ExitCode, output.ToString());
     }
+
+    private (Process Process, StringBuilder Output) StartLauncher(string miller, string groupPath)
+    {
+        var info = new ProcessStartInfo("setsid")
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = _work,
+        };
+        info.ArgumentList.Add("/bin/sh");
+        info.ArgumentList.Add("-c");
+        info.ArgumentList.Add(
+            "echo $$ > \"$7\"; read -r _; \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" \"$6\"; sleep 30");
+        info.ArgumentList.Add("ct-launcher");
+        info.ArgumentList.Add(miller);
+        info.ArgumentList.Add("tests");
+        info.ArgumentList.Add("serve");
+        info.ArgumentList.Add("--workspace");
+        info.ArgumentList.Add(_root);
+        info.ArgumentList.Add("--json");
+        info.ArgumentList.Add(groupPath);
+        info.Environment[MillerHome.EnvironmentVariable] = _home;
+        info.Environment["HOME"] = _home;
+        info.Environment["USERPROFILE"] = _home;
+        info.Environment.Remove(CtEnvironment.KillSwitch);
+        info.Environment["MILLER_SEMANTIC"] = "off";
+
+        Process process = Process.Start(info)
+            ?? throw new InvalidOperationException("the launcher process did not start");
+        var output = new StringBuilder();
+        process.OutputDataReceived += (_, e) => AppendLine(output, e.Data);
+        process.ErrorDataReceived += (_, e) => AppendLine(output, e.Data);
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        return (process, output);
+    }
+
+    private static int WaitForGroupId(string path, TimeSpan timeout)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < timeout)
+        {
+            if (File.Exists(path) && int.TryParse(File.ReadAllText(path), out int groupId))
+                return groupId;
+            Thread.Sleep(25);
+        }
+
+        throw new TimeoutException($"the launcher did not publish its process-group id in {path}");
+    }
+
+    private static bool WaitForOutput(StringBuilder output, string expected, TimeSpan timeout)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < timeout)
+        {
+            if (ReadOutput(output).Contains(expected, StringComparison.Ordinal))
+                return true;
+            Thread.Sleep(25);
+        }
+
+        return false;
+    }
+
+    private static string ReadOutput(StringBuilder output)
+    {
+        lock (output)
+            return output.ToString();
+    }
+
+    private static bool WaitForProcess(int pid, TimeSpan timeout)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < timeout)
+        {
+            try
+            {
+                using Process process = Process.GetProcessById(pid);
+                if (!process.HasExited)
+                    return true;
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+
+            Thread.Sleep(25);
+        }
+
+        return false;
+    }
+
+    [DllImport("libc", EntryPoint = "kill", SetLastError = true)]
+    private static extern int KillProcessGroup(int processId, int signal = 15);
+
+    [DllImport("libc", EntryPoint = "getpgid", SetLastError = true)]
+    private static extern int GetProcessGroup(int processId);
+
+    [DllImport("libc", EntryPoint = "getsid", SetLastError = true)]
+    private static extern int GetSessionId(int processId);
 
     private static void AppendLine(StringBuilder sink, string? line)
     {

@@ -591,10 +591,16 @@ arg="$2"
 verb="$3"
 stdout_path="$4"
 stderr_path="$5"
-if [ -n "$arg" ]; then
-  exec nohup "$exe" "$arg" "$verb" >>"$stdout_path" 2>>"$stderr_path" </dev/null
+if command -v setsid >/dev/null 2>&1; then
+  detacher=setsid
 else
-  exec nohup "$exe" "$verb" >>"$stdout_path" 2>>"$stderr_path" </dev/null
+  detacher=
 fi
+if [ -n "$arg" ]; then
+  set -- "$exe" "$arg" "$verb"
+else
+  set -- "$exe" "$verb"
+fi
+exec $detacher nohup "$@" >>"$stdout_path" 2>>"$stderr_path" </dev/null
 """;
 }
