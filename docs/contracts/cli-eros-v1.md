@@ -77,6 +77,25 @@ Current `json_commands` include:
 | `tests run --json` | Request a CT run: live daemon uses the command channel; otherwise a foreground one-shot. `--wait` observes daemon activity completion and reports a typed wait outcome, not a verdict transition. See [`tests-cli-v1.md`](tests-cli-v1.md). |
 | `capabilities --json` | Discover this contract surface. |
 
+### `workspace remove --json` cleanup field
+
+The removal response keeps the existing result, index, registry, and store-sidecar fields and adds the nullable
+`ignore_policy_cleanup_error` string. It is `null` when the exact Miller-owned global ignore policy was absent or
+deleted successfully. When it is non-null, the workspace index and registry removal still follow their existing
+lock and lease safeguards; the field is a warning that only that exact policy path could not be cleaned up. Miller
+never edits or removes a workspace-root `.julieignore`, including root files left by older releases.
+
+```json
+{
+  "result": "removed",
+  "index_dir_deleted": true,
+  "ignore_policy_cleanup_error": null
+}
+```
+
+Consumers must treat a non-null value as an actionable cleanup warning, not as permission to delete another policy
+path or to classify a root `.julieignore` by its contents.
+
 `capabilities --json` reports `optional_features.reference_aware_context=true` when `context --reference-mode usage`
 is available.
 

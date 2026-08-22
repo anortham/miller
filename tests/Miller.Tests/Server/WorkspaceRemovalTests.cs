@@ -3,6 +3,7 @@ using Miller.Indexing;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Testing;
+using System.Text.Json;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -18,17 +19,31 @@ public sealed class WorkspaceRemovalTests : IDisposable
 {
     private readonly string _dir;
     private readonly string _registryDb;
+    private readonly string _millerDirectory;
+    private readonly List<string> _globalPolicies = [];
 
     public WorkspaceRemovalTests()
     {
         _dir = Path.Combine(Path.GetTempPath(), "miller-removal-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
         _registryDb = Path.Combine(_dir, "workspaces.db");
+        _millerDirectory = Path.Combine(_dir, "miller-home", ".miller");
     }
 
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();
+        foreach (string path in _globalPolicies)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+                else if (Directory.Exists(path))
+                    Directory.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
@@ -55,6 +70,15 @@ public sealed class WorkspaceRemovalTests : IDisposable
             WorkspaceRegistryState.Ready);
     }
 
+    private string WriteGlobalPolicy(string workspaceId, string content = "# Miller generated\n")
+    {
+        string path = JulieIgnoreSeeder.GeneratedGlobalIgnorePathForWorkspaceId(workspaceId, _millerDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+        _globalPolicies.Add(path);
+        return path;
+    }
+
     // ---------- RemoveById ----------
 
     [Fact]
@@ -72,6 +96,36 @@ public sealed class WorkspaceRemovalTests : IDisposable
         Assert.Equal(root, result.Root);
         Assert.False(Directory.Exists(millerDir));
         Assert.Null(registry.Get("ws-remove-00000001"));
+    }
+
+    [Fact]
+    public void RemoveById_DeletesOnlyTheMatchingGlobalPolicyAndLeavesRootPolicyUntouched()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-ignore-remove");
+        const string LegacyRootPolicy = "# generated-looking legacy file\nnode_modules/\n";
+        string rootPolicy = Path.Combine(root, JulieIgnoreSeeder.WorkspaceIgnoreFileName);
+        File.WriteAllText(rootPolicy, LegacyRootPolicy);
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+        string policy = WriteGlobalPolicy(workspaceId);
+        string otherPolicy = WriteGlobalPolicy("ws-ignore-remove-000002", "# keep\n");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, workspaceId, "ignore-remove-disp", root);
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "ignore-remove-disp",
+            liveRoot: null,
+            millerDirectory: _millerDirectory);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.False(Directory.Exists(millerDir));
+        Assert.False(File.Exists(policy));
+        Assert.True(File.Exists(otherPolicy));
+        Assert.Equal(LegacyRootPolicy, File.ReadAllText(rootPolicy));
+        using JsonDocument json = JsonDocument.Parse(WorkspaceRender.Remove(result, json: true));
+        Assert.Equal(
+            JsonValueKind.Null,
+            json.RootElement.GetProperty("ignore_policy_cleanup_error").ValueKind);
     }
 
     [Fact]
@@ -501,6 +555,111 @@ public sealed class WorkspaceRemovalTests : IDisposable
         Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
         Assert.False(Directory.Exists(millerDir));
         Assert.Null(registry.Get("ws-bypath-00000001"));
+    }
+
+    [Fact]
+    public void RemoveByPath_DeletesOnlyTheMatchingGlobalPolicyAndLeavesEditedRootPolicyUntouched()
+    {
+        var (root, _) = MakeWorkspace("ws-ignore-bypath");
+        const string EditedRootPolicy = "# edited old policy\ncustom/\n";
+        string rootPolicy = Path.Combine(root, JulieIgnoreSeeder.WorkspaceIgnoreFileName);
+        File.WriteAllText(rootPolicy, EditedRootPolicy);
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+        string policy = WriteGlobalPolicy(workspaceId);
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, workspaceId, "ignore-bypath-disp", root);
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveByPath(
+            registry,
+            root,
+            liveRoot: null,
+            millerDirectory: _millerDirectory);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.False(File.Exists(policy));
+        Assert.Equal(EditedRootPolicy, File.ReadAllText(rootPolicy));
+    }
+
+    [Fact]
+    public void RemoveById_DerivesPolicyFromCanonicalRootInsteadOfRegistryId()
+    {
+        var (root, _) = MakeWorkspace("ws-ignore-canonical");
+        string canonicalPolicy = WriteGlobalPolicy(WorkspaceId.FromCanonicalRoot(root), "# canonical\n");
+        string rowPolicy = WriteGlobalPolicy("foreign-policy-id", "# foreign\n");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "foreign-policy-id", "ignore-canonical-disp", root);
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "ignore-canonical-disp",
+            liveRoot: null,
+            millerDirectory: _millerDirectory);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.False(File.Exists(canonicalPolicy));
+        Assert.True(File.Exists(rowPolicy));
+    }
+
+    [Fact]
+    public void RemoveById_MaliciousWorkspaceIdCannotTargetGlobalPolicy()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-ignore-malicious");
+        string escaped = Path.Combine(_millerDirectory, "escaped.julieignore");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(escaped)!);
+            File.WriteAllText(escaped, "# must remain\n");
+            using WorkspaceRegistry registry = OpenRegistry();
+            Register(registry, "../escaped", "ignore-malicious-disp", root);
+
+            WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+                registry,
+                "ignore-malicious-disp",
+                liveRoot: null,
+                millerDirectory: _millerDirectory);
+
+            Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+            Assert.False(Directory.Exists(millerDir));
+            Assert.True(File.Exists(escaped));
+            Assert.Null(registry.Get("../escaped"));
+        }
+        finally
+        {
+            try { File.Delete(escaped); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void RemoveById_ReportsGlobalPolicyCleanupFailureWithoutExpandingDeletion()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-ignore-cleanup-failure");
+        string workspaceId = WorkspaceId.FromCanonicalRoot(root);
+        string policyPath = JulieIgnoreSeeder.GeneratedGlobalIgnorePathForWorkspaceId(
+            workspaceId,
+            _millerDirectory);
+        Directory.CreateDirectory(policyPath);
+        _globalPolicies.Add(policyPath);
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, workspaceId, "ignore-cleanup-failure-disp", root);
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "ignore-cleanup-failure-disp",
+            liveRoot: null,
+            millerDirectory: _millerDirectory);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.False(Directory.Exists(millerDir));
+        Assert.Equal("the generated policy path is a directory", result.IgnorePolicyCleanupError);
+        Assert.Contains(
+            "generated ignore policy cleanup failed",
+            WorkspaceRender.Remove(result, json: false),
+            StringComparison.Ordinal);
+        using JsonDocument json = JsonDocument.Parse(WorkspaceRender.Remove(result, json: true));
+        Assert.Equal(
+            "the generated policy path is a directory",
+            json.RootElement.GetProperty("ignore_policy_cleanup_error").GetString());
+        Assert.True(Directory.Exists(policyPath));
     }
 
     [Fact]

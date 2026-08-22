@@ -127,9 +127,9 @@
 **Approach:** Resolve cleanup from the validated canonical root/workspace ID under Miller home; refuse traversal/out-of-home paths. A cleanup failure is reported but never expands deletion scope.
 
 **Acceptance criteria:**
-- [ ] Remove-by-ID and remove-by-path delete only the matching global policy.
-- [ ] User, inherited, edited, malformed, and legacy root `.julieignore` files remain byte-identical.
-- [ ] Invalid registrations cannot target arbitrary policy paths.
+- [x] Remove-by-ID and remove-by-path delete only the matching global policy.
+- [x] User, inherited, edited, malformed, and legacy root `.julieignore` files remain byte-identical.
+- [x] Invalid registrations cannot target arbitrary policy paths.
 - [ ] Focused removal/policy tests pass and the serialized worker commit is recorded.
 
 ### Task 3: Real extractor and clean-checkout acceptance

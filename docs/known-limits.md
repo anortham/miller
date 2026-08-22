@@ -4,6 +4,13 @@
   and rollback path. Until the Ph4/Ph5 A7 durable reader-pin
   protocol lands, producer GC must not run concurrently with live Miller family-store readers; an unpinned
   non-current generation may be reclaimed during a long read. The explicit standalone path is unaffected.
+- Generated ignore policy is Miller-owned state at
+  `$MILLER_HOME/.miller/ignore-policies/<canonical-workspace-id>.julieignore`. Workspace removal derives the ID
+  from the validated canonical root and deletes only that exact
+  validated path and never recurses or edits a workspace-root `.julieignore`. Files left at the root by older Miller
+  versions are not migrated or auto-deleted: ownership cannot be proven from a header after a user edits the file,
+  so review and remove those legacy files manually. If the global policy cannot be removed, the removal result
+  reports the cleanup warning while keeping the existing `.miller` and registry safeguards.
 - Search and content family-store sidecars apply store file changes in place when the sidecar stamp and a complete
   revision delta match (A8, shipped in v1.19.4). A failed or ineligible delta still falls back to a full
   WriteStoreView with no log. There is no local reproducible cost gate, so A8 is implemented, not proven closed.

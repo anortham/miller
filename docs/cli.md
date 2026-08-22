@@ -190,7 +190,12 @@ What these prove:
   misses, and friction signals with exact omission counts. Telemetry stores target hashes, not raw
   queries or raw target text.
 - `workspace list` marks missing roots without opening their indexes. `workspace remove` deletes only a
-  registered target and refuses live, sensitive, machine-global, corrupt-path, or write-locked targets.
+  registered target and refuses live, sensitive, machine-global, corrupt-path, or write-locked targets. For a
+  successful removal it also deletes only that workspace's Miller-owned global policy at
+  `$MILLER_HOME/.miller/ignore-policies/<canonical-workspace-id>.julieignore` (derived from the canonical root);
+  it never edits the root `.julieignore`.
+  Root policy files from older Miller versions are left for manual review because their ownership cannot be proved
+  safely. JSON removal output includes `ignore_policy_cleanup_error` when the exact global cleanup could not finish.
 - Symbol search stays narrow and structural (`name + signature`). Docs/config use `--mode content`;
   source bodies and imported text use the explicit content corpus modes.
 - `patterns --json` discovers extractor-recognized code-shape facts across the full pattern catalog

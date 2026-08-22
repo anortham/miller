@@ -90,6 +90,22 @@ public sealed class JulieIgnoreSeederTests
     }
 
     [Fact]
+    public void GeneratedGlobalIgnorePathForWorkspaceId_UsesTheInjectedMillerDirectory()
+    {
+        using var temp = new TempDir();
+        string millerDirectory = Path.Combine(temp.Path, "isolated", ".miller");
+        const string workspaceId = "workspace-id";
+
+        string actual = JulieIgnoreSeeder.GeneratedGlobalIgnorePathForWorkspaceId(
+            workspaceId,
+            millerDirectory);
+
+        Assert.Equal(
+            Path.Combine(millerDirectory, "ignore-policies", workspaceId + ".julieignore"),
+            actual);
+    }
+
+    [Fact]
     public void PreparePolicy_UserRootWinsAndNeverCreatesGlobalPolicy()
     {
         using var temp = new TempDir();

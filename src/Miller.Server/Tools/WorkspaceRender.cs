@@ -333,7 +333,8 @@ public readonly record struct WorkspaceRemoveResult(
     string? WorkspaceId = null,
     string? Root = null,
     bool IndexDirDeleted = false,
-    StoreSidecarReclaimResult SidecarReclaim = default)
+    StoreSidecarReclaimResult SidecarReclaim = default,
+    string? IgnorePolicyCleanupError = null)
 {
     /// <summary>Removal outcome.</summary>
     public enum Outcome
@@ -363,8 +364,16 @@ public readonly record struct WorkspaceRemoveResult(
         string? workspaceId = null,
         string? root = null,
         bool indexDirDeleted = true,
-        StoreSidecarReclaimResult sidecarReclaim = default) =>
-        new(Outcome.Removed, millerDir, workspaceId, root, indexDirDeleted, sidecarReclaim);
+        StoreSidecarReclaimResult sidecarReclaim = default,
+        string? ignorePolicyCleanupError = null) =>
+        new(
+            Outcome.Removed,
+            millerDir,
+            workspaceId,
+            root,
+            indexDirDeleted,
+            sidecarReclaim,
+            ignorePolicyCleanupError);
 
     /// <summary>Refused because the path is the live (in-use) workspace.</summary>
     public static WorkspaceRemoveResult RefusedLive(string millerDir, string? workspaceId = null, string? root = null) =>
@@ -2719,10 +2728,14 @@ public static class WorkspaceRender
     private static string RemoveCompact(WorkspaceRemoveResult result) => result.Result switch
     {
         WorkspaceRemoveResult.Outcome.Removed when result.IndexDirDeleted =>
-            $"removed workspace index: {result.MillerDir}" + SidecarReclaimSuffix(result.SidecarReclaim),
+            $"removed workspace index: {result.MillerDir}" +
+            SidecarReclaimSuffix(result.SidecarReclaim) +
+            IgnorePolicyCleanupSuffix(result.IgnorePolicyCleanupError),
         WorkspaceRemoveResult.Outcome.Removed =>
             $"removed workspace registry entry: {result.Root ?? result.WorkspaceId ?? result.MillerDir} " +
-            $"(no index dir at {result.MillerDir})" + SidecarReclaimSuffix(result.SidecarReclaim),
+            $"(no index dir at {result.MillerDir})" +
+            SidecarReclaimSuffix(result.SidecarReclaim) +
+            IgnorePolicyCleanupSuffix(result.IgnorePolicyCleanupError),
         WorkspaceRemoveResult.Outcome.RefusedLive =>
             $"refused: {result.MillerDir} is the workspace this Miller is serving (in use). " +
             "Stop that Miller first, or remove a different workspace.",
@@ -2760,6 +2773,10 @@ public static class WorkspaceRender
             else w.WriteString("root", result.Root);
             w.WriteBoolean("index_dir_deleted", result.IndexDirDeleted);
             WriteSidecarReclaim(w, result.SidecarReclaim);
+            if (result.IgnorePolicyCleanupError is null)
+                w.WriteNull("ignore_policy_cleanup_error");
+            else
+                w.WriteString("ignore_policy_cleanup_error", result.IgnorePolicyCleanupError);
             w.WriteString("message", RemoveCompact(result));
             w.WriteEndObject();
         }
@@ -2772,6 +2789,9 @@ public static class WorkspaceRender
     /// </summary>
     private static string SidecarReclaimSuffix(StoreSidecarReclaimResult reclaim) =>
         reclaim.HasReport ? $" ({SidecarReclaimText(reclaim)})" : string.Empty;
+
+    private static string IgnorePolicyCleanupSuffix(string? error) =>
+        error is null ? string.Empty : $" (generated ignore policy cleanup failed: {error})";
 
     internal static string SidecarReclaimText(StoreSidecarReclaimResult reclaim)
     {

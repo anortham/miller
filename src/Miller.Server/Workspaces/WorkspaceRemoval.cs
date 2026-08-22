@@ -21,6 +21,8 @@ namespace Miller.Server.Workspaces;
 /// </summary>
 public static class WorkspaceRemoval
 {
+    private const string GeneratedPolicyDirectoryName = "ignore-policies";
+
     /// <summary>
     /// Remove by registry selector (display id, unique prefix, full id, or registered root path).
     /// </summary>
@@ -31,13 +33,55 @@ public static class WorkspaceRemoval
         string? liveRoot,
         string? protectedMillerDir = null,
         Func<string, IDisposable?>? acquireWriterLock = null,
-        Func<string, IDisposable?>? acquireSidecarLease = null)
+        Func<string, IDisposable?>? acquireSidecarLease = null) =>
+        RemoveByIdCore(
+            registry,
+            selector,
+            liveRoot,
+            protectedMillerDir,
+            acquireWriterLock,
+            acquireSidecarLease,
+            MillerHome.ResolveMillerDirectory());
+
+    internal static WorkspaceRemoveResult RemoveById(
+        WorkspaceRegistry registry,
+        string selector,
+        string millerDirectory,
+        string? liveRoot = null,
+        string? protectedMillerDir = null,
+        Func<string, IDisposable?>? acquireWriterLock = null,
+        Func<string, IDisposable?>? acquireSidecarLease = null) =>
+        RemoveByIdCore(
+            registry,
+            selector,
+            liveRoot,
+            protectedMillerDir,
+            acquireWriterLock,
+            acquireSidecarLease,
+            millerDirectory);
+
+    private static WorkspaceRemoveResult RemoveByIdCore(
+        WorkspaceRegistry registry,
+        string selector,
+        string? liveRoot,
+        string? protectedMillerDir,
+        Func<string, IDisposable?>? acquireWriterLock,
+        Func<string, IDisposable?>? acquireSidecarLease,
+        string millerDirectory)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(selector);
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDirectory);
 
         WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, selector);
         if (!TryRegisteredMillerDir(row, out string millerDir))
+        {
+            return WorkspaceRemoveResult.RefusedInvalidRegistration(
+                millerDir,
+                row.WorkspaceId,
+                row.CanonicalRoot);
+        }
+        if (!TryRegisteredGlobalPolicyPath(row, millerDirectory, out string globalPolicyPath))
         {
             return WorkspaceRemoveResult.RefusedInvalidRegistration(
                 millerDir,
@@ -49,6 +93,7 @@ public static class WorkspaceRemoval
             row.WorkspaceId,
             row.CanonicalRoot,
             millerDir,
+            globalPolicyPath,
             liveRoot,
             protectedMillerDir,
             acquireWriterLock,
@@ -62,10 +107,45 @@ public static class WorkspaceRemoval
         string? liveRoot,
         string? protectedMillerDir = null,
         Func<string, IDisposable?>? acquireWriterLock = null,
-        Func<string, IDisposable?>? acquireSidecarLease = null)
+        Func<string, IDisposable?>? acquireSidecarLease = null) =>
+        RemoveByPathCore(
+            registry,
+            path,
+            liveRoot,
+            protectedMillerDir,
+            acquireWriterLock,
+            acquireSidecarLease,
+            MillerHome.ResolveMillerDirectory());
+
+    internal static WorkspaceRemoveResult RemoveByPath(
+        WorkspaceRegistry registry,
+        string path,
+        string millerDirectory,
+        string? liveRoot = null,
+        string? protectedMillerDir = null,
+        Func<string, IDisposable?>? acquireWriterLock = null,
+        Func<string, IDisposable?>? acquireSidecarLease = null) =>
+        RemoveByPathCore(
+            registry,
+            path,
+            liveRoot,
+            protectedMillerDir,
+            acquireWriterLock,
+            acquireSidecarLease,
+            millerDirectory);
+
+    private static WorkspaceRemoveResult RemoveByPathCore(
+        WorkspaceRegistry registry,
+        string path,
+        string? liveRoot,
+        string? protectedMillerDir,
+        Func<string, IDisposable?>? acquireWriterLock,
+        Func<string, IDisposable?>? acquireSidecarLease,
+        string millerDirectory)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDirectory);
 
         // A GONE dir cannot be canonicalized, so best-effort prune a registry row whose canonical root
         // lexically matches the full path (R4 — lets a CI teardown clean the registry after deleting the repo).
@@ -79,14 +159,25 @@ public static class WorkspaceRemoval
                 return WorkspaceRemoveResult.NotFound(goneMillerDir);
             StoreSidecarReclaimTarget? staleTarget =
                 StoreSidecarReclaimTarget.Capture(registry, stale.WorkspaceId);
+            if (!TryRegisteredGlobalPolicyPath(stale, millerDirectory, out string stalePolicyPath))
+            {
+                return WorkspaceRemoveResult.RefusedInvalidRegistration(
+                    goneMillerDir,
+                    stale.WorkspaceId,
+                    stale.CanonicalRoot);
+            }
+            string? ignorePolicyCleanupError = TryDeleteGeneratedPolicy(stalePolicyPath);
             _ = StoreSidecarReclaim.RecordIntent(staleTarget);
             registry.Remove(stale.WorkspaceId);
+            StoreSidecarReclaimResult sidecarReclaim =
+                StoreSidecarReclaim.Reclaim(registry, staleTarget, acquireSidecarLease);
             return WorkspaceRemoveResult.Removed(
                 goneMillerDir,
                 stale.WorkspaceId,
                 stale.CanonicalRoot,
                 indexDirDeleted: false,
-                StoreSidecarReclaim.Reclaim(registry, staleTarget, acquireSidecarLease));
+                sidecarReclaim,
+                ignorePolicyCleanupError);
         }
 
         string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(fullPath);
@@ -108,12 +199,20 @@ public static class WorkspaceRemoval
                 match.WorkspaceId,
                 match.CanonicalRoot);
         }
+        if (!TryRegisteredGlobalPolicyPath(match, millerDirectory, out string globalPolicyPath))
+        {
+            return WorkspaceRemoveResult.RefusedInvalidRegistration(
+                registeredMillerDir,
+                match.WorkspaceId,
+                match.CanonicalRoot);
+        }
 
         return Remove(
             registry,
             match.WorkspaceId,
             match.CanonicalRoot,
             registeredMillerDir,
+            globalPolicyPath,
             liveRoot,
             protectedMillerDir,
             acquireWriterLock,
@@ -125,6 +224,7 @@ public static class WorkspaceRemoval
         string? workspaceId,
         string? root,
         string millerDir,
+        string globalPolicyPath,
         string? liveRoot,
         string? protectedMillerDir,
         Func<string, IDisposable?>? acquireWriterLock,
@@ -158,14 +258,18 @@ public static class WorkspaceRemoval
         {
             if (workspaceId is null)
                 return WorkspaceRemoveResult.NotFound(millerDir, workspaceId, root);
+            string? missingIgnorePolicyCleanupError = TryDeleteGeneratedPolicy(globalPolicyPath);
             _ = StoreSidecarReclaim.RecordIntent(sidecarTarget);
             registry.Remove(workspaceId);
+            StoreSidecarReclaimResult missingSidecarReclaim =
+                StoreSidecarReclaim.Reclaim(registry, sidecarTarget, acquireSidecarLease);
             return WorkspaceRemoveResult.Removed(
                 millerDir,
                 workspaceId,
                 root,
                 indexDirDeleted: false,
-                StoreSidecarReclaim.Reclaim(registry, sidecarTarget, acquireSidecarLease));
+                missingSidecarReclaim,
+                missingIgnorePolicyCleanupError);
         }
 
         // The CT daemon is a FIFTH live holder, and the only one the lease bundle CANNOT hold. Its lease sits
@@ -206,18 +310,22 @@ public static class WorkspaceRemoval
         }
 
         SingleWriterLock.TryDeleteEmptiedDir(millerDir);
+        string? ignorePolicyCleanupError = TryDeleteGeneratedPolicy(globalPolicyPath);
         if (workspaceId is not null)
         {
             _ = StoreSidecarReclaim.RecordIntent(sidecarTarget);
             registry.Remove(workspaceId);
         }
 
+        StoreSidecarReclaimResult sidecarReclaim =
+            StoreSidecarReclaim.Reclaim(registry, sidecarTarget, acquireSidecarLease);
         return WorkspaceRemoveResult.Removed(
             millerDir,
             workspaceId,
             root,
             indexDirDeleted: true,
-            StoreSidecarReclaim.Reclaim(registry, sidecarTarget, acquireSidecarLease));
+            sidecarReclaim,
+            ignorePolicyCleanupError);
     }
 
     /// <summary>
@@ -324,6 +432,71 @@ public static class WorkspaceRemoval
             ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
         {
             return false;
+        }
+    }
+
+    private static bool TryRegisteredGlobalPolicyPath(
+        WorkspaceRegistryRow row,
+        string? millerDirectoryOverride,
+        out string policyPath)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        policyPath = string.Empty;
+        if (!TryRegisteredMillerDir(row, out _))
+            return false;
+
+        try
+        {
+            string canonicalRoot = Directory.Exists(row.CanonicalRoot)
+                ? PathCanonicalizer.CanonicalizeRoot(row.CanonicalRoot)
+                : Path.GetFullPath(row.CanonicalRoot);
+            if (!SamePath(canonicalRoot, row.CanonicalRoot))
+                return false;
+
+            string millerDirectory = Path.GetFullPath(
+                millerDirectoryOverride ?? MillerHome.ResolveMillerDirectory());
+            string policyDirectory = Path.GetFullPath(
+                Path.Combine(millerDirectory, GeneratedPolicyDirectoryName));
+            string canonicalWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+            string candidate = JulieIgnoreSeeder.GeneratedGlobalIgnorePathForWorkspaceId(
+                canonicalWorkspaceId,
+                millerDirectory);
+            string expected = Path.Combine(
+                policyDirectory,
+                canonicalWorkspaceId + JulieIgnoreSeeder.WorkspaceIgnoreFileName);
+            string? candidateDirectory = Path.GetDirectoryName(candidate);
+            if (candidateDirectory is null ||
+                !SamePath(candidate, expected) ||
+                !SamePath(candidateDirectory, policyDirectory))
+            {
+                return false;
+            }
+
+            policyPath = candidate;
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or IOException or UnauthorizedAccessException or
+            NotSupportedException or System.Security.SecurityException)
+        {
+            return false;
+        }
+    }
+
+    private static string? TryDeleteGeneratedPolicy(string policyPath)
+    {
+        try
+        {
+            File.Delete(policyPath);
+            return null;
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or IOException or UnauthorizedAccessException or
+            NotSupportedException or System.Security.SecurityException)
+        {
+            return Directory.Exists(policyPath)
+                ? "the generated policy path is a directory"
+                : ex.Message;
         }
     }
 
