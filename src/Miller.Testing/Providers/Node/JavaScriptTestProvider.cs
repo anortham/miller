@@ -42,12 +42,18 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         if (!Directory.Exists(packageRoot))
             return Task.FromResult<IReadOnlyList<ProviderTestCase>>([]);
 
+        // node:test discovers by Node's OWN rules, which are nothing like jest's stem convention. The
+        // rule is resolved ONCE per discovery because it reads the manifest. See NodeTestFileDiscovery.
+        var nodeDiscovery = string.Equals(ResolvedFrameworkOrNull(workspace), "node-test", StringComparison.Ordinal)
+            ? NodeTestFileDiscovery.ForPackage(packageRoot)
+            : null;
+
         var cases = Directory
             .EnumerateFiles(packageRoot, "*", SearchOption.AllDirectories)
             .Select(path => RelativePathOrNull(packageRoot, path))
             .Where(relativePath => relativePath is not null)
             .Select(relativePath => relativePath!)
-            .Where(IsDiscoverableTestFile)
+            .Where(relativePath => IsDiscoverableTestFile(relativePath, nodeDiscovery))
             .Order(StringComparer.Ordinal)
             .Select(relativePath => new ProviderTestCase(
                 Id: TestCaseId(relativePath),
@@ -93,9 +99,46 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         // one compile cache, so running them together would have them overwrite each other's output.
         // The CT execution budget already runs one workspace at a time.
         foreach (var invocation in invocations)
-            results.Add(await _runner.RunAsync(invocation.Command, cancellationToken).ConfigureAwait(false));
+            results.Add(await RunOneInvocationAsync(invocation.Command, cancellationToken).ConfigureAwait(false));
 
         return MergeRuns(request, paths, invocations, results);
+    }
+
+    /// <summary>
+    /// Runs one invocation and makes a launch that never happened SAY SO.
+    ///
+    /// <para>A missing package manager reaches this provider as a raw platform exception - on Windows a
+    /// <c>Win32Exception</c> naming nothing but "the system cannot find the file specified" - which is not
+    /// a provider failure, carries no generation, and reached the dogfood run's operator only as a line in
+    /// the daemon log while the run itself read as a bare <c>partial</c>. Restating it as a provider
+    /// failure puts the executable, the directory and the platform's own reason on the run, where the
+    /// coordinator stamps the generation onto it and terminalizes the run honestly.</para>
+    ///
+    /// <para>Cancellation and failures that already name themselves travel unchanged.</para>
+    /// </summary>
+    private async Task<TestProcessResult> RunOneInvocationAsync(
+        TestProcessCommand command,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (ContinuousTestProviderException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new ContinuousTestProviderException(
+                $"The JavaScript test run failed to launch '{command.FileName}' in "
+                + $"'{command.WorkingDirectory}': {exception.Message.Trim()}",
+                exception);
+        }
     }
 
     /// <summary>
@@ -316,7 +359,7 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
     {
         if (!string.IsNullOrWhiteSpace(request.Command))
         {
-            var tokens = SplitCommand(request.Command);
+            var tokens = NodeCommandLine.SplitCommand(request.Command);
             if (tokens.Count == 0)
                 throw new ContinuousTestProviderException("JavaScript test command must not be empty.");
 
@@ -327,9 +370,10 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
             return new TestProcessCommand(tokens[0], args, packageRoot, WorkspaceEnvironment(request.Workspace, paths));
         }
 
-        if (DetectPackageScript(packageRoot, framework) is { } scriptName)
+        var selection = SelectPackageScript(packageRoot, framework);
+        if (selection.Script is { } script)
         {
-            var args = new List<string> { "run", scriptName, "--" };
+            var args = new List<string> { "run", script.Name, "--" };
             args.AddRange(reporterArgs);
             return new TestProcessCommand(
                 PackageManager(packageRoot),
@@ -338,18 +382,35 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
                 WorkspaceEnvironment(request.Workspace, paths));
         }
 
-        return framework switch
+        return BuildDirectRunnerCommand(
+            request, paths, framework, packageRoot, reporterArgs, selection.RejectedScriptReason);
+    }
+
+    /// <summary>
+    /// The run that goes straight to the runner binary, with no package script between it and the
+    /// reporter arguments. Reached when the manifest names no usable script — either because it names none
+    /// at all, or because <see cref="SelectPackageScript"/> refused the ones it names.
+    /// </summary>
+    private TestProcessCommand BuildDirectRunnerCommand(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        string framework,
+        string packageRoot,
+        string[] reporterArgs,
+        string? rejectedScriptReason) =>
+        framework switch
         {
             "vitest" => new TestProcessCommand(
-                LocalBin(packageRoot, "vitest"),
+                RequiredLocalBin(packageRoot, "vitest", framework, request, rejectedScriptReason),
                 new[] { "run" }.Concat(reporterArgs).ToArray(),
                 packageRoot,
                 WorkspaceEnvironment(request.Workspace, paths)),
             "jest" => new TestProcessCommand(
-                LocalBin(packageRoot, "jest"),
+                RequiredLocalBin(packageRoot, "jest", framework, request, rejectedScriptReason),
                 reporterArgs,
                 packageRoot,
                 WorkspaceEnvironment(request.Workspace, paths)),
+            // node's runner needs no install: the same node that runs the project runs its tests.
             "node-test" => new TestProcessCommand(
                 "node",
                 new[] { "--test" }.Concat(reporterArgs).ToArray(),
@@ -357,6 +418,34 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
                 WorkspaceEnvironment(request.Workspace, paths)),
             _ => throw UnsupportedFramework(framework, request.Workspace.ProjectPath),
         };
+
+    /// <summary>
+    /// The workspace-local runner binary to launch.
+    ///
+    /// <para>When a package script was REJECTED, a missing binary means the run has no way to reach the
+    /// runner at all, and it says so. Spawning the missing name instead would fail the run and hand every
+    /// selected test file a failure summary taken from the launcher's own banner — a red attributed to
+    /// tests that never ran, which is exactly the shape dogfood finding F10 recorded. When no script was
+    /// rejected the name is returned unchecked, which keeps the long-standing behaviour: the spawn itself
+    /// then reports what is missing, now with the reason on the run (see
+    /// <see cref="RunOneInvocationAsync"/>).</para>
+    /// </summary>
+    private static string RequiredLocalBin(
+        string packageRoot,
+        string executableName,
+        string framework,
+        ContinuousTestProviderRunRequest request,
+        string? rejectedScriptReason)
+    {
+        var localBin = LocalBin(packageRoot, executableName);
+        if (rejectedScriptReason is null || File.Exists(localBin))
+            return localBin;
+
+        throw new ContinuousTestProviderException(
+            $"Continuous testing cannot run the {framework} suite in '{request.Workspace.ProjectPath}': "
+            + rejectedScriptReason
+            + $" Running {framework} directly instead needs '{localBin}', which is not installed. "
+            + "Install the project's dependencies, or set an explicit test command for this project.");
     }
 
     public static string TestCaseId(string relativePath)
@@ -556,12 +645,19 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
 
     private static string RequiredFramework(ContinuousTestWorkspace workspace)
     {
-        var framework = workspace.Framework?.Trim().ToLowerInvariant()
-            ?? DetectFramework(PackageRoot(workspace));
+        var framework = ResolvedFrameworkOrNull(workspace);
         return string.IsNullOrWhiteSpace(framework)
             ? throw UnsupportedFramework("<unspecified>", workspace.ProjectPath)
             : framework;
     }
+
+    /// <summary>
+    /// The framework this workspace runs, or null when neither the workspace nor the manifest names one.
+    /// Discovery asks in this non-throwing form: a directory with no manifest and no test file has no
+    /// framework and no cases, and that is an empty answer rather than an error.
+    /// </summary>
+    private static string? ResolvedFrameworkOrNull(ContinuousTestWorkspace workspace) =>
+        workspace.Framework?.Trim().ToLowerInvariant() ?? DetectFramework(PackageRoot(workspace));
 
     private static string[] ReporterArguments(string framework, string artifactPath) =>
         framework switch
@@ -669,31 +765,137 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         }
     }
 
-    private static string? DetectPackageScript(string packageRoot, string framework)
+    /// <summary>One package script: the name a package manager runs, and what it runs.</summary>
+    private sealed record PackageScript(string Name, string Command);
+
+    /// <summary>
+    /// The package script a run may be routed through, or the reason there is none. Both are null when the
+    /// manifest simply names no script for this framework — an absence, not a refusal.
+    /// </summary>
+    private sealed record PackageScriptSelection(PackageScript? Script, string? RejectedScriptReason);
+
+    /// <summary>
+    /// Chooses the package script to route a run through, or refuses.
+    ///
+    /// <para>A package manager appends everything after <c>--</c> to the END of the script, so a script is
+    /// usable only when arguments appended there reach the runner. Three shapes fail that test:</para>
+    /// <list type="bullet">
+    /// <item>a script that CHAINS commands — <c>a &amp;&amp; b</c> hands the reporter flags to <c>b</c>
+    /// alone, so every other command in the chain runs unreported and the report the provider reads is
+    /// never written;</item>
+    /// <item>a script the chained <c>test</c> entry point invokes — the halves of a chain are fragments of
+    /// one suite, and running a fragment silently covers part of it under whatever environment that
+    /// fragment configures;</item>
+    /// <item>a node:test script that already names a test path — Node stops reading options at the first
+    /// positional argument, so the appended reporter flags arrive as more paths
+    /// (<see cref="NodeTestFileDiscovery.SuppliesPositionalArguments"/>).</item>
+    /// </list>
+    /// <para>vercel/ms is the first two shapes at once: <c>test</c> chains <c>test:nodejs</c> and
+    /// <c>test:edge</c>, and this provider ran <c>test:edge</c> alone, produced no report, and marked all
+    /// four of its test files red with the launcher's banner as every failure summary — while both halves
+    /// pass by hand (dogfood finding F10, 2026-08-21). A rejection sends the run to the runner binary
+    /// instead.</para>
+    /// </summary>
+    private static PackageScriptSelection SelectPackageScript(string packageRoot, string framework)
+    {
+        var scripts = ReadPackageScripts(packageRoot);
+        if (scripts.Count == 0)
+            return new PackageScriptSelection(null, null);
+
+        var entryPoint = scripts.FirstOrDefault(script => script.Name == "test");
+        var chainedEntryPoint = entryPoint is not null && NodeCommandLine.IsChained(entryPoint.Command)
+            ? entryPoint
+            : null;
+        var fragments = chainedEntryPoint is null
+            ? []
+            : ChainedScriptFragments(chainedEntryPoint.Command);
+
+        var candidates = scripts
+            .Where(script => ScriptMatchesFramework(script.Name, script.Command, framework))
+            .OrderBy(script => ScriptPreference(script.Name))
+            .ThenBy(script => script.Name, StringComparer.Ordinal)
+            .ToArray();
+
+        var usable = candidates
+            .Where(script => !fragments.Contains(script.Name)
+                && ScriptRejectionReason(script, framework) is null)
+            .ToArray();
+        if (usable.Length > 0)
+            return new PackageScriptSelection(usable[0], null);
+
+        // The chained entry point names the real obstacle when there is one: the sibling scripts are only
+        // unusable because they are its fragments.
+        var reason = chainedEntryPoint is not null
+            ? ScriptRejectionReason(chainedEntryPoint, framework)
+            : candidates
+                .Select(script => ScriptRejectionReason(script, framework))
+                .FirstOrDefault(text => text is not null);
+        return new PackageScriptSelection(null, reason);
+    }
+
+    /// <summary>
+    /// Why this script cannot carry the appended reporter and isolation arguments, or null when it can.
+    /// </summary>
+    private static string? ScriptRejectionReason(PackageScript script, string framework)
+    {
+        if (NodeCommandLine.IsChained(script.Command))
+        {
+            return $"the '{script.Name}' package script chains commands (\"{script.Command}\"), so the "
+                + $"reporter and isolation arguments continuous testing appends cannot reach {framework}.";
+        }
+
+        if (framework == "node-test" && NodeTestFileDiscovery.SuppliesPositionalArguments(script.Command))
+        {
+            return $"the '{script.Name}' package script already names test paths (\"{script.Command}\") and "
+                + "node stops reading options at the first path, so the reporter arguments continuous "
+                + "testing appends cannot reach the runner.";
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<PackageScript> ReadPackageScripts(string packageRoot)
     {
         var packageJsonPath = Path.Combine(packageRoot, "package.json");
         if (!File.Exists(packageJsonPath))
-            return null;
+            return [];
 
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllText(packageJsonPath));
             if (!document.RootElement.TryGetProperty("scripts", out var scripts)
                 || scripts.ValueKind != JsonValueKind.Object)
-                return null;
+                return [];
 
             return scripts.EnumerateObject()
                 .Where(script => script.Value.ValueKind == JsonValueKind.String)
-                .Where(script => ScriptMatchesFramework(script.Name, script.Value.GetString() ?? string.Empty, framework))
-                .OrderBy(script => ScriptPreference(script.Name))
-                .ThenBy(script => script.Name, StringComparer.Ordinal)
-                .Select(script => script.Name)
-                .FirstOrDefault();
+                .Select(script => new PackageScript(script.Name, script.Value.GetString() ?? string.Empty))
+                .ToArray();
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            return null;
+            return [];
         }
+    }
+
+    /// <summary>
+    /// The script names a chained script invokes, from the <c>run &lt;name&gt;</c> pair each of its
+    /// segments carries. Those names are the fragments of one suite, not suites of their own.
+    /// </summary>
+    private static HashSet<string> ChainedScriptFragments(string command)
+    {
+        var fragments = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var segment in NodeCommandLine.SplitChainedSegments(command))
+        {
+            var tokens = NodeCommandLine.SplitCommand(segment);
+            for (var index = 0; index + 1 < tokens.Count; index++)
+            {
+                if (tokens[index] is "run" or "run-script")
+                    fragments.Add(tokens[index + 1]);
+            }
+        }
+
+        return fragments;
     }
 
     private static bool ScriptMatchesFramework(string name, string command, string framework)
@@ -979,11 +1181,22 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
             ? NormalizeRelativePath(testCaseId[TestCaseIdPrefix.Length..])
             : null;
 
-    private static bool IsDiscoverableTestFile(string relativePath)
+    /// <summary>
+    /// Whether one workspace-relative file is a test case of this project.
+    ///
+    /// <para>jest and vitest match the <c>.test.</c>/<c>.spec.</c> stem their own conventions use. A
+    /// node:test project instead matches <paramref name="nodeDiscovery"/>, which is Node's documented rule
+    /// set — a repo whose suite lives in <c>tests/index.js</c> has no stem to match and discovered nothing
+    /// (dogfood finding F8, 2026-08-21). The generated-directory exclusions apply to both.</para>
+    /// </summary>
+    private static bool IsDiscoverableTestFile(string relativePath, NodeTestFileDiscovery? nodeDiscovery)
     {
         var segments = relativePath.Split('/');
         if (segments.Any(IsExcludedSegment))
             return false;
+
+        if (nodeDiscovery is not null)
+            return nodeDiscovery.IsMatch(relativePath);
 
         var extension = Path.GetExtension(relativePath).ToLowerInvariant();
         if (extension is not (".js" or ".jsx" or ".ts" or ".tsx" or ".mjs" or ".cjs" or ".mts" or ".cts"))
@@ -1069,39 +1282,6 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
             return null;
 
         return value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
-    }
-
-    private static IReadOnlyList<string> SplitCommand(string command)
-    {
-        var result = new List<string>();
-        var current = new StringBuilder();
-        var inQuote = false;
-        char quoteChar = '\0';
-        foreach (var c in command)
-        {
-            if ((c == '"' || c == '\'') && (!inQuote || c == quoteChar))
-            {
-                inQuote = !inQuote;
-                quoteChar = inQuote ? c : '\0';
-                continue;
-            }
-
-            if (char.IsWhiteSpace(c) && !inQuote)
-            {
-                if (current.Length > 0)
-                {
-                    result.Add(current.ToString());
-                    current.Clear();
-                }
-                continue;
-            }
-
-            current.Append(c);
-        }
-
-        if (current.Length > 0)
-            result.Add(current.ToString());
-        return result;
     }
 
     private static bool RequiresPackageManagerArgumentSeparator(string executable)

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -564,6 +565,308 @@ public sealed class JavaScriptTestProviderTests : IDisposable
             StringComparison.Ordinal);
     }
 
+    // -------------------------------------------- chained package scripts (dogfood finding F10)
+
+    /// <summary>
+    /// vercel/ms, verbatim. Its <c>test</c> entry point chains the two halves of the suite, and each half
+    /// names jest. Continuous testing appends its reporter and isolation flags to the END of whatever it
+    /// runs, so neither the chain nor either half can be routed through: the chain delivers the flags to
+    /// its last command only, and a half is a fragment of the suite under its own environment. Running one
+    /// half produced no report, and the npm banner was then attributed to all four test files as a failure.
+    /// </summary>
+    private void WriteChainedTestScriptPackage() =>
+        WritePackageFile(
+            "package.json",
+            """
+            {
+              "scripts": {
+                "test": "pnpm run test:nodejs && pnpm run test:edge",
+                "test:nodejs": "jest --env node",
+                "test:edge": "jest --env @edge-runtime/jest-environment --no-coverage"
+              },
+              "devDependencies": { "jest": "30.0.5" }
+            }
+            """);
+
+    [Fact]
+    public void Build_run_command_bypasses_a_chained_package_test_script_and_runs_jest_directly()
+    {
+        var workspace = Workspace(null);
+        WriteChainedTestScriptPackage();
+        WriteLocalBin("jest");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner(), NoPackageManagerOnPath);
+        var generation = CtGenerationPaths.ResolveLatestOrFirst(workspace);
+
+        var command = provider.BuildRunCommand(Request(workspace, "js-test:src/index.test.ts"));
+
+        // The local jest binary, not the package manager: the flags now reach jest itself.
+        Assert.Equal(LocalBin("jest"), command.FileName);
+        Assert.Equal(PackageRoot, command.WorkingDirectory);
+        Assert.DoesNotContain("run", command.Arguments);
+        Assert.DoesNotContain("--", command.Arguments);
+        Assert.Contains("--json", command.Arguments);
+        Assert.Contains("--outputFile", command.Arguments);
+        Assert.Contains("src/index.test.ts", command.Arguments);
+        Assert.Equal(
+            CacheDirectory(generation),
+            command.Arguments[command.Arguments.ToList().IndexOf("--cacheDirectory") + 1]);
+    }
+
+    [Fact]
+    public void Build_run_command_fails_honestly_when_a_chained_script_leaves_no_local_runner()
+    {
+        var workspace = Workspace(null);
+        WriteChainedTestScriptPackage();
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner(), NoPackageManagerOnPath);
+
+        var exception = Assert.Throws<ContinuousTestProviderException>(
+            () => provider.BuildRunCommand(Request(workspace, "js-test:src/index.test.ts")));
+
+        // A visible reason, naming the script that cannot be used and the binary that is not there.
+        Assert.Contains("chains commands", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("pnpm run test:nodejs && pnpm run test:edge", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(LocalBin("jest"), exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Only a chained script is bypassed. A plain one still routes through the package manager, so a
+    /// project's own jest configuration keeps applying.
+    /// </summary>
+    [Fact]
+    public void Build_run_command_still_routes_a_plain_package_test_script_through_the_manager()
+    {
+        var workspace = Workspace(null);
+        WritePackageFile(
+            "package.json",
+            """
+            {
+              "scripts": { "test": "jest --runInBand" },
+              "devDependencies": { "jest": "^30.0.0" }
+            }
+            """);
+        WriteLocalBin("jest");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner(), NoPackageManagerOnPath);
+
+        var command = provider.BuildRunCommand(Request(workspace, "js-test:src/math.test.ts"));
+
+        Assert.Equal("npm", command.FileName);
+        Assert.Equal("run", command.Arguments[0]);
+        Assert.Equal("test", command.Arguments[1]);
+    }
+
+    /// <summary>
+    /// A sibling script the chained entry point does NOT invoke stays usable: only the fragments of the
+    /// chain are refused, not every script in the manifest.
+    /// </summary>
+    [Fact]
+    public void Build_run_command_uses_a_sibling_script_the_chained_entry_point_does_not_invoke()
+    {
+        var workspace = Workspace(null);
+        WritePackageFile(
+            "package.json",
+            """
+            {
+              "scripts": {
+                "test": "rimraf coverage && jest --coverage",
+                "test:unit": "jest --config jest.unit.config.js"
+              },
+              "devDependencies": { "jest": "^30.0.0" }
+            }
+            """);
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner(), NoPackageManagerOnPath);
+
+        var command = provider.BuildRunCommand(Request(workspace, "js-test:src/math.test.ts"));
+
+        Assert.Equal("npm", command.FileName);
+        Assert.Equal("test:unit", command.Arguments[1]);
+    }
+
+    /// <summary>
+    /// A quoted pipe is text, not a chain. Refusing this script would drop a project's own configuration
+    /// for no reason.
+    /// </summary>
+    [Fact]
+    public void Build_run_command_reads_a_quoted_operator_as_one_command()
+    {
+        var workspace = Workspace(null);
+        WritePackageFile(
+            "package.json",
+            """
+            {
+              "scripts": { "test": "jest --testPathPattern \"unit|contract\"" },
+              "devDependencies": { "jest": "^30.0.0" }
+            }
+            """);
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner(), NoPackageManagerOnPath);
+
+        var command = provider.BuildRunCommand(Request(workspace, "js-test:src/math.test.ts"));
+
+        Assert.Equal("npm", command.FileName);
+        Assert.Equal("test", command.Arguments[1]);
+    }
+
+    /// <summary>
+    /// Node stops reading options at the first positional argument, so a script that already names test
+    /// paths swallows the appended reporter flags as more paths: the run exits 0, prints the default spec
+    /// output, and writes no report at all. Measured against a real node 24 run of
+    /// <c>npm run test -- --test-reporter junit --test-reporter-destination out.xml tests/index.js</c>
+    /// against <c>"test": "node --test ./tests/*.js"</c>.
+    /// </summary>
+    [Fact]
+    public void Build_run_command_bypasses_a_node_test_script_that_already_names_test_paths()
+    {
+        var workspace = Workspace(null);
+        WritePackageFile("package.json", """{"scripts":{"test":"node --test ./tests/*.js"}}""");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner(), NoPackageManagerOnPath);
+
+        var command = provider.BuildRunCommand(Request(workspace, "js-test:tests/index.js"));
+
+        Assert.Equal("node", command.FileName);
+        Assert.Equal("--test", command.Arguments[0]);
+        Assert.Contains("--test-reporter", command.Arguments);
+        Assert.Contains("junit", command.Arguments);
+        Assert.Contains("tests/index.js", command.Arguments);
+        // Every option precedes every path, which is the only order node reads them in.
+        var arguments = command.Arguments.ToList();
+        Assert.True(
+            arguments.FindLastIndex(argument => argument.StartsWith("--", StringComparison.Ordinal))
+                < arguments.IndexOf("tests/index.js"));
+    }
+
+    [Fact]
+    public void Build_run_command_routes_a_node_test_script_with_no_paths_through_the_manager()
+    {
+        var workspace = Workspace(null);
+        WritePackageFile("package.json", """{"scripts":{"test":"node --test"}}""");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner(), NoPackageManagerOnPath);
+
+        var command = provider.BuildRunCommand(Request(workspace, "js-test:tests/index.js"));
+
+        Assert.Equal("npm", command.FileName);
+        Assert.Equal("run", command.Arguments[0]);
+        Assert.Equal("test", command.Arguments[1]);
+    }
+
+    /// <summary>
+    /// A spawn that never happened must say why. The dogfood run's first attempt died on a missing pnpm
+    /// and the reason reached the daemon log only, which cost a diagnosis step.
+    /// </summary>
+    [Fact]
+    public async Task Run_reports_why_the_test_process_could_not_be_launched()
+    {
+        var workspace = Workspace("jest");
+        var runner = new FakeTestProcessRunner();
+        runner.OnRun = _ => throw new Win32Exception(2, "The system cannot find the file specified.");
+        var provider = new JavaScriptTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(
+            () => provider.RunAsync(
+                Request(workspace, "js-test:src/math.test.ts"),
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("The system cannot find the file specified.", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(LocalBin("jest"), exception.Message, StringComparison.Ordinal);
+        Assert.Contains(PackageRoot, exception.Message, StringComparison.Ordinal);
+        Assert.Equal(CtGenerationPaths.IdForOrdinal(workspace, 1), exception.GenerationId);
+    }
+
+    // ------------------------------------------- node:test file discovery (dogfood finding F8)
+
+    /// <summary>
+    /// classnames, verbatim: <c>node --test ./tests/*.js</c>. Node runs the paths its command line names,
+    /// so the suite is those files - none of which carries a <c>.test.</c> or <c>.spec.</c> stem. Discovery
+    /// found zero cases against a suite of 63 passing tests (dogfood finding F8, 2026-08-21).
+    /// </summary>
+    [Fact]
+    public async Task Discover_finds_node_test_files_in_the_directory_the_package_script_names()
+    {
+        var workspace = Workspace(null);
+        WritePackageFile("package.json", """{"scripts":{"test":"node --test ./tests/*.js"}}""");
+        WritePackageFile("tests/index.js", "test('a', () => {})");
+        WritePackageFile("tests/dedupe.js", "test('b', () => {})");
+        WritePackageFile("tests/deep/nested.js", "test('c', () => {})");
+        WritePackageFile("index.js", "module.exports = {}");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        // A single '*' stays inside one path segment, exactly as glob(7) has it, so the nested file the
+        // script's glob does not name is not claimed either.
+        Assert.Equal(["tests/dedupe.js", "tests/index.js"], cases.Select(row => row.Selector).ToArray());
+        Assert.All(cases, row => Assert.Equal("node-test", row.Framework));
+    }
+
+    [Fact]
+    public async Task Discover_walks_a_directory_the_package_script_names()
+    {
+        var workspace = Workspace(null);
+        WritePackageFile("package.json", """{"scripts":{"test":"node --test tests/"}}""");
+        WritePackageFile("tests/index.js", "test('a', () => {})");
+        WritePackageFile("tests/deep/nested.mjs", "test('b', () => {})");
+        WritePackageFile("tests/fixture.json", "{}");
+        WritePackageFile("src/app.js", "module.exports = {}");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["tests/deep/nested.mjs", "tests/index.js"], cases.Select(row => row.Selector).ToArray());
+    }
+
+    /// <summary>
+    /// Node's own documented defaults, one file per pattern. Source:
+    /// <c>https://nodejs.org/api/test.html</c> — "By default, Node.js will run all files matching these
+    /// patterns": <c>**/*.test.*</c>, <c>**/*-test.*</c>, <c>**/*_test.*</c>, <c>**/test-*.*</c>,
+    /// <c>**/test.*</c> and <c>**/test/**/*.*</c>, over <c>cjs,mjs,js</c> plus <c>cts,mts,ts</c>.
+    /// </summary>
+    [Fact]
+    public async Task Discover_uses_node_default_patterns_when_the_script_names_no_path()
+    {
+        var workspace = Workspace(null);
+        WritePackageFile("package.json", """{"scripts":{"test":"node --test"}}""");
+        WritePackageFile("src/math.test.js", "");
+        WritePackageFile("src/string-test.mjs", "");
+        WritePackageFile("src/date_test.cjs", "");
+        WritePackageFile("src/parse.test.mts", "");
+        WritePackageFile("test-helpers.js", "");
+        WritePackageFile("test.js", "");
+        WritePackageFile("test/deep/anything.js", "");
+        WritePackageFile("src/helper.js", "");
+        WritePackageFile("src/notes.md", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [
+                "src/date_test.cjs",
+                "src/math.test.js",
+                "src/parse.test.mts",
+                "src/string-test.mjs",
+                "test-helpers.js",
+                "test.js",
+                "test/deep/anything.js",
+            ],
+            cases.Select(row => row.Selector).ToArray());
+    }
+
+    /// <summary>
+    /// jest and vitest keep the stem convention they actually use. Node's directory rule must not leak
+    /// into them: a jest project's <c>tests/index.js</c> helper is not a jest test file.
+    /// </summary>
+    [Fact]
+    public async Task Discover_keeps_test_and_spec_naming_for_jest_projects()
+    {
+        var workspace = Workspace("jest");
+        WritePackageFile("src/math.test.ts", "");
+        WritePackageFile("tests/index.js", "");
+        WritePackageFile("test/deep/anything.js", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["src/math.test.ts"], cases.Select(row => row.Selector).ToArray());
+    }
+
     // ------------------------------------------------------------ cmd.exe command-line cap
 
     /// <summary>
@@ -816,6 +1119,15 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         WritePackageFile(
             Path.Combine("node_modules", name, "package.json"),
             $$"""{"name":"{{name}}","version":"{{version}}"}""");
+
+    /// <summary>
+    /// The launchable shim npm, pnpm and yarn write into <c>node_modules/.bin</c> for an installed runner.
+    /// Its presence is what makes a direct invocation possible at all.
+    /// </summary>
+    private void WriteLocalBin(string name) =>
+        WritePackageFile(
+            Path.Combine("node_modules", ".bin", name + (OperatingSystem.IsWindows() ? ".cmd" : "")),
+            "");
 
     private string LocalBin(string name) =>
         Path.Combine(PackageRoot, "node_modules", ".bin", name + (OperatingSystem.IsWindows() ? ".cmd" : ""));
