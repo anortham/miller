@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Miller - Local Code Intelligence for Coding Agents</title>
-  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, refs, trace, impact, edit, marker audits through search, content search, structural patterns, workspace freshness, telemetry, and onboarding.">
+  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, refs, trace, impact, edit, marker audits through search, content search, structural patterns, workspace freshness, opt-in continuous testing, telemetry, and onboarding.">
   <link rel="canonical" href="https://anortham.github.io/miller/">
 
   <meta property="og:type" content="website">
@@ -29,6 +29,7 @@
       <a href="method.html">Method</a>
       <a href="#languages">Languages</a>
       <a href="#tools">Tools</a>
+      <a href="#testing">Testing</a>
       <a href="#dashboard">Dashboard</a>
       <a href="#install">Install</a>
       <a href="https://github.com/anortham/miller" target="_blank" rel="noopener">GitHub</a>
@@ -341,6 +342,99 @@
           <h3>workspace</h3>
           <p>Registry, freshness, refresh, telemetry-derived onboarding, dashboard launch, and cross-workspace selectors.</p>
         </article>
+        <article>
+          <h3>tests</h3>
+          <p>Opt-in <a href="#testing">continuous testing</a>: impact-selected runs, watermark freshness, and honest verdicts. <code>status</code> is a cheap read that starts nothing; <code>start</code> is the only spawn.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="testing" class="section intro-section">
+      <div class="section-heading">
+        <p class="eyebrow">Continuous testing</p>
+        <h2>Green results carry forward. Only impacted tests go stale.</h2>
+      </div>
+      <div class="split-copy">
+        <p>
+          Miller can watch a workspace and keep test verdicts as current as the index. The unit of
+          freshness is a test case, not a run: every result is stamped with the index generation and
+          revision it was proved at. When a file changes, green cases the change cannot reach carry
+          their verdict forward, and only the impacted cases go stale. A run then executes that stale
+          set as an explicit test-ID list, so a one-line edit runs the tests that edit can break
+          instead of the whole suite.
+        </p>
+        <p>
+          An explicit <code>tests run</code> also retries every red case, because asking for a run
+          means prove it again. Automatic runs debounce on the trailing edge. Green means complete
+          results at the current index key: when impact data is truncated, degraded, or unavailable,
+          Miller marks everything stale and runs nothing. There is no whole-suite fallback and no
+          optimistic green.
+        </p>
+      </div>
+      <div class="language-grid">
+        <article>
+          <h3>.NET</h3>
+          <ul>
+            <li><code>dotnet</code></li>
+            <li><code>xunit</code></li>
+            <li><code>nunit</code></li>
+            <li><code>mstest</code></li>
+          </ul>
+        </article>
+        <article>
+          <h3>Rust</h3>
+          <ul>
+            <li><code>cargo</code></li>
+          </ul>
+        </article>
+        <article>
+          <h3>Python</h3>
+          <ul>
+            <li><code>pytest</code></li>
+          </ul>
+        </article>
+        <article>
+          <h3>JavaScript and TypeScript</h3>
+          <ul>
+            <li><code>vitest</code></li>
+            <li><code>jest</code></li>
+            <li><code>node-test</code></li>
+          </ul>
+        </article>
+      </div>
+      <p class="language-note">
+        Run on real repositories: .NET on Miller's own suite, <code>cargo</code> on
+        <code>julie-extractors</code> (4,173 cases), <code>pytest</code> on <code>more-itertools</code>
+        (736 tests), plus <code>vitest</code> and <code>node-test</code> on live JavaScript projects.
+        <code>jest</code> is exercised by Miller's own test fixtures and has no real-repo run yet.
+        JavaScript and Python cases are discovered by test-file naming
+        (<code>*.test.*</code> or <code>*.spec.*</code>, <code>test_*.py</code> or
+        <code>*_test.py</code>), so a suite named some other way reports no cases rather than a false
+        green.
+      </p>
+      <div class="install-panel">
+        <pre><code>miller tests enable     # discover test projects, opt this workspace in
+miller tests serve      # start the daemon: the only start path
+miller tests status     # verdict, stale count, daemon state
+miller tests failures   # the red cases with failure summaries
+miller tests run        # the stale set plus every red case
+miller tests stop</code></pre>
+        <div class="limits">
+          <h3>Safety</h3>
+          <ul>
+            <li>Opt-in per workspace and off until you enable it. <code>MILLER_CT=off</code> is a
+              permanent zero-work switch.</li>
+            <li><code>tests status</code> is a cheap read: it creates no files and never starts the
+              daemon. <code>tests serve</code> is the only start path.</li>
+            <li>One workspace executes tests at a time, worktrees included.</li>
+            <li>The daemon runs from a private per-build copy, so it never locks the installed binary
+              or your build output.</li>
+            <li>A test process silent for ten minutes is killed and its run failed. The bound is on
+              silence, not total duration, so a slow suite survives.</li>
+            <li>Agents use the same operations through the <code>tests</code> MCP tool. A linked git
+              worktree inherits the main checkout's opt-in and is adopted by one family daemon.</li>
+          </ul>
+        </div>
       </div>
     </section>
 

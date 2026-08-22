@@ -15,9 +15,9 @@ budget made it worse, not better. Method, caveats, and raw evidence are in
 Miller is deterministic, local-first, and runs without a daemon. Semantic retrieval is on by default,
 fully local, and off-switchable; lexical-only results stay byte-identical either way. It does need a
 one-time embedding-model download — run [`miller semantic prepare`](#enable-semantic-retrieval) once, or
-Miller keeps serving lexical-only. Continuous testing is opt-in and off by default: `tests status` is a
-cheap read that starts nothing; `tests start` / `miller tests serve` is the only daemon start. Set
-`MILLER_CT=off` for a permanent zero-work switch. The extraction
+Miller keeps serving lexical-only. [Continuous testing](#continuous-testing) is opt-in and off by
+default: `tests status` is a cheap read that starts nothing; `tests start` / `miller tests serve` is the
+only daemon start. Set `MILLER_CT=off` for a permanent zero-work switch. The extraction
 layer ([`julie-extractors`](https://github.com/anortham/julie-extractors)) is hand-written across all
 [38 supported languages](#supported-languages), so it reaches structure shell search cannot: framework route facts across ~25
 framework families, dependency-injection registrations as real graph edges, partial classes linked
@@ -198,6 +198,75 @@ miller workspace health                 # per-language rows for what is actually
 
 Adding a language is `julie-extractors` work, not Miller work: Miller consumes whatever the pinned
 extractor emits, so a new language shows up here after a pin bump.
+
+## Continuous testing
+
+Miller can watch a workspace and keep test verdicts as current as the index. It is opt-in per
+workspace and off by default.
+
+The unit of freshness is a test case, not a run. Every result is stamped with the index generation and
+revision it was proved at. When a file changes, Miller advances that revision and asks the index which
+symbols the change can reach: green cases the change cannot reach carry their verdict forward, and only
+the impacted cases go stale. A run then executes the stale set as an explicit test-ID list, so a
+one-line edit runs the tests that edit can break instead of the whole suite. An explicit run
+(`tests run`) also retries every red case, because asking for a run means prove it again. Automatic
+runs debounce on the trailing edge (2 seconds, `MILLER_CT_DEBOUNCE`); changes during a run queue a
+follow-up instead of killing it.
+
+Green means complete results at the current index key. If impact data is truncated, degraded, or
+unavailable, Miller marks everything stale and runs nothing — there is no whole-suite fallback and no
+optimistic green. An index rebuild changes the generation identity, which stales every stored result.
+
+### Providers
+
+| Ecosystem | Frameworks | Run on a real repo |
+|---|---|---|
+| .NET | `dotnet`, `xunit`, `nunit`, `mstest` | yes — Miller's own suite |
+| Rust | `cargo` | yes — `julie-extractors`, 4,173 cases |
+| Python | `pytest` | yes — `more-itertools`, 736 tests |
+| JavaScript and TypeScript | `vitest`, `jest`, `node-test` | `vitest` and `node-test` yes; `jest` has test-fixture coverage only |
+
+`miller tests enable` discovers projects from the files already in the repo: test-signal `.csproj`
+files, `Cargo.toml`, `package.json`, and the usual Python config files. JavaScript and Python cases are
+discovered by test-file naming — `*.test.*` or `*.spec.*` for JavaScript and TypeScript, `test_*.py` or
+`*_test.py` for Python — so a suite named some other way reports no cases rather than a false green.
+Cross-repo evidence and the open provider gaps are recorded in
+[the CT dogfood finding](docs/findings/2026-08-21-ct-cross-repo-dogfood.md).
+
+### Safety
+
+Continuous testing runs real test processes, so every part of it is explicit and bounded.
+
+- Opt-in per workspace (`.miller/ct.enabled`), off until you enable it. `MILLER_CT=off` is a permanent
+  zero-work switch: no daemon, no `ct.db` writes, honest status.
+- `tests status` is a cheap read: it never creates `ct.db`, never creates `.miller/ct/`, and never
+  starts the daemon. `tests start` / `miller tests serve` is the only start path.
+- One workspace executes tests at a time, worktrees included, under a user-global budget. A run that
+  finds the budget held reports it and executes nothing.
+- The daemon runs from a private per-build copy under `~/.miller/ct-daemon/`, so a running daemon never
+  locks the installed binary or your build output.
+- A test process that goes silent for 10 minutes is treated as wedged: Miller kills its process tree and
+  fails the run. The bound is on silence, not total duration, so a slow suite survives
+  (`MILLER_CT_STALL_TIMEOUT`).
+- Providers write build, result, and temp artifacts only under supervised CT paths, never into your
+  workspace `bin`/`obj`.
+
+### Quickstart
+
+```bash
+miller tests enable     # discover test projects and opt this workspace in
+miller tests serve      # start the daemon: the only start path
+miller tests status     # verdict, stale count, daemon state
+miller tests failures   # the red cases with failure summaries
+miller tests run        # run the stale set plus every red case
+miller tests stop
+```
+
+Agents reach the same operations through the `tests` MCP tool
+(`status|failures|start|stop|enable|disable|run`). A linked git worktree inherits the main checkout's
+opt-in and is adopted by one family daemon, with its own `ct.db` and its own index key; a local
+`tests disable` writes a tombstone that beats the inheritance. The JSON shapes are documented in
+[docs/contracts/tests-cli-v1.md](docs/contracts/tests-cli-v1.md).
 
 ## How it works
 

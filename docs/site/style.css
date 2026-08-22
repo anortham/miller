@@ -516,6 +516,10 @@ h3 {
   gap: 24px;
 }
 
+#testing .install-panel {
+  margin-top: 28px;
+}
+
 .install-panel pre,
 .limits {
   margin: 0;
