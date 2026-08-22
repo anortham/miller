@@ -3,6 +3,7 @@ using Miller.Indexing;
 using Miller.Indexing.Semantic;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -17,11 +18,11 @@ public sealed class WorkspaceVectorFactsRenderTests
     private static readonly SemanticGenerationIdentity Identity =
         MillerSemanticContract.PinnedIdentity(MillerSemanticContract.DefaultEncoder);
 
-    private static WorkspaceFacts Facts(VectorSidecarFacts? vectors) => new(
+    private static WorkspaceFacts Facts(VectorSidecarFacts? vectors, bool isLeader = true) => new(
         Root: "/repo",
         WorkspaceId: "ws-123",
         DbPath: "/repo/.miller/symbols.db",
-        IsLeader: true,
+        IsLeader: isLeader,
         DocumentCount: 565,
         KnownExtensionsCount: 7,
         BuiltRevision: 42,
@@ -289,7 +290,57 @@ public sealed class WorkspaceVectorFactsRenderTests
         Assert.Equal("usable_with_warnings", warning.Severity);
         Assert.Contains("3 files pending", warning.Message, StringComparison.Ordinal);
         Assert.Contains(health.RecommendedActions, action => action.Contains("resident Miller leader", StringComparison.Ordinal));
+        Assert.StartsWith("wait for this resident Miller leader", health.RecommendedActions[0], StringComparison.Ordinal);
         Assert.Equal(HealthState.UsableWithWarnings, health.State);
+    }
+
+    [Fact]
+    public void Health_ReadyButBehindVectorsWithoutLeader_RecommendsOpeningOne()
+    {
+        VectorSidecarFacts vectors = Ready() with
+        {
+            SymbolCursor = Cursor("symbol", 40, 42, pendingFiles: 3),
+        };
+
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            Facts(vectors, isLeader: false),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(OkCount: 1, EmptyCount: 0, ErrorCount: 0),
+            EmptyExtractionHealth());
+
+        Assert.StartsWith("open or keep a resident Miller leader", health.RecommendedActions[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Health_MissingVectorStampWithoutLeader_DoesNotSuggestRefreshLoop()
+    {
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            Facts(new VectorSidecarFacts(
+                "unavailable",
+                "/repo/.miller/vectors.db",
+                "Vector artifact has no completeness stamp for the current view"), isLeader: false),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(OkCount: 1, EmptyCount: 0, ErrorCount: 0),
+            EmptyExtractionHealth());
+
+        Assert.StartsWith("open or keep a resident Miller leader", health.RecommendedActions[0], StringComparison.Ordinal);
+        Assert.DoesNotContain(health.RecommendedActions, action => action.Contains("workspace refresh", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Health_VectorFailureWithLeader_RecommendsBoundedRetryAndDiagnostics()
+    {
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            Facts(Ready() with
+            {
+                SymbolCursor = Cursor("symbol", 40, 42, pendingFiles: 3, lastError: "embed failed"),
+            }),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(OkCount: 1, EmptyCount: 0, ErrorCount: 0),
+            EmptyExtractionHealth());
+
+        Assert.Contains("bounded backoff", health.RecommendedActions[0], StringComparison.Ordinal);
+        Assert.Contains("diagnostics", health.RecommendedActions[0], StringComparison.Ordinal);
     }
 
     [Fact]

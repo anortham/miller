@@ -122,6 +122,7 @@ public sealed record WorkspaceHealthFacts(
             warnings.Add(new HealthWarning("index_stale", "degraded", "workspace index is stale"));
         if (!string.IsNullOrWhiteSpace(statusFacts.WarningText))
             warnings.Add(new HealthWarning("index_warning", "degraded", statusFacts.WarningText));
+        AddVectorWarnings(warnings, recommended, statusFacts.Vectors, statusFacts.IsLeader);
         AddSidecarWarning(
             warnings,
             recommended,
@@ -134,7 +135,6 @@ public sealed record WorkspaceHealthFacts(
             "content_corpus",
             statusFacts.ContentCorpus?.State,
             statusFacts.ContentCorpus?.Error);
-        AddVectorWarnings(warnings, recommended, statusFacts.Vectors);
         AddScanGovernorWarning(warnings, recommended, statusFacts.ScanGovernor);
 
         AddLeaderWarnings(warnings, recommended, statusFacts, leader);
@@ -306,7 +306,8 @@ public sealed record WorkspaceHealthFacts(
         }
         else
         {
-            recommended.Add($"run workspace full to replace the {code} after preserving its diagnostics");
+            recommended.Add(
+                $"inspect {code} diagnostics, then retry its convergence with bounded backoff");
         }
     }
 
@@ -339,13 +340,27 @@ public sealed record WorkspaceHealthFacts(
     private static void AddVectorWarnings(
         List<HealthWarning> warnings,
         List<string> recommended,
-        VectorSidecarFacts? vectors)
+        VectorSidecarFacts? vectors,
+        bool isLeader)
     {
         if (vectors is null || string.Equals(vectors.State, "disabled", StringComparison.OrdinalIgnoreCase))
             return;
 
         if (string.Equals(vectors.State, "ready", StringComparison.OrdinalIgnoreCase))
         {
+            string? failure = new[] { vectors.SymbolCursor?.LastError, vectors.ChunkCursor?.LastError }
+                .FirstOrDefault(static error => !string.IsNullOrWhiteSpace(error));
+            if (failure is not null)
+            {
+                warnings.Add(new HealthWarning(
+                    "vectors_failed",
+                    "usable_with_warnings",
+                    $"vector convergence reported a failure: {failure}"));
+                recommended.Add(isLeader
+                    ? "retry vector convergence with bounded backoff and inspect vector convergence diagnostics"
+                    : "open or keep a resident Miller leader running, then inspect vector convergence diagnostics");
+            }
+
             VectorCursorFacts? lagging = new[] { vectors.SymbolCursor, vectors.ChunkCursor }
                 .Where(static cursor => cursor is not null &&
                     (cursor.CompletedRevision < cursor.TargetRevision || cursor.PendingFiles > 0))
@@ -360,18 +375,9 @@ public sealed record WorkspaceHealthFacts(
                     "vectors_stale",
                     "usable_with_warnings",
                     $"vector convergence is behind revision {lagging.TargetRevision}{pending}"));
-                recommended.Add("keep a resident Miller leader running so vectors can converge");
-            }
-
-            string? failure = new[] { vectors.SymbolCursor?.LastError, vectors.ChunkCursor?.LastError }
-                .FirstOrDefault(static error => !string.IsNullOrWhiteSpace(error));
-            if (failure is not null)
-            {
-                warnings.Add(new HealthWarning(
-                    "vectors_failed",
-                    "usable_with_warnings",
-                    $"vector convergence reported a failure: {failure}"));
-                recommended.Add("keep a resident Miller leader running and inspect vector convergence diagnostics");
+                recommended.Add(isLeader
+                    ? "wait for this resident Miller leader to finish vector convergence"
+                    : "open or keep a resident Miller leader running so vector convergence can complete");
             }
 
             return;
@@ -392,13 +398,22 @@ public sealed record WorkspaceHealthFacts(
             ? $"vector retrieval is {vectors.State}"
             : $"vector retrieval is {vectors.State}: {vectors.Reason}";
         warnings.Add(new HealthWarning($"vectors_{normalizedState}", "degraded", message));
-        recommended.Add("keep a resident Miller leader running so vectors can converge or rebuild");
 
-        if (string.Equals(vectors.State, "unavailable", StringComparison.OrdinalIgnoreCase) &&
-            vectors.Reason?.Contains("no vector artifact exists", StringComparison.OrdinalIgnoreCase) == true)
+        bool noArtifact = string.Equals(vectors.State, "unavailable", StringComparison.OrdinalIgnoreCase) &&
+            vectors.Reason?.Contains("no vector artifact exists", StringComparison.OrdinalIgnoreCase) == true;
+        if (noArtifact)
+        {
             recommended.Add(
                 "if vectors have never converged here, install the embedding model with `miller semantic prepare` " +
                 "— a refresh alone cannot download it");
+            recommended.Add(isLeader
+                ? "wait for this resident Miller leader to finish vector convergence after preparing the model"
+                : "open or keep a resident Miller leader running after preparing the model");
+        }
+        else
+            recommended.Add(isLeader
+                ? "retry vector convergence with bounded backoff and inspect vector convergence diagnostics"
+                : "open or keep a resident Miller leader running so vector convergence can complete");
     }
 
     private static HealthState StateFrom(WorkspaceFacts statusFacts, IReadOnlyList<HealthWarning> warnings)

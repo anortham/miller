@@ -3394,7 +3394,8 @@ public static class CliDispatch
             ContentCorpus: refreshSidecars.Content,
             ScanDurationMs: (long?)result.ScanDuration?.TotalMilliseconds,
             DurationMs: (long?)result.TotalDuration?.TotalMilliseconds,
-            ArtifactId: ArtifactIdForAction(result, registry));
+            ArtifactId: ArtifactIdForAction(result, registry),
+            Sidecars: result.Sidecars);
     }
 
     /// <summary>

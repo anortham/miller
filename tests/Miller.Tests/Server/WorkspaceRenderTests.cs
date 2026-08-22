@@ -5,6 +5,7 @@ using Miller.Indexing;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -2033,6 +2034,66 @@ public sealed class WorkspaceRenderTests
         Assert.Equal("/repo/.miller/search.db", root.GetProperty("search_sidecar").GetProperty("path").GetString());
         Assert.Equal("current", root.GetProperty("content_corpus").GetProperty("state").GetString());
         Assert.Equal(8, root.GetProperty("content_corpus").GetProperty("chunk_count").GetInt32());
+    }
+
+    [Fact]
+    public void Action_Json_CarriesBoundedSidecarConvergenceFacts()
+    {
+        var sidecars = new SidecarConvergenceFacts(
+            TargetSequence: 42,
+            Content: new SidecarConvergenceFact("repaired", true, false, false, null),
+            Search: new SidecarConvergenceFact("failed", false, true, false, new string('x', 500)),
+            Vector: new SidecarConvergenceFact("leader_required", false, true, true, "resident leader required"));
+        var result = new WorkspaceActionResult(
+            Operation: "refresh", Scanned: false, Swapped: false, Revision: 42, Note: null,
+            Sidecars: sidecars);
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Action(result, json: true));
+        JsonElement root = doc.RootElement;
+        JsonElement json = root.GetProperty("sidecars");
+
+        Assert.Equal(42, json.GetProperty("target_sequence").GetInt64());
+        Assert.True(json.GetProperty("did_work").GetBoolean());
+        Assert.True(json.GetProperty("pending").GetBoolean());
+        Assert.True(json.GetProperty("leader_required").GetBoolean());
+        Assert.Equal("repaired", json.GetProperty("content").GetProperty("status").GetString());
+        Assert.Equal("failed", json.GetProperty("search").GetProperty("status").GetString());
+        Assert.Equal(240, json.GetProperty("search").GetProperty("reason").GetString()!.Length);
+        Assert.Equal("leader_required", json.GetProperty("vector").GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public void Action_Compact_PutsBoundedSidecarFactsOnOneLine()
+    {
+        var result = new WorkspaceActionResult(
+            Operation: "refresh", Scanned: false, Swapped: false, Revision: 42, Note: null,
+            Sidecars: new SidecarConvergenceFacts(
+                42,
+                new SidecarConvergenceFact("current", false, false, false, null),
+                new SidecarConvergenceFact("failed", false, true, false, "retry in 5s"),
+                new SidecarConvergenceFact("queued", false, true, false, null)));
+
+        string compact = WorkspaceRender.Action(result, json: false);
+        string line = Assert.Single(compact.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            item => item.StartsWith("sidecars: ", StringComparison.Ordinal));
+        Assert.Contains("target=42", line, StringComparison.Ordinal);
+        Assert.Contains("content=current", line, StringComparison.Ordinal);
+        Assert.Contains("search=failed", line, StringComparison.Ordinal);
+        Assert.Contains("vector=queued", line, StringComparison.Ordinal);
+        Assert.True(line.Length <= 240, $"sidecar line was {line.Length} chars");
+    }
+
+    [Fact]
+    public void Action_WithoutSidecarConvergenceFacts_OmitsOptionalField()
+    {
+        var result = new WorkspaceActionResult(
+            Operation: "refresh", Scanned: false, Swapped: false, Revision: 42, Note: null);
+
+        string compact = WorkspaceRender.Action(result, json: false);
+        using var doc = JsonDocument.Parse(WorkspaceRender.Action(result, json: true));
+
+        Assert.DoesNotContain("sidecars", compact, StringComparison.Ordinal);
+        Assert.False(doc.RootElement.TryGetProperty("sidecars", out _));
     }
 
     // Durations are cli-eros-v1 sweep telemetry: scan_duration_ms is the julie-extract attempt (set even for a

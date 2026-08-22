@@ -1,4 +1,59 @@
+using Miller.Server.Hosting;
+
 namespace Miller.Server.Workspaces;
+
+public sealed record SidecarConvergenceFact(
+    string Status,
+    bool DidWork,
+    bool Pending,
+    bool LeaderRequired,
+    string? Reason)
+{
+    public string? BoundedReason => BoundReason(Reason);
+
+    internal static SidecarConvergenceFact From(StoreSidecarConvergenceOutcome outcome) =>
+        new(
+            outcome.Status,
+            outcome.DidWork,
+            outcome.Pending,
+            outcome.LeaderRequired,
+            BoundReason(outcome.Reason));
+
+    private static string? BoundReason(string? reason) => string.IsNullOrWhiteSpace(reason)
+        ? null
+        : reason.Length <= 240 ? reason : reason[..240];
+}
+
+public sealed record SidecarConvergenceFacts(
+    long TargetSequence,
+    SidecarConvergenceFact Content,
+    SidecarConvergenceFact Search,
+    SidecarConvergenceFact Vector)
+{
+    public bool DidWork => Content.DidWork || Search.DidWork || Vector.DidWork;
+
+    public bool Pending => Content.Pending || Search.Pending || Vector.Pending;
+
+    public bool LeaderRequired => Content.LeaderRequired || Search.LeaderRequired || Vector.LeaderRequired;
+
+    public string? Reason => BoundReason(
+        string.Join(
+            "; ",
+            new[] { Content, Search, Vector }
+                .Where(static outcome => !string.IsNullOrWhiteSpace(outcome.Reason))
+                .Select(static outcome => outcome.Reason)));
+
+    internal static SidecarConvergenceFacts From(StoreSidecarConvergenceResult result) =>
+        new(
+            result.TargetSequence,
+            SidecarConvergenceFact.From(result.Content),
+            SidecarConvergenceFact.From(result.Search),
+            SidecarConvergenceFact.From(result.Vector));
+
+    private static string? BoundReason(string reason) => string.IsNullOrWhiteSpace(reason)
+        ? null
+        : reason.Length <= 240 ? reason : reason[..240];
+}
 
 public enum WorkspaceRefreshStatus
 {
@@ -33,7 +88,8 @@ public sealed record WorkspaceRefreshResult(
     string? Error = null,
     TimeSpan? ScanDuration = null,
     TimeSpan? TotalDuration = null,
-    string? ArtifactId = null)
+    string? ArtifactId = null,
+    SidecarConvergenceFacts? Sidecars = null)
 {
     public string StatusText =>
         Status switch

@@ -17,6 +17,9 @@ internal enum WorkspaceRegisteredFactsProfile
 
 internal static class WorkspaceFactsAssembler
 {
+    internal static SidecarConvergenceFacts? SidecarFactsFor(StoreSidecarConvergenceResult? result) =>
+        result is null ? null : SidecarConvergenceFacts.From(result);
+
     public static StoreWorkspaceFacts StoreFactsFor(
         WorkspaceReadSnapshot snapshot,
         bool legacyArtifactPresent,

@@ -70,7 +70,11 @@ with `warnings_total_count`, `warnings_omitted_count`, `recommended_actions_tota
 - `index`: `document_count`, `known_extensions`, `built_revision`, `latest_revision`, `index_fresh`,
   `freshness_status`, `warning`, `queue_empty`, `search_sidecar`, `content_corpus`, `history_db`, and —
   additively, only when semantic retrieval is enabled — `vectors` (same object as
-  [`workspace-status-v1.md`](workspace-status-v1.md); omitted entirely when `MILLER_SEMANTIC` is off).
+  [`workspace-status-v1.md`](workspace-status-v1.md); omitted entirely when `MILLER_SEMANTIC` is off). Health
+  actions are derived from these durable facts and the current process's leader role, not from a request-local
+  refresh outcome: a lagging vector cursor owned by this resident leader says to wait for that leader, while a
+  reader with a missing or stale vector stamp says to open or keep a resident leader. Vector failures name bounded
+  retry/diagnostic guidance; a missing embedding model keeps the explicit `miller semantic prepare` action.
   `history_db` is `null` only when history facts were not gathered; otherwise it is an object with:
   - `present`: whether `<workspace>/.miller/history.db` exists.
   - `unreadable`: whether a present sidecar could not be opened/read.
@@ -106,8 +110,8 @@ with `warnings_total_count`, `warnings_omitted_count`, `recommended_actions_tota
 
 Missing, stale, corrupt, or incompatible derived sidecars remain typed warnings rather than changing the
 authoritative `symbols.db` readiness verdict. Missing/stale `search_sidecar` and `content_corpus` warnings carry a
-`workspace refresh` recovery action; corrupt or otherwise unreadable derived artifacts carry a `workspace full`
-recovery action. Non-search symbol reads such as `inspect`, `context`, `impact`, and `trace` continue from a fresh,
+`workspace refresh` recovery action; failed or otherwise unreadable derived artifacts carry bounded diagnostic and
+retry guidance rather than repeating a full command that just failed. Non-search symbol reads such as `inspect`, `context`, `impact`, and `trace` continue from a fresh,
 compatible `symbols.db` when the search sidecar is MISSING, unstamped, or unreadable, and when an unrelated
 content/vector sidecar is unavailable. A readable search sidecar answers the name lookup for those four surfaces
 as well as for search: one stamped at the live snapshot is served as-is, and a readable last-good one — the same

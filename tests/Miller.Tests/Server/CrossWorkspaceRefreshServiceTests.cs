@@ -3,6 +3,7 @@ using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using Miller.Server.Cli;
+using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -41,6 +42,27 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         var result = new WorkspaceRefreshResult(status, "ws", "/work", "/work/.miller/symbols.db");
 
         Assert.Equal(expected, result.StatusText);
+    }
+
+    [Fact]
+    public void RefreshResult_CarriesOptionalSidecarConvergenceFacts()
+    {
+        var result = new WorkspaceRefreshResult(
+            WorkspaceRefreshStatus.Unchanged,
+            "ws",
+            "/work",
+            "/work/.miller/symbols.db",
+            Revision: 42,
+            Sidecars: new SidecarConvergenceFacts(
+                42,
+                new SidecarConvergenceFact("repaired", true, false, false, null),
+                new SidecarConvergenceFact("queued", false, true, false, "resident leader"),
+                new SidecarConvergenceFact("leader_required", false, true, true, "open a leader")));
+
+        Assert.Equal("unchanged", result.StatusText);
+        Assert.Equal(42, result.Sidecars?.TargetSequence);
+        Assert.Equal("queued", result.Sidecars?.Search.Status);
+        Assert.True(result.Sidecars?.Vector.LeaderRequired);
     }
 
     [Fact]

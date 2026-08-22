@@ -475,8 +475,12 @@ public sealed class CrossWorkspaceRefreshService
             // search hot path, skipped when already revision-fresh). A sidecar failure must never undo a
             // successful scan/refresh; reads report the sidecar unavailable/stale until the next successful
             // convergence.
+            SidecarConvergenceFacts? sidecars = null;
             if (useStore)
-                warning = JoinNotes(warning, TryConvergeStoreSidecars(row));
+            {
+                (sidecars, string? sidecarWarning) = TryConvergeStoreSidecars(row);
+                warning = JoinNotes(warning, sidecarWarning);
+            }
             else
                 TryConvergeSidecar(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, revision);
 
@@ -500,7 +504,8 @@ public sealed class CrossWorkspaceRefreshService
                 WarningText: warning,
                 ScanDuration: scanClock.Elapsed,
                 TotalDuration: total.Elapsed,
-                ArtifactId: artifactId);
+                ArtifactId: artifactId,
+                Sidecars: sidecars);
         }
         catch (Exception ex)
         {
@@ -716,7 +721,7 @@ public sealed class CrossWorkspaceRefreshService
         return coordinator.Scan(attempt.EffectiveIntent, attempt.Jobs);
     }
 
-    private string? TryConvergeStoreSidecars(WorkspaceRegistryRow row)
+    private (SidecarConvergenceFacts? Facts, string? Warning) TryConvergeStoreSidecars(WorkspaceRegistryRow row)
     {
         try
         {
@@ -728,13 +733,13 @@ public sealed class CrossWorkspaceRefreshService
             string storeRoot = session.FamilyStoreRoot ?? throw new InvalidOperationException(
                 "The store read session did not expose its family root.");
             StoreSidecarConvergenceResult result = _sidecarConverger.ConvergeStore(storeRoot, session);
-            return result.WarningText;
+            return (WorkspaceFactsAssembler.SidecarFactsFor(result), result.WarningText);
         }
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException
                 or UnauthorizedAccessException or ArgumentException or TimeoutException)
         {
-            return $"Store sidecar convergence is incomplete: {ex.Message}";
+            return (null, $"Store sidecar convergence is incomplete: {ex.Message}");
         }
     }
 

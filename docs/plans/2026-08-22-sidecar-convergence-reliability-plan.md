@@ -187,10 +187,10 @@
 **Approach:** Keep warnings truthful until exact stamps are current. Ensure the first compact action is the one that can change the state, not a repeated generic `workspace refresh` that just failed.
 
 **Acceptance criteria:**
-- [ ] The reproduced missing-vector-stamp state no longer loops on an ineffective generic refresh action.
-- [ ] Stale search refresh reports repaired, queued, or failed rather than silent `Unchanged`.
-- [ ] JSON/compact output remains bounded and old optional-field fixtures remain byte-identical.
-- [ ] Focused facts/render/refresh tests pass and the serialized worker commit is recorded.
+- [x] The reproduced missing-vector-stamp state no longer loops on an ineffective generic refresh action.
+- [x] Stale search refresh reports repaired, queued, or failed rather than silent `Unchanged`.
+- [x] JSON/compact output remains bounded and old optional-field fixtures remain byte-identical.
+- [x] Focused facts/render/refresh tests pass; the lead will record the serialized worker commit after review.
 
 ### Task 5: Sidecar dogfood acceptance
 

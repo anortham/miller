@@ -1145,7 +1145,8 @@ public sealed class WorkspaceTool
             Status: refresh.StatusText,
             ScanDurationMs: (long?)refresh.ScanDuration?.TotalMilliseconds,
             DurationMs: (long?)refresh.TotalDuration?.TotalMilliseconds,
-            ArtifactId: artifactId);
+            ArtifactId: artifactId,
+            Sidecars: refresh.Sidecars);
         return refresh.Status switch
         {
             WorkspaceRefreshStatus.Refreshed or WorkspaceRefreshStatus.Unchanged =>

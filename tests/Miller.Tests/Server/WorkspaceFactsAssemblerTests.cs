@@ -3,8 +3,10 @@ using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Server;
+using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -14,6 +16,28 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
     private readonly string _temp = Path.Combine(Path.GetTempPath(), "miller-workspace-facts-" + Guid.NewGuid());
 
     public WorkspaceFactsAssemblerTests() => Directory.CreateDirectory(_temp);
+
+    [Fact]
+    public void SidecarFactsFor_PreservesTypedConvergenceOutcomesAndTarget()
+    {
+        var result = new StoreSidecarConvergenceResult(
+            TargetSequence: 42,
+            Content: new StoreSidecarConvergenceOutcome("repaired", true, false, false, null),
+            Search: new StoreSidecarConvergenceOutcome("failed", false, true, false, "bounded failure"),
+            Vector: new StoreSidecarConvergenceOutcome("leader_required", false, true, true, "open a leader"),
+            MetricsDidWork: true);
+
+        SidecarConvergenceFacts facts = WorkspaceFactsAssembler.SidecarFactsFor(result)!;
+
+        Assert.Equal(42, facts.TargetSequence);
+        Assert.True(facts.DidWork);
+        Assert.True(facts.Pending);
+        Assert.True(facts.LeaderRequired);
+        Assert.Equal("repaired", facts.Content.Status);
+        Assert.Equal("failed", facts.Search.Status);
+        Assert.Equal("leader_required", facts.Vector.Status);
+        Assert.Equal("bounded failure; open a leader", facts.Reason);
+    }
 
     [Fact]
     public void StoreFactsUseThePinnedSessionGenerationAndTruthfulRollbackState()

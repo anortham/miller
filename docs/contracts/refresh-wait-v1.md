@@ -29,7 +29,17 @@ failure. The `--wait` flag is retained as a contract marker for Eros and scripts
   "index_fresh": true,
   "note": null,
   "search_sidecar": {},
-  "content_corpus": {}
+  "content_corpus": {},
+  "sidecars": {
+    "target_sequence": 123,
+    "did_work": true,
+    "pending": false,
+    "leader_required": false,
+    "reason": null,
+    "content": {},
+    "search": {},
+    "vector": {}
+  }
 }
 ```
 
@@ -51,6 +61,13 @@ failure. The `--wait` flag is retained as a contract marker for Eros and scripts
 - `note`: diagnostic note, or `null`.
 - `search_sidecar`: search sidecar facts, or `null`.
 - `content_corpus`: content corpus sidecar facts, or `null`.
+- `sidecars`: optional bounded convergence evidence. It is omitted when no convergence result exists, preserving
+  legacy output bytes. `target_sequence` is the exact store sequence inspected; `did_work`, `pending`, and
+  `leader_required` are aggregate booleans; `reason` is bounded to 240 characters. `content`, `search`, and `vector`
+  each contain `status`, `did_work`, `pending`, `leader_required`, and a bounded nullable `reason`. Status values
+  are `disabled`, `current`, `repaired`, `queued`, `leader_required`, or `failed`. `queued` means a resident
+  leader has accepted work; `leader_required` means this process cannot perform it and a resident Miller leader
+  must be opened or kept running; `failed` names the bounded failure and leaves bounded retry posture visible.
 
 `content_corpus` uses the same shape as `workspace status --json` `index.content_corpus`.
 

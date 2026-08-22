@@ -148,6 +148,8 @@ public sealed class WorkspaceHealthLeaderTests
         Assert.Contains(health.RecommendedActions, action =>
             action.Contains("workspace refresh", StringComparison.Ordinal));
         Assert.Contains(health.RecommendedActions, action =>
+            action.Contains("bounded backoff", StringComparison.Ordinal));
+        Assert.DoesNotContain(health.RecommendedActions, action =>
             action.Contains("workspace full", StringComparison.Ordinal));
     }
 

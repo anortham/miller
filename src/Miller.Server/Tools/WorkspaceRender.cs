@@ -9,6 +9,7 @@ using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
 using Miller.Server;
 using Miller.Server.Telemetry;
+using Miller.Server.Workspaces;
 
 namespace Miller.Server.Tools;
 
@@ -284,7 +285,8 @@ public readonly record struct WorkspaceActionResult(
     long? ScanDurationMs = null,
     long? DurationMs = null,
     string? ArtifactId = null,
-    bool Downgraded = false);
+    bool Downgraded = false,
+    SidecarConvergenceFacts? Sidecars = null);
 
 /// <summary>The result of starting or reusing the local loopback dashboard from the <c>workspace</c> tool.</summary>
 internal readonly record struct WorkspaceDashboardResult(
@@ -2533,7 +2535,18 @@ public static class WorkspaceRender
             sb.Append('\n').Append("duration_ms: ").Append(totalMs);
         if (!string.IsNullOrEmpty(result.Note))
             sb.Append('\n').Append("note: ").Append(result.Note);
+        if (result.Sidecars is { } sidecars)
+            sb.Append('\n').Append("sidecars: ").Append(SidecarConvergenceCompact(sidecars));
         return sb.ToString();
+    }
+
+    private static string SidecarConvergenceCompact(SidecarConvergenceFacts sidecars)
+    {
+        string reason = sidecars.Reason is { } bounded ? " reason=" + bounded : string.Empty;
+        string value =
+            $"target={sidecars.TargetSequence} content={sidecars.Content.Status} " +
+            $"search={sidecars.Search.Status} vector={sidecars.Vector.Status}{reason}";
+        return HealthCompactValue(value);
     }
 
     private static string ActionJson(WorkspaceActionResult result)
@@ -2566,11 +2579,47 @@ public static class WorkspaceRender
             WriteSearchSidecarJson(w, result.SearchSidecar);
             w.WritePropertyName("content_corpus");
             WriteContentCorpusJson(w, result.ContentCorpus);
+            if (result.Sidecars is { } sidecars)
+            {
+                w.WritePropertyName("sidecars");
+                WriteSidecarConvergenceJson(w, sidecars);
+            }
             if (string.IsNullOrEmpty(result.ArtifactId)) w.WriteNull("artifact_id");
             else w.WriteString("artifact_id", result.ArtifactId);
             w.WriteEndObject();
         }
         return Utf8(buffer);
+    }
+
+    private static void WriteSidecarConvergenceJson(Utf8JsonWriter writer, SidecarConvergenceFacts sidecars)
+    {
+        writer.WriteStartObject();
+        writer.WriteNumber("target_sequence", sidecars.TargetSequence);
+        writer.WriteBoolean("did_work", sidecars.DidWork);
+        writer.WriteBoolean("pending", sidecars.Pending);
+        writer.WriteBoolean("leader_required", sidecars.LeaderRequired);
+        if (sidecars.Reason is null) writer.WriteNull("reason");
+        else writer.WriteString("reason", sidecars.Reason);
+        writer.WritePropertyName("content");
+        WriteSidecarConvergenceFactJson(writer, sidecars.Content);
+        writer.WritePropertyName("search");
+        WriteSidecarConvergenceFactJson(writer, sidecars.Search);
+        writer.WritePropertyName("vector");
+        WriteSidecarConvergenceFactJson(writer, sidecars.Vector);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteSidecarConvergenceFactJson(Utf8JsonWriter writer, SidecarConvergenceFact fact)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("status", fact.Status);
+        writer.WriteBoolean("did_work", fact.DidWork);
+        writer.WriteBoolean("pending", fact.Pending);
+        writer.WriteBoolean("leader_required", fact.LeaderRequired);
+        string? reason = fact.BoundedReason;
+        if (reason is null) writer.WriteNull("reason");
+        else writer.WriteString("reason", reason);
+        writer.WriteEndObject();
     }
 
     // ---------- dashboard ----------
