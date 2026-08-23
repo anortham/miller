@@ -355,6 +355,8 @@ public static class SearchIndexWriter
         string? artifactId,
         StoreSidecarStamp? storeStamp)
     {
+        symbols = SearchSymbolAliasCanonicalizer.Canonicalize(symbols);
+
         var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = tempPath,

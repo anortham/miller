@@ -202,6 +202,26 @@ public sealed class SearchIndexWriterTests : IDisposable
     }
 
     [Fact]
+    public void Write_DuplicateAliasIds_ProducesOneSearchAndFtsRow()
+    {
+        var syms = new[]
+        {
+            Sym(42, "alias", "AliasName", "class AliasName", "class", "csharp", "z/Alias.cs", 1, 2),
+            Sym(7, "alias", "AliasName", "class AliasName", "class", "csharp", "a/Alias.cs", 1, 2),
+        };
+
+        SearchIndexWriter.Write(_dbPath, syms, revision: 7);
+
+        using var c = OpenRead();
+        Assert.Equal(1L, Long(Scalar(c, "SELECT COUNT(*) FROM search_symbols")));
+        Assert.Equal(1L, Long(Scalar(c, "SELECT COUNT(*) FROM symbols_fts")));
+        Assert.Equal(1L, Long(Scalar(c, "SELECT COUNT(*) FROM symbols_trigram")));
+        Assert.Equal(1L, Long(Scalar(c, "SELECT doc_count FROM meta")));
+        Assert.Equal(TokenCount("AliasName class AliasName"),
+            Convert.ToInt32(Scalar(c, "SELECT avgdl FROM meta")));
+    }
+
+    [Fact]
     public void Write_WordFts_MatchesComponentToken()
     {
         var syms = new[] { Sym(0, "id0", "IAuthenticationProvider", null, "interface", "csharp", "a.cs", 1, 2) };

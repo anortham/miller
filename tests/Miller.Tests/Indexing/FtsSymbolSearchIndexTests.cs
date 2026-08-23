@@ -258,6 +258,36 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_DuplicateAliasCorpus_HasExactDiskMemoryParity()
+    {
+        var syms = new[]
+        {
+            new IndexedSymbol(42, "alias", "AliasName", "class AliasName", "class", "csharp", "z/Alias.cs",
+                StartLine: 1, EndLine: 2, ParentId: null, IsTest: false),
+            new IndexedSymbol(7, "alias", "AliasName", "class AliasName", "class", "csharp", "a/Alias.cs",
+                StartLine: 1, EndLine: 2, ParentId: null, IsTest: false),
+            new IndexedSymbol(12, "other", "OtherName", "class OtherName", "class", "csharp", "b/Other.cs",
+                StartLine: 1, EndLine: 2, ParentId: null, IsTest: false),
+        };
+        SearchIndexWriter.Write(_dbPath, syms, revision: 1);
+
+        var memory = SymbolSearchProjection.Build(syms);
+        var disk = FtsSymbolSearchIndex.Open(_dbPath);
+        var expected = memory.Search("AliasName", limit: 10);
+        var actual = disk.Search("AliasName", limit: 10);
+
+        Assert.Equal(2, memory.DocumentCount);
+        Assert.Equal(memory.DocumentCount, disk.DocumentCount);
+        Assert.Equal(expected.Select(static hit => hit.Document.DocId), actual.Select(static hit => hit.Document.DocId));
+        Assert.Equal(
+            expected.Select(hit => memory.Resolve(hit.Document.DocId).FilePath),
+            actual.Select(hit => disk.Resolve(hit.Document.DocId).FilePath));
+        Assert.Equal(expected.Count, actual.Count);
+        for (int i = 0; i < expected.Count; i++)
+            Assert.Equal(expected[i].Score, actual[i].Score, precision: 9);
+    }
+
+    [Fact]
     public void Search_HighFanoutWordArm_HydratesOnlyRankedResultsWithExactParity()
     {
         IndexedSymbol[] syms = Enumerable.Range(0, 1_200)

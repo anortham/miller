@@ -25,6 +25,45 @@ public sealed class SymbolSearchProjectionTests
     }
 
     [Fact]
+    public void Build_DuplicateAliasIds_UsesLowestOrdinalPathAndOneLogicalDocument()
+    {
+        var rows = new[]
+        {
+            new IndexedSymbol(42, "alias", "Alias", "class Alias", "class", "csharp", "z/Alias.cs",
+                StartLine: 1, EndLine: 2, ParentId: null, IsTest: false),
+            new IndexedSymbol(7, "alias", "Alias", "class Alias", "class", "csharp", "a/Alias.cs",
+                StartLine: 1, EndLine: 2, ParentId: null, IsTest: false),
+        };
+
+        foreach (IndexedSymbol[] input in new[] { rows, rows.Reverse().ToArray() })
+        {
+            var projection = SymbolSearchProjection.Build(input);
+
+            Assert.Equal(1, projection.DocumentCount);
+            Assert.Equal("a/Alias.cs", projection.FindBySymbolId("alias")!.FilePath);
+            Assert.Equal(0, Assert.Single(projection.Search("Alias", limit: 10)).Document.DocId);
+        }
+    }
+
+    [Fact]
+    public void Build_DivergentDuplicateId_ThrowsActionableInvalidDataException()
+    {
+        var rows = new[]
+        {
+            new IndexedSymbol(0, "conflict", "First", null, "class", "csharp", "src/First.cs",
+                StartLine: 1, EndLine: 2, ParentId: null, IsTest: false),
+            new IndexedSymbol(1, "conflict", "Second", null, "class", "csharp", "src/Second.cs",
+                StartLine: 1, EndLine: 2, ParentId: null, IsTest: false),
+        };
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() => SymbolSearchProjection.Build(rows));
+
+        Assert.Contains("conflict", error.Message);
+        Assert.Contains("src/First.cs", error.Message);
+        Assert.Contains("src/Second.cs", error.Message);
+    }
+
+    [Fact]
     public void Resolve_OutOfRangeDocId_Throws()
     {
         using var fx = JulieDbFixture.CreateDefault();

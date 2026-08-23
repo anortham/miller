@@ -26,6 +26,8 @@ public sealed class SymbolSearchProjection : ISymbolLookupIndex
     {
         ArgumentNullException.ThrowIfNull(symbols);
 
+        symbols = SearchSymbolAliasCanonicalizer.Canonicalize(symbols);
+
         SymbolLookupTables tables = SymbolLookupTables.Build(symbols);
 
         var documents = new SearchableDocument[symbols.Count];
