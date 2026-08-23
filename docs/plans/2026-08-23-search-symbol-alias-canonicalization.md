@@ -127,15 +127,15 @@
 **Approach:** Alias addition may replace the resident row when the new path sorts earlier. Noncanonical deletion is a no-op. Canonical deletion re-elects a surviving alias outside the changed paths. Canonical content change handles removed old IDs and inserted new IDs in one transaction. Keep source-region deletion/insertion path-based; Zod proves region IDs are unique per path. Preserve transaction rollback, store stamping, and `TryApplyStoreDelta` fallback behavior.
 
 **Acceptance criteria:**
-- [ ] `SearchSidecarAliasDelta_AddingLaterAliasKeepsCanonicalRowAndDocId` passes without full rebuild or duplicate-key failure.
-- [ ] `SearchSidecarAliasDelta_AddingEarlierAliasReelectsCanonicalPathAndPreservesDocId` passes in place.
-- [ ] `SearchSidecarAliasDelta_DeletingNoncanonicalAliasIsNoOp` preserves the sentinel table and sidecar stamp progression.
-- [ ] `SearchSidecarAliasDelta_DeletingCanonicalAliasReelectsSurvivorAndPreservesDocId` keeps the logical symbol searchable.
-- [ ] `SearchSidecarAliasDelta_ChangingCanonicalContentReelectsOldIdAndAddsNewIds` handles both identity sets atomically.
-- [ ] Full rebuild and every delta history produce the same `search_symbols` rows, canonical paths, document IDs, FTS results, and store stamp.
-- [ ] Region-enabled focused coverage proves alias symbol re-election neither deletes surviving-path regions nor duplicates region rows.
-- [ ] Existing non-alias incremental tests retain their sentinel tables, proving no unnecessary full rebuild.
-- [ ] Worker-scope verification passes and the worker commits only owned files with `serial-worker-commit`.
+- [x] `SearchSidecarAliasDelta_AddingLaterAliasKeepsCanonicalRowAndDocId` passes without full rebuild or duplicate-key failure.
+- [x] `SearchSidecarAliasDelta_AddingEarlierAliasReelectsCanonicalPathAndPreservesDocId` passes in place.
+- [x] `SearchSidecarAliasDelta_DeletingNoncanonicalAliasIsNoOp` preserves the sentinel table and sidecar stamp progression.
+- [x] `SearchSidecarAliasDelta_DeletingCanonicalAliasReelectsSurvivorAndPreservesDocId` keeps the logical symbol searchable.
+- [x] `SearchSidecarAliasDelta_ChangingCanonicalContentReelectsOldIdAndAddsNewIds` handles both identity sets atomically.
+- [x] Full rebuild and every delta history produce the same `search_symbols` rows, canonical paths, document IDs, FTS results, and store stamp.
+- [x] Region-enabled focused coverage proves alias symbol re-election neither deletes surviving-path regions nor duplicates region rows.
+- [x] Existing non-alias incremental tests retain their sentinel tables, proving no unnecessary full rebuild.
+- [x] Worker-scope verification passes and the worker commits only owned files with `serial-worker-commit`.
 
 ## Lead Integration and Dogfood Gate
 
