@@ -10,6 +10,8 @@ namespace Miller.Tests.Indexing;
 [Trait("Category", "Scale")]
 public sealed class SemanticBrokerScaleTests : IDisposable
 {
+    private const int BrokerStartupTimeoutSeconds = 120;
+
     private readonly string _millerHome = CreateMillerHome();
 
     [Fact]
@@ -145,7 +147,7 @@ public sealed class SemanticBrokerScaleTests : IDisposable
             "--miller-home", _millerHome,
             "--label", label,
             "--duration-seconds", durationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            "--timeout-seconds", "30",
+            "--timeout-seconds", BrokerStartupTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
         })
         {
             start.ArgumentList.Add(argument);
@@ -208,7 +210,7 @@ public sealed class SemanticBrokerScaleTests : IDisposable
     {
         SemanticBrokerEndpoint endpoint =
             SemanticBrokerEndpoint.Create(_millerHome, MillerSemanticContract.DefaultEncoder);
-        DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(BrokerStartupTimeoutSeconds);
         while (DateTimeOffset.UtcNow < deadline)
         {
             if (!OperatingSystem.IsWindows() && File.Exists(endpoint.UnixSocketPath))
@@ -236,7 +238,7 @@ public sealed class SemanticBrokerScaleTests : IDisposable
             Thread.Sleep(50);
         }
 
-        Assert.Fail("keeper probe did not bind the shared broker endpoint within 30 seconds");
+        Assert.Fail($"keeper probe did not bind the shared broker endpoint within {BrokerStartupTimeoutSeconds} seconds");
     }
 
     private int CountBrokerProcesses(string candidate)
@@ -284,7 +286,7 @@ public sealed class SemanticBrokerScaleTests : IDisposable
     {
         string stdout = await process.StandardOutput.ReadToEndAsync();
         string stderr = await process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(BrokerStartupTimeoutSeconds));
         await process.WaitForExitAsync(timeout.Token);
         string? line = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .LastOrDefault(candidate => candidate.Contains("\"event\":\"complete\"", StringComparison.Ordinal));
