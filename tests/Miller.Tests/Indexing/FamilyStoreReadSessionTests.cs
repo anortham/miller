@@ -819,6 +819,20 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void ReadForSymbolIdsReturnsDenseLocalDocIdsAfterUnrelatedRows()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        AddVisibleSymbol(fixture, "000-unrelated");
+        AppendAliasManifest(fixture, generation: 3, versionId: 3, aliasPath: "zz.cs", sequence: 3);
+
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        IReadOnlyList<IndexedSymbol> candidates = SqliteSymbolReader.ReadForSymbolIds(session, ["symbol"]);
+
+        Assert.Equal(["same.cs", "zz.cs"], candidates.Select(static symbol => symbol.FilePath));
+        Assert.Equal([0, 1], candidates.Select(static symbol => symbol.DocId));
+    }
+
+    [Fact]
     public void SearchSidecarAliasDelta_RegionReelectionPreservesSurvivingPathRegions()
     {
         using StoreFixture fixture = StoreFixture.Create();

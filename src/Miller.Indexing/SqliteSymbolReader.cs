@@ -110,7 +110,7 @@ public static class SqliteSymbolReader
         return ReadForPaths(connection, paths);
     }
 
-    public static IReadOnlyList<IndexedSymbol> ReadForSymbolIds(
+    internal static IReadOnlyList<IndexedSymbol> ReadForSymbolIds(
         IWorkspaceReadSession session,
         IReadOnlyCollection<string> symbolIds)
     {
@@ -216,21 +216,52 @@ public static class SqliteSymbolReader
                     {evidence.FilesJoin}
                     {evidence.DiagnosticsJoin}
                     WHERE s.name IS NOT NULL
+                      AND s.symbol_id IN ({placeholders})
                 )
                 SELECT doc_id, symbol_id, name, signature, kind, language, path,
                        start_line, end_line, parent_symbol_id, is_test, visibility,
                        test_container, test_lifecycle, file_status,
                        has_file_evidence, has_parse_diagnostics
                 FROM ordered
-                WHERE symbol_id IN ({placeholders})
                 ORDER BY path, start_line, symbol_id;
                 """;
             using var reader = command.ExecuteReader();
             ReadRows(reader, results);
         }
 
-        results.Sort(static (a, b) => a.DocId.CompareTo(b.DocId));
+        results.Sort(CompareDeterministically);
+        for (int i = 0; i < results.Count; i++)
+            results[i] = results[i] with { DocId = i };
         return results;
+    }
+
+    private static int CompareDeterministically(IndexedSymbol left, IndexedSymbol right)
+    {
+        int result = StringComparer.Ordinal.Compare(left.FilePath, right.FilePath);
+        if (result != 0)
+            return result;
+        result = left.StartLine.CompareTo(right.StartLine);
+        if (result != 0)
+            return result;
+        result = StringComparer.Ordinal.Compare(left.SymbolId, right.SymbolId);
+        if (result != 0)
+            return result;
+        result = left.EndLine.CompareTo(right.EndLine);
+        if (result != 0)
+            return result;
+        result = StringComparer.Ordinal.Compare(left.Name, right.Name);
+        if (result != 0)
+            return result;
+        result = StringComparer.Ordinal.Compare(left.Signature, right.Signature);
+        if (result != 0)
+            return result;
+        result = StringComparer.Ordinal.Compare(left.Kind, right.Kind);
+        if (result != 0)
+            return result;
+        result = StringComparer.Ordinal.Compare(left.Language, right.Language);
+        if (result != 0)
+            return result;
+        return StringComparer.Ordinal.Compare(left.ParentId, right.ParentId);
     }
 
     private static void ReadRows(SqliteDataReader reader, List<IndexedSymbol> results)
