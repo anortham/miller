@@ -5,6 +5,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [`plans/2026-08-23-windows-scale-contract-separation-design.md`](plans/2026-08-23-windows-scale-contract-separation-design.md) - approved design separating cross-platform broker-sharing correctness from accelerator throughput soak and hardening loaded-host Windows Scale fixture readiness.
 - [`plans/2026-08-23-search-symbol-alias-canonicalization.md`](plans/2026-08-23-search-symbol-alias-canonicalization.md) - implementation plan for deterministic one-row-per-logical-ID disk/memory search projection and alias-aware incremental sidecar convergence, based on the Zod restart dogfood finding.
 - [`plans/2026-08-22-linux-ct-dogfood-repair-plan.md`](plans/2026-08-22-linux-ct-dogfood-repair-plan.md) - execution plan for the Linux v1.21.0 CT findings: deterministic .NET referenced-project outputs, portable Linux fixtures, bounded selection/chunk facts, honest start/wait behavior, and additive run metadata.
 - [`findings/2026-08-22-linux-ct-dogfood-repair-verification.md`](findings/2026-08-22-linux-ct-dogfood-repair-verification.md) - Linux Miller, Razorback, and more-itertools CT replays: green final verdicts, launcher/helper-host diagnosis, restored daemon/config state, and the remaining exact-final-tree branch gate.
