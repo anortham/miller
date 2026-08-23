@@ -64,6 +64,27 @@ public sealed class SymbolSearchProjectionTests
     }
 
     [Fact]
+    public void Build_DivergentDuplicateId_BoundsErrorMessage()
+    {
+        string firstPath = $"src/{new string('x', 600)}/First.cs";
+        string secondPath = $"src/{new string('y', 600)}/Second.cs";
+        var rows = new[]
+        {
+            new IndexedSymbol(0, "conflict", "First", null, "class", "csharp", firstPath,
+                StartLine: 1, EndLine: 2, ParentId: null, IsTest: false),
+            new IndexedSymbol(1, "conflict", "Second", null, "class", "csharp", secondPath,
+                StartLine: 1, EndLine: 2, ParentId: null, IsTest: false),
+        };
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() => SymbolSearchProjection.Build(rows));
+
+        Assert.InRange(error.Message.Length, 1, 300);
+        Assert.Contains("conflict", error.Message);
+        Assert.Contains("First.cs", error.Message);
+        Assert.Contains("Second.cs", error.Message);
+    }
+
+    [Fact]
     public void Resolve_OutOfRangeDocId_Throws()
     {
         using var fx = JulieDbFixture.CreateDefault();

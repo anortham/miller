@@ -8,19 +8,29 @@ internal static class SearchSymbolAliasCanonicalizer
         if (symbols.Count < 2)
             return symbols;
 
-        var groups = new Dictionary<string, List<IndexedSymbol>>(symbols.Count, StringComparer.Ordinal);
         bool hasAliases = false;
-        foreach (IndexedSymbol symbol in symbols)
         {
-            if (!groups.TryGetValue(symbol.SymbolId, out List<IndexedSymbol>? group))
-                groups[symbol.SymbolId] = group = new List<IndexedSymbol>(1);
-            else
-                hasAliases = true;
-            group.Add(symbol);
+            var seen = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
+            foreach (IndexedSymbol symbol in symbols)
+            {
+                if (!seen.Add(symbol.SymbolId))
+                {
+                    hasAliases = true;
+                    break;
+                }
+            }
         }
 
         if (!hasAliases)
             return symbols;
+
+        var groups = new Dictionary<string, List<IndexedSymbol>>(symbols.Count, StringComparer.Ordinal);
+        foreach (IndexedSymbol symbol in symbols)
+        {
+            if (!groups.TryGetValue(symbol.SymbolId, out List<IndexedSymbol>? group))
+                groups[symbol.SymbolId] = group = new List<IndexedSymbol>(1);
+            group.Add(symbol);
+        }
 
         var canonical = new List<IndexedSymbol>(groups.Count);
         foreach ((string symbolId, List<IndexedSymbol> group) in groups)
@@ -30,9 +40,8 @@ internal static class SearchSymbolAliasCanonicalizer
             {
                 IndexedSymbol alias = group[i];
                 if (!AreExactAliases(survivor, alias))
-                    throw new InvalidDataException(
-                        $"Search symbol '{symbolId}' has divergent aliases at '{survivor.FilePath}' and " +
-                        $"'{alias.FilePath}'; aliases must match every field except DocId and FilePath.");
+                    throw new InvalidDataException(BuildDivergentAliasMessage(
+                        symbolId, survivor.FilePath, alias.FilePath));
                 if (CompareDeterministically(alias, survivor) < 0)
                     survivor = alias;
             }
@@ -43,6 +52,39 @@ internal static class SearchSymbolAliasCanonicalizer
         for (int i = 0; i < canonical.Count; i++)
             canonical[i] = canonical[i] with { DocId = i };
         return canonical;
+    }
+
+    private static string BuildDivergentAliasMessage(string symbolId, string firstPath, string secondPath)
+    {
+        const string separator = "' and '";
+        const string suffix = "'; aliases must match every field except DocId and FilePath.";
+        string boundedId = symbolId;
+        string prefix = $"Search symbol '{boundedId}' has divergent aliases at '";
+        int pathBudget = 300 - prefix.Length - separator.Length - suffix.Length;
+        if (pathBudget < 2)
+        {
+            int idBudget = 300 - "Search symbol '' has divergent aliases at '".Length - separator.Length - suffix.Length - 2;
+            boundedId = Abbreviate(symbolId, Math.Max(1, idBudget));
+            prefix = $"Search symbol '{boundedId}' has divergent aliases at '";
+            pathBudget = 300 - prefix.Length - separator.Length - suffix.Length;
+        }
+
+        int firstPathBudget = Math.Max(1, pathBudget / 2);
+        int secondPathBudget = Math.Max(1, pathBudget - firstPathBudget);
+        return prefix + Abbreviate(firstPath, firstPathBudget) + separator +
+            Abbreviate(secondPath, secondPathBudget) + suffix;
+    }
+
+    private static string Abbreviate(string value, int maxLength)
+    {
+        if (value.Length <= maxLength)
+            return value;
+        if (maxLength <= 3)
+            return value[..maxLength];
+
+        int suffixLength = (maxLength - 3) / 2;
+        int prefixLength = maxLength - 3 - suffixLength;
+        return value[..prefixLength] + "..." + value[^suffixLength..];
     }
 
     private static bool AreExactAliases(IndexedSymbol left, IndexedSymbol right) =>
