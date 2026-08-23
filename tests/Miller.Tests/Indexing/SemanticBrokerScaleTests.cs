@@ -182,10 +182,11 @@ public sealed class SemanticBrokerScaleTests : IDisposable
             ? "miller-semantic-broker-probe.exe"
             : "miller-semantic-broker-probe";
         string probeRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(project)!, "bin"));
-        string? candidate = new[] { configuration, "Release", "Debug" }
-            .Distinct(StringComparer.Ordinal)
-            .Select(value => Path.Combine(probeRoot, value, "net10.0", executable))
-            .FirstOrDefault(File.Exists);
+        string? candidate = new[] { Path.Combine(AppContext.BaseDirectory, executable) }
+            .Concat(new[] { configuration, "Release", "Debug" }
+                .Distinct(StringComparer.Ordinal)
+                .Select(value => Path.Combine(probeRoot, value, "net10.0", executable)))
+            .FirstOrDefault(value => File.Exists(value) && File.Exists(Path.ChangeExtension(value, ".dll")));
         Assert.True(
             candidate is not null,
             $"The semantic broker probe apphost was not built under {probeRoot}. Build the Release solution or test project before running Scale tests.");
