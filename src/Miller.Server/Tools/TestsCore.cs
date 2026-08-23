@@ -988,7 +988,7 @@ public static class TestsCore
         sb.AppendLine($"projects: {result.Projects.Count.ToString(CultureInfo.InvariantCulture)}");
         foreach (TestsStatusProject project in result.Projects)
             sb.AppendLine($"  - {project.ProjectPath} ({project.Framework ?? "unknown"})");
-        return sb.ToString().TrimEnd();
+        return sb.ToString().TrimEnd().ReplaceLineEndings("\n");
     }
 
     private static void AppendDaemonRunFacts(StringBuilder sb, CtDaemonRunProgress run, string indent = "    ")
@@ -1217,7 +1217,7 @@ public static class TestsCore
             var facts = new StringBuilder();
             facts.AppendLine("run:");
             AppendDaemonRunFacts(facts, run, "  ");
-            output += "\n" + facts.ToString().TrimEnd();
+            output += "\n" + facts.ToString().TrimEnd().ReplaceLineEndings("\n");
         }
 
         return output;
@@ -1277,7 +1277,7 @@ public static class TestsCore
                 + $" (next: offset={next.ToString(CultureInfo.InvariantCulture)})");
         }
 
-        return sb.ToString().TrimEnd();
+        return sb.ToString().TrimEnd().ReplaceLineEndings("\n");
     }
 
     private static void WriteFailureCorrelation(Utf8JsonWriter writer, ContinuousTestStatus row)
