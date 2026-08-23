@@ -209,6 +209,19 @@ public sealed class JavaScriptTestProviderTests : IDisposable
             command.Arguments[command.Arguments.ToList().IndexOf("--cache.dir") + 1]);
     }
 
+    [Fact]
+    public void Build_run_command_for_vitest_4x_disables_cache_with_the_supported_boolean_option()
+    {
+        var workspace = Workspace("vitest");
+        WriteInstalledPackage("vitest", "4.1.5");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var command = provider.BuildRunCommand(Request(workspace, "js-test:src/math.test.ts"));
+
+        Assert.Contains("--cache=false", command.Arguments);
+        Assert.DoesNotContain("--cache.dir", command.Arguments);
+    }
+
     /// <summary>
     /// No installed manifest means no proof the flag is accepted. Omitting it costs cache isolation
     /// between generations; passing it on a guess costs the whole run.
@@ -410,6 +423,31 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         // ...and an empty PATH falls back to the bare name, which is what this provider sent before
         // any Windows suffix existed. A suffix appended here instead would name a missing file.
         Assert.Equal("pnpm", command.FileName);
+    }
+
+    [Fact]
+    public void Build_run_command_for_pnpm_package_script_passes_reporter_arguments_without_separator()
+    {
+        var workspace = Workspace(null);
+        WritePackageFile(
+            "package.json",
+            """
+            {
+              "scripts": { "test": "jest --runInBand" },
+              "devDependencies": { "jest": "^30.0.0" }
+            }
+            """);
+        WritePackageFile("pnpm-lock.yaml", "lockfileVersion: '9.0'");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner(), NoPackageManagerOnPath);
+
+        var command = provider.BuildRunCommand(Request(workspace, "js-test:src/math.test.ts"));
+
+        Assert.Equal("pnpm", command.FileName);
+        Assert.Equal("run", command.Arguments[0]);
+        Assert.Equal("test", command.Arguments[1]);
+        Assert.DoesNotContain("--", command.Arguments);
+        Assert.Contains("--json", command.Arguments);
+        Assert.Contains("--outputFile", command.Arguments);
     }
 
     [Fact]

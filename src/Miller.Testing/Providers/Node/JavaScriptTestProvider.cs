@@ -373,10 +373,13 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         var selection = SelectPackageScript(packageRoot, framework);
         if (selection.Script is { } script)
         {
-            var args = new List<string> { "run", script.Name, "--" };
+            var packageManager = PackageManager(packageRoot);
+            var args = new List<string> { "run", script.Name };
+            if (RequiresPackageManagerArgumentSeparator(packageManager))
+                args.Add("--");
             args.AddRange(reporterArgs);
             return new TestProcessCommand(
-                PackageManager(packageRoot),
+                packageManager,
                 args,
                 packageRoot,
                 WorkspaceEnvironment(request.Workspace, paths));
@@ -728,12 +731,10 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         };
 
     /// <summary>
-    /// The flags that move a framework's cache into this generation's private directory.
+    /// The flags that isolate a framework's cache state, using a private directory where supported and disabling it otherwise.
     ///
-    /// Vitest's dot-notation options (<c>--cache.dir</c>) arrived in vitest 1.x. Vitest 0.29.8 stops at
-    /// its CLI parser with <c>CACError: Unknown option `--cache`</c> and runs NOTHING, so every selected
-    /// file came back failed on a real 0.x workspace. The flag therefore goes on the command line only
-    /// when the INSTALLED major is 1 or newer.
+    /// Vitest 0.x omits cache flags because its CLI rejects them. Installed Vitest 1.x through 3.x uses
+    /// <c>--cache.dir</c>; Vitest 4.x and newer use the supported boolean <c>--cache=false</c>.
     ///
     /// When the installed version cannot be read or parsed, the flag is omitted. The run then shares
     /// vitest's default cache directory instead of this generation's private one, which loses cache
@@ -743,9 +744,12 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
     private static string[] IsolationArguments(string framework, string packageRoot, string cacheDirectory) =>
         framework switch
         {
-            "vitest" => InstalledPackageMajorVersion(packageRoot, "vitest") is int major && major >= 1
-                ? ["--cache.dir", cacheDirectory]
-                : [],
+            "vitest" => InstalledPackageMajorVersion(packageRoot, "vitest") switch
+            {
+                >= 4 => ["--cache=false"],
+                >= 1 => ["--cache.dir", cacheDirectory],
+                _ => [],
+            },
             "jest" => ["--cacheDirectory", cacheDirectory],
             _ => [],
         };
@@ -1354,7 +1358,7 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
     private static bool RequiresPackageManagerArgumentSeparator(string executable)
     {
         var name = Path.GetFileNameWithoutExtension(executable).ToLowerInvariant();
-        return name is "npm" or "pnpm" or "yarn";
+        return name is "npm";
     }
 
     private static ContinuousTestProviderException UnsupportedFramework(string framework, string projectPath) =>
