@@ -341,6 +341,8 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
         const string body = "shared item shared signature class shared";
         const string term = "shared";
         _ = FtsSymbolSearchIndex.CountTokenOccurrences(body, term);
+        for (int i = 0; i < 10_000; i++)
+            _ = FtsSymbolSearchIndex.CountTokenOccurrences(body, term);
 
         long before = GC.GetAllocatedBytesForCurrentThread();
         int total = 0;
@@ -377,6 +379,11 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
         int[] termHashes = FtsSymbolSearchIndex.CreateOrdinalTermHashes(terms);
         Span<int> frequencies = stackalloc int[terms.Length];
         _ = FtsSymbolSearchIndex.CountTokenFrequencies(body, terms, termHashes, frequencies);
+        for (int i = 0; i < 10_000; i++)
+        {
+            frequencies.Clear();
+            _ = FtsSymbolSearchIndex.CountTokenFrequencies(body, terms, termHashes, frequencies);
+        }
 
         long before = GC.GetAllocatedBytesForCurrentThread();
         int scannedTokens = 0;
