@@ -38,13 +38,13 @@ WaitForPidFileAsync will use a 30-second startup deadline. Runner_cancel_kills_t
 
 ## Acceptance Criteria
 
-- [ ] Probe parsing rejects invalid --health-only values.
-- [ ] Health-only probes handshake, remain alive for their duration, emit complete, and issue zero query/batch requests.
-- [ ] Eight same-model health-only processes report one endpoint identity, exactly one owner, zero failures, and zero hangs.
-- [ ] Batch-8 throughput and zero-failure requirements remain unchanged in the semantic broker soak.
-- [ ] Provider PID readiness allows 30 seconds and cancellation cleanup always observes runTask.
-- [ ] Focused broker and provider Scale tests pass on Linux.
-- [ ] Windows fast evidence remains valid for the unchanged fast scope.
+- [x] Probe parsing rejects invalid --health-only values.
+- [x] Health-only probes handshake, remain alive for their duration, emit complete, and issue zero query/batch requests.
+- [x] Eight same-model health-only processes report one endpoint identity, exactly one owner, zero failures, and zero hangs.
+- [x] Batch-8 throughput and zero-failure requirements remain unchanged in the semantic broker soak.
+- [x] Provider PID readiness allows 30 seconds and cancellation cleanup always observes runTask.
+- [x] Focused broker and provider Scale tests pass on Linux.
+- [ ] Windows fast passes on the synced final SHA.
 - [ ] Windows Scale passes on the synced final SHA.
 - [ ] Linux Release build, fast suite, and Scale suite pass on the final source tree.
 

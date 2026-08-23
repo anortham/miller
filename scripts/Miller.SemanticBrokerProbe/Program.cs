@@ -102,6 +102,15 @@ internal static class BrokerProbe
             Write(Result("ready", options, candidate, checksum, stopwatch, factory.Snapshot,
                 handshake, queryCount, batchCount, failedCount, hungCount, []));
 
+            if (options.HealthOnly)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(options.DurationSeconds), deadline.Token)
+                    .ConfigureAwait(false);
+                Write(Result("complete", options, candidate, checksum, stopwatch, factory.Snapshot,
+                    handshake, queryCount, batchCount, failedCount, hungCount, []));
+                return 0;
+            }
+
             DateTimeOffset end = DateTimeOffset.UtcNow.AddSeconds(options.DurationSeconds);
             long trafficStartedMilliseconds = stopwatch.ElapsedMilliseconds;
             int observedReconnectCount = factory.Snapshot.ReconnectCount;
@@ -281,6 +290,7 @@ internal sealed record ProbeOptions(
     int DurationSeconds,
     int IntervalMilliseconds,
     int BatchSize,
+    bool HealthOnly,
     int StartupTimeoutSeconds,
     int RequestTimeoutSeconds,
     int GraceSeconds)
@@ -306,6 +316,7 @@ internal sealed record ProbeOptions(
             Positive(values, "duration-seconds", 1, allowZero: true),
             Positive(values, "interval-ms", 100, allowZero: true),
             Positive(values, "batch-size", 8),
+            Boolean(values, "health-only", false),
             Positive(
                 values,
                 "startup-timeout-seconds",
@@ -329,6 +340,18 @@ internal sealed record ProbeOptions(
             return fallback;
         if (!int.TryParse(raw, out int value) || value < (allowZero ? 0 : 1))
             throw new ArgumentException($"--{name} must be {(allowZero ? "non-negative" : "positive")}.");
+        return value;
+    }
+
+    private static bool Boolean(
+        IReadOnlyDictionary<string, string> values,
+        string name,
+        bool fallback)
+    {
+        if (!values.TryGetValue(name, out string? raw))
+            return fallback;
+        if (!bool.TryParse(raw, out bool value))
+            throw new ArgumentException($"--{name} must be true or false.");
         return value;
     }
 }

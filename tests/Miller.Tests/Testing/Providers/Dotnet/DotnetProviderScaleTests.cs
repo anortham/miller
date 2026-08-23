@@ -11,6 +11,7 @@ public sealed class DotnetProviderScaleTests : IDisposable
         Directory.CreateTempSubdirectory("miller-ct-provider-scale-").FullName;
 
     private readonly HashSet<string> _ctTemps = new(StringComparer.Ordinal);
+    private static readonly TimeSpan ProcessReadinessTimeout = TimeSpan.FromSeconds(30);
 
     public void Dispose()
     {
@@ -143,8 +144,18 @@ public sealed class DotnetProviderScaleTests : IDisposable
         finally
         {
             cancellation.Cancel();
-            KillIfAlive(childPid);
-            KillIfAlive(rootPid);
+            try
+            {
+                await runTask;
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+            }
+            finally
+            {
+                KillIfAlive(childPid);
+                KillIfAlive(rootPid);
+            }
         }
     }
 
@@ -411,7 +422,7 @@ public sealed class DotnetProviderScaleTests : IDisposable
 
     private static async Task<int> WaitForPidFileAsync(string path, CancellationToken cancellationToken)
     {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        var deadline = DateTimeOffset.UtcNow.Add(ProcessReadinessTimeout);
         while (DateTimeOffset.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();

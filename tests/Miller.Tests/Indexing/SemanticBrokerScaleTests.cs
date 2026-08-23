@@ -24,13 +24,13 @@ public sealed class SemanticBrokerScaleTests : IDisposable
             "scripts",
             "Miller.SemanticBrokerProbe",
             "Miller.SemanticBrokerProbe.csproj");
-        Process keeper = StartProbe(probe, candidate.ToolsRoot, "same-0", 20);
+        Process keeper = StartProbe(probe, candidate.ToolsRoot, "same-0", 20, "true");
         WaitForBrokerEndpoint();
         Process[] processes =
         [
             keeper,
             .. Enumerable.Range(1, 7)
-                .Select(index => StartProbe(probe, candidate.ToolsRoot, $"same-{index}", 5)),
+                .Select(index => StartProbe(probe, candidate.ToolsRoot, $"same-{index}", 5, "true")),
         ];
         Assert.Equal(1, CountBrokerProcesses(candidate.Executable));
 
@@ -47,6 +47,53 @@ public sealed class SemanticBrokerScaleTests : IDisposable
         });
         Assert.Single(results.Select(result => result.EndpointIdentity).Distinct(StringComparer.Ordinal));
         Assert.Equal(1, results.Sum(result => result.OwnerCount));
+    }
+
+    [Theory]
+    [InlineData("maybe")]
+    [InlineData("1")]
+    public async Task ProbeRejectsInvalidHealthOnlyValue(string value)
+    {
+        string probe = Path.Combine(
+            ScaleTestSupport.RepoRoot(),
+            "scripts",
+            "Miller.SemanticBrokerProbe",
+            "Miller.SemanticBrokerProbe.csproj");
+        string toolsRoot = Path.Combine(_millerHome, "missing-tools");
+        Directory.CreateDirectory(toolsRoot);
+        using Process process = StartProbe(probe, toolsRoot, "invalid-health-only", 0, value);
+
+        string stdout = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        string stderr = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(BrokerTestTimeoutSeconds));
+        await process.WaitForExitAsync(timeout.Token);
+
+        Assert.True(process.ExitCode == 2, $"stdout: {stdout} stderr: {stderr}");
+        using JsonDocument document = JsonDocument.Parse(stdout);
+        JsonElement root = document.RootElement;
+        Assert.Equal("failed", root.GetProperty("event").GetString());
+        Assert.Contains("health-only", root.GetProperty("reason").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HealthOnlyProbe_EmitsCompleteWithoutTraffic()
+    {
+        BrokerCandidate candidate = RequireBrokerCandidate();
+        SkipWhenAForeignBrokerOwnsTheRendezvous();
+        string probe = Path.Combine(
+            ScaleTestSupport.RepoRoot(),
+            "scripts",
+            "Miller.SemanticBrokerProbe",
+            "Miller.SemanticBrokerProbe.csproj");
+        using Process process = StartProbe(probe, candidate.ToolsRoot, "health-only", 1, "true");
+
+        ProbeResult result = await ReadProbe(process);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(0, result.QueryCount);
+        Assert.Equal(0, result.BatchCount);
+        Assert.Equal(0, result.FailedCount);
+        Assert.Equal(0, result.HungCount);
     }
 
     [Fact]
@@ -123,7 +170,12 @@ public sealed class SemanticBrokerScaleTests : IDisposable
         return document.RootElement.Clone();
     }
 
-    private Process StartProbe(string project, string toolsRoot, string label, int durationSeconds)
+    private Process StartProbe(
+        string project,
+        string toolsRoot,
+        string label,
+        int durationSeconds,
+        string? healthOnly = null)
     {
         string configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
         string executable = OperatingSystem.IsWindows()
@@ -144,7 +196,7 @@ public sealed class SemanticBrokerScaleTests : IDisposable
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        foreach (string argument in new[]
+        var arguments = new List<string>
         {
             "--tools-root", toolsRoot,
             "--miller-home", _millerHome,
@@ -153,7 +205,14 @@ public sealed class SemanticBrokerScaleTests : IDisposable
             "--timeout-seconds", BrokerTestTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
             "--request-timeout-seconds", BrokerTestTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
             "--grace-seconds", BrokerTestTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        })
+        };
+        if (healthOnly is not null)
+        {
+            arguments.Add("--health-only");
+            arguments.Add(healthOnly);
+        }
+
+        foreach (string argument in arguments)
         {
             start.ArgumentList.Add(argument);
         }
