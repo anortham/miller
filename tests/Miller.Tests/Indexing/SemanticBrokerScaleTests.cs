@@ -38,9 +38,12 @@ public sealed class SemanticBrokerScaleTests : IDisposable
 
         Assert.All(results, result =>
         {
-            Assert.Equal(0, result.ExitCode);
-            Assert.Equal(0, result.HungCount);
-            Assert.Equal(0, result.FailedCount);
+            string diagnostics =
+                $"queries={result.QueryCount}, batches={result.BatchCount}, reconnects={result.ReconnectCount}, " +
+                $"maxRecoveryMs={result.MaxRecoveryMilliseconds}, failureReasons={string.Join(" | ", result.FailureReasons)}";
+            Assert.True(result.ExitCode == 0, diagnostics);
+            Assert.True(result.HungCount == 0, diagnostics);
+            Assert.True(result.FailedCount == 0, diagnostics);
         });
         Assert.Single(results.Select(result => result.EndpointIdentity).Distinct(StringComparer.Ordinal));
         Assert.Equal(1, results.Sum(result => result.OwnerCount));
@@ -301,7 +304,14 @@ public sealed class SemanticBrokerScaleTests : IDisposable
             root.GetProperty("endpointIdentity").GetString()!,
             root.GetProperty("isOwner").GetBoolean() ? 1 : 0,
             root.GetProperty("hungCount").GetInt32(),
-            root.GetProperty("failedCount").GetInt32());
+            root.GetProperty("failedCount").GetInt32(),
+            root.GetProperty("queryCount").GetInt32(),
+            root.GetProperty("batchCount").GetInt32(),
+            root.GetProperty("reconnectCount").GetInt32(),
+            root.GetProperty("maxRecoveryMilliseconds").GetInt64(),
+            root.GetProperty("failureReasons").EnumerateArray()
+                .Select(reason => reason.GetString() ?? string.Empty)
+                .ToArray());
     }
 
     public void Dispose() => Directory.Delete(_millerHome, recursive: true);
@@ -319,7 +329,12 @@ public sealed class SemanticBrokerScaleTests : IDisposable
         string EndpointIdentity,
         int OwnerCount,
         int HungCount,
-        int FailedCount);
+        int FailedCount,
+        int QueryCount,
+        int BatchCount,
+        int ReconnectCount,
+        long MaxRecoveryMilliseconds,
+        string[] FailureReasons);
 
     private sealed record BrokerCandidate(string ToolsRoot, string Executable);
 }
