@@ -406,7 +406,9 @@ public sealed class WorktreeIgnorePropagationScaleTests
         public void Dispose()
         {
             SqliteConnection.ClearAllPools();
-            try { Directory.Delete(_root, recursive: true); } catch (IOException) { /* best-effort temp cleanup */ }
+            try { Directory.Delete(_root, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
     }
 
