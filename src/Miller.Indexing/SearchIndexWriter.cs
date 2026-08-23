@@ -308,17 +308,27 @@ public static class SearchIndexWriter
         connection.Open();
         using var tx = connection.BeginTransaction();
 
-        IReadOnlyList<OldSymbolIdentity> oldSymbols = distinctPaths.Length == 0
-            ? Array.Empty<OldSymbolIdentity>()
-            : ReadOldSymbolsForPaths(connection, distinctPaths);
-
         if (distinctPaths.Length > 0)
         {
-            DeleteSymbolsForPaths(connection, distinctPaths);
+            IReadOnlyList<IndexedSymbol> changedSymbols = SqliteSymbolReader.ReadForPaths(session, distinctPaths);
+            var affectedIds = changedSymbols
+                .Select(static symbol => symbol.SymbolId)
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (OldSymbolIdentity oldSymbol in ReadOldSymbolsForPaths(connection, distinctPaths))
+                affectedIds.Add(oldSymbol.SymbolId);
+            string[] orderedAffectedIds = affectedIds.Order(StringComparer.Ordinal).ToArray();
+            IReadOnlyList<OldSymbolIdentity> oldSymbols = orderedAffectedIds.Length == 0
+                ? Array.Empty<OldSymbolIdentity>()
+                : ReadOldSymbolsForIds(connection, orderedAffectedIds);
+
+            DeleteSymbolsForIds(connection, orderedAffectedIds);
             if (regionOptions.Enabled)
                 DeleteRegionsForPaths(connection, distinctPaths);
 
-            IReadOnlyList<IndexedSymbol> currentSymbols = SqliteSymbolReader.ReadForPaths(session, distinctPaths);
+            IReadOnlyList<IndexedSymbol> currentSymbols = orderedAffectedIds.Length == 0
+                ? Array.Empty<IndexedSymbol>()
+                : SqliteSymbolReader.ReadForSymbolIds(session, orderedAffectedIds);
+            currentSymbols = SearchSymbolAliasCanonicalizer.Canonicalize(currentSymbols);
             IReadOnlyList<IndexedSymbol> stableSymbols = AssignStableDocIds(connection, currentSymbols, oldSymbols);
             Dictionary<string, IndexedSymbol> symbolsById =
                 BuildQualificationSymbolMap(connection, stableSymbols);
@@ -528,6 +538,28 @@ public static class SearchIndexWriter
         return oldSymbols;
     }
 
+    private static IReadOnlyList<OldSymbolIdentity> ReadOldSymbolsForIds(
+        SqliteConnection connection,
+        IReadOnlyList<string> symbolIds)
+    {
+        var oldSymbols = new List<OldSymbolIdentity>();
+        foreach ((int offset, int count) in Chunks(symbolIds.Count))
+        {
+            using var cmd = connection.CreateCommand();
+            string placeholders = AddSymbolIdParameters(cmd, symbolIds, offset, count);
+            cmd.CommandText = $"""
+                SELECT symbol_id, doc_id
+                FROM search_symbols
+                WHERE symbol_id IN ({placeholders})
+                ORDER BY doc_id;
+                """;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                oldSymbols.Add(new OldSymbolIdentity(reader.GetString(0), reader.GetInt32(1)));
+        }
+        return oldSymbols;
+    }
+
     private static void DeleteSymbolsForPaths(SqliteConnection connection, IReadOnlyList<string> paths)
     {
         foreach ((int offset, int count) in Chunks(paths.Count))
@@ -537,6 +569,19 @@ public static class SearchIndexWriter
             using var cmd = connection.CreateCommand();
             string placeholders = AddPathParameters(cmd, paths, offset, count);
             cmd.CommandText = $"DELETE FROM search_symbols WHERE path IN ({placeholders});";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static void DeleteSymbolsForIds(SqliteConnection connection, IReadOnlyList<string> symbolIds)
+    {
+        foreach ((int offset, int count) in Chunks(symbolIds.Count))
+        {
+            DeleteBySymbolIdChunk(connection, "symbols_fts", "symbol_id", symbolIds, offset, count);
+            DeleteBySymbolIdChunk(connection, "symbols_trigram", "symbol_id", symbolIds, offset, count);
+            using var cmd = connection.CreateCommand();
+            string placeholders = AddSymbolIdParameters(cmd, symbolIds, offset, count);
+            cmd.CommandText = $"DELETE FROM search_symbols WHERE symbol_id IN ({placeholders});";
             cmd.ExecuteNonQuery();
         }
     }
@@ -572,6 +617,20 @@ public static class SearchIndexWriter
                 WHERE path IN ({placeholders})
             );
             """;
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void DeleteBySymbolIdChunk(
+        SqliteConnection connection,
+        string targetTable,
+        string idColumn,
+        IReadOnlyList<string> symbolIds,
+        int offset,
+        int count)
+    {
+        using var cmd = connection.CreateCommand();
+        string placeholders = AddSymbolIdParameters(cmd, symbolIds, offset, count);
+        cmd.CommandText = $"DELETE FROM {targetTable} WHERE {idColumn} IN ({placeholders});";
         cmd.ExecuteNonQuery();
     }
 
@@ -758,6 +817,22 @@ public static class SearchIndexWriter
             string name = "$p" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
             placeholders[i] = name;
             command.Parameters.AddWithValue(name, paths[offset + i]);
+        }
+        return string.Join(", ", placeholders);
+    }
+
+    private static string AddSymbolIdParameters(
+        SqliteCommand command,
+        IReadOnlyList<string> symbolIds,
+        int offset,
+        int count)
+    {
+        var placeholders = new string[count];
+        for (int i = 0; i < count; i++)
+        {
+            string name = "$id" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            placeholders[i] = name;
+            command.Parameters.AddWithValue(name, symbolIds[offset + i]);
         }
         return string.Join(", ", placeholders);
     }

@@ -94,12 +94,12 @@
 **Approach:** Preserve existing explicit `DocId` behavior for duplicate-free direct writer inputs. For alias-bearing inputs, generate the same dense survivor sequence for memory and disk so BM25 document counts, average lengths, tie-breaking, file paths, and lookup tables remain identical. Keep qualification lookup one row per ID. Treat divergent rows as corruption with an actionable bounded exception rather than guessing.
 
 **Acceptance criteria:**
-- [ ] `Build_DuplicateAliasIds_UsesLowestOrdinalPathAndOneLogicalDocument` fails before production changes, then passes for shuffled input orders.
-- [ ] `Build_DivergentDuplicateId_ThrowsActionableInvalidDataException` proves the error names the logical ID and both paths.
-- [ ] `Write_DuplicateAliasIds_ProducesOneSearchAndFtsRow` proves `search_symbols`, word FTS, trigram FTS, `meta.doc_count`, and `avgdl` count the logical symbol once.
-- [ ] `Search_DuplicateAliasCorpus_HasExactDiskMemoryParity` proves identical IDs, canonical paths, result order, and scores.
-- [ ] Duplicate-free writer tests, including explicit non-dense `DocId` persistence, remain unchanged and green.
-- [ ] Worker-scope verification passes and the worker commits only owned files with `serial-worker-commit`.
+- [x] `Build_DuplicateAliasIds_UsesLowestOrdinalPathAndOneLogicalDocument` fails before production changes, then passes for shuffled input orders.
+- [x] `Build_DivergentDuplicateId_ThrowsActionableInvalidDataException` proves the error names the logical ID and both paths.
+- [x] `Write_DuplicateAliasIds_ProducesOneSearchAndFtsRow` proves `search_symbols`, word FTS, trigram FTS, `meta.doc_count`, and `avgdl` count the logical symbol once.
+- [x] `Search_DuplicateAliasCorpus_HasExactDiskMemoryParity` proves identical IDs, canonical paths, result order, and scores.
+- [x] Duplicate-free writer tests, including explicit non-dense `DocId` persistence, remain unchanged and green.
+- [x] Worker-scope verification passes and the worker commits only owned files with `serial-worker-commit`.
 
 ### Task 2: Alias-aware incremental store convergence
 

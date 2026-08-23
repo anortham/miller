@@ -110,6 +110,15 @@ public static class SqliteSymbolReader
         return ReadForPaths(connection, paths);
     }
 
+    public static IReadOnlyList<IndexedSymbol> ReadForSymbolIds(
+        IWorkspaceReadSession session,
+        IReadOnlyCollection<string> symbolIds)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(symbolIds);
+        return session.Read(connection => ReadForSymbolIds(connection, symbolIds));
+    }
+
     private static IReadOnlyList<IndexedSymbol> ReadForPaths(
         SqliteConnection connection,
         IReadOnlyCollection<string> paths)
@@ -157,6 +166,63 @@ public static class SqliteSymbolReader
                        has_file_evidence, has_parse_diagnostics
                 FROM ordered
                 WHERE path IN ({placeholders})
+                ORDER BY path, start_line, symbol_id;
+                """;
+            using var reader = command.ExecuteReader();
+            ReadRows(reader, results);
+        }
+
+        results.Sort(static (a, b) => a.DocId.CompareTo(b.DocId));
+        return results;
+    }
+
+    private static IReadOnlyList<IndexedSymbol> ReadForSymbolIds(
+        SqliteConnection connection,
+        IReadOnlyCollection<string> symbolIds)
+    {
+        var distinctSymbolIds = symbolIds
+            .Where(static id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (distinctSymbolIds.Length == 0)
+            return Array.Empty<IndexedSymbol>();
+
+        JulieSchemaGate.Verify(connection);
+
+        EvidenceProjection evidence = EvidenceProjection.From(connection);
+        string orderedCtePrefix = evidence.DiagnosticsJoin.Length == 0
+            ? "WITH"
+            : evidence.DiagnosticPathsCte + ",";
+
+        var results = new List<IndexedSymbol>();
+        for (int offset = 0; offset < distinctSymbolIds.Length; offset += ParameterChunkSize)
+        {
+            int count = Math.Min(ParameterChunkSize, distinctSymbolIds.Length - offset);
+            using var command = connection.CreateCommand();
+            string placeholders = AddSymbolIdParameters(command, distinctSymbolIds, offset, count);
+            command.CommandText = $"""
+                {orderedCtePrefix}
+                ordered AS (
+                    SELECT ROW_NUMBER() OVER (ORDER BY s.path, s.start_line, s.symbol_id) - 1 AS doc_id,
+                           s.symbol_id, s.name, s.signature, s.kind, s.language, s.path,
+                           s.start_line, s.end_line, s.parent_symbol_id, s.is_test, s.visibility,
+                           {evidence.TestContainer} AS test_container,
+                           {evidence.TestLifecycle} AS test_lifecycle,
+                           {evidence.FileStatus} AS file_status,
+                           {evidence.HasFileEvidence} AS has_file_evidence,
+                           {evidence.HasParseDiagnostics} AS has_parse_diagnostics
+                    FROM symbols AS s
+                    {evidence.FilesJoin}
+                    {evidence.DiagnosticsJoin}
+                    WHERE s.name IS NOT NULL
+                )
+                SELECT doc_id, symbol_id, name, signature, kind, language, path,
+                       start_line, end_line, parent_symbol_id, is_test, visibility,
+                       test_container, test_lifecycle, file_status,
+                       has_file_evidence, has_parse_diagnostics
+                FROM ordered
+                WHERE symbol_id IN ({placeholders})
                 ORDER BY path, start_line, symbol_id;
                 """;
             using var reader = command.ExecuteReader();
@@ -235,6 +301,22 @@ public static class SqliteSymbolReader
             string name = "$p" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
             placeholders[i] = name;
             command.Parameters.AddWithValue(name, paths[offset + i]);
+        }
+        return string.Join(", ", placeholders);
+    }
+
+    private static string AddSymbolIdParameters(
+        SqliteCommand command,
+        IReadOnlyList<string> symbolIds,
+        int offset,
+        int count)
+    {
+        var placeholders = new string[count];
+        for (int i = 0; i < count; i++)
+        {
+            string name = "$id" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            placeholders[i] = name;
+            command.Parameters.AddWithValue(name, symbolIds[offset + i]);
         }
         return string.Join(", ", placeholders);
     }

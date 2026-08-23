@@ -644,6 +644,211 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void SearchSidecarAliasDelta_AddingLaterAliasKeepsCanonicalRowAndDocId()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, initial));
+
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Search,
+            fixture.Binding.ViewId);
+        long docId = ReadInt64(databasePath, "SELECT doc_id FROM search_symbols WHERE symbol_id='symbol';");
+        AddSentinel(databasePath);
+        AppendAliasManifest(fixture, generation: 3, versionId: 3, aliasPath: "zz.cs", sequence: 3);
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, updated));
+
+        Assert.True(TableExists(databasePath, "fast_forward_sentinel"));
+        Assert.Equal(docId, ReadInt64(databasePath, "SELECT doc_id FROM search_symbols WHERE symbol_id='symbol';"));
+        Assert.Equal("same.cs", ReadText(databasePath, "SELECT path FROM search_symbols WHERE symbol_id='symbol';"));
+        Assert.Equal(1, ReadInt64(databasePath, "SELECT COUNT(*) FROM search_symbols WHERE symbol_id='symbol';"));
+    }
+
+    [Fact]
+    public void SearchSidecarAliasDelta_AddingEarlierAliasReelectsCanonicalPathAndPreservesDocId()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, initial));
+
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Search,
+            fixture.Binding.ViewId);
+        long docId = ReadInt64(databasePath, "SELECT doc_id FROM search_symbols WHERE symbol_id='symbol';");
+        AddSentinel(databasePath);
+        AppendAliasManifest(fixture, generation: 3, versionId: 3, aliasPath: "aa.cs", sequence: 3);
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, updated));
+
+        Assert.True(TableExists(databasePath, "fast_forward_sentinel"));
+        Assert.Equal(docId, ReadInt64(databasePath, "SELECT doc_id FROM search_symbols WHERE symbol_id='symbol';"));
+        Assert.Equal("aa.cs", ReadText(databasePath, "SELECT path FROM search_symbols WHERE symbol_id='symbol';"));
+        Assert.Equal(1, ReadInt64(databasePath, "SELECT COUNT(*) FROM search_symbols WHERE symbol_id='symbol';"));
+    }
+
+    [Fact]
+    public void SearchSidecarAliasDelta_DeletingNoncanonicalAliasIsNoOp()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, initial));
+        AppendAliasManifest(fixture, generation: 3, versionId: 3, aliasPath: "zz.cs", sequence: 3);
+        using (FamilyStoreReadSession withAlias = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, withAlias));
+
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Search,
+            fixture.Binding.ViewId);
+        AddSentinel(databasePath);
+        AppendAliasRemovalManifest(fixture, generation: 4, sequence: 4);
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, updated));
+
+        Assert.True(TableExists(databasePath, "fast_forward_sentinel"));
+        Assert.Equal(
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, updated.Snapshot),
+            StoreSidecarCatalog.TryRead(databasePath));
+        Assert.Equal("same.cs", ReadText(databasePath, "SELECT path FROM search_symbols WHERE symbol_id='symbol';"));
+        Assert.Equal(1, ReadInt64(databasePath, "SELECT COUNT(*) FROM search_symbols WHERE symbol_id='symbol';"));
+    }
+
+    [Fact]
+    public void SearchSidecarAliasDelta_DeletingCanonicalAliasReelectsSurvivorAndPreservesDocId()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, initial));
+        AppendAliasManifest(fixture, generation: 3, versionId: 3, aliasPath: "aa.cs", sequence: 3);
+        using (FamilyStoreReadSession withAlias = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, withAlias));
+
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Search,
+            fixture.Binding.ViewId);
+        long docId = ReadInt64(databasePath, "SELECT doc_id FROM search_symbols WHERE symbol_id='symbol';");
+        AddSentinel(databasePath);
+        AppendAliasRemovalManifest(fixture, generation: 4, sequence: 4);
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, updated));
+
+        Assert.True(TableExists(databasePath, "fast_forward_sentinel"));
+        Assert.Equal(docId, ReadInt64(databasePath, "SELECT doc_id FROM search_symbols WHERE symbol_id='symbol';"));
+        Assert.Equal("same.cs", ReadText(databasePath, "SELECT path FROM search_symbols WHERE symbol_id='symbol';"));
+        Assert.Equal(1, ReadInt64(databasePath, "SELECT COUNT(*) FROM search_symbols WHERE symbol_id='symbol';"));
+    }
+
+    [Fact]
+    public void SearchSidecarAliasDelta_ChangingCanonicalContentReelectsOldIdAndAddsNewIds()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, initial));
+        AppendAliasManifest(fixture, generation: 3, versionId: 3, aliasPath: "zz.cs", sequence: 3);
+        using (FamilyStoreReadSession withAlias = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, withAlias));
+
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Search,
+            fixture.Binding.ViewId);
+        long oldDocId = ReadInt64(databasePath, "SELECT doc_id FROM search_symbols WHERE symbol_id='symbol';");
+        AddSentinel(databasePath);
+        AppendCanonicalContentChangeManifest(fixture, generation: 4, versionId: 4, sequence: 4);
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, updated));
+
+        Assert.True(TableExists(databasePath, "fast_forward_sentinel"));
+        Assert.Equal(oldDocId, ReadInt64(databasePath, "SELECT doc_id FROM search_symbols WHERE symbol_id='symbol';"));
+        Assert.Equal("zz.cs", ReadText(databasePath, "SELECT path FROM search_symbols WHERE symbol_id='symbol';"));
+        Assert.Equal("same.cs", ReadText(databasePath, "SELECT path FROM search_symbols WHERE symbol_id='new-symbol';"));
+        Assert.Equal(2, ReadInt64(databasePath, "SELECT COUNT(*) FROM search_symbols;"));
+    }
+
+    [Fact]
+    public void SearchSidecarAliasDelta_FullRebuildMatchesDeltaProjection()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, initial));
+        AppendAliasManifest(fixture, generation: 3, versionId: 3, aliasPath: "aa.cs", sequence: 3);
+        using (FamilyStoreReadSession withAlias = FamilyStoreReadSession.Open(fixture.Binding))
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, withAlias));
+        AppendAliasRemovalManifest(fixture, generation: 4, sequence: 4);
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, updated));
+
+        string deltaDatabasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Search,
+            fixture.Binding.ViewId);
+        string fullDatabasePath = Path.Combine(fixture.Root, "full-search.db");
+        SearchIndexWriter.WriteStoreView(fullDatabasePath, updated, RegionIndexOptions.Disabled);
+
+        Assert.Equal(ReadSearchRows(deltaDatabasePath), ReadSearchRows(fullDatabasePath));
+        Assert.Equal(ReadFtsRows(deltaDatabasePath), ReadFtsRows(fullDatabasePath));
+        Assert.Equal(StoreSidecarCatalog.TryRead(deltaDatabasePath), StoreSidecarCatalog.TryRead(fullDatabasePath));
+    }
+
+    [Fact]
+    public void ReadForSymbolIdsReturnsEveryCurrentAliasCandidate()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        AppendAliasManifest(fixture, generation: 3, versionId: 3, aliasPath: "zz.cs", sequence: 3);
+
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        IReadOnlyList<IndexedSymbol> candidates = SqliteSymbolReader.ReadForSymbolIds(session, ["symbol"]);
+
+        Assert.Equal(["same.cs", "zz.cs"], candidates.Select(static symbol => symbol.FilePath));
+    }
+
+    [Fact]
+    public void SearchSidecarAliasDelta_RegionReelectionPreservesSurvivingPathRegions()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        File.WriteAllText(Path.Combine(fixture.Binding.WorkspaceRoot, "same.cs"), "// visible\n");
+        File.WriteAllText(Path.Combine(fixture.Binding.WorkspaceRoot, "zz.cs"), "// alias\n");
+        RefreshFileVersionHash(fixture, versionId: 2, path: "same.cs");
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.EnabledDefault);
+        using (FamilyStoreReadSession initial = FamilyStoreReadSession.Open(fixture.Binding))
+        {
+            Assert.Single(SqliteSourceRegionReader.ReadIndexedRegions(initial));
+            Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, initial));
+        }
+
+        string databasePath = StoreSidecarCatalog.PathFor(
+            fixture.Binding.StoreRoot,
+            StoreSidecarKind.Search,
+            fixture.Binding.ViewId);
+        AddSentinel(databasePath);
+        AppendAliasManifest(fixture, generation: 3, versionId: 3, aliasPath: "zz.cs", sequence: 3);
+
+        using FamilyStoreReadSession updated = FamilyStoreReadSession.Open(fixture.Binding);
+        Assert.True(sidecar.EnsureStoreCurrent(fixture.Binding.StoreRoot, updated));
+
+        Assert.True(TableExists(databasePath, "fast_forward_sentinel"));
+        Assert.Equal(1, ReadInt64(databasePath, "SELECT COUNT(*) FROM search_regions WHERE path='same.cs';"));
+        Assert.Equal(1, ReadInt64(databasePath, "SELECT COUNT(*) FROM search_regions WHERE path='zz.cs';"));
+        Assert.Equal(2, ReadInt64(databasePath, "SELECT COUNT(*) FROM search_regions;"));
+    }
+
+    [Fact]
     public void EnabledWorkspaceFactoryUsesTheValidatedPointerInsteadOfTheLegacyArtifact()
     {
         using StoreFixture fixture = StoreFixture.Create();
@@ -1676,6 +1881,151 @@ public sealed class FamilyStoreReadSessionTests
         command.ExecuteNonQuery();
     }
 
+    private static void AppendAliasManifest(
+        StoreFixture fixture,
+        long generation,
+        long versionId,
+        string aliasPath,
+        long sequence)
+    {
+        string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        string aliasAbsolutePath = Path.Combine(fixture.Binding.WorkspaceRoot, aliasPath);
+        bool aliasExists = File.Exists(aliasAbsolutePath);
+        byte[] aliasBytes = aliasExists ? File.ReadAllBytes(aliasAbsolutePath) : Array.Empty<byte>();
+        string aliasHash = aliasExists ? "blake3:" + ContentHasher.Blake3Hex(aliasBytes) : "blake3:alias";
+        int aliasLength = aliasExists ? aliasBytes.Length : 12;
+        command.CommandText =
+            """
+            INSERT INTO file_versions VALUES
+              ($version,$alias,$hash,1,'csharp',$bytes,1,NULL,1,2,3);
+            INSERT INTO manifests VALUES
+              ('view-a',$generation,$manifest,$request,'2026-08-09T00:00:02Z');
+            INSERT INTO manifest_entries VALUES
+              ('view-a',$generation,'same.cs','csharp',2,'indexed','blake3:visible','2026-08-09T00:00:02Z',NULL,NULL),
+              ('view-a',$generation,$alias,'csharp',$version,'indexed','blake3:alias','2026-08-09T00:00:02Z',NULL,NULL);
+            INSERT INTO symbols VALUES
+              ($version,'symbol',$alias,'csharp','Visible','class',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+            INSERT INTO source_regions VALUES
+              ($region,$version,$alias,'csharp','comment',NULL,1,1,1,2,0,1,NULL);
+            UPDATE views
+            SET current_generation=$generation,
+                updated_at='2026-08-09T00:00:02Z'
+            WHERE view_id='view-a';
+            INSERT INTO store_log VALUES
+              ($sequence,$request,'manifest_flipped','view-a',$generation,NULL,NULL,1,'{}','2026-08-09T00:00:02Z');
+            """;
+        command.Parameters.AddWithValue("$version", versionId);
+        command.Parameters.AddWithValue("$generation", generation);
+        command.Parameters.AddWithValue("$manifest", $"manifest-{generation}");
+        command.Parameters.AddWithValue("$request", $"request-{generation}");
+        command.Parameters.AddWithValue("$alias", aliasPath);
+        command.Parameters.AddWithValue("$hash", aliasHash);
+        command.Parameters.AddWithValue("$bytes", aliasLength);
+        command.Parameters.AddWithValue("$region", $"region-{generation}");
+        command.Parameters.AddWithValue("$sequence", sequence);
+        command.ExecuteNonQuery();
+    }
+
+    private static void RefreshFileVersionHash(StoreFixture fixture, long versionId, string path)
+    {
+        string absolutePath = Path.Combine(fixture.Binding.WorkspaceRoot, path);
+        byte[] bytes = File.ReadAllBytes(absolutePath);
+        string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            "UPDATE file_versions SET content_hash=$hash,content_bytes=$bytes WHERE version_id=$version;";
+        command.Parameters.AddWithValue("$hash", "blake3:" + ContentHasher.Blake3Hex(bytes));
+        command.Parameters.AddWithValue("$bytes", bytes.Length);
+        command.Parameters.AddWithValue("$version", versionId);
+        command.ExecuteNonQuery();
+    }
+
+    private static void AppendAliasRemovalManifest(
+        StoreFixture fixture,
+        long generation,
+        long sequence)
+    {
+        string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO manifests VALUES
+              ('view-a',$generation,$manifest,$request,'2026-08-09T00:00:03Z');
+            INSERT INTO manifest_entries VALUES
+              ('view-a',$generation,'same.cs','csharp',2,'indexed','blake3:visible','2026-08-09T00:00:03Z',NULL,NULL);
+            UPDATE views
+            SET current_generation=$generation,
+                updated_at='2026-08-09T00:00:03Z'
+            WHERE view_id='view-a';
+            INSERT INTO store_log VALUES
+              ($sequence,$request,'manifest_flipped','view-a',$generation,NULL,NULL,1,'{}','2026-08-09T00:00:03Z');
+            """;
+        command.Parameters.AddWithValue("$generation", generation);
+        command.Parameters.AddWithValue("$manifest", $"manifest-{generation}");
+        command.Parameters.AddWithValue("$request", $"request-{generation}");
+        command.Parameters.AddWithValue("$sequence", sequence);
+        command.ExecuteNonQuery();
+    }
+
+    private static void AppendCanonicalContentChangeManifest(
+        StoreFixture fixture,
+        long generation,
+        long versionId,
+        long sequence)
+    {
+        string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO file_versions VALUES
+              ($version,'same.cs','blake3:new',1,'csharp',12,1,NULL,1,2,3);
+            INSERT INTO manifests VALUES
+              ('view-a',$generation,$manifest,$request,'2026-08-09T00:00:03Z');
+            INSERT INTO manifest_entries VALUES
+              ('view-a',$generation,'same.cs','csharp',$version,'indexed','blake3:new','2026-08-09T00:00:03Z',NULL,NULL),
+              ('view-a',$generation,'zz.cs','csharp',3,'indexed','blake3:alias','2026-08-09T00:00:03Z',NULL,NULL);
+            INSERT INTO symbols VALUES
+              ($version,'new-symbol','same.cs','csharp','NewVisible','class',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+            UPDATE views
+            SET current_generation=$generation,
+                updated_at='2026-08-09T00:00:03Z'
+            WHERE view_id='view-a';
+            INSERT INTO store_log VALUES
+              ($sequence,$request,'manifest_flipped','view-a',$generation,NULL,NULL,1,'{}','2026-08-09T00:00:03Z');
+            """;
+        command.Parameters.AddWithValue("$version", versionId);
+        command.Parameters.AddWithValue("$generation", generation);
+        command.Parameters.AddWithValue("$manifest", $"manifest-{generation}");
+        command.Parameters.AddWithValue("$request", $"request-{generation}");
+        command.Parameters.AddWithValue("$sequence", sequence);
+        command.ExecuteNonQuery();
+    }
+
     private static void AppendReusedManifestImport(StoreFixture fixture)
     {
         string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
@@ -1749,6 +2099,50 @@ public sealed class FamilyStoreReadSessionTests
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = sql;
         return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static string ReadText(string databasePath, string sql)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        return Convert.ToString(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture)!;
+    }
+
+    private static string[] ReadSearchRows(string databasePath)
+    {
+        return ReadTexts(
+            databasePath,
+            "SELECT symbol_id || '|' || doc_id || '|' || name || '|' || path FROM search_symbols ORDER BY symbol_id;");
+    }
+
+    private static string[] ReadFtsRows(string databasePath)
+    {
+        return ReadTexts(databasePath, "SELECT symbol_id || '|' || body FROM symbols_fts ORDER BY symbol_id;");
+    }
+
+    private static string[] ReadTexts(string databasePath, string sql)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        using SqliteDataReader reader = command.ExecuteReader();
+        var values = new List<string>();
+        while (reader.Read())
+            values.Add(reader.GetString(0));
+        return values.ToArray();
     }
 
     private static bool TableExists(string databasePath, string table)
@@ -2011,6 +2405,20 @@ public sealed class FamilyStoreReadSessionTests
                   end_byte INTEGER NOT NULL,
                   confidence REAL,
                   metadata_json TEXT) STRICT;
+                CREATE TABLE source_regions (
+                  source_region_id TEXT PRIMARY KEY,
+                  version_id INTEGER NOT NULL,
+                  path TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  containing_symbol_id TEXT,
+                  start_line INTEGER NOT NULL,
+                  start_column INTEGER NOT NULL,
+                  end_line INTEGER NOT NULL,
+                  end_column INTEGER NOT NULL,
+                  start_byte INTEGER NOT NULL,
+                  end_byte INTEGER NOT NULL,
+                  metadata_json TEXT) STRICT;
                 CREATE TABLE type_facts (
                   version_id INTEGER NOT NULL,
                   type_fact_id TEXT NOT NULL,
@@ -2079,6 +2487,8 @@ public sealed class FamilyStoreReadSessionTests
                 INSERT INTO structural_facts VALUES
                   (1,1,'same.cs','csharp','hidden.pattern.v1','node','class',NULL,1,1,1,2,0,1,1.0,NULL),
                   (2,2,'same.cs','csharp','visible.pattern.v1','node','class',NULL,1,1,1,2,0,1,1.0,NULL);
+                INSERT INTO source_regions VALUES
+                  ('region-same',2,'same.cs','csharp','comment',NULL,1,1,1,2,0,1,NULL);
                 INSERT INTO store_log VALUES
                   (1,'request-prior','manifest_flipped','view-a',1,NULL,NULL,0,'{}','2026-08-08T00:00:00Z'),
                   (2,'request-a','manifest_flipped','view-a',2,NULL,NULL,1,'{}','2026-08-09T00:00:01Z');
