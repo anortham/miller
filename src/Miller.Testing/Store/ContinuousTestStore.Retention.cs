@@ -262,9 +262,9 @@ public sealed partial class ContinuousTestStore
             long protectedRuns = CountRows("test_runs", workspaceId);
             long protectedResults = CountRows("test_results", workspaceId);
             long protectedArtifacts = CountRows("run_artifacts", workspaceId);
-            long deletedRuns = consideredRuns - CountRows("test_runs", workspaceId);
-            long deletedResults = consideredResults - CountRows("test_results", workspaceId);
-            long deletedArtifacts = consideredArtifacts - CountRows("run_artifacts", workspaceId);
+            long deletedRuns = consideredRuns - protectedRuns;
+            long deletedResults = consideredResults - protectedResults;
+            long deletedArtifacts = consideredArtifacts - protectedArtifacts;
             long pageCount = ScalarLong("PRAGMA page_count;", workspaceId, cutoff);
             long freelistCount = ScalarLong("PRAGMA freelist_count;", workspaceId, cutoff);
             return new ContinuousTestHistoryPruneResult(

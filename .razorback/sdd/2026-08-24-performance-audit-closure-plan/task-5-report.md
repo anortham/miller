@@ -71,6 +71,7 @@ The review regressions were authored before the implementation correction was re
 
 - The failure-isolation tests install a real SQLite `BEFORE DELETE` trigger for `artifact:old`; they assert successful provider status, original provider exception text, unchanged artifact, and bounded lifecycle diagnostics.
 - The counter test disables foreign keys only while inserting a deterministic orphan `running_run_id`, then proves all three considered/deleted/protected invariants and zero false protection counts.
+- The follow-up cleanup reuses the three actual protected counts for `deleted = considered - protected`; post-edit Miller inspect reports `CountRows ×6` in the transaction instead of the prior `CountRows ×9`. No statement-count observer was added because the existing invariant regression was the established cheap seam.
 - The red run above is a mutation check for both reviewed defects; the green run proves their corrected behavior.
 - Focused existing store, coordinator runner, JUnit importer, and coverage importer tests remained green alongside the new tests.
 - No schema version, public CLI/MCP output, cache/generation deletion, physical compaction, or unrelated plan file was changed.
@@ -92,14 +93,16 @@ Changed Task 5 files:
 - `tests/Miller.Tests/Testing/Store/ContinuousTestStoreRetentionTests.cs`
 - This report.
 
-Earlier Task 5 commits retained in this branch: `83df8652` (retention implementation), `723875ac` (verification checkpoints), and `845e52ea` (internal API boundary). The review correction is pending the next worker commit.
+Earlier Task 5 commits retained in this branch: `83df8652` (retention implementation), `723875ac` (verification checkpoints), `845e52ea` (internal API boundary), and `86738ac9` (review correction: failure isolation, honest counters, and this report). The current cleanup removes three redundant count queries while preserving the same invariant.
 
 Goldfish checkpoints: `checkpoint_156fe21f`, `checkpoint_41ecc92a`, `checkpoint_2b5ebf38`, and `checkpoint_a87e5ff4`.
+
+Follow-up cleanup verification at `2026-08-24T03:45:22-05:00`–`03:45:38-05:00`: retention/coordinator tests passed 11/11; `Miller.Testing` build passed 0 warnings/errors; `git diff --check` passed. Miller refresh reached revision `39843`; post-edit inspect/impact confirmed the reduced `CountRows` call graph. The cleanup preserves the same 69-test full focused result recorded above.
 
 ## Worktree state at report authoring
 
 - Path: `/home/murphy/source/miller/.worktrees/perf-ct-audit-2026-08-23`
 - Branch: `perf/ct-audit-2026-08-23`
-- HEAD before this correction commit: `845e52ea32d4bc6f36fb791e14c554919811f48d`
-- `git status --short --branch`: the closure plan was the pre-existing lead-owned modification; Task 5 source/tests and this report were the only worker changes.
+- HEAD at the final review-correction state: `86738ac9509ae841da3e650b3854da042bb13ca5`
+- `git status --short --branch`: the closure plan was the pre-existing lead-owned modification; Task 5 source/tests and this report comprise the worker packet.
 - No push, merge, release, or main-worktree mutation was performed.
