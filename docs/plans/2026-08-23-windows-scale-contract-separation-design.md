@@ -44,9 +44,9 @@ WaitForPidFileAsync will use a 30-second startup deadline. Runner_cancel_kills_t
 - [x] Batch-8 throughput and zero-failure requirements remain unchanged in the semantic broker soak.
 - [x] Provider PID readiness allows 30 seconds and cancellation cleanup always observes runTask.
 - [x] Focused broker and provider Scale tests pass on Linux.
-- [ ] Windows fast passes on the synced final SHA.
-- [ ] Windows Scale passes on the synced final SHA.
-- [ ] Linux Release build, fast suite, and Scale suite pass on the final source tree.
+- [x] Windows fast passes on the synced final SHA.
+- [x] Windows Scale passes on the synced final SHA.
+- [x] Linux Release build, fast suite, and Scale suite pass on the final source tree.
 
 ## Verification
 
