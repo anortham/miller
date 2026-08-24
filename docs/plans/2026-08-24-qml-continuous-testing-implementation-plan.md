@@ -104,10 +104,10 @@ Commit mode: Tasks 1-2 use `parallel-lead-commit`; Tasks 3-5 use `serial-worker-
 **Approach:** Add tests for nested subdirectories, separate configure/evidence roots, multiple independent top-level projects, missing QuickTest, missing QML tests, and misleading strings in unrelated files. Reuse current path normalization and ignore policies.
 
 **Acceptance criteria:**
-- [ ] One logical CMake project produces one stable inventory row regardless of nested `CMakeLists.txt` count.
-- [ ] QuickTest and QML evidence may live below the configure root.
-- [ ] Generic QML/CMake applications and text-only false positives are not registered.
-- [ ] Worker-scope verification passes and the change is handed to the lead per `parallel-lead-commit`.
+- [x] One logical CMake project produces one stable inventory row regardless of nested `CMakeLists.txt` count.
+- [x] QuickTest and QML evidence may live below the configure root.
+- [x] Generic QML/CMake applications and text-only false positives are not registered.
+- [x] Worker-scope verification passes and the change is handed to the lead per `parallel-lead-commit`.
 
 ### Task 2: Parse CMake and CTest machine contracts
 
