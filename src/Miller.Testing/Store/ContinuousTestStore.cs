@@ -52,6 +52,35 @@ public sealed partial class ContinuousTestStore : IDisposable
     private const int SqliteNotADb = 26;
     private const int WriteBusyTimeoutSeconds = 5;
 
+    internal const string AggregateContinuousTestStatusesNoCursorSql = """
+        SELECT COUNT(*),
+               COALESCE(SUM(CASE WHEN state IN ('unknown', 'running') THEN 1 ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN state = 'stale' THEN 1 ELSE 0 END), 0),
+               0
+        FROM ct_test_states
+        WHERE workspace_id = $workspace;
+        """;
+
+    internal const string AggregateContinuousTestStatusesSelectedSql = """
+        SELECT COUNT(*),
+               COALESCE(SUM(CASE WHEN s.state IN ('unknown', 'running') THEN 1 ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN s.state NOT IN ('unknown', 'running')
+                   AND NOT (
+                       (s.state IN ('green', 'red', 'skipped')
+                           AND s.index_identity = $identity AND s.revision = $revision)
+                       OR (s.state = 'green' AND w.revision IS NOT NULL AND w.revision >= $revision)
+                   ) THEN 1 ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN s.state = 'red'
+                   AND s.index_identity = $identity AND s.revision = $revision
+                   THEN 1 ELSE 0 END), 0)
+        FROM ct_test_states s
+        LEFT JOIN ct_case_fresh_watermarks w
+            ON w.test_case_id = s.test_case_id
+           AND w.workspace_id = s.workspace_id
+           AND w.index_identity = $identity
+        WHERE s.workspace_id = $workspace;
+        """;
+
     private readonly object _gate = new();
     private SqliteConnection? _write;
     private SqliteTransaction? _transaction;
@@ -324,6 +353,40 @@ public sealed partial class ContinuousTestStore : IDisposable
                 }
 
                 return rows;
+            });
+    }
+
+    public ContinuousTestStatusAggregate AggregateContinuousTestStatuses(
+        string workspaceId,
+        CtFreshnessKey? selectedKey)
+    {
+        if (string.IsNullOrEmpty(workspaceId))
+            throw new ArgumentException("must not be empty", nameof(workspaceId));
+
+        return WithRead(
+            static () => new ContinuousTestStatusAggregate(0, 0, 0, 0),
+            connection =>
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = selectedKey is null
+                    ? AggregateContinuousTestStatusesNoCursorSql
+                    : AggregateContinuousTestStatusesSelectedSql;
+                command.Parameters.AddWithValue("$workspace", workspaceId);
+                if (selectedKey is { } selected)
+                {
+                    command.Parameters.AddWithValue("$identity", selected.IndexIdentity);
+                    command.Parameters.AddWithValue("$revision", selected.Revision);
+                }
+
+                using SqliteDataReader reader = command.ExecuteReader();
+                if (!reader.Read())
+                    return new ContinuousTestStatusAggregate(0, 0, 0, 0);
+
+                return new ContinuousTestStatusAggregate(
+                    Total: checked((int)reader.GetInt64(0)),
+                    Pending: checked((int)reader.GetInt64(1)),
+                    Stale: checked((int)reader.GetInt64(2)),
+                    FreshRed: checked((int)reader.GetInt64(3)));
             });
     }
 

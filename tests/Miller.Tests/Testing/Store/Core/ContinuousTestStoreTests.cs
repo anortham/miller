@@ -12,9 +12,11 @@ public sealed class ContinuousTestStoreTests : IDisposable
 
     private readonly string _dir;
     private readonly string _dbPath;
+    private readonly ITestOutputHelper _output;
 
-    public ContinuousTestStoreTests()
+    public ContinuousTestStoreTests(ITestOutputHelper output)
     {
+        _output = output;
         _dir = Path.Combine(Path.GetTempPath(), "miller-ct-store-core-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
         _dbPath = Path.Combine(_dir, CtSchema.DbFileName);
@@ -459,6 +461,92 @@ public sealed class ContinuousTestStoreTests : IDisposable
     }
 
     [Fact]
+    public void Aggregate_continuous_test_statuses_matches_detailed_projection_for_selected_and_missing_cursors()
+    {
+        using var store = CreateAggregateFixture();
+        CtFreshnessKey selected = Key(58);
+        IReadOnlyList<ContinuousTestStatus> statuses = store.ListContinuousTestStatuses(Workspace);
+        IReadOnlyDictionary<string, CtFreshnessKey> watermarks =
+            store.ListContinuousTestFreshWatermarks(Workspace, Identity);
+
+        ContinuousTestProjectedStatus detailed =
+            ContinuousTestStatusProjection.Project(selected, statuses, watermarks);
+        ContinuousTestStatusAggregate aggregate = store.AggregateContinuousTestStatuses(Workspace, selected);
+        ContinuousTestProjectedStatus projected = ContinuousTestStatusProjection.Project(selected, aggregate);
+
+        Assert.Equal(detailed, projected);
+        Assert.Equal(9, aggregate.Total);
+        Assert.Equal(2, aggregate.Pending);
+        Assert.Equal(3, aggregate.Stale);
+        Assert.Equal(1, aggregate.FreshRed);
+
+        ContinuousTestStatusAggregate missingCursor =
+            store.AggregateContinuousTestStatuses(Workspace, selectedKey: null);
+        ContinuousTestProjectedStatus missingProjection =
+            ContinuousTestStatusProjection.Project(liveKey: null, statuses);
+        Assert.Equal(missingProjection, ContinuousTestStatusProjection.Project(null, missingCursor));
+        Assert.Equal(1, missingCursor.Stale);
+    }
+
+    [Fact]
+    public void Aggregate_selected_key_keeps_an_exact_key_stale_row_stale()
+    {
+        using var store = CreateStoreWithTests("test:stale-exact");
+        Exec("""
+            INSERT INTO ct_test_states(test_case_id, workspace_id, index_identity, revision, state)
+            VALUES ('test:stale-exact', 'ws:1', 'gen-1', 58, 'stale');
+            """);
+        CtFreshnessKey selected = Key(58);
+        IReadOnlyList<ContinuousTestStatus> statuses = store.ListContinuousTestStatuses(Workspace);
+        ContinuousTestProjectedStatus detailed =
+            ContinuousTestStatusProjection.Project(selected, statuses);
+        ContinuousTestStatusAggregate aggregate = store.AggregateContinuousTestStatuses(Workspace, selected);
+        ContinuousTestProjectedStatus projected =
+            ContinuousTestStatusProjection.Project(selected, aggregate, watchHealthy: true);
+
+        Assert.Equal(detailed, projected);
+        Assert.Equal(1, aggregate.Stale);
+        Assert.Equal(ContinuousTestVerdict.Partial, projected.Verdict);
+    }
+
+    [Fact]
+    public void Aggregate_continuous_test_statuses_query_uses_existing_indexes_without_temp_sort()
+    {
+        using var store = CreateAggregateFixture();
+        string[] selectedPlan = ExplainAggregateQuery(Key(58));
+        string[] noCursorPlan = ExplainAggregateQuery(selected: null);
+        _output.WriteLine($"selected={string.Join(" | ", selectedPlan)}");
+        _output.WriteLine($"no_cursor={string.Join(" | ", noCursorPlan)}");
+
+        Assert.Contains(selectedPlan, line => line.Contains("idx_ct_test_states_", StringComparison.Ordinal));
+        Assert.Contains(noCursorPlan, line => line.Contains("idx_ct_test_states_workspace_state", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            selectedPlan.Concat(noCursorPlan),
+            line => line.Contains("USE TEMP B-TREE", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Aggregate_continuous_test_statuses_allocates_materially_less_than_detailed_rows()
+    {
+        using var store = CreateSyntheticAggregateFixture(256);
+        for (int i = 0; i < 4; i++)
+        {
+            _ = store.ListContinuousTestStatuses(Workspace);
+            _ = store.AggregateContinuousTestStatuses(Workspace, Key(58));
+        }
+
+        long detailedAllocations = Allocations(
+            () => store.ListContinuousTestStatuses(Workspace));
+        long aggregateAllocations = Allocations(
+            () => store.AggregateContinuousTestStatuses(Workspace, Key(58)));
+        _output.WriteLine($"detailed_allocations={detailedAllocations} aggregate_allocations={aggregateAllocations}");
+
+        Assert.True(
+            aggregateAllocations * 5 < detailedAllocations * 4,
+            $"aggregate allocations {aggregateAllocations} were not materially below detailed {detailedAllocations}");
+    }
+
+    [Fact]
     public void Store_never_exposes_a_sqlite_connection()
     {
         string[] names = typeof(ContinuousTestStore)
@@ -506,6 +594,90 @@ public sealed class ContinuousTestStoreTests : IDisposable
         foreach (string testCaseId in testCaseIds)
             store.PutTestCase(Case(testCaseId));
         return store;
+    }
+
+    private ContinuousTestStore CreateAggregateFixture()
+    {
+        var store = CreateStoreWithTests(
+            "test:exact-green",
+            "test:watermark-green",
+            "test:wrong-watermark-green",
+            "test:exact-red",
+            "test:watermark-red",
+            "test:exact-skipped",
+            "test:stale",
+            "test:running",
+            "test:unknown");
+        Exec("""
+            INSERT INTO ct_test_states(test_case_id, workspace_id, index_identity, revision, state)
+            VALUES ('test:exact-green', 'ws:1', 'gen-1', 58, 'green'),
+                   ('test:watermark-green', 'ws:1', 'gen-1', 41, 'green'),
+                   ('test:wrong-watermark-green', 'ws:1', 'gen-1', 41, 'green'),
+                   ('test:exact-red', 'ws:1', 'gen-1', 58, 'red'),
+                   ('test:watermark-red', 'ws:1', 'gen-1', 41, 'red'),
+                   ('test:exact-skipped', 'ws:1', 'gen-1', 58, 'skipped'),
+                   ('test:stale', 'ws:1', 'gen-1', 41, 'stale'),
+                   ('test:running', 'ws:1', 'gen-1', 58, 'running'),
+                   ('test:unknown', 'ws:1', 'gen-1', 58, 'unknown');
+            INSERT INTO ct_case_fresh_watermarks(test_case_id, workspace_id, index_identity, revision)
+            VALUES ('test:watermark-green', 'ws:1', 'gen-1', 59),
+                   ('test:wrong-watermark-green', 'ws:1', 'gen-2', 99),
+                   ('test:watermark-red', 'ws:1', 'gen-1', 59);
+            """);
+        return store;
+    }
+
+    private ContinuousTestStore CreateSyntheticAggregateFixture(int count)
+    {
+        string[] ids = Enumerable.Range(0, count)
+            .Select(index => $"test:synthetic-{index:D3}")
+            .ToArray();
+        ContinuousTestStore store = CreateStoreWithTests(ids);
+        string rows = string.Join(
+            ",\n",
+            ids.Select((id, index) =>
+                $"('{id}', 'ws:1', 'gen-1', 58, '{(index % 3 == 0 ? "red" : "green")}')"));
+        Exec($"INSERT INTO ct_test_states(test_case_id, workspace_id, index_identity, revision, state) VALUES {rows};");
+        return store;
+    }
+
+    private string[] ExplainAggregateQuery(CtFreshnessKey? selected)
+    {
+        SqliteConnection.ClearAllPools();
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "EXPLAIN QUERY PLAN\n"
+            + (selected is null
+                ? ContinuousTestStore.AggregateContinuousTestStatusesNoCursorSql
+                : ContinuousTestStore.AggregateContinuousTestStatusesSelectedSql);
+        command.Parameters.AddWithValue("$workspace", Workspace);
+        if (selected is { } key)
+        {
+            command.Parameters.AddWithValue("$identity", key.IndexIdentity);
+            command.Parameters.AddWithValue("$revision", key.Revision);
+        }
+        using SqliteDataReader reader = command.ExecuteReader();
+        var plan = new List<string>();
+        while (reader.Read())
+            plan.Add(reader.GetString(3));
+        return plan.ToArray();
+    }
+
+    private static long Allocations(Action body)
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 8; i++)
+            body();
+        return GC.GetAllocatedBytesForCurrentThread() - before;
     }
 
     private static void CompleteRun(

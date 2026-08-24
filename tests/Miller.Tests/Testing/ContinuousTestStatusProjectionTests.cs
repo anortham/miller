@@ -175,6 +175,60 @@ public sealed class ContinuousTestStatusProjectionTests
             ContinuousTestStatusProjection.Project(LiveKey, statuses, watermarks).Verdict);
     }
 
+    [Fact]
+    public void Aggregate_projection_matches_detailed_projection_for_every_state_and_watermark_rule()
+    {
+        var statuses = new[]
+        {
+            Row("test:exact-green", ContinuousTestState.Green, LiveKey),
+            Row("test:watermark-green", ContinuousTestState.Green, OldKey),
+            Row("test:wrong-watermark-green", ContinuousTestState.Green, OldKey),
+            Row("test:exact-red", ContinuousTestState.Red, LiveKey),
+            Row("test:watermark-red", ContinuousTestState.Red, OldKey),
+            Row("test:exact-skipped", ContinuousTestState.Skipped, LiveKey),
+            Row("test:stale", ContinuousTestState.Stale, OldKey),
+            Row("test:running", ContinuousTestState.Running, LiveKey),
+            Row("test:unknown", ContinuousTestState.Unknown, LiveKey),
+        };
+        var watermarks = new Dictionary<string, CtFreshnessKey>
+        {
+            ["test:watermark-green"] = new CtFreshnessKey(LiveKey.IndexIdentity, LiveKey.Revision + 1),
+            ["test:wrong-watermark-green"] = new CtFreshnessKey("ctgen1:store:fam:view:gen-2", 99),
+            ["test:watermark-red"] = new CtFreshnessKey(LiveKey.IndexIdentity, LiveKey.Revision + 1),
+        };
+
+        ContinuousTestProjectedStatus detailed =
+            ContinuousTestStatusProjection.Project(LiveKey, statuses, watermarks);
+        ContinuousTestProjectedStatus aggregate = ContinuousTestStatusProjection.Project(
+            LiveKey,
+            new ContinuousTestStatusAggregate(Total: 9, Pending: 2, Stale: 3, FreshRed: 1));
+
+        Assert.Equal(detailed, aggregate);
+        Assert.Equal(ContinuousTestVerdict.Unknown, aggregate.Verdict);
+        Assert.Equal(3, aggregate.StaleCount);
+    }
+
+    [Fact]
+    public void Aggregate_projection_preserves_no_cursor_watch_and_empty_verdict_rules()
+    {
+        ContinuousTestProjectedStatus noCursor = ContinuousTestStatusProjection.Project(
+            liveKey: null,
+            new ContinuousTestStatusAggregate(Total: 2, Pending: 1, Stale: 1, FreshRed: 1));
+        ContinuousTestProjectedStatus unhealthy = ContinuousTestStatusProjection.Project(
+            LiveKey,
+            new ContinuousTestStatusAggregate(Total: 1, Pending: 0, Stale: 0, FreshRed: 0),
+            watchHealthy: false);
+        ContinuousTestProjectedStatus empty = ContinuousTestStatusProjection.Project(
+            LiveKey,
+            new ContinuousTestStatusAggregate(Total: 0, Pending: 0, Stale: 0, FreshRed: 0));
+
+        Assert.Equal(ContinuousTestVerdict.Unknown, noCursor.Verdict);
+        Assert.Null(noCursor.SelectedKey);
+        Assert.Equal(1, noCursor.StaleCount);
+        Assert.Equal(ContinuousTestVerdict.Unknown, unhealthy.Verdict);
+        Assert.Equal(ContinuousTestVerdict.Unknown, empty.Verdict);
+    }
+
     private static ContinuousTestStatus Row(string id, ContinuousTestState state, CtFreshnessKey key) =>
         new(
             WorkspaceId: "ws:1",

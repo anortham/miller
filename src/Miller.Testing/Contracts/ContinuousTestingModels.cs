@@ -104,6 +104,12 @@ public sealed record ContinuousTestProjectedStatus(
     CtFreshnessKey? SelectedKey,
     int StaleCount);
 
+public sealed record ContinuousTestStatusAggregate(
+    int Total,
+    int Pending,
+    int Stale,
+    int FreshRed);
+
 /// <summary>
 /// THE status projection: the live index cursor plus the stored rows yield the verdict and the
 /// staleness. The selected key comes ONLY from the live cursor — a projection that derived it from
@@ -174,6 +180,33 @@ public static class ContinuousTestStatusProjection
             verdict = ContinuousTestVerdict.Green;
 
         return new ContinuousTestProjectedStatus(verdict, selected, stale);
+    }
+
+    public static ContinuousTestProjectedStatus Project(
+        CtFreshnessKey? liveKey,
+        ContinuousTestStatusAggregate aggregate,
+        bool watchHealthy = true)
+    {
+        ArgumentNullException.ThrowIfNull(aggregate);
+        if (liveKey is not { } selected)
+        {
+            return new ContinuousTestProjectedStatus(
+                ContinuousTestVerdict.Unknown,
+                SelectedKey: null,
+                StaleCount: aggregate.Stale);
+        }
+
+        ContinuousTestVerdict verdict;
+        if (!watchHealthy || aggregate.Total == 0 || aggregate.Pending > 0)
+            verdict = ContinuousTestVerdict.Unknown;
+        else if (aggregate.Stale > 0)
+            verdict = ContinuousTestVerdict.Partial;
+        else if (aggregate.FreshRed > 0)
+            verdict = ContinuousTestVerdict.Red;
+        else
+            verdict = ContinuousTestVerdict.Green;
+
+        return new ContinuousTestProjectedStatus(verdict, selected, aggregate.Stale);
     }
 
     private static bool IsFreshAt(

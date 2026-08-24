@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.Data.Sqlite;
 using Miller.Testing;
 using Xunit;
@@ -77,6 +78,29 @@ public sealed class ContinuousTestVerdictTests : IDisposable
         };
         Assert.Equal(ContinuousTestVerdict.Green, ContinuousTestFreshness.Evaluate(statuses, prior, watchHealthy: true));
         Assert.Equal(ContinuousTestVerdict.Partial, ContinuousTestFreshness.Evaluate(statuses, rebuilt, watchHealthy: true));
+    }
+
+    [Fact]
+    public void Daemon_evaluation_calls_only_the_aggregate_status_path()
+    {
+        MethodInfo evaluate = typeof(ContinuousTestDaemonHost).GetMethod(
+            "Evaluate",
+            BindingFlags.Instance | BindingFlags.NonPublic) ?? throw new InvalidOperationException();
+        MethodInfo aggregate = typeof(ContinuousTestStore)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Single(method => method.Name == nameof(ContinuousTestStore.AggregateContinuousTestStatuses));
+        MethodInfo detailed = typeof(ContinuousTestStore)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Single(method => method.Name == nameof(ContinuousTestStore.ListContinuousTestStatuses));
+        MethodInfo watermarks = typeof(ContinuousTestStore)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Single(method =>
+                method.Name == nameof(ContinuousTestStore.ListContinuousTestFreshWatermarks)
+                && method.GetParameters().Length == 2);
+
+        Assert.True(ContainsMetadataToken(evaluate, aggregate));
+        Assert.False(ContainsMetadataToken(evaluate, detailed));
+        Assert.False(ContainsMetadataToken(evaluate, watermarks));
     }
 
     [Fact]
@@ -224,6 +248,12 @@ public sealed class ContinuousTestVerdictTests : IDisposable
 
         cancellation.Cancel();
         try { await run; } catch (OperationCanceledException) { }
+    }
+
+    private static bool ContainsMetadataToken(MethodInfo caller, MethodInfo callee)
+    {
+        byte[] il = caller.GetMethodBody()?.GetILAsByteArray() ?? [];
+        return il.AsSpan().IndexOf(BitConverter.GetBytes(callee.MetadataToken)) >= 0;
     }
 
     private static ContinuousTestDaemonQueue QueueFor(ContinuousTestStore store) =>

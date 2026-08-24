@@ -176,12 +176,12 @@ Batch A uses `parallel-lead-commit`: workers do not commit. Every later task als
 **Approach:** Use separate null-cursor and selected-key SQL shapes when that keeps plans simple. The selected query left-joins watermarks on existing keys and returns one row without sorting. Add parity fixtures that feed the same cases through detailed and aggregate projection. Add a report-only side-by-side allocation probe and a hard assertion that aggregate allocation is materially below detailed materialization on the same synthetic store.
 
 **Acceptance criteria:**
-- [ ] Aggregate and detailed projection agree on every state/freshness/watch edge.
-- [ ] Query plan uses existing indexes and no temporary sort.
-- [ ] Daemon `Evaluate` materializes zero detailed status/watermark collections.
-- [ ] Detailed APIs and callers remain unchanged.
-- [ ] Relative allocation guard passes on identical synthetic data.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Aggregate and detailed projection agree on every state/freshness/watch edge.
+- [x] Query plan uses existing indexes and no temporary sort.
+- [x] Daemon `Evaluate` materializes zero detailed status/watermark collections.
+- [x] Detailed APIs and callers remain unchanged.
+- [x] Relative allocation guard passes on identical synthetic data.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 5: Final measurement and evidence
 

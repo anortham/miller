@@ -1041,19 +1041,12 @@ public sealed class ContinuousTestDaemonHost
     private ContinuousTestDaemonSnapshot Evaluate(string reason, CtDaemonLifecycleState state, bool executing)
     {
         ContinuousTestStore? store = _primary.Store;
-        IReadOnlyList<ContinuousTestStatus> statuses = store?.ListContinuousTestStatuses(_workspaceId) ?? [];
-
-        // Judge at the LATEST observed cursor — the same live key foreground status judges at —
-        // and through the SAME projection, with the per-case watermarks threaded in, so the daemon
-        // snapshot and `tests status` cannot disagree about the identical store state.
         CtFreshnessKey? selected = _primary.LatestFreshness ?? _primary.StartedAt;
-        IReadOnlyDictionary<string, CtFreshnessKey>? watermarks = selected is { } key && store is not null
-            ? store.ListContinuousTestFreshWatermarks(_workspaceId, key.IndexIdentity)
-            : null;
+        ContinuousTestStatusAggregate aggregate = store?.AggregateContinuousTestStatuses(_workspaceId, selected)
+            ?? new ContinuousTestStatusAggregate(0, 0, 0, 0);
         ContinuousTestProjectedStatus projected = ContinuousTestStatusProjection.Project(
             selected,
-            statuses,
-            watermarks,
+            aggregate,
             watchHealthy: _primary.Watch.IsHealthy);
         (CtDaemonActivity activity, CtDaemonRunProgress? run) = ReadActivity();
         return new ContinuousTestDaemonSnapshot(
@@ -1062,7 +1055,7 @@ public sealed class ContinuousTestDaemonHost
             projected.Verdict,
             selected,
             projected.StaleCount,
-            statuses.Count,
+            aggregate.Total,
             Enabled: true,
             Executing: executing,
             Activity: activity,
