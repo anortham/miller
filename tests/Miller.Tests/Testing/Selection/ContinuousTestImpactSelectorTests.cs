@@ -978,6 +978,25 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     [Fact]
+    public void Select_unscoped_qml_change_chooses_only_the_matching_quick_test_project()
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectA = Path.Combine(_dir, "qml-a", "CMakeLists.txt");
+        string projectB = Path.Combine(_dir, "qml-b", "CMakeLists.txt");
+        SeedQmlCase(store, "tc:qml-a", "A/basic", projectA, Path.Combine(_dir, "qml-a", "tests"));
+        SeedQmlCase(store, "tc:qml-b", "B/slow", projectB, Path.Combine(_dir, "qml-b", "tests"));
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: [Path.Combine(_dir, "qml-a", "ui", "Card.qml")]));
+
+        Assert.Equal(["tc:qml-a"], result.SelectedTestCaseIds);
+        Assert.DoesNotContain("tc:qml-b", result.SelectedTestCaseIds);
+        Assert.All(result.Evidence, evidence => Assert.Equal("project_scope", evidence.Tier));
+    }
+
+    [Fact]
     public void Select_keeps_targeted_changed_test_file_over_project_scope_escalation()
     {
         using ContinuousTestStore store = OpenStore();

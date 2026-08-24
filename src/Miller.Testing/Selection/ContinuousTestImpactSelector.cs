@@ -282,7 +282,7 @@ public sealed class ContinuousTestImpactSelector
             if (IsQmlProjectChange(path)
                 && testCases.Any(testCase =>
                     IsQmlProviderCase(testCase)
-                    && IsQmlCaseRelevantToChange(request, testCases, testCase, path)))
+                    && IsQmlCaseRelevantToChange(request, testCase, path)))
             {
                 continue;
             }
@@ -494,7 +494,7 @@ public sealed class ContinuousTestImpactSelector
 
         string pathList = string.Join(", ", changedPaths.Select(Path.GetFileName));
         foreach (TestCaseFact testCase in qmlCases.Where(testCase =>
-                     changedPaths.Any(path => IsQmlCaseRelevantToChange(request, testCases, testCase, path))))
+                     changedPaths.Any(path => IsQmlCaseRelevantToChange(request, testCase, path))))
         {
             if (evidence.Any(row => row.TestCaseId == testCase.Id && row.Tier == "changed_test_file"))
                 continue;
@@ -514,36 +514,31 @@ public sealed class ContinuousTestImpactSelector
 
     private static bool IsQmlProjectInScope(
         ContinuousTestImpactSelectionRequest request,
-        IReadOnlyList<TestCaseFact> testCases,
-        TestCaseFact testCase)
+        TestCaseFact testCase,
+        string changedPath)
     {
         if (!string.IsNullOrWhiteSpace(request.ProjectPath))
             return ProjectMatches(testCase.ProjectPath, request.ProjectPath);
 
-        return testCases
-            .Where(IsQmlProviderCase)
-            .Select(candidate => candidate.ProjectPath ?? string.Empty)
-            .Distinct(PathComparer)
-            .Take(2)
-            .Count() == 1;
-    }
-
-    private static bool IsQmlCaseRelevantToChange(
-        ContinuousTestImpactSelectionRequest request,
-        IReadOnlyList<TestCaseFact> testCases,
-        TestCaseFact testCase,
-        string changedPath)
-    {
-        if (!IsQmlProjectInScope(request, testCases, testCase))
+        if (string.IsNullOrWhiteSpace(testCase.ProjectPath)
+            && string.IsNullOrWhiteSpace(testCase.SourcePath))
+        {
             return false;
-        if (!string.IsNullOrWhiteSpace(request.ProjectPath))
-            return true;
+        }
 
         string? projectRoot = string.IsNullOrWhiteSpace(testCase.ProjectPath)
             ? null
             : Path.GetDirectoryName(testCase.ProjectPath);
         return IsPathUnderRoot(changedPath, projectRoot)
             || IsPathUnderRoot(changedPath, testCase.SourcePath);
+    }
+
+    private static bool IsQmlCaseRelevantToChange(
+        ContinuousTestImpactSelectionRequest request,
+        TestCaseFact testCase,
+        string changedPath)
+    {
+        return IsQmlProjectInScope(request, testCase, changedPath);
     }
 
     private static bool IsPathUnderRoot(string path, string? root)

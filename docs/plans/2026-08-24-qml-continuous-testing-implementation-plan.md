@@ -197,11 +197,11 @@ Commit mode: Tasks 1-2 use `parallel-lead-commit`; Tasks 3-5 use `serial-worker-
 **Approach:** Prefer exact fact-based selection where available, then framework/project fallback for unattributed CTest targets. Assert unrelated QML applications do not enter a QuickTest project and empty selection preserves whole-suite semantics.
 
 **Acceptance criteria:**
-- [ ] `.qml` paths are classified as language `qml`.
-- [ ] Relevant QML/CMake/runner changes select the expected QuickTest project or targets without false function precision.
-- [ ] The provider passes `WholeSuiteProviderContractTests`, including artifact and missing-case behavior.
-- [ ] Non-QML provider selection remains unchanged.
-- [ ] Worker-scope verification passes and the worker commits per `serial-worker-commit`.
+- [x] `.qml` paths are classified as language `qml`.
+- [x] Relevant QML/CMake/runner changes select the expected QuickTest project or targets without false function precision.
+- [x] The provider passes `WholeSuiteProviderContractTests`, including artifact and missing-case behavior.
+- [x] Non-QML provider selection remains unchanged.
+- [x] Worker-scope verification passes and the worker commits per `serial-worker-commit`.
 
 ### Task 5: Add real Qt Scale and platform evidence
 
