@@ -15,7 +15,8 @@ public sealed record JunitTestArtifactImportRequest(
     string? RunId = null,
     IReadOnlyDictionary<string, string>? TestCaseIdsBySelector = null,
     string? ArtifactRoot = null,
-    string? CurrentRevision = null);
+    string? CurrentRevision = null,
+    IReadOnlyList<string>? SelectedTestCaseIds = null);
 
 public sealed record JunitTestArtifactImportReport(
     string Kind,
@@ -57,6 +58,46 @@ public static class JunitTestArtifactImporter
             ["results"] = parsed.Cases.Count,
         };
 
+        var testCaseIds = new List<string>(parsed.Cases.Count);
+        IReadOnlyDictionary<string, string> testCaseIdsBySelector =
+            request.TestCaseIdsBySelector ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        var resolvedCases = new List<(ParsedTestArtifactCase ParsedCase, string TestCaseId, bool UsesExisting)>(parsed.Cases.Count);
+        foreach (ParsedTestArtifactCase parsedCase in parsed.Cases)
+        {
+            bool usesExistingTestCase = TryResolveTestCaseId(
+                testCaseIdsBySelector,
+                parsedCase.Selector,
+                out string? mappedTestCaseId);
+            string testCaseId = usesExistingTestCase
+                ? mappedTestCaseId!
+                : CtStableIds.StableId("test_case", request.WorkspaceId, parsedCase.Selector, "artifact");
+            resolvedCases.Add((parsedCase, testCaseId, usesExistingTestCase));
+        }
+
+        HashSet<string>? selectedTestCaseIds = request.SelectedTestCaseIds?
+            .Where(testCaseId => !string.IsNullOrWhiteSpace(testCaseId))
+            .ToHashSet(StringComparer.Ordinal);
+        int mappedSelected = selectedTestCaseIds is null
+            ? 0
+            : resolvedCases
+                .Where(row => row.UsesExisting && selectedTestCaseIds.Contains(row.TestCaseId))
+                .Select(row => row.TestCaseId)
+                .Distinct(StringComparer.Ordinal)
+                .Count();
+        int selectedResidue = selectedTestCaseIds is null ? 0 : selectedTestCaseIds.Count - mappedSelected;
+        if (selectedTestCaseIds is { Count: > 0 } && mappedSelected == 0)
+        {
+            throw new TestArtifactParseException(
+                $"artifact reported no selected test cases ({selectedTestCaseIds.Count} selected)");
+        }
+
+        if (selectedTestCaseIds is not null)
+        {
+            counts["mapped_selected"] = mappedSelected;
+            counts["selected_residue"] = selectedResidue;
+            counts["new_artifact_cases"] = resolvedCases.Count(row => !row.UsesExisting);
+        }
+
         store.PutRunArtifact(new ContinuousTestRunArtifact(
             Id: artifactId,
             WorkspaceId: request.WorkspaceId,
@@ -70,18 +111,8 @@ public static class JunitTestArtifactImporter
                 ["diagnostics"] = Array.Empty<object>(),
             }));
 
-        var testCaseIds = new List<string>(parsed.Cases.Count);
-        IReadOnlyDictionary<string, string> testCaseIdsBySelector =
-            request.TestCaseIdsBySelector ?? new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (ParsedTestArtifactCase parsedCase in parsed.Cases)
+        foreach ((ParsedTestArtifactCase parsedCase, string testCaseId, bool usesExistingTestCase) in resolvedCases)
         {
-            bool usesExistingTestCase = TryResolveTestCaseId(
-                testCaseIdsBySelector,
-                parsedCase.Selector,
-                out string? mappedTestCaseId);
-            string testCaseId = usesExistingTestCase
-                ? mappedTestCaseId!
-                : CtStableIds.StableId("test_case", request.WorkspaceId, parsedCase.Selector, "artifact");
             testCaseIds.Add(testCaseId);
             if (!usesExistingTestCase)
             {
@@ -125,15 +156,10 @@ public static class JunitTestArtifactImporter
             Revision: request.Revision,
             Status: state,
             Results: CtResultFold.MergeWorstWins(
-                parsed.Cases.Select(parsedCase =>
+                resolvedCases.Select(row =>
                 {
-                    bool usesExistingTestCase = TryResolveTestCaseId(
-                        testCaseIdsBySelector,
-                        parsedCase.Selector,
-                        out string? mappedTestCaseId);
-                    string testCaseId = usesExistingTestCase
-                        ? mappedTestCaseId!
-                        : CtStableIds.StableId("test_case", request.WorkspaceId, parsedCase.Selector, "artifact");
+                    ParsedTestArtifactCase parsedCase = row.ParsedCase;
+                    string testCaseId = row.TestCaseId;
                     return new ContinuousTestResult(
                         Id: CtStableIds.StableId("test_result", request.WorkspaceId, testCaseId, runId),
                         WorkspaceId: request.WorkspaceId,

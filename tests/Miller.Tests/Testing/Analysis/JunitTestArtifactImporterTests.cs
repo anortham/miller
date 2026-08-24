@@ -143,6 +143,70 @@ public sealed class JunitTestArtifactImporterTests : IDisposable
         Assert.Equal("passed", store.ListContinuousTestStatuses(Workspace).Single().LastResultStatus);
     }
 
+    [Fact]
+    public void Import_rejects_provider_artifact_with_no_selected_matches_before_mutation()
+    {
+        using var store = new ContinuousTestStore(_dbPath);
+        var root = WorkspaceRoot();
+        var artifact = WriteSingleJunitArtifactAt(root, Path.Combine("artifacts", "junit.xml"));
+
+        var ex = Assert.Throws<TestArtifactParseException>(() =>
+            JunitTestArtifactImporter.Import(
+                store,
+                Request(
+                    root,
+                    artifact,
+                    runId: "run:unmatched",
+                    testCaseIdsBySelector: new Dictionary<string, string>
+                    {
+                        ["tests/test_billing::test_not_reported"] = "provider:test:missing",
+                    },
+                    selectedTestCaseIds: ["provider:test:missing"])));
+
+        Assert.Contains("selected", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(store.ListRunArtifacts(Workspace));
+        Assert.Empty(store.ListTestRuns(Workspace));
+        Assert.Empty(store.ListTestCases(Workspace));
+        Assert.Empty(store.ListTestResults(Workspace));
+    }
+
+    [Fact]
+    public void Import_reports_selected_residue_and_keeps_new_artifact_cases()
+    {
+        using var store = new ContinuousTestStore(_dbPath);
+        var root = WorkspaceRoot();
+        var artifact = WriteJunitArtifact(root);
+        store.PutTestCase(new ContinuousTestCase(
+            Id: "provider:test:reported",
+            WorkspaceId: Workspace,
+            Name: "test_charge_card",
+            QualifiedName: "tests.test_billing.test_charge_card",
+            Selector: "tests/test_billing::test_charge_card",
+            Framework: "pytest",
+            Role: ContinuousTestRole.TestCase,
+            Source: "ct-provider:python",
+            Confidence: 1.0));
+
+        var report = JunitTestArtifactImporter.Import(
+            store,
+            Request(
+                root,
+                artifact,
+                runId: "run:partial",
+                testCaseIdsBySelector: new Dictionary<string, string>
+                {
+                    ["tests/test_billing::test_charge_card"] = "provider:test:reported",
+                },
+                selectedTestCaseIds: ["provider:test:reported", "provider:test:missing"]));
+
+        Assert.Equal(1, report.Counts["mapped_selected"]);
+        Assert.Equal(1, report.Counts["selected_residue"]);
+        Assert.Equal(2, report.Counts["new_artifact_cases"]);
+        Assert.Equal(3, store.ListTestCases(Workspace).Count);
+        Assert.Equal(2, store.ListTestCases(Workspace).Count(row => row.Source == "artifact"));
+        Assert.Contains(store.ListTestCases(Workspace), row => row.Id == "provider:test:reported");
+    }
+
     /// <summary>
     /// Every data row of a theory keeps its own result row.
     ///
@@ -425,7 +489,8 @@ public sealed class JunitTestArtifactImporterTests : IDisposable
         string root,
         string artifact,
         string? runId = null,
-        IReadOnlyDictionary<string, string>? testCaseIdsBySelector = null) =>
+        IReadOnlyDictionary<string, string>? testCaseIdsBySelector = null,
+        IReadOnlyList<string>? selectedTestCaseIds = null) =>
         new(
             WorkspaceId: Workspace,
             WorkspaceRoot: root,
@@ -434,7 +499,8 @@ public sealed class JunitTestArtifactImporterTests : IDisposable
             IndexIdentity: Fresh.IndexIdentity,
             Revision: Fresh.Revision,
             RunId: runId,
-            TestCaseIdsBySelector: testCaseIdsBySelector);
+            TestCaseIdsBySelector: testCaseIdsBySelector,
+            SelectedTestCaseIds: selectedTestCaseIds);
 
     private static string WriteJunitArtifact(string root) =>
         WriteJunitArtifactAt(root, Path.Combine("artifacts", "junit.xml"));

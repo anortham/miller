@@ -643,6 +643,47 @@ public sealed class ContinuousTestCoordinatorLifecycleLogTests : IDisposable
     }
 
     [Fact]
+    public async Task Partial_artifact_import_marks_unreported_selection_stale_and_logs_one_bounded_diagnostic()
+    {
+        var reported = new List<string>();
+        ContinuousTestWorkspace workspace = Workspace("project-g");
+        Directory.CreateDirectory(workspace.BuildOutputRoot);
+        string artifactPath = Path.Combine(workspace.BuildOutputRoot, "results.junit.xml");
+        File.WriteAllText(
+            artifactPath,
+            """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuite name="pytest" tests="2">
+              <testcase classname="tests.test_billing" name="test_charge_card" />
+              <testcase classname="tests.test_billing" name="test_new_card" />
+            </testsuite>
+            """);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedProviderCase(store, workspace, "test:reported", "tests/test_billing::test_charge_card");
+        SeedProviderCase(store, workspace, "test:missing", "tests/test_billing::test_missing_card");
+
+        var coordinator = new ContinuousTestCoordinator(
+            new ArtifactOnlyProvider(artifactPath),
+            store,
+            runIdFactory: static () => "run:artifact",
+            options: new ContinuousTestCoordinatorOptions
+            {
+                OwnerToken = OwnerToken,
+                LifecycleLog = reported.Add,
+            });
+
+        await coordinator.RunSelectedAsync(
+            RunRequest(workspace, ["test:reported", "test:missing"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("test_artifact_attribution_residue reported=1/2", Assert.Single(reported));
+        var statuses = store.ListContinuousTestStatuses(WorkspaceId).ToDictionary(row => row.TestCaseId);
+        Assert.Equal(ContinuousTestState.Green, statuses["test:reported"].State);
+        Assert.Equal(ContinuousTestState.Stale, statuses["test:missing"].State);
+        Assert.Contains(store.ListTestCases(WorkspaceId), row => row.Source == "artifact");
+    }
+
+    [Fact]
     public async Task The_constructor_sink_beats_the_options_sink()
     {
         var fromConstructor = new List<string>();
@@ -710,13 +751,15 @@ public sealed class ContinuousTestCoordinatorLifecycleLogTests : IDisposable
             Path.Combine(_root, "ct-build", buildOutputName));
     }
 
-    private static ContinuousTestCoordinatorRunRequest RunRequest(ContinuousTestWorkspace workspace) =>
+    private static ContinuousTestCoordinatorRunRequest RunRequest(
+        ContinuousTestWorkspace workspace,
+        IReadOnlyList<string>? testCaseIds = null) =>
         new(
             Workspace: workspace,
             SelectedRevision: "2",
             CurrentRevision: "2",
             IndexIdentity: Identity,
-            TestCaseIds: ["test:app"]);
+            TestCaseIds: testCaseIds ?? ["test:app"]);
 
     private static void SeedTestCase(ContinuousTestStore store, ContinuousTestWorkspace workspace) =>
         store.PutTestCase(new ContinuousTestCase(
@@ -729,6 +772,23 @@ public sealed class ContinuousTestCoordinatorLifecycleLogTests : IDisposable
             Framework: "xunit",
             Role: ContinuousTestRole.TestCase,
             Source: "ct-provider:dotnet",
+            Confidence: 1.0,
+            Metadata: new Dictionary<string, object?> { ["ct_project_path"] = workspace.ProjectPath }));
+
+    private static void SeedProviderCase(
+        ContinuousTestStore store,
+        ContinuousTestWorkspace workspace,
+        string id,
+        string selector) =>
+        store.PutTestCase(new ContinuousTestCase(
+            Id: id,
+            WorkspaceId: workspace.WorkspaceId,
+            Name: selector,
+            QualifiedName: selector,
+            Selector: selector,
+            Framework: "pytest",
+            Role: ContinuousTestRole.TestCase,
+            Source: "ct-provider:pytest",
             Confidence: 1.0,
             Metadata: new Dictionary<string, object?> { ["ct_project_path"] = workspace.ProjectPath }));
 
@@ -777,5 +837,23 @@ public sealed class ContinuousTestCoordinatorLifecycleLogTests : IDisposable
                         IndexIdentity: request.IndexIdentity))
                     .ToArray()));
         }
+    }
+
+    private sealed class ArtifactOnlyProvider(string artifactPath) : IContinuousTestProvider
+    {
+        public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
+            ContinuousTestWorkspace workspace,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ProviderTestCase>>([]);
+
+        public Task<ProviderRunResult> RunAsync(
+            ContinuousTestProviderRunRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ProviderRunResult(
+                RunId: request.RunId ?? "run:artifact",
+                Status: "passed",
+                EndedAt: DateTimeOffset.Parse("2026-08-23T01:00:02Z"),
+                CaseResults: [],
+                ResultArtifactPath: artifactPath));
     }
 }

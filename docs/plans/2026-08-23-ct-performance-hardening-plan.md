@@ -84,11 +84,11 @@ Batch A uses `parallel-lead-commit`: workers do not commit. Every later task als
 **Approach:** Extend the import request with an optional selected-id set. Resolve parsed rows and compute counts before any artifact/run/case/result write. Offline imports without selected ids remain byte/behavior compatible. Coordinator provider fallback supplies selected ids and logs `reported/selected` residue without logging case ids.
 
 **Acceptance criteria:**
-- [ ] Zero selected matches fails before any store mutation.
-- [ ] Partial selected matches import correctly, leave residue stale, and emit one bounded diagnostic.
-- [ ] New artifact rows still create artifact cases.
-- [ ] Exact, escaped, collapsed, ambiguous, and theory-row mappings remain covered.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Zero selected matches fails before any store mutation.
+- [x] Partial selected matches import correctly, leave residue stale, and emit one bounded diagnostic.
+- [x] New artifact rows still create artifact cases.
+- [x] Exact, escaped, collapsed, ambiguous, and theory-row mappings remain covered.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 2: xUnit whole-suite artifact transport
 

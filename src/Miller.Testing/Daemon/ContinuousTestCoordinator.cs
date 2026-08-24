@@ -259,7 +259,9 @@ public sealed class ContinuousTestCoordinator
 
             string currentRevision = ResolveCurrentRevision(request);
             long currentNumeric = ParseRevision(currentRevision);
-            string? artifactId = RecordRunArtifact(request, providerResult, currentRevision);
+            string? artifactId = providerResult.CaseResults.Count > 0
+                ? RecordRunArtifact(request, providerResult, currentRevision)
+                : null;
 
             if (!TryImportProviderResultArtifact(request, providerResult, currentRevision))
             {
@@ -273,6 +275,7 @@ public sealed class ContinuousTestCoordinator
                         $"The {request.Framework ?? request.Workspace.Framework ?? "test"} run selected " +
                         $"{request.TestCaseIds.Count} test case(s) and reported a result for none of them.");
 
+                artifactId ??= RecordRunArtifact(request, providerResult, currentRevision);
                 _applier.CompleteRun(
                     WorkspaceId: request.Workspace.WorkspaceId,
                     SelectedRevision: request.SelectedRevision,
@@ -853,7 +856,7 @@ public sealed class ContinuousTestCoordinator
             return false;
         try
         {
-            JunitTestArtifactImporter.Import(
+            JunitTestArtifactImportReport report = JunitTestArtifactImporter.Import(
                 _store,
                 new JunitTestArtifactImportRequest(
                     WorkspaceId: request.Workspace.WorkspaceId,
@@ -864,8 +867,16 @@ public sealed class ContinuousTestCoordinator
                     Revision: ParseRevision(currentRevision),
                     RunId: providerResult.RunId,
                     TestCaseIdsBySelector: TestCaseIdsByArtifactSelector(request.Workspace.WorkspaceId),
+                    SelectedTestCaseIds: request.TestCaseIds,
                     ArtifactRoot: request.Workspace.BuildOutputRoot,
                     CurrentRevision: currentRevision));
+            if (report.Counts.TryGetValue("selected_residue", out int selectedResidue)
+                && selectedResidue > 0)
+            {
+                int mappedSelected = report.Counts["mapped_selected"];
+                _lifecycleLog?.Invoke(
+                    $"test_artifact_attribution_residue reported={mappedSelected}/{mappedSelected + selectedResidue}");
+            }
             return true;
         }
         catch (TestArtifactParseException)
