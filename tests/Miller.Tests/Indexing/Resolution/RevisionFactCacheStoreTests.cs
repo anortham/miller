@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Miller.Core.Resolution;
 using Miller.Indexing.Resolution;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Indexing.Resolution;
@@ -70,5 +71,96 @@ public sealed class RevisionFactCacheStoreTests
         Assert.Same(
             provider.GetRequiredService<RevisionFactCacheStore>(),
             provider.GetRequiredService<RevisionFactCacheStore>());
+    }
+
+    [Fact]
+    public void StoreCatalog_ProducesScopedQmlCandidatesFromManifestAndImports()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+
+        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+            "qml-store",
+            "qml-rev-1",
+            fixture.OpenRead,
+            fixture.Visibility());
+
+        QmlVisibleType[] candidates = facts.QmlTypesVisibleTo(1).ToArray();
+
+        Assert.Equal(QmlVisibilityFixtureSupport.ExpectedExportedNames, candidates.Select(candidate => candidate.ExportedName));
+        Assert.Equal(
+            ["local", "remote", "remote", "theme", "theme"],
+            candidates.Select(candidate => candidate.Target.SymbolId));
+
+        QmlVisibleType directoryRemote = candidates[1];
+        Assert.Equal("Components", directoryRemote.ImportAlias);
+        Assert.Equal(QmlVisibilityScope.ForDirectory("components"), directoryRemote.Scope);
+        Assert.Equal("components/RemoteCard.qml", directoryRemote.SourceComponentPath);
+        Assert.Equal(new QmlVersionConstraint(new QmlVersion(1, 0), new QmlVersion(1, 0)), directoryRemote.VersionConstraint);
+        Assert.False(directoryRemote.IsSingleton);
+        Assert.Equal("components/qmldir", directoryRemote.Evidence.SourcePath);
+        Assert.Equal("qmldir", directoryRemote.Evidence.Provenance);
+        Assert.Equal(20, directoryRemote.Evidence.StartByte);
+        Assert.Equal(40, directoryRemote.Evidence.EndByte);
+
+        QmlVisibleType moduleTheme = candidates[4];
+        Assert.Equal("EC", moduleTheme.ImportAlias);
+        Assert.Equal(QmlVisibilityScope.ForModule("Example.Components"), moduleTheme.Scope);
+        Assert.Equal("components/Theme.qml", moduleTheme.SourceComponentPath);
+        Assert.True(moduleTheme.IsSingleton);
+    }
+
+    [Fact]
+    public void StoreCatalog_DropsMalformedAndFutureManifestFacts()
+    {
+        using ResolutionStoreFixture malformedFixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(malformedFixture);
+        malformedFixture.ExecuteWrite("UPDATE structural_facts SET metadata_json='not-json' WHERE structural_fact_id='fact-remote';");
+        IResolutionFacts malformed = new RevisionFactCacheStore().GetOrAdvance(
+            "qml-store-malformed",
+            "qml-rev-1",
+            malformedFixture.OpenRead,
+            malformedFixture.Visibility());
+
+        Assert.Equal(
+            ["LocalCard", "Theme", "Theme"],
+            malformed.QmlTypesVisibleTo(1).Select(candidate => candidate.ExportedName));
+
+        using ResolutionStoreFixture futureFixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(futureFixture);
+        futureFixture.ExecuteWrite("UPDATE structural_facts SET pattern_id='qmldir.object_type.v2' WHERE structural_fact_id='fact-remote';");
+        IResolutionFacts future = new RevisionFactCacheStore().GetOrAdvance(
+            "qml-store-future",
+            "qml-rev-1",
+            futureFixture.OpenRead,
+            futureFixture.Visibility());
+
+        Assert.Equal(
+            ["LocalCard", "Theme", "Theme"],
+            future.QmlTypesVisibleTo(1).Select(candidate => candidate.ExportedName));
+    }
+
+    [Fact]
+    public void StoreCatalog_NormalizesBackslashComponentPaths()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.ExecuteWrite(
+            """
+            UPDATE file_versions SET path='components\RemoteCard.qml' WHERE version_id=3;
+            UPDATE manifest_entries SET path='components\RemoteCard.qml' WHERE version_id=3;
+            UPDATE symbols SET path='components\RemoteCard.qml' WHERE version_id=3;
+            """);
+
+        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+            "qml-store-paths",
+            "qml-rev-1",
+            fixture.OpenRead,
+            fixture.Visibility());
+        QmlVisibleType remote = Assert.Single(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.Target.SymbolId == "remote" && candidate.ImportAlias == "Components");
+
+        Assert.Equal("components/RemoteCard.qml", remote.SourceComponentPath);
     }
 }

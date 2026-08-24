@@ -186,6 +186,29 @@ internal sealed class ResolutionStoreFixture : IDisposable
             """);
     }
 
+    public void AddStructuralFact(
+        long versionId,
+        string factId,
+        string path,
+        string patternId,
+        string captureName,
+        string nodeKind,
+        long startByte,
+        long endByte,
+        string metadataJson,
+        string language = "qml")
+    {
+        ExecuteWrite(
+            $"""
+            INSERT INTO structural_facts (
+              version_id,structural_fact_id,path,language,pattern_id,capture_name,node_kind,containing_symbol_id,
+              start_line,start_column,end_line,end_column,start_byte,end_byte,confidence,metadata_json)
+            VALUES (
+              {versionId},'{Escape(factId)}','{Escape(path)}','{Escape(language)}','{Escape(patternId)}',
+              '{Escape(captureName)}','{Escape(nodeKind)}',NULL,1,1,1,2,{startByte},{endByte},1.0,'{Escape(metadataJson)}');
+            """);
+    }
+
     public void AddTypeFact(long versionId, string typeFactId, string symbolId, string resolvedType, bool inferred = false)
     {
         ExecuteWrite(
@@ -536,5 +559,23 @@ internal sealed class ResolutionStoreFixture : IDisposable
           confidence REAL NOT NULL,
           metadata_json TEXT,
           PRIMARY KEY(version_id,relationship_id)) STRICT;
+        CREATE TABLE structural_facts (
+          version_id INTEGER NOT NULL,
+          structural_fact_id TEXT NOT NULL,
+          path TEXT NOT NULL,
+          language TEXT NOT NULL,
+          pattern_id TEXT NOT NULL,
+          capture_name TEXT NOT NULL,
+          node_kind TEXT NOT NULL,
+          containing_symbol_id TEXT,
+          start_line INTEGER NOT NULL,
+          start_column INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          end_column INTEGER NOT NULL,
+          start_byte INTEGER NOT NULL,
+          end_byte INTEGER NOT NULL,
+          confidence REAL NOT NULL,
+          metadata_json TEXT,
+          PRIMARY KEY(version_id,structural_fact_id)) STRICT;
         """;
 }

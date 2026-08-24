@@ -7,6 +7,7 @@ using Miller.Core.Resolution;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Resolution;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Indexing.Resolution;
@@ -69,6 +70,25 @@ public sealed class BoundedRevisionFactCacheTests
                 Assert.Equal(Serialize(full.TypeFactsOf(symbol.Key)), Serialize(bounded.TypeFactsOf(symbol.Key)));
             }
         }
+    }
+
+    [Fact]
+    public void BoundedAndFullQmlCandidatesAnswerIdentically()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        using SqliteConnection fullConnection = fixture.OpenRead();
+        using SqliteConnection boundedConnection = fixture.OpenRead();
+        RevisionFactCache fullCache = RevisionFactCache.Load(fullConnection, fixture.Visibility());
+        RevisionFactCache boundedCache = RevisionFactCache.LoadBounded(boundedConnection, fixture.Visibility());
+        IResolutionFacts full = fullCache;
+        IResolutionFacts bounded = boundedCache;
+
+        QmlVisibleType[] expected = full.QmlTypesVisibleTo(1).ToArray();
+
+        Assert.Equal(QmlVisibilityFixtureSupport.ExpectedExportedNames, expected.Select(candidate => candidate.ExportedName));
+        Assert.Equal(JsonSerializer.Serialize(expected), JsonSerializer.Serialize(bounded.QmlTypesVisibleTo(1)));
+        Assert.Equal(1, boundedCache.LoadedSliceCount);
     }
 
     // A version outside the pinned manifest has no slice in a full load, so the bounded cache must report the

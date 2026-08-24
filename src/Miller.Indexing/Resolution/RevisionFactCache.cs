@@ -16,7 +16,8 @@ internal readonly struct PackedSymbol
         string? parentId,
         string? signature,
         string? visibility,
-        byte staticCode)
+        byte staticCode,
+        string? metadataJson)
     {
         SymbolId = symbolId;
         Name = name;
@@ -26,6 +27,7 @@ internal readonly struct PackedSymbol
         Signature = signature;
         Visibility = visibility;
         StaticCode = staticCode;
+        MetadataJson = metadataJson;
     }
 
     internal string SymbolId { get; }
@@ -43,6 +45,8 @@ internal readonly struct PackedSymbol
     internal string? Visibility { get; }
 
     internal byte StaticCode { get; }
+
+    internal string? MetadataJson { get; }
 
     internal bool? IsStatic => StaticCode switch
     {
@@ -141,6 +145,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
     private readonly Dictionary<string, RevisionFactCacheLoader.VisibleFile> _pathIndex;
     private readonly StoreVisibility? _visibility;
     private readonly BoundedStoreSource? _bounded;
+    private readonly QmlVisibilityCatalog _qml;
     private readonly object _boundedGate = new();
     private int _boundedSliceMisses;
     private int _boundedPointSliceLoads;
@@ -151,13 +156,15 @@ internal sealed class RevisionFactCache : IResolutionFacts
         StringInternPool intern,
         Dictionary<long, VersionSlice> slices,
         Dictionary<string, RevisionFactCacheLoader.VisibleFile> pathIndex,
-        StoreVisibility? visibility)
+        StoreVisibility? visibility,
+        QmlVisibilityCatalog qml)
     {
         _intern = intern;
         _slices = slices;
         _pathIndex = pathIndex;
         _visibility = visibility;
         _bounded = null;
+        _qml = qml;
         RebuildIndexes();
         Propagation = new PropagationIndex(_slices);
         ResidentBytes = EstimateBytes();
@@ -167,13 +174,15 @@ internal sealed class RevisionFactCache : IResolutionFacts
         StringInternPool intern,
         Dictionary<string, RevisionFactCacheLoader.VisibleFile> pathIndex,
         StoreVisibility visibility,
-        BoundedStoreSource bounded)
+        BoundedStoreSource bounded,
+        QmlVisibilityCatalog qml)
     {
         _intern = intern;
         _slices = [];
         _pathIndex = pathIndex;
         _visibility = visibility;
         _bounded = bounded;
+        _qml = qml;
         Propagation = new PropagationIndex(_slices, SliceFor);
         ResidentBytes = 0;
     }
@@ -244,7 +253,8 @@ internal sealed class RevisionFactCache : IResolutionFacts
 
         BindAllImports(slices, pathIndex);
         DropImportSeeds(slices);
-        return new RevisionFactCache(intern, slices, pathIndex, visibility);
+        QmlVisibilityCatalog qml = QmlVisibilityCatalog.LoadStore(storeRead, visibility, internedFiles, slices, intern);
+        return new RevisionFactCache(intern, slices, pathIndex, visibility, qml);
     }
 
     internal static RevisionFactCache LoadFromArtifact(SqliteConnection artifactRead)
@@ -272,7 +282,8 @@ internal sealed class RevisionFactCache : IResolutionFacts
 
         BindAllImports(slices, pathIndex);
         DropImportSeeds(slices);
-        return new RevisionFactCache(intern, slices, pathIndex, visibility: null);
+        QmlVisibilityCatalog qml = QmlVisibilityCatalog.LoadArtifact(artifactRead, internedFiles, slices, intern);
+        return new RevisionFactCache(intern, slices, pathIndex, visibility: null, qml);
     }
 
     /// <summary>
@@ -309,11 +320,13 @@ internal sealed class RevisionFactCache : IResolutionFacts
             byVersion[interned.VersionId] = interned;
         }
 
+        QmlVisibilityCatalog qml = QmlVisibilityCatalog.LoadBoundedStore(storeRead, visibility, files, intern);
         return new RevisionFactCache(
             intern,
             pathIndex,
             visibility,
-            new BoundedStoreSource(storeRead, visibility, byVersion));
+            new BoundedStoreSource(storeRead, visibility, byVersion),
+            qml);
     }
 
     internal RevisionFactCache Advance(SqliteConnection storeRead, StoreVisibility newVisibility)
@@ -369,7 +382,13 @@ internal sealed class RevisionFactCache : IResolutionFacts
             }
         }
 
-        return new RevisionFactCache(_intern, nextSlices, pathIndex, newVisibility);
+        QmlVisibilityCatalog qml = QmlVisibilityCatalog.LoadStore(
+            storeRead,
+            newVisibility,
+            files,
+            nextSlices,
+            _intern);
+        return new RevisionFactCache(_intern, nextSlices, pathIndex, newVisibility, qml);
     }
 
     public IEnumerable<FactSymbol> SymbolsNamed(string name)
@@ -446,6 +465,18 @@ internal sealed class RevisionFactCache : IResolutionFacts
     }
 
     public IReadOnlyList<ImportBinding> ImportsOf(long versionId) => ImportArrayOf(versionId);
+
+    public IReadOnlyList<QmlVisibleType> QmlTypesVisibleTo(long versionId)
+    {
+        if (_bounded is null)
+            return _qml.For(versionId);
+
+        lock (_boundedGate)
+        {
+            _ = EnsureSlice(versionId);
+            return _qml.For(versionId);
+        }
+    }
 
     internal FactSymbol[] SymbolsOfVersion(long versionId) =>
         SliceFor(versionId) is { } slice ? slice.Symbols : [];
