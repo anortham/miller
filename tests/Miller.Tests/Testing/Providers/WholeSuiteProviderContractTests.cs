@@ -1,4 +1,5 @@
 using Miller.Testing;
+using Miller.Testing.Parsing;
 using Miller.Tests.Testing.Providers.Dotnet;
 using Miller.Tests.Testing.Providers.Rust;
 using Xunit;
@@ -41,16 +42,25 @@ public sealed class WholeSuiteProviderContractTests : IDisposable
         string[] ids = ["xunit:Sample.Tests.A", "xunit:Sample.Tests.B"];
         var runner = new FakeTestProcessRunner();
         runner.Enqueue();
-        runner.Enqueue(XunitRunJson("Sample.Tests.A", "Sample.Tests.B"));
+        runner.Enqueue("verbose progress");
+        runner.OnRun = WriteXunitJunitArtifact;
         var provider = new DotnetTestProvider(runner);
 
         var result = await provider.RunAsync(
             Request(DotnetWorkspace(), ids) with { WholeSuite = true },
             TestContext.Current.CancellationToken);
 
-        // The run command carries no per-case selection at all.
         Assert.DoesNotContain("-method", runner.Calls[1].Arguments);
-        AssertOneResultPerId(ids, result);
+        Assert.Contains("-reporter", runner.Calls[1].Arguments);
+        Assert.Contains("verbose", runner.Calls[1].Arguments);
+        Assert.Contains("-noAutoReporters", runner.Calls[1].Arguments);
+        Assert.Empty(result.CaseResults);
+        Assert.NotNull(result.ResultArtifactPath);
+        Assert.True(File.Exists(result.ResultArtifactPath));
+        var parsed = JunitTestResultParser.Parse(result.ResultArtifactPath!);
+        Assert.Equal(2, parsed.Cases.Count);
+        Assert.Contains(parsed.Cases, testCase => testCase.Name == "A" && testCase.Status == "passed");
+        Assert.Contains(parsed.Cases, testCase => testCase.Name == "B" && testCase.Status == "passed");
     }
 
     [Fact]
@@ -134,23 +144,18 @@ public sealed class WholeSuiteProviderContractTests : IDisposable
         Assert.All(result.CaseResults, row => Assert.Equal("passed", row.Status));
     }
 
-    private static string XunitRunJson(params string[] displayNames)
+    private static void WriteXunitJunitArtifact(TestProcessCommand command)
     {
-        var lines = new List<string>
-        {
-            """{"$type":"test-assembly-starting","AssemblyUniqueID":"asm-1","StartTime":"2026-06-14T01:00:00Z"}""",
-        };
-        for (var index = 0; index < displayNames.Length; index++)
-        {
-            lines.Add(
-                $$"""{"$type":"test-case-starting","AssemblyUniqueID":"asm-1","TestCaseUniqueID":"case-{{index}}","TestCaseDisplayName":"{{displayNames[index]}}"}""");
-            lines.Add(
-                $$"""{"$type":"test-passed","TestCaseUniqueID":"case-{{index}}","TestUniqueID":"result-{{index}}","ExecutionTime":0.01,"FinishTime":"2026-06-14T01:00:01Z"}""");
-        }
+        var artifactFlag = command.Arguments.ToList().IndexOf("-jUnit");
+        if (artifactFlag < 0)
+            return;
 
-        lines.Add(
-            $$"""{"$type":"test-assembly-finished","AssemblyUniqueID":"asm-1","TestsFailed":0,"TestsSkipped":0,"TestsTotal":{{displayNames.Length}},"FinishTime":"2026-06-14T01:00:02Z"}""");
-        return string.Join("\n", lines);
+        var artifactPath = command.Arguments[artifactFlag + 1];
+        Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+        File.WriteAllText(
+            artifactPath,
+            "<testsuite name=\"xunit\"><testcase classname=\"Sample.Tests\" name=\"A\" />"
+            + "<testcase classname=\"Sample.Tests\" name=\"B\" /></testsuite>");
     }
 
     private static void WriteJunit(TestProcessCommand command, IReadOnlyList<string> files)

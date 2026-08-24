@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Miller.Testing;
+using Miller.Testing.Parsing;
 using Xunit;
 
 namespace Miller.Tests.Testing.Providers.Dotnet;
@@ -267,6 +268,69 @@ public sealed class DotnetProviderScaleTests : IDisposable
             : CtGenerationPaths.For(workspace, result.GenerationId).GenerationRoot));
         if (OperatingSystem.IsWindows())
             Assert.True(result.GenerationId!.Length <= 16);
+    }
+
+    [Fact]
+    public async Task Whole_suite_transport_accepts_real_xunit_verbose_junit()
+    {
+        CtProviderTestSupport.RequireDotnet();
+        var ct = TestContext.Current.CancellationToken;
+        var workspaceRoot = Path.Combine(_dir, "whole-suite-repo");
+        var projectDir = Path.Combine(workspaceRoot, "tests", "Sample.Tests");
+        Directory.CreateDirectory(projectDir);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(projectDir, "Sample.Tests.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
+                <OutputType>Exe</OutputType>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="xunit.v3" Version="3.2.2" />
+              </ItemGroup>
+            </Project>
+            """,
+            ct);
+        await File.WriteAllTextAsync(
+            Path.Combine(projectDir, "CalculatorTests.cs"),
+            """
+            using Xunit;
+
+            namespace Sample.Tests;
+
+            public sealed class CalculatorTests
+            {
+                [Fact]
+                public void Adds() => Assert.Equal(2, 1 + 1);
+            }
+            """,
+            ct);
+
+        var workspace = new ContinuousTestWorkspace(
+            WorkspaceId: "ws:whole-suite",
+            WorkspaceRoot: workspaceRoot,
+            ProjectPath: Path.Combine(projectDir, "Sample.Tests.csproj"),
+            BuildOutputRoot: Path.Combine(_dir, "state", "workspaces", "ws-safe", "ct-build"));
+        _ctTemps.Add(CtTempPaths.ForWorkspace(workspace));
+        var provider = new DotnetTestProvider(new TestProcessRunner());
+
+        var result = await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: workspace,
+                SelectedRevision: "rev-1",
+                IndexIdentity: "store:whole-suite",
+                RunId: "run:whole-suite",
+                TestCaseIds: ["xunit:Sample.Tests.CalculatorTests.Adds"],
+                WholeSuite: true),
+            ct);
+
+        Assert.Equal("passed", result.Status);
+        Assert.Empty(result.CaseResults);
+        Assert.NotNull(result.ResultArtifactPath);
+        Assert.NotEmpty(JunitTestResultParser.Parse(result.ResultArtifactPath!).Cases);
     }
 
     [Fact]

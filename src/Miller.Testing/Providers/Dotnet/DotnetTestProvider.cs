@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
+using Miller.Testing.Parsing;
 
 namespace Miller.Testing;
 
@@ -228,6 +229,9 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         if (runFailure is not null)
             ExceptionDispatchInfo.Capture(runFailure).Throw();
 
+        if (IsXunitArtifactOnlyRun(request))
+            return ValidateXunitArtifactOnlyRun(request, paths, resultArtifactPath, results[0]);
+
         var runResult = MergeRuns(results, request.SelectedRevision, request.IndexIdentity);
 
         // Judged across the whole run, not per invocation: a chunked selection is ONE logical run, and
@@ -415,7 +419,11 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         IReadOnlyList<string> selection,
         int? part)
     {
-        var args = new List<string> { "-noLogo", "-noColor", "-reporter", "json", PreEnumerateTheories };
+        var artifactOnly = IsXunitArtifactOnlyRun(request);
+        var args = new List<string> { "-noLogo", "-noColor", "-reporter", artifactOnly ? "verbose" : "json" };
+        if (artifactOnly)
+            args.Add("-noAutoReporters");
+        args.Add(PreEnumerateTheories);
         if (XunitResultArtifactPath(request, paths, part) is { } resultArtifactPath)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(resultArtifactPath)!);
@@ -445,6 +453,74 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             request.Workspace.WorkspaceRoot,
             WorkspaceEnvironment(request.Workspace, paths, coverage),
             coverage is null ? null : ProcessPriorityClass.BelowNormal);
+    }
+
+    private static bool IsXunitArtifactOnlyRun(ContinuousTestProviderRunRequest request) =>
+        request.WholeSuite
+        && request.CoverageMode == ContinuousTestCoverageMode.None
+        && GenericFramework(request.Framework ?? request.Workspace.Framework) is null;
+
+    private static ProviderRunResult ValidateXunitArtifactOnlyRun(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        string? resultArtifactPath,
+        TestProcessResult processResult)
+    {
+        if (string.IsNullOrWhiteSpace(resultArtifactPath) || !File.Exists(resultArtifactPath))
+        {
+            var diagnostic = FailureSummary(processResult);
+            var diagnosticSuffix = string.IsNullOrWhiteSpace(diagnostic) ? string.Empty : $" Diagnostic: {diagnostic}";
+            throw new ContinuousTestProviderException(
+                $"xUnit whole-suite run did not produce a JUnit result artifact at '{resultArtifactPath ?? "<none>"}'."
+                + diagnosticSuffix);
+        }
+
+        ParsedTestArtifactRun parsed;
+        try
+        {
+            parsed = JunitTestResultParser.Parse(resultArtifactPath);
+        }
+        catch (Exception exception) when (exception is TestArtifactParseException or IOException or UnauthorizedAccessException)
+        {
+            throw new ContinuousTestProviderException(
+                $"xUnit whole-suite run produced an invalid JUnit result artifact '{resultArtifactPath}': "
+                + "could not parse: "
+                + exception.Message,
+                exception);
+        }
+
+        if (parsed.Cases.Count == 0)
+            throw new ContinuousTestProviderException(
+                $"xUnit whole-suite run produced a JUnit result artifact '{resultArtifactPath}' with no test cases.");
+
+        var artifactStatus = parsed.Cases.Any(static testCase => testCase.Status is "failed" or "errored")
+            ? "failed"
+            : parsed.Cases.All(static testCase => testCase.Status == "skipped")
+                ? "skipped"
+                : "passed";
+        if (processResult.ExitCode is not (0 or 1))
+        {
+            var diagnostic = FailureSummary(processResult);
+            var diagnosticSuffix = string.IsNullOrWhiteSpace(diagnostic) ? string.Empty : $" Diagnostic: {diagnostic}";
+            throw new ContinuousTestProviderException(
+                $"xUnit whole-suite run exited with unsupported exit code {processResult.ExitCode}; expected "
+                + $"0 for a non-failed result or 1 for test failures.{diagnosticSuffix}");
+        }
+
+        if ((processResult.ExitCode == 0 && artifactStatus == "failed")
+            || (processResult.ExitCode == 1 && artifactStatus != "failed"))
+            throw new ContinuousTestProviderException(
+                $"xUnit whole-suite run exit code {processResult.ExitCode} disagreed with JUnit artifact "
+                + $"status '{artifactStatus}' at '{resultArtifactPath}'.");
+
+        return new ProviderRunResult(
+            RunId: request.RunId ?? $"xunit:{Path.GetFileNameWithoutExtension(resultArtifactPath)}",
+            Status: artifactStatus,
+            ResultArtifactPath: resultArtifactPath,
+            CoverageArtifacts: DiscoverCoverageArtifacts(paths))
+        {
+            GenerationId = paths.GenerationId,
+        };
     }
 
     /// <summary>

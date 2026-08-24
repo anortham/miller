@@ -115,12 +115,12 @@ Batch A uses `parallel-lead-commit`: workers do not commit. Every later task als
 **Approach:** Keep generation, build, chunk progress, result-path, cleanup, and coverage behavior intact. Add a small predicate for artifact-only eligibility and a parser/validator local to `DotnetTestProvider`. Do not disable output capture or stall detection; verbose output keeps both live.
 
 **Acceptance criteria:**
-- [ ] Whole-suite/no-coverage argv uses verbose/no-auto-reporters/JUnit and never requires complete stdout.
-- [ ] Green and red artifacts return honest artifact-only results.
-- [ ] Missing, malformed, empty, inconsistent-exit, and rejected-flag cases fail actionably.
-- [ ] Selected/chunked/coverage command bytes and immediate case attribution remain unchanged.
-- [ ] Real Scale coverage proves the target project's xUnit runner accepts the flags and produces importable JUnit.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Whole-suite/no-coverage argv uses verbose/no-auto-reporters/JUnit and never requires complete stdout.
+- [x] Green and red artifacts return honest artifact-only results.
+- [x] Missing, malformed, empty, inconsistent-exit, and rejected-flag cases fail actionably.
+- [x] Selected/chunked/coverage command bytes and immediate case attribution remain unchanged.
+- [x] Real Scale coverage proves the target project's xUnit runner accepts the flags and produces importable JUnit.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 3: Whole-suite proof and idle baseline
 

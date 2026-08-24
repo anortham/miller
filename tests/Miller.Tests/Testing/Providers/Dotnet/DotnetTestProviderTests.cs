@@ -417,6 +417,211 @@ public sealed class DotnetTestProviderTests : IDisposable
     }
 
     [Fact]
+    public void BuildRunCommand_xunit_whole_suite_uses_verbose_artifact_transport()
+    {
+        var provider = new DotnetTestProvider(new FakeTestProcessRunner());
+
+        var command = provider.BuildRunCommand(new ContinuousTestProviderRunRequest(
+            Workspace: Workspace(),
+            SelectedRevision: "rev-1",
+            IndexIdentity: IndexIdentity,
+            RunId: "run:whole-suite",
+            TestCaseIds: ["xunit:Sample.Tests.Passes"],
+            WholeSuite: true));
+
+        Assert.Equal(
+            ["-noLogo", "-noColor", "-reporter", "verbose", "-noAutoReporters", "-preEnumerateTheories"],
+            command.Arguments.Take(6).ToArray());
+        Assert.Contains("-jUnit", command.Arguments);
+        Assert.DoesNotContain("json", command.Arguments, StringComparer.Ordinal);
+        Assert.DoesNotContain("-method", command.Arguments, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public async Task Run_xunit_whole_suite_returns_a_passing_artifact_result_without_stdout()
+    {
+        var runner = new ArtifactTestProcessRunner();
+        runner.Enqueue(standardOutputTruncated: true);
+        runner.Enqueue(standardOutput: "live verbose output", standardOutputTruncated: true);
+        runner.OnRun = command => WriteJunitArtifact(command, failed: false);
+        var provider = new DotnetTestProvider(runner);
+
+        var result = await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: Workspace(),
+                SelectedRevision: "rev-1",
+                IndexIdentity: IndexIdentity,
+                RunId: "run:whole-suite:passed",
+                TestCaseIds: ["xunit:Sample.Tests.Passes"],
+                WholeSuite: true),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("passed", result.Status);
+        Assert.Empty(result.CaseResults);
+        Assert.NotNull(result.ResultArtifactPath);
+        Assert.True(File.Exists(result.ResultArtifactPath));
+        Assert.Equal("verbose", runner.Calls[1].Arguments[3]);
+        Assert.Contains("-noAutoReporters", runner.Calls[1].Arguments);
+    }
+
+    [Fact]
+    public async Task Run_xunit_whole_suite_accepts_a_failed_artifact_on_red_exit()
+    {
+        var runner = new ArtifactTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue(standardOutput: "failed verbose output", exitCode: 1, standardOutputTruncated: true);
+        runner.OnRun = command => WriteJunitArtifact(command, failed: true);
+        var provider = new DotnetTestProvider(runner);
+
+        var result = await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: Workspace(),
+                SelectedRevision: "rev-1",
+                IndexIdentity: IndexIdentity,
+                RunId: "run:whole-suite:failed",
+                TestCaseIds: ["xunit:Sample.Tests.Fails"],
+                WholeSuite: true),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("failed", result.Status);
+        Assert.Empty(result.CaseResults);
+        Assert.NotNull(result.ResultArtifactPath);
+    }
+
+    [Fact]
+    public async Task Run_xunit_whole_suite_rejects_a_missing_artifact()
+    {
+        var runner = new ArtifactTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue();
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() => provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: Workspace(),
+                SelectedRevision: "rev-1",
+                IndexIdentity: IndexIdentity,
+                RunId: "run:whole-suite:missing",
+                TestCaseIds: ["xunit:Sample.Tests.Passes"],
+                WholeSuite: true),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("JUnit", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("artifact", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Run_xunit_whole_suite_rejects_an_empty_artifact()
+    {
+        var runner = new ArtifactTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue();
+        runner.OnRun = WriteEmptyJunitArtifact;
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() => provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: Workspace(),
+                SelectedRevision: "rev-1",
+                IndexIdentity: IndexIdentity,
+                RunId: "run:whole-suite:empty",
+                TestCaseIds: ["xunit:Sample.Tests.Passes"],
+                WholeSuite: true),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("no test cases", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Run_xunit_whole_suite_rejects_malformed_artifact()
+    {
+        var runner = new ArtifactTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue();
+        runner.OnRun = command => WriteArtifact(command, "<testsuite>");
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() => provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: Workspace(),
+                SelectedRevision: "rev-1",
+                IndexIdentity: IndexIdentity,
+                RunId: "run:whole-suite:malformed",
+                TestCaseIds: ["xunit:Sample.Tests.Passes"],
+                WholeSuite: true),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("JUnit", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("parse", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Run_xunit_whole_suite_rejects_an_exit_status_that_disagrees_with_the_artifact()
+    {
+        var runner = new ArtifactTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue(exitCode: 0);
+        runner.OnRun = command => WriteJunitArtifact(command, failed: true);
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() => provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: Workspace(),
+                SelectedRevision: "rev-1",
+                IndexIdentity: IndexIdentity,
+                RunId: "run:whole-suite:inconsistent",
+                TestCaseIds: ["xunit:Sample.Tests.Fails"],
+                WholeSuite: true),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("exit code", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("artifact", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Run_xunit_whole_suite_rejects_a_non_test_failure_exit_with_a_failed_artifact()
+    {
+        var runner = new ArtifactTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue(standardError: "testhost crashed", exitCode: 2, standardOutputTruncated: true);
+        runner.OnRun = command => WriteJunitArtifact(command, failed: true);
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() => provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: Workspace(),
+                SelectedRevision: "rev-1",
+                IndexIdentity: IndexIdentity,
+                RunId: "run:whole-suite:crashed",
+                TestCaseIds: ["xunit:Sample.Tests.Fails"],
+                WholeSuite: true),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("exit code 2", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Run_xunit_whole_suite_reports_a_rejected_invocation_diagnostic_without_an_artifact()
+    {
+        var runner = new ArtifactTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue(standardError: "error: unknown option -noAutoReporters", exitCode: 2);
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() => provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: Workspace(),
+                SelectedRevision: "rev-1",
+                IndexIdentity: IndexIdentity,
+                RunId: "run:whole-suite:rejected",
+                TestCaseIds: ["xunit:Sample.Tests.Passes"],
+                WholeSuite: true),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("unknown option -noAutoReporters", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Run_xunit_rejects_a_selected_run_that_executed_no_cases()
     {
         var runner = new FakeTestProcessRunner();
@@ -1917,6 +2122,30 @@ public sealed class DotnetTestProviderTests : IDisposable
         File.WriteAllText(artifactPath, "<testsuite />");
     }
 
+    private static void WriteJunitArtifact(TestProcessCommand command, bool failed)
+    {
+        var artifactFlag = command.Arguments.ToList().IndexOf("-jUnit");
+        if (artifactFlag < 0)
+            return;
+
+        var artifactPath = command.Arguments[artifactFlag + 1];
+        var testcase = failed
+            ? "<testcase classname=\"Sample.Tests\" name=\"Fails\"><failure message=\"boom\">boom</failure></testcase>"
+            : "<testcase classname=\"Sample.Tests\" name=\"Passes\" time=\"0.1\" />";
+        WriteArtifact(command, $"<testsuite name=\"xunit\">{testcase}</testsuite>");
+    }
+
+    private static void WriteArtifact(TestProcessCommand command, string content)
+    {
+        var artifactFlag = command.Arguments.ToList().IndexOf("-jUnit");
+        if (artifactFlag < 0)
+            return;
+
+        var artifactPath = command.Arguments[artifactFlag + 1];
+        Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+        File.WriteAllText(artifactPath, content);
+    }
+
     private static void AssertContainsAdjacentPair(
         IReadOnlyList<string> arguments,
         string flag,
@@ -2081,6 +2310,39 @@ public sealed class DotnetTestProviderTests : IDisposable
             }
 
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ArtifactTestProcessRunner : ITestProcessRunner
+    {
+        private readonly Queue<TestProcessResult> _results = new();
+
+        public List<TestProcessCommand> Calls { get; } = [];
+
+        public Action<TestProcessCommand>? OnRun { get; set; }
+
+        public void Enqueue(
+            string standardOutput = "",
+            string standardError = "",
+            int exitCode = 0,
+            bool standardOutputTruncated = false,
+            bool standardErrorTruncated = false) =>
+            _results.Enqueue(new TestProcessResult(
+                exitCode,
+                standardOutput,
+                standardError,
+                standardOutputTruncated,
+                standardErrorTruncated));
+
+        public Task<TestProcessResult> RunAsync(
+            TestProcessCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(command);
+            OnRun?.Invoke(command);
+            if (_results.Count == 0)
+                throw new InvalidOperationException("No fake result was queued.");
+            return Task.FromResult(_results.Dequeue());
         }
     }
 }
