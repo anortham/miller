@@ -716,7 +716,8 @@ internal sealed class QueryTimeResolutionReader
             site.Receiver,
             site.ReceiverQualifier,
             site.CallerScopeSymbolId,
-            site.Confidence));
+            site.Confidence,
+            site.Path));
         return new ResolvedPending(site, outcome);
     }
 

@@ -225,7 +225,11 @@ public sealed class QmlVisibilityPolicyTests
             7,
             sourcePath: "other/Widget.qml",
             scope: QmlVisibilityScope.ForDirectory("other"));
-        var request = new QmlVisibilityRequest(7, "ui/Main.qml", "Widget");
+        var request = new QmlVisibilityRequest(
+            7,
+            "ui/Main.qml",
+            "Widget",
+            QmlVisibilityScope.ForDirectory("ui"));
 
         var visible = QmlVisibilityPolicy.FilterAndOrder([candidate], request);
 
@@ -239,7 +243,11 @@ public sealed class QmlVisibilityPolicyTests
             7,
             sourcePath: "modules/org/example/Widget.qml",
             scope: QmlVisibilityScope.ForModule("org.example"));
-        var request = new QmlVisibilityRequest(7, "ui/Main.qml", "Widget");
+        var request = new QmlVisibilityRequest(
+            7,
+            "ui/Main.qml",
+            "Widget",
+            QmlVisibilityScope.ForModule("Other.Module"));
 
         var visible = QmlVisibilityPolicy.FilterAndOrder([candidate], request);
 

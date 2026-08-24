@@ -16,7 +16,9 @@ public static class QmlVisibilityPolicy
             .Where(candidate => string.Equals(candidate.ImportAlias, request.ImportAlias, StringComparison.Ordinal))
             .Where(candidate => candidate.VersionConstraint is null
                 || candidate.VersionConstraint.IsCompatibleWith(request.VersionConstraint))
-            .Where(candidate => !candidate.IsInternal || ScopeStrength(candidate, request) <= 1)
+            .Where(candidate => request.ImportScope is null
+                || !candidate.IsInternal
+                || ScopeStrength(candidate, request) <= 1)
             .Select(candidate => (Candidate: candidate, Strength: ScopeStrength(candidate, request)))
             .Where(item => item.Strength >= 0)
             .ToArray();
@@ -52,18 +54,25 @@ public static class QmlVisibilityPolicy
         return slash < 0 ? string.Empty : path[..slash];
     }
 
-    private static int ScopeStrength(QmlVisibleType candidate, QmlVisibilityRequest request)
+    internal static int ScopeStrength(QmlVisibleType candidate, QmlVisibilityRequest request)
     {
+        if (string.Equals(candidate.SourceComponentPath, request.ConsumerComponentPath, StringComparison.Ordinal))
+            return 0;
+
         if (candidate.Scope.Directory is { } directory)
         {
-            if (!string.Equals(directory, DirectoryOf(request.ConsumerComponentPath), StringComparison.Ordinal))
-                return string.Equals(directory, request.ImportScope?.Directory, StringComparison.Ordinal) ? 2 : -1;
+            if (string.Equals(DirectoryOf(candidate.SourceComponentPath), DirectoryOf(request.ConsumerComponentPath), StringComparison.Ordinal))
+                return 1;
 
-            return string.Equals(candidate.SourceComponentPath, request.ConsumerComponentPath, StringComparison.Ordinal) ? 0 : 1;
+            if (string.Equals(directory, request.ImportScope?.Directory, StringComparison.Ordinal))
+                return 2;
+
+            return request.ImportScope is null ? 2 : -1;
         }
 
         return candidate.Scope.Module is { } module
-            && string.Equals(module, request.ImportScope?.Module, StringComparison.Ordinal)
+            && (request.ImportScope is null
+                || string.Equals(module, request.ImportScope.Module, StringComparison.Ordinal))
             ? 3
             : -1;
     }

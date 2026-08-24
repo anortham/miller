@@ -91,7 +91,8 @@ public sealed record ResolutionInput(
     string? Receiver,
     string? ReceiverQualifier,
     string? CallerScopeSymbolId,
-    double SourceConfidence);
+    double SourceConfidence,
+    string? ConsumerPath = null);
 
 /// <summary>The total outcome of one <see cref="QueryTimeResolver.Resolve"/> call.</summary>
 public sealed record ResolutionOutcome(

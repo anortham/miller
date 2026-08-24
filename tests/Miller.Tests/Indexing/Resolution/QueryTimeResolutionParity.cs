@@ -319,7 +319,9 @@ internal static class QueryTimeResolutionParity
         ResolutionRefKind? kind = ResolutionKinds.FromPendingKind(pending.Kind);
         if (kind is null)
             return ResolutionOutcome.NoContext;
-        string language = cache.Slice(pending.VersionId)?.Language ?? pending.Language;
+        var slice = cache.Slice(pending.VersionId);
+        string language = slice?.Language ?? pending.Language;
+        string? path = slice?.Path;
         return resolver.Resolve(new ResolutionInput(
             ResolutionOrigin.Pending,
             kind.Value,
@@ -329,7 +331,8 @@ internal static class QueryTimeResolutionParity
             pending.Receiver,
             pending.Qualifier,
             pending.CallerScopeSymbolId,
-            pending.Confidence));
+            pending.Confidence,
+            path));
     }
 
     internal static Dictionary<(long VersionId, string Id), PendingFact> ReadPendingFacts(

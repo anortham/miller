@@ -198,11 +198,11 @@ Commit mode: all tasks use `serial-worker-commit`; each task changes shared cont
 **Approach:** Add a full resolution matrix first, then a parity case through the indexed read path. Keep QML branching at one policy boundary and verify non-QML resolver suites unchanged.
 
 **Acceptance criteria:**
-- [ ] Same-directory, directory-imported, and URI-module types resolve to the expected target.
-- [ ] Aliases, versions, and internal boundaries are enforced.
-- [ ] Duplicate visible types are ambiguous; invisible global names do not resolve.
-- [ ] Existing non-QML resolution parity remains green.
-- [ ] Worker-scope verification passes and the worker commits per `serial-worker-commit`.
+- [x] Same-directory, directory-imported, and URI-module types resolve to the expected target.
+- [x] Aliases, versions, and internal boundaries are enforced.
+- [x] Duplicate visible types are ambiguous; invisible global names do not resolve.
+- [x] Existing non-QML resolution parity remains green.
+- [x] Worker-scope verification passes and the worker commits per `serial-worker-commit`.
 
 ### Task 5: Prove QML across Miller tools
 

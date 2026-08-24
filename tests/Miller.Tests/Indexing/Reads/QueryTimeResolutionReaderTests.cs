@@ -7,6 +7,7 @@ using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Resolution;
 using Miller.Tests.Indexing.Resolution;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Indexing.Reads;
@@ -110,6 +111,80 @@ public sealed class QueryTimeResolutionReaderTests
         FamilyGraphResolutionEdge pending = Assert.Single(edges);
         Assert.Equal("pending_resolution", pending.Source);
         Assert.Equal(Helper, pending.ToId);
+    }
+
+    [Fact]
+    public void QmlPendingInstantiationUsesCatalogAndConsumerPath()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.AddPending(
+            1,
+            "pending-remote",
+            "source",
+            "RemoteCard",
+            "source.qml",
+            kind: "instantiates",
+            language: "qml");
+        fixture.ExecuteWrite(
+            "UPDATE pending_relationships SET target_display_name='Components.RemoteCard', target_terminal_name='RemoteCard', target_receiver='Components' WHERE pending_relationship_id='pending-remote';");
+
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+
+        IReadOnlyList<FamilyGraphResolutionEdge> edges = reader.ReadResolutionEdges(
+            connection,
+            ["source"],
+            Direction.Forward,
+            statementObserver: null);
+
+        FamilyGraphResolutionEdge edge = Assert.Single(edges, item => item.Source == "pending_resolution");
+        Assert.Equal("remote", edge.ToId);
+        Assert.Equal("instantiates", edge.Kind);
+    }
+
+    [Fact]
+    public void ReleasedV2351QmlPendingInstantiationUsesCatalog()
+    {
+        string artifactPath = Path.Combine(
+            ScaleTestSupport.RepoRoot(),
+            "tests",
+            "Miller.Tests",
+            "Fixtures",
+            "QmlFirstClass",
+            "symbols.db");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = artifactPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+
+        string sourceId;
+        string remoteId;
+        using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT value FROM artifact_metadata WHERE key='binary_version';";
+            Assert.Equal("2.35.1", (string)command.ExecuteScalar()!);
+            command.CommandText = "SELECT symbol_id FROM symbols WHERE path='source.qml' AND name='source';";
+            sourceId = (string)command.ExecuteScalar()!;
+            command.CommandText = "SELECT symbol_id FROM symbols WHERE path='components/RemoteCard.qml' AND name='RemoteCard';";
+            remoteId = (string)command.ExecuteScalar()!;
+        }
+
+        QueryTimeResolutionReader reader = ArtifactReader(connection);
+        IReadOnlyList<FamilyGraphResolutionEdge> edges = reader.ReadResolutionEdges(
+            connection,
+            [sourceId],
+            Direction.Forward,
+            statementObserver: null);
+
+        FamilyGraphResolutionEdge edge = Assert.Single(
+            edges,
+            item => item.Source == "pending_resolution" && item.ToId == remoteId);
+        Assert.Equal(remoteId, edge.ToId);
+        Assert.Equal("instantiates", edge.Kind);
     }
 
     [Fact]

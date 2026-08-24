@@ -13,6 +13,11 @@ public sealed class QueryTimeResolver(IResolutionFacts facts)
         if (input.Name.Length == 0)
             return ResolutionOutcome.NoContext;
 
+        if (input.Origin == ResolutionOrigin.Pending
+            && input.RefKind == ResolutionRefKind.Instantiates
+            && string.Equals(input.Language, "qml", StringComparison.Ordinal))
+            return ResolveQmlInstantiation(input);
+
         bool hasReceiver = input.Receiver is { Length: > 0 };
         IReadOnlyList<ResolutionTier> chain = ResolutionPolicy.Chain(input.Origin, input.RefKind, hasReceiver);
         if (chain.Count == 0)
@@ -51,6 +56,31 @@ public sealed class QueryTimeResolver(IResolutionFacts facts)
         return firstAmbiguousCount is { } count
             ? ResolutionOutcome.Ambiguous(count)
             : attempted ? ResolutionOutcome.Missing : ResolutionOutcome.NoContext;
+    }
+
+    private ResolutionOutcome ResolveQmlInstantiation(ResolutionInput input)
+    {
+        if (input.ConsumerPath is not { Length: > 0 })
+            return ResolutionOutcome.Missing;
+
+        string? alias = input.Receiver is { Length: > 0 } receiver ? receiver : null;
+        var request = new QmlVisibilityRequest(input.VersionId, input.ConsumerPath, input.Name, ImportAlias: alias);
+        IReadOnlyList<QmlVisibleType> visible = QmlVisibilityPolicy.FilterAndOrder(
+            facts.QmlTypesVisibleTo(input.VersionId),
+            request);
+        if (visible.Count == 0)
+            return ResolutionOutcome.Missing;
+        if (visible.Count > 1)
+            return ResolutionOutcome.Ambiguous(visible.Count);
+
+        QmlVisibleType candidate = visible[0];
+        bool local = QmlVisibilityPolicy.ScopeStrength(candidate, request) <= 1;
+        ResolutionTier tier = local ? ResolutionTier.Local : ResolutionTier.Import;
+        return ResolutionOutcome.Resolved(
+            candidate.Target,
+            ResolutionPolicy.TierNumber(tier),
+            Math.Min(tier == ResolutionTier.Local ? ResolutionPolicy.LocalConfidence : ResolutionPolicy.ImportConfidence, input.SourceConfidence),
+            ResolutionPolicy.TierMethod(tier));
     }
 
     private Dictionary<FactSymbolKey, double> Collect(ResolutionTier tier, ResolutionInput input) => tier switch
