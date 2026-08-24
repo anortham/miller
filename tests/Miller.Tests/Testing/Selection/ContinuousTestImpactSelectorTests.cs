@@ -132,6 +132,45 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.Equal(["tc:b"], otherResult.SelectedTestCaseIds);
     }
 
+    [Fact]
+    public void Selection_snapshot_reuses_cases_until_discovery_invalidates_it()
+    {
+        using ContinuousTestStore store = OpenStore();
+        string project = Path.Combine(_dir, "A.csproj");
+        SeedProviderCase(store, "tc:a", "ATests.test", "ATests.test", "test", "tests/A.cs", projectPath: project);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var request = new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            WorkspaceScope: true,
+            ProjectPath: project);
+        var key = new CtFreshnessKey("gen-1", 1);
+
+        Assert.Equal(["tc:a"], selector.SelectAtRevision(request, key).SelectedTestCaseIds);
+        SeedProviderCase(store, "tc:new", "BTests.test", "BTests.test", "test", "tests/B.cs", projectPath: project);
+        Assert.Equal(["tc:a"], selector.SelectAtRevision(request, key).SelectedTestCaseIds);
+
+        selector.InvalidateSelectionSnapshot(Workspace);
+        Assert.Equal(["tc:a", "tc:new"], selector.SelectAtRevision(request, key).SelectedTestCaseIds);
+    }
+
+    [Fact]
+    public void Selection_reads_live_status_after_a_same_revision_case_mutation()
+    {
+        using ContinuousTestStore store = OpenStore();
+        string project = Path.Combine(_dir, "A.csproj");
+        SeedProviderCase(store, "tc:a", "ATests.test", "ATests.test", "test", "tests/A.cs", projectPath: project);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var request = new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["README.md"],
+            ProjectPath: project);
+        var key = new CtFreshnessKey("gen-1", 1);
+
+        Assert.Equal(["tc:a"], selector.SelectAtRevision(request, key).StaleTestCaseIds);
+        SeedCommittedResult(store, "tc:a", identity: "gen-1", revision: 1);
+        Assert.Empty(selector.SelectAtRevision(request, key).StaleTestCaseIds);
+    }
+
     [Theory]
     [InlineData("unknown", "parse_diagnostics")]
     [InlineData("current", null)]

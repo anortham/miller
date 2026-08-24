@@ -1183,7 +1183,6 @@ public sealed class ContinuousTestImpactSelector
         private readonly string _workspaceId;
         private readonly object _gate = new();
         private readonly Dictionary<string, IReadOnlyList<ContinuousTestCase>> _casesByProject = [];
-        private readonly Dictionary<string, IReadOnlyList<ContinuousTestStatus>> _statusesByProject = [];
 
         public SelectionSnapshot(ContinuousTestStore store, string workspaceId)
         {
@@ -1213,15 +1212,7 @@ public sealed class ContinuousTestImpactSelector
                 return _store.ListContinuousTestStatuses(_workspaceId);
 
             string normalized = Path.GetFullPath(projectPath);
-            lock (_gate)
-            {
-                if (_statusesByProject.TryGetValue(normalized, out IReadOnlyList<ContinuousTestStatus>? rows))
-                    return rows;
-                IReadOnlyList<ContinuousTestStatus> loaded =
-                    _store.ListContinuousTestStatusesForProject(_workspaceId, normalized);
-                _statusesByProject[normalized] = loaded;
-                return loaded;
-            }
+            return _store.ListContinuousTestStatusesForProject(_workspaceId, normalized);
         }
     }
 
