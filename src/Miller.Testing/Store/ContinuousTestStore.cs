@@ -109,6 +109,9 @@ public sealed partial class ContinuousTestStore : IDisposable
         DbPath = Path.GetFullPath(dbPath);
     }
 
+    /// <summary>Ensures that a write-capable caller has applied the current schema before reading it.</summary>
+    public void EnsureSchemaForWrite() => WithWrite(static _ => { });
+
     public void Dispose()
     {
         lock (_gate)

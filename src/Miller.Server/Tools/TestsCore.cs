@@ -418,6 +418,7 @@ public static class TestsCore
             File.Delete(tombstone);
 
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        store.EnsureSchemaForWrite();
         HashSet<string> enabledBefore = store.ListContinuousTestProjects(workspaceId)
             .Select(static project => project.ProjectPath)
             .ToHashSet(StringComparer.Ordinal);
@@ -455,6 +456,7 @@ public static class TestsCore
 
         string workspaceId = ResolveWorkspaceId(request, root);
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        store.EnsureSchemaForWrite();
         IReadOnlyList<ContinuousTestProject> enabledBefore = store.ListContinuousTestProjects(workspaceId);
         if (!string.IsNullOrWhiteSpace(request.ProjectPath))
         {
@@ -566,6 +568,7 @@ public static class TestsCore
         }
 
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        store.EnsureSchemaForWrite();
         IReadOnlyList<ContinuousTestProject> projects = store.ListContinuousTestProjects(workspaceId);
         var selector = new ContinuousTestImpactSelector(
             store,
@@ -665,6 +668,7 @@ public static class TestsCore
 
         string workspaceId = ResolveWorkspaceId(request, root);
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        store.EnsureSchemaForWrite();
         IReadOnlyList<ContinuousTestProject> projects = store.ListContinuousTestProjects(workspaceId);
         CtRunDisposition disposition = CtDaemonLauncher.ResolveRun(root);
         if (disposition.Execution == CtRunExecution.Daemon)
