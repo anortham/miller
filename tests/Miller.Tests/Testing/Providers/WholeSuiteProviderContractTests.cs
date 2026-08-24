@@ -1,6 +1,8 @@
 using Miller.Testing;
 using Miller.Testing.Parsing;
+using Miller.Testing.Providers.Qml;
 using Miller.Tests.Testing.Providers.Dotnet;
+using QmlScriptedTestProcessRunner = Miller.Tests.Testing.Providers.Qml.ScriptedTestProcessRunner;
 using Miller.Tests.Testing.Providers.Rust;
 using Xunit;
 
@@ -136,6 +138,46 @@ public sealed class WholeSuiteProviderContractTests : IDisposable
         AssertOneResultPerId(ids, result);
     }
 
+    [Fact]
+    public async Task Qt_quick_test_whole_suite_run_reports_artifact_cases_without_selection()
+    {
+        string[] names = ["A/basic", "B/slow"];
+        var runner = QmlRunner(names, names);
+        var provider = new QtQuickTestProvider(runner);
+        var workspace = QmlWorkspace();
+        var discovered = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        string[] ids = discovered.Select(testCase => testCase.Id).ToArray();
+
+        var result = await provider.RunAsync(
+            Request(workspace, ids) with { WholeSuite = true },
+            TestContext.Current.CancellationToken);
+
+        var command = runner.Calls.Last(call => call.FileName == "ctest" && !call.Arguments.Contains("--show-only=json-v1"));
+        Assert.DoesNotContain("-R", command.Arguments);
+        Assert.Contains("--output-junit", command.Arguments);
+        Assert.NotNull(result.ResultArtifactPath);
+        Assert.True(File.Exists(result.ResultArtifactPath));
+        AssertOneResultPerId(ids, result);
+    }
+
+    [Fact]
+    public async Task Qt_quick_test_selected_run_rejects_missing_artifact_cases()
+    {
+        string[] names = ["A/basic", "B/slow"];
+        var runner = QmlRunner(names, ["A/basic"]);
+        var provider = new QtQuickTestProvider(runner);
+        var workspace = QmlWorkspace();
+        var discovered = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        string[] ids = discovered.Select(testCase => testCase.Id).ToArray();
+        string missingId = discovered.Single(testCase => testCase.DisplayName == "B/slow").Id;
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.RunAsync(Request(workspace, ids), TestContext.Current.CancellationToken));
+
+        Assert.Contains("did not report selected test cases", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(missingId, exception.Message, StringComparison.Ordinal);
+    }
+
     private static void AssertOneResultPerId(IReadOnlyList<string> ids, ProviderRunResult result)
     {
         Assert.Equal(
@@ -217,6 +259,69 @@ public sealed class WholeSuiteProviderContractTests : IDisposable
             WorkspaceRoot: RustRoot,
             ProjectPath: Path.Combine(RustRoot, "Cargo.toml"),
             BuildOutputRoot: Path.Combine(_dir, "ct-build", "rust")));
+
+    private ContinuousTestWorkspace QmlWorkspace()
+    {
+        string root = Path.Combine(_dir, "qml");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "CMakeLists.txt"), "project(qml)");
+        return Track(new ContinuousTestWorkspace(
+            WorkspaceId: "ws:qml",
+            WorkspaceRoot: root,
+            ProjectPath: Path.Combine(root, "CMakeLists.txt"),
+            BuildOutputRoot: Path.Combine(_dir, "ct-build", "qml"),
+            Framework: "qt-quick-test",
+            Metadata: new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["configure_root"] = root,
+                ["evidence_root"] = Path.Combine(root, "tests"),
+            }));
+    }
+
+    private QmlScriptedTestProcessRunner QmlRunner(
+        IReadOnlyList<string> discoveredNames,
+        IReadOnlyList<string> reportedNames) =>
+        new(command =>
+        {
+            if (command.FileName == "cmake" && command.Arguments.SequenceEqual(["--version"]))
+                return new TestProcessResult(0, "cmake version 3.27.9\n", string.Empty);
+            if (command.FileName == "cmake" && command.Arguments.Contains("-S"))
+            {
+                string buildDirectory = ArgumentAfter(command, "-B");
+                Directory.CreateDirectory(buildDirectory);
+                File.WriteAllText(Path.Combine(buildDirectory, "CMakeCache.txt"), "cache");
+                File.WriteAllText(Path.Combine(buildDirectory, "CTestTestfile.cmake"), "tests");
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            }
+            if (command.FileName == "cmake")
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            if (command.FileName == "ctest" && command.Arguments.Contains("--show-only=json-v1"))
+                return new TestProcessResult(0, QmlDiscoveryJson(discoveredNames), string.Empty);
+            if (command.FileName == "ctest")
+            {
+                string artifact = ArgumentAfter(command, "--output-junit");
+                Directory.CreateDirectory(Path.GetDirectoryName(artifact)!);
+                string cases = string.Concat(reportedNames.Select(name =>
+                    $"<testcase classname=\"CTest\" name=\"{name}\" />"));
+                File.WriteAllText(artifact, $"<testsuite name=\"CTest\">{cases}</testsuite>");
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            }
+
+            throw new Xunit.Sdk.XunitException($"unexpected command: {command.ToDisplayString()}");
+        });
+
+    private static string QmlDiscoveryJson(IReadOnlyList<string> names) =>
+        "{\"kind\":\"ctestInfo\",\"version\":{\"major\":1,\"minor\":0},\"tests\":["
+        + string.Join(',', names.Select(name =>
+            $"{{\"name\":{System.Text.Json.JsonSerializer.Serialize(name)},\"command\":[\"qml-test\"]}}"))
+        + "]}";
+
+    private static string ArgumentAfter(TestProcessCommand command, string argument)
+    {
+        int index = command.Arguments.ToList().IndexOf(argument);
+        Assert.True(index >= 0 && index + 1 < command.Arguments.Count);
+        return command.Arguments[index + 1];
+    }
 
     private ContinuousTestWorkspace Track(ContinuousTestWorkspace workspace)
     {

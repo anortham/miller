@@ -26,6 +26,8 @@ public interface ICtCoverageFactSource
 
 public sealed class ContinuousTestImpactSelector
 {
+    private const string QmlProviderSource = "ct-provider:qml";
+
     private static readonly HashSet<string> GenericPathStems = new(StringComparer.OrdinalIgnoreCase)
     {
         "index",
@@ -152,6 +154,7 @@ public sealed class ContinuousTestImpactSelector
         var evidence = new List<ContinuousTestSelectionEvidence>();
         AddChangedTestFileEvidence(request, testCases, changedFileByPath, evidence);
         AddProjectScopeEvidence(request, testCases, evidence);
+        AddQmlProjectScopeEvidence(request, testCases, evidence);
         bool unmappableHint = AddImpactedTestEvidence(request, casesBySourcePath, testCases, evidence);
         AddImpactedTestSymbolEvidence(impactedSymbols, testCaseBySymbolId, evidence);
         bool unmappableEvidence = AddCoverageEvidence(request, impactedSymbols, changedFiles, testCaseById, evidence);
@@ -276,6 +279,13 @@ public sealed class ContinuousTestImpactSelector
                 continue;
             if (IsProjectOrConfigPath(path))
                 continue;
+            if (IsQmlProjectChange(path)
+                && testCases.Any(testCase =>
+                    IsQmlProviderCase(testCase)
+                    && IsQmlCaseRelevantToChange(request, testCases, testCase, path)))
+            {
+                continue;
+            }
             if (IsHarmlessChangedPath(path))
                 continue;
             if (IsTestPath(path) && caseFilePaths.Contains(path))
@@ -461,6 +471,120 @@ public sealed class ContinuousTestImpactSelector
                 Explanation: $"project/config change {configList} governs project tests",
                 SourceFactIds: [testCase.FileId ?? testCase.Id]));
         }
+    }
+
+    private static void AddQmlProjectScopeEvidence(
+        ContinuousTestImpactSelectionRequest request,
+        IReadOnlyList<TestCaseFact> testCases,
+        List<ContinuousTestSelectionEvidence> evidence)
+    {
+        TestCaseFact[] qmlCases = testCases
+            .Where(IsQmlProviderCase)
+            .ToArray();
+        if (qmlCases.Length == 0)
+            return;
+
+        string[] changedPaths = request.ChangedPaths
+            .Where(IsQmlProjectChange)
+            .Select(NormalizePath)
+            .Distinct(PathComparer)
+            .ToArray();
+        if (changedPaths.Length == 0)
+            return;
+
+        string pathList = string.Join(", ", changedPaths.Select(Path.GetFileName));
+        foreach (TestCaseFact testCase in qmlCases.Where(testCase =>
+                     changedPaths.Any(path => IsQmlCaseRelevantToChange(request, testCases, testCase, path))))
+        {
+            if (evidence.Any(row => row.TestCaseId == testCase.Id && row.Tier == "changed_test_file"))
+                continue;
+
+            evidence.Add(new ContinuousTestSelectionEvidence(
+                TestCaseId: testCase.Id,
+                Selector: testCase.Selector,
+                Tier: "project_scope",
+                Confidence: TierConfidence["project_scope"],
+                Explanation: $"Qt Quick Test project change {pathList} selects the CTest target; CTest does not expose QML function ownership",
+                SourceFactIds: [testCase.FileId ?? testCase.Id]));
+        }
+    }
+
+    private static bool IsQmlProviderCase(TestCaseFact testCase) =>
+        string.Equals(testCase.Source, QmlProviderSource, StringComparison.Ordinal);
+
+    private static bool IsQmlProjectInScope(
+        ContinuousTestImpactSelectionRequest request,
+        IReadOnlyList<TestCaseFact> testCases,
+        TestCaseFact testCase)
+    {
+        if (!string.IsNullOrWhiteSpace(request.ProjectPath))
+            return ProjectMatches(testCase.ProjectPath, request.ProjectPath);
+
+        return testCases
+            .Where(IsQmlProviderCase)
+            .Select(candidate => candidate.ProjectPath ?? string.Empty)
+            .Distinct(PathComparer)
+            .Take(2)
+            .Count() == 1;
+    }
+
+    private static bool IsQmlCaseRelevantToChange(
+        ContinuousTestImpactSelectionRequest request,
+        IReadOnlyList<TestCaseFact> testCases,
+        TestCaseFact testCase,
+        string changedPath)
+    {
+        if (!IsQmlProjectInScope(request, testCases, testCase))
+            return false;
+        if (!string.IsNullOrWhiteSpace(request.ProjectPath))
+            return true;
+
+        string? projectRoot = string.IsNullOrWhiteSpace(testCase.ProjectPath)
+            ? null
+            : Path.GetDirectoryName(testCase.ProjectPath);
+        return IsPathUnderRoot(changedPath, projectRoot)
+            || IsPathUnderRoot(changedPath, testCase.SourcePath);
+    }
+
+    private static bool IsPathUnderRoot(string path, string? root)
+    {
+        if (string.IsNullOrWhiteSpace(root))
+            return false;
+
+        string normalizedPath = NormalizePath(path);
+        string normalizedRoot = NormalizePath(root);
+        return normalizedPath.Equals(normalizedRoot, PathComparison)
+            || normalizedPath.StartsWith(normalizedRoot + "/", PathComparison);
+    }
+
+    private static bool IsQmlProjectChange(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        string fileName = Path.GetFileName(path);
+        string extension = Path.GetExtension(fileName);
+        if (extension.Equals(".qml", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".cmake", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("CMakeLists.txt", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("CMakePresets.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!extension.Equals(".c", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".cc", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".cpp", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".cxx", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string stem = Path.GetFileNameWithoutExtension(fileName);
+        return stem.Equals("runner", StringComparison.OrdinalIgnoreCase)
+            || stem.EndsWith("runner", StringComparison.OrdinalIgnoreCase)
+            || stem.Equals("test_main", StringComparison.OrdinalIgnoreCase)
+            || stem.Equals("tst_main", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsProjectOrConfigPath(string? path)
@@ -1130,6 +1254,7 @@ public sealed class ContinuousTestImpactSelector
             ".go" => "go",
             ".js" => "javascript",
             ".jsx" => "javascript",
+            ".qml" => "qml",
             ".py" => "python",
             ".razor" => "razor",
             ".rs" => "rust",

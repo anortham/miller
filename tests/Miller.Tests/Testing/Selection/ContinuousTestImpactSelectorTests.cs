@@ -909,6 +909,75 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     [Fact]
+    public void Select_qml_change_uses_qt_quick_test_project_scope_without_function_precision()
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.Combine(_dir, "qml", "CMakeLists.txt");
+        string evidenceRoot = Path.Combine(_dir, "qml", "tests");
+        SeedQmlCase(store, "tc:qml-a", "A/basic", projectPath, evidenceRoot);
+        SeedQmlCase(store, "tc:qml-b", "B/slow", projectPath, evidenceRoot);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: [Path.Combine(_dir, "qml", "ui", "Card.qml")],
+            ProjectPath: projectPath));
+
+        Assert.Equal(["tc:qml-a", "tc:qml-b"], result.SelectedTestCaseIds);
+        Assert.All(result.Evidence, evidence => Assert.Equal("project_scope", evidence.Tier));
+        Assert.All(result.Evidence, evidence =>
+            Assert.Contains("CTest does not expose QML function ownership", evidence.Explanation));
+    }
+
+    [Theory]
+    [InlineData("CMakeLists.txt")]
+    [InlineData("cmake/QtQuickTest.cmake")]
+    [InlineData("tests/runner.cpp")]
+    public void Select_qt_quick_test_project_changes_do_not_select_unrelated_provider_cases(string changedPath)
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.Combine(_dir, "qml", "CMakeLists.txt");
+        string evidenceRoot = Path.Combine(_dir, "qml", "tests");
+        SeedQmlCase(store, "tc:qml", "Smoke/smoke", projectPath, evidenceRoot);
+        SeedProviderCase(
+            store,
+            "tc:dotnet",
+            "AppTests.test",
+            "AppTests.test",
+            "test",
+            Path.Combine(_dir, "qml", "tests", "AppTests.cs"),
+            projectPath: projectPath,
+            framework: "xunit");
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: [Path.Combine(_dir, "qml", changedPath)],
+            ProjectPath: projectPath));
+
+        Assert.Equal(["tc:qml"], result.SelectedTestCaseIds);
+        Assert.DoesNotContain("tc:dotnet", result.SelectedTestCaseIds);
+    }
+
+    [Fact]
+    public void Select_unrelated_qml_application_change_does_not_enter_qt_quick_test_project()
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.Combine(_dir, "qml", "CMakeLists.txt");
+        string evidenceRoot = Path.Combine(_dir, "qml", "tests");
+        SeedQmlCase(store, "tc:qml", "Smoke/smoke", projectPath, evidenceRoot);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: [Path.Combine(_dir, "app", "Main.qml")]));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.Equal(["tc:qml"], result.StaleTestCaseIds);
+    }
+
+    [Fact]
     public void Select_keeps_targeted_changed_test_file_over_project_scope_escalation()
     {
         using ContinuousTestStore store = OpenStore();
@@ -1489,6 +1558,31 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
                     IndexIdentity: identity,
                     Revision: revision),
             ]));
+    }
+
+    private static void SeedQmlCase(
+        ContinuousTestStore store,
+        string testCaseId,
+        string selector,
+        string projectPath,
+        string sourcePath)
+    {
+        store.PutTestCase(new ContinuousTestCase(
+            Id: testCaseId,
+            WorkspaceId: Workspace,
+            Name: selector,
+            QualifiedName: selector,
+            Selector: selector,
+            FilePath: sourcePath,
+            Framework: "qt-quick-test",
+            Role: ContinuousTestRole.TestCase,
+            Source: "ct-provider:qml",
+            Confidence: 1.0,
+            Metadata: new Dictionary<string, object?>
+            {
+                ["ct_project_path"] = projectPath,
+                ["source_path"] = sourcePath,
+            }));
     }
 
     private static void SeedProviderCase(
