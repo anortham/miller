@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Miller.Testing;
 
-public sealed record ContinuousTestHistoryPruneResult(
+internal sealed record ContinuousTestHistoryPruneResult(
     string WorkspaceId,
     DateTimeOffset AsOf,
     long ConsideredRuns,
@@ -21,7 +21,7 @@ public sealed record ContinuousTestHistoryPruneResult(
 
 public sealed partial class ContinuousTestStore
 {
-    public ContinuousTestHistoryPruneResult PruneContinuousTestHistory(
+    internal ContinuousTestHistoryPruneResult PruneContinuousTestHistory(
         string workspaceId,
         DateTimeOffset now)
     {
