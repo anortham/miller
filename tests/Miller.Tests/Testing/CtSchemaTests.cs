@@ -66,6 +66,10 @@ public sealed class CtSchemaTests : IDisposable
         Assert.DoesNotContain("file_id", caseColumns, StringComparer.OrdinalIgnoreCase);
         Assert.DoesNotContain("symbol_id", caseColumns, StringComparer.OrdinalIgnoreCase);
 
+        IReadOnlyList<string> resultColumns = TableColumns(connection, "test_results");
+        Assert.Contains("observed_at", resultColumns, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("idx_test_results_workspace_case_observed", IndexNames(connection, "test_results"));
+
         foreach (string sql in TableSql(connection))
         {
             Assert.DoesNotContain("references files(", sql, StringComparison.OrdinalIgnoreCase);
@@ -73,6 +77,81 @@ public sealed class CtSchemaTests : IDisposable
             Assert.DoesNotContain("references search_docs(", sql, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("attach ", sql, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    [Fact]
+    public void Apply_migrates_observed_at_from_owning_run_timestamps()
+    {
+        using (var connection = OpenWrite())
+        {
+            CreateSchemaWithoutObservedAt(connection);
+            Execute(connection, """
+                INSERT INTO test_cases (id, workspace_id, name, qualified_name, selector, role, source, confidence)
+                VALUES ('case:1', 'ws:1', 'case:1', 'case:1', 'case:1', 'testcase', 'ct-provider:dotnet', 1.0);
+                INSERT INTO test_runs (id, workspace_id, index_identity, revision, status, started_at, ended_at)
+                VALUES ('run:ended', 'ws:1', 'gen-1', 1, 'passed', '2026-08-24T00:00:00.0000000+00:00', '2026-08-24T01:02:03.0000000+00:00');
+                INSERT INTO test_runs (id, workspace_id, index_identity, revision, status, started_at)
+                VALUES ('run:started', 'ws:1', 'gen-1', 1, 'passed', '2026-08-24T02:03:04.0000000+00:00');
+                INSERT INTO test_runs (id, workspace_id, index_identity, revision, status)
+                VALUES ('run:epoch', 'ws:1', 'gen-1', 1, 'passed');
+                INSERT INTO test_results (id, workspace_id, index_identity, revision, test_case_id, test_run_id, status)
+                VALUES ('result:ended', 'ws:1', 'gen-1', 1, 'case:1', 'run:ended', 'passed'),
+                       ('result:started', 'ws:1', 'gen-1', 1, 'case:1', 'run:started', 'failed'),
+                       ('result:epoch', 'ws:1', 'gen-1', 1, 'case:1', 'run:epoch', 'skipped');
+                """);
+            Execute(connection, "PRAGMA user_version = 4;");
+            Execute(connection, "UPDATE meta SET value = '4' WHERE key = 'schema_version';");
+        }
+
+        using var migrated = OpenWrite();
+        CtSchema.Apply(migrated);
+
+        Assert.Equal(
+            "2026-08-24T01:02:03.0000000+00:00",
+            Convert.ToString(Scalar(migrated, "SELECT observed_at FROM test_results WHERE id = 'result:ended';"), CultureInfo.InvariantCulture));
+        Assert.Equal(
+            "2026-08-24T02:03:04.0000000+00:00",
+            Convert.ToString(Scalar(migrated, "SELECT observed_at FROM test_results WHERE id = 'result:started';"), CultureInfo.InvariantCulture));
+        Assert.Equal(
+            "0001-01-01T00:00:00.0000000+00:00",
+            Convert.ToString(Scalar(migrated, "SELECT observed_at FROM test_results WHERE id = 'result:epoch';"), CultureInfo.InvariantCulture));
+        Assert.Equal(CtSchema.SchemaVersion, UserVersion(migrated));
+        Assert.Contains("idx_test_results_workspace_case_observed", IndexNames(migrated, "test_results"));
+    }
+
+    [Fact]
+    public void Recent_history_query_uses_the_covering_index_without_a_temp_sort()
+    {
+        using var connection = OpenWrite();
+        CtSchema.Apply(connection);
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            EXPLAIN QUERY PLAN
+            SELECT r.test_case_id, r.status, r.observed_at
+            FROM test_results r
+            WHERE r.workspace_id = 'ws:1'
+              AND r.test_case_id IN ('case:1', 'case:2')
+              AND (
+                  SELECT COUNT(*)
+                  FROM test_results newer
+                  WHERE newer.workspace_id = r.workspace_id
+                    AND newer.test_case_id = r.test_case_id
+                    AND (
+                        newer.observed_at > r.observed_at
+                        OR (newer.observed_at = r.observed_at AND newer.id >= r.id)
+                    )
+              ) <= 50;
+            """;
+        using SqliteDataReader reader = command.ExecuteReader();
+        var plan = new List<string>();
+        while (reader.Read())
+            plan.Add(reader.GetString(3));
+
+        Assert.Contains(plan, detail => detail.Contains(
+            "USING COVERING INDEX idx_test_results_workspace_case_observed",
+            StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, detail => detail.Contains("TEMP B-TREE", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -381,6 +460,49 @@ public sealed class CtSchemaTests : IDisposable
         Execute(
             connection,
             "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '1');");
+    }
+
+    private static void CreateSchemaWithoutObservedAt(SqliteConnection connection)
+    {
+        Execute(connection, "PRAGMA journal_mode=WAL;");
+        Execute(connection, CtSchema.Ddl);
+        Execute(connection, "DROP INDEX IF EXISTS idx_test_results_workspace_revision;");
+        Execute(connection, "DROP INDEX IF EXISTS idx_test_results_test_case_id;");
+        Execute(connection, "DROP INDEX IF EXISTS idx_test_results_test_run_id;");
+        Execute(connection, "DROP INDEX IF EXISTS idx_test_results_workspace_case_observed;");
+        Execute(connection, "ALTER TABLE test_results RENAME TO test_results_current;");
+        Execute(connection, """
+            CREATE TABLE test_results (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                index_identity TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                test_case_id TEXT NOT NULL REFERENCES test_cases(id) ON DELETE CASCADE,
+                test_run_id TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
+                status TEXT NOT NULL,
+                result_revision TEXT,
+                duration_seconds REAL,
+                failure_text_hash TEXT,
+                failure_summary TEXT,
+                source_artifact_id TEXT REFERENCES run_artifacts(id) ON DELETE SET NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                UNIQUE (workspace_id, test_case_id, test_run_id)
+            );
+            INSERT INTO test_results (
+                id, workspace_id, index_identity, revision, test_case_id, test_run_id, status,
+                result_revision, duration_seconds, failure_text_hash, failure_summary,
+                source_artifact_id, metadata_json)
+            SELECT id, workspace_id, index_identity, revision, test_case_id, test_run_id, status,
+                   result_revision, duration_seconds, failure_text_hash, failure_summary,
+                   source_artifact_id, metadata_json
+            FROM test_results_current;
+            DROP TABLE test_results_current;
+            CREATE INDEX idx_test_results_workspace_revision
+                ON test_results(workspace_id, index_identity, revision);
+            CREATE INDEX idx_test_results_test_case_id ON test_results(test_case_id);
+            CREATE INDEX idx_test_results_test_run_id ON test_results(test_run_id);
+            """);
+        Execute(connection, "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '4');");
     }
 
     private static void SeedReferencingRows(SqliteConnection connection)

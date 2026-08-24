@@ -75,20 +75,26 @@ public sealed partial class ContinuousTestStore
                 completion.CurrentRevision,
                 StringComparison.Ordinal);
 
-            foreach (ContinuousTestResult result in completion.Results)
+            ContinuousTestResult[] results = completion.Results.ToArray();
+            foreach (ContinuousTestResult result in results)
             {
                 if (!string.Equals(result.WorkspaceId, completion.WorkspaceId, StringComparison.Ordinal))
                     throw new ArgumentException("result workspace must match completion workspace", nameof(completion));
                 if (!string.Equals(result.TestRunId, completion.TestRunId, StringComparison.Ordinal))
                     throw new ArgumentException("result run must match completion run", nameof(completion));
 
-                UpsertContinuousTestResult(result);
-                if (commitsFresh)
-                    CommitFreshResult(completion, result);
-                else
-                    PreserveStaleResult(completion, result);
+                UpsertContinuousTestResult(result, DateTimeText(completion.EndedAt));
+            }
 
-                UpdateFlakinessScore(completion.WorkspaceId, result.TestCaseId);
+            IReadOnlyDictionary<string, ContinuousTestFlakinessScore> scores =
+                ScoreContinuousTestFlakinessBatch(completion.WorkspaceId, results);
+            foreach (ContinuousTestResult result in results)
+            {
+                ContinuousTestFlakinessScore score = scores[result.TestCaseId];
+                if (commitsFresh)
+                    CommitFreshResult(completion, result, score);
+                else
+                    PreserveStaleResult(completion, result, score);
             }
 
             MarkUnreportedRunCasesStale(completion);
@@ -202,17 +208,17 @@ public sealed partial class ContinuousTestStore
         command.ExecuteNonQuery();
     }
 
-    private void UpsertContinuousTestResult(ContinuousTestResult result)
+    private void UpsertContinuousTestResult(ContinuousTestResult result, object observedAt)
     {
         using var command = _write!.CreateCommand();
         command.CommandText = """
             INSERT INTO test_results (
                 id, workspace_id, index_identity, revision, test_case_id, test_run_id, status,
-                duration_seconds, source_artifact_id, metadata_json, result_revision, failure_summary
+                duration_seconds, source_artifact_id, metadata_json, result_revision, failure_summary, observed_at
             )
             VALUES (
                 $id, $ws, $identity, $revision, $case, $run, $status,
-                $duration, $artifact, $metadata, $resultRevision, $failure
+                $duration, $artifact, $metadata, $resultRevision, $failure, $observedAt
             )
             ON CONFLICT(workspace_id, test_case_id, test_run_id) DO UPDATE SET
                 id = excluded.id,
@@ -223,7 +229,8 @@ public sealed partial class ContinuousTestStore
                 source_artifact_id = excluded.source_artifact_id,
                 metadata_json = excluded.metadata_json,
                 result_revision = excluded.result_revision,
-                failure_summary = excluded.failure_summary
+                failure_summary = excluded.failure_summary,
+                observed_at = excluded.observed_at
             ON CONFLICT(id) DO UPDATE SET
                 workspace_id = excluded.workspace_id,
                 index_identity = excluded.index_identity,
@@ -235,7 +242,8 @@ public sealed partial class ContinuousTestStore
                 source_artifact_id = excluded.source_artifact_id,
                 metadata_json = excluded.metadata_json,
                 result_revision = excluded.result_revision,
-                failure_summary = excluded.failure_summary;
+                failure_summary = excluded.failure_summary,
+                observed_at = excluded.observed_at;
             """;
         command.Parameters.AddWithValue("$id", result.Id);
         command.Parameters.AddWithValue("$ws", result.WorkspaceId);
@@ -249,20 +257,24 @@ public sealed partial class ContinuousTestStore
         command.Parameters.AddWithValue("$metadata", JsonText(result.Metadata));
         command.Parameters.AddWithValue("$resultRevision", result.ResultRevision);
         command.Parameters.AddWithValue("$failure", (object?)OneLine(result.FailureSummary) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$observedAt", observedAt);
         command.ExecuteNonQuery();
     }
 
-    private void CommitFreshResult(ContinuousTestRunCompletion completion, ContinuousTestResult result)
+    private void CommitFreshResult(
+        ContinuousTestRunCompletion completion,
+        ContinuousTestResult result,
+        ContinuousTestFlakinessScore score)
     {
         using var command = _write!.CreateCommand();
         command.CommandText = """
             INSERT INTO ct_test_states (
                 test_case_id, workspace_id, index_identity, revision, state, last_run_revision,
                 stale_since_revision, running_run_id, running_revision,
-                last_result_status, last_result_at, failure_summary, updated_at
+                last_result_status, last_result_at, failure_summary, flakiness_score, updated_at
             )
             SELECT id, workspace_id, $identity, $revision, $state, $lastRun, NULL, NULL, NULL, $status, $ended, $failure,
-                   strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                   $score, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             FROM test_cases
             WHERE workspace_id = $ws AND id = $id
             ON CONFLICT(test_case_id) DO UPDATE SET
@@ -277,6 +289,7 @@ public sealed partial class ContinuousTestStore
                 last_result_status = $status,
                 last_result_at = $ended,
                 failure_summary = $failure,
+                flakiness_score = $score,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
             """;
         command.Parameters.AddWithValue("$ws", completion.WorkspaceId);
@@ -288,20 +301,24 @@ public sealed partial class ContinuousTestStore
         command.Parameters.AddWithValue("$status", result.Status);
         command.Parameters.AddWithValue("$ended", DateTimeText(completion.EndedAt));
         command.Parameters.AddWithValue("$failure", (object?)OneLine(result.FailureSummary) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$score", score.FailureRate);
         command.ExecuteNonQuery();
     }
 
-    private void PreserveStaleResult(ContinuousTestRunCompletion completion, ContinuousTestResult result)
+    private void PreserveStaleResult(
+        ContinuousTestRunCompletion completion,
+        ContinuousTestResult result,
+        ContinuousTestFlakinessScore score)
     {
         using var command = _write!.CreateCommand();
         command.CommandText = """
             INSERT INTO ct_test_states (
                 test_case_id, workspace_id, index_identity, revision, state, stale_since_revision,
                 running_run_id, running_revision, last_result_status,
-                last_result_at, failure_summary, updated_at
+                last_result_at, failure_summary, flakiness_score, updated_at
             )
             SELECT id, workspace_id, $identity, $revision, 'stale', $current, NULL, NULL, $status, $ended, $failure,
-                   strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                   $score, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             FROM test_cases
             WHERE workspace_id = $ws AND id = $id
             ON CONFLICT(test_case_id) DO UPDATE SET
@@ -319,6 +336,7 @@ public sealed partial class ContinuousTestStore
                 last_result_status = $status,
                 last_result_at = $ended,
                 failure_summary = $failure,
+                flakiness_score = $score,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
             """;
         command.Parameters.AddWithValue("$ws", completion.WorkspaceId);
@@ -330,6 +348,7 @@ public sealed partial class ContinuousTestStore
         command.Parameters.AddWithValue("$status", result.Status);
         command.Parameters.AddWithValue("$ended", DateTimeText(completion.EndedAt));
         command.Parameters.AddWithValue("$failure", (object?)OneLine(result.FailureSummary) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$score", score.FailureRate);
         command.ExecuteNonQuery();
     }
 
@@ -352,52 +371,81 @@ public sealed partial class ContinuousTestStore
         command.ExecuteNonQuery();
     }
 
-    private void UpdateFlakinessScore(string workspaceId, string testCaseId)
-    {
-        ContinuousTestFlakinessScore score = ScoreContinuousTestFlakiness(workspaceId, testCaseId);
-        using var command = _write!.CreateCommand();
-        command.CommandText = """
-            UPDATE ct_test_states
-            SET flakiness_score = $score,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE workspace_id = $ws AND test_case_id = $id;
-            """;
-        command.Parameters.AddWithValue("$ws", workspaceId);
-        command.Parameters.AddWithValue("$id", testCaseId);
-        command.Parameters.AddWithValue("$score", score.FailureRate);
-        command.ExecuteNonQuery();
-    }
-
     private IReadOnlyList<ContinuousTestOutcome> RecentContinuousTestOutcomes(string workspaceId, string testCaseId)
     {
-        return WithRead<IReadOnlyList<ContinuousTestOutcome>>(
-            static () => [],
+        return RecentContinuousTestOutcomes(workspaceId, [testCaseId])
+            .GetValueOrDefault(testCaseId, []);
+    }
+
+    private IReadOnlyDictionary<string, ContinuousTestFlakinessScore> ScoreContinuousTestFlakinessBatch(
+        string workspaceId,
+        IReadOnlyCollection<ContinuousTestResult> results)
+    {
+        string[] testCaseIds = results
+            .Select(result => result.TestCaseId)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        IReadOnlyDictionary<string, IReadOnlyList<ContinuousTestOutcome>> histories =
+            RecentContinuousTestOutcomes(workspaceId, testCaseIds);
+        return testCaseIds.ToDictionary(
+            testCaseId => testCaseId,
+            testCaseId => ContinuousTestFlakiness.Score(histories.GetValueOrDefault(testCaseId, [])),
+            StringComparer.Ordinal);
+    }
+
+    private IReadOnlyDictionary<string, IReadOnlyList<ContinuousTestOutcome>> RecentContinuousTestOutcomes(
+        string workspaceId,
+        IReadOnlyCollection<string> testCaseIds)
+    {
+        string[] ids = testCaseIds
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (ids.Length == 0)
+            return new Dictionary<string, IReadOnlyList<ContinuousTestOutcome>>(StringComparer.Ordinal);
+
+        return WithRead<IReadOnlyDictionary<string, IReadOnlyList<ContinuousTestOutcome>>>(
+            static () => new Dictionary<string, IReadOnlyList<ContinuousTestOutcome>>(StringComparer.Ordinal),
             connection =>
             {
                 using var command = connection.CreateCommand();
-                command.CommandText = """
-                    SELECT r.status,
-                           coalesce(tr.ended_at, tr.started_at, '0001-01-01T00:00:00.0000000+00:00') AS observed_at
+                string[] parameters = ids
+                    .Select((_, index) => "$case" + index.ToString(CultureInfo.InvariantCulture))
+                    .ToArray();
+                command.CommandText = $$"""
+                    SELECT r.test_case_id, r.status, r.observed_at
                     FROM test_results r
-                    JOIN test_runs tr ON tr.id = r.test_run_id
-                    WHERE r.workspace_id = $ws AND r.test_case_id = $id
-                    ORDER BY observed_at DESC, r.id DESC
-                    LIMIT $limit;
+                    WHERE r.workspace_id = $ws
+                      AND r.test_case_id IN ({{string.Join(", ", parameters)}})
+                      AND (
+                          SELECT COUNT(*)
+                          FROM test_results newer
+                          WHERE newer.workspace_id = r.workspace_id
+                            AND newer.test_case_id = r.test_case_id
+                            AND (
+                                newer.observed_at > r.observed_at
+                                OR (newer.observed_at = r.observed_at AND newer.id >= r.id)
+                            )
+                      ) <= $limit;
                     """;
                 command.Parameters.AddWithValue("$ws", workspaceId);
-                command.Parameters.AddWithValue("$id", testCaseId);
                 command.Parameters.AddWithValue("$limit", ContinuousTestFlakiness.MaxHistory);
+                for (int index = 0; index < ids.Length; index++)
+                    command.Parameters.AddWithValue(parameters[index], ids[index]);
 
-                var outcomes = new List<ContinuousTestOutcome>();
+                var outcomes = ids.ToDictionary(
+                    testCaseId => testCaseId,
+                    _ => (IReadOnlyList<ContinuousTestOutcome>)new List<ContinuousTestOutcome>(),
+                    StringComparer.Ordinal);
                 using SqliteDataReader reader = command.ExecuteReader();
                 while (reader.Read())
                 {
-                    string status = reader.GetString(0);
+                    string testCaseId = reader.GetString(0);
+                    string status = reader.GetString(1);
                     if (ContinuousTestFlakiness.NormalizeStatus(status) is null)
                         continue;
-                    outcomes.Add(new ContinuousTestOutcome(
+                    ((List<ContinuousTestOutcome>)outcomes[testCaseId]).Add(new ContinuousTestOutcome(
                         status,
-                        DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture)));
+                        DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture)));
                 }
 
                 return outcomes;

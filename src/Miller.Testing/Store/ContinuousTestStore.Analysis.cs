@@ -766,14 +766,14 @@ public sealed partial class ContinuousTestStore
                     SELECT tr.test_case_id,
                            coalesce(tc.selector, tr.test_case_id) AS selector,
                            tr.status,
-                           coalesce(r.ended_at, r.started_at) AS observed_at
+                           tr.observed_at
                     FROM test_results tr
                     LEFT JOIN test_runs r ON r.id = tr.test_run_id
                     LEFT JOIN test_cases tc
                       ON tc.id = tr.test_case_id AND tc.workspace_id = tr.workspace_id
                     WHERE tr.workspace_id = $ws
                     ORDER BY tr.test_case_id,
-                             coalesce(julianday(coalesce(r.ended_at, r.started_at)), 0),
+                             tr.observed_at,
                              tr.id;
                     """;
                 command.Parameters.AddWithValue("$ws", workspaceId);

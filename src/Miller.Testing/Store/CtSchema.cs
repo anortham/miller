@@ -19,7 +19,7 @@ public static class CtSchema
     /// this class has always written, and <c>PRAGMA user_version</c>, which it did not write before
     /// version 2 and which therefore reads 0 on every file built by version 1.
     /// </summary>
-    public const int SchemaVersion = 4;
+    public const int SchemaVersion = 5;
     public const string DbFileName = "ct.db";
     public const string MillerDirectoryName = ".miller";
 
@@ -101,6 +101,7 @@ public static class CtSchema
             failure_summary TEXT,
             source_artifact_id TEXT REFERENCES run_artifacts(id) ON DELETE SET NULL,
             metadata_json TEXT NOT NULL DEFAULT '{}',
+            observed_at TEXT NOT NULL DEFAULT '0001-01-01T00:00:00.0000000+00:00',
             UNIQUE (workspace_id, test_case_id, test_run_id)
         );
 
@@ -448,6 +449,7 @@ public static class CtSchema
         if (version >= SchemaVersion)
         {
             Execute(connection, "CREATE INDEX IF NOT EXISTS idx_test_cases_workspace_project_source ON test_cases(workspace_id, project_path, source, selector, id);");
+            Execute(connection, "CREATE INDEX IF NOT EXISTS idx_test_results_workspace_case_observed ON test_results(workspace_id, test_case_id, observed_at DESC, id DESC, status);");
             return;
         }
 
@@ -459,6 +461,18 @@ public static class CtSchema
 
         Execute(connection, "CREATE INDEX IF NOT EXISTS idx_test_cases_workspace_project_source ON test_cases(workspace_id, project_path, source, selector, id);");
         BackfillProjectPaths(connection);
+        if (!HasColumn(connection, "test_results", "observed_at"))
+            Execute(connection, "ALTER TABLE test_results ADD COLUMN observed_at TEXT NOT NULL DEFAULT '0001-01-01T00:00:00.0000000+00:00';");
+
+        Execute(connection, """
+            UPDATE test_results
+            SET observed_at = coalesce(
+                (SELECT coalesce(ended_at, started_at)
+                 FROM test_runs
+                 WHERE test_runs.id = test_results.test_run_id),
+                '0001-01-01T00:00:00.0000000+00:00');
+            """);
+        Execute(connection, "CREATE INDEX IF NOT EXISTS idx_test_results_workspace_case_observed ON test_results(workspace_id, test_case_id, observed_at DESC, id DESC, status);");
         StampSchemaVersion(connection);
     }
 

@@ -13,10 +13,13 @@ public sealed class PerformanceBaselineObserverTests
     {
         int oneResult = CaptureCompletionStatements(1);
         int twoResults = CaptureCompletionStatements(2);
+        int threeResults = CaptureCompletionStatements(3);
 
-        Assert.Equal(6, oneResult);
-        Assert.Equal(10, twoResults);
-        Assert.Equal(oneResult + 4, twoResults);
+        Assert.Equal(5, oneResult);
+        Assert.Equal(7, twoResults);
+        Assert.Equal(9, threeResults);
+        Assert.Equal(oneResult + 2, twoResults);
+        Assert.Equal(twoResults + 2, threeResults);
     }
 
     private static int CaptureCompletionStatements(int resultCount)
