@@ -11,7 +11,9 @@ public sealed record CoverageArtifactImportRequest(
     string IndexIdentity,
     long Revision,
     string Parser = "auto",
-    string? ArtifactRoot = null);
+    string? ArtifactRoot = null,
+    string? RunId = null,
+    string? ProjectPath = null);
 
 public sealed record CoverageArtifactImportReport(
     string Kind,
@@ -48,18 +50,24 @@ public static class CoverageArtifactImporter
             ["coverage_spans"] = parsed.Files.Sum(file => file.LineHits.Count),
         };
 
+        var payload = new Dictionary<string, object?>
+        {
+            ["parser"] = parser,
+            ["sha256"] = artifactHash,
+            ["counts"] = counts,
+            ["diagnostics"] = Array.Empty<object>(),
+        };
+        if (!string.IsNullOrWhiteSpace(request.RunId))
+            payload["run_id"] = request.RunId;
+        if (!string.IsNullOrWhiteSpace(request.ProjectPath))
+            payload["project_path"] = Path.GetFullPath(request.ProjectPath);
+
         store.PutRunArtifact(new ContinuousTestRunArtifact(
             Id: artifactId,
             WorkspaceId: request.WorkspaceId,
             Kind: Kind,
             Path: relativePath,
-            Payload: new Dictionary<string, object?>
-            {
-                ["parser"] = parser,
-                ["sha256"] = artifactHash,
-                ["counts"] = counts,
-                ["diagnostics"] = Array.Empty<object>(),
-            }));
+            Payload: payload));
 
         foreach (ParsedCoverageArtifactFile parsedFile in parsed.Files)
         {

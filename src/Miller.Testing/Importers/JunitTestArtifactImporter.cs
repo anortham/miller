@@ -16,7 +16,8 @@ public sealed record JunitTestArtifactImportRequest(
     IReadOnlyDictionary<string, string>? TestCaseIdsBySelector = null,
     string? ArtifactRoot = null,
     string? CurrentRevision = null,
-    IReadOnlyList<string>? SelectedTestCaseIds = null);
+    IReadOnlyList<string>? SelectedTestCaseIds = null,
+    string? ProjectPath = null);
 
 public sealed record JunitTestArtifactImportReport(
     string Kind,
@@ -98,18 +99,23 @@ public static class JunitTestArtifactImporter
             counts["new_artifact_cases"] = resolvedCases.Count(row => !row.UsesExisting);
         }
 
+        var payload = new Dictionary<string, object?>
+        {
+            ["parser"] = parser,
+            ["sha256"] = artifactHash,
+            ["counts"] = counts,
+            ["diagnostics"] = Array.Empty<object>(),
+            ["run_id"] = runId,
+        };
+        if (!string.IsNullOrWhiteSpace(request.ProjectPath))
+            payload["project_path"] = Path.GetFullPath(request.ProjectPath);
+
         store.PutRunArtifact(new ContinuousTestRunArtifact(
             Id: artifactId,
             WorkspaceId: request.WorkspaceId,
             Kind: Kind,
             Path: relativePath,
-            Payload: new Dictionary<string, object?>
-            {
-                ["parser"] = parser,
-                ["sha256"] = artifactHash,
-                ["counts"] = counts,
-                ["diagnostics"] = Array.Empty<object>(),
-            }));
+            Payload: payload));
 
         foreach ((ParsedTestArtifactCase parsedCase, string testCaseId, bool usesExistingTestCase) in resolvedCases)
         {

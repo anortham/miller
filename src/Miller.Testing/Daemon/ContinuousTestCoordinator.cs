@@ -479,6 +479,16 @@ public sealed class ContinuousTestCoordinator
         ReapSupersededGenerations(workspace, activeGenerationId, ledger);
         DiskAccounting accounting = MeasureGenerationDisk(workspace);
         CommitMaintenance(workspace, ledger, accounting);
+        ContinuousTestHistoryPruneResult retention =
+            _store.PruneContinuousTestHistory(workspace.WorkspaceId, DateTimeOffset.UtcNow);
+        if (retention.DeletedRuns > 0 || retention.DeletedResults > 0 || retention.DeletedArtifacts > 0
+            || retention.LegacyUnlinkedArtifacts > 0)
+        {
+            _lifecycleLog?.Invoke(
+                $"ct_history_pruned runs={retention.DeletedRuns} results={retention.DeletedResults} "
+                + $"artifacts={retention.DeletedArtifacts} legacy_unlinked={retention.LegacyUnlinkedArtifacts} "
+                + $"page_count={retention.PageCount} freelist_count={retention.FreelistCount}");
+        }
     }
 
     private void ReapSupersededGenerations(
@@ -869,7 +879,8 @@ public sealed class ContinuousTestCoordinator
                     TestCaseIdsBySelector: TestCaseIdsByArtifactSelector(request.Workspace.WorkspaceId),
                     SelectedTestCaseIds: request.TestCaseIds,
                     ArtifactRoot: request.Workspace.BuildOutputRoot,
-                    CurrentRevision: currentRevision));
+                    CurrentRevision: currentRevision,
+                    ProjectPath: request.Workspace.ProjectPath));
             if (report.Counts.TryGetValue("selected_residue", out int selectedResidue)
                 && selectedResidue > 0)
             {
@@ -967,7 +978,9 @@ public sealed class ContinuousTestCoordinator
                         IndexIdentity: request.IndexIdentity,
                         Revision: ParseRevision(request.CurrentRevision),
                         Parser: artifact.Parser,
-                        ArtifactRoot: artifact.ArtifactRoot ?? request.Workspace.BuildOutputRoot));
+                        ArtifactRoot: artifact.ArtifactRoot ?? request.Workspace.BuildOutputRoot,
+                        RunId: providerResult.RunId,
+                        ProjectPath: request.Workspace.ProjectPath));
             }
             catch (Exception ex) when (
                 ex is ArgumentException or IOException or UnauthorizedAccessException or TestArtifactParseException)

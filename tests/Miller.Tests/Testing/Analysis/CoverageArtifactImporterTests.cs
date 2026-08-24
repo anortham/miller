@@ -77,6 +77,21 @@ public sealed class CoverageArtifactImporterTests : IDisposable
     }
 
     [Fact]
+    public void Import_stamps_run_and_project_payload_keys()
+    {
+        using var store = new ContinuousTestStore(_dbPath);
+        var root = WorkspaceRoot();
+        var artifact = WriteArtifact(root, Path.Combine("artifacts", "payload.info"), "SF:src/service.cs\nDA:1,1\nend_of_record\n");
+        string project = Path.Combine(root, "App.Tests.csproj");
+
+        CoverageArtifactImporter.Import(store, Request(root, artifact, runId: "run:payload", projectPath: project));
+
+        IReadOnlyDictionary<string, object?> payload = Assert.Single(store.ListRunArtifacts(Workspace)).Payload;
+        Assert.Equal("run:payload", payload["run_id"]);
+        Assert.Equal(Path.GetFullPath(project), payload["project_path"]);
+    }
+
+    [Fact]
     public void Import_is_idempotent_by_artifact_hash_and_uses_artifact_hash_for_unmapped_files()
     {
         using var store = new ContinuousTestStore(_dbPath);
@@ -222,13 +237,19 @@ public sealed class CoverageArtifactImporterTests : IDisposable
         return root;
     }
 
-    private static CoverageArtifactImportRequest Request(string root, string artifact) =>
+    private static CoverageArtifactImportRequest Request(
+        string root,
+        string artifact,
+        string? runId = null,
+        string? projectPath = null) =>
         new(
             WorkspaceId: Workspace,
             WorkspaceRoot: root,
             ArtifactPath: artifact,
             IndexIdentity: Fresh.IndexIdentity,
-            Revision: Fresh.Revision);
+            Revision: Fresh.Revision,
+            RunId: runId,
+            ProjectPath: projectPath);
 
     private static string WriteArtifact(string root, string relativePath, string content)
     {

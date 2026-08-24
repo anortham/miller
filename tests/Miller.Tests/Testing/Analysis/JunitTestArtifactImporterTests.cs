@@ -83,6 +83,21 @@ public sealed class JunitTestArtifactImporterTests : IDisposable
     }
 
     [Fact]
+    public void Import_stamps_run_and_project_payload_keys()
+    {
+        using var store = new ContinuousTestStore(_dbPath);
+        var root = WorkspaceRoot();
+        var artifact = WriteSingleJunitArtifactAt(root, Path.Combine("artifacts", "payload.xml"));
+        string project = Path.Combine(root, "App.Tests.csproj");
+
+        JunitTestArtifactImporter.Import(store, Request(root, artifact, runId: "run:payload", projectPath: project));
+
+        IReadOnlyDictionary<string, object?> payload = Assert.Single(store.ListRunArtifacts(Workspace)).Payload;
+        Assert.Equal("run:payload", payload["run_id"]);
+        Assert.Equal(Path.GetFullPath(project), payload["project_path"]);
+    }
+
+    [Fact]
     public void Import_is_idempotent_by_artifact_hash()
     {
         using var store = new ContinuousTestStore(_dbPath);
@@ -490,7 +505,8 @@ public sealed class JunitTestArtifactImporterTests : IDisposable
         string artifact,
         string? runId = null,
         IReadOnlyDictionary<string, string>? testCaseIdsBySelector = null,
-        IReadOnlyList<string>? selectedTestCaseIds = null) =>
+        IReadOnlyList<string>? selectedTestCaseIds = null,
+        string? projectPath = null) =>
         new(
             WorkspaceId: Workspace,
             WorkspaceRoot: root,
@@ -500,7 +516,8 @@ public sealed class JunitTestArtifactImporterTests : IDisposable
             Revision: Fresh.Revision,
             RunId: runId,
             TestCaseIdsBySelector: testCaseIdsBySelector,
-            SelectedTestCaseIds: selectedTestCaseIds);
+            SelectedTestCaseIds: selectedTestCaseIds,
+            ProjectPath: projectPath);
 
     private static string WriteJunitArtifact(string root) =>
         WriteJunitArtifactAt(root, Path.Combine("artifacts", "junit.xml"));
