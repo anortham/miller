@@ -20,7 +20,8 @@ const ROUTING_CANARIES = [
   { tool: 'impact', anchor: 'impacted symbols plus likely tests' },
   { tool: 'edit', anchor: 'diff preview and match proof' },
   { tool: 'patterns', anchor: 'code-shape facts' },
-  { tool: 'content', anchor: 'without full-file reads' },
+  { tool: 'content', anchor: 'large text' },
+  { tool: 'tests', anchor: 'continuous-test status' },
   { tool: 'workspace', anchor: 'semantic-broker health' },
 ];
 

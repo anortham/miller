@@ -20,7 +20,8 @@ Miller serves a fresh, structured index of this workspace's code. One Miller cal
 - impact — before a refactor or after edits: impacted symbols plus likely tests, from a symbol, file, or git diff. With no args it reads the working-tree diff.
 - edit — index-aware replace/rename/body-rewrite with a diff preview and match proof.
 - patterns — pre-extracted code-shape facts (routes, config keys, doc structure) across 38 languages.
-- content — import then search/read logs, CI output, web markdown, and other large text without full-file reads.
+- content — import then search/read logs, CI output, web markdown, and large text.
 - workspace — index lifecycle and semantic-broker health: status, refresh, health, list, onboarding, dashboard.
+- tests — continuous-test status (cheap, starts nothing); start is explicit; enable is opt-in.
 
 Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
