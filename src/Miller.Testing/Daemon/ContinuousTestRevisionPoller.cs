@@ -117,6 +117,7 @@ public sealed record ContinuousTestRevisionPollResult(
 public sealed class ContinuousTestRevisionPoller
 {
     public const string DebounceEnvironmentVariable = "MILLER_CT_DEBOUNCE";
+    private const int MaxRevisionReconcileAttempts = 3;
 
     /// <summary>
     /// Default quiet period between an observed change and its automatic run. The daemon polls the
@@ -215,8 +216,40 @@ public sealed class ContinuousTestRevisionPoller
             return Result(request.WorkspaceId, freshness, observation.Status, 0, "status-only");
         }
 
-        ContinuousTestImpactResult? impact = await ResolveImpactAsync(request, freshness, cancellationToken)
-            .ConfigureAwait(false);
+        ContinuousTestImpactResult? impact = null;
+        for (int attempt = 0; attempt < MaxRevisionReconcileAttempts; attempt++)
+        {
+            impact = await ResolveImpactAsync(request, freshness, cancellationToken)
+                .ConfigureAwait(false);
+            if (!string.Equals(impact?.Reason, "moving_cursor", StringComparison.Ordinal)
+                || attempt == MaxRevisionReconcileAttempts - 1)
+            {
+                break;
+            }
+
+            observation = await _source
+                .RefreshAsync(request.WorkspaceId, request.WorkspaceRoot, cancellationToken)
+                .ConfigureAwait(false);
+            if (observation is null)
+                return Result(request.WorkspaceId, null, "missing", 0, "missing_revision");
+            if (!string.Equals(observation.WorkspaceId, request.WorkspaceId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"revision source returned workspace '{observation.WorkspaceId}' for requested workspace '{request.WorkspaceId}'");
+            }
+
+            if (observation.Freshness is not { } retriedFreshness || !observation.IndexFresh)
+                return Result(request.WorkspaceId, observation.Freshness, observation.Status, 0, "degraded");
+            if (observation.Rebuild || IdentityChanged(retriedFreshness))
+            {
+                if (_lastObserved != retriedFreshness)
+                    request.OnRebuild?.Invoke(retriedFreshness);
+                _lastObserved = retriedFreshness;
+                return Result(request.WorkspaceId, retriedFreshness, observation.Status, 0, "rebuild");
+            }
+
+            freshness = retriedFreshness;
+        }
         ContinuousTestImpactOutcome outcome = impact?.Outcome ?? ContinuousTestImpactOutcome.Unavailable;
         if (outcome == ContinuousTestImpactOutcome.Unavailable)
         {
@@ -410,21 +443,11 @@ public sealed class MillerArtifactRevisionSource : IContinuousTestRevisionSource
 /// </summary>
 public sealed class MillerFactImpactSource : IContinuousTestImpactSource
 {
-    private const int MaxSessionDriftRetries = 2;
     private readonly Func<string, ICtFactSource>? _openFacts;
-    private readonly Func<string, WorkspaceReadHandle>? _openSession;
 
     public MillerFactImpactSource(Func<string, ICtFactSource>? openFacts = null)
     {
         _openFacts = openFacts;
-    }
-
-    internal MillerFactImpactSource(
-        Func<string, ICtFactSource>? openFacts,
-        Func<string, WorkspaceReadHandle>? openSession)
-    {
-        _openFacts = openFacts;
-        _openSession = openSession;
     }
 
     public Task<ContinuousTestImpactResult?> ImpactAsync(
@@ -452,17 +475,7 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
             });
         }
 
-        for (int attempt = 0; attempt <= MaxSessionDriftRetries; attempt++)
-        {
-            ContinuousTestImpactResult result = ReadAttempt(workspaceRoot, current, fromKey);
-            if (!string.Equals(result.Reason, "moving_cursor", StringComparison.Ordinal)
-                || attempt == MaxSessionDriftRetries)
-            {
-                return Task.FromResult<ContinuousTestImpactResult?>(result);
-            }
-        }
-
-        throw new InvalidOperationException("unreachable cursor drift retry state");
+        return Task.FromResult<ContinuousTestImpactResult?>(ReadAttempt(workspaceRoot, current, fromKey));
     }
 
     private ContinuousTestImpactResult ReadAttempt(
@@ -473,8 +486,10 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
         string dbPath = Path.Combine(workspaceRoot, CtSchema.MillerDirectoryName, "symbols.db");
         try
         {
-            using WorkspaceReadHandle session = _openSession?.Invoke(workspaceRoot)
-                ?? WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId: null);
+            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                dbPath,
+                workspaceRoot,
+                workspaceId: null);
             CtIndexCursor cursor = CtIndexCursor.FromSnapshot(session.Snapshot);
             if (!string.Equals(cursor.IndexIdentity, current.IndexIdentity, StringComparison.Ordinal)
                 || cursor.Revision != current.Revision)

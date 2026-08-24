@@ -4,7 +4,7 @@ namespace Miller.Testing;
 
 public sealed partial class ContinuousTestStore
 {
-    public CtFreshnessKey? ReadLastReconciledCursor(string workspaceId)
+    internal CtFreshnessKey? ReadLastReconciledCursor(string workspaceId)
     {
         if (string.IsNullOrEmpty(workspaceId))
             throw new ArgumentException("must not be empty", nameof(workspaceId));
@@ -32,7 +32,7 @@ public sealed partial class ContinuousTestStore
             });
     }
 
-    public void SaveLastReconciledCursor(string workspaceId, CtFreshnessKey cursor)
+    internal void SaveLastReconciledCursor(string workspaceId, CtFreshnessKey cursor)
     {
         if (string.IsNullOrEmpty(workspaceId))
             throw new ArgumentException("must not be empty", nameof(workspaceId));

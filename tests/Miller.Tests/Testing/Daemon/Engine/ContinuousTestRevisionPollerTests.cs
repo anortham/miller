@@ -1,5 +1,4 @@
 using Microsoft.Data.Sqlite;
-using Miller.Indexing.Reads;
 using Miller.Indexing.Testing;
 using Miller.Testing;
 using Miller.Tests.Indexing.Resolution;
@@ -93,45 +92,70 @@ public sealed class ContinuousTestRevisionPollerTests
     }
 
     [Fact]
-    public async Task Moving_cursor_retries_a_bounded_number_of_full_session_reads()
+    public async Task Moving_cursor_reprobes_and_completes_the_forward_interval_in_one_poll()
     {
-        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
-        string root = CreateWorkspaceRoot(fixture, out string dbPath);
+        string root = Directory.CreateTempSubdirectory("miller-ct-forward-drift-").FullName;
         try
         {
-            Execute(
-                dbPath,
-                "CREATE TABLE revision_file_changes (path TEXT, revision_id INTEGER, change_kind TEXT);");
-            int opens = 0;
-            WorkspaceReadHandle OpenSession(string workspaceRoot)
-            {
-                opens++;
-                WorkspaceReadHandle handle = WorkspaceReadSessionFactory.Open(
-                    dbPath,
-                    workspaceRoot,
-                    workspaceId: null,
-                    storeEnabled: false);
-                if (opens == 1)
-                    Execute(dbPath, "INSERT INTO extraction_revisions VALUES (2);");
-                return handle;
-            }
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            store.SaveLastReconciledCursor(
+                EngineTestSupport.WorkspaceId,
+                new CtFreshnessKey(EngineTestSupport.Identity, 1));
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(Observation(2));
+            source.Observations.Enqueue(Observation(3));
+            var impact = new ForwardMovingImpactSource();
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(source, impact, cursorStore: store);
 
-            var source = new MillerFactImpactSource(null, OpenSession);
-            var current = new CtFreshnessKey("ctgen1:artifact:art-1:blake3", 1);
-            ContinuousTestImpactResult? result = await source.ImpactAsync(
-                root,
-                current,
-                new CtFreshnessKey(current.IndexIdentity, 0),
+            ContinuousTestRevisionPollResult result = await poller.PollAsync(
+                Request(workspace, enqueuer, armed: false),
                 TestContext.Current.CancellationToken);
 
-            Assert.NotNull(result);
-            Assert.Equal(ContinuousTestImpactOutcome.Unavailable, result!.Outcome);
-            Assert.Equal("moving_cursor", result.Reason);
-            Assert.Equal(3, opens);
+            ContinuousTestDaemonChange change = Assert.Single(enqueuer.Changes);
+            Assert.Equal("enqueued", result.Reason);
+            Assert.Equal(2, source.RefreshCount);
+            Assert.Equal(2, impact.Calls);
+            Assert.Equal(3, change.DeltaToRevision);
+            Assert.Equal(
+                new CtFreshnessKey(EngineTestSupport.Identity, 3),
+                store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Moving_cursor_reconciliation_stops_after_three_total_attempts()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-drift-bound-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            var persisted = new CtFreshnessKey(EngineTestSupport.Identity, 1);
+            store.SaveLastReconciledCursor(EngineTestSupport.WorkspaceId, persisted);
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(Observation(2));
+            var impact = new AlwaysMovingImpactSource();
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(source, impact, cursorStore: store);
+
+            ContinuousTestRevisionPollResult result = await poller.PollAsync(
+                Request(workspace, enqueuer, armed: false),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("unavailable_delta", result.Reason);
+            Assert.Empty(enqueuer.Changes);
+            Assert.Equal(3, source.RefreshCount);
+            Assert.Equal(3, impact.Calls);
+            Assert.Equal(persisted, store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+        }
+        finally
+        {
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
     }
@@ -571,4 +595,58 @@ public sealed class ContinuousTestRevisionPollerTests
             ],
             enqueuer,
             EnqueueArmed: armed);
+
+    private sealed class ForwardMovingImpactSource : IContinuousTestImpactSource
+    {
+        public int Calls { get; private set; }
+
+        public Task<ContinuousTestImpactResult?> ImpactAsync(
+            string workspaceRoot,
+            CtFreshnessKey current,
+            CtFreshnessKey? from,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Calls++;
+            if (Calls == 1)
+            {
+                return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult("", [], [], [])
+                {
+                    Outcome = ContinuousTestImpactOutcome.Unavailable,
+                    Reason = "moving_cursor",
+                });
+            }
+
+            return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult(
+                "",
+                ["src/App.cs"],
+                [],
+                [])
+            {
+                Outcome = ContinuousTestImpactOutcome.Changed,
+                FromRevision = from?.Revision,
+                ToRevision = current.Revision,
+            });
+        }
+    }
+
+    private sealed class AlwaysMovingImpactSource : IContinuousTestImpactSource
+    {
+        public int Calls { get; private set; }
+
+        public Task<ContinuousTestImpactResult?> ImpactAsync(
+            string workspaceRoot,
+            CtFreshnessKey current,
+            CtFreshnessKey? from,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Calls++;
+            return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult("", [], [], [])
+            {
+                Outcome = ContinuousTestImpactOutcome.Unavailable,
+                Reason = "moving_cursor",
+            });
+        }
+    }
 }
