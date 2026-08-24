@@ -202,7 +202,7 @@
 **Acceptance criteria:**
 - [x] The populated parity fixture uses one write connection instead of about 78.
 - [x] The family snapshot test still proves its lazy slice survives the attempted mutation without a 30-second wait.
-- [ ] Focused Linux and Windows timings are recorded before and after.
+- [x] Focused Linux and Windows timings are recorded before and after.
 - [x] Worker-scope verification passes and changes are handed to the lead for review.
 
 ### Task 6: Batch failure-page seeding
@@ -229,7 +229,7 @@
 **Acceptance criteria:**
 - [x] The five measured tests retain identical paging/render/MCP behavior.
 - [x] Writer boundaries fall from 630 to 5 for the fixed workload.
-- [ ] Focused Linux and Windows timings are recorded before and after.
+- [x] Focused Linux and Windows timings are recorded before and after.
 - [x] Worker-scope verification passes and changes are handed to the lead for review.
 
 ### Task 7: Record closure evidence
@@ -255,7 +255,29 @@
 **Approach:** Status every finding fixed/deferred/open. Do not repeat the prior claim that none remain unless every listed gate passes on the final SHA.
 
 **Acceptance criteria:**
-- [ ] Every newly discovered Windows finding has a status and fixed SHA/file evidence.
-- [ ] Before/after timings use the same Windows guest workload and distinguish hard gates from report-only metrics.
-- [ ] The document names any release blocker that remains.
-- [ ] Worker-scope verification passes and changes are committed after lead review.
+- [x] Every newly discovered Windows finding has a status and fixed SHA/file evidence.
+- [x] Before/after timings use the same Windows guest workload and distinguish hard gates from report-only metrics.
+- [x] The document names any release blocker that remains.
+- [x] Worker-scope verification passes and changes are committed after lead review.
+
+#### Task 7 closure verification ledger (2026-08-24)
+
+The Windows rows use the same local Windows NTFS guest, `win-test` clone, suite commands, and final source
+`933fc39dab683ac1e105ee8b083a1fd88ab9f4fe`. Counts and zero failures are hard gates; elapsed time is report-only.
+
+| Invariant | Exact command/scope | Commit | Result | Evidence class |
+| --- | --- | --- | --- | --- |
+| Windows Release build | `win-test run miller -- dotnet build Miller.slnx -c Release` | `933fc39d` | PASS, 0 warnings / 0 errors | hard gate |
+| Original focused Windows regressions | Cache maintenance/janitor focused classes | `933fc39d` | PASS, `19 passed / 1 expected skip / 0 failed` | hard gate |
+| Windows fast suite | `win-test run miller -- powershell -File scripts/test.ps1` | `933fc39d` | PASS, `8,326 passed / 25 skipped / 0 failed`; `538s` wrapper | counts hard; time report-only |
+| Windows Scale suite | `win-test run miller -- powershell -File scripts/test.ps1 scale` | `933fc39d` | PASS, `198 passed / 13 skipped / 0 failed` | hard gate |
+| Linux Release build | `dotnet build Miller.slnx -c Release` | `933fc39d` | PASS, 0 warnings / 0 errors | hard gate |
+| Linux fast suite | `scripts/test.sh` | `933fc39d` | PASS, `8,342 passed / 9 skipped / 0 failed` | hard gate |
+| Linux Scale suite | `scripts/test.sh scale` | `933fc39d` | PASS, `195 passed / 16 skipped / 0 failed` | hard gate |
+| Plugin suite | `scripts/test-plugin.sh` | `933fc39d` | PASS, `49 passed / 0 failed` | hard gate |
+| Secret scan | `gitleaks detect --source . --no-banner --log-opts=HEAD` | `933fc39d` | PASS, no leaks | hard gate |
+| Dependency scan | `dotnet list Miller.slnx package --vulnerable --include-transitive` | `933fc39d` | PASS, no vulnerable packages | hard gate |
+| Documentation/source hygiene | `git diff --check`; `cmp -s CLAUDE.md AGENTS.md` | working tree | PASS, clean | hard gate |
+
+No code, release version, tag, or publish remains in this task. The final unchecked criterion is intentionally
+owned by the lead: commit these reviewed documentation edits before declaring the task complete.

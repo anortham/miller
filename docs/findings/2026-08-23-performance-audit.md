@@ -337,3 +337,51 @@ baseline evidence; they are not current-status claims. Every finding is fixed, w
 | Impact/Context repeated graph detail and bounded-slice reads | FIXED | `1e4869db`, `14ca699c` | Shared scratch/detail batching and lazy indexed point slices preserve exact output hashes (`e882...2072`, `b991...e9012`); interleaved ten-run p95 improved Context `1534.501`→`1458.401` ms and Impact `3581.362`→`2542.346` ms. |
 | Final live schema migration and adopted-family routing corrections | FIXED | `c5c9b09a`, `ceca0003` | Write paths migrate schema before reads; adopted-family routing performs zero local writes; focused coverage is `76 + 17` tests. |
 | Branch and live CT closure gates | FIXED | `ceca0003` | Release build: 0 warnings/errors. `scripts/test.sh all`: fast `8,372 passed / 9 skipped / 0 failed`; Scale `162 passed / 16 skipped / 0 failed`. Final foreground CT run was green at revision `40035` (`8,366` selected, stale `0`); daemon ended stopped with no provider and budget null. Comparable idle sample: `309` ticks / `3.09` CPU-s over 60 s, down from Task 5 `447` and original `708`; final state restored stopped/green/stale0. |
+
+## Windows release-gate closure (2026-08-24)
+
+This closure was measured on the same local Windows NTFS guest through `win-test`, with the final source at
+`933fc39dab683ac1e105ee8b083a1fd88ab9f4fe` on `fix/windows-release-hardening`. Timings below are report-only;
+the hard gates are build/test correctness, fast/Scale classification, security checks, and clean-tree checks.
+No release tag, GitHub release, or publish occurred.
+
+| Finding | Status | Fixed in | Evidence |
+| --- | --- | --- | --- |
+| Cache-debt paths persisted with Windows backslashes | FIXED | `771426b3`; `src/Miller.Testing/Daemon/ContinuousTestCoordinator.cs` | `RunMaintenanceTail` normalizes both removed paths and debts to `/`; the original Windows path assertions pass. |
+| Janitor fixtures counted control-marker bytes and assumed an unavailable Windows symlink | FIXED | `771426b3`; `tests/Miller.Tests/Testing/Daemon/Engine/CtBuildCacheJanitorTests.cs` | Zero-byte markers keep production byte accounting intact; foreign-path and symlink behaviors are separate, with the symlink case explicitly skipped when Windows cannot create one. |
+| Structural-fact fixtures paid one SQLite write boundary per synthetic row | FIXED | `771426b3`; `tests/Miller.Tests/Indexing/JulieDbFixture.cs`, `MarkerSearchTests.cs`, `MetricSnapshotAggregatesTests.cs` | One batch connection/transaction preserves reader-visible rows and removes the three Windows hot-test setup loops. |
+| Measured subprocess/allocation tests leaked into the default fast suite | FIXED | `771426b3`; Scale traits in `ContinuousTestStoreTests.cs`, `SharedSemanticBrokerConnectionFactoryTests.cs`, `CtDaemonLauncherTests.cs`, and `CliDispatchTests.cs` | Fast excludes the assigned cases; Scale discovers them without removing unrelated pure CLI tests. |
+| Bounded-fact parity fixtures opened about 78 write connections | FIXED | `933fc39d`; `tests/Miller.Tests/Indexing/Resolution/ResolutionStoreFixture.cs`, `BoundedRevisionFactCacheTests.cs` | One explicit fixture transaction is guarded by a one-write-connection test; production loaders were unchanged. |
+| Family snapshot lock probe waited for SQLite's default timeout | FIXED | `933fc39d`; `tests/Miller.Tests/Indexing/FamilyStoreReadSessionTests.cs` | The deliberate conflicting delete uses `PRAGMA busy_timeout=0` and still proves the lazy slice reads its original snapshot. |
+| Failure-page fixtures created 630 writer boundaries for five measured tests | FIXED | `933fc39d`; `tests/Miller.Tests/Server/TestsToolTests.cs` | `SeedCases` wraps the real store APIs in one outer transaction per test, reducing the fixed workload to five outer transactions while preserving paging behavior. |
+
+No newly discovered Windows finding is deferred or open. The remaining release decision is procedural: the lead
+must reconcile this branch with `main`, then obtain explicit approval before pushing/tagging/publishing a patch.
+
+### Same-guest before/after evidence
+
+| Scope | Before | After | Classification |
+| --- | ---: | ---: | --- |
+| Full Windows fast suite | `8,352 passed / 24 skipped / 5 failed`, about 10m instrumented; `569s` clean wrapper | `8,326 passed / 25 skipped / 0 failed`, `8m50s` test; `538s` wrapper | Counts are hard gates; wall time is report-only. |
+| `MarkerSearch` marker filter | `105.02s` | `232ms` | Report-only timing; both runs used the same guest workload. |
+| `MarkerSearch` path filter | `99.53s` | `156ms` | Report-only timing; both runs used the same guest workload. |
+| `MetricSnapshot` marker counts | `91.02s` | `450ms` | Report-only timing; both runs used the same guest workload. |
+| Bounded fact parity | `54.80s` under full-suite contention (`9s` isolated) | `1.41s` | Report-only timing; focused correctness is a hard gate. |
+| Family snapshot lazy slice | `31.11s` isolated | `2.57s` | Report-only timing; lock-refusal/snapshot behavior is a hard gate. |
+| Failure paging cases | `36.03–49.53s` under contention (about `8s` isolated) | `0.57–0.65s` | Report-only timing; paging assertions are hard gates. |
+
+### Release-gate ledger
+
+| Gate | Result | Evidence class |
+| --- | --- | --- |
+| Windows Release build | PASS, 0 warnings / 0 errors | hard gate |
+| Original focused Windows regressions | PASS, `19 passed / 1 expected skip / 0 failed` | hard gate |
+| Windows fast suite | PASS, `8,326 passed / 25 skipped / 0 failed` | hard gate; wall time report-only |
+| Windows Scale suite | PASS, `198 passed / 13 skipped / 0 failed` | hard gate |
+| Linux Release build | PASS, 0 warnings / 0 errors | hard gate |
+| Linux fast suite | PASS, `8,342 passed / 9 skipped / 0 failed` | hard gate |
+| Linux Scale suite | PASS, `195 passed / 16 skipped / 0 failed` | hard gate |
+| Plugin suite | PASS, `49 passed / 0 failed` | hard gate |
+| Gitleaks | PASS, no leaks | hard gate |
+| Vulnerable dependency scan | PASS, no vulnerable packages | hard gate |
+| `git diff --check` and `cmp -s CLAUDE.md AGENTS.md` | PASS, clean | hard gate |
