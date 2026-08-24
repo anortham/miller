@@ -75,6 +75,8 @@ public sealed class CtStickyUnavailableDeltaTests
     public async Task A_sticky_unavailable_delta_stops_the_four_hertz_loop_and_names_the_reason()
     {
         string root = Directory.CreateTempSubdirectory("miller-ct-sticky-").FullName;
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot>? run = null;
         try
         {
             var source = new ScriptedRevisionSource();
@@ -90,8 +92,8 @@ public sealed class CtStickyUnavailableDeltaTests
             };
             var enqueuer = new RecordingEnqueuer();
             var reasons = new List<string>();
-            using var cts = new CancellationTokenSource();
-            Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            var statusPublished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            run = ContinuousTestDaemonHost.RunAsync(
                 root,
                 new ContinuousTestDaemonHostOptions
                 {
@@ -101,15 +103,19 @@ public sealed class CtStickyUnavailableDeltaTests
                     Enqueuer = enqueuer,
                     Poller = new ContinuousTestRevisionPoller(source, impact),
                     PollInterval = TimeSpan.FromMilliseconds(1),
-                    StatusWriter = (_, reason) => { lock (reasons) reasons.Add(reason); },
+                    StatusWriter = (_, reason) =>
+                    {
+                        lock (reasons) reasons.Add(reason);
+                        if (reason.Contains("impact unavailable", StringComparison.Ordinal)
+                            && reason.Contains("impact_truncated", StringComparison.Ordinal))
+                            statusPublished.TrySetResult();
+                    },
                 },
                 cts.Token);
 
-            // Long enough that an unbacked-off loop polls many times over the limit — the tolerated
-            // streak is two seconds of production ticks, and the backoff that follows is five.
-            await Task.Delay(1500, TestContext.Current.CancellationToken);
-            await cts.CancelAsync();
-            try { await run; } catch (OperationCanceledException) { }
+            await statusPublished.Task.WaitAsync(
+                TimeSpan.FromSeconds(30),
+                TestContext.Current.CancellationToken);
 
             Assert.Empty(enqueuer.Changes);
             Assert.InRange(
@@ -127,6 +133,12 @@ public sealed class CtStickyUnavailableDeltaTests
         }
         finally
         {
+            await cts.CancelAsync();
+            if (run is not null)
+            {
+                try { await run; } catch (OperationCanceledException) { }
+            }
+
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
     }
