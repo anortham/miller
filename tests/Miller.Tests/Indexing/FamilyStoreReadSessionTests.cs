@@ -396,14 +396,19 @@ public sealed class FamilyStoreReadSessionTests
                 DataSource = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db"),
                 Pooling = false,
             }.ToString());
+            connection.DefaultTimeout = 1;
             connection.Open();
+            using (SqliteCommand busy = connection.CreateCommand())
+            {
+                busy.CommandText = "PRAGMA busy_timeout=0;";
+                busy.ExecuteNonQuery();
+            }
             using SqliteCommand command = connection.CreateCommand();
             command.CommandText = "DELETE FROM symbols;";
             command.ExecuteNonQuery();
         }
         catch (SqliteException)
         {
-            // The read lock refused the writer. That is the pin doing its job, not a test failure.
         }
     }
 

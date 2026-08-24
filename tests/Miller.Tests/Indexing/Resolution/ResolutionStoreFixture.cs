@@ -19,12 +19,15 @@ internal sealed class ResolutionStoreFixture : IDisposable
 
     public long Generation { get; private set; } = 1;
 
+    public int WriteConnectionOpenCount { get; private set; }
+
     public static ResolutionStoreFixture Create()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-qtr-facts-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         string storePath = Path.Combine(root, "store.db");
-        using var connection = OpenWrite(storePath);
+        ResolutionStoreFixture fixture = new(root, storePath);
+        using var connection = fixture.OpenWrite();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = SchemaSql;
         command.ExecuteNonQuery();
@@ -52,7 +55,7 @@ internal sealed class ResolutionStoreFixture : IDisposable
               ('view-a',1,'manifest-1','request-1','2026-08-09T00:00:00Z');
             """;
         command.ExecuteNonQuery();
-        return new ResolutionStoreFixture(root, storePath);
+        return fixture;
     }
 
     public StoreVisibility Visibility() =>
@@ -92,10 +95,40 @@ internal sealed class ResolutionStoreFixture : IDisposable
 
     public void ExecuteWrite(string sql)
     {
-        using var connection = OpenWrite(StorePath);
+        using SqliteConnection? ownedConnection = _writeConnection is null ? OpenWrite() : null;
+        SqliteConnection connection = _writeConnection ?? ownedConnection!;
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = _writeTransaction;
         command.CommandText = sql;
         command.ExecuteNonQuery();
+    }
+
+    public void WriteTransaction(Action body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        if (_writeTransaction is not null)
+            throw new InvalidOperationException("A fixture write transaction is already active.");
+
+        using SqliteConnection connection = OpenWrite();
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        _writeConnection = connection;
+        _writeTransaction = transaction;
+        try
+        {
+            body();
+            transaction.Commit();
+        }
+        catch
+        {
+            try { transaction.Rollback(); }
+            catch (SqliteException) { }
+            throw;
+        }
+        finally
+        {
+            _writeTransaction = null;
+            _writeConnection = null;
+        }
     }
 
     public void AddFile(long versionId, string path, string language = "csharp", string status = "indexed")
@@ -300,17 +333,22 @@ internal sealed class ResolutionStoreFixture : IDisposable
             Directory.Delete(Root, recursive: true);
     }
 
-    private static SqliteConnection OpenWrite(string path)
+    private SqliteConnection OpenWrite()
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = path,
+            DataSource = StorePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Pooling = false,
         }.ToString());
         connection.Open();
+        WriteConnectionOpenCount++;
         return connection;
     }
+
+    private SqliteConnection? _writeConnection;
+
+    private SqliteTransaction? _writeTransaction;
 
     public void RemoveReferenceSite(string ownerId)
     {

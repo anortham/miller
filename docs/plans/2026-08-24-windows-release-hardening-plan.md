@@ -58,7 +58,9 @@
 | Task 2: Make janitor fixtures portable | Batch A | `tests/Miller.Tests/Testing/Daemon/Engine/CtBuildCacheJanitorTests.cs` | No | None - safe parallel batch. |
 | Task 3: Batch large structural-fact fixtures | Batch A | `tests/Miller.Tests/Indexing/JulieDbFixture.cs`; `tests/Miller.Tests/Indexing/JulieDbFixtureTests.cs`; `tests/Miller.Tests/Server/MarkerSearchTests.cs`; `tests/Miller.Tests/Indexing/MetricSnapshotAggregatesTests.cs` | No | None - safe parallel batch. |
 | Task 4: Restore the fast/Scale boundary | Batch B | `tests/Miller.Tests/Testing/Store/Core/ContinuousTestStoreTests.cs`; `tests/Miller.Tests/Indexing/SharedSemanticBrokerConnectionFactoryTests.cs`; `tests/Miller.Tests/Testing/Daemon/ControlPlane/CtDaemonLauncherTests.cs`; `tests/Miller.Tests/Server/Cli/CliDispatchTests.cs` | No | None - safe parallel batch. |
-| Task 5: Record closure evidence | None - serial | `docs/findings/2026-08-23-performance-audit.md`; this plan's acceptance boxes and verification ledger | Yes | Requires final Linux and Windows evidence from Tasks 1-4. |
+| Task 5: Batch fact-cache fixtures and bound the lock probe | Batch C | `tests/Miller.Tests/Indexing/Resolution/ResolutionStoreFixture.cs`; `tests/Miller.Tests/Indexing/Resolution/ResolutionStoreFixtureTests.cs`; `tests/Miller.Tests/Indexing/Resolution/BoundedRevisionFactCacheTests.cs`; `tests/Miller.Tests/Indexing/FamilyStoreReadSessionTests.cs` | No | None - safe parallel batch. |
+| Task 6: Batch failure-page seeding | Batch C | `tests/Miller.Tests/Server/TestsToolTests.cs` | No | None - safe parallel batch. |
+| Task 7: Record closure evidence | None - serial | `docs/findings/2026-08-23-performance-audit.md`; this plan's acceptance boxes and verification ledger | Yes | Requires final Linux and Windows evidence from Tasks 1-6. |
 
 ### Task 1: Normalize persisted cache paths
 
@@ -109,7 +111,7 @@
 **Approach:** Preserve production accounting. Do not special-case marker filenames in production and do not leave a Windows branch asserting evidence it never created.
 
 **Acceptance criteria:**
-- [ ] The three Windows janitor failures pass on NTFS.
+- [x] The three Windows janitor failures pass on NTFS.
 - [x] The POSIX symlink behavior remains covered and Windows reports an explicit skip.
 - [x] Worker-scope verification passes and changes are handed to the lead for review.
 
@@ -140,7 +142,7 @@
 **Acceptance criteria:**
 - [x] Batch and single-row APIs produce identical reader-visible rows.
 - [x] The three Windows hot tests no longer perform hundreds of connection/autocommit cycles.
-- [ ] Focused Windows durations are recorded before and after on the same VM.
+- [x] Focused Windows durations are recorded before and after on the same VM.
 - [x] Worker-scope verification passes and changes are handed to the lead for review.
 
 ### Task 4: Restore the fast/Scale boundary
@@ -173,7 +175,64 @@
 - [x] No unrelated `CliDispatchTests` are removed from the fast suite.
 - [x] Worker-scope verification passes and changes are handed to the lead for review.
 
-### Task 5: Record closure evidence
+### Task 5: Batch fact-cache fixtures and bound the lock probe
+
+**Files:**
+- Modify: `tests/Miller.Tests/Indexing/Resolution/ResolutionStoreFixture.cs`
+- Create: `tests/Miller.Tests/Indexing/Resolution/ResolutionStoreFixtureTests.cs`
+- Modify: `tests/Miller.Tests/Indexing/Resolution/BoundedRevisionFactCacheTests.cs:406-484`
+- Modify: `tests/Miller.Tests/Indexing/FamilyStoreReadSessionTests.cs:370-407`
+
+**Interfaces:**
+- Consumes: existing `ResolutionStoreFixture` row builders and the snapshot-preserving family read session.
+- Produces: one test-fixture transaction scope with a deterministic write-connection count; an immediate expected-lock probe.
+
+**Contract inputs:** `Populate` currently opens about 78 write connections; the family lock probe currently waits the default 30-second SQLite timeout before accepting the expected lock refusal.
+
+**File ownership:** `tests/Miller.Tests/Indexing/Resolution/ResolutionStoreFixture.cs`; `tests/Miller.Tests/Indexing/Resolution/ResolutionStoreFixtureTests.cs`; `tests/Miller.Tests/Indexing/Resolution/BoundedRevisionFactCacheTests.cs`; `tests/Miller.Tests/Indexing/FamilyStoreReadSessionTests.cs`
+
+**Serialization required:** No.
+
+**Dependency reason:** None - safe parallel batch.
+
+**What to build:** Add an explicit fixture transaction scope that lets existing row builders reuse one connection/transaction, with a count guard proving the connection amplification is gone. Wrap `BoundedRevisionFactCacheTests.Populate` in it. Set `PRAGMA busy_timeout=0` before the family test's deliberately conflicting delete.
+
+**Approach:** Keep production loaders unchanged. Preserve all parity/accessor assertions and the snapshot lock-refusal behavior. Follow the existing `PRAGMA busy_timeout=0` test pattern.
+
+**Acceptance criteria:**
+- [x] The populated parity fixture uses one write connection instead of about 78.
+- [x] The family snapshot test still proves its lazy slice survives the attempted mutation without a 30-second wait.
+- [ ] Focused Linux and Windows timings are recorded before and after.
+- [x] Worker-scope verification passes and changes are handed to the lead for review.
+
+### Task 6: Batch failure-page seeding
+
+**Files:**
+- Modify: `tests/Miller.Tests/Server/TestsToolTests.cs:715-773`
+
+**Interfaces:**
+- Consumes: `ContinuousTestStore.Transaction`, `PutTestCase`, `StartContinuousTestRun`, and `CompleteContinuousTestRun`.
+- Produces: identical real completion-path fixtures inside one outer transaction.
+
+**Contract inputs:** Five measured tests currently create 630 lock/open/commit boundaries; nested store writes already reuse an outer transaction.
+
+**File ownership:** `tests/Miller.Tests/Server/TestsToolTests.cs`
+
+**Serialization required:** No.
+
+**Dependency reason:** None - safe parallel batch.
+
+**What to build:** Wrap the existing `SeedCases` loop in one `store.Transaction` without bypassing any production store API or changing case/run/result content.
+
+**Approach:** Preserve the real run-completion path and every paging assertion. The before metric is 630 writer boundaries and 36-50 seconds under full Windows contention; the after hard count is five outer transactions across the five measured tests.
+
+**Acceptance criteria:**
+- [x] The five measured tests retain identical paging/render/MCP behavior.
+- [x] Writer boundaries fall from 630 to 5 for the fixed workload.
+- [ ] Focused Linux and Windows timings are recorded before and after.
+- [x] Worker-scope verification passes and changes are handed to the lead for review.
+
+### Task 7: Record closure evidence
 
 **Files:**
 - Modify: `docs/findings/2026-08-23-performance-audit.md`
@@ -189,7 +248,7 @@
 
 **Serialization required:** Yes.
 
-**Dependency reason:** Requires final Linux and Windows evidence from Tasks 1-4.
+**Dependency reason:** Requires final Linux and Windows evidence from Tasks 1-6.
 
 **What to build:** Append a dated Windows release-gate section covering path portability, janitor fixtures, fixture-write amplification, Scale leakage, and the local `win-test` evidence.
 

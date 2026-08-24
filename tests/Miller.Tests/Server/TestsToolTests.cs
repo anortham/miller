@@ -726,51 +726,53 @@ public sealed class TestsToolTests : IDisposable
         string workspaceId = _workspace.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(_root);
         string revisionText = revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
-        for (int offset = 0; offset < count; offset++)
+        store.Transaction(() =>
         {
-            int index = caseOffset + offset;
-            // Zero-padded so ordinal order matches numeric order and a paging assertion reads plainly.
-            string caseId = $"test:{index:D3}";
-            string runId = $"run:{index:D3}";
-            store.PutTestCase(new ContinuousTestCase(
-                Id: caseId,
-                WorkspaceId: workspaceId,
-                Name: caseId,
-                QualifiedName: caseId,
-                Selector: caseId,
-                FilePath: "tests/Suite.cs",
-                Framework: "xunit"));
-            store.StartContinuousTestRun(
-                new ContinuousTestRun(
-                    Id: runId,
+            for (int offset = 0; offset < count; offset++)
+            {
+                int index = caseOffset + offset;
+                string caseId = $"test:{index:D3}";
+                string runId = $"run:{index:D3}";
+                store.PutTestCase(new ContinuousTestCase(
+                    Id: caseId,
                     WorkspaceId: workspaceId,
-                    Status: "running",
-                    SelectedRevision: revisionText,
-                    IndexIdentity: identity,
-                    Revision: revision),
-                [caseId]);
-            store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
-                WorkspaceId: workspaceId,
-                TestRunId: runId,
-                SelectedRevision: revisionText,
-                CurrentRevision: revisionText,
-                IndexIdentity: identity,
-                Revision: revision,
-                Status: resultStatus,
-                Results:
-                [
-                    new ContinuousTestResult(
-                        Id: runId + ":" + caseId,
+                    Name: caseId,
+                    QualifiedName: caseId,
+                    Selector: caseId,
+                    FilePath: "tests/Suite.cs",
+                    Framework: "xunit"));
+                store.StartContinuousTestRun(
+                    new ContinuousTestRun(
+                        Id: runId,
                         WorkspaceId: workspaceId,
-                        TestCaseId: caseId,
-                        TestRunId: runId,
-                        Status: resultStatus,
-                        ResultRevision: revisionText,
+                        Status: "running",
+                        SelectedRevision: revisionText,
                         IndexIdentity: identity,
-                        Revision: revision,
-                        FailureSummary: resultStatus == "failed" ? "boom " + caseId : null),
-                ]));
-        }
+                        Revision: revision),
+                    [caseId]);
+                store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
+                    WorkspaceId: workspaceId,
+                    TestRunId: runId,
+                    SelectedRevision: revisionText,
+                    CurrentRevision: revisionText,
+                    IndexIdentity: identity,
+                    Revision: revision,
+                    Status: resultStatus,
+                    Results:
+                    [
+                        new ContinuousTestResult(
+                            Id: runId + ":" + caseId,
+                            WorkspaceId: workspaceId,
+                            TestCaseId: caseId,
+                            TestRunId: runId,
+                            Status: resultStatus,
+                            ResultRevision: revisionText,
+                            IndexIdentity: identity,
+                            Revision: revision,
+                            FailureSummary: resultStatus == "failed" ? "boom " + caseId : null),
+                    ]));
+            }
+        });
     }
 
     private TestsTool CreateTool(Func<ProcessStartInfo, Process?>? startProcess = null)

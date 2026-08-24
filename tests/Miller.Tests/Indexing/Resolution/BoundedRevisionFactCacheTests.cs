@@ -406,80 +406,83 @@ public sealed class BoundedRevisionFactCacheTests
     private static ResolutionStoreFixture Populate()
     {
         ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
-        fixture.AddFile(1, "src/App.cs");
-        fixture.AddFile(2, "src/Other.cs");
-        fixture.AddFile(3, "src/Third.cs");
-        fixture.AddFile(4, "src/Many.cs");
-
-        fixture.AddSymbol(1, App, "App", "class", "src/App.cs", visibility: "public");
-        fixture.AddSymbol(1, Run, "Run", "method", "src/App.cs", parentId: App, signature: "void Run(int count)");
-        fixture.AddSymbol(1, Helper, "Helper", "function", "src/App.cs", parentId: App);
-        fixture.AddSymbol(1, Count, "count", "variable", "src/App.cs", parentId: Run);
-        fixture.AddSymbol(1, DupA, "Dup", "class", "src/App.cs");
-        fixture.AddSymbol(1, Lonely, "Lonely", "class", "src/App.cs");
-        fixture.AddIdentifier(1, "id-help", "Helper", "src/App.cs", kind: "call", containingSymbolId: Run, startByte: 10, endByte: 16);
-        fixture.AddIdentifier(1, "id-count", "count", "src/App.cs", kind: "variable_ref", containingSymbolId: Run, startByte: 40, endByte: 45);
-        fixture.AddIdentifier(1, "id-missing", "Missing", "src/App.cs", kind: "call", containingSymbolId: Run, startByte: 50, endByte: 57);
-        fixture.AddIdentifier(1, "id-dup", "Dup", "src/App.cs", kind: "type_usage", containingSymbolId: Run, startByte: 60, endByte: 63);
-        fixture.AddPending(1, "pend-help", Run, "Helper", "src/App.cs", startByte: 10, endByte: 16);
-        fixture.AddRelationship(1, "rel-help", Run, Helper, "src/App.cs", startByte: 80, endByte: 86);
-
-        fixture.AddSymbol(2, Consumer, "Consumer", "class", "src/Other.cs");
-        fixture.AddSymbol(2, Use, "Use", "method", "src/Other.cs", parentId: Consumer, signature: "void Use(App app)");
-        fixture.AddSymbol(2, DupB, "Dup", "class", "src/Other.cs");
-        fixture.AddTypeFact(2, "tf-use", Use, "App");
-        fixture.AddIdentifier(2, "id-x-help", "Helper", "src/Other.cs", kind: "call", containingSymbolId: Use, startByte: 12, endByte: 18);
-        fixture.AddIdentifier(2, "id-x-app", "App", "src/Other.cs", kind: "type_usage", containingSymbolId: Use, startByte: 30, endByte: 33);
-        fixture.AddIdentifier(2, "id-x-run", "Run", "src/Other.cs", kind: "call", containingSymbolId: Use, startByte: 44, endByte: 47);
-        fixture.AddPending(2, "pend-x-run", Use, "Run", "src/Other.cs", startByte: 44, endByte: 47);
-
-        fixture.AddFile(5, "src/mod.ts", "typescript");
-        fixture.AddFile(6, "src/widget.ts", "typescript");
-        fixture.AddSymbol(
-            5,
-            "imp-widget",
-            "Widget",
-            "import",
-            "src/mod.ts",
-            language: "typescript",
-            metadataJson: """{"source":"./widget","imported_name":"Widget"}""");
-        fixture.AddSymbol(5, "fn-mod", "run", "function", "src/mod.ts", language: "typescript");
-        fixture.AddSymbol(6, "cls-widget", "Widget", "class", "src/widget.ts", language: "typescript");
-        fixture.AddIdentifier(
-            5, "id-widget", "Widget", "src/mod.ts", kind: "type_usage", containingSymbolId: "fn-mod",
-            startByte: 5, endByte: 11, language: "typescript");
-
-        // A relationship whose TARGET symbol lives on a version the pinned manifest does not carry. Both read
-        // shapes must drop it: the manifest-joined read by its target-visibility join, the fast read by its
-        // target-visibility EXISTS. The identifier at the same span is what makes the difference observable —
-        // keeping the relationship would locate that identifier and change the propagation row set.
-        fixture.AddFile(7, "src/Ghost.cs");
-        fixture.AddSymbol(7, "cls-ghost", "Ghost", "class", "src/Ghost.cs");
-        fixture.ExecuteWrite("DELETE FROM manifest_entries WHERE path='src/Ghost.cs'");
-        fixture.AddIdentifier(
-            1, "id-ghost", "Ghost", "src/App.cs", kind: "type_usage", containingSymbolId: Run,
-            startByte: 200, endByte: 205, startLine: 7);
-        fixture.AddRelationship(
-            1, "rel-ghost", Run, "cls-ghost", "src/App.cs", kind: "uses",
-            startByte: 200, endByte: 205, startLine: 7);
-
-        fixture.AddSymbol(3, "cls-third", "Third", "class", "src/Third.cs");
-        fixture.AddIdentifier(3, "id-third-run", "Run", "src/Third.cs", kind: "call", containingSymbolId: "cls-third", startByte: 5, endByte: 8);
-
-        fixture.AddSymbol(4, "cls-many", "Many", "class", "src/Many.cs");
-        for (int i = 0; i < ManyCallSites; i++)
+        fixture.WriteTransaction(() =>
         {
+            fixture.AddFile(1, "src/App.cs");
+            fixture.AddFile(2, "src/Other.cs");
+            fixture.AddFile(3, "src/Third.cs");
+            fixture.AddFile(4, "src/Many.cs");
+
+            fixture.AddSymbol(1, App, "App", "class", "src/App.cs", visibility: "public");
+            fixture.AddSymbol(1, Run, "Run", "method", "src/App.cs", parentId: App, signature: "void Run(int count)");
+            fixture.AddSymbol(1, Helper, "Helper", "function", "src/App.cs", parentId: App);
+            fixture.AddSymbol(1, Count, "count", "variable", "src/App.cs", parentId: Run);
+            fixture.AddSymbol(1, DupA, "Dup", "class", "src/App.cs");
+            fixture.AddSymbol(1, Lonely, "Lonely", "class", "src/App.cs");
+            fixture.AddIdentifier(1, "id-help", "Helper", "src/App.cs", kind: "call", containingSymbolId: Run, startByte: 10, endByte: 16);
+            fixture.AddIdentifier(1, "id-count", "count", "src/App.cs", kind: "variable_ref", containingSymbolId: Run, startByte: 40, endByte: 45);
+            fixture.AddIdentifier(1, "id-missing", "Missing", "src/App.cs", kind: "call", containingSymbolId: Run, startByte: 50, endByte: 57);
+            fixture.AddIdentifier(1, "id-dup", "Dup", "src/App.cs", kind: "type_usage", containingSymbolId: Run, startByte: 60, endByte: 63);
+            fixture.AddPending(1, "pend-help", Run, "Helper", "src/App.cs", startByte: 10, endByte: 16);
+            fixture.AddRelationship(1, "rel-help", Run, Helper, "src/App.cs", startByte: 80, endByte: 86);
+
+            fixture.AddSymbol(2, Consumer, "Consumer", "class", "src/Other.cs");
+            fixture.AddSymbol(2, Use, "Use", "method", "src/Other.cs", parentId: Consumer, signature: "void Use(App app)");
+            fixture.AddSymbol(2, DupB, "Dup", "class", "src/Other.cs");
+            fixture.AddTypeFact(2, "tf-use", Use, "App");
+            fixture.AddIdentifier(2, "id-x-help", "Helper", "src/Other.cs", kind: "call", containingSymbolId: Use, startByte: 12, endByte: 18);
+            fixture.AddIdentifier(2, "id-x-app", "App", "src/Other.cs", kind: "type_usage", containingSymbolId: Use, startByte: 30, endByte: 33);
+            fixture.AddIdentifier(2, "id-x-run", "Run", "src/Other.cs", kind: "call", containingSymbolId: Use, startByte: 44, endByte: 47);
+            fixture.AddPending(2, "pend-x-run", Use, "Run", "src/Other.cs", startByte: 44, endByte: 47);
+
+            fixture.AddFile(5, "src/mod.ts", "typescript");
+            fixture.AddFile(6, "src/widget.ts", "typescript");
+            fixture.AddSymbol(
+                5,
+                "imp-widget",
+                "Widget",
+                "import",
+                "src/mod.ts",
+                language: "typescript",
+                metadataJson: """{"source":"./widget","imported_name":"Widget"}""");
+            fixture.AddSymbol(5, "fn-mod", "run", "function", "src/mod.ts", language: "typescript");
+            fixture.AddSymbol(6, "cls-widget", "Widget", "class", "src/widget.ts", language: "typescript");
             fixture.AddIdentifier(
-                4,
-                "id-many-" + i.ToString(CultureInfo.InvariantCulture),
-                "Helper",
-                "src/Many.cs",
-                kind: "call",
-                containingSymbolId: "cls-many",
-                startByte: 100 + (i * 10),
-                endByte: 106 + (i * 10),
-                startLine: i + 1);
-        }
+                5, "id-widget", "Widget", "src/mod.ts", kind: "type_usage", containingSymbolId: "fn-mod",
+                startByte: 5, endByte: 11, language: "typescript");
+
+            // A relationship whose TARGET symbol lives on a version the pinned manifest does not carry. Both read
+            // shapes must drop it: the manifest-joined read by its target-visibility join, the fast read by its
+            // target-visibility EXISTS. The identifier at the same span is what makes the difference observable —
+            // keeping the relationship would locate that identifier and change the propagation row set.
+            fixture.AddFile(7, "src/Ghost.cs");
+            fixture.AddSymbol(7, "cls-ghost", "Ghost", "class", "src/Ghost.cs");
+            fixture.ExecuteWrite("DELETE FROM manifest_entries WHERE path='src/Ghost.cs'");
+            fixture.AddIdentifier(
+                1, "id-ghost", "Ghost", "src/App.cs", kind: "type_usage", containingSymbolId: Run,
+                startByte: 200, endByte: 205, startLine: 7);
+            fixture.AddRelationship(
+                1, "rel-ghost", Run, "cls-ghost", "src/App.cs", kind: "uses",
+                startByte: 200, endByte: 205, startLine: 7);
+
+            fixture.AddSymbol(3, "cls-third", "Third", "class", "src/Third.cs");
+            fixture.AddIdentifier(3, "id-third-run", "Run", "src/Third.cs", kind: "call", containingSymbolId: "cls-third", startByte: 5, endByte: 8);
+
+            fixture.AddSymbol(4, "cls-many", "Many", "class", "src/Many.cs");
+            for (int i = 0; i < ManyCallSites; i++)
+            {
+                fixture.AddIdentifier(
+                    4,
+                    "id-many-" + i.ToString(CultureInfo.InvariantCulture),
+                    "Helper",
+                    "src/Many.cs",
+                    kind: "call",
+                    containingSymbolId: "cls-many",
+                    startByte: 100 + (i * 10),
+                    endByte: 106 + (i * 10),
+                    startLine: i + 1);
+            }
+        });
 
         return fixture;
     }
