@@ -5,7 +5,7 @@ namespace Miller.Tests.Support;
 internal static class QmlVisibilityFixtureSupport
 {
     internal static readonly string[] ExpectedExportedNames =
-        ["LocalCard", "RemoteCard", "RemoteCard", "Theme", "Theme"];
+        ["LocalCard", "RemoteCard", "RemoteCard", "Theme", "Theme", "source"];
 
     internal static void Populate(ResolutionStoreFixture fixture)
     {
@@ -37,7 +37,7 @@ internal static class QmlVisibilityFixtureSupport
 
     private static void AddSymbols(ResolutionStoreFixture fixture)
     {
-        fixture.AddSymbol(1, "source", "source", "class", "source.qml");
+        fixture.AddSymbol(1, "source", "source", "class", "source.qml", language: "qml");
         fixture.AddSymbol(
             1,
             "import-components",

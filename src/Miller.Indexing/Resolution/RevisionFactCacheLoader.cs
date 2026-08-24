@@ -245,16 +245,7 @@ internal static class RevisionFactCacheLoader
             false => 2,
             _ => 0,
         };
-        symbols.Add(new PackedSymbol(
-            symbolId,
-            name,
-            kind.Value,
-            language,
-            parentId,
-            signature,
-            visibility,
-            staticCode,
-            RetainQmlMetadata(language, metadata)));
+        symbols.Add(new PackedSymbol(symbolId, name, kind.Value, language, parentId, signature, visibility, staticCode));
         if (kind == FactSymbolKind.Import)
             importSeeds.Add(new ImportSeed(name, FactMetadataParser.ParseImport(metadata)));
     }
@@ -765,16 +756,7 @@ internal static class RevisionFactCacheLoader
                 false => 2,
                 _ => 0,
             };
-            symbols.Add(new PackedSymbol(
-                symbolId,
-                name,
-                kind.Value,
-                language,
-                parentId,
-                signature,
-                visibility,
-                staticCode,
-                RetainQmlMetadata(language, metadata)));
+            symbols.Add(new PackedSymbol(symbolId, name, kind.Value, language, parentId, signature, visibility, staticCode));
             if (kind == FactSymbolKind.Import)
                 importSeeds.Add(new ImportSeed(name, FactMetadataParser.ParseImport(metadata)));
         }
@@ -1136,12 +1118,6 @@ internal static class RevisionFactCacheLoader
     }
 
     private static string? EmptyToNull(string? value) => string.IsNullOrEmpty(value) ? null : value;
-
-    private static string? RetainQmlMetadata(string language, string? metadata) =>
-        string.Equals(language, "qml", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(language, "qmldir", StringComparison.OrdinalIgnoreCase)
-            ? metadata
-            : null;
 
     private readonly record struct PendingLocateRow(
         string RowId,

@@ -88,13 +88,18 @@ public sealed class RevisionFactCacheArtifactTests
 
         Assert.Equal(QmlVisibilityFixtureSupport.ExpectedExportedNames, candidates.Select(candidate => candidate.ExportedName));
         Assert.Equal(
-            ["local", "remote", "remote", "theme", "theme"],
+            ["local", "remote", "remote", "theme", "theme", "source"],
             candidates.Select(candidate => candidate.Target.SymbolId));
+        QmlVisibleType local = candidates[0];
+        Assert.Equal("LocalCard.qml", local.Evidence.SourcePath);
+        Assert.Equal("qml.component", local.Evidence.Provenance);
+        Assert.Equal(0, local.Evidence.StartByte);
+        Assert.Equal(1, local.Evidence.EndByte);
         Assert.Equal(
-            ["", "Components", "EC", "Components", "EC"],
+            ["", "Components", "EC", "Components", "EC", ""],
             candidates.Select(candidate => candidate.ImportAlias ?? string.Empty));
         Assert.Equal(
-            ["qml.directory", "qmldir", "qmldir", "qmldir", "qmldir"],
+            ["qml.component", "qmldir", "qmldir", "qmldir", "qmldir", "qml.component"],
             candidates.Select(candidate => candidate.Evidence.Provenance));
 
         using ResolutionStoreFixture storeFixture = ResolutionStoreFixture.Create();
@@ -136,7 +141,7 @@ public sealed class RevisionFactCacheArtifactTests
         long malformedSource = Assert.Single(malformed.SymbolsNamed("source")).Key.VersionId;
 
         Assert.Equal(
-            ["LocalCard", "Theme", "Theme"],
+            ["LocalCard", "Theme", "Theme", "source"],
             malformed.QmlTypesVisibleTo(malformedSource).Select(candidate => candidate.ExportedName));
 
         using ResolutionArtifactFixture futureFixture = ResolutionArtifactFixture.Create();
@@ -147,7 +152,7 @@ public sealed class RevisionFactCacheArtifactTests
         long futureSource = Assert.Single(future.SymbolsNamed("source")).Key.VersionId;
 
         Assert.Equal(
-            ["LocalCard", "Theme", "Theme"],
+            ["LocalCard", "Theme", "Theme", "source"],
             future.QmlTypesVisibleTo(futureSource).Select(candidate => candidate.ExportedName));
     }
 
@@ -173,9 +178,77 @@ public sealed class RevisionFactCacheArtifactTests
         long sourceVersion = Assert.Single(facts.SymbolsNamed("source")).Key.VersionId;
         QmlVisibleType[] candidates = facts.QmlTypesVisibleTo(sourceVersion).ToArray();
 
-        Assert.Equal(["LocalCard", "RemoteCard", "Theme"], candidates.Select(candidate => candidate.ExportedName));
-        Assert.All(candidates.Skip(1), candidate => Assert.Equal("Components", candidate.ImportAlias));
+        Assert.Equal(["LocalCard", "RemoteCard", "Theme", "source"], candidates.Select(candidate => candidate.ExportedName));
+        Assert.Equal(
+            ["", "Components", "Components", ""],
+            candidates.Select(candidate => candidate.ImportAlias ?? string.Empty));
         Assert.DoesNotContain(candidates, candidate => candidate.ExportedName == "InternalCard");
+    }
+
+    [Fact]
+    public void ArtifactCatalog_EmitsSameFileCandidateWithComponentEvidence()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        using SqliteConnection connection = fixture.OpenRead();
+        IResolutionFacts facts = RevisionFactCache.LoadFromArtifact(connection);
+
+        QmlVisibleType sameFile = Assert.Single(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.Target.SymbolId == "source");
+
+        Assert.Equal("source.qml", sameFile.Evidence.SourcePath);
+        Assert.Equal("qml.component", sameFile.Evidence.Provenance);
+        Assert.Equal(0, sameFile.Evidence.StartByte);
+        Assert.Equal(1, sameFile.Evidence.EndByte);
+    }
+
+    [Fact]
+    public void ArtifactCatalog_AllowsUnversionedManifestEntryForVersionedImport()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.ExecuteWrite(
+            """
+            UPDATE structural_facts
+            SET metadata_json='{"directive":"singleton","file":"Theme.qml","pattern_version":1,"query_family":"qmldir","singleton":true,"type_name":"Theme"}'
+            WHERE structural_fact_id='fact-theme';
+            """);
+
+        using SqliteConnection connection = fixture.OpenRead();
+        IResolutionFacts facts = RevisionFactCache.LoadFromArtifact(connection);
+
+        Assert.Contains(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.Target.SymbolId == "theme" && candidate.ImportAlias == "EC");
+    }
+
+    [Fact]
+    public void ArtifactCatalog_UsesImportEvidenceForManifestlessDirectoryCandidate()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.AddFile("file-loose", "loose/LooseCard.qml", "qml");
+        fixture.AddSymbol("file-loose", "loose-card", "LooseCard", "class", "loose/LooseCard.qml", language: "qml");
+        fixture.AddSymbol(
+            "file-source",
+            "import-loose",
+            "loose",
+            "import",
+            "source.qml",
+            language: "qml",
+            metadataJson: """{"import_kind":"directory","source":"loose","alias":"Loose","local_name":"Loose","is_namespace":true}""");
+
+        using SqliteConnection connection = fixture.OpenRead();
+        IResolutionFacts facts = RevisionFactCache.LoadFromArtifact(connection);
+        QmlVisibleType loose = Assert.Single(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.Target.SymbolId == "loose-card");
+
+        Assert.Equal("source.qml", loose.Evidence.SourcePath);
+        Assert.Equal("qml.import", loose.Evidence.Provenance);
+        Assert.Equal(0, loose.Evidence.StartByte);
+        Assert.Equal(1, loose.Evidence.EndByte);
     }
 
     private static string[] ReadArtifactNames(SqliteConnection connection, string name)

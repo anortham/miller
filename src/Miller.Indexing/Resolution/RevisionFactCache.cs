@@ -16,8 +16,7 @@ internal readonly struct PackedSymbol
         string? parentId,
         string? signature,
         string? visibility,
-        byte staticCode,
-        string? metadataJson)
+        byte staticCode)
     {
         SymbolId = symbolId;
         Name = name;
@@ -27,7 +26,6 @@ internal readonly struct PackedSymbol
         Signature = signature;
         Visibility = visibility;
         StaticCode = staticCode;
-        MetadataJson = metadataJson;
     }
 
     internal string SymbolId { get; }
@@ -45,8 +43,6 @@ internal readonly struct PackedSymbol
     internal string? Visibility { get; }
 
     internal byte StaticCode { get; }
-
-    internal string? MetadataJson { get; }
 
     internal bool? IsStatic => StaticCode switch
     {
@@ -209,6 +205,8 @@ internal sealed class RevisionFactCache : IResolutionFacts
         }
     }
 
+    internal int BoundedStructuralFactRowsRead => _qml.BoundedStructuralFactRowsRead;
+
     /// <summary>Files this cache has materialized. A full load has one per visible file from the start.</summary>
     internal int LoadedSliceCount
     {
@@ -253,7 +251,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
 
         BindAllImports(slices, pathIndex);
         DropImportSeeds(slices);
-        QmlVisibilityCatalog qml = QmlVisibilityCatalog.LoadStore(storeRead, visibility, internedFiles, slices, intern);
+        QmlVisibilityCatalog qml = QmlVisibilityCatalog.LoadStore(storeRead, visibility, internedFiles, intern);
         return new RevisionFactCache(intern, slices, pathIndex, visibility, qml);
     }
 
@@ -282,7 +280,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
 
         BindAllImports(slices, pathIndex);
         DropImportSeeds(slices);
-        QmlVisibilityCatalog qml = QmlVisibilityCatalog.LoadArtifact(artifactRead, internedFiles, slices, intern);
+        QmlVisibilityCatalog qml = QmlVisibilityCatalog.LoadArtifact(artifactRead, internedFiles, intern);
         return new RevisionFactCache(intern, slices, pathIndex, visibility: null, qml);
     }
 
@@ -382,12 +380,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
             }
         }
 
-        QmlVisibilityCatalog qml = QmlVisibilityCatalog.LoadStore(
-            storeRead,
-            newVisibility,
-            files,
-            nextSlices,
-            _intern);
+        QmlVisibilityCatalog qml = QmlVisibilityCatalog.LoadStore(storeRead, newVisibility, files, _intern);
         return new RevisionFactCache(_intern, nextSlices, pathIndex, newVisibility, qml);
     }
 

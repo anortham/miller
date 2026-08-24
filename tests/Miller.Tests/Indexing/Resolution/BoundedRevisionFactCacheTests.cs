@@ -91,6 +91,53 @@ public sealed class BoundedRevisionFactCacheTests
         Assert.Equal(1, boundedCache.LoadedSliceCount);
     }
 
+    [Fact]
+    public void BoundedQmlCatalogReadsOnlyRelevantStructuralFactDirectories()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.AddFile(8, "unrelated/qmldir", "qmldir");
+        fixture.AddStructuralFact(
+            8,
+            "unrelated-module",
+            "unrelated/qmldir",
+            "qmldir.module.v1",
+            "module",
+            "command",
+            0,
+            20,
+            """{"directive":"module","module":"Unrelated.Module","pattern_version":1,"query_family":"qmldir"}""",
+            language: "qmldir");
+        using SqliteConnection connection = fixture.OpenRead();
+        RevisionFactCache bounded = RevisionFactCache.LoadBounded(connection, fixture.Visibility());
+
+        _ = bounded.QmlTypesVisibleTo(1);
+
+        Assert.Equal(6, bounded.BoundedStructuralFactRowsRead);
+    }
+
+    [Fact]
+    public void BoundedQmlCatalogHandlesMoreVersionsThanSqliteVariableLimit()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.ExecuteWrite(
+            """
+            WITH RECURSIVE seq(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM seq WHERE i < 32766)
+            INSERT OR REPLACE INTO file_versions
+              (version_id,path,content_hash,extraction_epoch,language,content_bytes,line_count,metadata_json,complete_l1,complete_l2,complete_l3)
+            SELECT 1000 + i,'Bulk' || i || '.cs','blake3:' || (1000 + i),1,'csharp',10,1,NULL,1,2,3 FROM seq;
+            WITH RECURSIVE seq(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM seq WHERE i < 32766)
+            INSERT OR REPLACE INTO manifest_entries
+              (view_id,generation,path,language,version_id,status,observed_content_hash,indexed_at,error_class,error_json)
+            SELECT 'view-a',1,'Bulk' || i || '.cs','csharp',1000 + i,'indexed','blake3:' || (1000 + i),'2026-08-09T00:00:00Z',NULL,NULL FROM seq;
+            """);
+        using SqliteConnection connection = fixture.OpenRead();
+        RevisionFactCache bounded = RevisionFactCache.LoadBounded(connection, fixture.Visibility());
+
+        Assert.Contains(bounded.QmlTypesVisibleTo(1), candidate => candidate.Target.SymbolId == "source");
+    }
+
     // A version outside the pinned manifest has no slice in a full load, so the bounded cache must report the
     // same absence rather than reading the rows and reporting an empty file.
     [Fact]

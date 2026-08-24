@@ -89,8 +89,14 @@ public sealed class RevisionFactCacheStoreTests
 
         Assert.Equal(QmlVisibilityFixtureSupport.ExpectedExportedNames, candidates.Select(candidate => candidate.ExportedName));
         Assert.Equal(
-            ["local", "remote", "remote", "theme", "theme"],
+            ["local", "remote", "remote", "theme", "theme", "source"],
             candidates.Select(candidate => candidate.Target.SymbolId));
+
+        QmlVisibleType local = candidates[0];
+        Assert.Equal("LocalCard.qml", local.Evidence.SourcePath);
+        Assert.Equal("qml.component", local.Evidence.Provenance);
+        Assert.Equal(0, local.Evidence.StartByte);
+        Assert.Equal(1, local.Evidence.EndByte);
 
         QmlVisibleType directoryRemote = candidates[1];
         Assert.Equal("Components", directoryRemote.ImportAlias);
@@ -123,7 +129,7 @@ public sealed class RevisionFactCacheStoreTests
             malformedFixture.Visibility());
 
         Assert.Equal(
-            ["LocalCard", "Theme", "Theme"],
+            ["LocalCard", "Theme", "Theme", "source"],
             malformed.QmlTypesVisibleTo(1).Select(candidate => candidate.ExportedName));
 
         using ResolutionStoreFixture futureFixture = ResolutionStoreFixture.Create();
@@ -136,7 +142,7 @@ public sealed class RevisionFactCacheStoreTests
             futureFixture.Visibility());
 
         Assert.Equal(
-            ["LocalCard", "Theme", "Theme"],
+            ["LocalCard", "Theme", "Theme", "source"],
             future.QmlTypesVisibleTo(1).Select(candidate => candidate.ExportedName));
     }
 
@@ -162,5 +168,80 @@ public sealed class RevisionFactCacheStoreTests
             candidate => candidate.Target.SymbolId == "remote" && candidate.ImportAlias == "Components");
 
         Assert.Equal("components/RemoteCard.qml", remote.SourceComponentPath);
+    }
+
+    [Fact]
+    public void StoreCatalog_EmitsSameFileCandidateWithComponentEvidence()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+            "qml-store-same-file",
+            "qml-rev-1",
+            fixture.OpenRead,
+            fixture.Visibility());
+
+        QmlVisibleType sameFile = Assert.Single(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.Target.SymbolId == "source");
+
+        Assert.Equal("source.qml", sameFile.Evidence.SourcePath);
+        Assert.Equal("qml.component", sameFile.Evidence.Provenance);
+        Assert.Equal(0, sameFile.Evidence.StartByte);
+        Assert.Equal(1, sameFile.Evidence.EndByte);
+    }
+
+    [Fact]
+    public void StoreCatalog_AllowsUnversionedManifestEntryForVersionedImport()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.ExecuteWrite(
+            """
+            UPDATE structural_facts
+            SET metadata_json='{"directive":"singleton","file":"Theme.qml","pattern_version":1,"query_family":"qmldir","singleton":true,"type_name":"Theme"}'
+            WHERE structural_fact_id='fact-theme';
+            """);
+
+        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+            "qml-store-unversioned-entry",
+            "qml-rev-1",
+            fixture.OpenRead,
+            fixture.Visibility());
+
+        Assert.Contains(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.Target.SymbolId == "theme" && candidate.ImportAlias == "EC");
+    }
+
+    [Fact]
+    public void StoreCatalog_UsesImportEvidenceForManifestlessDirectoryCandidate()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.AddFile(8, "loose/LooseCard.qml", "qml");
+        fixture.AddSymbol(8, "loose-card", "LooseCard", "class", "loose/LooseCard.qml", language: "qml");
+        fixture.AddSymbol(
+            1,
+            "import-loose",
+            "loose",
+            "import",
+            "source.qml",
+            language: "qml",
+            metadataJson: """{"import_kind":"directory","source":"loose","alias":"Loose","local_name":"Loose","is_namespace":true}""");
+
+        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+            "qml-store-loose-dir",
+            "qml-rev-1",
+            fixture.OpenRead,
+            fixture.Visibility());
+        QmlVisibleType loose = Assert.Single(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.Target.SymbolId == "loose-card");
+
+        Assert.Equal("source.qml", loose.Evidence.SourcePath);
+        Assert.Equal("qml.import", loose.Evidence.Provenance);
+        Assert.Equal(0, loose.Evidence.StartByte);
+        Assert.Equal(1, loose.Evidence.EndByte);
     }
 }

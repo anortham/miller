@@ -11,6 +11,7 @@ internal sealed class QmlVisibilityCatalog
     private readonly Func<long, QmlVisibleType[]>? _load;
     private readonly Dictionary<long, IReadOnlyList<QmlVisibleType>> _loaded = [];
     private readonly object _gate = new();
+    private int _boundedStructuralFactRowsRead;
 
     private QmlVisibilityCatalog(Dictionary<long, QmlVisibleType[]> candidates)
     {
@@ -39,25 +40,27 @@ internal sealed class QmlVisibilityCatalog
         }
     }
 
+    internal int BoundedStructuralFactRowsRead => Volatile.Read(ref _boundedStructuralFactRowsRead);
+
     internal static QmlVisibilityCatalog LoadStore(
         SqliteConnection connection,
         StoreVisibility visibility,
         IReadOnlyList<RevisionFactCacheLoader.VisibleFile> files,
-        IReadOnlyDictionary<long, VersionSlice> slices,
         StringInternPool intern)
     {
         List<QmlStructuralRow> facts = ReadStoreFacts(connection, visibility, intern);
-        return new QmlVisibilityCatalog(BuildConsumers(files, slices, facts, intern));
+        List<QmlSymbolRow> symbols = ReadStoreSymbols(connection, visibility, files.Select(file => file.VersionId).ToArray(), intern);
+        return new QmlVisibilityCatalog(BuildConsumers(files, symbols, facts, intern));
     }
 
     internal static QmlVisibilityCatalog LoadArtifact(
         SqliteConnection connection,
         IReadOnlyList<RevisionFactCacheLoader.VisibleFile> files,
-        IReadOnlyDictionary<long, VersionSlice> slices,
         StringInternPool intern)
     {
         List<QmlStructuralRow> facts = ReadArtifactFacts(connection, intern);
-        return new QmlVisibilityCatalog(BuildConsumers(files, slices, facts, intern));
+        List<QmlSymbolRow> symbols = ReadArtifactSymbols(connection, intern);
+        return new QmlVisibilityCatalog(BuildConsumers(files, symbols, facts, intern));
     }
 
     internal static QmlVisibilityCatalog LoadBoundedStore(
@@ -66,7 +69,8 @@ internal sealed class QmlVisibilityCatalog
         IReadOnlyList<RevisionFactCacheLoader.VisibleFile> files,
         StringInternPool intern)
     {
-        return new QmlVisibilityCatalog(versionId =>
+        QmlVisibilityCatalog? catalog = null;
+        catalog = new QmlVisibilityCatalog(versionId =>
         {
             if (!files.Any(file =>
                     file.VersionId == versionId
@@ -75,39 +79,40 @@ internal sealed class QmlVisibilityCatalog
                 return [];
 
             RevisionFactCacheLoader.VisibleFile consumer = files.Last(file => file.VersionId == versionId);
-            VersionSlice slice = RevisionFactCacheLoader.LoadStoreSlice(connection, visibility, consumer, intern, indexedLocate: true);
-            List<QmlImportRow> imports = ParseImports(slice, consumer.Path, intern);
-            Dictionary<long, QmlStructuralModel> models = DecodeFacts(
-                ReadStoreFacts(connection, visibility, intern),
-                intern);
+            List<QmlSymbolRow> consumerSymbols = ReadStoreSymbols(connection, visibility, [versionId], intern);
+            List<QmlImportRow> imports = ParseImports(consumerSymbols, consumer.Path, intern);
+            List<QmlStructuralRow> facts = ReadStoreFactsForConsumer(connection, visibility, consumer.Path, imports, intern);
+            Volatile.Write(ref catalog!._boundedStructuralFactRowsRead, facts.Count);
+            Dictionary<long, QmlStructuralModel> models = DecodeFacts(facts, intern);
             HashSet<string> paths = RelevantPaths(consumer.Path, imports, files, models);
             HashSet<long> versions = files
                 .Where(file => paths.Contains(NormalizePath(file.Path)))
                 .Select(file => file.VersionId)
                 .ToHashSet();
             List<QmlSymbolRow> symbols = ReadStoreSymbols(connection, visibility, versions, intern);
-            AddConsumerSymbolRows(symbols, slice, consumer.Path, intern);
             return BuildConsumer(consumer, imports, symbols, models, intern);
         });
+        return catalog;
     }
 
     private static Dictionary<long, QmlVisibleType[]> BuildConsumers(
         IReadOnlyList<RevisionFactCacheLoader.VisibleFile> files,
-        IReadOnlyDictionary<long, VersionSlice> slices,
+        IReadOnlyList<QmlSymbolRow> symbols,
         IReadOnlyList<QmlStructuralRow> facts,
         StringInternPool intern)
     {
         Dictionary<long, QmlStructuralModel> models = DecodeFacts(facts, intern);
-        List<QmlSymbolRow> symbols = SymbolRows(slices, intern);
         var result = new Dictionary<long, QmlVisibleType[]>();
         foreach (RevisionFactCacheLoader.VisibleFile file in files)
         {
-            if (!slices.TryGetValue(file.VersionId, out VersionSlice? slice)
-                || !string.Equals(file.Language, "qml", StringComparison.OrdinalIgnoreCase)
+            if (!string.Equals(file.Language, "qml", StringComparison.OrdinalIgnoreCase)
                 || !file.Path.EndsWith(".qml", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            List<QmlImportRow> imports = ParseImports(slice, file.Path, intern);
+            List<QmlImportRow> imports = ParseImports(
+                symbols.Where(symbol => symbol.VersionId == file.VersionId),
+                file.Path,
+                intern);
             result[file.VersionId] = BuildConsumer(
                 file,
                 imports,
@@ -119,59 +124,13 @@ internal sealed class QmlVisibilityCatalog
         return result;
     }
 
-    private static List<QmlSymbolRow> SymbolRows(
-        IReadOnlyDictionary<long, VersionSlice> slices,
-        StringInternPool intern)
-    {
-        var rows = new List<QmlSymbolRow>();
-        foreach (VersionSlice slice in slices.Values)
-        {
-            foreach (PackedSymbol symbol in slice.Packed)
-            {
-                rows.Add(new QmlSymbolRow(
-                    slice.VersionId,
-                    slice.Path,
-                    symbol.SymbolId,
-                    symbol.Name,
-                    symbol.Kind,
-                    symbol.Language,
-                    symbol.Visibility,
-                    symbol.MetadataJson));
-            }
-        }
-
-        return rows;
-    }
-
-    private static void AddConsumerSymbolRows(
-        List<QmlSymbolRow> rows,
-        VersionSlice slice,
-        string path,
-        StringInternPool intern)
-    {
-        foreach (PackedSymbol symbol in slice.Packed)
-        {
-            if (rows.Any(row => row.VersionId == slice.VersionId && string.Equals(row.SymbolId, symbol.SymbolId, StringComparison.Ordinal)))
-                continue;
-            rows.Add(new QmlSymbolRow(
-                slice.VersionId,
-                intern.Intern(path),
-                symbol.SymbolId,
-                symbol.Name,
-                symbol.Kind,
-                symbol.Language,
-                symbol.Visibility,
-                symbol.MetadataJson));
-        }
-    }
-
     private static List<QmlImportRow> ParseImports(
-        VersionSlice slice,
+        IEnumerable<QmlSymbolRow> symbols,
         string path,
         StringInternPool intern)
     {
         var imports = new List<QmlImportRow>();
-        foreach (PackedSymbol symbol in slice.Packed.Where(symbol => symbol.Kind == FactSymbolKind.Import))
+        foreach (QmlSymbolRow symbol in symbols.Where(symbol => symbol.Kind == FactSymbolKind.Import))
         {
             if (symbol.MetadataJson is null)
                 continue;
@@ -187,11 +146,13 @@ internal sealed class QmlVisibilityCatalog
                 continue;
             string? alias = FirstNonEmpty(ReadString(root, "alias"), ReadString(root, "local_name"));
             imports.Add(new QmlImportRow(
-                intern.Intern(path),
+                intern.Intern(NormalizePath(path)),
                 intern.Intern(kind),
                 intern.Intern(source),
                 alias is null ? null : intern.Intern(alias),
-                version));
+                version,
+                symbol.StartByte,
+                symbol.EndByte));
         }
 
         return imports;
@@ -225,8 +186,7 @@ internal sealed class QmlVisibilityCatalog
         {
             (string Path, string Name) key = pair.Key;
             QmlSymbolRow target = pair.Value;
-            if (string.Equals(key.Path, consumerPath, StringComparison.Ordinal)
-                || !string.Equals(DirectoryOf(key.Path), consumerDirectory, StringComparison.Ordinal))
+            if (!string.Equals(DirectoryOf(key.Path), consumerDirectory, StringComparison.Ordinal))
                 continue;
             entries.TryGetValue(key, out QmlManifestEntry? entry);
             candidates.Add(CreateCandidate(
@@ -235,7 +195,11 @@ internal sealed class QmlVisibilityCatalog
                 entry,
                 QmlVisibilityScope.ForDirectory(consumerDirectory),
                 importAlias: null,
-                new QmlEvidence(consumerPath, "qml.directory", 0, 0),
+                new QmlEvidence(
+                    intern.Intern(NormalizePath(target.Path)),
+                    "qml.component",
+                    target.StartByte,
+                    target.EndByte),
                 intern));
         }
 
@@ -280,7 +244,11 @@ internal sealed class QmlVisibilityCatalog
                             entry: null,
                             QmlVisibilityScope.ForDirectory(directory),
                             import.Alias,
-                            new QmlEvidence(consumerPath, "qml.import", 0, 0),
+                            new QmlEvidence(
+                                import.Path,
+                                "qml.import",
+                                import.StartByte,
+                                import.EndByte),
                             intern));
                     }
                 }
@@ -293,7 +261,10 @@ internal sealed class QmlVisibilityCatalog
                         continue;
                     foreach (QmlManifestEntry entry in manifest.Entries)
                     {
-                        if (entry.IsInternal || import.Version is not null && !entry.VersionConstraint!.IsCompatibleWith(import.Version))
+                        if (entry.IsInternal
+                            || import.Version is not null
+                            && entry.VersionConstraint is not null
+                            && !entry.VersionConstraint.IsCompatibleWith(import.Version))
                             continue;
                         string targetPath = NormalizePath(Combine(DirectoryOf(manifest.Path), entry.File));
                         if (!targets.TryGetValue((targetPath, entry.TypeName), out QmlSymbolRow? target)
@@ -486,24 +457,22 @@ internal sealed class QmlVisibilityCatalog
             return [];
         using SqliteCommand command = connection.CreateCommand();
         command.CommandTimeout = 0;
-        var placeholders = new List<string>(versions.Count);
-        int index = 0;
-        foreach (long version in versions)
-        {
-            string parameter = "$version" + index++;
-            placeholders.Add(parameter);
-            command.Parameters.AddWithValue(parameter, version);
-        }
-
-        command.CommandText = $"""
-            SELECT s.version_id,s.path,s.symbol_id,s.name,s.kind,s.language,s.visibility,s.metadata_json
+        command.CommandText =
+            """
+            SELECT s.version_id,s.path,s.symbol_id,s.name,s.kind,s.language,s.visibility,
+                   s.start_byte,s.end_byte,s.metadata_json
             FROM main.symbols AS s
             JOIN main.manifest_entries AS e ON e.version_id=s.version_id
-            WHERE e.view_id=$view_id AND e.generation=$generation AND s.version_id IN ({string.Join(',', placeholders)})
+            WHERE e.view_id=$view_id AND e.generation=$generation
+              AND (s.language='qml' OR s.language='qmldir')
+              AND EXISTS (
+                    SELECT 1 FROM json_each($versions) requested
+                    WHERE CAST(requested.value AS INTEGER)=s.version_id)
             ORDER BY s.version_id,s.symbol_id
             """;
         command.Parameters.AddWithValue("$view_id", visibility.ViewId);
         command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
+        command.Parameters.AddWithValue("$versions", JsonSerializer.Serialize(versions));
         using SqliteDataReader reader = command.ExecuteReader();
         var rows = new List<QmlSymbolRow>();
         while (reader.Read())
@@ -519,7 +488,44 @@ internal sealed class QmlVisibilityCatalog
                 kind.Value,
                 intern.Intern(reader.GetString(5)),
                 reader.IsDBNull(6) ? null : intern.Intern(reader.GetString(6)),
-                reader.IsDBNull(7) ? null : reader.GetString(7)));
+                reader.GetInt64(7),
+                reader.GetInt64(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9)));
+        }
+
+        return rows;
+    }
+
+    private static List<QmlSymbolRow> ReadArtifactSymbols(SqliteConnection connection, StringInternPool intern)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT f.rowid,s.path,s.symbol_id,s.name,s.kind,s.language,s.visibility,
+                   s.start_byte,s.end_byte,s.metadata_json
+            FROM symbols AS s
+            JOIN files AS f ON f.file_id=s.file_id
+            WHERE s.language='qml' OR s.language='qmldir'
+            ORDER BY f.rowid,s.symbol_id
+            """;
+        using SqliteDataReader reader = command.ExecuteReader();
+        var rows = new List<QmlSymbolRow>();
+        while (reader.Read())
+        {
+            FactSymbolKind? kind = ResolutionPolicy.ParseSymbolKind(reader.GetString(4));
+            if (kind is null)
+                continue;
+            rows.Add(new QmlSymbolRow(
+                reader.GetInt64(0),
+                intern.Intern(NormalizePath(reader.GetString(1))),
+                intern.Intern(reader.GetString(2)),
+                intern.Intern(reader.GetString(3)),
+                kind.Value,
+                intern.Intern(reader.GetString(5)),
+                reader.IsDBNull(6) ? null : intern.Intern(reader.GetString(6)),
+                reader.GetInt64(7),
+                reader.GetInt64(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9)));
         }
 
         return rows;
@@ -544,6 +550,100 @@ internal sealed class QmlVisibilityCatalog
             """;
         command.Parameters.AddWithValue("$view_id", visibility.ViewId);
         command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
+        return ReadFacts(command, intern);
+    }
+
+    private static List<QmlStructuralRow> ReadStoreFactsForConsumer(
+        SqliteConnection connection,
+        StoreVisibility visibility,
+        string consumerPath,
+        IReadOnlyList<QmlImportRow> imports,
+        StringInternPool intern)
+    {
+        if (!TableExists(connection, "structural_facts"))
+            return [];
+
+        string consumerDirectory = DirectoryOf(consumerPath);
+        var directories = new HashSet<string>(StringComparer.Ordinal) { consumerDirectory };
+        foreach (QmlImportRow import in imports.Where(import => import.Kind == "directory"))
+            directories.Add(ResolveDirectory(consumerPath, import.Source));
+
+        string[] modules = imports
+            .Where(import => import.Kind == "module")
+            .Select(import => import.Source)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        List<QmlStructuralRow> moduleFacts = ReadStoreModuleFacts(
+            connection,
+            visibility,
+            modules,
+            directories,
+            intern);
+        Dictionary<long, QmlStructuralModel> moduleModels = DecodeFacts(moduleFacts, intern);
+        foreach (QmlStructuralModel model in moduleModels.Values)
+            directories.Add(DirectoryOf(model.Path));
+
+        return ReadStoreFactsInDirectories(connection, visibility, directories, intern);
+    }
+
+    private static List<QmlStructuralRow> ReadStoreModuleFacts(
+        SqliteConnection connection,
+        StoreVisibility visibility,
+        IReadOnlyCollection<string> modules,
+        IReadOnlyCollection<string> directories,
+        StringInternPool intern)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandTimeout = 0;
+        command.CommandText =
+            """
+            SELECT f.version_id,f.path,f.pattern_id,f.start_byte,f.end_byte,f.metadata_json
+            FROM main.structural_facts AS f
+            JOIN main.manifest_entries AS e ON e.version_id=f.version_id
+            WHERE e.view_id=$view_id AND e.generation=$generation
+              AND f.pattern_id='qmldir.module.v1'
+              AND (
+                    EXISTS (
+                        SELECT 1 FROM json_each($modules) requested
+                        WHERE json_extract(f.metadata_json,'$.module')=requested.value)
+                 OR EXISTS (
+                        SELECT 1 FROM json_each($directories) requested
+                        WHERE (
+                            (requested.value='.' AND instr(replace(f.path,'\','/'),'/')=0)
+                            OR replace(f.path,'\','/') LIKE requested.value || '/%')))
+            ORDER BY f.version_id,f.path,f.start_byte,f.pattern_id
+            """;
+        command.Parameters.AddWithValue("$view_id", visibility.ViewId);
+        command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
+        command.Parameters.AddWithValue("$modules", JsonSerializer.Serialize(modules));
+        command.Parameters.AddWithValue("$directories", JsonSerializer.Serialize(directories));
+        return ReadFacts(command, intern);
+    }
+
+    private static List<QmlStructuralRow> ReadStoreFactsInDirectories(
+        SqliteConnection connection,
+        StoreVisibility visibility,
+        IReadOnlyCollection<string> directories,
+        StringInternPool intern)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandTimeout = 0;
+        command.CommandText =
+            """
+            SELECT f.version_id,f.path,f.pattern_id,f.start_byte,f.end_byte,f.metadata_json
+            FROM main.structural_facts AS f
+            JOIN main.manifest_entries AS e ON e.version_id=f.version_id
+            WHERE e.view_id=$view_id AND e.generation=$generation
+              AND EXISTS (
+                    SELECT 1 FROM json_each($directories) requested
+                    WHERE (
+                        (requested.value='.' AND instr(replace(f.path,'\','/'),'/')=0)
+                        OR replace(f.path,'\','/') LIKE requested.value || '/%'))
+            ORDER BY f.version_id,f.path,f.start_byte,f.pattern_id
+            """;
+        command.Parameters.AddWithValue("$view_id", visibility.ViewId);
+        command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
+        command.Parameters.AddWithValue("$directories", JsonSerializer.Serialize(directories));
         return ReadFacts(command, intern);
     }
 
@@ -572,8 +672,8 @@ internal sealed class QmlVisibilityCatalog
                 reader.GetInt64(0),
                 intern.Intern(NormalizePath(reader.GetString(1))),
                 intern.Intern(reader.GetString(2)),
-                reader.IsDBNull(3) ? 0 : reader.GetInt64(3),
-                reader.IsDBNull(4) ? 0 : reader.GetInt64(4),
+                reader.GetInt64(3),
+                reader.GetInt64(4),
                 reader.IsDBNull(5) ? null : reader.GetString(5)));
         }
 
@@ -838,7 +938,14 @@ internal sealed class QmlVisibilityCatalog
         long StartByte,
         long EndByte);
 
-    private sealed record QmlImportRow(string Path, string Kind, string Source, string? Alias, QmlVersionConstraint? Version);
+    private sealed record QmlImportRow(
+        string Path,
+        string Kind,
+        string Source,
+        string? Alias,
+        QmlVersionConstraint? Version,
+        long StartByte,
+        long EndByte);
 
     private sealed record QmlSymbolRow(
         long VersionId,
@@ -848,6 +955,8 @@ internal sealed class QmlVisibilityCatalog
         FactSymbolKind Kind,
         string Language,
         string? Visibility,
+        long StartByte,
+        long EndByte,
         string? MetadataJson);
 
     private sealed record QmlStructuralRow(

@@ -168,10 +168,10 @@ Commit mode: all tasks use `serial-worker-commit`; each task changes shared cont
 **Approach:** Add equivalent store and artifact fixture tests before implementation. Normalize paths with existing cross-platform helpers, intern repeated strings through current cache facilities, and bound candidate expansion to manifest/directory scopes.
 
 **Acceptance criteria:**
-- [ ] Store and artifact constructors return identical ordered candidate records.
-- [ ] Internal, aliased, versioned, directory, and URI visibility are represented without guessed module names.
-- [ ] Unknown/malformed facts follow existing compatibility diagnostics and do not create candidates.
-- [ ] Worker-scope verification passes and the worker commits per `serial-worker-commit`.
+- [x] Store and artifact constructors return identical ordered candidate records.
+- [x] Internal, aliased, versioned, directory, and URI visibility are represented without guessed module names.
+- [x] Unknown/malformed facts follow existing compatibility diagnostics and do not create candidates.
+- [x] Worker-scope verification passes and the worker commits per `serial-worker-commit`.
 
 ### Task 4: Resolve QML instantiations with module scope
 
