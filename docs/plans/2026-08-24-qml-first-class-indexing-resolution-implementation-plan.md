@@ -105,10 +105,10 @@ Commit mode: all tasks use `serial-worker-commit`; each task changes shared cont
 **Approach:** Treat version constants and fixture contents as one contract migration. Preserve existing fail-closed behavior for older/newer incompatible artifacts and do not add compatibility shims for missing QML facts.
 
 **Acceptance criteria:**
-- [ ] Extractor, schema, and contract pins identify one released Julie build.
-- [ ] Compatibility tests accept that artifact and reject incompatible versions with existing error codes.
-- [ ] Fixture preflight proves all required QML-family row kinds are present.
-- [ ] Worker-scope verification passes and the worker commits per `serial-worker-commit`.
+- [x] Extractor, schema, and contract pins identify one released Julie build.
+- [x] Compatibility tests accept that artifact and reject incompatible versions with existing error codes.
+- [x] Fixture preflight proves all required QML-family row kinds are present.
+- [x] Worker-scope verification passes and the worker commits per `serial-worker-commit`.
 
 ### Task 2: Add typed QML visibility facts
 

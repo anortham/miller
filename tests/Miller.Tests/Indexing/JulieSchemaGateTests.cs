@@ -36,7 +36,7 @@ public sealed class JulieSchemaGateTests
         Assert.Equal(7, MillerExtractContract.ExpectedSqliteSchemaVersion);
         Assert.Equal(4, MillerExtractContract.ExpectedExtractContractVersion);
         Assert.Equal(5, MillerExtractContract.ExpectedJsonlSchemaVersion);
-        Assert.Equal("2.35.0", MillerExtractContract.PinnedJulieExtractVersion);
+        Assert.Equal("2.35.1", MillerExtractContract.PinnedJulieExtractVersion);
     }
 
     private static SqliteConnection OpenReadOnly(string dbPath)
@@ -54,6 +54,15 @@ public sealed class JulieSchemaGateTests
         using var conn = OpenReadOnly(fx.DbPath);
 
         // No exception == compatible. Calling it is the assertion; a throw would fail the test.
+        JulieSchemaGate.Verify(conn);
+    }
+
+    [Fact]
+    public void Verify_ReleasedQmlFixture_DoesNotThrow()
+    {
+        string artifact = Path.Combine(
+            ScaleTestSupport.RepoRoot(), "tests", "Miller.Tests", "Fixtures", "QmlFirstClass", "symbols.db");
+        using var conn = OpenReadOnly(artifact);
         JulieSchemaGate.Verify(conn);
     }
 

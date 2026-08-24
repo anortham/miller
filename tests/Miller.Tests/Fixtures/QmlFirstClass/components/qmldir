@@ -1,0 +1,5 @@
+module Example.Components
+RemoteCard 1.0 RemoteCard.qml
+singleton Theme 1.0 Theme.qml
+internal InternalCard InternalCard.qml
+typeinfo Module.qmltypes

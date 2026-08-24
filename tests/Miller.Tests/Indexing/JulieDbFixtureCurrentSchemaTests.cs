@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Xunit;
@@ -11,6 +13,12 @@ namespace Miller.Tests.Indexing;
 /// </summary>
 public sealed class JulieDbFixtureCurrentSchemaTests
 {
+    private const string QmlFixtureArtifactSha256 =
+        "b30424877ae1d7e04e2ed7659e190d75578bb20882046c0a80d6144f92f6cb4a";
+
+    private static string QmlFixtureArtifactPath => Path.Combine(
+        ScaleTestSupport.RepoRoot(), "tests", "Miller.Tests", "Fixtures", "QmlFirstClass", "symbols.db");
+
     private static SqliteConnection Open(string dbPath)
     {
         var c = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -60,6 +68,72 @@ public sealed class JulieDbFixtureCurrentSchemaTests
         Assert.False(TableExists(c, "schema_version"), "schema_version table is dropped in v1");
         Assert.False(TableExists(c, "external_extract_metadata"),
             "external_extract_metadata is dropped in v1 (hash_algorithm moved onto artifact_metadata)");
+    }
+
+    [Fact]
+    public void QmlFixture_ContainsReleasedJulieFamilyFacts()
+    {
+        Assert.Equal(
+            QmlFixtureArtifactSha256,
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(QmlFixtureArtifactPath))).ToLowerInvariant());
+
+        using var c = Open(QmlFixtureArtifactPath);
+
+        Assert.Equal("2.35.1", Metadata(c, "binary_version"));
+        Assert.Equal("7", Metadata(c, "schema_version"));
+        Assert.Equal("7", Metadata(c, "sqlite_schema_version"));
+        Assert.Equal("4", Metadata(c, "extract_contract_version"));
+        Assert.Equal("blake3", Metadata(c, "hash_algorithm"));
+
+        AssertMetadata(c, "source.qml", "components", "import_kind", "directory");
+        AssertMetadata(c, "source.qml", "components", "alias", "Components");
+        AssertMetadata(c, "source.qml", "QtQuick.Controls", "import_kind", "module");
+        AssertMetadata(c, "source.qml", "./js/helpers.js", "import_kind", "javascript");
+
+        foreach (string pattern in new[]
+        {
+            "qmldir.module.v1", "qmldir.object_type.v1", "qmldir.singleton_type.v1",
+            "qmldir.internal_type.v1", "qmldir.typeinfo.v1",
+        })
+            Assert.Equal(1L, Count(c, "SELECT COUNT(*) FROM structural_facts WHERE path='components/qmldir' AND pattern_id=$p;", ("$p", pattern)));
+
+        using (var command = c.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT metadata_json
+                FROM symbols
+                WHERE path='components/Module.qmltypes' AND name='RemoteCard' AND kind='class';
+                """;
+            using var reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            using JsonDocument metadata = JsonDocument.Parse(reader.GetString(0));
+            Assert.Equal("type", metadata.RootElement.GetProperty("typeinfo_kind").GetString());
+            Assert.Contains(
+                "Example/Components 1.0",
+                metadata.RootElement.GetProperty("exports").EnumerateArray().Select(value => value.GetString()),
+                StringComparer.Ordinal);
+        }
+
+        AssertMetadata(c, "components/qmldir", "RemoteCard", "file", "RemoteCard.qml");
+        Assert.Equal(1L, Count(c, "SELECT COUNT(*) FROM files WHERE path='components/RemoteCard.qml';"));
+
+        using (var command = c.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT target_display_name, target_terminal_name
+                FROM pending_relationships
+                WHERE path='source.qml' AND kind='instantiates'
+                ORDER BY target_terminal_name;
+                """;
+            using var reader = command.ExecuteReader();
+            var rows = new List<(string Display, string Terminal)>();
+            while (reader.Read())
+                rows.Add((reader.GetString(0), reader.GetString(1)));
+
+            Assert.Equal(
+                new[] { ("LocalCard", "LocalCard"), ("Components.RemoteCard", "RemoteCard") },
+                rows);
+        }
     }
 
     [Fact]
@@ -406,5 +480,34 @@ public sealed class JulieDbFixtureCurrentSchemaTests
         using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.ExecuteNonQuery();
+    }
+
+    private static string Metadata(SqliteConnection connection, string key)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT value FROM artifact_metadata WHERE key=$key;";
+        command.Parameters.AddWithValue("$key", key);
+        return Assert.IsType<string>(command.ExecuteScalar());
+    }
+
+    private static void AssertMetadata(
+        SqliteConnection connection, string path, string name, string key, string expected)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT metadata_json FROM symbols WHERE path=$path AND name=$name;";
+        command.Parameters.AddWithValue("$path", path);
+        command.Parameters.AddWithValue("$name", name);
+        using JsonDocument metadata = JsonDocument.Parse(Assert.IsType<string>(command.ExecuteScalar()));
+        Assert.Equal(expected, metadata.RootElement.GetProperty(key).GetString());
+    }
+
+    private static long Count(
+        SqliteConnection connection, string sql, params (string Name, object Value)[] parameters)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        foreach ((string name, object value) in parameters)
+            command.Parameters.AddWithValue(name, value);
+        return System.Convert.ToInt64(command.ExecuteScalar());
     }
 }
