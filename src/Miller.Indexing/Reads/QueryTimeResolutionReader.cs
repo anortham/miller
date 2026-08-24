@@ -39,6 +39,25 @@ internal sealed record QueryTimeExportEvidence(
     string? SourceKind,
     bool? SourceIsTest);
 
+internal sealed class QueryTimeResolutionCounters
+{
+    private int _resolvePasses;
+    private int _identifierDetailCommands;
+    private int _identifierDetailRows;
+
+    internal int ResolvePasses => Volatile.Read(ref _resolvePasses);
+
+    internal int IdentifierDetailCommands => Volatile.Read(ref _identifierDetailCommands);
+
+    internal int IdentifierDetailRows => Volatile.Read(ref _identifierDetailRows);
+
+    internal void RecordResolvePass() => Interlocked.Increment(ref _resolvePasses);
+
+    internal void RecordIdentifierDetailCommand() => Interlocked.Increment(ref _identifierDetailCommands);
+
+    internal void RecordIdentifierDetailRow() => Interlocked.Increment(ref _identifierDetailRows);
+}
+
 internal sealed class QueryTimeResolutionReader
 {
     private const int IdChunkSize = 128;
@@ -46,6 +65,8 @@ internal sealed class QueryTimeResolutionReader
     private readonly RevisionFactCache _cache;
     private readonly StoreVisibility? _visibility;
     private readonly QueryTimeResolver _resolver;
+    private readonly object _scratchGate = new();
+    private PendingScratch? _pendingScratch;
 
     internal QueryTimeResolutionReader(RevisionFactCache cache, StoreVisibility? visibility)
     {
@@ -56,6 +77,8 @@ internal sealed class QueryTimeResolutionReader
     }
 
     internal RevisionFactCache Cache => _cache;
+
+    internal QueryTimeResolutionCounters Counters { get; } = new();
 
     public IReadOnlyList<FamilyGraphResolutionEdge> ReadResolutionEdges(
         SqliteConnection connection,
@@ -69,7 +92,11 @@ internal sealed class QueryTimeResolutionReader
             return [];
 
         long started = System.Diagnostics.Stopwatch.GetTimestamp();
-        QueryScratch scratch = ResolveQuery(connection, candidateIds);
+        QueryScratch scratch = ResolveGraphQuery(
+            connection,
+            candidateIds,
+            direction,
+            GraphReadKind.Resolution);
         var edges = new List<FamilyGraphResolutionEdge>();
         foreach (string candidateId in candidateIds)
         {
@@ -173,7 +200,11 @@ internal sealed class QueryTimeResolutionReader
             return [];
 
         long started = System.Diagnostics.Stopwatch.GetTimestamp();
-        QueryScratch scratch = ResolveQuery(connection, candidateIds);
+        QueryScratch scratch = ResolveGraphQuery(
+            connection,
+            candidateIds,
+            direction,
+            GraphReadKind.Unresolved);
         var edges = new List<FamilyGraphUnresolvedNameEdge>();
         foreach (string candidateId in candidateIds)
         {
@@ -562,38 +593,103 @@ internal sealed class QueryTimeResolutionReader
         return new QueryScratch(_cache, candidates, identifiers, pendings, ReadAllRelationships(connection));
     }
 
+    private QueryScratch ResolveGraphQuery(
+        SqliteConnection connection,
+        IReadOnlyList<string> candidateIds,
+        Direction direction,
+        GraphReadKind kind)
+    {
+        lock (_scratchGate)
+        {
+            if (_pendingScratch is { } pending
+                && pending.Kind != kind
+                && ReferenceEquals(pending.Connection, connection)
+                && pending.Direction == direction
+                && SameIds(pending.CandidateIds, candidateIds))
+            {
+                _pendingScratch = null;
+                return pending.Scratch;
+            }
+        }
+
+        QueryScratch scratch = ResolveQuery(connection, candidateIds);
+        lock (_scratchGate)
+            _pendingScratch = new PendingScratch(connection, candidateIds.ToArray(), direction, kind, scratch);
+
+        return scratch;
+    }
+
     private QueryScratch ResolveQuery(SqliteConnection connection, IReadOnlyList<string> candidateIds)
     {
+        Counters.RecordResolvePass();
         Dictionary<string, CandidateRecord> candidates = ReadCandidates(connection, candidateIds);
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (CandidateRecord candidate in candidates.Values)
             names.Add(candidate.Name);
 
-        var identifiers = new List<ResolvedIdentifier>();
+        var identifierSites = new List<ResolutionIdentifierSite>();
         var seenIdentifiers = new HashSet<(long VersionId, long RowId)>();
         foreach (ResolutionIdentifierSite site in ReadIdentifierSites(connection, candidateIds, names))
         {
-            if (!seenIdentifiers.Add((site.VersionId, site.RowId)))
-                continue;
-            identifiers.Add(ResolveIdentifier(connection, site));
+            if (seenIdentifiers.Add((site.VersionId, site.RowId)))
+                identifierSites.Add(site);
         }
 
-        var pendings = new List<ResolvedPending>();
+        var pendingSites = new List<PendingSite>();
         var seenPendings = new HashSet<(long VersionId, string PendingId)>(PendingKeyComparer.Instance);
         foreach (PendingSite site in ReadPendingSites(connection, candidateIds, names))
         {
-            if (!seenPendings.Add((site.VersionId, site.PendingId)))
-                continue;
-            pendings.Add(ResolvePending(site));
+            if (seenPendings.Add((site.VersionId, site.PendingId)))
+                pendingSites.Add(site);
         }
+
+        var versions = new HashSet<long>();
+        foreach (CandidateRecord candidate in candidates.Values)
+            versions.Add(candidate.VersionId);
+        foreach (ResolutionIdentifierSite site in identifierSites)
+            versions.Add(site.VersionId);
+        foreach (PendingSite site in pendingSites)
+            versions.Add(site.VersionId);
+        _cache.PrefetchSlices(versions);
+
+        Dictionary<(long VersionId, long RowId), SiteDetails> details =
+            ReadIdentifierDetailsBatch(connection, identifierSites);
+        var identifiers = new List<ResolvedIdentifier>(identifierSites.Count);
+        foreach (ResolutionIdentifierSite site in identifierSites)
+        {
+            if (!details.TryGetValue((site.VersionId, site.RowId), out SiteDetails siteDetails))
+                siteDetails = MissingIdentifierDetails(site);
+            identifiers.Add(ResolveIdentifier(site, siteDetails));
+        }
+
+        var pendings = new List<ResolvedPending>(pendingSites.Count);
+        foreach (PendingSite site in pendingSites)
+            pendings.Add(ResolvePending(site));
 
         IReadOnlyList<RelationshipSite> relationships = ReadRelationships(connection, candidateIds);
         return new QueryScratch(_cache, candidates, identifiers, pendings, relationships);
     }
 
+    private static bool SameIds(IReadOnlyList<string> left, IReadOnlyList<string> right)
+    {
+        if (left.Count != right.Count)
+            return false;
+        for (int i = 0; i < left.Count; i++)
+        {
+            if (!string.Equals(left[i], right[i], StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
+    }
+
     private ResolvedIdentifier ResolveIdentifier(SqliteConnection connection, ResolutionIdentifierSite site)
     {
-        SiteDetails details = ReadIdentifierDetails(connection, site);
+        return ResolveIdentifier(site, ReadIdentifierDetails(connection, site));
+    }
+
+    private ResolvedIdentifier ResolveIdentifier(ResolutionIdentifierSite site, SiteDetails details)
+    {
         bool skip = _cache.Propagation.TryGetOverride(site.VersionId, site.RowId, out PropagationSource source);
         ResolutionRefKind? kind = ResolutionKinds.FromIdentifierKind(site.Kind);
         if (kind is null)
@@ -958,6 +1054,98 @@ internal sealed class QueryTimeResolutionReader
         return ids;
     }
 
+    private Dictionary<(long VersionId, long RowId), SiteDetails> ReadIdentifierDetailsBatch(
+        SqliteConnection connection,
+        IReadOnlyList<ResolutionIdentifierSite> sites)
+    {
+        var rows = new Dictionary<(long VersionId, long RowId), SiteDetails>();
+        if (sites.Count == 0)
+            return rows;
+
+        var identifierIds = new Dictionary<(long VersionId, long RowId), string>();
+        foreach (ResolutionIdentifierSite site in sites)
+            identifierIds[(site.VersionId, site.RowId)] = site.IdentifierId;
+
+        for (int offset = 0; offset < sites.Count; offset += IdChunkSize)
+        {
+            int count = Math.Min(IdChunkSize, sites.Count - offset);
+            using SqliteCommand command = connection.CreateCommand();
+            string values = ValuesClause(command, sites, offset, count);
+            command.CommandText = _visibility is null
+                ? $"""
+                    WITH requested(version_id,row_id) AS (VALUES {values})
+                    SELECT requested.version_id,requested.row_id,
+                           COALESCE(s.path,i.path),COALESCE(s.language,i.language),i.reference_site_id,
+                           s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,
+                           s.is_exact,s.provenance,s.containing_symbol_id
+                    FROM requested
+                    JOIN identifiers AS i ON i.rowid=requested.row_id
+                    JOIN files AS f ON f.file_id=i.file_id AND f.rowid=requested.version_id
+                    LEFT JOIN reference_sites AS s ON s.reference_site_id=i.reference_site_id
+                    """
+                : $"""
+                    WITH requested(version_id,row_id) AS (VALUES {values})
+                    SELECT requested.version_id,requested.row_id,
+                           COALESCE(s.path,i.path),COALESCE(s.language,i.language),i.reference_site_id,
+                           s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,
+                           s.is_exact,s.provenance,s.containing_symbol_id
+                    FROM requested
+                    JOIN main.identifiers AS i
+                      ON i.version_id=requested.version_id AND i.rowid=requested.row_id
+                    LEFT JOIN main.reference_sites AS s
+                      ON s.version_id=i.version_id AND s.reference_site_id=i.reference_site_id
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM main.manifest_entries AS e
+                        WHERE e.version_id=i.version_id
+                          AND e.view_id=$view_id AND e.generation=$generation)
+                    """;
+            BindVisibility(command);
+            Counters.RecordIdentifierDetailCommand();
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                long versionId = reader.GetInt64(0);
+                long rowId = reader.GetInt64(1);
+                bool hasSite = !reader.IsDBNull(12);
+                string key = identifierIds[(versionId, rowId)];
+                rows[(versionId, rowId)] = new SiteDetails(
+                    hasSite,
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? key : reader.GetString(4),
+                    ReadNullableInt64(reader, 5),
+                    ReadNullableInt64(reader, 6),
+                    ReadNullableInt64(reader, 7),
+                    ReadNullableInt64(reader, 8),
+                    ReadNullableInt64(reader, 9),
+                    ReadNullableInt64(reader, 10),
+                    hasSite && reader.GetInt64(11) == 1,
+                    hasSite ? reader.GetString(12) : string.Empty,
+                    reader.IsDBNull(13) ? null : reader.GetString(13));
+                Counters.RecordIdentifierDetailRow();
+            }
+        }
+
+        return rows;
+    }
+
+    private SiteDetails MissingIdentifierDetails(ResolutionIdentifierSite site) =>
+        new(
+            HasSiteRow: false,
+            string.Empty,
+            _cache.Slice(site.VersionId)?.Language ?? string.Empty,
+            site.IdentifierId,
+            StartLine: null,
+            StartColumn: null,
+            EndLine: null,
+            EndColumn: null,
+            StartByte: null,
+            EndByte: null,
+            IsExact: false,
+            string.Empty,
+            SiteContainingSymbolId: null);
+
     private SiteDetails ReadIdentifierDetails(SqliteConnection connection, ResolutionIdentifierSite site)
     {
         using SqliteCommand command = connection.CreateCommand();
@@ -985,25 +1173,14 @@ internal sealed class QueryTimeResolutionReader
         }
 
         command.Parameters.AddWithValue("$rowid", site.RowId);
+        Counters.RecordIdentifierDetailCommand();
         using SqliteDataReader reader = command.ExecuteReader();
         if (!reader.Read())
         {
-            return new SiteDetails(
-                HasSiteRow: false,
-                string.Empty,
-                _cache.Slice(site.VersionId)?.Language ?? string.Empty,
-                site.IdentifierId,
-                StartLine: null,
-                StartColumn: null,
-                EndLine: null,
-                EndColumn: null,
-                StartByte: null,
-                EndByte: null,
-                IsExact: false,
-                string.Empty,
-                SiteContainingSymbolId: null);
+            return MissingIdentifierDetails(site);
         }
 
+        Counters.RecordIdentifierDetailRow();
         bool hasSite = !reader.IsDBNull(10);
         return new SiteDetails(
             hasSite,
@@ -1489,6 +1666,28 @@ internal sealed class QueryTimeResolutionReader
         return string.Join(',', parts);
     }
 
+    private static string ValuesClause(
+        SqliteCommand command,
+        IReadOnlyList<ResolutionIdentifierSite> sites,
+        int offset,
+        int count)
+    {
+        var rows = new string[count];
+        for (int i = 0; i < count; i++)
+        {
+            int index = offset + i;
+            rows[i] = $"($version{i.ToString(CultureInfo.InvariantCulture)},$row{i.ToString(CultureInfo.InvariantCulture)})";
+            command.Parameters.AddWithValue(
+                "$version" + i.ToString(CultureInfo.InvariantCulture),
+                sites[index].VersionId);
+            command.Parameters.AddWithValue(
+                "$row" + i.ToString(CultureInfo.InvariantCulture),
+                sites[index].RowId);
+        }
+
+        return string.Join(',', rows);
+    }
+
     private static void BindIds(SqliteCommand command, string[] ids)
     {
         for (int i = 0; i < ids.Length; i++)
@@ -1496,6 +1695,19 @@ internal sealed class QueryTimeResolutionReader
     }
 
     private readonly record struct CandidateRecord(string Id, long VersionId, string Name);
+
+    private sealed record PendingScratch(
+        SqliteConnection Connection,
+        string[] CandidateIds,
+        Direction Direction,
+        GraphReadKind Kind,
+        QueryScratch Scratch);
+
+    private enum GraphReadKind
+    {
+        Resolution,
+        Unresolved,
+    }
 
     private readonly record struct SiteDetails(
         bool HasSiteRow,

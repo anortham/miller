@@ -263,6 +263,44 @@ public sealed class QueryTimeResolutionReaderTests
         Assert.NotEmpty(reader.ReadResolutionEdges(connection, [Run], Direction.Forward, statementObserver: null));
     }
 
+    [Fact]
+    public void GraphFrontierReusesScratchAndBatchesIdentifierDetails()
+    {
+        using ResolutionStoreFixture fixture = PopulateStore();
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+        string[] candidates = [Run, Helper, Count, DupA];
+
+        IReadOnlyList<FamilyGraphUnresolvedNameEdge> unresolved = reader.ReadUnresolvedNameEdges(
+            connection, candidates, Direction.Both, statementObserver: null);
+        IReadOnlyList<FamilyGraphResolutionEdge> resolution = reader.ReadResolutionEdges(
+            connection, candidates, Direction.Both, statementObserver: null);
+
+        Assert.NotEmpty(resolution);
+        Assert.NotEmpty(unresolved);
+        Assert.Equal(1, reader.Counters.ResolvePasses);
+        Assert.Equal(1, reader.Counters.IdentifierDetailCommands);
+        Assert.Equal(5, reader.Counters.IdentifierDetailRows);
+    }
+
+    [Fact]
+    public void GraphFrontierPreservesCandidateOrderAndDuplicates()
+    {
+        using ResolutionStoreFixture fixture = PopulateStore();
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+
+        IReadOnlyList<FamilyGraphResolutionEdge> single = reader.ReadResolutionEdges(
+            connection, [Run], Direction.Forward, statementObserver: null);
+        IReadOnlyList<FamilyGraphResolutionEdge> repeated = reader.ReadResolutionEdges(
+            connection, [Run, Count, Run], Direction.Forward, statementObserver: null);
+
+        Assert.NotEmpty(single);
+        Assert.Equal(single.Count * 2, repeated.Count);
+        Assert.Equal(single, repeated.Take(single.Count));
+        Assert.Equal(single, repeated.Skip(single.Count));
+    }
+
     private static readonly string[] RetiredGraphTuples =
     [
         "fn-help|fn-run|fn-help|calls|0.55|pending_resolution",

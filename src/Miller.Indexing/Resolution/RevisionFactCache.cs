@@ -142,6 +142,7 @@ internal sealed class RevisionFactCache : IResolutionFacts
     private readonly StoreVisibility? _visibility;
     private readonly BoundedStoreSource? _bounded;
     private readonly object _boundedGate = new();
+    private int _boundedSliceMisses;
     private Dictionary<string, List<PackedRef>> _byName = new(StringComparer.Ordinal);
     private Dictionary<long, ImportBinding[]> _imports = [];
 
@@ -179,6 +180,15 @@ internal sealed class RevisionFactCache : IResolutionFacts
     internal PropagationIndex Propagation { get; private set; }
 
     internal long ResidentBytes { get; private set; }
+
+    internal int BoundedSliceMisses
+    {
+        get
+        {
+            lock (_boundedGate)
+                return _boundedSliceMisses;
+        }
+    }
 
     /// <summary>Files this cache has materialized. A full load has one per visible file from the start.</summary>
     internal int LoadedSliceCount
@@ -444,6 +454,45 @@ internal sealed class RevisionFactCache : IResolutionFacts
 
     internal VersionSlice? Slice(long versionId) => SliceFor(versionId);
 
+    internal void PrefetchSlices(IEnumerable<long> versionIds)
+    {
+        if (_bounded is not { } bounded)
+            return;
+
+        lock (_boundedGate)
+        {
+            var files = new List<RevisionFactCacheLoader.VisibleFile>();
+            foreach (long versionId in versionIds.Distinct().OrderBy(static id => id))
+            {
+                if (_slices.ContainsKey(versionId)
+                    || !bounded.TryGetVisibleFile(versionId, out RevisionFactCacheLoader.VisibleFile file))
+                {
+                    continue;
+                }
+
+                files.Add(file);
+            }
+
+            if (files.Count == 0)
+                return;
+
+            Dictionary<long, VersionSlice> loaded = RevisionFactCacheLoader.LoadStoreSlices(
+                bounded.Connection,
+                bounded.Visibility,
+                files,
+                _intern,
+                indexedLocate: true);
+            _boundedSliceMisses += loaded.Count;
+            foreach ((long versionId, VersionSlice slice) in loaded)
+            {
+                slice.Imports = RevisionFactCacheLoader.BindImports(slice, _pathIndex);
+                slice.ImportSeeds = [];
+                _slices[versionId] = slice;
+                _imports[versionId] = slice.Imports;
+            }
+        }
+    }
+
     // A full load never mutates after its constructor, so its readers need no lock. A bounded one fills as it
     // is queried — _slices, _imports and the name cache all grow on an ACCESSOR — and the reader it lives in is
     // handed out (IQueryTimeResolutionHost.Resolution, WorkspaceReadHandle.ResolutionReader) with no promise
@@ -468,12 +517,15 @@ internal sealed class RevisionFactCache : IResolutionFacts
             return null;
         }
 
-        VersionSlice slice = RevisionFactCacheLoader.LoadStoreSlice(
+        Dictionary<long, VersionSlice> loaded = RevisionFactCacheLoader.LoadStoreSlices(
             bounded.Connection,
             bounded.Visibility,
-            file,
+            [file],
             _intern,
             indexedLocate: true);
+        if (!loaded.TryGetValue(versionId, out VersionSlice? slice))
+            return null;
+        _boundedSliceMisses++;
         slice.Imports = RevisionFactCacheLoader.BindImports(slice, _pathIndex);
         slice.ImportSeeds = [];
         _slices[versionId] = slice;

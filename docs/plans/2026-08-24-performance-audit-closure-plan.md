@@ -134,8 +134,8 @@ Close every deferred or open item in `docs/findings/2026-08-23-performance-audit
 
 **Acceptance criteria:**
 
-- [ ] Impact and Context rendered output is byte-identical on the fixed workload.
-- [ ] `--max-hops 0` performs zero frontier detail reads and slice loads.
+- [x] Impact and Context rendered output is byte-identical on the fixed workload.
+- [x] `--max-hops 0` performs zero frontier detail reads and slice loads.
 - [ ] Deterministic counters remove the measured 11k/429-style fan-out and warm ten-run p95 improves for both tools, or the audit retires a sub-finding with counter evidence.
 
 ## Task 9: Close the audit and verify the branch

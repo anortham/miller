@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Resolution;
 using Miller.Indexing.Reads;
@@ -62,6 +63,34 @@ internal static class RevisionFactCacheLoader
         IReadOnlyList<VisibleFile> files,
         StringInternPool intern)
     {
+        var slices = CreateSlices(files, intern);
+        FillStoreSymbols(connection, visibility, slices, intern);
+        FillStoreTypeFacts(connection, visibility, slices, intern);
+        FillStorePropagation(connection, visibility, slices);
+        return slices;
+    }
+
+    internal static Dictionary<long, VersionSlice> LoadStoreSlices(
+        SqliteConnection connection,
+        StoreVisibility visibility,
+        IReadOnlyList<VisibleFile> files,
+        StringInternPool intern,
+        bool indexedLocate = false)
+    {
+        var slices = CreateSlices(files, intern);
+        if (slices.Count == 0)
+            return slices;
+
+        FillStoreSymbols(connection, visibility, slices, intern, files);
+        FillStoreTypeFacts(connection, visibility, slices, intern, files);
+        FillStorePropagation(connection, visibility, slices, files, indexedLocate);
+        return slices;
+    }
+
+    private static Dictionary<long, VersionSlice> CreateSlices(
+        IReadOnlyList<VisibleFile> files,
+        StringInternPool intern)
+    {
         var slices = new Dictionary<long, VersionSlice>(files.Count);
         foreach (VisibleFile file in files)
         {
@@ -75,10 +104,6 @@ internal static class RevisionFactCacheLoader
                 [],
                 []);
         }
-
-        FillStoreSymbols(connection, visibility, slices, intern);
-        FillStoreTypeFacts(connection, visibility, slices, intern);
-        FillStorePropagation(connection, visibility, slices);
         return slices;
     }
 
@@ -114,16 +139,18 @@ internal static class RevisionFactCacheLoader
         SqliteConnection connection,
         StoreVisibility visibility,
         Dictionary<long, VersionSlice> slices,
-        StringInternPool intern)
+        StringInternPool intern,
+        IReadOnlyList<VisibleFile>? files = null)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandTimeout = 0;
+        string versions = VersionFilter(command, "s.version_id", files);
         command.CommandText =
-            """
+            $"""
             SELECT s.version_id,s.symbol_id,s.name,s.kind,s.language,s.parent_symbol_id,s.signature,s.visibility,s.metadata_json
             FROM main.symbols AS s
             JOIN main.manifest_entries AS e ON e.version_id=s.version_id
-            WHERE e.view_id=$view_id AND e.generation=$generation
+            WHERE e.view_id=$view_id AND e.generation=$generation AND {versions}
             ORDER BY s.version_id,s.symbol_id
             """;
         command.Parameters.AddWithValue("$view_id", visibility.ViewId);
@@ -266,16 +293,18 @@ internal static class RevisionFactCacheLoader
         SqliteConnection connection,
         StoreVisibility visibility,
         Dictionary<long, VersionSlice> slices,
-        StringInternPool intern)
+        StringInternPool intern,
+        IReadOnlyList<VisibleFile>? files = null)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandTimeout = 0;
+        string versions = VersionFilter(command, "t.version_id", files);
         command.CommandText =
-            """
+            $"""
             SELECT t.version_id,t.symbol_id,t.resolved_type,t.is_inferred
             FROM main.type_facts AS t
             JOIN main.manifest_entries AS e ON e.version_id=t.version_id
-            WHERE e.view_id=$view_id AND e.generation=$generation
+            WHERE e.view_id=$view_id AND e.generation=$generation AND {versions}
             ORDER BY t.version_id,t.symbol_id,t.type_fact_id
             """;
         command.Parameters.AddWithValue("$view_id", visibility.ViewId);
@@ -340,23 +369,26 @@ internal static class RevisionFactCacheLoader
     private static void FillStorePropagation(
         SqliteConnection connection,
         StoreVisibility visibility,
-        Dictionary<long, VersionSlice> slices)
+        Dictionary<long, VersionSlice> slices,
+        IReadOnlyList<VisibleFile>? files = null,
+        bool indexedLocate = false)
     {
-        Dictionary<long, List<PendingLocateRow>> pending = ReadAllStorePendings(connection, visibility);
-        Dictionary<long, List<RelationshipLocateRow>> relationships = ReadAllStoreRelationships(connection, visibility);
+        Dictionary<long, List<PendingLocateRow>> pending = ReadAllStorePendings(connection, visibility, files);
+        Dictionary<long, List<RelationshipLocateRow>> relationships = ReadAllStoreRelationships(connection, visibility, files);
         using SqliteCommand command = connection.CreateCommand();
         command.CommandTimeout = 0;
+        string versions = VersionFilter(command, "i.version_id", files);
         command.CommandText =
-            """
+            $"""
             SELECT i.version_id,i.rowid,i.name,i.start_byte,i.end_byte,i.start_line
             FROM main.identifiers AS i
             JOIN main.manifest_entries AS e ON e.version_id=i.version_id
-            WHERE e.view_id=$view_id AND e.generation=$generation
+            WHERE e.view_id=$view_id AND e.generation=$generation AND {versions}
             ORDER BY i.version_id
             """;
         command.Parameters.AddWithValue("$view_id", visibility.ViewId);
         command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
-        LocateStreaming(command, slices, pending, relationships);
+        LocateStreaming(command, slices, pending, relationships, indexedLocate);
     }
 
     private static void FillArtifactPropagation(
@@ -381,7 +413,8 @@ internal static class RevisionFactCacheLoader
         SqliteCommand command,
         Dictionary<long, VersionSlice> slices,
         Dictionary<long, List<PendingLocateRow>> pending,
-        Dictionary<long, List<RelationshipLocateRow>> relationships)
+        Dictionary<long, List<RelationshipLocateRow>> relationships,
+        bool indexedLocate = false)
     {
         using SqliteDataReader reader = command.ExecuteReader();
         var candidates = new List<PropagationCandidate>();
@@ -392,7 +425,7 @@ internal static class RevisionFactCacheLoader
             long versionId = reader.GetInt64(0);
             if (versionId != currentVersion)
             {
-                FlushLocated(slices, currentVersion, candidates, rowIds, pending, relationships);
+                FlushLocated(slices, currentVersion, candidates, rowIds, pending, relationships, indexedLocate);
                 currentVersion = versionId;
             }
 
@@ -404,7 +437,7 @@ internal static class RevisionFactCacheLoader
                 reader.IsDBNull(5) ? 0 : reader.GetInt64(5)));
         }
 
-        FlushLocated(slices, currentVersion, candidates, rowIds, pending, relationships);
+        FlushLocated(slices, currentVersion, candidates, rowIds, pending, relationships, indexedLocate);
     }
 
     private static void FlushLocated(
@@ -413,18 +446,22 @@ internal static class RevisionFactCacheLoader
         List<PropagationCandidate> candidates,
         List<long> rowIds,
         Dictionary<long, List<PendingLocateRow>> pending,
-        Dictionary<long, List<RelationshipLocateRow>> relationships)
+        Dictionary<long, List<RelationshipLocateRow>> relationships,
+        bool indexedLocate = false)
     {
         if (versionId != long.MinValue && slices.TryGetValue(versionId, out VersionSlice? slice))
         {
             var located = new Dictionary<long, PropagationSource>();
+            PropagationCandidateIndex? index = indexedLocate ? new PropagationCandidateIndex(candidates) : null;
             if (pending.TryGetValue(versionId, out List<PendingLocateRow>? pendingRows))
             {
                 foreach (PendingLocateRow row in pendingRows)
                 {
-                    int? index = PropagationLocator.Locate(candidates, row.Name, row.StartByte, row.EndByte, row.StartLine);
-                    if (index is { } hit)
-                        located[rowIds[hit]] = new PropagationSource(PropagationOrigin.Pending, row.RowId);
+                    int? hit = index is null
+                        ? PropagationLocator.Locate(candidates, row.Name, row.StartByte, row.EndByte, row.StartLine)
+                        : index.Locate(row.Name, row.StartByte, row.EndByte, row.StartLine);
+                    if (hit is { } pendingHit)
+                        located[rowIds[pendingHit]] = new PropagationSource(PropagationOrigin.Pending, row.RowId);
                 }
             }
 
@@ -432,9 +469,11 @@ internal static class RevisionFactCacheLoader
             {
                 foreach (RelationshipLocateRow row in relRows)
                 {
-                    int? index = PropagationLocator.Locate(candidates, row.Name, row.StartByte, row.EndByte, row.StartLine);
-                    if (index is { } hit)
-                        located[rowIds[hit]] = new PropagationSource(PropagationOrigin.Relationship, row.RowId);
+                    int? hit = index is null
+                        ? PropagationLocator.Locate(candidates, row.Name, row.StartByte, row.EndByte, row.StartLine)
+                        : index.Locate(row.Name, row.StartByte, row.EndByte, row.StartLine);
+                    if (hit is { } relationshipHit)
+                        located[rowIds[relationshipHit]] = new PropagationSource(PropagationOrigin.Relationship, row.RowId);
                 }
             }
 
@@ -466,16 +505,18 @@ internal static class RevisionFactCacheLoader
 
     private static Dictionary<long, List<PendingLocateRow>> ReadAllStorePendings(
         SqliteConnection connection,
-        StoreVisibility visibility)
+        StoreVisibility visibility,
+        IReadOnlyList<VisibleFile>? files = null)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandTimeout = 0;
+        string versions = VersionFilter(command, "p.version_id", files);
         command.CommandText =
-            """
+            $"""
             SELECT p.version_id,p.pending_relationship_id,p.target_terminal_name,p.start_byte,p.end_byte,p.start_line
             FROM main.pending_relationships AS p
             JOIN main.manifest_entries AS e ON e.version_id=p.version_id
-            WHERE e.view_id=$view_id AND e.generation=$generation
+            WHERE e.view_id=$view_id AND e.generation=$generation AND {versions}
             """;
         command.Parameters.AddWithValue("$view_id", visibility.ViewId);
         command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
@@ -520,19 +561,21 @@ internal static class RevisionFactCacheLoader
 
     private static Dictionary<long, List<RelationshipLocateRow>> ReadAllStoreRelationships(
         SqliteConnection connection,
-        StoreVisibility visibility)
+        StoreVisibility visibility,
+        IReadOnlyList<VisibleFile>? files = null)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandTimeout = 0;
+        string versions = VersionFilter(command, "r.version_id", files);
         command.CommandText =
-            """
+            $"""
             SELECT r.version_id,r.relationship_id,t.name,r.start_byte,r.end_byte,r.start_line
             FROM main.relationships AS r
             JOIN main.manifest_entries AS e ON e.version_id=r.version_id
             JOIN main.symbols AS t ON t.symbol_id=r.to_symbol_id
             JOIN main.manifest_entries AS te
               ON te.version_id=t.version_id AND te.view_id=$view_id AND te.generation=$generation
-            WHERE e.view_id=$view_id AND e.generation=$generation
+            WHERE e.view_id=$view_id AND e.generation=$generation AND {versions}
               AND r.kind IN ('calls','instantiates','uses','extends','implements')
             """;
         command.Parameters.AddWithValue("$view_id", visibility.ViewId);
@@ -1100,6 +1143,31 @@ internal static class RevisionFactCacheLoader
 
     private static long? ReadNullableInt64(SqliteDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
+
+    private static string VersionFilter(
+        SqliteCommand command,
+        string column,
+        IReadOnlyList<VisibleFile>? files)
+    {
+        if (files is null)
+            return "1=1";
+        long[] versions = files
+            .Select(static file => file.VersionId)
+            .Distinct()
+            .OrderBy(static version => version)
+            .ToArray();
+        if (versions.Length == 0)
+            return "0";
+
+        var placeholders = new string[versions.Length];
+        for (int i = 0; i < versions.Length; i++)
+        {
+            placeholders[i] = "$slice_version" + i.ToString(CultureInfo.InvariantCulture);
+            command.Parameters.AddWithValue(placeholders[i], versions[i]);
+        }
+
+        return column + " IN (" + string.Join(',', placeholders) + ')';
+    }
 
     private static bool ReadInferred(SqliteDataReader reader, int ordinal)
     {

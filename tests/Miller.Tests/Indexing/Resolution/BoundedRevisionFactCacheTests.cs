@@ -149,6 +149,8 @@ public sealed class BoundedRevisionFactCacheTests
                 Serialize(full.ReadUnresolvedNameEdges(fullConnection, Targets, direction, null)),
                 Serialize(bounded.ReadUnresolvedNameEdges(boundedConnection, Targets, direction, null)));
         }
+
+        Assert.Equal(0, full.Cache.BoundedSliceMisses);
     }
 
     // The pending row that covers id-help suppresses the identifier edge. The bounded cache reads propagation
@@ -181,6 +183,20 @@ public sealed class BoundedRevisionFactCacheTests
         _ = reader.ReadInboundExact(connection, [Count]);
 
         Assert.InRange(bounded.LoadedSliceCount, 1, VisibleVersions.Length - 1);
+    }
+
+    [Fact]
+    public void BoundedGraphFrontierPrefetchesEachRequestedVersionOnce()
+    {
+        using ResolutionStoreFixture fixture = Populate();
+        using SqliteConnection connection = fixture.OpenRead();
+        RevisionFactCache bounded = RevisionFactCache.LoadBounded(connection, fixture.Visibility());
+        var reader = new QueryTimeResolutionReader(bounded, fixture.Visibility());
+
+        _ = reader.ReadResolutionEdges(connection, [Run], Direction.Both, statementObserver: null);
+
+        Assert.Equal(3, bounded.BoundedSliceMisses);
+        Assert.Equal(3, bounded.LoadedSliceCount);
     }
 
     // The fast relationship shape is the only new SQL on the bounded path, and it carries two safety predicates.
