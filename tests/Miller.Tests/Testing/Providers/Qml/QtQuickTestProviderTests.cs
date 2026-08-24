@@ -238,6 +238,174 @@ public sealed class QtQuickTestProviderTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Generated_run_identity_is_used_for_case_results_when_request_has_no_run_id()
+    {
+        var runner = new ScriptedTestProcessRunner(command =>
+        {
+            if (command.FileName == "cmake" && command.Arguments.SequenceEqual(["--version"]))
+                return new TestProcessResult(0, "cmake version 3.27.9\n", string.Empty);
+            if (command.FileName == "cmake" && command.Arguments.Contains("-S"))
+            {
+                var buildDirectory = ArgumentAfter(command, "-B");
+                Directory.CreateDirectory(buildDirectory);
+                File.WriteAllText(Path.Combine(buildDirectory, "CMakeCache.txt"), "cache");
+                File.WriteAllText(Path.Combine(buildDirectory, "CTestTestfile.cmake"), "tests");
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            }
+            if (command.FileName == "cmake")
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            if (command.FileName == "ctest" && command.Arguments.Contains("--show-only=json-v1"))
+                return new TestProcessResult(0, DiscoveryJson("A/basic"), string.Empty);
+            var artifact = ArgumentAfter(command, "--output-junit");
+            Directory.CreateDirectory(Path.GetDirectoryName(artifact)!);
+            File.WriteAllText(artifact, "<testsuite name=\"CTest\"><testcase name=\"A/basic\" /></testsuite>");
+            return new TestProcessResult(0, string.Empty, string.Empty);
+        });
+        var provider = new QtQuickTestProvider(runner);
+        var workspace = Workspace();
+        var discovered = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        var request = Request(workspace, [Assert.Single(discovered).Id]) with { RunId = null };
+
+        var first = await provider.RunAsync(request, TestContext.Current.CancellationToken);
+        var second = await provider.RunAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(first.RunId, second.RunId);
+        Assert.NotEqual(Assert.Single(first.CaseResults).Id, Assert.Single(second.CaseResults).Id);
+        Assert.StartsWith("ct_run:", first.RunId, StringComparison.Ordinal);
+        Assert.StartsWith("ct_run:", second.RunId, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Missing_selected_junit_cases_fail_with_their_stable_ids()
+    {
+        var runner = new ScriptedTestProcessRunner(command =>
+        {
+            if (command.FileName == "cmake" && command.Arguments.SequenceEqual(["--version"]))
+                return new TestProcessResult(0, "cmake version 3.27.9\n", string.Empty);
+            if (command.FileName == "cmake" && command.Arguments.Contains("-S"))
+            {
+                var buildDirectory = ArgumentAfter(command, "-B");
+                Directory.CreateDirectory(buildDirectory);
+                File.WriteAllText(Path.Combine(buildDirectory, "CMakeCache.txt"), "cache");
+                File.WriteAllText(Path.Combine(buildDirectory, "CTestTestfile.cmake"), "tests");
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            }
+            if (command.FileName == "cmake")
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            if (command.FileName == "ctest" && command.Arguments.Contains("--show-only=json-v1"))
+                return new TestProcessResult(0, DiscoveryJson("A/basic", "B/slow"), string.Empty);
+            var artifact = ArgumentAfter(command, "--output-junit");
+            Directory.CreateDirectory(Path.GetDirectoryName(artifact)!);
+            File.WriteAllText(artifact, "<testsuite name=\"CTest\"><testcase name=\"A/basic\" /></testsuite>");
+            return new TestProcessResult(0, string.Empty, string.Empty);
+        });
+        var provider = new QtQuickTestProvider(runner);
+        var workspace = Workspace();
+        var discovered = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        var selected = discovered.Select(testCase => testCase.Id).ToArray();
+        var missingId = discovered.Single(testCase => testCase.DisplayName == "B/slow").Id;
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.RunAsync(Request(workspace, selected), TestContext.Current.CancellationToken));
+
+        Assert.Contains("did not report selected test cases", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(missingId, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Raw_launch_failure_is_stamped_with_command_context_and_generation()
+    {
+        var runner = new ScriptedTestProcessRunner(_ => throw new InvalidOperationException("tool missing"));
+        var provider = new QtQuickTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(Workspace(), TestContext.Current.CancellationToken));
+
+        Assert.Contains("cmake", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(ConfigureRoot, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("tool missing", exception.Message, StringComparison.Ordinal);
+        Assert.NotNull(exception.GenerationId);
+    }
+
+    [Fact]
+    public async Task Unsupported_cmake_version_is_stamped_and_rejected()
+    {
+        var runner = new ScriptedTestProcessRunner(_ =>
+            new TestProcessResult(0, "cmake version 3.20.6\n", string.Empty));
+        var provider = new QtQuickTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(Workspace(), TestContext.Current.CancellationToken));
+
+        Assert.Contains("unsupported", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("3.21", exception.Message, StringComparison.Ordinal);
+        Assert.NotNull(exception.GenerationId);
+    }
+
+    [Fact]
+    public async Task Cancellation_from_a_timeout_shaped_runner_is_preserved()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var runner = new ScriptedTestProcessRunner(_ =>
+            throw new OperationCanceledException("timeout-shaped cancellation", cancellation.Token));
+        var provider = new QtQuickTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            provider.DiscoverAsync(Workspace(), cancellation.Token));
+
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Nonzero_configure_exit_is_reported_with_exit_code()
+    {
+        var runner = new ScriptedTestProcessRunner(command =>
+            command.Arguments.SequenceEqual(["--version"])
+                ? new TestProcessResult(0, "cmake version 3.27.9\n", string.Empty)
+                : new TestProcessResult(9, string.Empty, "configure failed"));
+        var provider = new QtQuickTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(Workspace(), TestContext.Current.CancellationToken));
+
+        Assert.Contains("configure failed with exit code 9", exception.Message, StringComparison.Ordinal);
+        Assert.NotNull(exception.GenerationId);
+    }
+
+    [Fact]
+    public async Task Nonzero_ctest_run_exit_is_reported_with_exit_code()
+    {
+        var runner = new ScriptedTestProcessRunner(command =>
+        {
+            if (command.FileName == "cmake" && command.Arguments.SequenceEqual(["--version"]))
+                return new TestProcessResult(0, "cmake version 3.27.9\n", string.Empty);
+            if (command.FileName == "cmake" && command.Arguments.Contains("-S"))
+            {
+                var buildDirectory = ArgumentAfter(command, "-B");
+                Directory.CreateDirectory(buildDirectory);
+                File.WriteAllText(Path.Combine(buildDirectory, "CMakeCache.txt"), "cache");
+                File.WriteAllText(Path.Combine(buildDirectory, "CTestTestfile.cmake"), "tests");
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            }
+            if (command.FileName == "cmake")
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            if (command.Arguments.Contains("--show-only=json-v1"))
+                return new TestProcessResult(0, DiscoveryJson("A/basic"), string.Empty);
+            return new TestProcessResult(7, string.Empty, "CTest failed");
+        });
+        var provider = new QtQuickTestProvider(runner);
+        var workspace = Workspace();
+        var discovered = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.RunAsync(Request(workspace, [Assert.Single(discovered).Id]), TestContext.Current.CancellationToken));
+
+        Assert.Contains("CTest run failed with exit code 7", exception.Message, StringComparison.Ordinal);
+        Assert.NotNull(exception.GenerationId);
+    }
+
     private string ConfigureRoot => Path.Combine(_root, "source");
 
     private string BuildRoot => Path.Combine(_root, "build");

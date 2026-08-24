@@ -102,9 +102,10 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
         CtGenerationPaths paths,
         CancellationToken cancellationToken)
     {
+        var started = DateTimeOffset.UtcNow;
+        string runId = request.RunId ?? NewRunId(request, paths.GenerationId);
         await EnsureBuildAsync(request.Workspace, paths, cancellationToken).ConfigureAwait(false);
 
-        string runId = request.RunId ?? NewRunId(request);
         string artifactPath = ResultArtifactPath(paths, runId);
         DeleteArtifact(artifactPath);
 
@@ -124,7 +125,7 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
                 request.WholeSuite),
             paths.OutDir,
             EnvironmentFor(request.Workspace, paths));
-        var processResult = await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
+        var processResult = await RunProcessAsync(command, cancellationToken).ConfigureAwait(false);
         RequireComplete(processResult, "CTest run");
         if (processResult.ExitCode != 0)
             throw Failure(
@@ -149,18 +150,26 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
         var selectedIds = request.TestCaseIds.ToHashSet(StringComparer.Ordinal);
         var results = parsed.Cases
             .GroupBy(testCase => testCase.Name, StringComparer.Ordinal)
-            .Select(group => ToProviderCaseResult(request, artifactPath, group.Key, group, selectedIds))
+            .Select(group => ToProviderCaseResult(request, runId, artifactPath, group.Key, group, selectedIds))
             .Where(result => result is not null)
             .Select(result => result!)
             .OrderBy(result => result.TestCaseId, StringComparer.Ordinal)
             .ToArray();
+        var missing = request.TestCaseIds
+            .Except(results.Select(result => result.TestCaseId), StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (missing.Length > 0)
+            throw Failure(
+                $"CTest JUnit artifact did not report selected test cases: {string.Join(", ", missing)}",
+                artifactPath);
         if (results.Length == 0)
             throw Failure("CTest JUnit artifact contained no selected test cases.", artifactPath);
 
         return new ProviderRunResult(
             RunId: runId,
             Status: AggregateStatus(results.Select(result => result.Status)),
-            StartedAt: null,
+            StartedAt: started,
             EndedAt: DateTimeOffset.UtcNow,
             CaseResults: results,
             ResultArtifactPath: artifactPath,
@@ -179,7 +188,7 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
         if (HasValidBuildTree(paths))
             return;
 
-        var version = await _runner.RunAsync(
+        var version = await RunProcessAsync(
             new TestProcessCommand(
                 _cmakePath,
                 QtQuickTestTooling.BuildCMakeVersionArguments(),
@@ -188,7 +197,7 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
             cancellationToken).ConfigureAwait(false);
         QtQuickTestTooling.ParseCMakeVersion(version);
 
-        var configure = await _runner.RunAsync(
+        var configure = await RunProcessAsync(
             new TestProcessCommand(
                 _cmakePath,
                 ["-S", ConfigureRoot(workspace), "-B", paths.OutDir],
@@ -200,7 +209,7 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
             throw Failure(
                 $"CMake configure failed with exit code {configure.ExitCode}: {FailureSummary(configure)}");
 
-        var build = await _runner.RunAsync(
+        var build = await RunProcessAsync(
             new TestProcessCommand(
                 _cmakePath,
                 ["--build", paths.OutDir],
@@ -215,12 +224,37 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
             throw Failure($"CMake build did not produce a valid CTest build tree under '{paths.OutDir}'.");
     }
 
+    private async Task<TestProcessResult> RunProcessAsync(
+        TestProcessCommand command,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (ContinuousTestProviderException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new ContinuousTestProviderException(
+                $"The Qt Quick Test command failed to launch '{command.FileName}' in "
+                + $"'{command.WorkingDirectory}': {exception.Message.Trim()}",
+                exception);
+        }
+    }
+
     private async Task<CTestDiscoveryResult> DiscoverTargetsAsync(
         ContinuousTestWorkspace workspace,
         CtGenerationPaths paths,
         CancellationToken cancellationToken)
     {
-        var result = await _runner.RunAsync(
+        var result = await RunProcessAsync(
             new TestProcessCommand(
                 _ctestPath,
                 QtQuickTestTooling.BuildCTestDiscoveryArguments(paths.OutDir),
@@ -260,6 +294,7 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
 
     private static ProviderCaseResult? ToProviderCaseResult(
         ContinuousTestProviderRunRequest request,
+        string runId,
         string artifactPath,
         string testName,
         IEnumerable<ParsedTestArtifactCase> cases,
@@ -271,7 +306,7 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
 
         var rows = cases.ToArray();
         return new ProviderCaseResult(
-            Id: CtStableIds.StableId("test_result", request.Workspace.WorkspaceId, testCaseId, request.RunId),
+            Id: CtStableIds.StableId("test_result", request.Workspace.WorkspaceId, testCaseId, runId),
             TestCaseId: testCaseId,
             Status: AggregateStatus(rows.Select(row => row.Status)),
             ResultRevision: request.SelectedRevision,
@@ -369,13 +404,13 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
     private static string ResultArtifactPath(CtGenerationPaths paths, string runId) =>
         Path.Combine(paths.ResultsDirectory, $"run-{CtStableIds.StableId("qml-run", runId).Split(':')[1]}.junit.xml");
 
-    private static string NewRunId(ContinuousTestProviderRunRequest request) =>
+    private static string NewRunId(ContinuousTestProviderRunRequest request, string generationId) =>
         CtStableIds.StableId(
             "ct_run",
             request.Workspace.WorkspaceId,
             request.Workspace.ProjectPath,
             request.SelectedRevision,
-            DateTimeOffset.UtcNow.UtcTicks);
+            generationId);
 
     private static void DeleteArtifact(string path)
     {

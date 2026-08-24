@@ -165,12 +165,12 @@ Commit mode: Tasks 1-2 use `parallel-lead-commit`; Tasks 3-5 use `serial-worker-
 **Approach:** Follow existing provider lifecycle and shared runner patterns identified with Miller. Set `QT_QPA_PLATFORM` only if absent; reuse a valid build tree within the generation; fail before execution for coverage requests; require complete outputs before parsing.
 
 **Acceptance criteria:**
-- [ ] Discovery configures/builds outside source and returns stable CTest target cases.
-- [ ] Whole-suite and exact selections use `--output-junit` and `--no-tests=error` and map results correctly.
-- [ ] Explicit Qt platform values are preserved; absent values default to `offscreen`.
-- [ ] Coverage, zero tests, missing tools, bad versions, truncation, cancellation, timeout, and nonzero exits have honest typed outcomes.
-- [ ] Default factory resolves `qt-quick-test` to the provider.
-- [ ] Worker-scope verification passes and the worker commits per `serial-worker-commit`.
+- [x] Discovery configures/builds outside source and returns stable CTest target cases.
+- [x] Whole-suite and exact selections use `--output-junit` and `--no-tests=error` and map results correctly.
+- [x] Explicit Qt platform values are preserved; absent values default to `offscreen`.
+- [x] Coverage, zero tests, missing tools, bad versions, truncation, cancellation, timeout, and nonzero exits have honest typed outcomes.
+- [x] Default factory resolves `qt-quick-test` to the provider.
+- [x] Worker-scope verification passes and the worker commits per `serial-worker-commit`.
 
 ### Task 4: Integrate selection and whole-suite contracts
 
