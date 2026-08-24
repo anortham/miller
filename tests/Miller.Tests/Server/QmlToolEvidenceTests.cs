@@ -180,7 +180,10 @@ public sealed class QmlToolEvidenceTests
             language: "rust",
             format: "json");
 
-        Assert.Contains("rust", wrongLanguage, StringComparison.Ordinal);
+        using JsonDocument wrongLanguageDocument = JsonDocument.Parse(wrongLanguage);
+        JsonElement wrongLanguageRoot = wrongLanguageDocument.RootElement;
+        Assert.Empty(wrongLanguageRoot.GetProperty("matches").EnumerateArray());
+        Assert.Equal("rust", wrongLanguageRoot.GetProperty("active_filters").GetProperty("language").GetString());
     }
 
     [Fact]
