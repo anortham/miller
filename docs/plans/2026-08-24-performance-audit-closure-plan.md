@@ -61,9 +61,9 @@ Close every deferred or open item in `docs/findings/2026-08-23-performance-audit
 
 **Acceptance criteria:**
 
-- [ ] An unchanged tick opens zero compatibility projections.
-- [ ] Restart after an empty or changed interval converges without a recovery run.
-- [ ] Moving cursor, truncation, and identity mismatch remain partial/unavailable rather than false green.
+- [x] An unchanged tick opens zero compatibility projections.
+- [x] Restart after an empty or changed interval converges without a recovery run.
+- [x] Moving cursor, truncation, and identity mismatch remain partial/unavailable rather than false green.
 
 ## Task 3: Make selection project-filtered and live state bounded
 
@@ -73,10 +73,10 @@ Close every deferred or open item in `docs/findings/2026-08-23-performance-audit
 
 **Acceptance criteria:**
 
-- [ ] Selection does not load all workspace cases/statuses for every project.
-- [ ] Unknown/unmapped cases remain fail-closed and selection output is unchanged.
-- [ ] Retry keys are removed at terminal completion.
-- [ ] Disabled lifecycle rows no longer force an active partial verdict; re-enable restores visibility.
+- [x] Selection does not load all workspace cases/statuses for every project.
+- [x] Unknown/unmapped cases remain fail-closed and selection output is unchanged.
+- [x] Retry keys are removed at terminal completion.
+- [x] Disabled lifecycle rows no longer force an active partial verdict; re-enable restores visibility.
 
 ## Task 4: Batch run completion and index recent history
 
@@ -122,9 +122,9 @@ Close every deferred or open item in `docs/findings/2026-08-23-performance-audit
 
 **Acceptance criteria:**
 
-- [ ] The generation contains one canonical runnable runtime tree.
-- [ ] Fixed-fixture bytes materially decrease and test results remain identical.
-- [ ] Real provider execution passes as a Scale gate.
+- [x] The generation contains one canonical runnable runtime tree.
+- [x] Fixed-fixture bytes materially decrease and test results remain identical.
+- [x] Real provider execution passes as a Scale gate.
 
 ## Task 8: Batch shared Impact/Context graph reads
 

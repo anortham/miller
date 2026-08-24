@@ -1096,6 +1096,25 @@ public sealed class DotnetTestProviderTests : IDisposable
         Assert.DoesNotContain("EROS_", string.Join('\0', command.Environment.Keys), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void BuildProjectCommand_keeps_artifacts_and_runnable_output_in_the_generation()
+    {
+        var provider = new DotnetTestProvider(new FakeTestProcessRunner());
+        var workspace = Workspace();
+
+        var command = provider.BuildProjectCommand(workspace);
+        var generation = CtGenerationPaths.ResolveLatestOrFirst(workspace);
+
+        Assert.Contains("--artifacts-path", command.Arguments);
+        Assert.Contains(generation.GenerationRoot, command.Arguments);
+        Assert.DoesNotContain(workspace.BuildOutputRoot, command.Arguments);
+        Assert.Contains("-p:ArtifactsBinOutputName=out", command.Arguments);
+        Assert.Contains("-p:CreateHardLinksForCopyFilesToOutputDirectoryIfPossible=true", command.Arguments);
+        Assert.Contains("-p:CreateHardLinksForCopyAdditionalFilesIfPossible=true", command.Arguments);
+        Assert.Contains("-p:CreateHardLinksForCopyLocalIfPossible=true", command.Arguments);
+        Assert.Contains("-p:CreateHardLinksForAdditionalFilesIfPossible=true", command.Arguments);
+    }
+
     // ---------------------------------------------------------------- Windows command-line cap
 
     /// <summary>
@@ -2176,7 +2195,13 @@ public sealed class DotnetTestProviderTests : IDisposable
         Assert.Contains("--disable-build-servers", arguments);
         Assert.Contains("-nr:false", arguments);
         Assert.Contains("--artifacts-path", arguments);
-        Assert.Contains(buildRoot, arguments);
+        Assert.Contains(generation.GenerationRoot, arguments);
+        Assert.DoesNotContain(arguments, arg => string.Equals(arg, buildRoot, StringComparison.Ordinal));
+        Assert.Contains("-p:ArtifactsBinOutputName=out", arguments);
+        Assert.Contains("-p:CreateHardLinksForCopyFilesToOutputDirectoryIfPossible=true", arguments);
+        Assert.Contains("-p:CreateHardLinksForCopyAdditionalFilesIfPossible=true", arguments);
+        Assert.Contains("-p:CreateHardLinksForCopyLocalIfPossible=true", arguments);
+        Assert.Contains("-p:CreateHardLinksForAdditionalFilesIfPossible=true", arguments);
         Assert.Contains("-p:GenerateProjectSpecificOutputFolder=true", arguments);
         Assert.Contains($"-p:OutDir={generation.OutDir}", arguments);
         Assert.Contains($"-p:ResultsDirectory={generation.ResultsDirectory}", arguments);

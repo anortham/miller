@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Security.Cryptography;
 using Miller.Testing;
 using Miller.Testing.Parsing;
 using Xunit;
@@ -263,11 +265,138 @@ public sealed class DotnetProviderScaleTests : IDisposable
         Assert.Equal("store:scale-identity", caseResult.IndexIdentity);
 
         Assert.Empty(WorkspaceGeneratedEntries(workspaceRoot));
+        Assert.False(Directory.Exists(Path.Combine(workspace.BuildOutputRoot, "bin")));
+        Assert.False(Directory.Exists(Path.Combine(workspace.BuildOutputRoot, "obj")));
         Assert.True(IsContained(workspace.BuildOutputRoot, result.GenerationId is null
             ? workspace.BuildOutputRoot
             : CtGenerationPaths.For(workspace, result.GenerationId).GenerationRoot));
         if (OperatingSystem.IsWindows())
             Assert.True(result.GenerationId!.Length <= 16);
+    }
+
+    [Fact]
+    public async Task Diagnostic_real_provider_inventory_records_generation_layout_and_results()
+    {
+        CtProviderTestSupport.RequireDotnet();
+        var ct = TestContext.Current.CancellationToken;
+        var workspaceRoot = Path.Combine(_dir, "layout-repo");
+        var projectDir = Path.Combine(workspaceRoot, "tests", "Sample.Tests");
+        var helperRoot = Path.Combine(workspaceRoot, "helpers");
+        var runtimeRoot = Path.Combine(workspaceRoot, "runtime");
+        Directory.CreateDirectory(projectDir);
+        Directory.CreateDirectory(runtimeRoot);
+        foreach (var helperName in new[] { "Helper.A", "Helper.B" })
+        {
+            var helperDirectory = Path.Combine(helperRoot, helperName);
+            Directory.CreateDirectory(helperDirectory);
+            await File.WriteAllTextAsync(
+                Path.Combine(helperDirectory, helperName + ".csproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Content Include="../../runtime/payload.bin" Link="runtimes/shared/payload.bin">
+                      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+                    </Content>
+                  </ItemGroup>
+                </Project>
+                """,
+                ct);
+        }
+        await File.WriteAllBytesAsync(
+            Path.Combine(runtimeRoot, "payload.bin"),
+            new byte[16 * 1024 * 1024],
+            ct);
+        await File.WriteAllTextAsync(
+            Path.Combine(projectDir, "Sample.Tests.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+                <OutputType>Exe</OutputType>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="xunit.v3" Version="3.2.2" />
+                <ProjectReference Include="../../helpers/Helper.A/Helper.A.csproj" ReferenceOutputAssembly="false" />
+                <ProjectReference Include="../../helpers/Helper.B/Helper.B.csproj" ReferenceOutputAssembly="false" />
+              </ItemGroup>
+            </Project>
+            """,
+            ct);
+        await File.WriteAllTextAsync(
+            Path.Combine(projectDir, "CalculatorTests.cs"),
+            """
+            using Xunit;
+
+            namespace Sample.Tests;
+
+            public sealed class CalculatorTests
+            {
+                [Fact]
+                public void Adds() => Assert.Equal(2, 1 + 1);
+            }
+            """,
+            ct);
+
+        var workspace = new ContinuousTestWorkspace(
+            WorkspaceId: "ws:layout",
+            WorkspaceRoot: workspaceRoot,
+            ProjectPath: Path.Combine(projectDir, "Sample.Tests.csproj"),
+            BuildOutputRoot: Path.Combine(_dir, "state", "workspaces", "ws-safe", "ct-build"));
+        _ctTemps.Add(CtTempPaths.ForWorkspace(workspace));
+        var provider = new DotnetTestProvider(new TestProcessRunner());
+
+        var discovered = await provider.DiscoverAsync(workspace, ct);
+        var testCase = Assert.Single(discovered);
+        var discoveryGeneration = CtGenerationPaths.ResolveLatestOrFirst(workspace);
+        var discoveryLaunchPath = Path.Combine(
+            discoveryGeneration.OutDir,
+            "Sample.Tests",
+            "Sample.Tests" + (OperatingSystem.IsWindows() ? ".exe" : string.Empty));
+        Assert.True(File.Exists(discoveryLaunchPath));
+        var discoveryLaunchIdentity = HashFile(discoveryLaunchPath);
+        var result = await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: workspace,
+                SelectedRevision: "layout-revision",
+                IndexIdentity: "store:layout",
+                RunId: "run:layout",
+                TestCaseIds: [testCase.Id]),
+            ct);
+
+        Assert.Equal("passed", result.Status);
+        var caseResult = Assert.Single(result.CaseResults);
+        Assert.Equal(testCase.Id, caseResult.TestCaseId);
+        Assert.Equal("passed", caseResult.Status);
+        Assert.NotNull(result.GenerationId);
+
+        var generation = CtGenerationPaths.For(workspace, result.GenerationId!);
+        var launchPath = Path.Combine(
+            generation.OutDir,
+            "Sample.Tests",
+            "Sample.Tests" + (OperatingSystem.IsWindows() ? ".exe" : string.Empty));
+        Assert.True(File.Exists(launchPath));
+        Assert.Equal(discoveryLaunchIdentity, HashFile(launchPath));
+
+        var inventory = LayoutInventory.Create(workspace.BuildOutputRoot);
+        var payloadFiles = inventory.Files
+            .Where(file => file.RelativePath.EndsWith(
+                Path.Combine("runtimes", "shared", "payload.bin"),
+                StringComparison.Ordinal))
+            .ToArray();
+        Assert.True(payloadFiles.Length >= 2);
+        Assert.Single(payloadFiles.Select(file => file.Identity).Distinct(StringComparer.Ordinal));
+        if (payloadFiles.All(file => file.PhysicalIdentity is not null))
+            Assert.Single(payloadFiles.Select(file => file.PhysicalIdentity).Distinct(StringComparer.Ordinal));
+        Assert.True(inventory.UniqueBytes < inventory.Bytes * 3 / 4);
+        if (DiskBytes(workspace.BuildOutputRoot) is { } diskBytes)
+            Assert.True(diskBytes < inventory.Bytes * 3 / 4);
+        Assert.False(Directory.Exists(Path.Combine(workspace.BuildOutputRoot, "bin")));
+        Assert.False(Directory.Exists(Path.Combine(workspace.BuildOutputRoot, "obj")));
     }
 
     [Fact]
@@ -587,5 +716,101 @@ public sealed class DotnetProviderScaleTests : IDisposable
         catch (UnauthorizedAccessException)
         {
         }
+    }
+
+    private sealed record LayoutFile(string RelativePath, long Bytes, string Identity, string? PhysicalIdentity);
+
+    private sealed class LayoutInventory
+    {
+        private LayoutInventory(IReadOnlyList<LayoutFile> files)
+        {
+            Files = files;
+            Bytes = files.Sum(file => file.Bytes);
+            var identities = files.All(file => file.PhysicalIdentity is not null)
+                ? files.Select(file => file.PhysicalIdentity!).ToArray()
+                : files.Select(file => file.Identity).ToArray();
+            UniqueBytes = files
+                .Select((file, index) => (file, identity: identities[index]))
+                .GroupBy(pair => pair.identity, StringComparer.Ordinal)
+                .Sum(group => group.First().file.Bytes);
+        }
+
+        public IReadOnlyList<LayoutFile> Files { get; }
+
+        public long Bytes { get; }
+
+        public long UniqueBytes { get; }
+
+        public static LayoutInventory Create(string root)
+        {
+            var files = Directory
+                .EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                .Select(path => new LayoutFile(
+                    Path.GetRelativePath(root, path),
+                    new FileInfo(path).Length,
+                    HashFile(path),
+                    PhysicalIdentity(path)))
+                .OrderBy(file => file.RelativePath, StringComparer.Ordinal)
+                .ToArray();
+            return new LayoutInventory(files);
+        }
+    }
+
+    private static string HashFile(string path)
+    {
+        using FileStream stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private static string? PhysicalIdentity(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return null;
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "stat",
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("-c");
+        startInfo.ArgumentList.Add("%d:%i");
+        startInfo.ArgumentList.Add(path);
+        using var process = Process.Start(startInfo);
+        if (process is null)
+            return null;
+
+        string output = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        return process.ExitCode == 0 && output.Length > 0 ? output : null;
+    }
+
+    private static long? DiskBytes(string root)
+    {
+        if (OperatingSystem.IsWindows())
+            return null;
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "du",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("-sb");
+        startInfo.ArgumentList.Add(root);
+        using var process = Process.Start(startInfo);
+        if (process is null)
+            return null;
+
+        string output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        string first = output
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault() ?? string.Empty;
+        return process.ExitCode == 0
+               && long.TryParse(first, NumberStyles.Integer, CultureInfo.InvariantCulture, out long bytes)
+            ? bytes
+            : null;
     }
 }

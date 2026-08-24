@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -1240,7 +1242,12 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             "--nologo",
             "--disable-build-servers",
             "--artifacts-path",
-            workspace.BuildOutputRoot,
+            paths.GenerationRoot,
+            "-p:ArtifactsBinOutputName=out",
+            "-p:CreateHardLinksForCopyFilesToOutputDirectoryIfPossible=true",
+            "-p:CreateHardLinksForCopyAdditionalFilesIfPossible=true",
+            "-p:CreateHardLinksForCopyLocalIfPossible=true",
+            "-p:CreateHardLinksForAdditionalFilesIfPossible=true",
             "-nr:false",
             $"-p:OutDir={paths.OutDir}",
             "-p:GenerateProjectSpecificOutputFolder=true",
@@ -1264,6 +1271,124 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         if (result.ExitCode != 0)
             throw new ContinuousTestProviderException(
                 $"Dotnet test project build failed with exit code {result.ExitCode}: {FailureSummary(result)}");
+
+        DeduplicateOutputFiles(paths.OutDir);
+    }
+
+    private static void DeduplicateOutputFiles(string outputDirectory)
+    {
+        if (!Directory.Exists(outputDirectory))
+            return;
+
+        var canonicalByIdentity = new Dictionary<(long Length, string Hash), string>();
+        foreach (var path in Directory.EnumerateFiles(outputDirectory, "*", SearchOption.AllDirectories)
+                     .OrderBy(path => path, PathStringComparer))
+        {
+            if (!IsRuntimeTreeFile(outputDirectory, path))
+                continue;
+
+            var info = new FileInfo(path);
+            var identity = (info.Length, FileIdentityHash(path));
+            if (!canonicalByIdentity.TryGetValue(identity, out var canonical))
+            {
+                canonicalByIdentity.Add(identity, path);
+                continue;
+            }
+
+            TryReplaceWithHardLink(path, canonical);
+        }
+    }
+
+    private static string FileIdentityHash(string path)
+    {
+        using FileStream stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
+
+    private static bool IsRuntimeTreeFile(string outputDirectory, string path)
+    {
+        var relative = Path.GetRelativePath(outputDirectory, path);
+        return relative
+            .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
+            .Any(static component => string.Equals(component, ".tools", StringComparison.Ordinal)
+                || string.Equals(component, "runtimes", StringComparison.Ordinal));
+    }
+
+    private static void TryReplaceWithHardLink(string path, string canonical)
+    {
+        var temporaryPath = path + ".miller-link-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            if (!CreateHardLink(temporaryPath, canonical))
+                return;
+
+            var backupPath = path + ".miller-original-" + Guid.NewGuid().ToString("N");
+            File.Move(path, backupPath);
+            try
+            {
+                File.Move(temporaryPath, path);
+                File.Delete(backupPath);
+            }
+            catch
+            {
+                DeleteTemporaryLink(path);
+                File.Move(backupPath, path);
+                throw;
+            }
+        }
+        catch (IOException)
+        {
+            DeleteTemporaryLink(temporaryPath);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            DeleteTemporaryLink(temporaryPath);
+        }
+        catch (PlatformNotSupportedException)
+        {
+            DeleteTemporaryLink(temporaryPath);
+        }
+        catch (DllNotFoundException)
+        {
+            DeleteTemporaryLink(temporaryPath);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            DeleteTemporaryLink(temporaryPath);
+        }
+    }
+
+    private static bool CreateHardLink(string path, string canonical)
+    {
+        if (OperatingSystem.IsWindows())
+            return CreateHardLinkWindows(path, canonical, IntPtr.Zero);
+
+        return LinkUnix(canonical, path) == 0;
+    }
+
+    [SupportedOSPlatform("windows")]
+    [DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateHardLinkWindows(
+        string fileName,
+        string existingFileName,
+        IntPtr securityAttributes);
+
+    [DllImport("libc", EntryPoint = "link", CharSet = CharSet.Ansi, SetLastError = true)]
+    private static extern int LinkUnix(string existingPath, string newPath);
+
+    private static void DeleteTemporaryLink(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     private async Task<string> ResolveGenericTargetPathAsync(
