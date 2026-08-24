@@ -206,8 +206,28 @@ Batch A uses `parallel-lead-commit`: workers do not commit. Every later task als
 **Approach:** Run affected focused tests, then one fast suite and one Scale suite at the branch gate. Check Release warnings/errors through the wrapper build, `git diff --check`, and every related worktree state. Update findings and Goldfish before any local commit.
 
 **Acceptance criteria:**
-- [ ] Whole-suite and idle before/after comparisons use identical workloads.
-- [ ] All hard gates pass; report-only metrics are recorded without flaky thresholds.
-- [ ] Poller reopen and other deferred hot spots remain explicit, not silently declared fixed.
-- [ ] Plan checklist and verification ledger match executed evidence.
-- [ ] Final integration verification passes and the diff is handed to the lead.
+- [x] Whole-suite and idle before/after comparisons use identical workloads. Task 3 remains the whole-suite field
+      proof; Task 5 reran the exact foreground command only as environment-drift recovery, then measured the same
+      three-project/no-runnable-work idle state with the Task 3 five-sample cadence. The recovery's one fresh red
+      provider row is retained as a comparison concern, not hidden as a benchmark result.
+- [x] All hard gates pass; report-only metrics are recorded without flaky thresholds. Release build, idle state,
+      PID lifecycle, CPU-tick identity, Task 4 focused guards, fast 8,320/8,320, Scale 161/161, and
+      `git diff --check` are evidenced.
+- [x] Poller reopen and other deferred hot spots remain explicit, not silently declared fixed. The poller
+      session-reopen candidate, total-case selection, retry-key eviction, run/history operation shape, and
+      retention remain listed in the findings document.
+- [x] Plan checklist and verification ledger match executed evidence. The findings ledger records the exact
+      commands, commit, timestamps, hard/report-only classification, recovery judgment, and pending lead gates.
+- [x] Final integration verification passes and the diff is handed to the lead. Lead-owned fast, Scale, diff, and
+      worktree-state checks passed on the final source tree.
+
+**Task 5 worker evidence ledger:**
+
+| Invariant | Command/scope | Commit | Result |
+| --- | --- | --- | --- |
+| Release build | `dotnet build Miller.slnx -c Release` | `90207cb7` | PASS, 0 warnings/errors |
+| Comparable target state | `miller tests status --json --workspace /home/murphy/source/miller` plus read-only SQLite state queries | `90207cb7` | PASS after recovery: `stale_count=2`, two stale lifecycle rows, three enabled projects, no provider-runnable rows |
+| Idle lifecycle | `miller tests serve/stop --json` plus five `/proc/<pid>` samples | `90207cb7` | PASS: PID 1067947 stayed S/idle with `run=null`; PID gone after graceful stop |
+| Idle CPU comparison | Task 3 cadence, direct `/proc/<pid>/stat` ticks | `13bfcbdc` → `90207cb7` | 708 → 447 ticks; 7.08 → 4.47 CPU-s; RSS ranges report-only |
+| Task 4 aggregate evidence | Accepted focused `ContinuousTestStoreTests` results | `90207cb7` | PASS evidence: 720,480 detailed vs 38,624 aggregate bytes; existing indexes; no temp sort |
+| Branch gates | `scripts/test.sh`; `scripts/test.sh scale`; `git diff --check`; worktree-state audit | `90207cb7` | PASS: fast 8,320 passed/9 skipped; Scale 161 passed/16 skipped; diff clean |

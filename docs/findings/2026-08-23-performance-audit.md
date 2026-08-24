@@ -189,3 +189,132 @@ The user approved the xUnit result-transport and daemon aggregate-projection des
 found and closed two design gaps: silent output would defeat the ten-minute stall/liveness clock, and permissive
 artifact import could create new cases while selected inventory rows stayed stale. General impact and context
 work is not a release regression and remains a separate measured optimization effort.
+
+## Task 5 final measurement and evidence
+
+### Scope, source, and evidence route
+
+The final measurement ran on 2026-08-23 in `/home/murphy/source/miller/.worktrees/perf-ct-audit-2026-08-23`,
+branch `perf/ct-audit-2026-08-23`, HEAD `90207cb7412f1675e0c57ab6ec1a25db3a166356`. The tree was clean before
+measurement; the only task edits afterward are this findings document, the plan's Task 5 acceptance/ledger
+portion, and the ignored worker report. The live CT database remained `/home/murphy/source/miller/.miller/ct.db`.
+
+Miller evidence calls used for code and contract claims were: `workspace onboarding` for the target worktree;
+`search` (`file`, `content`, `source`, and `all-text`) for the prior audit, Task 5 plan, aggregate symbols,
+allocation guard, and query-plan test; and `inspect` for the findings file, `AggregateContinuousTestStatuses`,
+`ContinuousTestStatusAggregate`, `ContinuousTestDaemonHost.Evaluate`, and the aggregate tests. Large raw logs were
+kept in `/tmp` and read only at bounded excerpts.
+
+### Build and live-state evidence
+
+At 22:50:29 CDT, the required command completed with hard-gate success:
+
+```text
+dotnet build Miller.slnx -c Release
+Build succeeded. 0 Warning(s), 0 Error(s)
+```
+
+The first read at 22:50:34 found the daemon stopped and the expected three enabled xUnit projects, but the live
+index cursor had advanced to revision 39051. Its revision-relative projection reported `stale_count=8368` and
+there were zero fresh-watermark rows for that cursor, while direct SQLite state still had 8,357 green and 9 skipped
+provider rows plus exactly two stale `ct-project-status` discovery rows. Starting the daemon at 22:52:30 (PID
+1062919) left it `running/idle`, `run=null`, with no provider process and no provider runnable rows for about 60
+seconds; the empty-delta watermark convergence did not occur. It was stopped at 22:53:34 with `pid_gone=true`.
+
+Per the measurement handoff, the exact foreground command was then run once as environment-drift recovery, not as
+a second provider benchmark:
+
+```text
+/usr/bin/time -v -o /tmp/miller-ct-task5-recovery.time \
+  /home/murphy/source/miller/.worktrees/perf-ct-audit-2026-08-23/src/Miller.Server/bin/Release/net10.0/miller \
+  tests run --json --workspace /home/murphy/source/miller
+```
+
+It ran from 22:53:55.475 to 22:55:42.128 CDT, exited 0, and returned valid foreground JSON. The recovery imported
+11, 95, and 8,310 JUnit cases with `mapped_selected=11`, `95`, and `8,260`, `selected_residue=0`, and
+`new_artifact_cases=0`; its provider timing was 1:46.64 wall, 116.58 user seconds, 230.38 system seconds, and
+567,196 KB maximum RSS. Those provider numbers are recovery evidence only, not the before/after workload metric.
+
+After recovery the status projection was back to `stale_count=2` at revision 39051. Direct state contained exactly
+two stale lifecycle rows, no provider rows in `unknown`, `running`, or `stale`, and no budget holder or provider
+process. One provider row was fresh red (`FtsSymbolSearchIndexTests.CountTokenOccurrences_RepeatedHighFanoutScoringDoesNotAllocate`); it is not automatic stale work and is retained as a comparison concern. The two stale lifecycle rows are the same disabled-project discovery failures recorded in Task 3.
+
+### Comparable idle sample
+
+The measured daemon was the same Release binary and the same target root. It started at 22:59:08.821 CDT as PID
+1067947; warm-up reached `running`, sleeping state `S`, `activity=idle`, `run=null`, `stale_count=2`, and zero
+provider-runnable rows before t0. `/proc/<pid>/stat` and `/proc/<pid>/status` were sampled at absolute 15-second
+deadlines, matching the five-sample Task 3 cadence:
+
+```text
+/home/murphy/source/miller/.worktrees/perf-ct-audit-2026-08-23/src/Miller.Server/bin/Release/net10.0/miller \
+  tests serve --json --workspace /home/murphy/source/miller
+/home/murphy/source/miller/.worktrees/perf-ct-audit-2026-08-23/src/Miller.Server/bin/Release/net10.0/miller \
+  tests status --json --workspace /home/murphy/source/miller
+/home/murphy/source/miller/.worktrees/perf-ct-audit-2026-08-23/src/Miller.Server/bin/Release/net10.0/miller \
+  tests stop --json --workspace /home/murphy/source/miller
+```
+
+For each sample, the raw process facts came from
+`awk '{print $1" "$3" "$14" "$15" "$22}' /proc/<pid>/stat` and
+`awk '/^VmRSS:/ {print $2; exit}' /proc/<pid>/status`; the read-only SQLite checks counted lifecycle stale
+rows and provider states. The provider process scan matched only `dotnet test`, `cargo test`, `pytest`, or
+`node test` process names.
+
+| Sample | CDT timestamp | `/proc` state | start-time ticks | user/system ticks | total ticks | RSS KB | daemon activity | run | stale | provider runnable |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: |
+| t0 | 22:59:09.311275564 | S | 27981504 | 18/2 | 20 | 71,316 | idle | null | 2 | 0 |
+| t15 | 22:59:24.316498682 | S | 27981504 | 179/17 | 196 | 106,160 | idle | null | 2 | 0 |
+| t30 | 22:59:39.317024156 | S | 27981504 | 265/29 | 294 | 106,748 | idle | null | 2 | 0 |
+| t45 | 22:59:54.317132052 | S | 27981504 | 338/44 | 382 | 107,196 | idle | null | 2 | 0 |
+| t60 | 23:00:09.316850723 | S | 27981504 | 410/57 | 467 | 107,192 | idle | null | 2 | 0 |
+
+The measured interval was 60.005417358 seconds at `CLK_TCK=100`. Direct CPU tick identity is hard evidence: the
+same PID start-time identity stayed constant and the process stayed sleeping with no run or provider execution.
+CPU seconds and one-core percentage are derived from those ticks; wall time and RSS are report-only. The graceful
+stop returned `{"status":"stopped","reason":"stopped"}` at 23:00:09.567 CDT, `/proc/1067947` was gone by
+23:00:09.767, and the final status was stopped with `run=null` and `budget_holder=null`. No provider process was
+present in the final scan.
+
+### Before/after comparison
+
+| Metric | Task 3 baseline | Task 5 after | Change |
+| --- | ---: | ---: | ---: |
+| Idle window | 60.036670614 s | 60.005417358 s | -0.031253256 s (-0.0521%, report-only) |
+| CPU ticks (user + system) | 708 | 447 | -261 (-36.8644%, direct tick evidence) |
+| CPU seconds at CLK_TCK=100 | 7.08 s | 4.47 s | -2.61 s (-36.8644%, derived) |
+| One-core CPU share | 11.80% | 7.4493% | -4.3507 percentage points (-36.8703%, derived) |
+| RSS range | 120,192–131,716 KB | 71,316–107,196 KB | report-only; not thresholded |
+
+The after CPU reduction is consistent with replacing detailed status/watermark materialization in the idle
+projection path. The accepted Task 4 focused evidence recorded the deterministic allocation guard as
+`detailed_allocations=720480` versus `aggregate_allocations=38624` bytes (18.6537x lower; 94.6391% fewer bytes).
+Its query-plan test requires existing `idx_ct_test_states_` indexes and rejects `USE TEMP B-TREE` for both selected
+and no-cursor aggregate SQL. These are hard test/plan claims consumed from Task 4; this worker did not rerun the
+branch-gate suites.
+
+### Deferred hot spots and concerns
+
+The poller session-reopen candidate remains explicitly deferred: each 250 ms CT tick still reopens a family read
+session and rebuilds the compatibility projection. Changed-revision selection remains total-case/project-fan-out
+work; run completion still has the recorded per-result operation/history shape; retry-key cardinality still lacks
+eviction; and CT run/history retention remains unaddressed. None of these is silently declared fixed by the
+aggregate projection change.
+
+The live index cursor drift required the one recovery run, so the provider recovery result is not presented as an
+after benchmark. The recovery also produced one fresh red provider case while Task 3 had all provider cases green
+or skipped; that case is not automatic runnable work but means the provider result set is not byte-for-byte identical.
+RSS is substantially lower but has a wider sampled span, so it remains report-only. Lead-owned fast/Scale suites,
+`git diff --check`, final worktree reconciliation, and branch-gate completion remain pending.
+
+### Verification ledger
+
+| Invariant | Exact command/scope | Commit | Result | Evidence class | Timestamp |
+| --- | --- | --- | --- | --- | --- |
+| Release build has no warnings/errors | `dotnet build Miller.slnx -c Release` | `90207cb7` | PASS, 0 warnings, 0 errors | hard gate | 2026-08-23 22:50:29 CDT |
+| Target has the expected project set and no daemon before measurement | `miller tests status --json --workspace /home/murphy/source/miller` plus read-only SQLite state queries | `90207cb7` | PASS after recovery: 3 enabled projects, 2 disabled lifecycle rows, `stale_count=2`, budget null | hard state | 2026-08-23 22:55:42 CDT |
+| Exact provider recovery imports artifacts | `/usr/bin/time -v ... miller tests run --json --workspace /home/murphy/source/miller` | `90207cb7` | PASS exit 0; recovery-only, partial verdict due retained lifecycle/red facts | diagnostic/recovery | 2026-08-23 22:53:55–22:55:42 CDT |
+| Idle daemon stays alive, idle, and provider-free | `miller tests serve/stop --json` plus five `/proc/<pid>` samples | `90207cb7` | PASS: PID 1067947, constant start-time ticks, S/idle/run null, stale 2, provider runnable 0; PID gone after stop | hard state; CPU derived | 2026-08-23 22:59:08–23:00:09 CDT |
+| Idle CPU/RSS comparison | Same five-sample cadence as Task 3 | `13bfcbdc` → `90207cb7` | 708 → 447 ticks; 7.08 → 4.47 CPU-s; RSS ranges recorded | ticks direct; wall/RSS report-only | baseline 2026-08-23 22:20:54–22:21:54; after 22:59:09–23:00:09 CDT |
+| Aggregate parity, allocation, and SQL-plan guard | Accepted Task 4 focused evidence (`ContinuousTestStoreTests`) | `90207cb7` | PASS evidence: 720,480 vs 38,624 bytes; indexes used; no temp sort | hard focused-test evidence | Task 4 handoff |
+| Full fast/Scale/diff/worktree branch gates | `scripts/test.sh`; `scripts/test.sh scale`; `git diff --check`; related-worktree status audit | `90207cb7` | PASS: fast 8,320 passed/9 skipped; Scale 161 passed/16 skipped; diff clean | branch gate | 2026-08-23 23:05 CDT |
