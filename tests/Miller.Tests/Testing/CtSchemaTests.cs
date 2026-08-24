@@ -129,10 +129,10 @@ public sealed class CtSchemaTests : IDisposable
         command.CommandText = """
             EXPLAIN QUERY PLAN
             SELECT r.test_case_id, r.status, r.observed_at
-            FROM test_results r
-            WHERE r.workspace_id = 'ws:1'
-              AND r.test_case_id IN ('case:1', 'case:2')
-              AND (
+            FROM json_each('["case:1", "case:2"]') requested
+            JOIN test_results r
+              ON r.workspace_id = 'ws:1' AND r.test_case_id = requested.value
+            WHERE (
                   SELECT COUNT(*)
                   FROM test_results newer
                   WHERE newer.workspace_id = r.workspace_id

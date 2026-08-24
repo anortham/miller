@@ -442,6 +442,22 @@ public sealed class ContinuousTestStoreTests : IDisposable
     }
 
     [Fact]
+    public void Flakiness_score_orders_equal_observation_times_by_result_id()
+    {
+        using var store = CreateStoreWithTests("test:1");
+        DateTimeOffset now = DateTimeOffset.Parse("2026-06-14T15:00:00Z", CultureInfo.InvariantCulture);
+
+        CompleteRun(store, "run:old", "test:1", 1, "passed", now);
+        CompleteRun(store, "run:a", "test:1", 2, "failed", now.AddMinutes(1));
+        CompleteRun(store, "run:b", "test:1", 3, "passed", now.AddMinutes(1));
+        CompleteRun(store, "run:new", "test:1", 4, "failed", now.AddMinutes(2));
+
+        ContinuousTestFlakinessScore score = store.ScoreContinuousTestFlakiness(Workspace, "test:1");
+        Assert.Equal(1, score.Transitions);
+        Assert.Equal(ContinuousTestFlakinessState.Stable, score.State);
+    }
+
+    [Fact]
     public void Skipped_only_history_keeps_flakiness_score_zero()
     {
         using var store = CreateStoreWithTests("test:1");

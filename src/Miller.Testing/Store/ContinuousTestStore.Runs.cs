@@ -408,15 +408,12 @@ public sealed partial class ContinuousTestStore
             connection =>
             {
                 using var command = connection.CreateCommand();
-                string[] parameters = ids
-                    .Select((_, index) => "$case" + index.ToString(CultureInfo.InvariantCulture))
-                    .ToArray();
                 command.CommandText = $$"""
-                    SELECT r.test_case_id, r.status, r.observed_at
-                    FROM test_results r
-                    WHERE r.workspace_id = $ws
-                      AND r.test_case_id IN ({{string.Join(", ", parameters)}})
-                      AND (
+                    SELECT r.test_case_id, r.id, r.status, r.observed_at
+                    FROM json_each($caseIds) requested
+                    JOIN test_results r
+                      ON r.workspace_id = $ws AND r.test_case_id = requested.value
+                    WHERE (
                           SELECT COUNT(*)
                           FROM test_results newer
                           WHERE newer.workspace_id = r.workspace_id
@@ -429,26 +426,39 @@ public sealed partial class ContinuousTestStore
                     """;
                 command.Parameters.AddWithValue("$ws", workspaceId);
                 command.Parameters.AddWithValue("$limit", ContinuousTestFlakiness.MaxHistory);
-                for (int index = 0; index < ids.Length; index++)
-                    command.Parameters.AddWithValue(parameters[index], ids[index]);
+                command.Parameters.AddWithValue("$caseIds", TestingJson.Strings(ids));
 
                 var outcomes = ids.ToDictionary(
                     testCaseId => testCaseId,
-                    _ => (IReadOnlyList<ContinuousTestOutcome>)new List<ContinuousTestOutcome>(),
+                    _ => new List<RecentContinuousTestOutcomeRow>(),
                     StringComparer.Ordinal);
                 using SqliteDataReader reader = command.ExecuteReader();
                 while (reader.Read())
                 {
                     string testCaseId = reader.GetString(0);
-                    string status = reader.GetString(1);
+                    string id = reader.GetString(1);
+                    string status = reader.GetString(2);
                     if (ContinuousTestFlakiness.NormalizeStatus(status) is null)
                         continue;
-                    ((List<ContinuousTestOutcome>)outcomes[testCaseId]).Add(new ContinuousTestOutcome(
+                    outcomes[testCaseId].Add(new RecentContinuousTestOutcomeRow(
+                        id,
                         status,
-                        DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture)));
+                        DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture)));
                 }
 
-                return outcomes;
+                return outcomes.ToDictionary(
+                    pair => pair.Key,
+                    pair => (IReadOnlyList<ContinuousTestOutcome>)pair.Value
+                        .OrderByDescending(row => row.ObservedAt)
+                        .ThenByDescending(row => row.Id, StringComparer.Ordinal)
+                        .Select(row => new ContinuousTestOutcome(row.Status, row.ObservedAt))
+                        .ToArray(),
+                    StringComparer.Ordinal);
             });
     }
+
+    private sealed record RecentContinuousTestOutcomeRow(
+        string Id,
+        string Status,
+        DateTimeOffset ObservedAt);
 }

@@ -22,7 +22,18 @@ public sealed class PerformanceBaselineObserverTests
         Assert.Equal(twoResults + 2, threeResults);
     }
 
-    private static int CaptureCompletionStatements(int resultCount)
+    [Fact]
+    public void Completion_batch_case_ids_survive_a_lowered_sqlite_variable_limit()
+    {
+        const int resultCount = 20;
+        const int variableLimit = 16;
+
+        int statements = CaptureCompletionStatements(resultCount, variableLimit);
+
+        Assert.Equal(3 + (2 * resultCount), statements);
+    }
+
+    private static int CaptureCompletionStatements(int resultCount, int? variableLimit = null)
     {
         string directory = Directory.CreateTempSubdirectory("miller-ct-baseline-").FullName;
         try
@@ -52,6 +63,8 @@ public sealed class PerformanceBaselineObserverTests
                 var connection = (SqliteConnection)typeof(ContinuousTestStore)
                 .GetField("_write", BindingFlags.Instance | BindingFlags.NonPublic)!
                     .GetValue(store)!;
+                if (variableLimit is int limit)
+                    SQLitePCL.raw.sqlite3_limit(connection.Handle!, SQLitePCL.raw.SQLITE_LIMIT_VARIABLE_NUMBER, limit);
                 using var trace = new SqliteTraceObserver(connection, statements);
                 store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
                     "ws:1",
