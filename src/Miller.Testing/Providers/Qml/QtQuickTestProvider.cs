@@ -9,6 +9,7 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
     private const string Framework = "qt-quick-test";
     private const string ProviderSource = "ct-provider:qml";
     private const string ProjectIdMetadataKey = "project_id";
+    private const string ConfigurationMetadataKey = "configuration";
 
     private readonly ITestProcessRunner _runner;
     private readonly string _cmakePath;
@@ -122,7 +123,8 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
                 paths.OutDir,
                 artifactPath,
                 selectedNames,
-                request.WholeSuite),
+                request.WholeSuite,
+                ConfigurationFor(request.Workspace)),
             paths.OutDir,
             EnvironmentFor(request.Workspace, paths));
         var processResult = await RunProcessAsync(command, cancellationToken).ConfigureAwait(false);
@@ -188,6 +190,8 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
         if (HasValidBuildTree(paths))
             return;
 
+        string? configuration = ConfigurationFor(workspace);
+
         var version = await RunProcessAsync(
             new TestProcessCommand(
                 _cmakePath,
@@ -200,7 +204,10 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
         var configure = await RunProcessAsync(
             new TestProcessCommand(
                 _cmakePath,
-                ["-S", ConfigureRoot(workspace), "-B", paths.OutDir],
+                QtQuickTestTooling.BuildCMakeConfigureArguments(
+                    ConfigureRoot(workspace),
+                    paths.OutDir,
+                    configuration),
                 ConfigureRoot(workspace),
                 EnvironmentFor(workspace, paths)),
             cancellationToken).ConfigureAwait(false);
@@ -212,7 +219,7 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
         var build = await RunProcessAsync(
             new TestProcessCommand(
                 _cmakePath,
-                ["--build", paths.OutDir],
+                QtQuickTestTooling.BuildCMakeBuildArguments(paths.OutDir, configuration),
                 ConfigureRoot(workspace),
                 EnvironmentFor(workspace, paths)),
             cancellationToken).ConfigureAwait(false);
@@ -257,7 +264,7 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
         var result = await RunProcessAsync(
             new TestProcessCommand(
                 _ctestPath,
-                QtQuickTestTooling.BuildCTestDiscoveryArguments(paths.OutDir),
+                QtQuickTestTooling.BuildCTestDiscoveryArguments(paths.OutDir, ConfigurationFor(workspace)),
                 paths.OutDir,
                 EnvironmentFor(workspace, paths)),
             cancellationToken).ConfigureAwait(false);
@@ -355,6 +362,18 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
         && !string.IsNullOrWhiteSpace(projectId)
             ? projectId
             : workspace.BuildOutputRoot;
+
+    private static string? ConfigurationFor(ContinuousTestWorkspace workspace)
+    {
+        if (workspace.Metadata.TryGetValue(ConfigurationMetadataKey, out object? value)
+            && value is string configuration
+            && !string.IsNullOrWhiteSpace(configuration))
+        {
+            return configuration.Trim();
+        }
+
+        return OperatingSystem.IsWindows() ? "Release" : null;
+    }
 
     private static string ConfigureRoot(ContinuousTestWorkspace workspace)
     {

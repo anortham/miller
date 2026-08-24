@@ -56,17 +56,56 @@ public static class QtQuickTestTooling
 
     public static ImmutableArray<string> BuildCMakeVersionArguments() => ["--version"];
 
-    public static ImmutableArray<string> BuildCTestDiscoveryArguments(string buildDirectory)
+    public static ImmutableArray<string> BuildCMakeConfigureArguments(
+        string sourceDirectory,
+        string buildDirectory,
+        string? configuration = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
+        var arguments = new List<string>
+        {
+            "-S",
+            sourceDirectory,
+            "-B",
+            buildDirectory,
+            "-DBUILD_TESTING=ON",
+        };
+        if (!string.IsNullOrWhiteSpace(configuration))
+            arguments.Add($"-DCMAKE_BUILD_TYPE={configuration}");
+        return [.. arguments];
+    }
+
+    public static ImmutableArray<string> BuildCMakeBuildArguments(
+        string buildDirectory,
+        string? configuration = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
-        return ["--test-dir", buildDirectory, "--show-only=json-v1"];
+        var arguments = new List<string> { "--build", buildDirectory };
+        if (!string.IsNullOrWhiteSpace(configuration))
+        {
+            arguments.Add("--config");
+            arguments.Add(configuration);
+        }
+        return [.. arguments];
+    }
+
+    public static ImmutableArray<string> BuildCTestDiscoveryArguments(
+        string buildDirectory,
+        string? configuration = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
+        var arguments = new List<string> { "--test-dir", buildDirectory, "--show-only=json-v1" };
+        AppendConfiguration(arguments, configuration);
+        return [.. arguments];
     }
 
     public static ImmutableArray<string> BuildCTestRunArguments(
         string buildDirectory,
         string resultArtifactPath,
         IEnumerable<string> selectedNames,
-        bool wholeSuite)
+        bool wholeSuite,
+        string? configuration = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(resultArtifactPath);
@@ -81,6 +120,7 @@ public static class QtQuickTestTooling
             "--no-tests=error",
             "--output-on-failure",
         };
+        AppendConfiguration(arguments, configuration);
         if (!wholeSuite)
         {
             arguments.Add("-R");
@@ -111,6 +151,15 @@ public static class QtQuickTestTooling
             throw new ArgumentException("test names must contain at least one name", nameof(names));
 
         return $"^(?:{string.Join('|', ordered.Select(Regex.Escape))})$";
+    }
+
+    private static void AppendConfiguration(List<string> arguments, string? configuration)
+    {
+        if (!string.IsNullOrWhiteSpace(configuration))
+        {
+            arguments.Add("-C");
+            arguments.Add(configuration);
+        }
     }
 
     public static ImmutableDictionary<string, string?> WithDefaultQtPlatform(

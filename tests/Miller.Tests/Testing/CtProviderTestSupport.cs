@@ -1,12 +1,12 @@
+using System.Diagnostics;
 using Xunit;
 
 namespace Miller.Tests.Testing;
 
 /// <summary>
-/// Shared scaffolding for continuous-testing provider Scale tests. Centralizes the ONE thing every
-/// live provider smoke needs — locating <c>dotnet</c> / <c>cargo</c> / <c>node</c> / <c>python</c> on
-/// <c>PATH</c> and skipping (never failing) when the toolchain is absent — so the launch signal lives
-/// in exactly one place.
+/// Shared scaffolding for continuous-testing provider Scale tests. Centralizes toolchain discovery for
+/// live provider smokes and skips (never fails) when a prerequisite is absent, so each launch signal
+/// lives in exactly one place.
 ///
 /// That single signal is what <see cref="Conventions.CtScaleTraitConventionTests"/> keys on: any test
 /// that calls <see cref="RequireDotnet"/>, <see cref="RequireCargo"/>, <see cref="RequireNode"/>, or
@@ -34,6 +34,45 @@ public static class CtProviderTestSupport
         }
 
         return null;
+    }
+
+    public static string? LocateCMake() =>
+        LocateOnPath(OperatingSystem.IsWindows() ? "cmake.exe" : "cmake");
+
+    public static string RequireCMake()
+    {
+        string? binary = LocateCMake();
+        Assert.SkipWhen(binary is null,
+            "cmake is required for QtQuickTestProvider Scale smoke");
+        return binary!;
+    }
+
+    public static string? LocateCTest() =>
+        LocateOnPath(OperatingSystem.IsWindows() ? "ctest.exe" : "ctest");
+
+    public static string RequireCTest()
+    {
+        string? binary = LocateCTest();
+        Assert.SkipWhen(binary is null,
+            "ctest is required for QtQuickTestProvider Scale smoke");
+        return binary!;
+    }
+
+    public static string? LocateQtPaths() =>
+        LocateOnPath(OperatingSystem.IsWindows() ? "qtpaths6.exe" : "qtpaths6")
+        ?? LocateOnPath(OperatingSystem.IsWindows() ? "qtpaths.exe" : "qtpaths");
+
+    public static string RequireQtQuickTestCMakePrefix()
+    {
+        string? qtPaths = LocateQtPaths();
+        Assert.SkipWhen(qtPaths is null,
+            "Qt qtpaths is required for QtQuickTestProvider Scale smoke");
+
+        string? prefix = RunQtPathsQuery(qtPaths!);
+        string? config = FindQtQuickTestConfig(prefix);
+        Assert.SkipWhen(config is null,
+            "Qt Quick Test development CMake package is required for QtQuickTestProvider Scale smoke");
+        return PrefixFromConfig(config!);
     }
 
     public static string? LocateDotnet() =>
@@ -90,5 +129,69 @@ public static class CtProviderTestSupport
         Assert.SkipWhen(binary is null,
             "PowerShell is required for process-tree Scale tests on Windows");
         return binary!;
+    }
+
+    private static string? RunQtPathsQuery(string qtPaths)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = qtPaths,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                ArgumentList = { "--query", "QT_INSTALL_PREFIX" },
+            });
+            if (process is null)
+                return null;
+            string output = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit();
+            return process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output) ? output : null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string? FindQtQuickTestConfig(string? qtPrefix)
+    {
+        var prefixes = new List<string>();
+        if (!string.IsNullOrWhiteSpace(qtPrefix))
+            prefixes.Add(qtPrefix!);
+        string? configuredPrefixes = Environment.GetEnvironmentVariable("CMAKE_PREFIX_PATH");
+        if (!string.IsNullOrWhiteSpace(configuredPrefixes))
+            prefixes.AddRange(configuredPrefixes.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries));
+
+        foreach (string prefix in prefixes.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (string libraryDirectory in new[] { "lib", "lib64" })
+            {
+                string candidate = Path.Combine(
+                    prefix,
+                    libraryDirectory,
+                    "cmake",
+                    "Qt6QuickTest",
+                    "Qt6QuickTestConfig.cmake");
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static string PrefixFromConfig(string configPath)
+    {
+        string? cmakeDirectory = Path.GetDirectoryName(configPath);
+        string? libraryDirectory = cmakeDirectory is null ? null : Path.GetDirectoryName(Path.GetDirectoryName(cmakeDirectory));
+        string? prefix = libraryDirectory is null ? null : Path.GetDirectoryName(libraryDirectory);
+        return prefix ?? throw new InvalidOperationException($"Could not derive Qt prefix from '{configPath}'.");
     }
 }

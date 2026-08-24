@@ -49,6 +49,7 @@ public sealed class QtQuickTestProviderTests : IDisposable
         Assert.Equal(ConfigureRoot, ArgumentAfter(configure, "-S"));
         Assert.StartsWith(Path.Combine(BuildRoot, "g"), ArgumentAfter(configure, "-B"), StringComparison.Ordinal);
         Assert.DoesNotContain(ConfigureRoot, ArgumentAfter(configure, "-B"), StringComparison.Ordinal);
+        Assert.Contains("-DBUILD_TESTING=ON", configure.Arguments);
 
         var second = await provider.DiscoverAsync(Workspace(), TestContext.Current.CancellationToken);
         Assert.Equal(cases.Select(testCase => testCase.Id), second.Select(testCase => testCase.Id));
@@ -236,6 +237,58 @@ public sealed class QtQuickTestProviderTests : IDisposable
         {
             Environment.SetEnvironmentVariable("QT_QPA_PLATFORM", original);
         }
+    }
+
+    [Fact]
+    public async Task Configured_build_configuration_is_shared_by_configure_build_discovery_and_run()
+    {
+        var runner = new ScriptedTestProcessRunner(command =>
+        {
+            if (command.FileName == "cmake" && command.Arguments.SequenceEqual(["--version"]))
+                return new TestProcessResult(0, "cmake version 3.27.9\n", string.Empty);
+            if (command.FileName == "cmake" && command.Arguments.Contains("-S"))
+            {
+                var buildDirectory = ArgumentAfter(command, "-B");
+                Directory.CreateDirectory(buildDirectory);
+                File.WriteAllText(Path.Combine(buildDirectory, "CMakeCache.txt"), "cache");
+                File.WriteAllText(Path.Combine(buildDirectory, "CTestTestfile.cmake"), "tests");
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            }
+            if (command.FileName == "cmake")
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            if (command.FileName == "ctest" && command.Arguments.Contains("--show-only=json-v1"))
+                return new TestProcessResult(0, DiscoveryJson("A/basic"), string.Empty);
+
+            var artifact = ArgumentAfter(command, "--output-junit");
+            Directory.CreateDirectory(Path.GetDirectoryName(artifact)!);
+            File.WriteAllText(artifact, "<testsuite name=\"CTest\"><testcase name=\"A/basic\" /></testsuite>");
+            return new TestProcessResult(0, string.Empty, string.Empty);
+        });
+        var provider = new QtQuickTestProvider(runner);
+        var workspace = Workspace() with
+        {
+            Metadata = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["configure_root"] = ConfigureRoot,
+                ["evidence_root"] = Path.Combine(ConfigureRoot, "tests"),
+                ["configuration"] = "Debug",
+            },
+        };
+
+        var discovered = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        await provider.RunAsync(
+            Request(workspace, [Assert.Single(discovered).Id]),
+            TestContext.Current.CancellationToken);
+
+        var configure = runner.Calls.Single(command => command.Arguments.Contains("-S"));
+        Assert.Contains("-DCMAKE_BUILD_TYPE=Debug", configure.Arguments);
+        Assert.Contains("-DBUILD_TESTING=ON", configure.Arguments);
+        var build = runner.Calls.Single(command => command.Arguments.Contains("--build"));
+        Assert.Equal("Debug", ArgumentAfter(build, "--config"));
+        var discovery = runner.Calls.Single(command => command.FileName == "ctest" && command.Arguments.Contains("--show-only=json-v1"));
+        Assert.Equal("Debug", ArgumentAfter(discovery, "-C"));
+        var run = runner.Calls.Last(command => command.FileName == "ctest" && !command.Arguments.Contains("--show-only=json-v1"));
+        Assert.Equal("Debug", ArgumentAfter(run, "-C"));
     }
 
     [Fact]

@@ -206,6 +206,35 @@ public sealed class CTestDiscoveryParserTests
     }
 
     [Fact]
+    public void CTestArguments_include_a_host_configuration_when_requested()
+    {
+        var discovery = QtQuickTestTooling.BuildCTestDiscoveryArguments("build", "Release");
+        var run = QtQuickTestTooling.BuildCTestRunArguments(
+            "build",
+            "results.xml",
+            ["A/basic"],
+            wholeSuite: false,
+            configuration: "Release");
+
+        Assert.Equal("Release", ArgumentAfter(discovery, "-C"));
+        Assert.Equal("Release", ArgumentAfter(run, "-C"));
+    }
+
+    [Fact]
+    public void CTestArguments_omit_configuration_when_not_requested()
+    {
+        var discovery = QtQuickTestTooling.BuildCTestDiscoveryArguments("build");
+        var run = QtQuickTestTooling.BuildCTestRunArguments(
+            "build",
+            "results.xml",
+            ["A/basic"],
+            wholeSuite: false);
+
+        Assert.DoesNotContain("-C", discovery);
+        Assert.DoesNotContain("-C", run);
+    }
+
+    [Fact]
     public void QtEnvironment_preserves_an_explicit_platform_and_defaults_when_absent()
     {
         var explicitPlatform = QtQuickTestTooling.WithDefaultQtPlatform(
@@ -235,6 +264,13 @@ public sealed class CTestDiscoveryParserTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Same(command, Assert.Single(runner.Calls));
+    }
+
+    private static string ArgumentAfter(IReadOnlyList<string> arguments, string value)
+    {
+        int index = arguments.ToList().IndexOf(value);
+        Assert.True(index >= 0 && index + 1 < arguments.Count, $"argument '{value}' was not present");
+        return arguments[index + 1];
     }
 
     private static string DiscoveryJson(string first, string second) =>

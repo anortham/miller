@@ -8,15 +8,14 @@ namespace Miller.Tests.Conventions;
 /// <see cref="ScaleTraitConventionTests"/> for the continuous-testing toolchain launch signals in
 /// <see cref="CtProviderTestSupport"/>.
 ///
-/// A test that calls <see cref="CtProviderTestSupport.RequireDotnet"/> / <c>RequireCargo</c> /
-/// <c>RequireNode</c> / <c>RequirePython</c> (or the matching <c>Locate*</c> methods) spawns a real
-/// <c>dotnet test</c> / <c>cargo test</c> / node / pytest process and MUST carry
+/// A test that calls a <see cref="CtProviderTestSupport"/> toolchain launch signal (or its matching
+/// <c>Locate*</c> method) spawns a real provider process and MUST carry
 /// <c>[Trait("Category","Scale")]</c>. The default-suite filter
 /// (<c>VSTestTestCaseFilter=Category!=Scale</c>) excludes that trait; this guard makes sure nothing
 /// that SHOULD be tagged Scale escapes the tag.
 ///
 /// Each toolchain family gets its OWN non-vacuity assertion. One combined counter would let a rename
-/// of the Python signal pass silently as long as a dotnet Scale test still existed.
+/// of one signal pass silently as long as another Scale test still existed.
 ///
 /// This is a SOURCE scan, not reflection. Both the launch-signal scan and the trait check operate on
 /// COMMENT-STRIPPED source, so a doc-comment <c>&lt;see cref&gt;</c> mention of the signal cannot
@@ -28,6 +27,10 @@ public sealed class CtScaleTraitConventionTests
     private static readonly string[] CargoLaunchSignals = ["RequireCargo", "LocateCargo"];
     private static readonly string[] NodeLaunchSignals = ["RequireNode", "LocateNode"];
     private static readonly string[] PythonLaunchSignals = ["RequirePython", "LocatePython"];
+    private static readonly string[] CMakeLaunchSignals = ["RequireCMake", "LocateCMake"];
+    private static readonly string[] CTestLaunchSignals = ["RequireCTest", "LocateCTest"];
+    private static readonly string[] QtQuickTestLaunchSignals =
+        ["RequireQtQuickTestCMakePrefix", "LocateQtPaths"];
 
     private static readonly HashSet<string> ExemptFileNames = new(StringComparer.Ordinal)
     {
@@ -54,6 +57,9 @@ public sealed class CtScaleTraitConventionTests
         int cargoFilesSeen = 0;
         int nodeFilesSeen = 0;
         int pythonFilesSeen = 0;
+        int cmakeFilesSeen = 0;
+        int ctestFilesSeen = 0;
+        int qtQuickTestFilesSeen = 0;
 
         foreach (var path in sources)
         {
@@ -65,7 +71,11 @@ public sealed class CtScaleTraitConventionTests
             bool spawnsCargo = CargoLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsNode = NodeLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsPython = PythonLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
-            if (!spawnsDotnet && !spawnsCargo && !spawnsNode && !spawnsPython)
+            bool spawnsCMake = CMakeLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
+            bool spawnsCTest = CTestLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
+            bool spawnsQtQuickTest = QtQuickTestLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
+            if (!spawnsDotnet && !spawnsCargo && !spawnsNode && !spawnsPython
+                && !spawnsCMake && !spawnsCTest && !spawnsQtQuickTest)
                 continue;
 
             if (spawnsDotnet)
@@ -76,6 +86,12 @@ public sealed class CtScaleTraitConventionTests
                 nodeFilesSeen++;
             if (spawnsPython)
                 pythonFilesSeen++;
+            if (spawnsCMake)
+                cmakeFilesSeen++;
+            if (spawnsCTest)
+                ctestFilesSeen++;
+            if (spawnsQtQuickTest)
+                qtQuickTestFilesSeen++;
 
             if (!HasScaleTrait(code))
                 violations.Add(Path.GetRelativePath(testRoot, path));
@@ -85,6 +101,9 @@ public sealed class CtScaleTraitConventionTests
         AssertSignalFamilyIsCovered(cargoFilesSeen, "cargo", CargoLaunchSignals);
         AssertSignalFamilyIsCovered(nodeFilesSeen, "node", NodeLaunchSignals);
         AssertSignalFamilyIsCovered(pythonFilesSeen, "python", PythonLaunchSignals);
+        AssertSignalFamilyIsCovered(cmakeFilesSeen, "cmake", CMakeLaunchSignals);
+        AssertSignalFamilyIsCovered(ctestFilesSeen, "ctest", CTestLaunchSignals);
+        AssertSignalFamilyIsCovered(qtQuickTestFilesSeen, "Qt Quick Test", QtQuickTestLaunchSignals);
 
         Assert.True(violations.Count == 0,
             "These tests spawn a real CT provider toolchain but are MISSING [Trait(\"Category\",\"Scale\")], so a " +

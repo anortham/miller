@@ -5,6 +5,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [`findings/2026-08-24-qml-continuous-testing-verification.md`](findings/2026-08-24-qml-continuous-testing-verification.md) - QML Qt Quick Test Scale fixture, CMake/CTest configuration contract, and honest Linux/Windows toolchain evidence.
 - [`findings/2026-08-24-v1.21.2-release-verification.md`](findings/2026-08-24-v1.21.2-release-verification.md) - live stable v1.21.2 publication evidence: exact source commit, successful package and promotion runs, eight verified assets, checksums, package version smoke, and unchanged producer pins.
 - [`plans/2026-08-24-v1.21.2-patch-release.md`](plans/2026-08-24-v1.21.2-patch-release.md) - approved stable patch release plan for the completed CT/performance hardening, unchanged producer pins, package validation, promotion, and live release verification.
 - [`findings/2026-08-24-v1.21.1-release-verification.md`](findings/2026-08-24-v1.21.1-release-verification.md) - previous stable v1.21.1 publication evidence: exact source commit, successful package and promotion runs, eight verified assets, checksums, package version smoke, and unchanged producer pins.
