@@ -49,9 +49,9 @@ Close every deferred or open item in `docs/findings/2026-08-23-performance-audit
 
 **Acceptance criteria:**
 
-- [ ] Baseline evidence records workload identity and direct operation counts for every remaining performance finding.
-- [ ] Observers measure behavior without changing production output or timing policy.
-- [ ] Focused tests prove each observer detects the current hot path.
+- [x] Baseline evidence records workload identity and direct operation counts for every remaining performance finding.
+- [x] Observers measure behavior without changing production output or timing policy.
+- [x] Focused tests prove each observer detects the current hot path.
 
 ## Task 2: Replace full-session ticks and converge durable cursors
 
@@ -150,4 +150,3 @@ Close every deferred or open item in `docs/findings/2026-08-23-performance-audit
 - [ ] Every fixed row names a commit SHA and deterministic or fixed-workload evidence.
 - [ ] Release build is 0 warnings/0 errors; fast and Scale suites pass; live CT state is restored.
 - [ ] Branch and all related worktrees are reconciled and no task changes are stranded.
-
