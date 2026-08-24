@@ -144,10 +144,10 @@ Batch A uses `parallel-lead-commit`: workers do not commit. Every later task als
 **Approach:** Treat failed/partial/provider-error results as diagnosis, not a baseline. Record poller-vs-projection evidence available from focused probes; if exact phase timing is not observable yet, record that explicitly and use Task 4's side-by-side store allocation probe.
 
 **Acceptance criteria:**
-- [ ] Whole-suite no longer fails on output truncation and reported cases persist.
-- [ ] Daemon is genuinely idle for the complete sample and restored to stopped.
-- [ ] Baseline command, CPU delta, RSS range, result counts, stale count, and artifact size are recorded.
-- [ ] Evidence diff is handed to the lead.
+- [x] Whole-suite no longer fails on output truncation and reported cases persist.
+- [x] Daemon is genuinely idle for the complete sample and restored to stopped.
+- [x] Baseline command, CPU delta, RSS range, result counts, stale count, and artifact size are recorded.
+- [x] Evidence diff is handed to the lead.
 
 ### Task 4: Aggregate daemon projection
 

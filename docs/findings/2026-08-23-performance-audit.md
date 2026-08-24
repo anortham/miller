@@ -74,6 +74,52 @@ selected only the still-stale Miller.Tests project. It took 75.78 seconds wall t
 plus 235.41 system CPU-seconds, peaked at 585,236 KB resident memory, and failed after 74.50 seconds without
 recording one case result.
 
+### Task 3 Release foreground proof
+
+At 2026-08-23 22:14:29–22:16:14.827 CDT, the task worktree at HEAD `13bfcbdc532754781c4af96bb54cb38e596653d1`
+built with `dotnet build Miller.slnx -c Release`: 0 warnings and 0 errors. Before the run,
+`miller tests status --json --workspace /home/murphy/source/miller` reported `daemon.state=stopped`,
+`running=false`, and three enabled xUnit projects. The exact required foreground command was run with the
+Release binary under `/usr/bin/time -v`:
+
+```text
+/usr/bin/time -v -o /tmp/miller-ct-task3-run.time \
+  /home/murphy/source/miller/.worktrees/perf-ct-audit-2026-08-23/src/Miller.Server/bin/Release/net10.0/miller \
+  tests run --json --workspace /home/murphy/source/miller
+```
+
+The process exited 0 after 1:47.77 wall time (117.13 user CPU-seconds, 229.97 system CPU-seconds,
+525,516 KB maximum RSS), and stdout was valid 252-byte JSON with `execution=foreground_one_shot`; however,
+the reported verdict was `partial`, so this is diagnosis and not a passing whole-suite baseline. Three
+persisted provider runs all completed `passed` at revision 38,946: FusionArm 11 results, RetrievalEval 95,
+and Miller.Tests 8,260 (8,251 passed plus 9 skipped). The three JUnit artifacts were retained and parsed:
+11 cases/0 failures/0 errors/0 disabled (2,421 bytes), 95/0/0/0 (21,786 bytes), and 8,310/0/0/9
+(1,842,373 bytes). The artifact payloads reported `mapped_selected=11`, `95`, and `8,260`, with
+`selected_residue=0` and `new_artifact_cases=0` for each. The read-only `ct.db` was 56,369,152 bytes.
+
+The partial verdict is explained by two historical project-discovery pseudo-cases that remain stale and
+were not reported by the run: `project-discovery::/home/murphy/source/miller/src/Miller.Testing/Miller.Testing.csproj`
+(`ct-discovery-failure:dad7afa7e0ecbe8301dabf9b`) and
+`project-discovery::/home/murphy/source/miller/tests/Miller.SharedBrokerTestHost/Miller.SharedBrokerTestHost.csproj`
+(`ct-discovery-failure:76f293dbfbc14b7ee6e1978e`). Both projects are disabled in `ct_test_projects`; each
+has one historical failed result but zero results in the three new run IDs. Their prior failure records are
+an exit-134 `--endpoint` argument exception and a missing `Miller.Testing` process path. Post-run status was
+still `daemon=stopped`, `verdict=partial`, `stale=2`. Miller's selector only admits provider-managed cases
+whose source starts with `ct-provider:`; these two `ct-project-status` lifecycle rows belong to disabled
+projects and were not runnable work. The same Release binary was therefore started for a qualified no-runnable-
+work idle sample, while retaining `stale=2` as a hard status fact.
+
+`miller tests serve --json --workspace /home/murphy/source/miller` returned `status=started`, `pid=1038423`,
+and `publication.readiness=ready`. Start and end status reads both reported the same Release version,
+`activity=idle`, `run=null`, and `loop_stalled=false`. The process stayed alive and sleeping (`/proc/1038423/stat`
+state `S`) at five samples over 60.036670614 seconds, from 2026-08-23 22:20:54.099907685 CDT through
+22:21:54.129702080 CDT. CPU ticks moved from user/system `486/53` to `1103/144`: +617 user, +91 system,
+708 total ticks, or 7.08 CPU-seconds (11.80% of one core; report-only). RSS samples ranged from 120,192 to
+131,716 KB (11,524 KB span; report-only). A final `tests stop --json` returned `status=stopped`; the PID was
+absent from `/proc`, and the final status read reported `daemon.state=stopped`, `running=false`, `run=null`.
+No provider process was present in the final process scan. Exact poller-versus-projection phase timing was not
+observable; the sample is a pre-aggregate, no-runnable-work idle baseline, not proof that stale_count is zero.
+
 ### Release A/B
 
 The same commands and current family-store generation were read by the released `v1.20.1` binary. The CT schema
