@@ -103,9 +103,10 @@ The preferred repair is local to xUnit whole-suite execution: use the official `
 `-noAutoReporters`, retain the existing JUnit artifact, validate it with `JunitTestResultParser`, and return the
 existing artifact-only `ProviderRunResult`. Verbose progress preserves the output-silence stall guard while the
 bounded capture is no longer parsed. `ContinuousTestCoordinator.TryImportProviderResultArtifact` maps the
-artifact back to stored cases, including theory rows; provider imports must reject any reported row that does not
-resolve to a selected inventory id before mutating the store. Selected/chunked xUnit runs keep JSON; their
-120-unit/6-KiB chunk cap bounds output below this failure mode.
+artifact back to stored cases, including theory rows. Provider imports preflight attribution and fail before
+mutation if none of a non-empty selected inventory maps; partial residue is diagnosed and remains stale. New
+artifact rows remain importable because whole-suite runs can discover tests added since the prior inventory.
+Selected/chunked xUnit runs keep JSON; their 120-unit/6-KiB chunk cap bounds output below this failure mode.
 
 ## Other hot spots
 

@@ -36,11 +36,12 @@ Only an xUnit whole-suite invocation changes transport:
 4. The provider returns the existing artifact-only `ProviderRunResult`: no in-memory case-result list,
    the validated verdict, and `ResultArtifactPath` set.
 5. `ContinuousTestCoordinator.TryImportProviderResultArtifact` performs the existing selector
-   reconciliation and persistence, including theory-row handling. Provider-triggered imports use a
-   strict mode: every reported artifact row must resolve to an already-selected inventory id before
-   any store write. An unresolved row fails validation instead of creating a new `source=artifact`
-   case. Selected ids absent from the artifact stay stale and their requested/reported residue is
-   written through the existing coordinator lifecycle diagnostic.
+   reconciliation and persistence, including theory-row handling. Provider-triggered imports preflight
+   attribution before any store write and count selected matches, selected residue, and genuinely new
+   artifact cases. A non-empty selected inventory with zero mapped selected cases fails validation;
+   partial residue stays stale and is written through the existing coordinator lifecycle diagnostic.
+   Unmatched artifact rows remain eligible to create `source=artifact` cases because a whole-suite run
+   executes the current assembly and can legitimately discover tests added since the last inventory.
 
 Selected and chunked xUnit runs keep the JSON reporter. Their existing 120-unit/6-KiB argv caps also
 bound JSON volume, and their immediate per-case results remain useful for partial selection.
@@ -118,7 +119,7 @@ reused.
 **Depth/locality check:** transport behavior remains inside `DotnetTestProvider`; daemon aggregation
 remains inside the store/projection/host boundary. Detailed status callers are unchanged.
 
-**Test surface:** provider command/result tests, strict coordinator artifact-import integration, store
+**Test surface:** provider command/result tests, preflight coordinator artifact-import integration, store
 projection parity, query-plan evidence, daemon snapshot tests, and one real Scale whole-suite run.
 
 **Seams/adapters:** the existing `ProviderRunResult.ResultArtifactPath` and
@@ -148,8 +149,9 @@ sensitive fail-safe paths; parity and real-provider verification are required.
       JUnit cases.
 - [ ] Whole-suite xUnit retained stdout remains bounded independently of suite size while verbose
       progress continues to reset the stall/liveness clock.
-- [ ] Every imported JUnit row maps to a selected inventory id; unresolved rows fail before store
-      mutation, while selected-but-unreported ids stay stale with a lifecycle diagnostic.
+- [ ] Artifact import fails before mutation when no reported row maps to a non-empty selected inventory;
+      partial selected residue stays stale with a diagnostic, and genuinely new artifact rows remain
+      importable as new cases.
 - [ ] Red, empty-artifact, malformed-artifact, unsupported-runner, and coverage-mode edges remain
       honest and tested.
 - [ ] Selected/chunked xUnit behavior and exact theory-row attribution remain unchanged.
