@@ -479,8 +479,16 @@ public sealed class ContinuousTestCoordinator
         ReapSupersededGenerations(workspace, activeGenerationId, ledger);
         DiskAccounting accounting = MeasureGenerationDisk(workspace);
         CommitMaintenance(workspace, ledger, accounting);
-        ContinuousTestHistoryPruneResult retention =
-            _store.PruneContinuousTestHistory(workspace.WorkspaceId, DateTimeOffset.UtcNow);
+        ContinuousTestHistoryPruneResult retention;
+        try
+        {
+            retention = _store.PruneContinuousTestHistory(workspace.WorkspaceId, DateTimeOffset.UtcNow);
+        }
+        catch (Exception exception)
+        {
+            _lifecycleLog?.Invoke($"ct_history_prune_failed type={exception.GetType().Name}");
+            return;
+        }
         if (retention.DeletedRuns > 0 || retention.DeletedResults > 0 || retention.DeletedArtifacts > 0
             || retention.LegacyUnlinkedArtifacts > 0)
         {

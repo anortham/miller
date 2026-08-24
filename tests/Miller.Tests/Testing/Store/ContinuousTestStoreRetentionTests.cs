@@ -167,6 +167,33 @@ public sealed class ContinuousTestStoreRetentionTests : IDisposable
         Assert.Equal(0, Count("SELECT COUNT(*) FROM test_cases WHERE id = 'case:rollback';"));
     }
 
+    [Fact]
+    public void Prune_reports_actual_remaining_counts_when_a_running_state_names_no_run()
+    {
+        using var store = new ContinuousTestStore(_dbPath);
+        store.PutTestCase(Case("case:counter"));
+        store.PutTestCase(Case("case:orphan"));
+        CompleteRun(store, "run:counter", "case:counter", 1, At("2026-01-01T00:00:00Z"), resultStatus: "unknown");
+        PutArtifact(store, "artifact:counter", At("2026-01-01T00:00:00Z"), "run:counter", "project:counter");
+        Execute("""
+            PRAGMA foreign_keys=OFF;
+            INSERT INTO ct_test_states(
+                test_case_id, workspace_id, index_identity, revision, state, running_run_id)
+            VALUES ('case:orphan', 'ws:retention', 'gen:retention', 1, 'running', 'run:missing');
+            PRAGMA foreign_keys=ON;
+            """);
+
+        ContinuousTestHistoryPruneResult result =
+            store.PruneContinuousTestHistory(Workspace, At("2026-08-24T12:00:00Z"));
+
+        Assert.Equal(result.ConsideredRuns, result.DeletedRuns + result.ProtectedRuns);
+        Assert.Equal(result.ConsideredResults, result.DeletedResults + result.ProtectedResults);
+        Assert.Equal(result.ConsideredArtifacts, result.DeletedArtifacts + result.ProtectedArtifacts);
+        Assert.Equal(0, result.ProtectedRuns);
+        Assert.Equal(0, result.ProtectedResults);
+        Assert.Equal(0, result.ProtectedArtifacts);
+    }
+
     private static ContinuousTestCase Case(string id, string workspace = Workspace) =>
         new(id, workspace, id, id, id, Framework: "xunit");
 
@@ -176,7 +203,8 @@ public sealed class ContinuousTestStoreRetentionTests : IDisposable
         string testCaseId,
         long revision,
         DateTimeOffset endedAt,
-        string workspace = Workspace)
+        string workspace = Workspace,
+        string resultStatus = "passed")
     {
         store.StartContinuousTestRun(new ContinuousTestRun(
             runId, workspace, "running", revision.ToString(CultureInfo.InvariantCulture), Identity, revision), [testCaseId]);
@@ -194,7 +222,7 @@ public sealed class ContinuousTestStoreRetentionTests : IDisposable
                 workspace,
                 testCaseId,
                 runId,
-                "passed",
+                resultStatus,
                 revision.ToString(CultureInfo.InvariantCulture),
                 Identity,
                 revision)]));

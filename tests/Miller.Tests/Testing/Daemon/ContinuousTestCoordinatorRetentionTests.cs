@@ -71,4 +71,112 @@ public sealed class ContinuousTestCoordinatorRetentionTests : IDisposable
 
         Assert.DoesNotContain(store.ListRunArtifacts(workspace.WorkspaceId), row => row.Id == "artifact:old");
     }
+
+    [Fact]
+    public async Task Retention_failure_does_not_terminalize_a_successful_run()
+    {
+        ContinuousTestWorkspace workspace = EngineTestSupport.Workspace(_directory);
+        using var store = new ContinuousTestStore(_dbPath);
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        PutOldArtifact(store, workspace);
+        AddRetentionDeleteFailureTrigger();
+        var diagnostics = new List<string>();
+        var provider = SuccessfulProvider();
+        var coordinator = new ContinuousTestCoordinator(
+            provider,
+            store,
+            runIdFactory: static () => "run:live",
+            onDiagnostic: diagnostics.Add);
+
+        ContinuousTestCoordinatorRunResult result = await coordinator.RunSelectedAsync(
+            Request(workspace),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("passed", result.ProviderResult.Status);
+        Assert.Equal("passed", store.ListTestRuns(workspace.WorkspaceId).Single(row => row.Id == "run:live").Status);
+        Assert.Contains(store.ListRunArtifacts(workspace.WorkspaceId), row => row.Id == "artifact:old");
+        Assert.Contains(diagnostics, row => row.StartsWith("ct_history_prune_failed type=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Retention_failure_does_not_replace_the_original_provider_failure()
+    {
+        ContinuousTestWorkspace workspace = EngineTestSupport.Workspace(_directory);
+        using var store = new ContinuousTestStore(_dbPath);
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        PutOldArtifact(store, workspace);
+        AddRetentionDeleteFailureTrigger();
+        var diagnostics = new List<string>();
+        var provider = SuccessfulProvider();
+        provider.RunException = new InvalidOperationException("provider original failure");
+        var coordinator = new ContinuousTestCoordinator(
+            provider,
+            store,
+            runIdFactory: static () => "run:failed",
+            onDiagnostic: diagnostics.Add);
+
+        InvalidOperationException exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.RunSelectedAsync(Request(workspace, "run:failed"), TestContext.Current.CancellationToken));
+
+        Assert.Equal("provider original failure", exception.Message);
+        Assert.Contains(store.ListRunArtifacts(workspace.WorkspaceId), row => row.Id == "artifact:old");
+        Assert.Contains(diagnostics, row => row.StartsWith("ct_history_prune_failed type=", StringComparison.Ordinal));
+    }
+
+    private static ContinuousTestCoordinatorRunRequest Request(
+        ContinuousTestWorkspace workspace,
+        string runId = "run:live") =>
+        new(
+            workspace,
+            "2",
+            "2",
+            EngineTestSupport.Identity,
+            ["test:app"],
+            RunId: runId);
+
+    private static FakeContinuousTestProvider SuccessfulProvider() =>
+        new()
+        {
+            RunResult = new ProviderRunResult(
+                "run:live",
+                "passed",
+                EndedAt: DateTimeOffset.UtcNow,
+                CaseResults:
+                [
+                    new ProviderCaseResult("result:app", "test:app", "passed", "2", EngineTestSupport.Identity),
+                ]),
+        };
+
+    private static void PutOldArtifact(ContinuousTestStore store, ContinuousTestWorkspace workspace) =>
+        store.PutRunArtifact(new ContinuousTestRunArtifact(
+            "artifact:old",
+            workspace.WorkspaceId,
+            "test_results",
+            CreatedAt: DateTimeOffset.UtcNow.AddDays(-90),
+            Payload: new Dictionary<string, object?>
+            {
+                ["run_id"] = "run:orphan",
+                ["project_path"] = workspace.ProjectPath,
+            }));
+
+    private void AddRetentionDeleteFailureTrigger()
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TRIGGER fail_ct_retention_delete
+            BEFORE DELETE ON run_artifacts
+            WHEN OLD.id = 'artifact:old'
+            BEGIN
+                SELECT RAISE(ABORT, 'retention failure');
+            END;
+            """;
+        command.ExecuteNonQuery();
+    }
 }

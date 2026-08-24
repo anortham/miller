@@ -259,9 +259,9 @@ public sealed partial class ContinuousTestStore
                 workspaceId,
                 cutoff);
 
-            long protectedRuns = ScalarLong("SELECT COUNT(*) FROM temp.ct_retention_runs;", workspaceId, cutoff);
-            long protectedResults = ScalarLong("SELECT COUNT(*) FROM temp.ct_retention_results;", workspaceId, cutoff);
-            long protectedArtifacts = ScalarLong("SELECT COUNT(*) FROM temp.ct_retention_artifacts;", workspaceId, cutoff);
+            long protectedRuns = CountRows("test_runs", workspaceId);
+            long protectedResults = CountRows("test_results", workspaceId);
+            long protectedArtifacts = CountRows("run_artifacts", workspaceId);
             long deletedRuns = consideredRuns - CountRows("test_runs", workspaceId);
             long deletedResults = consideredResults - CountRows("test_results", workspaceId);
             long deletedArtifacts = consideredArtifacts - CountRows("run_artifacts", workspaceId);
