@@ -524,10 +524,10 @@ public sealed class ContinuousTestCoordinator
             workspace.BuildOutputRoot,
             operationLockHeld: true);
         foreach (string path in cache.RemovedPaths)
-            ledger.Removed.Add(Path.GetRelativePath(workspace.BuildOutputRoot, path));
+            ledger.Removed.Add(StoredRelativePath(workspace.BuildOutputRoot, path));
         foreach (CtCacheReapDebt debt in cache.Debts)
             ledger.Debts.Add(new ReapDebt(
-                Path.GetRelativePath(workspace.BuildOutputRoot, debt.Path),
+                StoredRelativePath(workspace.BuildOutputRoot, debt.Path),
                 debt.Bytes));
         DiskAccounting accounting = MeasureGenerationDisk(workspace);
         CommitMaintenance(workspace, ledger, accounting);
@@ -552,6 +552,9 @@ public sealed class ContinuousTestCoordinator
                 + $"page_count={retention.PageCount} freelist_count={retention.FreelistCount}");
         }
     }
+
+    private static string StoredRelativePath(string root, string path) =>
+        Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
 
     private void ReapSupersededGenerations(
         ContinuousTestWorkspace workspace,

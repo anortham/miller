@@ -349,6 +349,71 @@ internal sealed class JulieDbFixture : IDisposable
         });
     }
 
+    internal sealed record StructuralFactInput(
+        string StructuralFactId,
+        string? ContainingSymbolId,
+        string Path,
+        string Language = "csharp",
+        string PatternId = "custom.pattern.v1",
+        string CaptureName = "attribute",
+        string NodeKind = "attribute",
+        string? MetadataJson = null);
+
+    /// <summary>
+    /// Insert structural-fact rows in one write transaction using one prepared command.
+    /// </summary>
+    public void AddStructuralFacts(IReadOnlyList<StructuralFactInput> facts)
+    {
+        ArgumentNullException.ThrowIfNull(facts);
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = DbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+            ForeignKeys = false,
+        }.ToString());
+        connection.Open();
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES ($id, $fid, $path, $lang, $pattern, $capture, $node, $symbol,
+                    1, 1, 1, 2, 0, 1, 1.0, $metadata);
+            """;
+
+        SqliteParameter id = command.Parameters.Add("$id", SqliteType.Text);
+        SqliteParameter fileId = command.Parameters.Add("$fid", SqliteType.Text);
+        SqliteParameter path = command.Parameters.Add("$path", SqliteType.Text);
+        SqliteParameter language = command.Parameters.Add("$lang", SqliteType.Text);
+        SqliteParameter pattern = command.Parameters.Add("$pattern", SqliteType.Text);
+        SqliteParameter capture = command.Parameters.Add("$capture", SqliteType.Text);
+        SqliteParameter node = command.Parameters.Add("$node", SqliteType.Text);
+        SqliteParameter symbol = command.Parameters.Add("$symbol", SqliteType.Text);
+        SqliteParameter metadata = command.Parameters.Add("$metadata", SqliteType.Text);
+        command.Prepare();
+
+        foreach (StructuralFactInput fact in facts)
+        {
+            id.Value = fact.StructuralFactId;
+            fileId.Value = FileId(fact.Path);
+            path.Value = fact.Path;
+            language.Value = fact.Language;
+            pattern.Value = fact.PatternId;
+            capture.Value = fact.CaptureName;
+            node.Value = fact.NodeKind;
+            symbol.Value = (object?)fact.ContainingSymbolId ?? DBNull.Value;
+            metadata.Value = (object?)fact.MetadataJson ?? DBNull.Value;
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
     /// <summary>
     /// Insert a <c>structural_facts</c> row bound to <paramref name="containingSymbolId"/> (the framework-bound
     /// source the reader treats as a suppression signal on the symbol OR any ancestor).
@@ -359,24 +424,17 @@ internal sealed class JulieDbFixture : IDisposable
         string captureName = "attribute", string nodeKind = "attribute",
         string? metadataJson = null)
     {
-        ExecuteWrite("""
-            INSERT INTO structural_facts
-                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
-                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
-                 confidence, metadata_json)
-            VALUES ($id, $fid, $path, $lang, $pattern, $capture, $node, $symbol,
-                    1, 1, 1, 2, 0, 1, 1.0, $metadata);
-            """, p =>
+        AddStructuralFacts(new[]
         {
-            p.AddWithValue("$id", structuralFactId);
-            p.AddWithValue("$fid", FileId(path));
-            p.AddWithValue("$path", path);
-            p.AddWithValue("$lang", language);
-            p.AddWithValue("$pattern", patternId);
-            p.AddWithValue("$capture", captureName);
-            p.AddWithValue("$node", nodeKind);
-            p.AddWithValue("$symbol", (object?)containingSymbolId ?? DBNull.Value);
-            p.AddWithValue("$metadata", (object?)metadataJson ?? DBNull.Value);
+            new StructuralFactInput(
+                structuralFactId,
+                containingSymbolId,
+                path,
+                language,
+                patternId,
+                captureName,
+                nodeKind,
+                metadataJson),
         });
     }
 

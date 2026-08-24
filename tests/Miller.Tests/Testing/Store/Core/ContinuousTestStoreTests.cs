@@ -599,6 +599,7 @@ public sealed class ContinuousTestStoreTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Scale")]
     public void Aggregate_continuous_test_statuses_allocates_materially_less_than_detailed_rows()
     {
         using var store = CreateSyntheticAggregateFixture(256);

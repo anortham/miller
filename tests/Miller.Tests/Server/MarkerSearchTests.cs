@@ -89,25 +89,27 @@ public sealed class MarkerSearchTests
     public void FindMarkers_AppliesMarkerFilterBeforeLimit()
     {
         using var fixture = JulieDbFixture.CreateDefault();
+        var facts = new List<JulieDbFixture.StructuralFactInput>(MarkerSearch.MaxLimit + 1);
         for (int i = 0; i < MarkerSearch.MaxLimit; i++)
         {
-            fixture.AddStructuralFact(
+            facts.Add(new JulieDbFixture.StructuralFactInput(
                 $"marker-todo-{i:D3}",
                 null,
                 $"aaa/{i:D3}.cs",
-                patternId: MarkerFactReader.PatternId,
-                captureName: "marker",
-                nodeKind: "comment",
-                metadataJson: """{"marker":"TODO"}""");
+                PatternId: MarkerFactReader.PatternId,
+                CaptureName: "marker",
+                NodeKind: "comment",
+                MetadataJson: """{"marker":"TODO"}"""));
         }
-        fixture.AddStructuralFact(
+        facts.Add(new JulieDbFixture.StructuralFactInput(
             "marker-hack-target",
             null,
             "zzz/Target.cs",
-            patternId: MarkerFactReader.PatternId,
-            captureName: "marker",
-            nodeKind: "comment",
-            metadataJson: """{"marker":"HACK"}""");
+            PatternId: MarkerFactReader.PatternId,
+            CaptureName: "marker",
+            NodeKind: "comment",
+            MetadataJson: """{"marker":"HACK"}"""));
+        fixture.AddStructuralFacts(facts);
 
         MarkerSearchHit hit = Assert.Single(MarkerSearch.FindMarkers(
             fixture.DbPath,
@@ -124,25 +126,27 @@ public sealed class MarkerSearchTests
     public void FindMarkers_AppliesPathFilterBeforeLimit()
     {
         using var fixture = JulieDbFixture.CreateDefault();
+        var facts = new List<JulieDbFixture.StructuralFactInput>(MarkerSearch.MaxLimit + 1);
         for (int i = 0; i < MarkerSearch.MaxLimit; i++)
         {
-            fixture.AddStructuralFact(
+            facts.Add(new JulieDbFixture.StructuralFactInput(
                 $"marker-early-{i:D3}",
                 null,
                 $"aaa/{i:D3}.cs",
-                patternId: MarkerFactReader.PatternId,
-                captureName: "marker",
-                nodeKind: "comment",
-                metadataJson: """{"marker":"TODO"}""");
+                PatternId: MarkerFactReader.PatternId,
+                CaptureName: "marker",
+                NodeKind: "comment",
+                MetadataJson: """{"marker":"TODO"}"""));
         }
-        fixture.AddStructuralFact(
+        facts.Add(new JulieDbFixture.StructuralFactInput(
             "marker-path-target",
             null,
             "zzz/Target.cs",
-            patternId: MarkerFactReader.PatternId,
-            captureName: "marker",
-            nodeKind: "comment",
-            metadataJson: """{"marker":"TODO"}""");
+            PatternId: MarkerFactReader.PatternId,
+            CaptureName: "marker",
+            NodeKind: "comment",
+            MetadataJson: """{"marker":"TODO"}"""));
+        fixture.AddStructuralFacts(facts);
 
         MarkerSearchHit hit = Assert.Single(MarkerSearch.FindMarkers(
             fixture.DbPath,

@@ -10,6 +10,7 @@ using Xunit;
 
 namespace Miller.Tests.Indexing;
 
+[Trait("Category", "Scale")]
 public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
 {
     private const string CounterVariable = "MILLER_FAKE_SHARED_BROKER_COUNTER";

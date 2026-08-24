@@ -145,23 +145,37 @@ public sealed class CtBuildCacheJanitorTests : IDisposable
     }
 
     [Fact]
-    public void Machine_janitor_ignores_non_miller_paths_and_symlinked_cache_entries()
+    public void Machine_janitor_ignores_non_miller_paths()
     {
         string foreign = Path.Combine(_root, "build", "foreign", "project");
         string foreignCache = Cache(foreign, "tool", 6, Now.AddDays(-8));
-        string canonical = BuildRoot("aaaaaaaaaaaa", "333333333333");
-        string target = Cache(canonical, "target", 6, Now.AddDays(-8));
-        string link = Path.Combine(canonical, "cache", "link");
-        MarkRoot(canonical);
-        if (!OperatingSystem.IsWindows())
-            Directory.CreateSymbolicLink(link, target);
 
         CtCacheMaintenanceResult result = Janitor(workspaceBudgetBytes: 1024, machineBudgetBytes: 1)
             .EnforceMachine();
 
+        Assert.Equal(0, result.DeletedCount);
+        Assert.Equal(0, result.DeletedBytes);
         Assert.True(Directory.Exists(foreignCache));
-        if (!OperatingSystem.IsWindows())
-            Assert.True(Directory.Exists(target));
+    }
+
+    [Fact]
+    public void Machine_janitor_ignores_symlinked_cache_entries()
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("Symbolic-link creation requires elevation or Developer Mode on Windows.");
+
+        string canonical = BuildRoot("aaaaaaaaaaaa", "333333333333");
+        string target = Cache(canonical, "target", 6, Now.AddDays(-8));
+        string link = Path.Combine(canonical, "cache", "link");
+        MarkRoot(canonical);
+        Directory.CreateSymbolicLink(link, target);
+
+        CtCacheMaintenanceResult result = Janitor(workspaceBudgetBytes: 1024, machineBudgetBytes: 1)
+            .EnforceMachine();
+
+        Assert.True(Directory.Exists(target));
+        Assert.Equal(0, result.DeletedCount);
+        Assert.Equal(0, result.DeletedBytes);
         Assert.True(result.SkippedAmbiguousRootCount > 0);
     }
 
@@ -274,7 +288,7 @@ public sealed class CtBuildCacheJanitorTests : IDisposable
 
     private static void MarkRoot(string buildRoot)
     {
-        File.WriteAllText(Path.Combine(buildRoot, CtBuildRootOperationLease.LockFileName), "marker");
+        File.WriteAllText(Path.Combine(buildRoot, CtBuildRootOperationLease.LockFileName), string.Empty);
     }
 
     private static void WriteBytes(string path, int count) =>

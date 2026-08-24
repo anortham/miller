@@ -3432,6 +3432,7 @@ public sealed class CliDispatchTests : IDisposable
     [Theory]
     [InlineData(null)]
     [InlineData("shadow")]
+    [Trait("Category", "Scale")]
     public async Task WorkspaceStatus_DefaultOnAndShadowPassivelyObserveAnExistingSharedBroker(
         string? semanticValue)
     {

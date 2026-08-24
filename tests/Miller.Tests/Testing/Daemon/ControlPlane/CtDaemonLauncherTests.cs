@@ -11,6 +11,7 @@ using Xunit;
 
 namespace Miller.Tests.Testing.Daemon.ControlPlane;
 
+[Trait("Category", "Scale")]
 public sealed class CtDaemonLauncherTests : IDisposable
 {
     private readonly string _root;

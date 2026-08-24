@@ -68,25 +68,27 @@ public sealed class MetricSnapshotAggregatesTests
     public void ReadConvergeMetrics_MarkerCountsAreExactAboveSearchLimit()
     {
         using var fx = NewFixture();
+        var facts = new List<JulieDbFixture.StructuralFactInput>(502);
         for (int i = 0; i <= 500; i++)
         {
-            fx.AddStructuralFact(
+            facts.Add(new JulieDbFixture.StructuralFactInput(
                 $"marker-{i:D3}",
                 null,
                 $"src/{i:D3}.cs",
-                patternId: MarkerFactReader.PatternId,
-                captureName: "marker",
-                nodeKind: "comment",
-                metadataJson: """{"marker":"TODO"}""");
+                PatternId: MarkerFactReader.PatternId,
+                CaptureName: "marker",
+                NodeKind: "comment",
+                MetadataJson: """{"marker":"TODO"}"""));
         }
-        fx.AddStructuralFact(
+        facts.Add(new JulieDbFixture.StructuralFactInput(
             "marker-unknown",
             null,
             "src/unknown.cs",
-            patternId: MarkerFactReader.PatternId,
-            captureName: "marker",
-            nodeKind: "comment",
-            metadataJson: """{"marker":"NOTE"}""");
+            PatternId: MarkerFactReader.PatternId,
+            CaptureName: "marker",
+            NodeKind: "comment",
+            MetadataJson: """{"marker":"NOTE"}"""));
+        fx.AddStructuralFacts(facts);
 
         IReadOnlyList<MetricHistoryPoint> metrics =
             MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath);
