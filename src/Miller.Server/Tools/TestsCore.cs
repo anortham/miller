@@ -666,10 +666,6 @@ public static class TestsCore
         if (ContinuousTestPolicy.IsKillSwitchOff(request.KillSwitch))
             return new TestsRunResult(3, CtRunExecution.ForegroundOneShot, ContinuousTestVerdict.Unknown, "disabled", false, null);
 
-        string workspaceId = ResolveWorkspaceId(request, root);
-        using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
-        store.EnsureSchemaForWrite();
-        IReadOnlyList<ContinuousTestProject> projects = store.ListContinuousTestProjects(workspaceId);
         CtRunDisposition disposition = CtDaemonLauncher.ResolveRun(root);
         if (disposition.Execution == CtRunExecution.Daemon)
         {
@@ -720,6 +716,11 @@ public static class TestsCore
                     Wait: wait);
             }
         }
+
+        string workspaceId = ResolveWorkspaceId(request, root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        store.EnsureSchemaForWrite();
+        IReadOnlyList<ContinuousTestProject> projects = store.ListContinuousTestProjects(workspaceId);
 
         TestsRunOutcome outcome;
         if (request.Hooks?.ForegroundRun is { } hook)
