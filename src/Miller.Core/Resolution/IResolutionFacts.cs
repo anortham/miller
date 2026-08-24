@@ -9,4 +9,5 @@ public interface IResolutionFacts
     IReadOnlyList<FactSymbol> TopLevelOf(long versionId);
     IReadOnlyList<FactTypeFact> TypeFactsOf(FactSymbolKey symbol);
     IReadOnlyList<ImportBinding> ImportsOf(long versionId);
+    IReadOnlyList<QmlVisibleType> QmlTypesVisibleTo(long versionId) => [];
 }

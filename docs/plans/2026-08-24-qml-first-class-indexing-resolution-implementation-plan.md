@@ -136,10 +136,10 @@ Commit mode: all tasks use `serial-worker-commit`; each task changes shared cont
 **Approach:** Use `trace` on `IResolutionFacts` before modifying every implementation/test double. Test precedence and negative cases through the public policy seam; do not add speculative Qt plugin or C++ registration models.
 
 **Acceptance criteria:**
-- [ ] The interface carries every required visibility constraint and no artifact-format object.
-- [ ] Policy tests cover aliases, versions, internal types, duplicate names, and missing manifest evidence.
-- [ ] No valid tie is broken by lexical/global uniqueness.
-- [ ] Worker-scope verification passes and the worker commits per `serial-worker-commit`.
+- [x] The interface carries every required visibility constraint and no artifact-format object.
+- [x] Policy tests cover aliases, versions, internal types, duplicate names, and missing manifest evidence.
+- [x] No valid tie is broken by lexical/global uniqueness.
+- [x] Worker-scope verification passes and the worker commits per `serial-worker-commit`.
 
 ### Task 3: Build store/artifact QML visibility catalogs
 

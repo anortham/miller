@@ -35,6 +35,7 @@ internal sealed class MemoryResolutionFacts : IResolutionFacts
     private readonly Dictionary<long, List<FactSymbol>> _topLevel = [];
     private readonly Dictionary<FactSymbolKey, List<FactTypeFact>> _typeFacts = [];
     private readonly Dictionary<long, List<ImportBinding>> _imports = [];
+    private readonly Dictionary<long, List<QmlVisibleType>> _qmlTypes = [];
 
     public FactSymbol Add(
         string id,
@@ -69,6 +70,11 @@ internal sealed class MemoryResolutionFacts : IResolutionFacts
         GetList(_imports, version).Add(import);
     }
 
+    public void AddQmlVisibleType(QmlVisibleType type)
+    {
+        GetList(_qmlTypes, type.ConsumerVersionId).Add(type);
+    }
+
     public IEnumerable<FactSymbol> SymbolsNamed(string name) =>
         _byName.TryGetValue(name, out List<FactSymbol>? list) ? list : [];
 
@@ -86,6 +92,9 @@ internal sealed class MemoryResolutionFacts : IResolutionFacts
 
     public IReadOnlyList<ImportBinding> ImportsOf(long versionId) =>
         _imports.TryGetValue(versionId, out List<ImportBinding>? list) ? list : [];
+
+    public IReadOnlyList<QmlVisibleType> QmlTypesVisibleTo(long versionId) =>
+        _qmlTypes.TryGetValue(versionId, out List<QmlVisibleType>? list) ? list : [];
 
     private static List<TValue> GetList<TKey, TValue>(Dictionary<TKey, List<TValue>> map, TKey key)
         where TKey : notnull
