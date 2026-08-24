@@ -97,20 +97,24 @@ public sealed record QmlVersionConstraint
 /// <summary>Producer provenance and the byte span that supports one QML fact.</summary>
 public sealed record QmlEvidence
 {
+    public string SourcePath { get; }
+
     public string Provenance { get; }
 
     public long StartByte { get; }
 
     public long EndByte { get; }
 
-    public QmlEvidence(string Provenance, long StartByte, long EndByte)
+    public QmlEvidence(string SourcePath, string Provenance, long StartByte, long EndByte)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(SourcePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(Provenance);
         if (StartByte < 0)
             throw new ArgumentOutOfRangeException(nameof(StartByte));
         if (EndByte < StartByte)
             throw new ArgumentOutOfRangeException(nameof(EndByte));
 
+        this.SourcePath = SourcePath;
         this.Provenance = Provenance;
         this.StartByte = StartByte;
         this.EndByte = EndByte;

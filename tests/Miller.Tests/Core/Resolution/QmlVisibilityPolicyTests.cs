@@ -306,6 +306,26 @@ public sealed class QmlVisibilityPolicyTests
         Assert.Equal(candidate, roundTrip);
     }
 
+    [Fact]
+    public void CandidatePreservesComponentPathSeparateFromEvidenceSourcePath()
+    {
+        var evidence = new QmlEvidence("modules/org/example/qmldir", "qmldir", 0L, 5L);
+        var candidate = new QmlVisibleType(
+            7,
+            new FactSymbolKey(12, "widget"),
+            "Widget",
+            "ui/Widget.qml",
+            QmlVisibilityScope.ForDirectory("ui"),
+            null,
+            null,
+            false,
+            false,
+            evidence);
+
+        Assert.Equal("modules/org/example/qmldir", candidate.Evidence.SourcePath);
+        Assert.NotEqual(candidate.SourceComponentPath, candidate.Evidence.SourcePath);
+    }
+
     private static QmlVisibleType Candidate(
         long consumerVersionId,
         FactSymbolKey? target = null,
@@ -324,5 +344,5 @@ public sealed class QmlVisibilityPolicyTests
         importAlias,
         isInternal,
         isSingleton,
-        new QmlEvidence("qmldir", 0, 5));
+        new QmlEvidence("ui/qmldir", "qmldir", 0, 5));
 }
