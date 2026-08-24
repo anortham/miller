@@ -92,20 +92,25 @@ public sealed class ContinuousTestRevisionPollerTests
     }
 
     [Fact]
-    public async Task Moving_cursor_reprobes_and_completes_the_forward_interval_in_one_poll()
+    public async Task Moving_cursor_reprobes_after_real_session_drift_and_completes_interval()
     {
-        string root = Directory.CreateTempSubdirectory("miller-ct-forward-drift-").FullName;
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        string root = CreateWorkspaceRoot(fixture, out string dbPath);
         try
         {
+            Execute(
+                dbPath,
+                "CREATE TABLE revision_file_changes (path TEXT, revision_id INTEGER, change_kind TEXT);");
             var workspace = EngineTestSupport.Workspace(root);
             using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
             store.SaveLastReconciledCursor(
                 EngineTestSupport.WorkspaceId,
-                new CtFreshnessKey(EngineTestSupport.Identity, 1));
-            var source = new ScriptedRevisionSource();
-            source.Observations.Enqueue(Observation(2));
-            source.Observations.Enqueue(Observation(3));
-            var impact = new ForwardMovingImpactSource();
+                new CtFreshnessKey("ctgen1:artifact:art-1:blake3", 0));
+            var source = new MillerArtifactRevisionSource();
+            var facts = new Miller.Tests.Testing.Selection.FakeCtFactSource();
+            var impact = new RealMovingImpactSource(
+                dbPath,
+                new MillerFactImpactSource(_ => facts));
             var enqueuer = new RecordingEnqueuer();
             var poller = new ContinuousTestRevisionPoller(source, impact, cursorStore: store);
 
@@ -115,15 +120,15 @@ public sealed class ContinuousTestRevisionPollerTests
 
             ContinuousTestDaemonChange change = Assert.Single(enqueuer.Changes);
             Assert.Equal("enqueued", result.Reason);
-            Assert.Equal(2, source.RefreshCount);
             Assert.Equal(2, impact.Calls);
-            Assert.Equal(3, change.DeltaToRevision);
+            Assert.Equal(2, change.DeltaToRevision);
             Assert.Equal(
-                new CtFreshnessKey(EngineTestSupport.Identity, 3),
+                new CtFreshnessKey("ctgen1:artifact:art-1:blake3", 2),
                 store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
         }
         finally
         {
+            SqliteConnection.ClearAllPools();
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
     }
@@ -596,8 +601,17 @@ public sealed class ContinuousTestRevisionPollerTests
             enqueuer,
             EnqueueArmed: armed);
 
-    private sealed class ForwardMovingImpactSource : IContinuousTestImpactSource
+    private sealed class RealMovingImpactSource : IContinuousTestImpactSource
     {
+        private readonly string _dbPath;
+        private readonly IContinuousTestImpactSource _inner;
+
+        public RealMovingImpactSource(string dbPath, IContinuousTestImpactSource inner)
+        {
+            _dbPath = dbPath;
+            _inner = inner;
+        }
+
         public int Calls { get; private set; }
 
         public Task<ContinuousTestImpactResult?> ImpactAsync(
@@ -609,24 +623,10 @@ public sealed class ContinuousTestRevisionPollerTests
             cancellationToken.ThrowIfCancellationRequested();
             Calls++;
             if (Calls == 1)
-            {
-                return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult("", [], [], [])
-                {
-                    Outcome = ContinuousTestImpactOutcome.Unavailable,
-                    Reason = "moving_cursor",
-                });
-            }
-
-            return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult(
-                "",
-                ["src/App.cs"],
-                [],
-                [])
-            {
-                Outcome = ContinuousTestImpactOutcome.Changed,
-                FromRevision = from?.Revision,
-                ToRevision = current.Revision,
-            });
+                Execute(
+                    _dbPath,
+                    "INSERT INTO revision_file_changes VALUES ('src/App.cs', 2, 'updated'); INSERT INTO extraction_revisions VALUES (2);");
+            return _inner.ImpactAsync(workspaceRoot, current, from, cancellationToken);
         }
     }
 
