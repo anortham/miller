@@ -1,4 +1,5 @@
 using Miller.Testing;
+using Miller.Testing.Providers.Qml;
 using Xunit;
 
 namespace Miller.Tests.Testing.Daemon.Engine;
@@ -50,13 +51,15 @@ public sealed class ContinuousTestProviderFactoryTests : IDisposable
     }
 
     [Fact]
-    public void Default_factory_wires_dotnet_rust_js_and_python()
+    public void Default_factory_wires_dotnet_rust_js_python_and_qml()
     {
         var factory = ContinuousTestProviderFactory.CreateDefault();
         Assert.IsType<DotnetTestProvider>(factory.Resolve(Workspace("app.csproj", null)).Provider);
         Assert.IsType<RustTestProvider>(factory.Resolve(Workspace("Cargo.toml", null)).Provider);
         Assert.IsType<JavaScriptTestProvider>(factory.Resolve(Workspace("package.json", null)).Provider);
         Assert.IsType<PythonTestProvider>(factory.Resolve(Workspace("pyproject.toml", null)).Provider);
+        Assert.IsType<QtQuickTestProvider>(factory.Resolve(Workspace("CMakeLists.txt", "qt-quick-test")).Provider);
+        Assert.Equal("ct-provider:qml", factory.Resolve(Workspace("CMakeLists.txt", "qt-quick-test")).ProviderSource);
     }
 
     [Fact]

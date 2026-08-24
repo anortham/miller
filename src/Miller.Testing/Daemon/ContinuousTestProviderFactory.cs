@@ -1,3 +1,5 @@
+using Miller.Testing.Providers.Qml;
+
 namespace Miller.Testing;
 
 public interface IContinuousTestProviderResolver
@@ -84,6 +86,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
         var rust = new RustTestProvider(process);
         var javascript = new JavaScriptTestProvider(process);
         var python = new PythonTestProvider(process);
+        var qml = new QtQuickTestProvider(process);
         return new ContinuousTestProviderFactory(
             new DotnetTestProvider(process),
             new Dictionary<string, ContinuousTestProviderRegistration>(StringComparer.Ordinal)
@@ -95,6 +98,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
                 ["node-test"] = new(javascript, "ct-provider:javascript"),
                 ["pytest"] = new(python, "ct-provider:python"),
                 ["python"] = new(python, "ct-provider:python"),
+                ["qt-quick-test"] = new(qml, "ct-provider:qml"),
             })
         {
             DefaultProcessRunner = process,
