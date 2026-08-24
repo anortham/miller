@@ -280,7 +280,14 @@ public sealed class FamilyStoreReadSession :
                 generation,
                 hash,
                 paths.StoreRoot,
-                Required(metadata, "binary_version"));
+                Required(metadata, "binary_version"),
+                string.Join(
+                    ':',
+                    "ctgen1",
+                    "store",
+                    binding.FamilyId.ToString("D", CultureInfo.InvariantCulture),
+                    binding.ViewId,
+                    paths.GenerationName));
         }
         catch (FamilyStoreReadException)
         {
@@ -1138,4 +1145,3 @@ public sealed class FamilyStoreReadSession :
         string StoreDatabasePath,
         string CoordinatorDatabasePath);
 }
-

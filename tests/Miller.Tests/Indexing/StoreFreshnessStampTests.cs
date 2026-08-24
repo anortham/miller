@@ -148,6 +148,9 @@ public sealed class StoreFreshnessStampTests
         Assert.Equal(42, probe.Revision);
         Assert.Equal(7, probe.ManifestGeneration);
         Assert.Equal("stamp-hash", probe.ManifestHash);
+        Assert.Equal(
+            "ctgen1:store:11111111-1111-4111-8111-111111111111:view-a:gen-001",
+            probe.IndexGenerationIdentity);
         Assert.False(File.Exists(Path.Combine(dir.StoreRoot, "gen-001", "store.db")));
     }
 

@@ -589,7 +589,8 @@ public static class TestsCore
             runActivity: runActivity);
         var poller = new ContinuousTestRevisionPoller(
             new MillerArtifactRevisionSource(),
-            new MillerFactImpactSource(workspace => OpenLiveFacts(workspace, workspaceId)));
+            new MillerFactImpactSource(workspace => OpenLiveFacts(workspace, workspaceId)),
+            cursorStore: store);
 
         // Family-worktree adoption: the daemon scans the machine-global registry through its
         // NON-CREATING read path and serves every registered, opted-in worktree of this repo
@@ -1600,7 +1601,8 @@ public static class TestsCore
                 runActivity: runActivity);
             var poller = new ContinuousTestRevisionPoller(
                 new MillerArtifactRevisionSource(),
-                new MillerFactImpactSource(workspace => OpenLiveFacts(workspace, workspaceId)));
+                new MillerFactImpactSource(workspace => OpenLiveFacts(workspace, workspaceId)),
+                cursorStore: store);
             return new ContinuousTestWorkspaceContext
             {
                 WorkspaceRoot = root,

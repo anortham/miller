@@ -13,6 +13,7 @@ public sealed class CtSchemaTests : IDisposable
         "test_results",
         "ct_test_states",
         "ct_case_fresh_watermarks",
+        "ct_revision_cursors",
         "coverage_files",
         "coverage_spans",
         "confidence_snapshots",
@@ -44,7 +45,7 @@ public sealed class CtSchemaTests : IDisposable
         using var connection = OpenWrite();
         CtSchema.Apply(connection);
 
-        Assert.Equal("2", Convert.ToString(
+        Assert.Equal(CtSchema.SchemaVersion.ToString(CultureInfo.InvariantCulture), Convert.ToString(
             Scalar(connection, "SELECT value FROM meta WHERE key='schema_version';"),
             CultureInfo.InvariantCulture));
         Assert.Equal(CtSchema.SchemaVersion, CtSchema.ReadSchemaVersion(connection));

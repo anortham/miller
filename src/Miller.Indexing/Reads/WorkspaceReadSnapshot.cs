@@ -7,7 +7,8 @@ public sealed record WorkspaceFreshnessProbe(
     long? ManifestGeneration = null,
     string? ManifestHash = null,
     string? StoreRoot = null,
-    string? BinaryVersion = null);
+    string? BinaryVersion = null,
+    string? IndexGenerationIdentity = null);
 
 public enum WorkspaceReadMode
 {

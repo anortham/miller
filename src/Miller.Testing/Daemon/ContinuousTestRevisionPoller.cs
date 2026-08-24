@@ -109,7 +109,7 @@ public sealed record ContinuousTestRevisionPollResult(
 }
 
 /// <summary>
-/// Polls the live artifact (reopen per poll) and enqueues only a complete delta: a changed delta
+/// Polls the live artifact through its cheap freshness probe and enqueues only a complete delta: a changed delta
 /// selects impacted tests, an empty delta becomes a pure watermark advance (known-empty in the
 /// queue — nothing stales, nothing executes). Unavailable impact never enqueues and never falls
 /// back to workspace scope.
@@ -130,16 +130,22 @@ public sealed class ContinuousTestRevisionPoller
 
     private readonly IContinuousTestRevisionSource _source;
     private readonly IContinuousTestImpactSource? _impactSource;
+    private readonly ContinuousTestStore? _cursorStore;
     private readonly TimeSpan _debounceDelay;
     private CtFreshnessKey? _lastFresh;
+    private CtFreshnessKey? _lastObserved;
+    private string? _cursorWorkspaceId;
+    private bool _cursorLoaded;
 
     public ContinuousTestRevisionPoller(
         IContinuousTestRevisionSource source,
         IContinuousTestImpactSource? impactSource = null,
-        TimeSpan? debounceDelay = null)
+        TimeSpan? debounceDelay = null,
+        ContinuousTestStore? cursorStore = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _impactSource = impactSource;
+        _cursorStore = cursorStore;
         if (debounceDelay is { } explicitDelay && explicitDelay < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(debounceDelay));
         _debounceDelay = debounceDelay
@@ -173,6 +179,7 @@ public sealed class ContinuousTestRevisionPoller
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        LoadCursor(request.WorkspaceId);
 
         ContinuousTestRevisionObservation? observation = await _source
             .RefreshAsync(request.WorkspaceId, request.WorkspaceRoot, cancellationToken)
@@ -191,17 +198,20 @@ public sealed class ContinuousTestRevisionPoller
 
         if (observation.Rebuild || IdentityChanged(freshness))
         {
-            request.OnRebuild?.Invoke(freshness);
-            _lastFresh = freshness;
+            if (_lastObserved != freshness)
+                request.OnRebuild?.Invoke(freshness);
+            _lastObserved = freshness;
             return Result(request.WorkspaceId, freshness, observation.Status, 0, "rebuild");
         }
 
         if (_lastFresh is { } last && last == freshness)
             return Result(request.WorkspaceId, freshness, observation.Status, 0, "same_revision");
 
-        if (!request.EnqueueArmed || _lastFresh is null)
+        if (_lastFresh is null)
         {
+            _lastObserved = freshness;
             _lastFresh = freshness;
+            SaveCursor(freshness);
             return Result(request.WorkspaceId, freshness, observation.Status, 0, "status-only");
         }
 
@@ -228,6 +238,8 @@ public sealed class ContinuousTestRevisionPoller
             || impact.ToRevision is not { } to
             || to != freshness.Revision
             || from >= to
+            || _lastFresh is not { } lastFresh
+            || from != lastFresh.Revision
             || (impact.ChangedPaths.Count == 0) != empty)
         {
             return Result(request.WorkspaceId, freshness, observation.Status, 0, "unavailable_delta") with
@@ -262,6 +274,8 @@ public sealed class ContinuousTestRevisionPoller
             enqueued++;
         }
 
+        SaveCursor(freshness);
+        _lastObserved = freshness;
         _lastFresh = freshness;
         return new ContinuousTestRevisionPollResult(
             request.WorkspaceId,
@@ -280,6 +294,20 @@ public sealed class ContinuousTestRevisionPoller
     private bool IdentityChanged(CtFreshnessKey freshness) =>
         _lastFresh is { } last
         && !string.Equals(last.IndexIdentity, freshness.IndexIdentity, StringComparison.Ordinal);
+
+    private void LoadCursor(string workspaceId)
+    {
+        if (_cursorLoaded && string.Equals(_cursorWorkspaceId, workspaceId, StringComparison.Ordinal))
+            return;
+
+        _lastObserved = null;
+        _cursorWorkspaceId = workspaceId;
+        _cursorLoaded = true;
+        _lastFresh = _cursorStore?.ReadLastReconciledCursor(workspaceId);
+    }
+
+    private void SaveCursor(CtFreshnessKey freshness) =>
+        _cursorStore?.SaveLastReconciledCursor(_cursorWorkspaceId!, freshness);
 
     private async Task<ContinuousTestImpactResult?> ResolveImpactAsync(
         ContinuousTestRevisionPollRequest request,
@@ -330,8 +358,8 @@ public sealed class ContinuousTestRevisionPoller
 }
 
 /// <summary>
-/// Reopens the live Miller artifact each poll. A new generation identity is a rebuild; a routine
-/// write or a revision-only advance never is.
+/// Probes the live Miller artifact each poll. A new generation identity is a rebuild; a routine
+/// write or a revision-only advance never is. Full sessions remain in the impact path only.
 /// </summary>
 public sealed class MillerArtifactRevisionSource : IContinuousTestRevisionSource
 {
@@ -346,10 +374,12 @@ public sealed class MillerArtifactRevisionSource : IContinuousTestRevisionSource
         string dbPath = Path.Combine(workspaceRoot, CtSchema.MillerDirectoryName, "symbols.db");
         try
         {
-            using WorkspaceReadHandle handle = WorkspaceReadSessionFactory.Open(
+            WorkspaceFreshnessProbe probe = WorkspaceReadSessionFactory.Probe(
                 dbPath, workspaceRoot, workspaceId);
-            CtIndexCursor cursor = CtIndexCursor.FromSnapshot(handle.Snapshot);
-            var freshness = new CtFreshnessKey(cursor.IndexIdentity, cursor.Revision);
+            var freshness = new CtFreshnessKey(
+                probe.IndexGenerationIdentity
+                    ?? throw new InvalidOperationException("freshness probe did not provide a CT identity"),
+                probe.Revision);
             bool rebuild = _lastIdentity is not null
                 && !string.Equals(_lastIdentity, freshness.IndexIdentity, StringComparison.Ordinal);
             _lastIdentity = freshness.IndexIdentity;
@@ -380,11 +410,21 @@ public sealed class MillerArtifactRevisionSource : IContinuousTestRevisionSource
 /// </summary>
 public sealed class MillerFactImpactSource : IContinuousTestImpactSource
 {
+    private const int MaxSessionDriftRetries = 2;
     private readonly Func<string, ICtFactSource>? _openFacts;
+    private readonly Func<string, WorkspaceReadHandle>? _openSession;
 
     public MillerFactImpactSource(Func<string, ICtFactSource>? openFacts = null)
     {
         _openFacts = openFacts;
+    }
+
+    internal MillerFactImpactSource(
+        Func<string, ICtFactSource>? openFacts,
+        Func<string, WorkspaceReadHandle>? openSession)
+    {
+        _openFacts = openFacts;
+        _openSession = openSession;
     }
 
     public Task<ContinuousTestImpactResult?> ImpactAsync(
@@ -412,44 +452,74 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
             });
         }
 
+        for (int attempt = 0; attempt <= MaxSessionDriftRetries; attempt++)
+        {
+            ContinuousTestImpactResult result = ReadAttempt(workspaceRoot, current, fromKey);
+            if (!string.Equals(result.Reason, "moving_cursor", StringComparison.Ordinal)
+                || attempt == MaxSessionDriftRetries)
+            {
+                return Task.FromResult<ContinuousTestImpactResult?>(result);
+            }
+        }
+
+        throw new InvalidOperationException("unreachable cursor drift retry state");
+    }
+
+    private ContinuousTestImpactResult ReadAttempt(
+        string workspaceRoot,
+        CtFreshnessKey current,
+        CtFreshnessKey from)
+    {
         string dbPath = Path.Combine(workspaceRoot, CtSchema.MillerDirectoryName, "symbols.db");
         try
         {
-            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId: null);
+            using WorkspaceReadHandle session = _openSession?.Invoke(workspaceRoot)
+                ?? WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId: null);
             CtIndexCursor cursor = CtIndexCursor.FromSnapshot(session.Snapshot);
-            if (!string.Equals(cursor.IndexIdentity, fromKey.IndexIdentity, StringComparison.Ordinal))
+            if (!string.Equals(cursor.IndexIdentity, current.IndexIdentity, StringComparison.Ordinal)
+                || cursor.Revision != current.Revision)
             {
-                // The live artifact moved to a new generation between the poll and this read.
-                return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult("", [], [], [])
+                return new ContinuousTestImpactResult("", [], [], [])
                 {
                     Outcome = ContinuousTestImpactOutcome.Unavailable,
-                    Reason = "identity_changed",
-                });
+                    Reason = "moving_cursor",
+                };
             }
 
             // The delta reader compares this against the artifact's own family/artifact id, so it
             // gets the cursor's family id, never the composed generation-identity string.
-            RevisionDeltaResult delta = RevisionDeltaReader.Read(session, fromKey.Revision, cursor.FamilyId);
-            if (delta.Status != RevisionDeltaStatus.Complete || delta.ToRevision != current.Revision)
+            RevisionDeltaResult delta = RevisionDeltaReader.Read(session, from.Revision, cursor.FamilyId);
+            if (delta.Status != RevisionDeltaStatus.Complete)
             {
-                return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult("", [], [], [])
+                return new ContinuousTestImpactResult("", [], [], [])
                 {
                     Outcome = ContinuousTestImpactOutcome.Unavailable,
                     Reason = delta.Reason,
                     FromRevision = delta.FromRevision,
                     ToRevision = delta.ToRevision,
-                });
+                };
+            }
+
+            if (delta.ToRevision != current.Revision)
+            {
+                return new ContinuousTestImpactResult("", [], [], [])
+                {
+                    Outcome = ContinuousTestImpactOutcome.Unavailable,
+                    Reason = "moving_cursor",
+                    FromRevision = delta.FromRevision,
+                    ToRevision = delta.ToRevision,
+                };
             }
 
             if (delta.ChangedPaths.Count == 0)
             {
-                return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult("", [], [], [])
+                return new ContinuousTestImpactResult("", [], [], [])
                 {
                     Outcome = ContinuousTestImpactOutcome.Empty,
                     Reason = "no_source_delta",
                     FromRevision = delta.FromRevision,
                     ToRevision = delta.ToRevision,
-                });
+                };
             }
 
             ICtFactSource facts = _openFacts?.Invoke(workspaceRoot) ?? new CtFactAdapter(session);
@@ -463,16 +533,16 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
                     // A truncated read is an incomplete blast radius. Claiming "Changed" off it
                     // would let the consumer run a silently narrow selection; Unavailable makes
                     // the poller skip the enqueue and the selector treat the delta as Unknown.
-                    return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult("", [], [], [])
+                    return new ContinuousTestImpactResult("", [], [], [])
                     {
                         Outcome = ContinuousTestImpactOutcome.Unavailable,
                         Reason = "impact_truncated",
                         FromRevision = delta.FromRevision,
                         ToRevision = delta.ToRevision,
-                    });
+                    };
                 }
 
-                return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult(
+                return new ContinuousTestImpactResult(
                     "",
                     delta.ChangedPaths,
                     impact.Impacted.Select(ToSymbol).ToArray(),
@@ -481,7 +551,7 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
                     Outcome = ContinuousTestImpactOutcome.Changed,
                     FromRevision = delta.FromRevision,
                     ToRevision = delta.ToRevision,
-                });
+                };
             }
             finally
             {
@@ -492,11 +562,11 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or InvalidOperationException or FamilyStoreReadException)
         {
-            return Task.FromResult<ContinuousTestImpactResult?>(new ContinuousTestImpactResult("", [], [], [])
+            return new ContinuousTestImpactResult("", [], [], [])
             {
                 Outcome = ContinuousTestImpactOutcome.Unavailable,
                 Reason = "bridge_error",
-            });
+            };
         }
     }
 

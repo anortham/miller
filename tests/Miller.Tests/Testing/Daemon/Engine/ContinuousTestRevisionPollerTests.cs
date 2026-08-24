@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Testing;
 using Miller.Testing;
 using Miller.Tests.Indexing.Resolution;
@@ -8,6 +9,170 @@ namespace Miller.Tests.Testing.Daemon.Engine;
 
 public sealed class ContinuousTestRevisionPollerTests
 {
+    [Fact]
+    public async Task Restart_reconciles_a_persisted_empty_interval_before_enqueue_arm()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-restart-empty-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            var persisted = new CtFreshnessKey(EngineTestSupport.Identity, 2);
+            store.SaveLastReconciledCursor(EngineTestSupport.WorkspaceId, persisted);
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(Observation(3));
+            var impact = new ScriptedImpactSource
+            {
+                Result = new ContinuousTestImpactResult(EngineTestSupport.WorkspaceId, [], [], [])
+                {
+                    Outcome = ContinuousTestImpactOutcome.Empty,
+                    FromRevision = 2,
+                    ToRevision = 3,
+                },
+            };
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(source, impact, cursorStore: store);
+
+            ContinuousTestRevisionPollResult result = await poller.PollAsync(
+                Request(workspace, enqueuer, armed: false),
+                TestContext.Current.CancellationToken);
+
+            Assert.Single(enqueuer.Changes);
+            Assert.Equal("no_source_delta", result.Reason);
+            Assert.Equal(new CtFreshnessKey(EngineTestSupport.Identity, 3),
+                store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Restart_reconciles_a_persisted_changed_interval_before_enqueue_arm()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-restart-changed-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            store.SaveLastReconciledCursor(
+                EngineTestSupport.WorkspaceId,
+                new CtFreshnessKey(EngineTestSupport.Identity, 2));
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(Observation(3));
+            var impact = new ScriptedImpactSource
+            {
+                Result = new ContinuousTestImpactResult(
+                    EngineTestSupport.WorkspaceId,
+                    ["src/App.cs"],
+                    [new ContinuousTestImpactedSymbol(Name: "App", Path: "src/App.cs")],
+                    [new ContinuousTestImpactedTest(Name: "AppTests", Path: "tests/AppTests.cs")])
+                {
+                    Outcome = ContinuousTestImpactOutcome.Changed,
+                    FromRevision = 2,
+                    ToRevision = 3,
+                },
+            };
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(source, impact, cursorStore: store);
+
+            ContinuousTestRevisionPollResult result = await poller.PollAsync(
+                Request(workspace, enqueuer, armed: false),
+                TestContext.Current.CancellationToken);
+
+            Assert.Single(enqueuer.Changes);
+            Assert.Equal("enqueued", result.Reason);
+            Assert.Equal(new CtFreshnessKey(EngineTestSupport.Identity, 3),
+                store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Moving_cursor_retries_a_bounded_number_of_full_session_reads()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        string root = CreateWorkspaceRoot(fixture, out string dbPath);
+        try
+        {
+            Execute(
+                dbPath,
+                "CREATE TABLE revision_file_changes (path TEXT, revision_id INTEGER, change_kind TEXT);");
+            int opens = 0;
+            WorkspaceReadHandle OpenSession(string workspaceRoot)
+            {
+                opens++;
+                WorkspaceReadHandle handle = WorkspaceReadSessionFactory.Open(
+                    dbPath,
+                    workspaceRoot,
+                    workspaceId: null,
+                    storeEnabled: false);
+                if (opens == 1)
+                    Execute(dbPath, "INSERT INTO extraction_revisions VALUES (2);");
+                return handle;
+            }
+
+            var source = new MillerFactImpactSource(null, OpenSession);
+            var current = new CtFreshnessKey("ctgen1:artifact:art-1:blake3", 1);
+            ContinuousTestImpactResult? result = await source.ImpactAsync(
+                root,
+                current,
+                new CtFreshnessKey(current.IndexIdentity, 0),
+                TestContext.Current.CancellationToken);
+
+            Assert.NotNull(result);
+            Assert.Equal(ContinuousTestImpactOutcome.Unavailable, result!.Outcome);
+            Assert.Equal("moving_cursor", result.Reason);
+            Assert.Equal(3, opens);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Restart_identity_mismatch_does_not_persist_an_unreconciled_cursor()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-restart-identity-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            var persisted = new CtFreshnessKey("gen-old", 9);
+            store.SaveLastReconciledCursor(EngineTestSupport.WorkspaceId, persisted);
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId,
+                new CtFreshnessKey("gen-new", 1),
+                true,
+                "fresh",
+                DateTimeOffset.UtcNow));
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(
+                source,
+                new ScriptedImpactSource(),
+                cursorStore: store);
+
+            ContinuousTestRevisionPollResult result = await poller.PollAsync(
+                Request(workspace, enqueuer, armed: false),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("rebuild", result.Reason);
+            Assert.Empty(enqueuer.Changes);
+            Assert.Equal(persisted, store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
     [Fact]
     public async Task Complete_changed_delta_enqueues_project_scope_after_start()
     {

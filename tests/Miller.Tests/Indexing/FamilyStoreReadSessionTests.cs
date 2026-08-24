@@ -140,6 +140,9 @@ public sealed class FamilyStoreReadSessionTests
         Assert.Equal(2, probe.Revision);
         Assert.Equal("11111111-1111-4111-8111-111111111111:gen-001", probe.StoreInstanceId);
         Assert.Equal("view-a", probe.ViewId);
+        Assert.Equal(
+            "ctgen1:store:11111111-1111-4111-8111-111111111111:view-a:gen-001",
+            probe.IndexGenerationIdentity);
         Assert.Equal(2, probe.ManifestGeneration);
         Assert.Equal("manifest-current", probe.ManifestHash);
         Assert.Equal(fixture.Binding.StoreRoot, probe.StoreRoot);

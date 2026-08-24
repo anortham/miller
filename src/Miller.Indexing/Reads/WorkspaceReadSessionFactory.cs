@@ -102,7 +102,8 @@ public static class WorkspaceReadSessionFactory
             return new WorkspaceFreshnessProbe(
                 session.Snapshot.Freshness.Revision,
                 StoreInstanceId: null,
-                ViewId: null);
+                ViewId: null,
+                IndexGenerationIdentity: session.Snapshot.IndexGenerationIdentity);
         }
 
         StoreWorkspacePointerDocument pointer = StoreWorkspacePointer.Read(workspaceRoot)
@@ -112,7 +113,22 @@ public static class WorkspaceReadSessionFactory
         if (StoreFreshnessStamp.TryRead(pointer.StoreRoot, pointer.ViewId) is { } stamp
             && StoreFreshnessStamp.MatchesPointer(stamp, pointer))
         {
-            return StoreFreshnessStamp.ToProbe(stamp);
+            string instance = stamp.StoreInstanceId;
+            int separator = instance.LastIndexOf(':');
+            string family = separator > 0 ? instance[..separator] : instance;
+            string generation = separator > 0 && separator < instance.Length - 1
+                ? instance[(separator + 1)..]
+                : string.Empty;
+            return StoreFreshnessStamp.ToProbe(stamp) with
+            {
+                IndexGenerationIdentity = string.Join(
+                    ':',
+                    "ctgen1",
+                    "store",
+                    family,
+                    stamp.ViewId,
+                    generation),
+            };
         }
 
         var binding = new StoreFamilyBinding(

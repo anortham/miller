@@ -11,12 +11,13 @@ namespace Miller.Testing;
 public static class CtSchema
 {
     /// <summary>
-    /// Version 2 dropped <c>UNIQUE (workspace_id, selector, source)</c> from <c>test_cases</c>.
+    /// Version 2 dropped <c>UNIQUE (workspace_id, selector, source)</c> from <c>test_cases</c>;
+    /// version 3 adds durable continuous-test revision cursors.
     /// The number is stamped in TWO places that must always agree: <c>meta.schema_version</c>, which
     /// this class has always written, and <c>PRAGMA user_version</c>, which it did not write before
     /// version 2 and which therefore reads 0 on every file built by version 1.
     /// </summary>
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
     public const string DbFileName = "ct.db";
     public const string MillerDirectoryName = ".miller";
 
@@ -240,6 +241,13 @@ public static class CtSchema
             revision INTEGER NOT NULL CHECK (revision >= 0),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             PRIMARY KEY (test_case_id, index_identity)
+        );
+
+        CREATE TABLE IF NOT EXISTS ct_revision_cursors (
+            workspace_id TEXT PRIMARY KEY,
+            index_identity TEXT NOT NULL,
+            revision INTEGER NOT NULL CHECK (revision >= 0),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         );
 
         CREATE TABLE IF NOT EXISTS ct_generations (
