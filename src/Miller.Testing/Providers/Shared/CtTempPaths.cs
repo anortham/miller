@@ -17,6 +17,8 @@ public static class CtTempPaths
 
     public static string Root => ComputeRoot(Path.GetTempPath());
 
+    internal static string BuildRoot => Path.Combine(Root, "build");
+
     internal static string ComputeRoot(string ambientTemp)
     {
         ArgumentException.ThrowIfNullOrEmpty(ambientTemp);

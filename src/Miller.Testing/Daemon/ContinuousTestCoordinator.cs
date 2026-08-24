@@ -11,9 +11,21 @@ public sealed class ContinuousTestCoordinatorOptions
 
     public const long DefaultGenerationDiskBudgetBytes = 20L * 1024 * 1024 * 1024;
 
+    public const long DefaultBuildCacheBudgetBytes = CtBuildCacheJanitor.DefaultWorkspaceBudgetBytes;
+
+    public const long DefaultMachineBuildCacheBudgetBytes = CtBuildCacheJanitor.DefaultMachineBudgetBytes;
+
+    public static readonly TimeSpan DefaultBuildCacheInactivity = CtBuildCacheJanitor.DefaultInactivity;
+
     public TimeSpan ProviderOperationTimeout { get; init; } = DefaultProviderOperationTimeout;
 
     public long GenerationDiskBudgetBytes { get; init; } = DefaultGenerationDiskBudgetBytes;
+
+    public long BuildCacheBudgetBytes { get; init; } = DefaultBuildCacheBudgetBytes;
+
+    public long MachineBuildCacheBudgetBytes { get; init; } = DefaultMachineBuildCacheBudgetBytes;
+
+    public TimeSpan BuildCacheInactivity { get; init; } = DefaultBuildCacheInactivity;
 
     public string OwnerToken { get; init; } = Guid.NewGuid().ToString("N");
 
@@ -27,6 +39,16 @@ public sealed class ContinuousTestCoordinatorOptions
     internal Func<string, long?> MeasureDirectoryBytes { get; init; } =
         ContinuousTestCoordinator.MeasureTreeBytes;
 
+    internal Func<string, long?> MeasureCacheDirectoryBytes { get; init; } =
+        ContinuousTestCoordinator.MeasureTreeBytes;
+
+    internal string? MachineBuildRoot { get; init; }
+
+    internal Func<DateTimeOffset> UtcNow { get; init; } =
+        static () => DateTimeOffset.UtcNow;
+
+    internal CtBuildCacheJanitor? BuildCacheJanitor { get; init; }
+
     internal Func<ContinuousTestCoordinatorRunRequest, CtRevisionObservation> RevisionObserver { get; init; } =
         ContinuousTestCoordinator.ObserveRevision;
 
@@ -36,6 +58,12 @@ public sealed class ContinuousTestCoordinatorOptions
             throw new ArgumentOutOfRangeException(nameof(ProviderOperationTimeout));
         if (GenerationDiskBudgetBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(GenerationDiskBudgetBytes));
+        if (BuildCacheBudgetBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(BuildCacheBudgetBytes));
+        if (MachineBuildCacheBudgetBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MachineBuildCacheBudgetBytes));
+        if (BuildCacheInactivity <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(BuildCacheInactivity));
         if (string.IsNullOrWhiteSpace(OwnerToken))
             throw new ArgumentException("must not be blank", nameof(OwnerToken));
     }
@@ -69,6 +97,7 @@ public sealed class ContinuousTestCoordinator
     private readonly Func<string> _runIdFactory;
     private readonly ContinuousTestCoordinatorOptions _options;
     private readonly Action<string>? _lifecycleLog;
+    private readonly CtBuildCacheJanitor _buildCacheJanitor;
 
     public ContinuousTestCoordinator(
         IContinuousTestProvider provider,
@@ -105,6 +134,14 @@ public sealed class ContinuousTestCoordinator
         _options = options ?? new ContinuousTestCoordinatorOptions();
         _options.Validate();
         _lifecycleLog = onDiagnostic ?? _options.LifecycleLog;
+        _buildCacheJanitor = _options.BuildCacheJanitor ?? new CtBuildCacheJanitor(
+            _options.MachineBuildRoot ?? CtTempPaths.BuildRoot,
+            _options.BuildCacheBudgetBytes,
+            _options.MachineBuildCacheBudgetBytes,
+            _options.BuildCacheInactivity,
+            _options.UtcNow,
+            _options.MeasureCacheDirectoryBytes,
+            _lifecycleLog);
     }
 
     public async Task<ContinuousTestDiscoveryResult> DiscoverAsync(
@@ -145,6 +182,9 @@ public sealed class ContinuousTestCoordinator
         ContinuousTestDiscoveryRequest request,
         CancellationToken cancellationToken)
     {
+        using CtBuildRootOperationLease operationLease = CtBuildRootOperationLease.Acquire(
+            request.Workspace.BuildOutputRoot,
+            cancellationToken);
         ContinuousTestProviderResolution resolution = _providerResolver.Resolve(request.Workspace);
         string? generationId = null;
         IReadOnlyList<ProviderTestCase> testCases;
@@ -185,6 +225,9 @@ public sealed class ContinuousTestCoordinator
         ContinuousTestCoordinatorRunRequest request,
         CancellationToken cancellationToken)
     {
+        using CtBuildRootOperationLease operationLease = CtBuildRootOperationLease.Acquire(
+            request.Workspace.BuildOutputRoot,
+            cancellationToken);
         string runId = !string.IsNullOrWhiteSpace(request.RunId) ? request.RunId! : _runIdFactory();
         if (string.IsNullOrWhiteSpace(runId))
             throw new InvalidOperationException("continuous test run id factory returned an empty id");
@@ -477,8 +520,19 @@ public sealed class ContinuousTestCoordinator
     {
         var ledger = new ReapLedger();
         ReapSupersededGenerations(workspace, activeGenerationId, ledger);
+        CtCacheMaintenanceResult cache = _buildCacheJanitor.EnforceWorkspace(
+            workspace.BuildOutputRoot,
+            operationLockHeld: true);
+        foreach (string path in cache.RemovedPaths)
+            ledger.Removed.Add(Path.GetRelativePath(workspace.BuildOutputRoot, path));
+        foreach (CtCacheReapDebt debt in cache.Debts)
+            ledger.Debts.Add(new ReapDebt(
+                Path.GetRelativePath(workspace.BuildOutputRoot, debt.Path),
+                debt.Bytes));
         DiskAccounting accounting = MeasureGenerationDisk(workspace);
         CommitMaintenance(workspace, ledger, accounting);
+        if (_buildCacheJanitor.IsMachineOwnedBuildRoot(workspace.BuildOutputRoot))
+            _buildCacheJanitor.EnforceMachine(workspace.BuildOutputRoot);
         ContinuousTestHistoryPruneResult retention;
         try
         {

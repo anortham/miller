@@ -140,6 +140,42 @@ public sealed class CtBuildCacheMaintenanceTests : IDisposable
         Assert.False(Directory.Exists(CtGenerationPaths.CacheRoot(workspace)));
     }
 
+    [Fact]
+    public async Task A_cache_reap_failure_is_debt_and_does_not_fail_the_verdict()
+    {
+        ContinuousTestWorkspace workspace = Workspace("project-cache-debt");
+        string cacheFile = SeedCache(workspace);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+        var reported = new List<string>();
+        var janitor = new CtBuildCacheJanitor(
+            Path.Combine(_root, "machine", "build"),
+            workspaceBudgetBytes: 1,
+            machineBudgetBytes: 1,
+            inactivity: TimeSpan.FromDays(7),
+            utcNow: static () => DateTimeOffset.UtcNow,
+            report: reported.Add,
+            reap: static _ => CtReapOutcome.RenameFailed);
+        var coordinator = new ContinuousTestCoordinator(
+            new PassingProvider(),
+            store,
+            runIdFactory: static () => "run:cache-debt",
+            options: new ContinuousTestCoordinatorOptions
+            {
+                OwnerToken = OwnerToken,
+                BuildCacheJanitor = janitor,
+            });
+
+        ContinuousTestCoordinatorRunResult result = await coordinator.RunSelectedAsync(
+            RunRequest(workspace), TestContext.Current.CancellationToken);
+
+        Assert.Equal("passed", result.ProviderResult.Status);
+        Assert.True(File.Exists(cacheFile));
+        CtGenerationReapDebtRecord debt = Assert.Single(store.ListCtGenerationReapDebt());
+        Assert.Equal("cache/cargo", debt.DirectoryName);
+        Assert.Contains(reported, message => message.Contains("cache_reap_failed", StringComparison.Ordinal));
+    }
+
     private ContinuousTestCoordinator Coordinator(ContinuousTestStore store, IContinuousTestProvider provider) =>
         new(
             provider,

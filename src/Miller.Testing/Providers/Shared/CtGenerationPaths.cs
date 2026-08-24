@@ -4,6 +4,14 @@ using System.Text;
 
 namespace Miller.Testing;
 
+internal enum CtReapOutcome
+{
+    Missing,
+    Deleted,
+    RenameFailed,
+    DeleteFailed,
+}
+
 /// <summary>
 /// Filesystem handle for one immutable CT build generation. Directory names are short hashes so
 /// Windows MAX_PATH still has headroom; uniqueness is the incrementing ordinal written into the
@@ -133,12 +141,26 @@ public sealed record CtGenerationPaths(
     }
 
     public static bool TryReap(string generationRoot)
-        => TryReap(
+        => TryReapDetailed(
+            generationRoot,
+            static (source, destination) => Directory.Move(source, destination),
+            static directory => Directory.Delete(directory, recursive: true))
+            is not CtReapOutcome.RenameFailed;
+
+    internal static CtReapOutcome TryReapDetailed(string generationRoot)
+        => TryReapDetailed(
             generationRoot,
             static (source, destination) => Directory.Move(source, destination),
             static directory => Directory.Delete(directory, recursive: true));
 
     internal static bool TryReap(
+        string generationRoot,
+        Action<string, string> renameDirectory,
+        Action<string> deleteDirectory)
+        => TryReapDetailed(generationRoot, renameDirectory, deleteDirectory)
+            is not CtReapOutcome.RenameFailed;
+
+    internal static CtReapOutcome TryReapDetailed(
         string generationRoot,
         Action<string, string> renameDirectory,
         Action<string> deleteDirectory)
@@ -148,7 +170,7 @@ public sealed record CtGenerationPaths(
         ArgumentNullException.ThrowIfNull(deleteDirectory);
 
         if (!Directory.Exists(generationRoot))
-            return true;
+            return CtReapOutcome.Missing;
 
         var reapRoot = generationRoot + ReapSuffixPrefix + RandomHexSuffix();
         try
@@ -157,25 +179,31 @@ public sealed record CtGenerationPaths(
         }
         catch (IOException)
         {
-            return false;
+            return CtReapOutcome.RenameFailed;
         }
         catch (UnauthorizedAccessException)
         {
-            return false;
+            return CtReapOutcome.RenameFailed;
         }
 
         try
         {
             deleteDirectory(reapRoot);
         }
+        catch (DirectoryNotFoundException)
+        {
+            return CtReapOutcome.Deleted;
+        }
         catch (IOException)
         {
+            return CtReapOutcome.DeleteFailed;
         }
         catch (UnauthorizedAccessException)
         {
+            return CtReapOutcome.DeleteFailed;
         }
 
-        return true;
+        return CtReapOutcome.Deleted;
     }
 
     public static bool IsGenerationId(string? directoryName)
