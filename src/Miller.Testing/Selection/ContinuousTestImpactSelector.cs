@@ -70,6 +70,8 @@ public sealed class ContinuousTestImpactSelector
     private readonly ContinuousTestStore _store;
     private readonly IMillerFactSource _facts;
     private readonly ICtCoverageFactSource? _coverage;
+    private readonly object _snapshotGate = new();
+    private readonly Dictionary<SelectionSnapshotKey, SelectionSnapshot> _selectionSnapshots = [];
 
     public ContinuousTestImpactSelector(
         ContinuousTestStore store,
@@ -81,11 +83,21 @@ public sealed class ContinuousTestImpactSelector
         _coverage = coverage;
     }
 
-    public ContinuousTestSelectionResult Select(ContinuousTestImpactSelectionRequest request)
+    public ContinuousTestSelectionResult Select(ContinuousTestImpactSelectionRequest request) =>
+        SelectAtRevision(request, snapshotKey: null);
+
+    internal ContinuousTestSelectionResult SelectAtRevision(
+        ContinuousTestImpactSelectionRequest request,
+        CtFreshnessKey? snapshotKey)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        TestCaseFact[] testCases = _store.ListTestCases(request.WorkspaceId)
+        SelectionSnapshot? snapshot = snapshotKey is null ? null : SnapshotFor(request, snapshotKey.Value);
+        IReadOnlyList<ContinuousTestCase> storedCases = snapshot?.Cases(request.ProjectPath)
+            ?? (string.IsNullOrWhiteSpace(request.ProjectPath)
+                ? _store.ListTestCases(request.WorkspaceId)
+                : _store.ListTestCasesForProject(request.WorkspaceId, request.ProjectPath));
+        TestCaseFact[] testCases = storedCases
             .Where(IsProviderManagedTestCase)
             .Select(TestCaseFact.FromCase)
             .Where(row => ProjectMatches(row.ProjectPath, request.ProjectPath))
@@ -176,7 +188,11 @@ public sealed class ContinuousTestImpactSelector
         // stale, and cases with no result at all) — never every case in scope. Key-drifted green
         // rows are deliberately NOT re-staled here: keeping or staling them is the watermark's
         // call, computed as the complement of THIS impacted set.
-        string[] alreadyOwed = AlreadyOwedTestCaseIds(request.WorkspaceId, testCases);
+        string[] alreadyOwed = AlreadyOwedTestCaseIds(
+            request.WorkspaceId,
+            request.ProjectPath,
+            testCases,
+            snapshot?.Statuses(request.ProjectPath));
         if (ranked.Count == 0)
             return new ContinuousTestSelectionResult([], alreadyOwed, [], ContinuousTestSelectionOutcome.KnownEmpty);
 
@@ -189,14 +205,35 @@ public sealed class ContinuousTestImpactSelector
         return new ContinuousTestSelectionResult(selected, stale, ranked, ContinuousTestSelectionOutcome.Impacted);
     }
 
+    internal void InvalidateSelectionSnapshot(string workspaceId)
+    {
+        lock (_snapshotGate)
+        {
+            foreach (SelectionSnapshotKey key in _selectionSnapshots.Keys
+                         .Where(candidate => string.Equals(candidate.WorkspaceId, workspaceId, StringComparison.Ordinal))
+                         .ToArray())
+            {
+                _selectionSnapshots.Remove(key);
+            }
+        }
+    }
+
     /// <summary>
     /// The already-owed backlog: cases the store marked stale and cases with no committed result
     /// at all. A green or red row at an older key is NOT owed here — carrying or staling it is the
     /// watermark's decision, not the selector's.
     /// </summary>
-    private string[] AlreadyOwedTestCaseIds(string workspaceId, IReadOnlyList<TestCaseFact> testCases)
+    private string[] AlreadyOwedTestCaseIds(
+        string workspaceId,
+        string? projectPath,
+        IReadOnlyList<TestCaseFact> testCases,
+        IReadOnlyList<ContinuousTestStatus>? snapshotStatuses)
     {
-        Dictionary<string, ContinuousTestStatus> statuses = _store.ListContinuousTestStatuses(workspaceId)
+        IReadOnlyList<ContinuousTestStatus> storedStatuses = snapshotStatuses
+            ?? (string.IsNullOrWhiteSpace(projectPath)
+                ? _store.ListContinuousTestStatuses(workspaceId)
+                : _store.ListContinuousTestStatusesForProject(workspaceId, projectPath));
+        Dictionary<string, ContinuousTestStatus> statuses = storedStatuses
             .GroupBy(row => row.TestCaseId, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         return testCases
@@ -1114,6 +1151,84 @@ public sealed class ContinuousTestImpactSelector
             Path.GetFullPath(requestProjectPath),
             PathComparison);
     }
+
+    private SelectionSnapshot SnapshotFor(
+        ContinuousTestImpactSelectionRequest request,
+        CtFreshnessKey key)
+    {
+        var snapshotKey = new SelectionSnapshotKey(request.WorkspaceId, key.IndexIdentity, key.Revision);
+        lock (_snapshotGate)
+        {
+            foreach (SelectionSnapshotKey stale in _selectionSnapshots.Keys
+                         .Where(candidate => string.Equals(candidate.WorkspaceId, request.WorkspaceId, StringComparison.Ordinal)
+                             && candidate != snapshotKey)
+                         .ToArray())
+            {
+                _selectionSnapshots.Remove(stale);
+            }
+
+            if (!_selectionSnapshots.TryGetValue(snapshotKey, out SelectionSnapshot? snapshot))
+            {
+                snapshot = new SelectionSnapshot(_store, request.WorkspaceId);
+                _selectionSnapshots[snapshotKey] = snapshot;
+            }
+
+            return snapshot;
+        }
+    }
+
+    private sealed class SelectionSnapshot
+    {
+        private readonly ContinuousTestStore _store;
+        private readonly string _workspaceId;
+        private readonly object _gate = new();
+        private readonly Dictionary<string, IReadOnlyList<ContinuousTestCase>> _casesByProject = [];
+        private readonly Dictionary<string, IReadOnlyList<ContinuousTestStatus>> _statusesByProject = [];
+
+        public SelectionSnapshot(ContinuousTestStore store, string workspaceId)
+        {
+            _store = store;
+            _workspaceId = workspaceId;
+        }
+
+        public IReadOnlyList<ContinuousTestCase> Cases(string? projectPath)
+        {
+            if (string.IsNullOrWhiteSpace(projectPath))
+                return _store.ListTestCases(_workspaceId);
+
+            string normalized = Path.GetFullPath(projectPath);
+            lock (_gate)
+            {
+                if (_casesByProject.TryGetValue(normalized, out IReadOnlyList<ContinuousTestCase>? rows))
+                    return rows;
+                IReadOnlyList<ContinuousTestCase> loaded = _store.ListTestCasesForProject(_workspaceId, normalized);
+                _casesByProject[normalized] = loaded;
+                return loaded;
+            }
+        }
+
+        public IReadOnlyList<ContinuousTestStatus> Statuses(string? projectPath)
+        {
+            if (string.IsNullOrWhiteSpace(projectPath))
+                return _store.ListContinuousTestStatuses(_workspaceId);
+
+            string normalized = Path.GetFullPath(projectPath);
+            lock (_gate)
+            {
+                if (_statusesByProject.TryGetValue(normalized, out IReadOnlyList<ContinuousTestStatus>? rows))
+                    return rows;
+                IReadOnlyList<ContinuousTestStatus> loaded =
+                    _store.ListContinuousTestStatusesForProject(_workspaceId, normalized);
+                _statusesByProject[normalized] = loaded;
+                return loaded;
+            }
+        }
+    }
+
+    private readonly record struct SelectionSnapshotKey(
+        string WorkspaceId,
+        string IndexIdentity,
+        long Revision);
 
     private static string? MetadataString(IReadOnlyDictionary<string, object?> row, string key)
     {

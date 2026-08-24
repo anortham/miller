@@ -57,8 +57,15 @@ public sealed partial class ContinuousTestStore : IDisposable
                COALESCE(SUM(CASE WHEN state IN ('unknown', 'running') THEN 1 ELSE 0 END), 0),
                COALESCE(SUM(CASE WHEN state = 'stale' THEN 1 ELSE 0 END), 0),
                0
-        FROM ct_test_states
-        WHERE workspace_id = $workspace;
+        FROM ct_test_states s INDEXED BY idx_ct_test_states_workspace_state
+        JOIN test_cases tc
+          ON tc.workspace_id = s.workspace_id
+         AND tc.id = s.test_case_id
+        LEFT JOIN ct_test_projects p
+          ON p.workspace_id = tc.workspace_id
+         AND p.project_path = tc.project_path
+        WHERE s.workspace_id = $workspace
+          AND (tc.source <> 'ct-project-status' OR p.enabled IS NULL OR p.enabled = 1);
         """;
 
     internal const string AggregateContinuousTestStatusesSelectedSql = """
@@ -73,12 +80,19 @@ public sealed partial class ContinuousTestStore : IDisposable
                COALESCE(SUM(CASE WHEN s.state = 'red'
                    AND s.index_identity = $identity AND s.revision = $revision
                    THEN 1 ELSE 0 END), 0)
-        FROM ct_test_states s
+        FROM ct_test_states s INDEXED BY idx_ct_test_states_workspace_state
+        JOIN test_cases tc
+          ON tc.workspace_id = s.workspace_id
+         AND tc.id = s.test_case_id
+        LEFT JOIN ct_test_projects p
+          ON p.workspace_id = tc.workspace_id
+         AND p.project_path = tc.project_path
         LEFT JOIN ct_case_fresh_watermarks w
             ON w.test_case_id = s.test_case_id
            AND w.workspace_id = s.workspace_id
            AND w.index_identity = $identity
-        WHERE s.workspace_id = $workspace;
+        WHERE s.workspace_id = $workspace
+          AND (tc.source <> 'ct-project-status' OR p.enabled IS NULL OR p.enabled = 1);
         """;
 
     private readonly object _gate = new();
@@ -239,11 +253,11 @@ public sealed partial class ContinuousTestStore : IDisposable
                 INSERT INTO test_cases (
                     id, workspace_id, file_path, content_hash, symbol_name, symbol_path,
                     suite_id, name, qualified_name, selector, framework, role, source,
-                    confidence, metadata_json, provenance_json
+                    confidence, metadata_json, provenance_json, project_path
                 )
                 VALUES (
                     $id, $ws, $file, $hash, $symbolName, $symbolPath, $suite, $name, $qualified,
-                    $selector, $framework, $role, $source, $confidence, $metadata, $provenance
+                    $selector, $framework, $role, $source, $confidence, $metadata, $provenance, $project
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     workspace_id = excluded.workspace_id,
@@ -260,7 +274,8 @@ public sealed partial class ContinuousTestStore : IDisposable
                     source = excluded.source,
                     confidence = excluded.confidence,
                     metadata_json = excluded.metadata_json,
-                    provenance_json = excluded.provenance_json;
+                    provenance_json = excluded.provenance_json,
+                    project_path = excluded.project_path;
                 """;
             command.Parameters.AddWithValue("$id", testCase.Id);
             command.Parameters.AddWithValue("$ws", testCase.WorkspaceId);
@@ -278,6 +293,7 @@ public sealed partial class ContinuousTestStore : IDisposable
             command.Parameters.AddWithValue("$confidence", testCase.Confidence);
             command.Parameters.AddWithValue("$metadata", JsonText(testCase.Metadata));
             command.Parameters.AddWithValue("$provenance", JsonText(testCase.Provenance));
+            command.Parameters.AddWithValue("$project", (object?)NormalizedProjectPath(testCase.Metadata) ?? DBNull.Value);
             command.ExecuteNonQuery();
         });
     }
@@ -314,12 +330,19 @@ public sealed partial class ContinuousTestStore : IDisposable
             {
                 using var command = connection.CreateCommand();
                 command.CommandText = """
-                    SELECT workspace_id, test_case_id, state, index_identity, revision,
-                           last_run_revision, stale_since_revision, running_run_id, running_revision,
-                           last_result_status, last_result_at, failure_summary, flakiness_score
-                    FROM ct_test_states
-                    WHERE workspace_id = $ws
-                    ORDER BY state, test_case_id;
+                    SELECT s.workspace_id, s.test_case_id, s.state, s.index_identity, s.revision,
+                           s.last_run_revision, s.stale_since_revision, s.running_run_id, s.running_revision,
+                           s.last_result_status, s.last_result_at, s.failure_summary, s.flakiness_score
+                    FROM ct_test_states s INDEXED BY idx_ct_test_states_workspace_state
+                    JOIN test_cases tc
+                      ON tc.workspace_id = s.workspace_id
+                     AND tc.id = s.test_case_id
+                    LEFT JOIN ct_test_projects p
+                      ON p.workspace_id = tc.workspace_id
+                     AND p.project_path = tc.project_path
+                    WHERE s.workspace_id = $ws
+                      AND (tc.source <> 'ct-project-status' OR p.enabled IS NULL OR p.enabled = 1)
+                    ORDER BY s.state, s.test_case_id;
                     """;
                 command.Parameters.AddWithValue("$ws", workspaceId);
 
@@ -644,6 +667,31 @@ public sealed partial class ContinuousTestStore : IDisposable
         ex.SqliteErrorCode is SqliteCorrupt or SqliteNotADb;
 
     private static string JsonText(object? value) => TestingJson.Value(value);
+
+    private static string? NormalizedProjectPath(IReadOnlyDictionary<string, object?> metadata)
+    {
+        if (!metadata.TryGetValue("ct_project_path", out object? raw)
+            || raw is null)
+        {
+            return null;
+        }
+
+        string? path = raw as string ?? Convert.ToString(raw, CultureInfo.InvariantCulture);
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
+    }
 
     private static IReadOnlyDictionary<string, object?> MetadataFromJson(string json) =>
         TestingJson.Object(json);

@@ -78,6 +78,63 @@ public sealed class ContinuousTestStoreTests : IDisposable
     }
 
     [Fact]
+    public void Project_filtered_reads_use_the_normalized_association_and_keep_unknown_cases_fail_closed()
+    {
+        using var store = new ContinuousTestStore(_dbPath);
+        string project = Path.Combine(_dir, "a", "A.csproj");
+        string otherProject = Path.Combine(_dir, "b", "B.csproj");
+        store.PutTestCase(Case("test:a") with
+        {
+            Source = "ct-provider:dotnet",
+            Metadata = new Dictionary<string, object?> { ["ct_project_path"] = project },
+        });
+        store.PutTestCase(Case("test:b") with
+        {
+            Source = "ct-provider:dotnet",
+            Metadata = new Dictionary<string, object?> { ["ct_project_path"] = otherProject },
+        });
+        store.PutTestCase(Case("test:unknown") with { Source = "ct-provider:dotnet" });
+
+        Assert.Equal(["test:a"], store.ListTestCasesForProject(Workspace, project).Select(row => row.Id));
+        Assert.Equal(["test:b"], store.ListTestCasesForProject(Workspace, otherProject).Select(row => row.Id));
+        Assert.Empty(store.ListTestCasesForProject(Workspace, Path.Combine(_dir, "missing.csproj")));
+        Assert.Equal(
+            Path.GetFullPath(project),
+            Convert.ToString(Scalar("SELECT project_path FROM test_cases WHERE id = 'test:a';"), CultureInfo.InvariantCulture));
+        Assert.True(Scalar("SELECT project_path FROM test_cases WHERE id = 'test:unknown';") is DBNull or null);
+    }
+
+    [Fact]
+    public void Disabled_project_lifecycle_status_is_hidden_but_reenable_restores_it()
+    {
+        using var store = new ContinuousTestStore(_dbPath);
+        string project = Path.Combine(_dir, "A.csproj");
+        store.PutContinuousTestProject(new ContinuousTestProject("project:a", Workspace, project, Enabled: false));
+        store.PutTestCase(new ContinuousTestCase(
+            Id: "status:a",
+            WorkspaceId: Workspace,
+            Name: "Project discovery failed",
+            QualifiedName: "Project discovery failed",
+            Selector: "project-discovery::" + project,
+            Source: "ct-project-status",
+            Metadata: new Dictionary<string, object?>
+            {
+                ["kind"] = "ct-project-discovery-failure",
+                ["ct_project_path"] = project,
+            }));
+        CompleteRun(store, "run:status", "status:a", 1, "failed");
+
+        Assert.Empty(store.ListContinuousTestStatuses(Workspace));
+        Assert.Equal(0, store.AggregateContinuousTestStatuses(Workspace, Key(1)).Total);
+        Assert.Single(store.ListContinuousTestStatusesForProject(Workspace, project));
+        Assert.Equal(1, Convert.ToInt32(Scalar("SELECT COUNT(*) FROM ct_test_states;"), CultureInfo.InvariantCulture));
+
+        Assert.Equal(1, store.SetContinuousTestProjectEnabled(Workspace, project, true));
+        Assert.Single(store.ListContinuousTestStatuses(Workspace));
+        Assert.Equal(1, store.AggregateContinuousTestStatuses(Workspace, Key(1)).Total);
+    }
+
+    [Fact]
     public void DeleteTestCase_removes_the_case_and_cascades_status_and_results()
     {
         using var store = CreateStoreWithTests("test:1");

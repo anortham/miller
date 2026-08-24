@@ -203,6 +203,44 @@ public sealed class ContinuousTestDebouncedAutoRunTests : IDisposable
     }
 
     [Fact]
+    public async Task A_flaky_retry_key_is_evicted_after_the_retry_completes()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        CommitOutcome(store, "test:app", 1, "passed");
+        CommitOutcome(store, "test:app", 2, "failed");
+        CommitOutcome(store, "test:app", 3, "passed");
+        CommitOutcome(store, "test:app", 4, "failed");
+        Assert.Single(store.ListContinuousTestStatuses(EngineTestSupport.WorkspaceId));
+        var provider = new FlakyRetryProvider("test:app");
+        ContinuousTestDaemonQueue queue = Queue(store, provider, revision: 5);
+
+        ContinuousTestDaemonEnqueueResult enqueued = queue.EnqueueExplicit(EngineTestSupport.Change(
+            workspace,
+            revision: "5",
+            workspaceScope: true,
+            completeness: ContinuousTestDeltaCompleteness.Unavailable,
+            observedAt: T0));
+        Assert.Equal(ContinuousTestSelectionOutcome.WorkspaceScope, enqueued.Selection.Outcome);
+        Assert.Equal(["test:app"], enqueued.Selection.SelectedTestCaseIds);
+        Assert.Equal(T0, enqueued.Pending.ReadyAt);
+        Assert.Single(store.ListContinuousTestStatuses(EngineTestSupport.WorkspaceId));
+
+        IReadOnlyList<ContinuousTestDaemonDrainResult> firstDrain =
+            await queue.DrainReadyAsync(T0, TestContext.Current.CancellationToken);
+        Assert.Single(firstDrain);
+        Assert.Single(await queue.DrainReadyAsync(T0, TestContext.Current.CancellationToken));
+        Assert.Equal(2, provider.RunCount);
+
+        var retryAttempts = (System.Collections.IDictionary?)typeof(ContinuousTestDaemonQueue)
+            .GetField("_retryAttempts", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?.GetValue(queue);
+        Assert.NotNull(retryAttempts);
+        Assert.Empty(retryAttempts);
+    }
+
+    [Fact]
     public async Task An_unknown_selection_never_becomes_ready_work_even_after_the_quiet_period()
     {
         var workspace = EngineTestSupport.Workspace(_root);
@@ -518,6 +556,45 @@ public sealed class ContinuousTestDebouncedAutoRunTests : IDisposable
             ]));
     }
 
+    private static void CommitOutcome(
+        ContinuousTestStore store,
+        string testCaseId,
+        long revision,
+        string status)
+    {
+        string revisionText = revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string runId = "seed-run:" + testCaseId + ":" + revisionText;
+        store.StartContinuousTestRun(
+            new ContinuousTestRun(
+                Id: runId,
+                WorkspaceId: EngineTestSupport.WorkspaceId,
+                Status: "running",
+                SelectedRevision: revisionText,
+                IndexIdentity: EngineTestSupport.Identity,
+                Revision: revision),
+            [testCaseId]);
+        store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
+            WorkspaceId: EngineTestSupport.WorkspaceId,
+            TestRunId: runId,
+            SelectedRevision: revisionText,
+            CurrentRevision: revisionText,
+            IndexIdentity: EngineTestSupport.Identity,
+            Revision: revision,
+            Status: status,
+            Results:
+            [
+                new ContinuousTestResult(
+                    Id: runId + ":result",
+                    WorkspaceId: EngineTestSupport.WorkspaceId,
+                    TestCaseId: testCaseId,
+                    TestRunId: runId,
+                    Status: status,
+                    ResultRevision: revisionText,
+                    IndexIdentity: EngineTestSupport.Identity,
+                    Revision: revision),
+            ]));
+    }
+
     private static async Task WaitUntil(Func<bool> condition, CancellationToken cancellationToken)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -553,6 +630,43 @@ public sealed class ContinuousTestDebouncedAutoRunTests : IDisposable
                 OnFirstRun?.Invoke();
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(RunResult ?? new ProviderRunResult(request.RunId ?? "run:1", "passed"));
+        }
+    }
+
+    private sealed class FlakyRetryProvider(string testCaseId) : IContinuousTestProvider
+    {
+        public int RunCount { get; private set; }
+
+        public Task<IReadOnlyList<ProviderTestCase>> DiscoverAsync(
+            ContinuousTestWorkspace workspace,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ProviderTestCase>>
+            ([new ProviderTestCase(
+                testCaseId,
+                testCaseId,
+                testCaseId,
+                testCaseId,
+                Framework: workspace.Framework,
+                SourcePath: "tests/AppTests.cs")]);
+
+        public Task<ProviderRunResult> RunAsync(
+            ContinuousTestProviderRunRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            RunCount++;
+            string status = RunCount == 1 ? "failed" : "passed";
+            return Task.FromResult(new ProviderRunResult(
+                request.RunId ?? "run:1",
+                status,
+                CaseResults:
+                [
+                    new ProviderCaseResult(
+                        $"result:{RunCount}",
+                        testCaseId,
+                        status,
+                        request.SelectedRevision,
+                        EngineTestSupport.Identity),
+                ]));
         }
     }
 }

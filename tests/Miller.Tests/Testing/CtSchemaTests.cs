@@ -131,9 +131,15 @@ public sealed class CtSchemaTests : IDisposable
             Assert.False(HasSelectorUniqueIndex(connection));
             Assert.Equal(CtSchema.SchemaVersion, UserVersion(connection));
             Assert.Equal(CtSchema.SchemaVersion, CtSchema.ReadSchemaVersion(connection));
+            Assert.Equal(
+                Path.GetFullPath("relative/A.csproj"),
+                Convert.ToString(
+                    Scalar(connection, "SELECT project_path FROM test_cases WHERE id = 'case:1';"),
+                    CultureInfo.InvariantCulture));
 
             IReadOnlyList<string> indexes = IndexNames(connection, "test_cases");
             Assert.Contains("idx_test_cases_workspace_id", indexes);
+            Assert.Contains("idx_test_cases_workspace_project_source", indexes);
             Assert.Contains("idx_test_cases_file_path", indexes);
 
             // The point of the migration: a second case may now claim the first one's selector.
@@ -379,7 +385,11 @@ public sealed class CtSchemaTests : IDisposable
 
     private static void SeedReferencingRows(SqliteConnection connection)
     {
-        InsertCase(connection, "case:1", selector: "-method Suite.Theory");
+        InsertCase(
+            connection,
+            "case:1",
+            selector: "-method Suite.Theory",
+            metadataJson: "{\"ct_project_path\":\"relative/A.csproj\"}");
         InsertCase(connection, "case:2", selector: "-method Suite.Other");
         Execute(connection, """
             INSERT INTO test_runs (id, workspace_id, index_identity, revision, status)
@@ -414,15 +424,20 @@ public sealed class CtSchemaTests : IDisposable
             """);
     }
 
-    private static void InsertCase(SqliteConnection connection, string id, string selector)
+    private static void InsertCase(
+        SqliteConnection connection,
+        string id,
+        string selector,
+        string metadataJson = "{}")
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO test_cases (id, workspace_id, name, qualified_name, selector, role, source, confidence)
-            VALUES ($id, 'ws:1', $id, $id, $selector, 'testcase', 'ct-provider:dotnet', 1.0);
+            INSERT INTO test_cases (id, workspace_id, name, qualified_name, selector, role, source, confidence, metadata_json)
+            VALUES ($id, 'ws:1', $id, $id, $selector, 'testcase', 'ct-provider:dotnet', 1.0, $metadata);
             """;
         command.Parameters.AddWithValue("$id", id);
         command.Parameters.AddWithValue("$selector", selector);
+        command.Parameters.AddWithValue("$metadata", metadataJson);
         command.ExecuteNonQuery();
     }
 

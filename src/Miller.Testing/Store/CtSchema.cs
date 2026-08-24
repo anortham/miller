@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace Miller.Testing;
@@ -12,12 +13,13 @@ public static class CtSchema
 {
     /// <summary>
     /// Version 2 dropped <c>UNIQUE (workspace_id, selector, source)</c> from <c>test_cases</c>;
-    /// version 3 adds durable continuous-test revision cursors.
+    /// version 3 adds durable continuous-test revision cursors; version 4 adds the normalized CT
+    /// project association used by project-filtered selection.
     /// The number is stamped in TWO places that must always agree: <c>meta.schema_version</c>, which
     /// this class has always written, and <c>PRAGMA user_version</c>, which it did not write before
     /// version 2 and which therefore reads 0 on every file built by version 1.
     /// </summary>
-    public const int SchemaVersion = 3;
+    public const int SchemaVersion = 4;
     public const string DbFileName = "ct.db";
     public const string MillerDirectoryName = ".miller";
 
@@ -55,7 +57,8 @@ public static class CtSchema
             source TEXT NOT NULL,
             confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            provenance_json TEXT NOT NULL DEFAULT '{}'
+            provenance_json TEXT NOT NULL DEFAULT '{}',
+            project_path TEXT
         );
 
         CREATE TABLE IF NOT EXISTS run_artifacts (
@@ -441,10 +444,22 @@ public static class CtSchema
     /// </summary>
     private static void Migrate(SqliteConnection connection)
     {
-        if (ReadUserVersion(connection) >= SchemaVersion)
+        long version = ReadUserVersion(connection);
+        if (version >= SchemaVersion)
+        {
+            Execute(connection, "CREATE INDEX IF NOT EXISTS idx_test_cases_workspace_project_source ON test_cases(workspace_id, project_path, source, selector, id);");
             return;
+        }
 
-        DropTestCasesSelectorUniqueness(connection);
+        if (version < 3)
+            DropTestCasesSelectorUniqueness(connection);
+
+        if (!HasColumn(connection, "test_cases", "project_path"))
+            Execute(connection, "ALTER TABLE test_cases ADD COLUMN project_path TEXT;");
+
+        Execute(connection, "CREATE INDEX IF NOT EXISTS idx_test_cases_workspace_project_source ON test_cases(workspace_id, project_path, source, selector, id);");
+        BackfillProjectPaths(connection);
+        StampSchemaVersion(connection);
     }
 
     /// <summary>
@@ -467,11 +482,7 @@ public static class CtSchema
     private static void DropTestCasesSelectorUniqueness(SqliteConnection connection)
     {
         if (!HasSelectorUniqueIndex(connection))
-        {
-            // A fresh file, or one an earlier run already rebuilt. Only the stamp is owed.
-            StampSchemaVersion(connection);
             return;
-        }
 
         Execute(connection, "PRAGMA foreign_keys=OFF;");
         try
@@ -509,16 +520,20 @@ public static class CtSchema
                     source TEXT NOT NULL,
                     confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
                     metadata_json TEXT NOT NULL DEFAULT '{}',
-                    provenance_json TEXT NOT NULL DEFAULT '{}'
+                    provenance_json TEXT NOT NULL DEFAULT '{}',
+                    project_path TEXT
                 );
 
                 INSERT INTO {{RebuildTableName}} ({{TestCaseColumns}})
-                SELECT {{TestCaseColumns}} FROM test_cases;
+                SELECT {{LegacyTestCaseColumns}}, NULL
+                FROM test_cases;
 
                 DROP TABLE test_cases;
                 ALTER TABLE {{RebuildTableName}} RENAME TO test_cases;
 
                 CREATE INDEX IF NOT EXISTS idx_test_cases_workspace_id ON test_cases(workspace_id);
+                CREATE INDEX IF NOT EXISTS idx_test_cases_workspace_project_source
+                    ON test_cases(workspace_id, project_path, source, selector, id);
                 CREATE INDEX IF NOT EXISTS idx_test_cases_file_path ON test_cases(file_path);
                 """);
 
@@ -557,7 +572,82 @@ public static class CtSchema
     /// </summary>
     private const string TestCaseColumns =
         "id, workspace_id, file_path, content_hash, symbol_name, symbol_path, suite_id, name, " +
+        "qualified_name, selector, framework, role, source, confidence, metadata_json, provenance_json, project_path";
+
+    private const string LegacyTestCaseColumns =
+        "id, workspace_id, file_path, content_hash, symbol_name, symbol_path, suite_id, name, " +
         "qualified_name, selector, framework, role, source, confidence, metadata_json, provenance_json";
+
+    private static bool HasColumn(SqliteConnection connection, string table, string column)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({table});";
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), column, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void BackfillProjectPaths(SqliteConnection connection)
+    {
+        using var select = connection.CreateCommand();
+        select.CommandText = """
+            SELECT id, metadata_json
+            FROM test_cases
+            WHERE project_path IS NULL;
+            """;
+        var rows = new List<(string Id, string? ProjectPath)>();
+        using (SqliteDataReader reader = select.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                string? raw = null;
+                try
+                {
+                    using JsonDocument document = JsonDocument.Parse(reader.GetString(1));
+                    if (document.RootElement.TryGetProperty("ct_project_path", out JsonElement value)
+                        && value.ValueKind == JsonValueKind.String)
+                    {
+                        raw = value.GetString();
+                    }
+                }
+                catch (JsonException)
+                {
+                }
+
+                string? normalized = null;
+                if (!string.IsNullOrWhiteSpace(raw))
+                {
+                    try
+                    {
+                        normalized = Path.GetFullPath(raw);
+                    }
+                    catch (ArgumentException)
+                    {
+                    }
+                    catch (NotSupportedException)
+                    {
+                    }
+                }
+                rows.Add((reader.GetString(0), normalized));
+            }
+        }
+
+        using var update = connection.CreateCommand();
+        update.CommandText = "UPDATE test_cases SET project_path = $project WHERE id = $id;";
+        var projectParameter = update.Parameters.Add("$project", SqliteType.Text);
+        var idParameter = update.Parameters.Add("$id", SqliteType.Text);
+        foreach ((string id, string? projectPath) in rows)
+        {
+            idParameter.Value = id;
+            projectParameter.Value = (object?)projectPath ?? DBNull.Value;
+            update.ExecuteNonQuery();
+        }
+    }
 
     /// <summary>
     /// True when <c>test_cases</c> still carries a UNIQUE index over

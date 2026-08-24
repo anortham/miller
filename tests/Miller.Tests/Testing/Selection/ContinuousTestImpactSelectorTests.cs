@@ -103,6 +103,35 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.DoesNotContain("tc:unrelated", result.SelectedTestCaseIds);
     }
 
+    [Fact]
+    public void Select_reads_only_the_requested_project_and_keeps_unmapped_cases_unknown()
+    {
+        using ContinuousTestStore store = OpenStore();
+        string project = Path.Combine(_dir, "A.csproj");
+        string otherProject = Path.Combine(_dir, "B.csproj");
+        SeedProviderCase(store, "tc:a", "ATests.test", "ATests.test", "test", "tests/A.cs", projectPath: project);
+        SeedProviderCase(store, "tc:b", "BTests.test", "BTests.test", "test", "tests/B.cs", projectPath: otherProject);
+        SeedProviderCase(store, "tc:unknown", "UnknownTests.test", "UnknownTests.test", "test", "tests/U.cs");
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.SelectAtRevision(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            WorkspaceScope: true,
+            ProjectPath: project),
+            new CtFreshnessKey("gen-1", 1));
+        ContinuousTestSelectionResult otherResult = selector.SelectAtRevision(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            WorkspaceScope: true,
+            ProjectPath: otherProject),
+            new CtFreshnessKey("gen-1", 1));
+
+        Assert.Equal(["tc:a"], result.SelectedTestCaseIds);
+        Assert.Equal(["tc:a"], result.StaleTestCaseIds);
+        Assert.DoesNotContain("tc:b", result.SelectedTestCaseIds);
+        Assert.DoesNotContain("tc:unknown", result.SelectedTestCaseIds);
+        Assert.Equal(["tc:b"], otherResult.SelectedTestCaseIds);
+    }
+
     [Theory]
     [InlineData("unknown", "parse_diagnostics")]
     [InlineData("current", null)]

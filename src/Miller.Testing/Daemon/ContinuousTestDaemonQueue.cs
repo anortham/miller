@@ -135,13 +135,14 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         if (requireCompleteDelta && change.DeltaCompleteness != ContinuousTestDeltaCompleteness.Complete)
             return new ContinuousTestDaemonEnqueueResult(empty, rejected);
 
-        ContinuousTestSelectionResult selection = _selector.Select(new ContinuousTestImpactSelectionRequest(
+        ContinuousTestSelectionResult selection = _selector.SelectAtRevision(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: change.Workspace.WorkspaceId,
             ChangedPaths: change.ChangedPaths,
             ImpactedSymbols: change.ImpactedSymbols,
             ImpactedTests: change.ImpactedTests,
             WorkspaceScope: change.WorkspaceScope,
-            ProjectPath: change.Workspace.ProjectPath));
+            ProjectPath: change.Workspace.ProjectPath),
+            change.Freshness);
         IReadOnlyList<string> foregroundTestCaseIds = SelectForegroundTestCaseIds(change, selection);
         if (explicitRun && change.WorkspaceScope)
         {
@@ -300,6 +301,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             _pending.Remove(key);
             _pending.Remove(backfillKey);
             _wholeSuiteEligible.Remove(key);
+            ClearRetryAttempts(key);
+            ClearRetryAttempts(backfillKey);
             if (_backfillCancellationByProject.Remove(key, out CancellationTokenSource? inFlightBackfill))
                 inFlightBackfill.Cancel();
         }
@@ -362,7 +365,10 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 ContinuousTestDaemonPendingRun readyPending = await RefreshInventoryIfNeededAsync(pending, drainToken)
                     .ConfigureAwait(false);
                 if (readyPending.TestCaseIds.Count == 0)
+                {
+                    ClearRetryAttempts(key, readyPending);
                     continue;
+                }
 
                 int preTrimSelectedCount = readyPending.TestCaseIds.Count;
                 IReadOnlyList<string> survivors = DropFreshAt(
@@ -373,6 +379,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                     keepRed: readyPending.ExplicitRun);
                 if (survivors.Count == 0)
                 {
+                    ClearRetryAttempts(key, readyPending);
                     Log($"ct drain skip workspace={readyPending.Workspace.WorkspaceId} reason=all_fresh_at_revision");
                     continue;
                 }
@@ -380,7 +387,10 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 IReadOnlyList<string> remainder = [];
                 if (readyPending.Lane == ContinuousTestRunLane.Backfill)
                 {
-                    IReadOnlyList<string> ordered = OrderBackfillCases(readyPending.Workspace.WorkspaceId, survivors);
+                    IReadOnlyList<string> ordered = OrderBackfillCases(
+                        readyPending.Workspace.WorkspaceId,
+                        readyPending.Workspace.ProjectPath,
+                        survivors);
                     readyPending = readyPending with { TestCaseIds = ordered.Take(BackfillBatchSize).ToArray() };
                     remainder = ordered.Skip(BackfillBatchSize).ToArray();
                 }
@@ -399,6 +409,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                     PostTrimSelectedCount: readyPending.TestCaseIds.Count,
                     RetainedRedCount: CountRedCases(
                         readyPending.Workspace.WorkspaceId,
+                        readyPending.Workspace.ProjectPath,
                         readyPending.TestCaseIds,
                         readyPending.ExplicitRun),
                     CoversEveryKnownCase: coverage.CoversEveryKnownCase,
@@ -454,16 +465,22 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     FailCancelledRunBestEffort(key, readyPending, runId);
+                    ClearRetryAttempts(key, readyPending);
                     throw;
                 }
                 catch (Exception)
                 {
-                    if (TrySpendRunFailureRetry(key, readyPending.SelectedRevision))
+                    bool requeued = TrySpendRunFailureRetry(key, readyPending.SelectedRevision);
+                    if (requeued)
                     {
                         if (readyPending.Lane == ContinuousTestRunLane.Backfill)
                             RequeueBackfillRemainder(key, pending, readyPending.TestCaseIds.Concat(remainder).ToArray(), now);
                         else
                             RequeueForegroundRetry(key, pending, readyPending.TestCaseIds, now);
+                    }
+                    else
+                    {
+                        ClearRetryAttempts(key, readyPending);
                     }
 
                     throw;
@@ -551,9 +568,9 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         HashSet<string> known;
         try
         {
-            known = _store.ListTestCases(pending.Workspace.WorkspaceId)
-                .Where(row => ContinuousTestImpactSelector.IsProviderManagedTestCaseForProject(
-                    row, pending.Workspace.ProjectPath))
+            known = _store.ListTestCasesForProject(
+                    pending.Workspace.WorkspaceId,
+                    pending.Workspace.ProjectPath)
                 .Select(row => row.Id)
                 .ToHashSet(StringComparer.Ordinal);
         }
@@ -571,7 +588,11 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         return new CoverageCheck(known.Count, coversEveryKnownCase, CoverageAvailability.Known);
     }
 
-    private int CountRedCases(string workspaceId, IReadOnlyList<string> testCaseIds, bool keepRed)
+    private int CountRedCases(
+        string workspaceId,
+        string projectPath,
+        IReadOnlyList<string> testCaseIds,
+        bool keepRed)
     {
         if (!keepRed || testCaseIds.Count == 0)
             return 0;
@@ -579,7 +600,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         try
         {
             HashSet<string> selected = testCaseIds.ToHashSet(StringComparer.Ordinal);
-            return _store.ListContinuousTestStatuses(workspaceId)
+            return _store.ListContinuousTestStatusesForProject(workspaceId, projectPath)
                 .Count(status => selected.Contains(status.TestCaseId) && status.State == ContinuousTestState.Red);
         }
         catch (Exception)
@@ -723,9 +744,12 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         cancellation.Dispose();
     }
 
-    private IReadOnlyList<string> OrderBackfillCases(string workspaceId, IReadOnlyList<string> testCaseIds)
+    private IReadOnlyList<string> OrderBackfillCases(
+        string workspaceId,
+        string projectPath,
+        IReadOnlyList<string> testCaseIds)
     {
-        var statuses = _store.ListContinuousTestStatuses(workspaceId)
+        var statuses = _store.ListContinuousTestStatusesForProject(workspaceId, projectPath)
             .ToDictionary(status => status.TestCaseId, StringComparer.Ordinal);
         return testCaseIds
             .OrderBy(id => statuses.TryGetValue(id, out ContinuousTestStatus? status)
@@ -842,10 +866,12 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         }
 
         ClearDiscoveryFailure(pending.Workspace);
-        ContinuousTestSelectionResult selection = _selector.Select(new ContinuousTestImpactSelectionRequest(
+        _selector.InvalidateSelectionSnapshot(pending.Workspace.WorkspaceId);
+        ContinuousTestSelectionResult selection = _selector.SelectAtRevision(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: pending.Workspace.WorkspaceId,
             WorkspaceScope: true,
-            ProjectPath: pending.Workspace.ProjectPath));
+            ProjectPath: pending.Workspace.ProjectPath),
+            pending.Freshness);
         // The explicit run's selection is rebuilt here after discovery, so the red-keeping rule has to
         // be applied again: this is the list the drain executes.
         IReadOnlyList<string> selectedTestCaseIds = DropFreshAt(
@@ -893,9 +919,11 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     {
         if (testCaseIds.Count == 0)
             return testCaseIds;
-        if (ContinuousTestDurableFreshness.HasActiveDiscoveryFailure(_store.ListTestCases(workspaceId), projectPath))
+        if (ContinuousTestDurableFreshness.HasActiveDiscoveryFailure(
+                _store.ListTestCasesForProject(workspaceId, projectPath, includeLifecycle: true),
+                projectPath))
             return testCaseIds;
-        var statusesById = _store.ListContinuousTestStatuses(workspaceId)
+        var statusesById = _store.ListContinuousTestStatusesForProject(workspaceId, projectPath)
             .ToDictionary(status => status.TestCaseId, StringComparer.Ordinal);
         // Fresh-by-watermark counts as fresh: a green the last change could not reach has nothing
         // to prove, so it is neither re-marked stale nor re-run. Same rule as the status projection.
@@ -910,8 +938,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     }
 
     private bool HasProviderInventory(string workspaceId, string projectPath) =>
-        _store.ListTestCases(workspaceId).Any(row =>
-            ContinuousTestImpactSelector.IsProviderManagedTestCaseForProject(row, projectPath));
+        _store.ListTestCasesForProject(workspaceId, projectPath).Count > 0;
 
     private void RecordDiscoveryFailure(ContinuousTestDaemonPendingRun pending, Exception exception)
     {
@@ -1011,7 +1038,11 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             .Order(StringComparer.Ordinal)
             .ToArray();
         if (retryTestCaseIds.Length == 0)
+        {
+            ClearRetryAttempts(pendingKey, pending);
             return coordinatorResult;
+        }
+        ClearRetryAttempts(pendingKey, pending, retryTestCaseIds);
         _store.MarkContinuousTestsStale(pending.Workspace.WorkspaceId, retryTestCaseIds, pending.Freshness);
         NotifyCtStateChanged(pending.Workspace.WorkspaceId);
         lock (_lock)
@@ -1059,6 +1090,27 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 return false;
             _retryAttempts[retryKey] = attempts + 1;
             return true;
+        }
+    }
+
+    private void ClearRetryAttempts(
+        PendingKey key,
+        ContinuousTestDaemonPendingRun? pending = null,
+        IReadOnlyList<string>? keep = null)
+    {
+        HashSet<string>? keepIds = keep?.ToHashSet(StringComparer.Ordinal);
+        string? revision = pending?.CurrentRevision;
+        lock (_lock)
+        {
+            foreach (RetryKey retryKey in _retryAttempts.Keys
+                         .Where(candidate => candidate.WorkspaceId == key.WorkspaceId
+                             && candidate.ProjectPath == key.ProjectPath
+                             && (revision is null || candidate.Revision == revision)
+                             && (keepIds is null || !keepIds.Contains(candidate.TestCaseId)))
+                         .ToArray())
+            {
+                _retryAttempts.Remove(retryKey);
+            }
         }
     }
 
