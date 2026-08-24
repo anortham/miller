@@ -102,6 +102,31 @@ public sealed class CtBuildCacheJanitorTests : IDisposable
     }
 
     [Fact]
+    public void Machine_janitor_holds_the_root_lock_through_the_reap_call()
+    {
+        string buildRoot = BuildRoot("aaaaaaaaaaaa", "999999999999");
+        Cache(buildRoot, "tool", 6, Now.AddDays(-8));
+        MarkRoot(buildRoot);
+        CtOperationLockState lockStateAtReap = CtOperationLockState.Unknown;
+        var janitor = new CtBuildCacheJanitor(
+            Path.Combine(_root, "build"),
+            workspaceBudgetBytes: 1024,
+            machineBudgetBytes: 1,
+            inactivity: TimeSpan.FromDays(7),
+            utcNow: static () => Now,
+            reap: path =>
+            {
+                lockStateAtReap = CtBuildRootOperationLease.Probe(buildRoot);
+                return CtGenerationPaths.TryReapDetailed(path);
+            });
+
+        janitor.EnforceMachine();
+
+        Assert.Equal(CtOperationLockState.Held, lockStateAtReap);
+        Assert.Equal(CtOperationLockState.Available, CtBuildRootOperationLease.Probe(buildRoot));
+    }
+
+    [Fact]
     public void Machine_janitor_skips_recent_and_ambiguous_roots()
     {
         string recent = BuildRoot("aaaaaaaaaaaa", "222222222222");
@@ -181,6 +206,31 @@ public sealed class CtBuildCacheJanitorTests : IDisposable
         Assert.Single(result.Debts);
         Assert.True(Directory.Exists(cache));
         Assert.Contains(reported, message => message.Contains("cache_reap_failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Delete_failure_debt_names_the_existing_reap_remnant()
+    {
+        string buildRoot = BuildRoot("aaaaaaaaaaaa", "aaaa11111111");
+        string cache = Cache(buildRoot, "tool", 3, Now.AddDays(-8));
+        MarkRoot(buildRoot);
+        var janitor = new CtBuildCacheJanitor(
+            Path.Combine(_root, "build"),
+            workspaceBudgetBytes: 1,
+            machineBudgetBytes: 1,
+            inactivity: TimeSpan.FromDays(7),
+            utcNow: static () => Now,
+            reap: path => CtGenerationPaths.TryReapDetailed(
+                path,
+                static (source, destination) => Directory.Move(source, destination),
+                static _ => throw new IOException("sharing violation")));
+
+        CtCacheMaintenanceResult result = janitor.EnforceWorkspace(buildRoot);
+
+        CtCacheReapDebt debt = Assert.Single(result.Debts);
+        Assert.False(Directory.Exists(cache));
+        Assert.True(Directory.Exists(debt.Path));
+        Assert.Contains(".reap-", debt.Path, StringComparison.Ordinal);
     }
 
     [Fact]

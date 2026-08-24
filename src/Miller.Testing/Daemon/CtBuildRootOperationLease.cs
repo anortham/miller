@@ -48,13 +48,25 @@ internal sealed class CtBuildRootOperationLease : IDisposable
     internal static CtOperationLockState Probe(string buildOutputRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(buildOutputRoot);
+        CtOperationLockState state = TryAcquireExisting(buildOutputRoot, out CtBuildRootOperationLease? lease);
+        lease?.Dispose();
+        return state;
+    }
+
+    internal static CtOperationLockState TryAcquireExisting(
+        string buildOutputRoot,
+        out CtBuildRootOperationLease? lease)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(buildOutputRoot);
+        lease = null;
         string path = Path.Combine(buildOutputRoot, LockFileName);
         if (!File.Exists(path))
             return CtOperationLockState.Missing;
 
         try
         {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            lease = new CtBuildRootOperationLease(
+                new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None));
             return CtOperationLockState.Available;
         }
         catch (IOException exception) when (IsLockContention(exception))

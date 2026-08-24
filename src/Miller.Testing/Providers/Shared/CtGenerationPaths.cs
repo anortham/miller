@@ -12,6 +12,11 @@ internal enum CtReapOutcome
     DeleteFailed,
 }
 
+internal readonly record struct CtReapResult(CtReapOutcome Outcome, string? RemainingPath)
+{
+    public static implicit operator CtReapResult(CtReapOutcome outcome) => new(outcome, null);
+}
+
 /// <summary>
 /// Filesystem handle for one immutable CT build generation. Directory names are short hashes so
 /// Windows MAX_PATH still has headroom; uniqueness is the incrementing ordinal written into the
@@ -145,9 +150,9 @@ public sealed record CtGenerationPaths(
             generationRoot,
             static (source, destination) => Directory.Move(source, destination),
             static directory => Directory.Delete(directory, recursive: true))
-            is not CtReapOutcome.RenameFailed;
+            .Outcome is not CtReapOutcome.RenameFailed;
 
-    internal static CtReapOutcome TryReapDetailed(string generationRoot)
+    internal static CtReapResult TryReapDetailed(string generationRoot)
         => TryReapDetailed(
             generationRoot,
             static (source, destination) => Directory.Move(source, destination),
@@ -157,10 +162,10 @@ public sealed record CtGenerationPaths(
         string generationRoot,
         Action<string, string> renameDirectory,
         Action<string> deleteDirectory)
-        => TryReapDetailed(generationRoot, renameDirectory, deleteDirectory)
+        => TryReapDetailed(generationRoot, renameDirectory, deleteDirectory).Outcome
             is not CtReapOutcome.RenameFailed;
 
-    internal static CtReapOutcome TryReapDetailed(
+    internal static CtReapResult TryReapDetailed(
         string generationRoot,
         Action<string, string> renameDirectory,
         Action<string> deleteDirectory)
@@ -170,7 +175,7 @@ public sealed record CtGenerationPaths(
         ArgumentNullException.ThrowIfNull(deleteDirectory);
 
         if (!Directory.Exists(generationRoot))
-            return CtReapOutcome.Missing;
+            return new(CtReapOutcome.Missing, null);
 
         var reapRoot = generationRoot + ReapSuffixPrefix + RandomHexSuffix();
         try
@@ -179,11 +184,11 @@ public sealed record CtGenerationPaths(
         }
         catch (IOException)
         {
-            return CtReapOutcome.RenameFailed;
+            return new(CtReapOutcome.RenameFailed, generationRoot);
         }
         catch (UnauthorizedAccessException)
         {
-            return CtReapOutcome.RenameFailed;
+            return new(CtReapOutcome.RenameFailed, generationRoot);
         }
 
         try
@@ -192,18 +197,18 @@ public sealed record CtGenerationPaths(
         }
         catch (DirectoryNotFoundException)
         {
-            return CtReapOutcome.Deleted;
+            return new(CtReapOutcome.Deleted, null);
         }
         catch (IOException)
         {
-            return CtReapOutcome.DeleteFailed;
+            return new(CtReapOutcome.DeleteFailed, reapRoot);
         }
         catch (UnauthorizedAccessException)
         {
-            return CtReapOutcome.DeleteFailed;
+            return new(CtReapOutcome.DeleteFailed, reapRoot);
         }
 
-        return CtReapOutcome.Deleted;
+        return new(CtReapOutcome.Deleted, null);
     }
 
     public static bool IsGenerationId(string? directoryName)

@@ -176,6 +176,45 @@ public sealed class CtBuildCacheMaintenanceTests : IDisposable
         Assert.Contains(reported, message => message.Contains("cache_reap_failed", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task A_cache_delete_failure_persists_the_existing_reap_remnant()
+    {
+        ContinuousTestWorkspace workspace = Workspace("project-cache-remnant");
+        string cacheFile = SeedCache(workspace);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+        var janitor = new CtBuildCacheJanitor(
+            Path.Combine(_root, "machine", "build"),
+            workspaceBudgetBytes: 1,
+            machineBudgetBytes: 1,
+            inactivity: TimeSpan.FromDays(7),
+            utcNow: static () => DateTimeOffset.UtcNow,
+            reap: path => CtGenerationPaths.TryReapDetailed(
+                path,
+                static (source, destination) => Directory.Move(source, destination),
+                static _ => throw new IOException("sharing violation")));
+        var coordinator = new ContinuousTestCoordinator(
+            new PassingProvider(),
+            store,
+            runIdFactory: static () => "run:cache-remnant",
+            options: new ContinuousTestCoordinatorOptions
+            {
+                OwnerToken = OwnerToken,
+                BuildCacheJanitor = janitor,
+            });
+
+        ContinuousTestCoordinatorRunResult result = await coordinator.RunSelectedAsync(
+            RunRequest(workspace), TestContext.Current.CancellationToken);
+
+        Assert.Equal("passed", result.ProviderResult.Status);
+        Assert.False(File.Exists(cacheFile));
+        CtGenerationReapDebtRecord debt = Assert.Single(store.ListCtGenerationReapDebt());
+        string remnant = Path.Combine(workspace.BuildOutputRoot, debt.DirectoryName);
+        Assert.StartsWith("cache/cargo.reap-", debt.DirectoryName, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(CtGenerationPaths.CacheDirectory(workspace, "cargo")));
+        Assert.True(Directory.Exists(remnant));
+    }
+
     private ContinuousTestCoordinator Coordinator(ContinuousTestStore store, IContinuousTestProvider provider) =>
         new(
             provider,

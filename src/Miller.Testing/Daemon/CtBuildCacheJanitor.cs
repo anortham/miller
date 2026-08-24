@@ -33,7 +33,7 @@ internal sealed class CtBuildCacheJanitor
     private readonly TimeSpan _inactivity;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string, long?> _measureDirectoryBytes;
-    private readonly Func<string, CtReapOutcome> _reap;
+    private readonly Func<string, CtReapResult> _reap;
     private readonly Action<string>? _report;
 
     internal CtBuildCacheJanitor(
@@ -44,7 +44,7 @@ internal sealed class CtBuildCacheJanitor
         Func<DateTimeOffset>? utcNow = null,
         Func<string, long?>? measureDirectoryBytes = null,
         Action<string>? report = null,
-        Func<string, CtReapOutcome>? reap = null)
+        Func<string, CtReapResult>? reap = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(machineBuildRoot);
         if (workspaceBudgetBytes <= 0)
@@ -117,73 +117,86 @@ internal sealed class CtBuildCacheJanitor
         DateTimeOffset cutoff = _utcNow() - _inactivity;
         var roots = new List<RootSnapshot>();
         var eligibleRoots = new List<RootSnapshot>();
+        var heldRootLeases = new List<CtBuildRootOperationLease>();
         int lockedRoots = 0;
         int recentRoots = 0;
         int ambiguousRoots = 0;
-        foreach (string root in EnumerateCanonicalRoots())
+        try
         {
-            RootReadResult read = ReadMachineRoot(root, cutoff, currentBuildRoot);
-            switch (read.Kind)
+            foreach (string root in EnumerateCanonicalRoots())
             {
-                case RootReadKind.Locked:
-                    lockedRoots++;
-                    if (read.Snapshot is not null)
-                        roots.Add(read.Snapshot);
-                    break;
-                case RootReadKind.Recent:
-                    recentRoots++;
-                    if (read.Snapshot is not null)
-                        roots.Add(read.Snapshot);
-                    break;
-                case RootReadKind.Ambiguous:
-                    ambiguousRoots++;
-                    if (read.Snapshot is not null)
-                        roots.Add(read.Snapshot);
-                    break;
-                case RootReadKind.Complete:
-                    if (read.Snapshot is not null)
+                RootReadResult read = ReadMachineRoot(root, cutoff, currentBuildRoot);
+                if (read.Lease is not null)
+                    heldRootLeases.Add(read.Lease);
+                switch (read.Kind)
+                {
+                    case RootReadKind.Locked:
+                        lockedRoots++;
+                        if (read.Snapshot is not null)
+                            roots.Add(read.Snapshot);
+                        break;
+                    case RootReadKind.Recent:
+                        recentRoots++;
+                        if (read.Snapshot is not null)
+                            roots.Add(read.Snapshot);
+                        break;
+                    case RootReadKind.Ambiguous:
+                        ambiguousRoots++;
+                        if (read.Snapshot is not null)
+                            roots.Add(read.Snapshot);
+                        break;
+                    case RootReadKind.Complete:
                     {
-                        roots.Add(read.Snapshot);
-                        eligibleRoots.Add(read.Snapshot);
+                        if (read.Snapshot is not null)
+                        {
+                            roots.Add(read.Snapshot);
+                            eligibleRoots.Add(read.Snapshot);
+                        }
+                        break;
                     }
-                    break;
+                }
             }
-        }
 
-        var result = new MutableResult(
-            roots.Sum(root => root.TotalBytes),
-            roots.Sum(root => root.ProtectedBytes));
-        result.LockedRootCount = lockedRoots;
-        result.SkippedRecentRootCount = recentRoots;
-        result.SkippedAmbiguousRootCount = ambiguousRoots;
-        var candidates = eligibleRoots
-            .SelectMany(root => root.Candidates)
-            .ToList();
-        foreach (CacheCandidate candidate in candidates.Where(candidate => candidate.LastUsedUtc < cutoff)
-                     .OrderBy(candidate => candidate.LastUsedUtc)
-                     .ThenBy(candidate => candidate.Path, StringComparer.Ordinal)
-                     .ToArray())
+            var result = new MutableResult(
+                roots.Sum(root => root.TotalBytes),
+                roots.Sum(root => root.ProtectedBytes));
+            result.LockedRootCount = lockedRoots;
+            result.SkippedRecentRootCount = recentRoots;
+            result.SkippedAmbiguousRootCount = ambiguousRoots;
+            var candidates = eligibleRoots
+                .SelectMany(root => root.Candidates)
+                .ToList();
+            foreach (CacheCandidate candidate in candidates.Where(candidate => candidate.LastUsedUtc < cutoff)
+                         .OrderBy(candidate => candidate.LastUsedUtc)
+                         .ThenBy(candidate => candidate.Path, StringComparer.Ordinal)
+                         .ToArray())
+            {
+                if (result.RemainingBytes <= _machineBudgetBytes)
+                    break;
+                PruneCandidate(candidate, result, "machine");
+            }
+
+            foreach (CacheCandidate candidate in candidates
+                         .Where(candidate => !result.RemovedPaths.Contains(candidate.Path))
+                         .OrderBy(candidate => candidate.LastUsedUtc)
+                         .ThenBy(candidate => candidate.Path, StringComparer.Ordinal))
+            {
+                if (result.RemainingBytes <= _machineBudgetBytes)
+                    break;
+                PruneCandidate(candidate, result, "machine");
+            }
+
+            return result.ToResult(
+                _machineBudgetBytes,
+                _report,
+                "machine",
+                _machineBuildRoot);
+        }
+        finally
         {
-            if (result.RemainingBytes <= _machineBudgetBytes)
-                break;
-            PruneCandidate(candidate, result, "machine");
+            for (var index = heldRootLeases.Count - 1; index >= 0; index--)
+                heldRootLeases[index].Dispose();
         }
-
-        foreach (CacheCandidate candidate in candidates
-                     .Where(candidate => !result.RemovedPaths.Contains(candidate.Path))
-                     .OrderBy(candidate => candidate.LastUsedUtc)
-                     .ThenBy(candidate => candidate.Path, StringComparer.Ordinal))
-        {
-            if (result.RemainingBytes <= _machineBudgetBytes)
-                break;
-            PruneCandidate(candidate, result, "machine");
-        }
-
-        return result.ToResult(
-            _machineBudgetBytes,
-            _report,
-            "machine",
-            _machineBuildRoot);
     }
 
     private RootReadResult ReadMachineRoot(
@@ -193,19 +206,28 @@ internal sealed class CtBuildCacheJanitor
     {
         if (currentBuildRoot is not null
             && string.Equals(Path.GetFullPath(currentBuildRoot), root, PathComparison))
-            return new RootReadResult(RootReadKind.Locked, ReadRoot(root));
+            return new RootReadResult(RootReadKind.Locked, ReadRoot(root), null);
 
-        CtOperationLockState lockState = CtBuildRootOperationLease.Probe(root);
+        CtOperationLockState lockState = CtBuildRootOperationLease.TryAcquireExisting(
+            root,
+            out CtBuildRootOperationLease? lease);
         if (lockState is CtOperationLockState.Held)
-            return new RootReadResult(RootReadKind.Locked, ReadRoot(root));
+            return new RootReadResult(RootReadKind.Locked, ReadRoot(root), null);
 
         RootSnapshot? snapshot = ReadRoot(root);
         if (snapshot is null || lockState is not CtOperationLockState.Available)
-            return new RootReadResult(RootReadKind.Ambiguous, snapshot);
+        {
+            lease?.Dispose();
+            return new RootReadResult(RootReadKind.Ambiguous, snapshot, null);
+        }
 
         if (snapshot.HasRecentActivity(cutoff))
-            return new RootReadResult(RootReadKind.Recent, snapshot);
-        return new RootReadResult(RootReadKind.Complete, snapshot);
+        {
+            lease!.Dispose();
+            return new RootReadResult(RootReadKind.Recent, snapshot, null);
+        }
+
+        return new RootReadResult(RootReadKind.Complete, snapshot, lease);
     }
 
     private RootSnapshot? ReadRoot(string root)
@@ -269,17 +291,17 @@ internal sealed class CtBuildCacheJanitor
         if (!result.AttemptedPaths.Add(candidate.Path))
             return;
 
-        CtReapOutcome outcome;
+        CtReapResult reapResult;
         try
         {
-            outcome = _reap(candidate.Path);
+            reapResult = _reap(candidate.Path);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            outcome = CtReapOutcome.RenameFailed;
+            reapResult = new(CtReapOutcome.RenameFailed, candidate.Path);
         }
 
-        switch (outcome)
+        switch (reapResult.Outcome)
         {
             case CtReapOutcome.Missing:
             case CtReapOutcome.Deleted:
@@ -291,8 +313,9 @@ internal sealed class CtBuildCacheJanitor
             case CtReapOutcome.RenameFailed:
             case CtReapOutcome.DeleteFailed:
                 result.FailedCount++;
-                result.Debts.Add(new CtCacheReapDebt(candidate.Path, candidate.Bytes));
-                Report($"cache_reap_failed scope={scope} path={candidate.Path} bytes={candidate.Bytes}");
+                string debtPath = reapResult.RemainingPath ?? candidate.Path;
+                result.Debts.Add(new CtCacheReapDebt(debtPath, candidate.Bytes));
+                Report($"cache_reap_failed scope={scope} path={debtPath} bytes={candidate.Bytes}");
                 break;
         }
     }
@@ -437,7 +460,10 @@ internal sealed class CtBuildCacheJanitor
 
     private sealed record CacheCandidate(string Path, long Bytes, DateTimeOffset LastUsedUtc);
 
-    private sealed record RootReadResult(RootReadKind Kind, RootSnapshot? Snapshot);
+    private sealed record RootReadResult(
+        RootReadKind Kind,
+        RootSnapshot? Snapshot,
+        CtBuildRootOperationLease? Lease);
 
     private enum RootReadKind
     {
