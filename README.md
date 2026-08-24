@@ -189,6 +189,10 @@ document structure and symbols, not type or reference resolution). Framework rou
 dependency-injection edges, and cross-file linkage ride on top of the language extractors for roughly
 25 framework families.
 
+QML support includes component symbols from `.qml`, module exports from `qmldir` and `.qmltypes` files,
+visibility-aware component resolution, and the same `search`, `inspect`, `trace`, `patterns`, and `edit`
+tools used for other first-class languages.
+
 Two ways to check this list yourself instead of trusting the README:
 
 ```bash

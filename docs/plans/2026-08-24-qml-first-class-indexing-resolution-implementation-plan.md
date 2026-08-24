@@ -230,9 +230,9 @@ Commit mode: all tasks use `serial-worker-commit`; each task changes shared cont
 **Approach:** Prefer one shared fixture and assert tool contracts rather than private indexes. If patterns already routes fact families generically, add tests only; do not add a redundant QML switch.
 
 **Acceptance criteria:**
-- [ ] Search, inspect, trace, patterns, and edit each have positive QML evidence plus meaningful negative controls.
-- [ ] Tool JSON/text schemas are unchanged and resolution provenance is visible through existing fields.
-- [ ] No semantic corpus generation/version file changes.
+- [x] Search, inspect, trace, patterns, and edit each have positive QML evidence plus meaningful negative controls.
+- [x] Tool JSON/text schemas are unchanged and resolution provenance is visible through existing fields.
+- [x] No semantic corpus generation/version file changes.
 - [ ] Fast, Scale, and triggered Windows gates pass; the worker commits per `serial-worker-commit`.
 
 ## Execution Handoff
