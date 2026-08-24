@@ -643,15 +643,6 @@ internal sealed class QueryTimeResolutionReader
                 pendingSites.Add(site);
         }
 
-        var versions = new HashSet<long>();
-        foreach (CandidateRecord candidate in candidates.Values)
-            versions.Add(candidate.VersionId);
-        foreach (ResolutionIdentifierSite site in identifierSites)
-            versions.Add(site.VersionId);
-        foreach (PendingSite site in pendingSites)
-            versions.Add(site.VersionId);
-        _cache.PrefetchSlices(versions);
-
         Dictionary<(long VersionId, long RowId), SiteDetails> details =
             ReadIdentifierDetailsBatch(connection, identifierSites);
         var identifiers = new List<ResolvedIdentifier>(identifierSites.Count);

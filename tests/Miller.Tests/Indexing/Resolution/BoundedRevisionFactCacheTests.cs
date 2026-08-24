@@ -186,7 +186,7 @@ public sealed class BoundedRevisionFactCacheTests
     }
 
     [Fact]
-    public void BoundedGraphFrontierPrefetchesEachRequestedVersionOnce()
+    public void BoundedGraphFrontierLoadsEachRequestedVersionOnce()
     {
         using ResolutionStoreFixture fixture = Populate();
         using SqliteConnection connection = fixture.OpenRead();
@@ -197,6 +197,17 @@ public sealed class BoundedRevisionFactCacheTests
 
         Assert.Equal(3, bounded.BoundedSliceMisses);
         Assert.Equal(3, bounded.LoadedSliceCount);
+    }
+
+    [Fact]
+    public void BoundedLazySliceUsesThePointLoader()
+    {
+        using ResolutionStoreFixture fixture = Populate();
+        using SqliteConnection connection = fixture.OpenRead();
+        RevisionFactCache bounded = RevisionFactCache.LoadBounded(connection, fixture.Visibility());
+
+        Assert.NotNull(bounded.Slice(VisibleVersions[0]));
+        Assert.Equal(1, bounded.BoundedPointSliceLoads);
     }
 
     // The fast relationship shape is the only new SQL on the bounded path, and it carries two safety predicates.
