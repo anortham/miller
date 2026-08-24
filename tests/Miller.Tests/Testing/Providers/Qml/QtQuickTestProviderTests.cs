@@ -1,10 +1,12 @@
 using System.Text;
 using Miller.Testing;
 using Miller.Testing.Providers.Qml;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Testing.Providers.Qml;
 
+[Collection(QmlProviderEnvironmentCollection.Name)]
 public sealed class QtQuickTestProviderTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("miller-ct-qml-provider-").FullName;

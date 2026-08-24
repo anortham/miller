@@ -1,11 +1,13 @@
 using System.Security.Cryptography;
 using Miller.Testing;
 using Miller.Testing.Providers.Qml;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Testing.Providers.Qml;
 
 [Trait("Category", "Scale")]
+[Collection(QmlProviderEnvironmentCollection.Name)]
 public sealed class QtQuickTestProviderScaleTests : IDisposable
 {
     private readonly string _dir =
