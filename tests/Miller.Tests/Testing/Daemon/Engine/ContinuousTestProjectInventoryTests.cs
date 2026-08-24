@@ -323,6 +323,123 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
         Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
     }
 
+    [Fact]
+    public void Discover_collapses_nested_qml_build_files_and_keeps_the_evidence_root()
+    {
+        WriteProject("CMakeLists.txt", """
+            cmake_minimum_required(VERSION 3.21)
+            project(app LANGUAGES CXX)
+            add_subdirectory(tests)
+            """);
+        WriteProject("tests/CMakeLists.txt", """
+            find_package(Qt6 REQUIRED COMPONENTS QuickTest)
+            qt_add_executable(app_tests runner.cpp)
+            target_link_libraries(app_tests PRIVATE Qt6::QuickTest)
+            """);
+        WriteProject("tests/runner.cpp", "QUICK_TEST_MAIN(app_tests)");
+        WriteProject("tests/qml/tst_smoke.qml", """
+            import QtQuickTest 1.3
+            TestCase { name: "Smoke" }
+            """);
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+
+        Assert.Equal("qt-quick-test", project.Framework);
+        Assert.Equal(Path.Combine(_root, "CMakeLists.txt"), project.ProjectPath);
+        Assert.Equal(_root, project.Metadata["configure_root"]);
+        Assert.Equal(Path.Combine(_root, "tests", "qml"), project.Metadata["evidence_root"]);
+    }
+
+    [Fact]
+    public void Identify_resolves_a_nested_qml_build_file_to_the_topmost_project()
+    {
+        WriteProject("CMakeLists.txt", """
+            cmake_minimum_required(VERSION 3.21)
+            project(app LANGUAGES CXX)
+            add_subdirectory(tests)
+            """);
+        WriteProject("tests/CMakeLists.txt", "find_package(Qt6 REQUIRED COMPONENTS QuickTest)");
+        WriteProject("tests/runner.cpp", "QUICK_TEST_MAIN(app_tests)");
+        WriteProject("tests/tst_smoke.qml", "TestCase { name: \"Smoke\" }");
+
+        ContinuousTestProject? project = ContinuousTestProjectInventory.Identify(
+            _root,
+            "ws:1",
+            Path.Combine(_root, "tests", "CMakeLists.txt"));
+
+        Assert.NotNull(project);
+        Assert.Equal("qt-quick-test", project.Framework);
+        Assert.Equal(Path.Combine(_root, "CMakeLists.txt"), project.ProjectPath);
+    }
+
+    [Fact]
+    public void Discover_keeps_independent_qml_cmake_projects_separate()
+    {
+        WriteQmlQuickTestProject("apps/alpha");
+        WriteQmlQuickTestProject("apps/beta");
+
+        var projects = ContinuousTestProjectInventory.Discover(_root, "ws:1");
+
+        Assert.Equal(2, projects.Count);
+        Assert.All(projects, project => Assert.Equal("qt-quick-test", project.Framework));
+        Assert.Equal(
+            [
+                Path.Combine(_root, "apps", "alpha", "CMakeLists.txt"),
+                Path.Combine(_root, "apps", "beta", "CMakeLists.txt"),
+            ],
+            projects.Select(project => project.ProjectPath).ToArray());
+    }
+
+    [Fact]
+    public void Discover_rejects_a_qml_project_without_quick_test_evidence()
+    {
+        WriteProject("CMakeLists.txt", """
+            cmake_minimum_required(VERSION 3.21)
+            project(app LANGUAGES CXX)
+            """);
+        WriteProject("qml/tst_smoke.qml", "TestCase { name: \"Smoke\" }");
+
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+    }
+
+    [Fact]
+    public void Discover_rejects_a_quick_test_project_without_qml_evidence()
+    {
+        WriteProject("CMakeLists.txt", """
+            cmake_minimum_required(VERSION 3.21)
+            project(app LANGUAGES CXX)
+            find_package(Qt6 REQUIRED COMPONENTS QuickTest)
+            qt_add_executable(app_tests runner.cpp)
+            target_link_libraries(app_tests PRIVATE Qt6::QuickTest)
+            """);
+        WriteProject("runner.cpp", "QUICK_TEST_MAIN(app_tests)");
+
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+    }
+
+    [Fact]
+    public void Discover_ignores_qml_and_quick_test_words_in_comments_strings_and_unrelated_files()
+    {
+        WriteProject("CMakeLists.txt", """
+            cmake_minimum_required(VERSION 3.21)
+            project(app LANGUAGES CXX)
+            # Qt6::QuickTest
+            set(note "Qt6::QuickTest")
+            """);
+        WriteProject("runner.cpp", """
+            // QUICK_TEST_MAIN(app_tests)
+            const char* text = "QUICK_TEST_MAIN";
+            """);
+        WriteProject("qml/Main.qml", """
+            // TestCase
+            Item { property string text: "TestCase" }
+            """);
+        WriteProject("notes.txt", "Qt6::QuickTest QUICK_TEST_MAIN TestCase");
+
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+    }
+
     /// <summary>
     /// vitest and jest are still decided first: a repository that installs vitest and also keeps a node
     /// script runs its suite through vitest.
@@ -717,6 +834,19 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
         string full = Path.Combine(_root, relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         File.WriteAllText(full, content);
+    }
+
+    private void WriteQmlQuickTestProject(string relativeRoot)
+    {
+        WriteProject($"{relativeRoot}/CMakeLists.txt", """
+            cmake_minimum_required(VERSION 3.21)
+            project(app LANGUAGES CXX)
+            find_package(Qt6 REQUIRED COMPONENTS QuickTest)
+            qt_add_executable(app_tests runner.cpp)
+            target_link_libraries(app_tests PRIVATE Qt6::QuickTest)
+            """);
+        WriteProject($"{relativeRoot}/runner.cpp", "QUICK_TEST_MAIN(app_tests)");
+        WriteProject($"{relativeRoot}/tst_smoke.qml", "TestCase { name: \"Smoke\" }");
     }
 
     [Fact]

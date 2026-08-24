@@ -60,6 +60,30 @@ public static class ContinuousTestProjectInventory
         ".vbproj",
     };
 
+    private static readonly HashSet<string> QmlSourceExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".qml",
+    };
+
+    private static readonly HashSet<string> QuickTestRunnerExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".c",
+        ".cc",
+        ".cpp",
+        ".cxx",
+        ".h",
+        ".hh",
+        ".hpp",
+        ".hxx",
+        ".m",
+        ".mm",
+    };
+
+    private sealed record QmlProjectEvidence(
+        string ProjectPath,
+        string ConfigureRoot,
+        string EvidenceRoot);
+
     /// <summary>
     /// Every python config file that enables a pytest project, in the order pytest ITSELF reads them
     /// when it picks a rootdir: <c>pytest.ini</c> wins over everything (even when empty), then
@@ -97,9 +121,12 @@ public static class ContinuousTestProjectInventory
         if (!Directory.Exists(root))
             return [];
 
+        string[] candidateFiles = EnumerateCandidateFiles(root).ToArray();
         var projects = new List<ContinuousTestProject>();
-        foreach (string path in EnumerateCandidateFiles(root))
+        foreach (string path in candidateFiles)
         {
+            if (IsCMakeLists(path))
+                continue;
             if (!TryIdentify(path, out string? framework, out IReadOnlyList<string> excludeTraits))
                 continue;
             projects.Add(new ContinuousTestProject(
@@ -108,6 +135,20 @@ public static class ContinuousTestProjectInventory
                 ProjectPath: path,
                 Framework: framework,
                 ExcludeTraits: excludeTraits));
+        }
+
+        foreach (QmlProjectEvidence evidence in DiscoverQmlProjects(candidateFiles))
+        {
+            projects.Add(new ContinuousTestProject(
+                Id: ProjectId(workspaceId, root, evidence.ProjectPath),
+                WorkspaceId: workspaceId,
+                ProjectPath: evidence.ProjectPath,
+                Framework: "qt-quick-test",
+                Metadata: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["configure_root"] = evidence.ConfigureRoot,
+                    ["evidence_root"] = evidence.EvidenceRoot,
+                }));
         }
 
         return CollapsePytestConfigRoots(SuppressCargoWorkspaceMembers(projects))
@@ -123,6 +164,27 @@ public static class ContinuousTestProjectInventory
         string full = Path.GetFullPath(projectPath);
         if (!File.Exists(full))
             return null;
+        if (IsCMakeLists(full))
+        {
+            string[] candidateFiles = EnumerateCandidateFiles(Path.GetFullPath(workspaceRoot)).ToArray();
+            QmlProjectEvidence? qmlEvidence = DiscoverQmlProjects(candidateFiles)
+                .FirstOrDefault(evidence =>
+                    PathComparer.Equals(evidence.ProjectPath, full)
+                    || IsInside(evidence.ConfigureRoot, full));
+            if (qmlEvidence is not null)
+            {
+                return new ContinuousTestProject(
+                    Id: ProjectId(workspaceId, workspaceRoot, qmlEvidence.ProjectPath),
+                    WorkspaceId: workspaceId,
+                    ProjectPath: qmlEvidence.ProjectPath,
+                    Framework: "qt-quick-test",
+                    Metadata: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["configure_root"] = qmlEvidence.ConfigureRoot,
+                        ["evidence_root"] = qmlEvidence.EvidenceRoot,
+                    });
+            }
+        }
         if (!TryIdentify(full, out string? framework, out IReadOnlyList<string> excludeTraits))
         {
             framework = FrameworkFallback(full);
@@ -743,13 +805,250 @@ public static class ContinuousTestProjectInventory
     private static string DirectoryOf(string path) =>
         Path.GetDirectoryName(Path.GetFullPath(path)) ?? Path.GetFullPath(path);
 
+    private static IReadOnlyList<QmlProjectEvidence> DiscoverQmlProjects(IReadOnlyList<string> candidateFiles)
+    {
+        var candidates = new List<QmlProjectEvidence>();
+        foreach (string path in candidateFiles.Where(IsCMakeLists))
+        {
+            if (TryDiscoverQmlProject(path, candidateFiles, out QmlProjectEvidence? evidence)
+                && evidence is not null)
+                candidates.Add(evidence);
+        }
+
+        var projects = new List<QmlProjectEvidence>(candidates.Count);
+        foreach (QmlProjectEvidence candidate in candidates
+                     .OrderBy(evidence => PathDepth(evidence.ConfigureRoot))
+                     .ThenBy(evidence => evidence.ProjectPath, PathComparer))
+        {
+            if (projects.Any(project => IsInside(project.ConfigureRoot, candidate.ConfigureRoot)))
+                continue;
+            projects.Add(candidate);
+        }
+
+        return projects;
+    }
+
+    private static bool TryDiscoverQmlProject(
+        string cmakePath,
+        IReadOnlyList<string> candidateFiles,
+        out QmlProjectEvidence? evidence)
+    {
+        evidence = null;
+        string configureRoot = DirectoryOf(cmakePath);
+        if (!ContainsCMakeProjectDeclaration(ReadHead(cmakePath)))
+            return false;
+
+        string[] subtreeFiles = candidateFiles
+            .Where(path => IsInside(configureRoot, path))
+            .OrderBy(path => path, PathComparer)
+            .ToArray();
+        string? quickTestPath = subtreeFiles.FirstOrDefault(IsQuickTestEvidence);
+        string[] qmlTestPaths = subtreeFiles.Where(IsQmlTestEvidence).ToArray();
+        if (quickTestPath is null || qmlTestPaths.Length == 0)
+            return false;
+
+        evidence = new QmlProjectEvidence(
+            ProjectPath: Path.GetFullPath(cmakePath),
+            ConfigureRoot: configureRoot,
+            EvidenceRoot: CommonDirectory(qmlTestPaths));
+        return true;
+    }
+
+    private static bool IsQuickTestEvidence(string path)
+    {
+        string extension = Path.GetExtension(path);
+        if (!IsCMakeLists(path) && !QuickTestRunnerExtensions.Contains(extension))
+            return false;
+
+        string code = CodeWithoutCommentsOrStrings(ReadHead(path));
+        return ContainsCodeToken(code, "Qt6::QuickTest")
+            || ContainsCodeToken(code, "Qt5::QuickTest")
+            || ContainsCodeToken(code, "Qt::QuickTest")
+            || ContainsCodeToken(code, "QUICK_TEST_MAIN")
+            || ContainsCodeToken(code, "QUICK_TEST_OPENGL_MAIN");
+    }
+
+    private static bool IsQmlTestEvidence(string path)
+    {
+        if (!QmlSourceExtensions.Contains(Path.GetExtension(path)))
+            return false;
+
+        string name = Path.GetFileName(path);
+        return name.StartsWith("tst_", StringComparison.OrdinalIgnoreCase)
+            || ContainsCodeToken(CodeWithoutCommentsOrStrings(ReadHead(path)), "TestCase");
+    }
+
+    private static bool IsCMakeLists(string path) =>
+        string.Equals(Path.GetFileName(path), "CMakeLists.txt", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsCMakeProjectDeclaration(string text) =>
+        ContainsCodeCall(CodeWithoutCommentsOrStrings(text), "project");
+
+    private static bool ContainsCodeCall(string code, string token)
+    {
+        int index = 0;
+        while ((index = IndexOfCodeToken(code, token, index)) >= 0)
+        {
+            int cursor = index + token.Length;
+            while (cursor < code.Length && char.IsWhiteSpace(code[cursor]))
+                cursor++;
+            if (cursor < code.Length && code[cursor] == '(')
+                return true;
+            index = cursor;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsCodeToken(string code, string token) =>
+        IndexOfCodeToken(code, token, 0) >= 0;
+
+    private static int IndexOfCodeToken(string code, string token, int start)
+    {
+        int index = code.IndexOf(token, start, StringComparison.OrdinalIgnoreCase);
+        while (index >= 0)
+        {
+            bool leftBoundary = index == 0 || !IsCodeTokenCharacter(code[index - 1]);
+            int end = index + token.Length;
+            bool rightBoundary = end == code.Length || !IsCodeTokenCharacter(code[end]);
+            if (leftBoundary && rightBoundary)
+                return index;
+            index = code.IndexOf(token, index + 1, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return -1;
+    }
+
+    private static bool IsCodeTokenCharacter(char value) =>
+        char.IsLetterOrDigit(value) || value is '_' or ':';
+
+    private static string CodeWithoutCommentsOrStrings(string text)
+    {
+        var output = text.ToCharArray();
+        bool lineComment = false;
+        bool blockComment = false;
+        bool quoted = false;
+        bool escaped = false;
+        for (int index = 0; index < output.Length; index++)
+        {
+            char current = output[index];
+            if (lineComment)
+            {
+                if (current == '\n' || current == '\r')
+                    lineComment = false;
+                else
+                    output[index] = ' ';
+                continue;
+            }
+
+            if (blockComment)
+            {
+                if (current == '*' && index + 1 < output.Length && output[index + 1] == '/')
+                {
+                    output[index++] = ' ';
+                    output[index] = ' ';
+                    blockComment = false;
+                }
+                else if (current != '\n' && current != '\r')
+                {
+                    output[index] = ' ';
+                }
+                continue;
+            }
+
+            if (quoted)
+            {
+                if (escaped)
+                {
+                    output[index] = ' ';
+                    escaped = false;
+                }
+                else if (current == '\\')
+                {
+                    output[index] = ' ';
+                    escaped = true;
+                }
+                else if (current == '"')
+                {
+                    output[index] = ' ';
+                    quoted = false;
+                }
+                else if (current != '\n' && current != '\r')
+                {
+                    output[index] = ' ';
+                }
+                continue;
+            }
+
+            if (current == '#')
+            {
+                output[index] = ' ';
+                lineComment = true;
+            }
+            else if (current == '/' && index + 1 < output.Length && output[index + 1] == '/')
+            {
+                output[index++] = ' ';
+                output[index] = ' ';
+                lineComment = true;
+            }
+            else if (current == '/' && index + 1 < output.Length && output[index + 1] == '*')
+            {
+                output[index++] = ' ';
+                output[index] = ' ';
+                blockComment = true;
+            }
+            else if (current == '"')
+            {
+                output[index] = ' ';
+                quoted = true;
+            }
+        }
+
+        return new string(output);
+    }
+
+    private static int PathDepth(string path) =>
+        Path.GetFullPath(path).Count(character => character == Path.DirectorySeparatorChar);
+
+    private static string CommonDirectory(IEnumerable<string> paths)
+    {
+        string[] normalized = paths.Select(DirectoryOf).Distinct(PathComparer).ToArray();
+        if (normalized.Length == 0)
+            throw new InvalidOperationException("QML evidence requires at least one path");
+
+        string[] segments = normalized[0]
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        int shared = segments.Length;
+        foreach (string path in normalized.Skip(1))
+        {
+            string[] current = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            shared = Math.Min(shared, current.Length);
+            for (int index = 0; index < shared; index++)
+            {
+                if (!string.Equals(segments[index], current[index], PathComparison))
+                {
+                    shared = index;
+                    break;
+                }
+            }
+        }
+
+        if (shared == 0)
+            return Path.GetPathRoot(normalized[0]) ?? normalized[0];
+        string result = string.Join(Path.DirectorySeparatorChar, segments.Take(shared));
+        return Path.IsPathRooted(result) ? result : Path.DirectorySeparatorChar + result;
+    }
+
     private static bool IsCandidateFileName(string path)
     {
         string name = Path.GetFileName(path);
         return DotnetProjectExtensions.Contains(Path.GetExtension(path))
             || string.Equals(name, "Cargo.toml", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "package.json", StringComparison.OrdinalIgnoreCase)
-            || PythonProjectNames.Contains(name);
+            || PythonProjectNames.Contains(name)
+            || IsCMakeLists(path)
+            || QmlSourceExtensions.Contains(Path.GetExtension(path))
+            || QuickTestRunnerExtensions.Contains(Path.GetExtension(path));
     }
 
     private static bool TryIdentify(string path, out string? framework, out IReadOnlyList<string> excludeTraits)
