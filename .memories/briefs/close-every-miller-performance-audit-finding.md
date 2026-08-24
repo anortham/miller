@@ -1,9 +1,9 @@
 ---
 id: close-every-miller-performance-audit-finding
 title: Close every Miller performance-audit finding
-status: active
+status: completed
 created: 2026-08-24T06:21:51.511Z
-updated: 2026-08-24T06:45:45.387Z
+updated: 2026-08-24T10:10:38.343Z
 tags:
   - performance
   - continuous-testing
