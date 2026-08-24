@@ -1,6 +1,6 @@
 # Performance Audit Closure Implementation Plan
 
-**Status:** Approved for same-session execution on `perf/ct-audit-2026-08-23`.
+**Status:** Implemented and verified on 2026-08-24 at `ceca0003`.
 
 **Design:** `docs/plans/2026-08-24-performance-audit-closure-design.md`
 
@@ -86,9 +86,9 @@ Close every deferred or open item in `docs/findings/2026-08-23-performance-audit
 
 **Acceptance criteria:**
 
-- [ ] Completion issues no per-result recent-history query or temp order-by sort.
-- [ ] Statement count is at most `C + 2R` for a small asserted constant `C`.
-- [ ] Flakiness, normalization, tie-break, rollback, and freshness results are unchanged.
+- [x] Completion issues no per-result recent-history query or temp order-by sort.
+- [x] Statement count is at most `C + 2R` for a small asserted constant `C`.
+- [x] Flakiness, normalization, tie-break, rollback, and freshness results are unchanged.
 
 ## Task 5: Enforce CT history retention
 
@@ -98,9 +98,9 @@ Close every deferred or open item in `docs/findings/2026-08-23-performance-audit
 
 **Acceptance criteria:**
 
-- [ ] The exact 30-day/50-outcome keep-set is deterministic and workspace-scoped.
-- [ ] Current states, watermarks, flakiness, active failures, and protected artifacts are unchanged.
-- [ ] Repeated pruning is idempotent and transactional failure leaves the prior set intact.
+- [x] The exact 30-day/50-outcome keep-set is deterministic and workspace-scoped.
+- [x] Current states, watermarks, flakiness, active failures, and protected artifacts are unchanged.
+- [x] Repeated pruning is idempotent and transactional failure leaves the prior set intact.
 
 ## Task 6: Enforce workspace and machine cache limits
 
@@ -110,9 +110,9 @@ Close every deferred or open item in `docs/findings/2026-08-23-performance-audit
 
 **Acceptance criteria:**
 
-- [ ] Workspace and machine caps are enforced, not report-only.
-- [ ] Active/newest-complete generations, live outputs, live leases, and non-Miller paths are never selected.
-- [ ] Selection order is deterministic and failed deletion remains recoverable debt.
+- [x] Workspace and machine caps are enforced, not report-only.
+- [x] Active/newest-complete generations, live outputs, live leases, and non-Miller paths are never selected.
+- [x] Selection order is deterministic and failed deletion remains recoverable debt.
 
 ## Task 7: Remove duplicate .NET runtime trees
 
@@ -136,17 +136,19 @@ Close every deferred or open item in `docs/findings/2026-08-23-performance-audit
 
 - [x] Impact and Context rendered output is byte-identical on the fixed workload.
 - [x] `--max-hops 0` performs zero frontier detail reads and slice loads.
-- [ ] Deterministic counters remove the measured 11k/429-style fan-out and warm ten-run p95 improves for both tools, or the audit retires a sub-finding with counter evidence.
+- [x] Deterministic counters remove the measured 11k/429-style fan-out and warm ten-run p95 improves for both tools, or the audit retires a sub-finding with counter evidence.
 
 ## Task 9: Close the audit and verify the branch
 
 **Files:** `docs/findings/2026-08-23-performance-audit.md`; design/plan checkboxes; Goldfish memories.
 
-**Build:** Run the identical after workloads, update every finding to fixed with its commit SHA and evidence, then run affected gates, Release build, fast suite, Scale suite, live CT stop/restore, and all related-worktree state checks.
+**Build:** Completed the identical after workloads, updated every finding to fixed with its commit SHA and evidence, and ran the affected gates, Release build, fast suite, Scale suite, live CT stop/restore, and related-worktree state checks.
+
+**Closure evidence:** source `ceca0003`; Release build 0 warnings/0 errors; `scripts/test.sh all` fast `8,372 passed / 9 skipped / 0 failed` and Scale `162 passed / 16 skipped / 0 failed`; final foreground CT green at revision `40035` with `8,366` selected and stale `0`; final daemon state stopped with no provider and budget null; related worktrees reconciled with `main` clean at `28f680ac`, comparison worktree clean at `5cf2a52b`, and only this branch's planned documentation changes before this packet.
 
 **Acceptance criteria:**
 
-- [ ] The findings ledger has zero deferred or open rows.
-- [ ] Every fixed row names a commit SHA and deterministic or fixed-workload evidence.
-- [ ] Release build is 0 warnings/0 errors; fast and Scale suites pass; live CT state is restored.
-- [ ] Branch and all related worktrees are reconciled and no task changes are stranded.
+- [x] The findings ledger has zero deferred or open rows.
+- [x] Every fixed row names a commit SHA and deterministic or fixed-workload evidence.
+- [x] Release build is 0 warnings/0 errors; fast and Scale suites pass; live CT state is restored.
+- [x] Branch and all related worktrees are reconciled and no task changes are stranded.

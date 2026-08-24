@@ -1,6 +1,6 @@
 # Performance Audit Closure Design
 
-**Status:** Approved on 2026-08-24.
+**Status:** Implemented and verified on 2026-08-24 at `ceca0003`.
 
 ## Goal
 
@@ -126,10 +126,10 @@ Default `max-hops`, `ReachCap`, ranking, truncation, and public output do not ch
 
 ## Acceptance criteria
 
-- [ ] Unchanged CT ticks open zero full compatibility projections; startup cursor drift converges without a recovery run.
-- [ ] Selection reads are project-filtered/once-per-revision, retry state is bounded, and disabled lifecycle rows do not affect active verdicts.
-- [ ] Completion has no per-result history query/temp sort and meets the statement-count bound.
-- [ ] History and build storage obey the approved retention/cap policies without deleting protected state.
-- [ ] .NET generations contain one canonical runnable runtime tree and are materially smaller on the fixed fixture.
-- [ ] Impact and Context outputs remain byte-identical while detail-query/slice counts and p95 improve or the finding is retired by the recorded counters.
-- [ ] The final audit contains zero deferred/open findings and all project verification gates pass.
+- [x] Unchanged CT ticks open zero full compatibility projections; startup cursor drift converges without a recovery run.
+- [x] Selection reads are project-filtered/once-per-revision, retry state is bounded, and disabled lifecycle rows do not affect active verdicts.
+- [x] Completion has no per-result history query/temp sort and meets the statement-count bound.
+- [x] History and build storage obey the approved retention/cap policies without deleting protected state.
+- [x] .NET generations contain one canonical runnable runtime tree and are materially smaller on the fixed fixture.
+- [x] Impact and Context outputs remain byte-identical while detail-query/slice counts and p95 improve for both tools.
+- [x] The final audit contains zero deferred/open findings and all project verification gates pass.

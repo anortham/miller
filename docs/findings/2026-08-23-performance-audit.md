@@ -154,7 +154,7 @@ mutation if none of a non-empty selected inventory maps; partial residue is diag
 artifact rows remain importable because whole-suite runs can discover tests added since the prior inventory.
 Selected/chunked xUnit runs keep JSON; their 120-unit/6-KiB chunk cap bounds output below this failure mode.
 
-## Other hot spots
+## Historical hot spots (pre-closure baseline)
 
 ### CT enabled paths
 
@@ -293,13 +293,13 @@ Its query-plan test requires existing `idx_ct_test_states_` indexes and rejects 
 and no-cursor aggregate SQL. These are hard test/plan claims consumed from Task 4; this worker did not rerun the
 branch-gate suites.
 
-### Deferred hot spots and concerns
+### Historical pre-closure observations
 
-The poller session-reopen candidate remains explicitly deferred: each 250 ms CT tick still reopens a family read
-session and rebuilds the compatibility projection. Changed-revision selection remains total-case/project-fan-out
-work; run completion still has the recorded per-result operation/history shape; retry-key cardinality still lacks
-eviction; and CT run/history retention remains unaddressed. None of these is silently declared fixed by the
-aggregate projection change.
+This section records the state before the closure slices landed. At that point, each 250 ms CT tick reopened a
+family read session and rebuilt the compatibility projection; changed-revision selection used total-case/project-
+fan-out work; run completion had the recorded per-result operation/history shape; retry-key cardinality lacked
+eviction; and CT run/history retention had no maintenance path. The closure matrix below records the repairs and
+evidence for each observation. None remains an open or deferred finding.
 
 The live index cursor drift required the one recovery run, so the provider recovery result is not presented as an
 after benchmark. The recovery also produced one fresh red provider case while Task 3 had all provider cases green
@@ -318,3 +318,22 @@ RSS is substantially lower but has a wider sampled span, so it remains report-on
 | Idle CPU/RSS comparison | Same five-sample cadence as Task 3 | `13bfcbdc` → `90207cb7` | 708 → 447 ticks; 7.08 → 4.47 CPU-s; RSS ranges recorded | ticks direct; wall/RSS report-only | baseline 2026-08-23 22:20:54–22:21:54; after 22:59:09–23:00:09 CDT |
 | Aggregate parity, allocation, and SQL-plan guard | Accepted Task 4 focused evidence (`ContinuousTestStoreTests`) | `90207cb7` | PASS evidence: 720,480 vs 38,624 bytes; indexes used; no temp sort | hard focused-test evidence | Task 4 handoff |
 | Full fast/Scale/diff/worktree branch gates | `scripts/test.sh`; `scripts/test.sh scale`; `git diff --check`; related-worktree status audit | `90207cb7` | PASS: fast 8,320 passed/9 skipped; Scale 161 passed/16 skipped; diff clean | branch gate | 2026-08-23 23:05 CDT |
+
+## Final closure matrix
+
+The matrix below is the current audit state at source `ceca0003`. Historical measurements above remain useful
+baseline evidence; they are not current-status claims. Every finding is fixed, with no deferred or open row.
+
+| Finding | Status | Fixed in | Evidence |
+| --- | --- | --- | --- |
+| xUnit whole-suite JSON overwhelmed bounded provider capture | FIXED | `37ddfcee`, `13bfcbdc` | Full JSON transport (`48,502,555` bytes / `75,369` lines) replaced by bounded verbose progress plus JUnit; artifact parsing remains bounded and deterministic. |
+| CT aggregate status rebuilt all state on every idle tick | FIXED | `90207cb7` | Aggregate projection reduced the deterministic allocation guard from `720,480` to `38,624` bytes; idle CPU fell from `708` to `447` ticks in the comparable 60-second sample. |
+| Poller reopened a full compatibility session on unchanged 250 ms ticks and drift needed recovery | FIXED | `3bf5040f`, `04825112`, `b79cd506` | Unchanged ticks open zero compatibility projections; durable cursor, moving-cursor retry, truncation, and identity-mismatch coverage are focused-tested. |
+| Selection loaded all cases/statuses per enabled project; retry state grew; disabled lifecycle rows polluted status | FIXED | `a25b7aea`, `614e284c` | Project-filtered revision snapshots, terminal retry eviction, and disabled-row exclusion/re-enable behavior are covered by 243 focused tests. |
+| Completion performed per-result history work and temporary sorts | FIXED | `55cdb125`, `4979cee0` | Completion is `3 + 2R` statements (`5/7/9` for `R=1/2/3`, `43` for `R=20` under the variable-limit split); the covering history index avoids a temp B-tree. |
+| CT run/result/artifact history was unbounded | FIXED | `83df8652`, `845e52ea`, `86738ac9`, `92c51164` | Transactional active/30-day/newest-50/transitive-artifact keep-set is workspace-scoped, idempotent, and failure-isolated. |
+| CT generation/cache storage had no enforcing janitor | FIXED | `7463d486`, `434fa615` | Seven-day TTL, 2 GiB workspace cap, and 8 GiB machine cap enforce deterministic oldest-unused-first selection under operation/root locks; protected state is excluded and remaining deletion debt is reported. No final log claimed material deletion (`cache_pruned` was absent). |
+| .NET provider generations duplicated runtime trees | FIXED | `17366fce` | Controlled fixture bytes fell from `56,051,083` to `22,357,719` (`-60.11%`); Miller.Tests runnable output fell from `1,427,958,593` to `284,195,348` (`-80.10%`); the real Scale provider passed. |
+| Impact/Context repeated graph detail and bounded-slice reads | FIXED | `1e4869db`, `14ca699c` | Shared scratch/detail batching and lazy indexed point slices preserve exact output hashes (`e882...2072`, `b991...e9012`); interleaved ten-run p95 improved Context `1534.501`→`1458.401` ms and Impact `3581.362`→`2542.346` ms. |
+| Final live schema migration and adopted-family routing corrections | FIXED | `c5c9b09a`, `ceca0003` | Write paths migrate schema before reads; adopted-family routing performs zero local writes; focused coverage is `76 + 17` tests. |
+| Branch and live CT closure gates | FIXED | `ceca0003` | Release build: 0 warnings/errors. `scripts/test.sh all`: fast `8,372 passed / 9 skipped / 0 failed`; Scale `162 passed / 16 skipped / 0 failed`. Final foreground CT run was green at revision `40035` (`8,366` selected, stale `0`); daemon ended stopped with no provider and budget null. Comparable idle sample: `309` ticks / `3.09` CPU-s over 60 s, down from Task 5 `447` and original `708`; final state restored stopped/green/stale0. |
