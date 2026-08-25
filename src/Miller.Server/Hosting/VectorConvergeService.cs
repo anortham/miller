@@ -236,6 +236,9 @@ public sealed class VectorConvergeService : BackgroundService
 
     private const int MaxLastErrorLength = 300;
 
+    /// <summary>How often the startup catch-up stamp re-reads the indexer lease while it waits for it.</summary>
+    private static readonly TimeSpan LeadershipPollInterval = TimeSpan.FromMilliseconds(250);
+
     private readonly IndexBootstrapService _bootstrap;
     private readonly VectorSidecar _sidecar;
     private readonly VectorConvergeSignal _signal;
@@ -252,6 +255,7 @@ public sealed class VectorConvergeService : BackgroundService
     private readonly TimeSpan _heldRetryDelay;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly Func<WorkspaceContext, VectorDesiredState?> _readDesiredState;
+    private readonly Func<bool> _holdsIndexLeadership;
 
     private SemanticEmbeddingSession? _session;
     private IVectorGenerationGc? _gc;
@@ -263,6 +267,7 @@ public sealed class VectorConvergeService : BackgroundService
         VectorSidecar sidecar,
         VectorConvergeSignal signal,
         SemanticEmbeddingSessionBroker broker,
+        IndexerService indexer,
         ILogger<VectorConvergeService> logger)
         : this(
             bootstrap,
@@ -272,9 +277,11 @@ public sealed class VectorConvergeService : BackgroundService
             workspace => SqliteVectorConvergePort.TryOpen(workspace, sidecar.Encoder),
             static _ => null,
             null,
-            workspace => SqliteVectorShadowRebuilder.TryOpen(workspace, sidecar.Encoder))
+            workspace => SqliteVectorShadowRebuilder.TryOpen(workspace, sidecar.Encoder),
+            holdsIndexLeadership: () => indexer.IsLeader)
     {
         ArgumentNullException.ThrowIfNull(broker);
+        ArgumentNullException.ThrowIfNull(indexer);
         _broker = broker;
     }
 
@@ -293,7 +300,8 @@ public sealed class VectorConvergeService : BackgroundService
         VectorLiveReaderRegistry? readerRegistry = null,
         TimeSpan? heldRetryDelay = null,
         Func<TimeSpan, CancellationToken, Task>? delay = null,
-        Func<WorkspaceContext, VectorDesiredState?>? readDesiredState = null)
+        Func<WorkspaceContext, VectorDesiredState?>? readDesiredState = null,
+        Func<bool>? holdsIndexLeadership = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(sidecar);
@@ -320,6 +328,9 @@ public sealed class VectorConvergeService : BackgroundService
         _heldRetryDelay = heldRetryDelay ?? TimeSpan.FromMinutes(5);
         _delay = delay ?? (static (span, token) => Task.Delay(span, token));
         _readDesiredState = readDesiredState ?? ReadDesiredState;
+        // The production ctor binds the indexer lease. This seam defaults to held so a drain test states the
+        // drain behavior it is about, and a leadership test says so by passing the probe explicitly.
+        _holdsIndexLeadership = holdsIndexLeadership ?? (static () => true);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -337,7 +348,7 @@ public sealed class VectorConvergeService : BackgroundService
             await _bootstrap.WaitUntilBoundAsync(stoppingToken).ConfigureAwait(false);
             WorkspaceContext workspace = _bootstrap.Workspace;
 
-            StampMissingDesiredState(workspace);
+            _ = StampMissingDesiredStateWhenLeaderAsync(workspace, stoppingToken);
 
             while (!stoppingToken.IsCancellationRequested)
             {
@@ -411,6 +422,13 @@ public sealed class VectorConvergeService : BackgroundService
     /// another index-convergence wake, so the loop schedules a delayed retry when this returns true.</summary>
     internal async Task<bool> DrainOnceAsync(CancellationToken cancellationToken)
     {
+        // vectors.db is a single-writer artifact whose shadow rebuild, promote and generation GC all assume one
+        // writer per workspace. The indexer lease is that one writer, so a reader process drains nothing: two
+        // processes rebuilding the same shadow burn minutes each, and a reader's GC judges liveness from its OWN
+        // in-process reader registry, which cannot see the generation another process holds open.
+        if (!_holdsIndexLeadership())
+            return false;
+
         WorkspaceContext? workspace = TryGetWorkspace();
         if (workspace is null)
             return false;
@@ -545,6 +563,28 @@ public sealed class VectorConvergeService : BackgroundService
         {
             cts.Cancel();
             cts.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The one catch-up stamp for a workspace whose vectors are behind but whose sources are quiet: nothing else
+    /// wakes the drain there. It belongs to the leader, so it waits for the indexer lease rather than sampling it
+    /// once — a leader that has not claimed yet is a startup race, not a reader. A process that is already leader
+    /// stamps synchronously, before the loop's first wait; a permanent reader simply never stamps.
+    /// </summary>
+    private async Task StampMissingDesiredStateWhenLeaderAsync(
+        WorkspaceContext workspace,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!_holdsIndexLeadership())
+                await _delay(LeadershipPollInterval, cancellationToken).ConfigureAwait(false);
+
+            StampMissingDesiredState(workspace);
+        }
+        catch (OperationCanceledException)
+        {
         }
     }
 
@@ -776,9 +816,10 @@ public sealed class VectorConvergeService : BackgroundService
     /// <summary>
     /// One GC pass at the tail of a drain, on the leader that just converged: a fresh promote leaves a superseded
     /// generation beside the active artifact, and every leader wake sweeps whatever aged past its soak window with
-    /// no live in-process reader. GC is wake-gated by construction — a reader instance's converge signal is never
-    /// stamped, so it never drains and never collects. Failures are swallowed so a GC fault can never crash the
-    /// drain; the retained files are simply revisited next wake.
+    /// no live in-process reader. Collecting is leader-only because <see cref="DrainOnceAsync"/> refuses to drain
+    /// without the indexer lease: the liveness set below is this process's own reader registry, so a reader that
+    /// collected would delete generations other processes still hold open. Failures are swallowed so a GC fault
+    /// can never crash the drain; the retained files are simply revisited next wake.
     /// </summary>
     private void CollectGarbage(IVectorConvergePort port)
     {

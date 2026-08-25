@@ -1176,6 +1176,7 @@ public sealed class VectorConvergeServiceTests
                 new VectorSidecar(SemanticMode.On),
                 new VectorConvergeSignal(enabled: true),
                 broker,
+                ReaderIndexer(bootstrap),
                 NullLogger<VectorConvergeService>.Instance);
 
             await service.StartAsync(CancellationToken.None);
@@ -1214,6 +1215,7 @@ public sealed class VectorConvergeServiceTests
                 new VectorSidecar(SemanticMode.On),
                 new VectorConvergeSignal(enabled: true),
                 broker,
+                ReaderIndexer(bootstrap),
                 NullLogger<VectorConvergeService>.Instance);
 
             await service.StartAsync(TestContext.Current.CancellationToken);
@@ -2008,6 +2010,84 @@ public sealed class VectorConvergeServiceTests
     }
 
     [Fact]
+    public async Task Drain_WhenTheProcessDoesNotHoldTheIndexLease_OpensNothingAndReportsNoHold()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-reader-drain-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            int opens = 0;
+            IndexBootstrapService bootstrap = IsolatedBootstrap();
+            bootstrap.SeedForTest(
+                WorkspaceAt(root, symbols), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+            await using var session = new SemanticEmbeddingSession(
+                FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            var service = new VectorConvergeService(
+                bootstrap,
+                new VectorSidecar(SemanticMode.On),
+                new VectorConvergeSignal(enabled: true),
+                NullLogger.Instance,
+                _ =>
+                {
+                    opens++;
+                    return new FakePort { SymbolUnits = [Card("a", "src/A.cs", "card a")] };
+                },
+                _ => session,
+                () => DateTimeOffset.UnixEpoch,
+                holdsIndexLeadership: () => false);
+
+            Assert.False(await service.DrainOnceAsync(TestContext.Current.CancellationToken));
+            Assert.Equal(0, opens);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Start_WhenTheProcessDoesNotHoldTheIndexLease_NeverStampsTheCatchUpTarget()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-reader-start-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var signal = new VectorConvergeSignal(enabled: true);
+            int probes = 0;
+            var gate = new DelayGate();
+            IndexBootstrapService bootstrap = IsolatedBootstrap();
+            bootstrap.SeedForTest(
+                WorkspaceAt(root, symbols), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+            var service = new VectorConvergeService(
+                bootstrap,
+                new VectorSidecar(SemanticMode.On),
+                signal,
+                NullLogger.Instance,
+                _ => throw new InvalidOperationException("a reader must not open the vector artifact"),
+                _ => throw new InvalidOperationException("a reader must not open an embedding session"),
+                () => DateTimeOffset.UnixEpoch,
+                delay: gate.DelayAsync,
+                readDesiredState: _ =>
+                {
+                    probes++;
+                    return new VectorDesiredState(5, IsExact: false);
+                },
+                holdsIndexLeadership: () => false);
+
+            await service.StartAsync(CancellationToken.None);
+            await gate.Requested.WaitAsync(WaitBound, TestContext.Current.CancellationToken);
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.Equal(0, probes);
+            Assert.Equal(0, signal.TargetRevision);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task PromotedArtifactThatWillNotReopen_ReportsAHoldSoTheRetryIsScheduled()
     {
         string root = Directory.CreateTempSubdirectory("miller-vec-promote-reopen-").FullName;
@@ -2286,6 +2366,13 @@ public sealed class VectorConvergeServiceTests
 
     private static IndexBootstrapService IsolatedBootstrap() =>
         VectorConvergePortScaleTests.IsolatedBootstrap();
+
+    private static IndexerService ReaderIndexer(IndexBootstrapService bootstrap) =>
+        new(
+            bootstrap,
+            NullLogger<IndexerService>.Instance,
+            NullLoggerFactory.Instance,
+            SymbolSearchSidecar.Disabled);
 
     private static async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
         FakePort port,

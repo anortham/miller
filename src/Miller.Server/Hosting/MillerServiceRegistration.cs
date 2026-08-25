@@ -73,7 +73,9 @@ public static class MillerServiceRegistration
         // Optional local semantic retrieval (ADR-0003). The drain loop follows the SAME lazy-bootstrap-getter
         // discipline as the M3 services above, and under MILLER_SEMANTIC=off its ExecuteAsync returns before
         // waiting, opening, or stating anything — the vectors-v1 zero-work guarantee. The wake signal is the
-        // process-wide instance IndexerSidecarConverger stamps.
+        // process-wide instance IndexerSidecarConverger stamps. It takes the IndexerService (registered above,
+        // and constructing it reads no bootstrap getter) because vectors.db is single-writer: the drain runs only
+        // in the process holding the indexer lease.
         services.AddSingleton(_ =>
             evaluationAdapter?.CreateVectorSidecar(activeSemanticMode)
             ?? new VectorSidecar(activeSemanticMode));
