@@ -41,6 +41,36 @@
 
 ## Product Backlog
 
+- CT xUnit v2 detection (field report 2026-08-25, EpicTrackerboard): CT runs the built self-executing test
+  assembly (`DotnetTestProvider.TestAssemblyPath` + `ExecutableExtension`), which only xUnit v3 /
+  Microsoft.Testing.Platform produces. An xUnit v2 project builds only a dll plus `testhost.exe`, so CT fails
+  late with `ct-discovery-failure: An error occurred trying to start process '...\<Project>.Tests.exe'` — the
+  user went hunting for a broken build. Fix in two places: (1) classify the runner generation at
+  enable/inventory time (xunit v3 vs v2 package reference in the csproj) and say plainly "xUnit v2 detected;
+  CT needs the v3 self-executing assembly" in `tests enable`/`status` output — same honesty rule as the
+  refused no-toolchain enable; (2) when discovery fails because the exe is missing but the dll exists next to
+  it, name the real cause in the failure message instead of the raw process error. Docs note: `dotnet new
+  xunit` still scaffolds v2 on SDK 10.0.400, so standard scaffolding hits this. (Same report confirmed the
+  watch loop end-to-end: unprompted pickup of a broken assertion, exact failing test named, auto-green on
+  revert — no action needed there.)
+
+- Dashboard CT visibility (dogfood 2026-08-25): watching the dashboard during a live CT session gives no view
+  of test status. Add a Tests section to the workspace detail view fed read-only from the CT sidecar facts the
+  contract already exposes (`tests status --json` core: enabled state, project inventory, verdict, stale/selected
+  counts, daemon liveness/version, last run + failures with test name and exception type — the one-line failure
+  shape the field report praised). `ct.db` is self-contained and cheap to read, so this fits the ADR-0002
+  dashboard rule (aggregate facts only, no index hydration); status reads must stay create-nothing. Lesser
+  fallback if the section stalls: show tool RESPONSES (not just calls) for `tests` in Live Activity — noted as
+  strictly less useful than a dedicated section.
+
+- Dashboard cleanup pass: the dashboard is Razor Components running the static-SSR + htmx + Alpine hybrid —
+  `DashboardHead.razor` still loads and configures htmx (`selfRequestsOnly`), `DashboardScripts.razor` loads
+  idiomorph + Alpine + `alpine-components.js`, so none of it is provably dead today. Audit which interactions
+  still ride htmx/Alpine vs Razor, converge on one interaction model, then delete the losing stack's assets
+  (`wwwroot/lib/htmx`, `lib/idiomorph`, `lib/alpine`, `js/alpine-components.js`) and their CSP/config residue.
+  Release packaging note: dashboard wwwroot assets ship in every archive, so removing dead ones shrinks all
+  four platform packages.
+
 - Cross-tool discoverability: keep improving high-traffic empty states so `search`, `trace`, `impact`, and `inspect` hand agents to `content`, `patterns`, source-region search, or complexity when those are the better next tool.
 
 - MCP SDK / stateless MCP: with new stateless MCP support available now, evaluate and plan the upgrade to the new MCP SDK. Goal: drop long-lived reader process assumptions where they hurt, improve multi-client behavior under Hermes gateway + CLI, and reduce cold/warm path surprises. Capture current stdio multi-process shape (gateway child + per-session reader) before changing it.
