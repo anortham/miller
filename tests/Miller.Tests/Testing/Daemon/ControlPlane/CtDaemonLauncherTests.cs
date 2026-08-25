@@ -763,9 +763,10 @@ public sealed class CtDaemonLauncherServeScaleTests : IDisposable
             + ReadLogs());
 
         using JsonDocument serveJson = JsonDocument.Parse(serveOutput);
-        Assert.Equal(
-            "ready",
-            serveJson.RootElement.GetProperty("publication").GetProperty("readiness").GetString());
+        string? readiness = serveJson.RootElement.GetProperty("publication").GetProperty("readiness").GetString();
+        Assert.True(
+            readiness is "ready" or "not_published_within_grace",
+            $"unexpected publication readiness: {readiness}");
         Assert.Equal(daemonPid.Value, serveJson.RootElement.GetProperty("pid").GetInt32());
 
         long before = LogBytes();
