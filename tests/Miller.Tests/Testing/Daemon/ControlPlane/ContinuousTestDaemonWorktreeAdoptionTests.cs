@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing.Testing;
 using Miller.Testing;
+using Miller.Tests.Support;
 using Miller.Tests.Testing.Daemon.Engine;
 using Miller.Tests.Testing.Selection;
 using Xunit;
@@ -17,6 +18,7 @@ namespace Miller.Tests.Testing.Daemon.ControlPlane;
 /// <c>gitdir: &lt;admin dir&gt;</c> plus the admin dir's <c>commondir</c> pointer. No git
 /// subprocess, no julie, no real CT provider.</para>
 /// </summary>
+[Collection(ContinuousTestDaemonAdoptionCollection.Name)]
 public sealed class ContinuousTestDaemonWorktreeAdoptionTests : IDisposable
 {
     private readonly string _dir =
