@@ -224,6 +224,9 @@ public sealed class VectorConvergeService : BackgroundService
     internal const string ModelNotPreparedPauseValue = "model-not-prepared";
     internal const string DiskBlockedPauseValue = "disk-blocked";
 
+    /// <summary>The hold reason a drain reports when the artifact it just promoted would not reopen.</summary>
+    internal const string PromoteReopenHoldReason = "the promoted vector artifact could not be reopened";
+
     /// <summary>A disk gate that always reports space: the default for drains that do not project onto a real
     /// artifact (the fast-suite entry points), and the neutral element of pause resolution.</summary>
     internal static readonly DiskGate AlwaysAvailable = static _ => new DiskPreflightVerdict(true, -1, 0);
@@ -741,10 +744,15 @@ public sealed class VectorConvergeService : BackgroundService
         // disk-blocked or circuit-open pause the superseded artifact carried.
         if (state.Promoted)
         {
-            _signal.StampTarget(_signal.TargetRevision, fullRebuild: false);
+            // A held chunk outcome, not a bare success: the cursor did NOT converge onto the promoted artifact, and
+            // the only production wake comes from index convergence. Reporting no error would let the drain return
+            // "nothing held", schedule no retry, and strand the chunk cursor until the next host start. The extra
+            // wake below is stamped only on the success path for the same reason: a wake consumed by an immediate
+            // no-op re-drain cancels the pending held retry, which would strand the cursor exactly as before.
             if (reopenAfterPromote?.Invoke() is not { } reopened)
-                return [symbols];
+                return [symbols, Failed(VectorUnitKind.Chunk, 0, PromoteReopenHoldReason)];
 
+            _signal.StampTarget(_signal.TargetRevision, fullRebuild: false);
             using (reopened)
             {
                 VectorCursorOutcome promotedChunks = await DrainChunkToCompletionAsync(

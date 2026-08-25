@@ -743,9 +743,12 @@ public sealed class VectorConvergeServiceTests
 
         IReadOnlyList<VectorCursorOutcome> outcomes = await DrainAsync(live, rebuilder);
 
-        VectorCursorOutcome only = Assert.Single(outcomes);
-        Assert.Equal(VectorConvergeDecision.ShadowRebuild, only.Decision);
-        Assert.Equal(2, only.Embedded);
+        VectorCursorOutcome symbols = outcomes.Single(o => o.Kind is VectorUnitKind.Symbol);
+        Assert.Equal(VectorConvergeDecision.ShadowRebuild, symbols.Decision);
+        Assert.Equal(2, symbols.Embedded);
+        Assert.Equal(
+            VectorConvergeService.PromoteReopenHoldReason,
+            outcomes.Single(o => o.Kind is VectorUnitKind.Chunk).LastError);
 
         CommitRecord built = Assert.Single(shadow.Commits);
         Assert.Equal(VectorUnitKind.Symbol, built.Kind);
@@ -832,10 +835,10 @@ public sealed class VectorConvergeServiceTests
 
         IReadOnlyList<VectorCursorOutcome> outcomes = await DrainAsync(live, rebuilder);
 
-        VectorCursorOutcome only = Assert.Single(outcomes);
-        Assert.Equal(VectorConvergeDecision.ShadowRebuild, only.Decision);
-        Assert.Equal(VectorEscalationTrigger.BatchTooLarge, only.Trigger);
-        Assert.Equal(live.SymbolUnits.Count, only.Embedded);
+        VectorCursorOutcome symbols = outcomes.Single(o => o.Kind is VectorUnitKind.Symbol);
+        Assert.Equal(VectorConvergeDecision.ShadowRebuild, symbols.Decision);
+        Assert.Equal(VectorEscalationTrigger.BatchTooLarge, symbols.Trigger);
+        Assert.Equal(live.SymbolUnits.Count, symbols.Embedded);
         Assert.True(rebuilder.Promoted);
 
         List<CommitRecord> commits = [.. shadow.Commits.Where(c => c.Kind is VectorUnitKind.Symbol)];
@@ -863,7 +866,7 @@ public sealed class VectorConvergeServiceTests
             .DrainAsync(live, session, rebuilder, TestContext.Current.CancellationToken);
 
         Assert.True(rebuilder.Promoted);
-        Assert.Equal(2, Assert.Single(outcomes).Embedded);
+        Assert.Equal(2, outcomes.Single(o => o.Kind is VectorUnitKind.Symbol).Embedded);
         Assert.Equal(
             ["a", "c"],
             shadow.Commits
@@ -1518,6 +1521,8 @@ public sealed class VectorConvergeServiceTests
         Delay = static (_, _) => Task.CompletedTask,
     };
 
+    private static readonly TimeSpan WaitBound = TimeSpan.FromSeconds(10);
+
     private static async Task WaitUntil(Func<bool> condition)
     {
         for (int attempt = 0; attempt < 200 && !condition(); attempt++)
@@ -1995,6 +2000,59 @@ public sealed class VectorConvergeServiceTests
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
             await signal.WaitAsync(timeout.Token);
             Assert.Equal(2, opens);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PromotedArtifactThatWillNotReopen_ReportsAHoldSoTheRetryIsScheduled()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-promote-reopen-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var live = new FakePort
+            {
+                SymbolSnapshot = new VectorConvergeSnapshot(
+                    Artifact,
+                    5,
+                    DeltaHistoryComplete: false,
+                    ["src/A.cs"]),
+            };
+            var shadow = new FakePort { SymbolUnits = [Card("a", "src/A.cs", "card a")] };
+            var rebuilder = new FakeShadowRebuilder(shadow);
+            var signal = new VectorConvergeSignal(enabled: true);
+            var gate = new DelayGate();
+            int opens = 0;
+            IndexBootstrapService bootstrap = IsolatedBootstrap();
+            bootstrap.SeedForTest(
+                WorkspaceAt(root, symbols), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+            await using var session = new SemanticEmbeddingSession(
+                FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            var service = new VectorConvergeService(
+                bootstrap,
+                new VectorSidecar(SemanticMode.On),
+                signal,
+                NullLogger.Instance,
+                _ => opens++ == 0 ? live : null,
+                _ => session,
+                () => DateTimeOffset.UnixEpoch,
+                openShadow: _ => rebuilder,
+                heldRetryDelay: TimeSpan.FromMinutes(5),
+                delay: gate.DelayAsync);
+
+            await service.StartAsync(CancellationToken.None);
+            signal.StampTarget(5, fullRebuild: false);
+
+            await gate.Requested.WaitAsync(WaitBound, TestContext.Current.CancellationToken);
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.True(rebuilder.Promoted);
+            Assert.Equal(2, opens);
+            Assert.Equal(1, gate.RequestCount);
         }
         finally
         {
