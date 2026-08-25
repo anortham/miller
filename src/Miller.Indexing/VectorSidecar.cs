@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text.Json;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
+using Miller.Indexing.Store;
 
 namespace Miller.Indexing;
 
@@ -200,6 +201,7 @@ public sealed class VectorSidecar
 
     private readonly IVectorFileProbe _probe;
     private readonly IVectorStoreOpener _opener;
+    private readonly Func<string, StoreCoordinatorQueueFacts?> _queueReader;
 
     /// <summary>The off instance — the permanent zero-work guarantee of vectors-v1. No method on it reaches the
     /// filesystem.</summary>
@@ -215,12 +217,14 @@ public sealed class VectorSidecar
         IVectorFileProbe probe,
         IVectorStoreOpener? opener = null,
         SemanticReaderIdentity? reader = null,
-        SemanticEncoderPin? encoder = null)
+        SemanticEncoderPin? encoder = null,
+        Func<string, StoreCoordinatorQueueFacts?>? queueReader = null)
     {
         ArgumentNullException.ThrowIfNull(probe);
         Mode = mode;
         _probe = probe;
         _opener = opener ?? SqliteVectorStoreOpener.Instance;
+        _queueReader = queueReader ?? StoreCoordinatorQueueReader.Read;
         Encoder = encoder ?? SemanticEncoderSelection.Active;
         Reader = reader ?? ReaderIdentityFor(Encoder);
     }
@@ -304,14 +308,26 @@ public sealed class VectorSidecar
                 path,
                 $"Vector artifact at '{path}' has no completeness stamp for family '{expected.FamilyId}', " +
                 $"view '{expected.ViewId}', manifest '{expected.ManifestHash}', and store_log sequence " +
-                $"{expected.StoreLogSequence}. Run `miller workspace refresh` to converge it.");
+                $"{expected.StoreLogSequence}. " + ConvergeRemedy(storeRoot, "Run `miller workspace refresh` to converge it."));
         }
 
         return _probe.FileExists(path)
             ? ClassifyGeneration(path, ActiveRole)
             : Unavailable(path, $"Semantic retrieval is enabled but no vector artifact exists at '{path}'. " +
-                "Run `miller workspace refresh` to build it.");
+                ConvergeRemedy(storeRoot, "Run `miller workspace refresh` to build it."));
     }
+
+    /// <summary>
+    /// The remedy sentence for a store view that has not converged. Normally that is a refresh — but when the
+    /// family-store coordinator queue cannot drain, a refresh submits into the SAME blocked queue and can never
+    /// succeed, so naming it would send the reader in a circle. The queue is probed only on this failure path,
+    /// so a converged view pays nothing, and an unreadable queue falls back to the ordinary remedy.
+    /// </summary>
+    private string ConvergeRemedy(string storeRoot, string refreshRemedy) =>
+        _queueReader(storeRoot) is { Wedged: true } wedged
+            ? $"The {StoreCoordinatorQueueReader.BlockedQueueMarker} ({wedged.Description}), so " +
+              "`miller workspace refresh` cannot converge it — clear the coordinator queue first."
+            : refreshRemedy;
 
     /// <summary>
     /// Non-throwing open. Returns the opened store, or <c>null</c> with a stated

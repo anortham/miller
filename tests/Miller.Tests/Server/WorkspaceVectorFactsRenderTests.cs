@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
+using Miller.Indexing.Store;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
@@ -406,6 +407,32 @@ public sealed class WorkspaceVectorFactsRenderTests
         Assert.Contains(
             health.RecommendedActions,
             action => action.Contains("miller semantic prepare", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Health_VectorsBlockedByTheCoordinatorQueue_NamesTheQueueInsteadOfARefreshOrALeader()
+    {
+        var vectors = new VectorSidecarFacts(
+            "unavailable",
+            "/repo/.miller/vectors.db",
+            $"Vector artifact has no completeness stamp. The {StoreCoordinatorQueueReader.BlockedQueueMarker} " +
+            "(queued 3, claimed 1; claim owner 'cli-4242' is gone), so `miller workspace refresh` cannot " +
+            "converge it — clear the coordinator queue first.");
+
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            Facts(vectors),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(OkCount: 1, EmptyCount: 0, ErrorCount: 0),
+            EmptyExtractionHealth());
+
+        Assert.Contains("coord.db", health.RecommendedActions[0], StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            health.RecommendedActions,
+            action => action.Contains("resident Miller leader", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            health.RecommendedActions,
+            action => action.Contains("miller semantic prepare", StringComparison.Ordinal));
+        Assert.Equal(HealthState.Degraded, health.State);
     }
 
     [Theory]

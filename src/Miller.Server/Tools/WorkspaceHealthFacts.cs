@@ -1,5 +1,6 @@
 using System.Globalization;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 
@@ -402,6 +403,20 @@ public sealed record WorkspaceHealthFacts(
             ? $"vector retrieval is {vectors.State}"
             : $"vector retrieval is {vectors.State}: {vectors.Reason}";
         warnings.Add(new HealthWarning($"vectors_{normalizedState}", "degraded", message));
+
+        // A blocked coordinator queue is the one unavailable reason whose remedy is NOT a Miller leader doing
+        // more convergence work: every convergence path submits into that same queue. Naming a wait or a
+        // refresh here would send the reader in a circle, so the queue is what the action names.
+        bool blockedQueue = vectors.Reason?.Contains(
+            StoreCoordinatorQueueReader.BlockedQueueMarker, StringComparison.OrdinalIgnoreCase) == true;
+        if (blockedQueue)
+        {
+            vectorActions.Add(
+                "clear the family-store coordinator queue (`coord.db`) — vector convergence and " +
+                "`miller workspace refresh` both submit into the blocked queue");
+            recommended.InsertRange(0, vectorActions);
+            return;
+        }
 
         bool noArtifact = string.Equals(vectors.State, "unavailable", StringComparison.OrdinalIgnoreCase) &&
             vectors.Reason?.Contains("no vector artifact exists", StringComparison.OrdinalIgnoreCase) == true;
