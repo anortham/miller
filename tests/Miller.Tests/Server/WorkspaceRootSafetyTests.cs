@@ -61,6 +61,22 @@ public sealed class WorkspaceRootSafetyTests
     }
 
     [Fact]
+    public void IsSensitiveRoot_MalformedForbiddenEntry_IsSkippedRatherThanFatal()
+    {
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        Assert.True(WorkspaceRootSafety.IsSensitiveRoot(home, ["bad\0entry", home]));
+        Assert.False(WorkspaceRootSafety.IsSensitiveRoot(
+            Path.Combine(home, "src", "app"), ["bad\0entry", home]));
+    }
+
+    [Fact]
+    public void IsSensitiveRoot_MalformedCandidate_IsNotSensitive()
+    {
+        Assert.False(WorkspaceRootSafety.IsSensitiveRoot("bad\0candidate", ["/nowhere"]));
+    }
+
+    [Fact]
     public void SensitiveRootCandidates_IncludesHomeDirectory()
     {
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);

@@ -50,6 +50,25 @@ public sealed class MillerHomeTests
     }
 
     [Fact]
+    public void UnrootedProfileFailsByNameRatherThanLoggingIntoTheLaunchDirectory()
+    {
+        var thrown = Assert.Throws<InvalidOperationException>(
+            () => MillerHome.Resolve(_ => null, () => string.Empty));
+
+        Assert.Contains(MillerHome.EnvironmentVariable, thrown.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnAbsoluteOverrideStillWinsOverAnUnrootedProfile()
+    {
+        string absolute = Path.Combine(Path.GetTempPath(), "miller-home-override");
+
+        Assert.Equal(
+            Path.GetFullPath(absolute),
+            MillerHome.Resolve(name => name == MillerHome.EnvironmentVariable ? absolute : null, () => string.Empty));
+    }
+
+    [Fact]
     public void ResolveMillerDirectoryHangsOffTheResolvedHome()
     {
         Assert.Equal(

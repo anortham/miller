@@ -202,6 +202,29 @@ public sealed class MillerLoggingSetupTests : IDisposable
         Assert.True(MillerLoggingSetup.RetainedFileCountLimit > 0);
     }
 
+    [Fact]
+    public void SinkThatCannotOpenItsFileReportsThroughSerilogSelfLog()
+    {
+        string blocked = Path.Combine(_dir, "miller-" + DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + ".log");
+        Directory.CreateDirectory(blocked);
+        var selfLog = new StringWriter();
+        Serilog.Debugging.SelfLog.Enable(selfLog);
+
+        try
+        {
+            using var logger = MillerLoggingSetup
+                .Configure(new LoggerConfiguration(), _dir, 4242, new LoggingLevelSwitch(LogEventLevel.Information))
+                .CreateLogger();
+            logger.Information("probe");
+        }
+        finally
+        {
+            Serilog.Debugging.SelfLog.Disable();
+        }
+
+        Assert.NotEqual(string.Empty, selfLog.ToString());
+    }
+
     // --- helpers ---
 
     // The single dated roll Serilog wrote for an extension — resolved by the shared "miller-" prefix (the date is

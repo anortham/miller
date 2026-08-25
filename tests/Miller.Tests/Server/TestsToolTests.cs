@@ -218,7 +218,8 @@ public sealed class TestsToolTests : IDisposable
 
         Assert.Equal(
             "{\"schema_version\":1,\"miller_version\":\"1.0.0+own\",\"enabled\":true,"
-            + "\"kill_switch\":false,\"projects\":[],\"daemon\":{\"state\":\"running\","
+            + "\"kill_switch\":false,\"projects\":[],\"projects_discovered\":false,"
+            + "\"daemon\":{\"state\":\"running\","
             + "\"reason\":\"idle\",\"running\":true,\"paused\":false,\"activity\":\"executing\","
             + "\"run\":{\"project_path\":\"/repo/Sample.Tests.csproj\",\"run_id\":\"run:42\","
             + "\"selected_case_count\":2,\"started_at\":\"2026-08-22T09:30:00.0000000+00:00\","

@@ -21,7 +21,7 @@ const ROUTING_CANARIES = [
   { tool: 'edit', anchor: 'diff preview and match proof' },
   { tool: 'patterns', anchor: 'code-shape facts' },
   { tool: 'content', anchor: 'large text' },
-  { tool: 'tests', anchor: 'continuous-test status' },
+  { tool: 'tests', anchor: 'their last verdict' },
   { tool: 'workspace', anchor: 'semantic-broker health' },
 ];
 

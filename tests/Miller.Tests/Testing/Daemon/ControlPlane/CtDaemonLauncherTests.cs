@@ -1111,11 +1111,19 @@ public sealed class CtDaemonLauncherServeScaleTests : IDisposable
     /// claims to exercise. The apphost <c>miller.exe</c> cannot answer this: it is rewritten only when project
     /// properties change, so its timestamp sat at an old build while the managed code moved on. The managed
     /// assemblies beside it carry the code, so they are what gets compared.
+    ///
+    /// <para>The match is case-INSENSITIVE on purpose. Miller.Server's own assembly is <c>miller.dll</c>, not
+    /// <c>Miller.Server.dll</c>, and it holds Program.cs plus every tool core. A <c>Miller.*.dll</c> glob
+    /// matches it on Windows and macOS and MISSES it on Linux, so the guard measured only the referenced
+    /// projects there: a change confined to Miller.Server failed as stale because those DLLs correctly did not
+    /// relink, and a stale miller.dll beside a fresh Miller.Core.dll would have passed.</para>
     /// </summary>
     private static void RequireBinaryNotOlderThanSource(string outputDir, string binary)
     {
         DateTime built = Directory
-            .EnumerateFiles(outputDir, "Miller.*.dll", SearchOption.TopDirectoryOnly)
+            .EnumerateFiles(outputDir, "*.dll", SearchOption.TopDirectoryOnly)
+            .Where(static path => Path.GetFileName(path)
+                .StartsWith("miller", StringComparison.OrdinalIgnoreCase))
             .Select(File.GetLastWriteTimeUtc)
             .DefaultIfEmpty(File.GetLastWriteTimeUtc(binary))
             .Max();

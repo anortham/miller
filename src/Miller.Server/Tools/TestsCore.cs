@@ -109,6 +109,18 @@ public sealed record TestsStatusResult(
     CtDaemonVersionVerdict? DaemonVersion = null,
 
     /// <summary>
+    /// True when <see cref="Projects"/> came from a filesystem scan rather than from recorded CT state —
+    /// the case where continuous testing is off for this workspace and nothing has ever discovered.
+    ///
+    /// <para>Without this the disabled reading was <c>projects: 0</c> on a tree that plainly holds test
+    /// projects, because a count of what CT had recorded reads as a count of what exists. An agent asking
+    /// "are the tests passing?" correctly concluded Miller had nothing to offer and went and ran the suite
+    /// by hand (2026-08-25 field report). The scan answers the question the reader actually asked, and the
+    /// flag keeps the answer honest about where the list came from.</para>
+    /// </summary>
+    bool ProjectsDiscovered = false,
+
+    /// <summary>
     /// Whether the live daemon's MAIN LOOP is still turning. Null only under the kill switch. On an
     /// adopted worktree this judges the FAMILY daemon's record, because a worktree has no periodic
     /// record of its own.
@@ -280,6 +292,21 @@ public static class TestsCore
         bool optedIn = ContinuousTestPolicy.IsWorkspaceOptedIn(root);
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
         IReadOnlyList<ContinuousTestProject> stored = store.ListContinuousTestProjects(workspaceId, includeDisabled: false);
+
+        // CT off means nothing ever ran discovery, so the recorded list is empty on a tree that may be full
+        // of test projects. Reporting that emptiness as "projects: 0" answers a question nobody asked. The
+        // scan is the SAME inventory the daemon would run, it writes nothing, and it is confined to this
+        // branch: an opted-in workspace keeps reading its recorded state exactly as before.
+        //
+        // It runs only for a workspace that has never DECIDED. An opt-out tombstone, or a disabled project
+        // row, is someone answering "no" — re-listing what they turned off, under a line inviting them to
+        // enable it, argues with a decision the workspace already made.
+        bool discovered = false;
+        if (!optedIn && stored.Count == 0 && !HasContinuousTestHistory(root, store, workspaceId))
+        {
+            stored = ContinuousTestProjectInventory.Discover(root, workspaceId);
+            discovered = stored.Count > 0;
+        }
         IReadOnlyList<ContinuousTestStatus> statuses = store.ListContinuousTestStatuses(workspaceId);
         // Probed, not merely published: a daemon that died without a clean shutdown leaves its last
         // "running" record on disk, and reporting it would tell the reader CT watches the tree when
@@ -307,7 +334,7 @@ public static class TestsCore
             endpoint?.Lease);
         CtLoopHealthVerdict loop = ResolveLoopHealth(root, endpoint, snapshot);
         return new TestsStatusResult(
-            Enabled: optedIn || stored.Count > 0,
+            Enabled: optedIn || (!discovered && stored.Count > 0),
             KillSwitchOff: false,
             Projects: stored.Select(ToStatusProject).ToArray(),
             DaemonState: snapshot.State,
@@ -318,11 +345,27 @@ public static class TestsCore
             SelectedCount: statuses.Count,
             LastRun: store.LatestTestRunAt(workspaceId),
             BudgetHolder: budget,
+            ProjectsDiscovered: discovered,
             DaemonActivity: snapshot.Activity,
             DaemonRun: snapshot.Run,
             DaemonVersion: version,
             DaemonLoop: loop);
     }
+
+    /// <summary>
+    /// Whether this workspace has ever decided about continuous testing — an explicit opt-out tombstone,
+    /// or any recorded project row including the disabled ones. Distinguishes "never asked" from "said no",
+    /// which the enabled-only row count cannot: both report zero.
+    ///
+    /// <para>Both callers turn on this one question. Status discovers projects only for a workspace that has
+    /// never decided, and an enable that finds nothing refuses only for one. A tombstone means the caller is
+    /// REVERSING their own opt-out — a linked worktree of an enabled main checkout has no projects of its
+    /// own to discover, and refusing that would strand it opted out.</para>
+    /// </summary>
+    private static bool HasContinuousTestHistory(
+        string root, ContinuousTestStore store, string workspaceId) =>
+        File.Exists(ContinuousTestPolicy.DisabledMarkerPath(root))
+        || store.ListContinuousTestProjects(workspaceId, includeDisabled: true).Count > 0;
 
     /// <summary>
     /// Whether the daemon that serves <paramref name="root"/> is still turning its main loop.
@@ -400,12 +443,24 @@ public static class TestsCore
                 return MutationError("enable", error!);
             ContinuousTestProject? identified = ContinuousTestProjectInventory.Identify(root, workspaceId, full);
             if (identified is null)
-                return MutationError("enable", $"test project not found: {full}");
+            {
+                return MutationError(
+                    "enable",
+                    $"not a supported test project: {full}. " + SupportedFrameworksSentence());
+            }
             discovered = [identified];
         }
         else
         {
             discovered = ContinuousTestProjectInventory.Discover(root, workspaceId);
+
+            // Enabling a workspace CT can never watch used to "succeed": it wrote the opt-in marker, created
+            // ct.db, reported "enable 0 project(s)", and exited 0. A Go or Ruby repo was then permanently
+            // enabled: true / projects: 0, a state nothing can ever move, and the status hint that would have
+            // explained it is suppressed by the very marker the failed enable wrote. Refusing before any write
+            // keeps the workspace exactly as it was and names the languages that would work.
+            if (discovered.Count == 0 && !HasContinuousTestHistory(root, workspaceId))
+                return MutationError("enable", NoSupportedProjectsMessage(root));
         }
 
         string marker = ContinuousTestPolicy.EnabledMarkerPath(root);
@@ -917,6 +972,10 @@ public static class TestsCore
             writer.WriteBoolean("kill_switch", result.KillSwitchOff);
             writer.WritePropertyName("projects");
             WriteProjects(writer, result.Projects);
+            // Says where the project list came from. A consumer that reports coverage must not read a
+            // filesystem scan as recorded CT state: these projects have no verdicts, no watermarks, and
+            // no ct.db rows behind them.
+            writer.WriteBoolean("projects_discovered", result.ProjectsDiscovered);
             writer.WritePropertyName("daemon");
             writer.WriteStartObject();
             writer.WriteString("state", Snake(result.DaemonState.ToString()));
@@ -964,7 +1023,8 @@ public static class TestsCore
     {
         var sb = new StringBuilder();
         sb.AppendLine("# tests");
-        sb.AppendLine("enabled: " + (result.Enabled ? "true" : "false"));
+        sb.AppendLine("enabled: " + (result.Enabled ? "true" : "false")
+            + (result.Enabled ? string.Empty : " (continuous testing is opt-in here)"));
         sb.AppendLine($"daemon: {Snake(result.DaemonState.ToString())} ({result.DaemonReason})");
         sb.AppendLine("activity: " + Snake(result.DaemonActivity.ToString()));
         if (result.DaemonRun is { } running)
@@ -991,10 +1051,52 @@ public static class TestsCore
         sb.AppendLine("budget: " + (result.BudgetHolder is { } holder
             ? $"pid={holder.Pid.ToString(CultureInfo.InvariantCulture)} {holder.WorkspaceRoot}"
             : "-"));
-        sb.AppendLine($"projects: {result.Projects.Count.ToString(CultureInfo.InvariantCulture)}");
+        sb.AppendLine($"projects: {result.Projects.Count.ToString(CultureInfo.InvariantCulture)}"
+            + (result.ProjectsDiscovered ? " discovered (not tracked yet)" : string.Empty));
         foreach (TestsStatusProject project in result.Projects)
             sb.AppendLine($"  - {project.ProjectPath} ({project.Framework ?? "unknown"})");
+        AppendDisabledNextStep(sb, result);
         return sb.ToString().TrimEnd().ReplaceLineEndings("\n");
+    }
+
+    /// <summary>
+    /// The one line a reader on a CT-off workspace actually needs. Compact output only — the JSON
+    /// contract carries facts, not advice (ADR-0001).
+    ///
+    /// <para>It names the cheap answer FIRST. A reader asking "are the tests passing?" once wants a direct
+    /// run, not a background daemon; sending everyone up the enable/start ladder for a one-off question
+    /// would trade one dead end for a worse one.</para>
+    /// </summary>
+    private static void AppendDisabledNextStep(StringBuilder sb, TestsStatusResult result)
+    {
+        if (result.KillSwitchOff)
+            return;
+
+        // Enabled with nothing to watch is a dead end that reports as healthy: verdict unknown forever,
+        // nothing stale, nothing to run. It is reachable on a workspace enabled before its test projects
+        // existed, or one whose projects were all removed.
+        //
+        // A run in flight refutes the claim outright, whatever the project count says, so the line stays
+        // silent there rather than telling a reader that the tests currently executing will never report.
+        if (result.Enabled)
+        {
+            if (result.Projects.Count == 0 && result.DaemonRun is null)
+            {
+                sb.AppendLine();
+                sb.AppendLine("next: CT is on but has no projects to watch, so it will never report a verdict.");
+                sb.AppendLine("      supported: .NET, Rust (cargo), Python (pytest), JS/TS (vitest/jest/node),");
+                sb.AppendLine("      Qt/QML (CTest). tests operation=disable turns it back off.");
+            }
+
+            return;
+        }
+
+        sb.AppendLine();
+        sb.AppendLine(result.Projects.Count > 0
+            ? "next: for a one-off answer, run these tests directly."
+            : "next: no test projects found, so CT has nothing to watch here.");
+        if (result.Projects.Count > 0)
+            sb.AppendLine("      for ongoing verdicts: tests operation=enable, then operation=start.");
     }
 
     private static void AppendDaemonRunFacts(StringBuilder sb, CtDaemonRunProgress run, string indent = "    ")
@@ -1675,6 +1777,30 @@ public static class TestsCore
 
     private static TestsStatusProject ToStatusProject(ContinuousTestProject project) =>
         new(project.Id, project.ProjectPath, project.Framework, project.Command, project.Enabled, project.ExcludeTraits);
+
+    /// <summary>
+    /// The <see cref="HasContinuousTestHistory(string, ContinuousTestStore, string)"/> question for a caller
+    /// with no store open. Opened WITHOUT <c>EnsureSchemaForWrite</c>, so asking never creates <c>ct.db</c>.
+    /// </summary>
+    private static bool HasContinuousTestHistory(string root, string workspaceId)
+    {
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        return HasContinuousTestHistory(root, store, workspaceId);
+    }
+
+    /// <summary>
+    /// Why an enable found nothing, and which toolchains would have worked. Naming the supported set is the
+    /// point: "0 projects" alone leaves a reader unable to tell an unsupported language from a layout Miller
+    /// failed to walk.
+    /// </summary>
+    private static string NoSupportedProjectsMessage(string root) =>
+        $"no supported test projects found under {root}. " + SupportedFrameworksSentence()
+        + " Nothing was enabled and nothing was written.";
+
+    /// <summary>The one copy of the supported-toolchain list, so two refusals cannot drift apart.</summary>
+    private static string SupportedFrameworksSentence() =>
+        "Continuous testing supports .NET (xunit/nunit/mstest), Rust (cargo), Python (pytest), "
+        + "JavaScript and TypeScript (vitest/jest/node --test), and Qt/QML (CTest).";
 
     private static TestsMutationResult MutationError(string operation, string error) =>
         new(3, operation, 0, [], error);

@@ -37,13 +37,30 @@ public static class MillerHome
     public static string Resolve() => Resolve(Environment.GetEnvironmentVariable);
 
     /// <summary>Testable overload. A blank or whitespace override is ignored.</summary>
-    public static string Resolve(Func<string, string?> readEnvironmentVariable)
+    public static string Resolve(
+        Func<string, string?> readEnvironmentVariable, Func<string>? readUserProfile = null)
     {
         ArgumentNullException.ThrowIfNull(readEnvironmentVariable);
         string? configured = readEnvironmentVariable(EnvironmentVariable);
-        return string.IsNullOrWhiteSpace(configured)
+        if (!string.IsNullOrWhiteSpace(configured))
+            return Path.GetFullPath(configured);
+
+        string profile = readUserProfile is null
             ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
-            : Path.GetFullPath(configured);
+            : readUserProfile();
+
+        // A broken or roaming Windows profile makes the known-folder call return an empty string, and
+        // Path.Combine("", ".miller") yields the RELATIVE path ".miller". Miller would then put the registry,
+        // the governor lock, and its logs inside whatever directory it was launched from — a silent third
+        // location nobody looks in. Failing by name is the honest outcome.
+        if (!Path.IsPathRooted(profile))
+        {
+            throw new InvalidOperationException(
+                "Miller cannot resolve the user profile directory, so it has nowhere to keep its machine-wide "
+                + $"state. Set {EnvironmentVariable} to an absolute path.");
+        }
+
+        return profile;
     }
 
     /// <summary>The <c>.miller</c> directory under <see cref="Resolve()"/>.</summary>

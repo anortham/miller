@@ -191,6 +191,14 @@ public static class ContinuousTestProjectInventory
             excludeTraits = DotnetProjectExtensions.Contains(Path.GetExtension(full))
                 ? ParseDefaultFilterExclusions(ReadHead(full))
                 : [];
+
+            // The fallback deliberately accepts a project file whose contents name no framework — a .csproj
+            // that references a shared test library still runs under dotnet test. It cannot accept a file it
+            // has no framework for at all: that path returned a project with a NULL framework, so
+            // `tests enable --project go.mod` enabled a Go module file, rendered as "(unknown)", and gave the
+            // workspace a project no provider can ever run.
+            if (framework is null)
+                return null;
         }
         return new ContinuousTestProject(
             Id: ProjectId(workspaceId, workspaceRoot, full),

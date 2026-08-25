@@ -25,18 +25,29 @@ using Serilog.Core;
 // — NO MCP host, NO Serilog file logging, NO stdio-purity constraint (the CLI OWNS stdout here). `serve` and the
 // no-args launch fall through to the MCP stdio server below (the historical default). The CLI reads the SAME pure
 // tool cores the server exposes, so a shell invocation and a tool call agree. Resolved before any filesystem touch.
+// STARTUP STAGES: every step below names itself here so the last-resort catch can say WHERE it died. The
+// logger does not exist until the build-logger stage, so a failure above it can only be reported by
+// StartupFailureLog — which is why the stage name is the whole diagnosis for that region.
+string startupStage = "cli-dispatch";
+string? resolvedLogsPath = null;
+
+try
+{
+
 if (Miller.Server.Cli.CliDispatch.IsCliInvocation(args))
 {
     var cliContext = WorkspaceContext.Create(Environment.CurrentDirectory, AppContext.BaseDirectory);
     return Miller.Server.Cli.CliDispatch.Run(args, cliContext, Console.Out, Console.Error);
 }
 
+startupStage = "resolve-workspace";
 var workspacePath = Environment.CurrentDirectory;
 var startupWorkspace = WorkspaceBindingResolver.TryResolveStartup(workspacePath);
 bool eagerBootstrap = startupWorkspace is not null;
 
 // SAFETY (eager path only): refuse to run in a sensitive system root when cwd/env is the binding source.
 // Deferred MCP startup (bad plugin/global cwd) skips this guard and binds from MCP roots on the first tool call.
+startupStage = "safety-guard";
 if (startupWorkspace?.Source == WorkspaceBindingResolver.WorkspaceSource.Cwd)
 {
     workspacePath = Miller.Server.Tools.WorkspaceRootSafety.CanonicalizeAndRejectSensitiveRoot(
@@ -48,9 +59,11 @@ else if (startupWorkspace is not null)
 }
 
 // Deferred launches log to machine-global ~/.miller/logs until MCP roots bind the primary workspace.
+startupStage = "create-logs-dir";
 var logsPath = eagerBootstrap
     ? Path.Combine(workspacePath, ".miller", "logs")
     : Path.Combine(MillerHome.ResolveMillerDirectory(), "logs");
+resolvedLogsPath = logsPath;
 Directory.CreateDirectory(logsPath);
 
 int processId = Environment.ProcessId;
@@ -64,9 +77,21 @@ var levelSwitch = new LoggingLevelSwitch(LogLevelParse.ToLevel(logLevelEnv));
 // MillerLoggingSetup so this host and the sink test exercise the same configuration. Console stays on stderr
 // (STDIO purity: nothing but the MCP protocol may touch stdout). One daily pair is shared across all processes,
 // so there is no per-pid file pile-up and no startup sweep to run.
+startupStage = "build-logger";
+
+// The rolling file sink opens its file LAZILY on the first write and hands an open failure to SelfLog, which
+// is a no-op by default. Without this line a locked file, a denied directory, or an unhydrated cloud folder
+// produces a perfectly healthy Miller that writes zero bytes — the silent case that is hardest to diagnose.
+Serilog.Debugging.SelfLog.Enable(message => Console.Error.WriteLine("miller serilog: " + message));
+
 Log.Logger = MillerLoggingSetup
     .Configure(new LoggerConfiguration(), logsPath, processId, levelSwitch)
     .CreateLogger();
+
+string breadcrumb = StartupBreadcrumb.Format(
+    MillerVersion.Current, processId, logsPath, workspacePath, eagerBootstrap, levelSwitch.MinimumLevel.ToString());
+Console.Error.WriteLine("miller: " + breadcrumb);
+Log.Information("{Breadcrumb}", breadcrumb);
 
 // One-time warn for a typo'd level (the logger is built, so this line itself is captured). A recognized value or
 // an absent variable is silent — Information is the honest default.
@@ -76,6 +101,7 @@ if (!string.IsNullOrEmpty(logLevelEnv) && !LogLevelParse.WasRecognized(logLevelE
         "unknown MILLER_LOG_LEVEL '{Value}', defaulting to Information.", logLevelEnv);
 }
 
+startupStage = "build-host";
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddSerilog();
 
@@ -116,5 +142,24 @@ builder.Services.AddSingleton<WorkspaceRootsNotificationService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<WorkspaceRootsNotificationService>());
 
 var host = builder.Build();
+
+startupStage = "run-host";
 await host.RunAsync();
 return 0;
+
+}
+catch (Exception startupFailure)
+{
+    StartupFailureLog.Write(
+        startupFailure,
+        startupStage,
+        StartupFailureLog.CandidateDirectories(resolvedLogsPath, MillerHome.ResolveMillerDirectory()),
+        Console.Error,
+        DateTimeOffset.UtcNow,
+        Environment.ProcessId);
+    return 70;
+}
+finally
+{
+    Log.CloseAndFlush();
+}

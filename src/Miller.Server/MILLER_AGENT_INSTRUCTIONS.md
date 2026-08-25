@@ -22,6 +22,6 @@ Fresh index of this workspace's code. One Miller call beats shell greps and full
 - patterns — pre-extracted code-shape facts (routes, config keys, doc structure).
 - content — import then search/read logs, CI output, web markdown, and large text.
 - workspace — index lifecycle and semantic-broker health: status, refresh, health, list, onboarding, dashboard.
-- tests — continuous-test status (cheap, starts nothing); start is explicit; enable is opt-in.
+- tests — which tests your change made stale, and their last verdict; opt-in per workspace.
 
 Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.

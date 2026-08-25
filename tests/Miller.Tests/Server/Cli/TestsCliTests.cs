@@ -62,6 +62,151 @@ public sealed class TestsCliTests : IDisposable
     }
 
     [Fact]
+    public void Status_WhenNotOptedIn_DiscoversTestProjectsInsteadOfReportingZero()
+    {
+        WriteTestProject();
+
+        var (code, outText, _) = Run("tests", "status", "--json");
+
+        Assert.Equal(0, code);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.False(root.GetProperty("enabled").GetBoolean());
+        Assert.True(root.GetProperty("projects_discovered").GetBoolean());
+        JsonElement projects = root.GetProperty("projects");
+        Assert.Equal(1, projects.GetArrayLength());
+        Assert.Equal("xunit", projects[0].GetProperty("framework").GetString());
+    }
+
+    [Fact]
+    public void Status_WhenNotOptedIn_DiscoveryCreatesNothing()
+    {
+        WriteTestProject();
+
+        Assert.Equal(0, Run("tests", "status", "--json").Code);
+
+        Assert.False(File.Exists(CtSchema.DbPathFor(_root)));
+        Assert.False(Directory.Exists(CtDaemonProtocol.RootDirectory(_root)));
+        Assert.Null(CtDaemonLease.TryRead(_root));
+    }
+
+    [Fact]
+    public void Status_WhenNotOptedIn_CompactNamesTheCheapPathBeforeEnabling()
+    {
+        WriteTestProject();
+
+        var (code, outText, _) = Run("tests", "status");
+
+        Assert.Equal(0, code);
+        Assert.Contains("enabled: false (continuous testing is opt-in here)", outText, StringComparison.Ordinal);
+        Assert.Contains("projects: 1 discovered (not tracked yet)", outText, StringComparison.Ordinal);
+        int directRun = outText.IndexOf("run these tests directly", StringComparison.Ordinal);
+        int enableLadder = outText.IndexOf("tests operation=enable", StringComparison.Ordinal);
+        Assert.True(directRun >= 0 && enableLadder > directRun);
+    }
+
+    [Fact]
+    public void Status_WhenNotOptedIn_WithNoTestProjects_SaysSoRatherThanOfferingTheLadder()
+    {
+        var (code, outText, _) = Run("tests", "status");
+
+        Assert.Equal(0, code);
+        Assert.Contains("projects: 0", outText, StringComparison.Ordinal);
+        Assert.DoesNotContain("discovered (not tracked yet)", outText, StringComparison.Ordinal);
+        Assert.Contains("no test projects found", outText, StringComparison.Ordinal);
+        Assert.DoesNotContain("tests operation=enable", outText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_WhenOptedIn_ReportsRecordedRowsNotAScan()
+    {
+        WriteTestProject();
+        Assert.Equal(0, Run("tests", "enable").Code);
+
+        var (code, outText, _) = Run("tests", "status", "--json");
+
+        Assert.Equal(0, code);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.True(doc.RootElement.GetProperty("enabled").GetBoolean());
+        Assert.False(doc.RootElement.GetProperty("projects_discovered").GetBoolean());
+        Assert.DoesNotContain("continuous testing is opt-in here", Run("tests", "status").Out, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_AfterAnExplicitDisable_DoesNotReofferTheProjectsItWasToldToDrop()
+    {
+        string project = WriteTestProject();
+        Assert.Equal(0, Run("tests", "enable").Code);
+        Assert.Equal(0, Run("tests", "disable", "--project", project).Code);
+
+        var (code, outText, _) = Run("tests", "status", "--json");
+
+        Assert.Equal(0, code);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.False(doc.RootElement.GetProperty("enabled").GetBoolean());
+        Assert.False(doc.RootElement.GetProperty("projects_discovered").GetBoolean());
+        Assert.Empty(doc.RootElement.GetProperty("projects").EnumerateArray());
+        Assert.DoesNotContain("tests operation=enable", Run("tests", "status").Out, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Enable_WithNoSupportedTestProjects_RefusesAndWritesNothing()
+    {
+        File.WriteAllText(Path.Combine(_root, "go.mod"), "module example.com/thing\ngo 1.23\n");
+
+        var (code, _, errText) = Run("tests", "enable");
+
+        Assert.Equal(3, code);
+        Assert.Contains("no supported test projects found", errText, StringComparison.Ordinal);
+        Assert.Contains("Rust (cargo)", errText, StringComparison.Ordinal);
+        Assert.False(File.Exists(ContinuousTestPolicy.EnabledMarkerPath(_root)));
+        Assert.False(File.Exists(CtSchema.DbPathFor(_root)));
+    }
+
+    [Fact]
+    public void Enable_ByProject_RefusesAFileWithNoKnownFramework()
+    {
+        string goMod = Path.Combine(_root, "go.mod");
+        File.WriteAllText(goMod, "module example.com/thing\ngo 1.23\n");
+
+        var (code, _, errText) = Run("tests", "enable", "--project", goMod);
+
+        Assert.Equal(3, code);
+        Assert.Contains("not a supported test project", errText, StringComparison.Ordinal);
+        Assert.False(File.Exists(ContinuousTestPolicy.EnabledMarkerPath(_root)));
+    }
+
+    [Fact]
+    public void Enable_ByProject_StillAcceptsADotnetProjectWithNoRecognizedPackageReference()
+    {
+        string project = Path.Combine(_root, "App.Tests.csproj");
+        File.WriteAllText(project, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+            </Project>
+            """);
+
+        var (code, outText, _) = Run("tests", "enable", "--project", project);
+
+        Assert.Equal(0, code);
+        Assert.Contains("App.Tests.csproj", outText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_WhenEnabledWithNothingToWatch_SaysItWillNeverReportAVerdict()
+    {
+        string marker = ContinuousTestPolicy.EnabledMarkerPath(_root);
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        File.WriteAllText(marker, string.Empty);
+
+        var (code, outText, _) = Run("tests", "status");
+
+        Assert.Equal(0, code);
+        Assert.Contains("CT is on but has no projects to watch", outText, StringComparison.Ordinal);
+        Assert.Contains("tests operation=disable", outText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Status_OnStoppedDaemon_StartsNothing()
     {
         WriteTestProject();

@@ -145,7 +145,19 @@ public static class WorkspaceRootSafety
     // keeping this pure lets the predicate be unit-tested without touching the filesystem.
     private static string Normalize(string path)
     {
-        string full = Path.GetFullPath(path);
+        // Six of the forbidden entries come straight from Windows environment variables, so a malformed value
+        // reaches GetFullPath. It throws, and this runs before the logger exists, so the process died with no
+        // log line at all. An entry that cannot be normalized is skipped, not fatal.
+        string full;
+        try
+        {
+            full = Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException)
+        {
+            return path;
+        }
+
         string trimmed = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         // A bare root trims to empty (POSIX "/") or a drive letter ("C:") — keep the original so it still reads
         // as a root (GetDirectoryName(null-parent)) rather than collapsing to something with a parent.

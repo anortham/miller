@@ -89,7 +89,8 @@ provider, selection, or chunk facts. Absent optional facts remain absent for com
 | `miller_version` | string | The Miller build that produced this output. |
 | `enabled` | bool | Workspace is opted in (`<workspace>/.miller/ct.enabled`, or inherited from the main checkout on a linked worktree — see "Worktrees" below) or has enabled project rows. |
 | `kill_switch` | bool | `true` when `MILLER_CT=off` (also `0`/`false`/`no`). |
-| `projects` | array | **Enabled** projects only. Empty on a never-enabled workspace. |
+| `projects` | array | Enabled projects when the workspace is opted in. On a workspace that is NOT opted in, a filesystem scan of the tree instead — see `projects_discovered`. |
+| `projects_discovered` | bool | `true` when `projects` came from a filesystem scan rather than recorded CT state. Those rows have no verdicts, no watermarks, and no `ct.db` rows behind them; never read them as coverage. ADDITIVE at `schema_version` 1. |
 | `daemon.state` | string | `running`, `paused`, or `stopped`. |
 | `daemon.reason` | string | Why the daemon is in that state. Wording is not a contract. |
 | `daemon.running` | bool | `true` only when `state` is `running`. |
@@ -165,9 +166,26 @@ facts are inferred from project paths or private database state.
 | `workspace_root` | string | Workspace that holds the execution budget. |
 | `reason` | string | Why the budget was taken, for example `run`. |
 
-A never-enabled workspace reports `enabled: false`, empty `projects`, `daemon.state: "stopped"`,
+A never-enabled workspace reports `enabled: false`, `daemon.state: "stopped"`,
 `verdict: "unknown"`, and null `selected` / `last_run` / `budget_holder`. The command creates no
-files. `selected` is also `null` — and the verdict honest `unknown` — whenever the workspace has
+files — no `ct.db`, no `.miller/ct/`, and no daemon.
+
+`projects` is NOT empty on a workspace that has never DECIDED about continuous testing. CT being off
+means nothing ever ran discovery, so a count of what CT recorded would report `0` on a tree plainly
+full of test projects, and a reader cannot tell "none exist" from "nobody looked". The status
+therefore runs the same `ContinuousTestProjectInventory` scan the daemon would, writes nothing, and
+sets `projects_discovered: true`.
+
+"Never decided" is the whole rule. A workspace carrying an opt-out tombstone
+(`.miller/ct.disabled`) or ANY recorded project row — including disabled ones — has already answered
+"no", and reports `projects: []` with `projects_discovered: false` and no `next:` line. Re-listing
+projects someone turned off, under an invitation to enable them, argues with a decision the
+workspace already made. An opted-in workspace keeps reading its recorded rows. Measured at about 85 ms on a 3,500-file tree, so status stays cheap. A workspace
+with genuinely no test projects still reports `projects: []`, and that now means what it says.
+
+Compact output adds a `next:` line here naming the cheap path first — run the tests directly for a
+one-off answer, enable and start only for ongoing verdicts. That line is compact-only; the JSON
+carries facts, not advice (ADR-0001). `selected` is also `null` — and the verdict honest `unknown` — whenever the workspace has
 no readable live index, whatever `ct.db` holds.
 
 `daemon.state` is PROBED, not merely published. A daemon that dies without a clean shutdown —
@@ -323,6 +341,18 @@ run; they never kill a healthy run in flight.
   disabling the auto-run loop.
 
 ## Enablement
+
+`miller tests enable` refuses, with exit `3`, when it finds no supported test project AND the workspace
+has never decided about continuous testing. It writes nothing in that case — no opt-in marker, no
+`ct.db`, no `.miller/`. The error names the supported toolchains: .NET (xunit/nunit/mstest), Rust
+(cargo), Python (pytest), JavaScript and TypeScript (vitest/jest/node --test), and Qt/QML (CTest).
+An enable that reverses an opt-out tombstone is always allowed, because a linked worktree of an
+enabled main checkout has no projects of its own to discover and refusing would strand it opted out.
+`--project` on a file with no identifiable framework is refused the same way; a `.csproj` whose
+contents name no test package is still accepted, because it runs under `dotnet test` regardless.
+
+A workspace already opted in with no projects reports `enabled: true` and `projects: []`, and the
+compact output says plainly that CT will never report a verdict there and how to turn it back off.
 
 `miller tests enable` discovers test projects through `ContinuousTestProjectInventory` and writes
 per-project rows to `<workspace>/.miller/ct.db` (path, framework, command, exclusions). It also

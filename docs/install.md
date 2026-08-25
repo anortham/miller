@@ -30,6 +30,46 @@ The launcher consumes the release version pinned in `miller-plugin.json`.
 > MCP error `-32000` and writes no Miller log. Install Node.js LTS and fully restart your agent so the
 > new `PATH` is picked up; an in-session reconnect keeps the old environment and still fails.
 
+> **The first launch after a version change downloads the release archive.** Each version caches into its
+> own directory (`~/.miller/plugin-cache/<version>/<target>/package/`), so a plugin update is a cold
+> download of about 100 MB, not an overwrite. That download runs **before** `miller` starts, inside the
+> window your client allows for MCP startup. Claude Code's budget is `MCP_TIMEOUT`, in milliseconds,
+> default `30000`. On a slow or proxied link the download can outlast it, and the client reports a
+> connect failure. Reconnecting through `/mcp` then succeeds, because the archive is already cached.
+> To give the first launch room, raise the budget in `~/.claude/settings.json` (on Windows,
+> `%USERPROFILE%\.claude\settings.json`):
+>
+> ```json
+> { "env": { "MCP_TIMEOUT": "180000" } }
+> ```
+>
+> Put it in `settings.json`, not in `~/.claude.json` — that file holds app state and ignores `env`.
+
+### When the plugin fails to connect
+
+A plugin launch runs two processes, and they log to different places. Check them in this order.
+
+1. **The Miller launcher log** — `~/.miller/logs/launcher-<YYYYMMDD>.log`. It records every install stage:
+   the resolved version, a cache hit or miss, download progress in MB/s, hash, extract, promote, and the
+   spawn. If a launch died before `miller` started, the last line names the stage it died in. The same
+   lines also go to stderr, so your client captures them too.
+2. **Your client's MCP log** — it holds the launcher's stderr plus the connect result. Claude Code writes
+   one file per session per server, with no debug flag needed:
+   - Windows: `%LOCALAPPDATA%\claude-cli-nodejs\Cache\<encoded-project-path>\mcp-logs-plugin-miller-miller\<timestamp>.jsonl`
+   - macOS and Linux: `~/.cache/claude-cli-nodejs/<encoded-project-path>/mcp-logs-plugin-miller-miller/<timestamp>.jsonl`
+
+   The project path is encoded by replacing each non-alphanumeric character with `-`. List the `Cache`
+   directory rather than typing the name. The file records the timeout in force
+   (`Starting connection with timeout of 30000ms`) and the outcome.
+3. **The Miller server log** — `<workspace>/.miller/logs/miller-<YYYYMMDD>.log`. Miller writes a
+   breadcrumb to stderr and to this log as its first line, naming the exact directory it logs to. When
+   Miller starts with no usable workspace directory it logs to `~/.miller/logs/` instead for its whole
+   life, and the breadcrumb says so. A startup that fails before the logger exists still appends a
+   `role:startup` line here, or to `~/.miller/logs/` when the workspace directory cannot take it.
+
+An empty workspace log with no breadcrumb means `miller` never started; the answer is then in the
+launcher log or the client's MCP log.
+
 Claude Code:
 
 ```bash

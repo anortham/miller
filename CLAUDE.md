@@ -376,6 +376,44 @@ scripts/test.ps1 all
   `content export`, `telemetry export --jsonl`, `tests status --json`, and stable read-command JSON such as
   `impact --json`, `trace --json`, and `patterns --json`. Add or harden new surfaces only when a concrete
   Eros workflow needs facts the documented contracts do not cover.
+- **A launch may never fail silently (load-bearing).** A plugin launch is TWO processes, and each used to be
+  able to die leaving nothing in `<workspace>/.miller/logs` — the only file a user knows to open. That is what
+  made a 2026-08-25 Windows connect failure undiagnosable from Miller's own logs. Three rules keep it closed.
+  (1) The Node launcher writes `~/.miller/logs/launcher-<YYYYMMDD>.log` (honoring `MILLER_HOME`) AND the same
+  lines to stderr, naming every install stage: cache hit/miss, download progress, hash, list, extract, promote,
+  spawn, child exit. A version bump is a COLD ~100MB download that runs BEFORE `miller` starts, inside the
+  client's MCP startup budget (`MCP_TIMEOUT`, ms, default 30000) — the launcher says so on a cache miss.
+  `launcherLog` never throws; a launcher that dies while reporting a problem is the failure this prevents.
+  The DOWNLOAD ITSELF must be bounded, and this is what actually failed in the field: the old `downloadFile`
+  set no `https.get` timeout, armed no idle watchdog, and drained the body with a bare `response.pipe`, so a
+  body that simply STOPPED left the promise unsettled forever — no error, no exit, no output. The user's
+  attempt stalled at 57.8% of the archive on a 25MB/s link and hung. The idle bound is 15s, deliberately
+  SHORTER than the 30000ms client budget so the launcher reports and retries while the client still waits;
+  `downloadWithRetry` retries three times. A killed attempt strands its `stage-<pid>-<ms>` directory and
+  `*.tmp-<pid>-<ms>` file (cleanup lives in a `finally` and a `.catch`, and neither runs on a kill), so
+  `sweepStaleInstallLeftovers` reclaims those older than 10 minutes — the age comes from the name's own epoch
+  stamp, never from a process probe, so a live sibling install is never touched. **The version cache is
+  bounded.** Each version installs into its own `~/.miller/plugin-cache/<version>/<target>/` and nothing ever
+  removed the old ones, so a machine that followed a few releases carried ~430MB per dead version forever
+  (two abandoned versions measured at 855MB on a dev box). `pruneOldCachedVersions` keeps the version being
+  installed plus the one other most-recently-used, and runs ONLY on a cache miss, so a warm start pays
+  nothing. Recency comes from a `.last-used` marker stamped on every launch, falling back to the directory
+  time: a version a SECOND client still launches keeps its own marker fresh and survives. A locked version
+  (a live `miller.exe` holds its image on Windows) fails to delete and is REPORTED, never retried.
+  (2) `Program.cs` tracks a `startupStage` string and wraps the WHOLE startup in one catch that calls
+  [`StartupFailureLog`](src/Miller.Server/Logging/StartupFailureLog.cs) (exit 70). It always writes to stderr
+  (a client captures a stdio server's stderr even when the handshake never completes), then appends a
+  `role:startup` line to the first writable candidate — the resolved logs dir, then `<home>/.miller/logs`, then
+  temp. It never throws and never RECREATES a candidate whose parent is gone (same rule as `CtDaemonLog`).
+  The stage name is the whole diagnosis above the `build-logger` stage, because no logger exists there.
+  (3) `Serilog.Debugging.SelfLog` is enabled to stderr before `CreateLogger`: the rolling file sink opens its
+  file LAZILY and hands an open failure to `SelfLog`, so without it a locked file or denied directory produced a
+  perfectly healthy Miller that wrote zero bytes. A [`StartupBreadcrumb`](src/Miller.Server/Logging/StartupBreadcrumb.cs)
+  line names the log directory on stderr unconditionally, so `MILLER_LOG_LEVEL=Error` cannot hide it and an empty
+  workspace log is decisive: no breadcrumb ⟹ `miller` never started. Pre-logger throw sources are guarded too —
+  `WorkspaceRootSafety.Normalize` skips a malformed forbidden entry (six come from Windows env vars) instead of
+  killing the process, and `MillerHome.Resolve` refuses an unrooted user profile by name rather than logging into
+  the launch directory. Reader-facing paths: [docs/install.md](docs/install.md) "When the plugin fails to connect".
 - **Logging.** All processes append to ONE shared daily pair (`.miller/logs/miller-<YYYYMMDD>.log` +
   `.jsonl`, Serilog `shared:true`); `pid`/`role`/`cid` are line properties, not file-name segments. There
   is no per-pid file and no startup reaper (both removed 2026-05-31; see the superseded D1/D6 notes in
@@ -463,6 +501,28 @@ scripts/test.ps1 all
   routed `run` reaches the worktree's own queue and ct.db. Explicit start only:
   `miller tests serve`, the dashboard, or MCP `tests operation=start`. Status reads never create `ct.db`,
   never create `.miller/ct/`, and never start the daemon.
+  **A status read on a workspace that never DECIDED discovers projects (load-bearing).** CT off means
+  nothing ever ran discovery, so the recorded count is 0 on a tree full of test projects and reads as
+  "none exist" rather than "nobody looked" — an agent asking whether the tests passed took that at face
+  value and ran the suite by hand (2026-08-25 field report). Status runs the SAME
+  `ContinuousTestProjectInventory` scan the daemon would, writes nothing (~85ms on a 3,500-file tree), and
+  sets `projects_discovered` so no consumer reads a filesystem scan as coverage. "Never decided" is the
+  whole rule: an opt-out tombstone or ANY recorded row including a DISABLED one is an answer of "no", and
+  re-listing what someone turned off under an invitation to enable it argues with their decision. The
+  compact `next:` line names the direct run FIRST — a one-off question wants a test run, not a background
+  daemon — and it is compact-only, because the JSON carries facts, not advice (ADR-0001).
+  **An enable that can never work is REFUSED, not recorded (load-bearing).** `tests enable` on a repo with
+  no supported toolchain (Go, Ruby, Java, PHP) reported `enable 0 project(s)`, exited 0, and wrote the opt-in
+  marker — leaving the workspace permanently `enabled: true` / `projects: 0`, a state nothing can move, with
+  the status guidance suppressed by the very marker the failed enable wrote. It now exits 3 and writes NOTHING
+  (no marker, no `ct.db`, no `.miller/`), naming the supported set. The refusal turns on the SAME
+  never-decided rule as status: an enable that reverses an opt-out tombstone is always allowed, because a
+  linked worktree of an enabled main checkout has no projects of its own to discover and refusing would
+  strand it opted out. `ContinuousTestProjectInventory.Identify` likewise returns null when
+  `FrameworkFallback` cannot name a framework — it used to build a project with a NULL framework, so
+  `tests enable --project go.mod` enabled a Go module file rendered as `(unknown)`. The `.csproj`-with-no-test-package
+  fallback STAYS: it runs under `dotnet test` regardless. The enabled-but-empty status line is silent while a
+  run is in flight — a run refutes "will never report a verdict" whatever the project count says.
   **The daemon runs from a PRIVATE per-build copy, never from the install or the build output.**
   [`CtDaemonShadowCopy`](src/Miller.Testing/Daemon/CtDaemonShadowCopy.cs) materializes the binaries under
   `~/.miller/ct-daemon/<version>-<build stamp>` and `CtDaemonLauncher.SpawnDetached` launches THAT: a live
