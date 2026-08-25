@@ -313,7 +313,8 @@ public sealed class IndexerService : BackgroundService
         Func<WorkspaceContext, StoreSidecarRetryTarget, StoreSidecarConvergenceResult>?
             convergeStoreSidecarsForTest = null,
         Func<bool>? storeSidecarRetryEnabledForTest = null,
-        Func<bool>? storeSidecarRetryLeaderForTest = null)
+        Func<bool>? storeSidecarRetryLeaderForTest = null,
+        VectorConvergeSignal? vectorSignalForTest = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -338,6 +339,7 @@ public sealed class IndexerService : BackgroundService
             sidecar,
             _contentSidecar,
             logger,
+            vectorSignal: vectorSignalForTest,
             phaseSink: phaseSink,
             vectorDrainAvailable: () => IsLeader);
         _phaseSink = phaseSink ?? new LoggingIndexerPhaseSink(logger);
@@ -800,12 +802,14 @@ public sealed class IndexerService : BackgroundService
         try
         {
             bool usedWholeRepoScan;
+            ExtractReport? wholeRepoScanReport;
             try
             {
                 processed = _core!.DrainAndProcess(
                     headChanged,
                     wholeRepoScanAdmitted: admission is not null,
-                    out usedWholeRepoScan);
+                    out usedWholeRepoScan,
+                    out wholeRepoScanReport);
             }
             finally
             {
@@ -817,7 +821,9 @@ public sealed class IndexerService : BackgroundService
 
             if (processed)
             {
-                TryConvergeSidecarToLatest(workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
+                TryConvergeSidecarToLatest(
+                    workspace.CanonicalExtractDbPath,
+                    fullRebuild: SidecarNeedsFullRebuild(wholeRepoScanReport));
                 _walCheckpointOwed = true;
             }
             else
@@ -1484,8 +1490,11 @@ public sealed class IndexerService : BackgroundService
         }
     }
 
-    private static bool SidecarNeedsFullRebuild(ExtractReport report) =>
-        report.CreatedRevision is not null &&
+    // A whole-repo scan is not a from-scratch rebuild. Only julie's `import` operation replaces the artifact, so
+    // an IncrementalReconcile delta — which is also a whole-repo scan — must converge the derived sidecars rather
+    // than stamp a full rebuild that re-embeds the entire corpus.
+    private static bool SidecarNeedsFullRebuild(ExtractReport? report) =>
+        report is { CreatedRevision: not null } &&
         string.Equals(report.Operation, "import", StringComparison.Ordinal);
 
     private void TryConvergeSidecar(string? symbolsDbPath, ExtractReport report, bool fullRebuild)
@@ -1769,9 +1778,14 @@ public sealed class IndexerService : BackgroundService
             ?? throw new InvalidOperationException("PublishOpsForTest must run before DrainForTest.");
         lock (_opsGate)
         {
-            bool processed = core.DrainAndProcess(headChanged, wholeRepoScanAdmitted, out bool usedWholeRepoScan);
+            bool processed = core.DrainAndProcess(
+                headChanged, wholeRepoScanAdmitted, out _, out ExtractReport? wholeRepoScanReport);
             if (processed)
-                TryConvergeSidecarToLatest(_bootstrap.Workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
+            {
+                TryConvergeSidecarToLatest(
+                    _bootstrap.Workspace.CanonicalExtractDbPath,
+                    fullRebuild: SidecarNeedsFullRebuild(wholeRepoScanReport));
+            }
         }
     }
 

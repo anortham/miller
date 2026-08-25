@@ -233,16 +233,31 @@ public sealed class IndexerCore
     /// those paths anyway, so draining would only spend hundreds of sequential extracts — holding this gate and
     /// the caller's, and blocking the exempt per-file write-through — to reach the same index.
     /// <paramref name="usedWholeRepoScan"/> reports a whole-repo scan that actually ran and SUCCEEDED — it drives
-    /// the caller's full-rebuild sidecar convergence, so a failed scan must not claim one.
+    /// the caller's post-scan convergence and level-upgrade bookkeeping, so a failed scan must not claim one.
     /// Returns true if any op ran (work was scheduled), false on a tick with nothing left to do.
     /// </summary>
-    public bool DrainAndProcess(bool headChanged, bool wholeRepoScanAdmitted, out bool usedWholeRepoScan)
+    public bool DrainAndProcess(bool headChanged, bool wholeRepoScanAdmitted, out bool usedWholeRepoScan) =>
+        DrainAndProcess(headChanged, wholeRepoScanAdmitted, out usedWholeRepoScan, out _);
+
+    /// <summary>
+    /// Drain and process the queue, additionally reporting julie's <paramref name="wholeRepoScanReport"/> for the
+    /// whole-repo scan that ran — null when none ran or it failed. A whole-repo scan is NOT by itself a
+    /// from-scratch rebuild: an <see cref="ScanIntent.IncrementalReconcile"/> delta is a whole-repo scan too, so a
+    /// caller deciding whether its derived sidecars must rebuild rather than converge reads this report, never
+    /// <paramref name="usedWholeRepoScan"/>.
+    /// </summary>
+    public bool DrainAndProcess(
+        bool headChanged,
+        bool wholeRepoScanAdmitted,
+        out bool usedWholeRepoScan,
+        out ExtractReport? wholeRepoScanReport)
     {
         // The whole drain+execute runs under one lock so a second debounce tick cannot interleave a concurrent
         // subprocess: the operations run strictly one-in-flight, in routed order.
         lock (_gate)
         {
             usedWholeRepoScan = false;
+            wholeRepoScanReport = null;
 
             // Fold every transient signal into the persistent latch FIRST. headChanged is computed per-tick by
             // the caller and is not persistent, so a HEAD-move rescan that never runs would otherwise be lost.
@@ -301,13 +316,18 @@ public sealed class IndexerCore
 
             foreach (var op in ops)
             {
-                (bool succeeded, Exception? failure) = ExecuteIsolated(op);
+                (bool succeeded, Exception? failure, ExtractReport? report) = ExecuteIsolated(op);
                 if (op is not ScanOp scan)
                     continue;
                 if (succeeded)
+                {
                     usedWholeRepoScan = true;
+                    wholeRepoScanReport = report;
+                }
                 else
+                {
                     RecordScanFailure(scan, failure);
+                }
             }
 
             // Success, not admission, is the commit point: a swallowed extractor failure must leave the latch
@@ -381,9 +401,10 @@ public sealed class IndexerCore
         new(StringComparer.Ordinal) { "data_loss_guard" };
 
     // Run one op, isolating any failure so a single bad file never aborts the rest of the batch (decision-10).
-    // Returns whether the op completed and, when it did not, the exception — the caller uses the first to decide
-    // whether the rescan latch may be cleared and the second to record julie's exit code in the failure history.
-    private (bool Succeeded, Exception? Failure) ExecuteIsolated(ExtractOp op)
+    // Returns whether the op completed, the exception when it did not, and julie's report when it did — the caller
+    // uses the first to decide whether the rescan latch may be cleared, the second to record julie's exit code in
+    // the failure history, and the third to tell a from-scratch rebuild from a delta.
+    private (bool Succeeded, Exception? Failure, ExtractReport? Report) ExecuteIsolated(ExtractOp op)
     {
         try
         {
@@ -401,7 +422,7 @@ public sealed class IndexerCore
                 _logger?.LogDebug(
                     "extract op {Op} succeeded (status {Status}, revision {Revision}).",
                     Describe(op), report.Status, report.Revision);
-            return (true, null);
+            return (true, null, report);
         }
         catch (JulieExtractFailedException ex)
         {
@@ -432,7 +453,7 @@ public sealed class IndexerCore
                     Describe(op), described.Codes, described.StderrTail);
             }
 
-            return (false, ex);
+            return (false, ex, null);
         }
         catch (Exception ex)
         {
@@ -449,7 +470,7 @@ public sealed class IndexerCore
                     "extract op {Op} hit a retryable producer miss; keeping the prior index and " +
                     "retrying on the next scan.",
                     Describe(op));
-                return (false, ex);
+                return (false, ex, null);
             }
 
             var described = ExtractErrorLog.Describe(ex);
@@ -468,7 +489,7 @@ public sealed class IndexerCore
                     Describe(op), described.StderrTail);
             }
 
-            return (false, ex);
+            return (false, ex, null);
         }
     }
 

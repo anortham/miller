@@ -169,6 +169,38 @@ public sealed class IndexerServiceScanTests : IDisposable
     }
 
     [Fact]
+    public void DebounceDrain_WholeRepoDeltaScan_StampsTheVectorTargetWithoutAFullRebuild()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            JulieDbFixture.DefaultRows,
+            revisions: [new JulieDbFixture.RevisionRow(7)]);
+        WorkspaceContext workspace = WorkspaceOverArtifact(fixture);
+        var signal = new VectorConvergeSignal(enabled: true);
+        var service = NewSeededService(
+            workspace, SymbolSearchSidecar.Disabled, vectorSignalForTest: signal);
+        service.PublishOpsForTest(new RecordingScanOps());
+        service.RequestWholeRepoScanForTest(ScanIntent.IncrementalReconcile);
+
+        service.RunDrainTickForTest(Path.Combine(workspace.CanonicalRoot!, ".miller"));
+
+        Assert.Equal(7, signal.TargetRevision);
+        Assert.False(signal.TakeFullRebuild());
+    }
+
+    private static WorkspaceContext WorkspaceOverArtifact(JulieDbFixture fixture)
+    {
+        string canonicalRoot = Path.GetFullPath(fixture.WorkspaceRoot);
+        return WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory, CreateTempHome()) with
+        {
+            WorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot),
+            CanonicalRoot = canonicalRoot,
+            CanonicalExtractDbPath = fixture.DbPath,
+        };
+    }
+
+    [Fact]
     public void IdleStoreSidecarRetry_WhenNotLeader_SkipsInspection()
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-sidecar-retry-reader-" + Guid.NewGuid().ToString("N"));
@@ -439,7 +471,8 @@ public sealed class IndexerServiceScanTests : IDisposable
         Func<WorkspaceContext, StoreSidecarRetryTarget, StoreSidecarConvergenceResult>?
             convergeStoreSidecarsForTest = null,
         Func<bool>? storeSidecarRetryEnabledForTest = null,
-        Func<bool>? storeSidecarRetryLeaderForTest = null)
+        Func<bool>? storeSidecarRetryLeaderForTest = null,
+        VectorConvergeSignal? vectorSignalForTest = null)
     {
         string tempHome = Path.GetDirectoryName(Path.GetDirectoryName(workspace.RegistryDbPath))!;
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
@@ -450,7 +483,8 @@ public sealed class IndexerServiceScanTests : IDisposable
         if (drainFileConvergeRequests is null && scanGovernor is null && drainFullScanRequests is null &&
             ownExtractorVersion is null && opsGateWait is null && phaseSink is null && clock is null &&
             inspectStoreSidecarsForTest is null && convergeStoreSidecarsForTest is null &&
-            storeSidecarRetryEnabledForTest is null && storeSidecarRetryLeaderForTest is null)
+            storeSidecarRetryEnabledForTest is null && storeSidecarRetryLeaderForTest is null &&
+            vectorSignalForTest is null)
             return new IndexerService(
                 bootstrap, NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, sidecar);
         return new IndexerService(
@@ -473,7 +507,8 @@ public sealed class IndexerServiceScanTests : IDisposable
             inspectStoreSidecarsForTest: inspectStoreSidecarsForTest,
             convergeStoreSidecarsForTest: convergeStoreSidecarsForTest,
             storeSidecarRetryEnabledForTest: storeSidecarRetryEnabledForTest,
-            storeSidecarRetryLeaderForTest: storeSidecarRetryLeaderForTest);
+            storeSidecarRetryLeaderForTest: storeSidecarRetryLeaderForTest,
+            vectorSignalForTest: vectorSignalForTest);
     }
 
     private static IndexerService NewStartedService(
