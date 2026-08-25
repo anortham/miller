@@ -50,7 +50,7 @@ Result: 34 passed, 1 skipped, 0 failed. The real Qt Scale test skipped during th
 Qt development-package preflight. Linux real configure/build/discovery/run evidence is
 therefore **NOT VERIFIED** on this machine.
 
-The first two pre-fix Linux fast-suite attempts failed only an existing Julie-adoption test
+The first two pre-fix Linux fast-suite attempts failed only an existing CT worktree-adoption test
 under full-suite load. The focused test and stress replay passed; the collection was made
 nonparallel at `a7e04ecb`, and the final fast gate is green.
 
@@ -85,8 +85,9 @@ coverage for a guest with the required Qt development package.
 - Linux and Windows claims above are backed by the final fast/Scale logs at `a7e04ecb`;
   missing Qt development toolchains are explicitly **NOT VERIFIED**, not counted as fixture
   execution.
-- `scripts/test.sh all` and `scripts/test.ps1 all` both passed on the exact final tree with
-  0 warnings and 0 errors.
+- `scripts/test.sh all` and `scripts/test.ps1 all` both passed at tested source commit
+  `a7e04ecb` with 0 warnings and 0 errors; the later documentation-only commit did not
+  change the tested source.
 - `gitleaks detect --source . --no-banner --redact --verbose` at `92ed4333` exited 0 after the
   narrow public model-ID allowlist in `.gitleaks.toml`; it scanned 1,895 commits and found no
   secrets. The allowlist is limited to the exact public identifiers and does not disable the
