@@ -219,6 +219,28 @@ public sealed class QmlVisibilityPolicyTests
     }
 
     [Fact]
+    public void EquivalentEvidenceForOneTargetDoesNotBecomeAmbiguous()
+    {
+        var componentEvidence = Candidate(7);
+        var manifestEvidence = new QmlVisibleType(
+            componentEvidence.ConsumerVersionId,
+            componentEvidence.Target,
+            componentEvidence.ExportedName,
+            componentEvidence.SourceComponentPath,
+            componentEvidence.Scope,
+            componentEvidence.VersionConstraint,
+            componentEvidence.ImportAlias,
+            componentEvidence.IsInternal,
+            componentEvidence.IsSingleton,
+            new QmlEvidence("ui/qmldir", "qmldir", 10, 20));
+        var request = new QmlVisibilityRequest(7, "ui/Main.qml", "Widget");
+
+        var visible = QmlVisibilityPolicy.FilterAndOrder([manifestEvidence, componentEvidence], request);
+
+        Assert.Equal([componentEvidence], visible);
+    }
+
+    [Fact]
     public void QmlCandidatesDoNotUseGlobalNameFallback()
     {
         var candidate = Candidate(

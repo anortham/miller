@@ -172,12 +172,28 @@ internal sealed class QmlVisibilityCatalog
             .Where(IsQmlComponent)
             .GroupBy(symbol => (NormalizePath(symbol.Path), symbol.Name))
             .ToDictionary(group => group.Key, group => group.OrderBy(symbol => symbol.SymbolId, StringComparer.Ordinal).First());
+        Dictionary<string, QmlSymbolRow[]> targetsByPath = targets
+            .GroupBy(pair => pair.Key.Path, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .Select(pair => pair.Value)
+                    .OrderBy(symbol => symbol.SymbolId, StringComparer.Ordinal)
+                    .ToArray(),
+                StringComparer.Ordinal);
         Dictionary<string, QmlManifest> manifests = BuildManifests(symbols, models, intern);
-        Dictionary<(string Path, string Name), QmlManifestEntry> entries = manifests
+        Dictionary<string, QmlManifestEntry[]> entries = manifests
             .SelectMany(pair => pair.Value.Entries.Select(entry =>
-                ((NormalizePath(Combine(DirectoryOf(pair.Key), entry.File)), entry.TypeName), entry)))
-            .GroupBy(pair => pair.Item1)
-            .ToDictionary(group => group.Key, group => group.First().Item2);
+                (Path: NormalizePath(Combine(DirectoryOf(pair.Key), entry.File)), Entry: entry)))
+            .GroupBy(pair => pair.Path, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .Select(pair => pair.Entry)
+                    .OrderBy(entry => entry.TypeName, StringComparer.Ordinal)
+                    .ThenBy(entry => entry.StartByte)
+                    .ToArray(),
+                StringComparer.Ordinal);
         var candidates = new List<QmlVisibleType>();
         string consumerPath = NormalizePath(consumer.Path);
         string consumerDirectory = DirectoryOf(consumerPath);
@@ -188,7 +204,9 @@ internal sealed class QmlVisibilityCatalog
             QmlSymbolRow target = pair.Value;
             if (!string.Equals(DirectoryOf(key.Path), consumerDirectory, StringComparison.Ordinal))
                 continue;
-            entries.TryGetValue(key, out QmlManifestEntry? entry);
+            QmlManifestEntry? entry = entries.TryGetValue(key.Path, out QmlManifestEntry[]? pathEntries)
+                ? pathEntries.FirstOrDefault(candidate => string.Equals(candidate.TypeName, target.Name, StringComparison.Ordinal))
+                : null;
             candidates.Add(CreateCandidate(
                 consumer.VersionId,
                 target,
@@ -215,18 +233,21 @@ internal sealed class QmlVisibilityCatalog
                     foreach (QmlManifestEntry entry in manifest.Entries)
                     {
                         string targetPath = NormalizePath(Combine(DirectoryOf(manifest.Path), entry.File));
-                        if (!targets.TryGetValue((targetPath, entry.TypeName), out QmlSymbolRow? target)
-                            || target is null
-                            || entry.IsInternal && !string.Equals(consumerDirectory, directory, StringComparison.Ordinal))
+                        if (!targetsByPath.TryGetValue(targetPath, out QmlSymbolRow[]? pathTargets))
                             continue;
-                        candidates.Add(CreateCandidate(
-                            consumer.VersionId,
-                            target,
-                            entry,
-                            QmlVisibilityScope.ForDirectory(directory),
-                            import.Alias,
-                            Evidence(entry, manifest.Path, intern),
-                            intern));
+                        foreach (QmlSymbolRow target in pathTargets)
+                        {
+                            if (entry.IsInternal && !string.Equals(consumerDirectory, directory, StringComparison.Ordinal))
+                                continue;
+                            candidates.Add(CreateCandidate(
+                                consumer.VersionId,
+                                target,
+                                entry,
+                                QmlVisibilityScope.ForDirectory(directory),
+                                import.Alias,
+                                Evidence(entry, manifest.Path, intern),
+                                intern));
+                        }
                     }
                 }
 
@@ -267,18 +288,20 @@ internal sealed class QmlVisibilityCatalog
                             && !entry.VersionConstraint.IsCompatibleWith(import.Version))
                             continue;
                         string targetPath = NormalizePath(Combine(DirectoryOf(manifest.Path), entry.File));
-                        if (!targets.TryGetValue((targetPath, entry.TypeName), out QmlSymbolRow? target)
-                            || target is null
+                        if (!targetsByPath.TryGetValue(targetPath, out QmlSymbolRow[]? pathTargets)
                             || !manifest.TypeInfoAllows(entry.TypeName, entry.VersionConstraint))
                             continue;
-                        candidates.Add(CreateCandidate(
-                            consumer.VersionId,
-                            target,
-                            entry,
-                            QmlVisibilityScope.ForModule(manifest.Module),
-                            import.Alias,
-                            Evidence(entry, manifest.Path, intern),
-                            intern));
+                        foreach (QmlSymbolRow target in pathTargets)
+                        {
+                            candidates.Add(CreateCandidate(
+                                consumer.VersionId,
+                                target,
+                                entry,
+                                QmlVisibilityScope.ForModule(manifest.Module),
+                                import.Alias,
+                                Evidence(entry, manifest.Path, intern),
+                                intern));
+                        }
                     }
                 }
             }
@@ -310,7 +333,7 @@ internal sealed class QmlVisibilityCatalog
         return new QmlVisibleType(
             consumerVersionId,
             new FactSymbolKey(target.VersionId, target.SymbolId),
-            intern.Intern(target.Name),
+            intern.Intern(entry?.TypeName ?? target.Name),
             intern.Intern(NormalizePath(target.Path)),
             scope,
             entry?.VersionConstraint,
@@ -358,18 +381,19 @@ internal sealed class QmlVisibilityCatalog
                         NormalizePath(candidate.Path),
                         typeInfoPath,
                         StringComparison.Ordinal));
-                if (typeInfoModel is null)
-                    continue;
-                foreach (QmlSymbolRow symbol in symbols)
+                if (typeInfoModel is not null)
                 {
-                    if (!string.Equals(NormalizePath(symbol.Path), typeInfoPath, StringComparison.Ordinal)
-                        || symbol.Kind != FactSymbolKind.Class
-                        || !TryReadObject(symbol.MetadataJson, out JsonElement root)
-                        || !string.Equals(ReadString(root, "typeinfo_kind"), "type", StringComparison.Ordinal))
-                        continue;
-                    QmlTypeInfo? info = ParseTypeInfo(symbol, typeInfoModel, intern);
-                    if (info is not null)
-                        manifest.TypeInfos.Add(info);
+                    foreach (QmlSymbolRow symbol in symbols)
+                    {
+                        if (!string.Equals(NormalizePath(symbol.Path), typeInfoPath, StringComparison.Ordinal)
+                            || symbol.Kind != FactSymbolKind.Class
+                            || !TryReadObject(symbol.MetadataJson, out JsonElement root)
+                            || !string.Equals(ReadString(root, "typeinfo_kind"), "type", StringComparison.Ordinal))
+                            continue;
+                        QmlTypeInfo? info = ParseTypeInfo(symbol, typeInfoModel, intern);
+                        if (info is not null)
+                            manifest.TypeInfos.Add(info);
+                    }
                 }
             }
 

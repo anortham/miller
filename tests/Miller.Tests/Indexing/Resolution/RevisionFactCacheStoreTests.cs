@@ -147,6 +147,96 @@ public sealed class RevisionFactCacheStoreTests
     }
 
     [Fact]
+    public void StoreCatalog_RetainsPublicEntriesWhenTypeInfoModelIsMissing()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.ExecuteWrite(
+            """
+            UPDATE structural_facts
+            SET metadata_json='{"directive":"typeinfo","file":"Missing.qmltypes","pattern_version":1,"query_family":"qmldir"}'
+            WHERE structural_fact_id='fact-typeinfo';
+            """);
+
+        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+            "qml-store-missing-typeinfo",
+            "qml-rev-1",
+            fixture.OpenRead,
+            fixture.Visibility());
+
+        QmlVisibleType remote = Assert.Single(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.ExportedName == "RemoteCard" && candidate.ImportAlias == "EC");
+        Assert.Equal("remote", remote.Target.SymbolId);
+        Assert.DoesNotContain(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.ExportedName == "InternalCard" && candidate.ImportAlias == "EC");
+    }
+
+    [Fact]
+    public void StoreCatalog_BindsExportAliasToTheComponentTarget()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.ExecuteWrite(
+            """
+            UPDATE structural_facts
+            SET metadata_json='{"directive":"object_type","file":"RemoteCard.qml","pattern_version":1,"query_family":"qmldir","type_name":"FancyRemote","version":"1.0"}'
+            WHERE structural_fact_id='fact-remote';
+            """);
+
+        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+            "qml-store-export-alias",
+            "qml-rev-1",
+            fixture.OpenRead,
+            fixture.Visibility());
+
+        QmlVisibleType remote = Assert.Single(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.ExportedName == "FancyRemote" && candidate.ImportAlias == "Components");
+        Assert.Equal("remote", remote.Target.SymbolId);
+        Assert.Contains(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.ExportedName == "FancyRemote" && candidate.ImportAlias == "EC");
+    }
+
+    [Fact]
+    public void StoreCatalog_DotImportDoesNotMakeTheSameTargetAmbiguous()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.AddSymbol(
+            1,
+            "import-current",
+            ".",
+            "import",
+            "source.qml",
+            language: "qml",
+            metadataJson: """{"import_kind":"directory","source":"."}""");
+
+        IResolutionFacts facts = new RevisionFactCacheStore().GetOrAdvance(
+            "qml-store-dot-import",
+            "qml-rev-1",
+            fixture.OpenRead,
+            fixture.Visibility());
+
+        ResolutionOutcome outcome = new QueryTimeResolver(facts).Resolve(new ResolutionInput(
+            ResolutionOrigin.Pending,
+            ResolutionRefKind.Instantiates,
+            "qml",
+            1,
+            "LocalCard",
+            null,
+            null,
+            null,
+            1.0,
+            "source.qml"));
+
+        Assert.Equal(ResolutionOutcomeKind.Resolved, outcome.Kind);
+        Assert.Equal(new FactSymbolKey(2, "local"), outcome.Target);
+    }
+
+    [Fact]
     public void StoreCatalog_NormalizesBackslashComponentPaths()
     {
         using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();

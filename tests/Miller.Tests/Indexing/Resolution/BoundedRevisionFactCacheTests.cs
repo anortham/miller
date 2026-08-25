@@ -92,6 +92,35 @@ public sealed class BoundedRevisionFactCacheTests
     }
 
     [Fact]
+    public void BoundedAndFullQmlCatalogPreserveAliasesWithoutTypeInfoModel()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.ExecuteWrite(
+            """
+            UPDATE structural_facts
+            SET metadata_json='{"directive":"object_type","file":"RemoteCard.qml","pattern_version":1,"query_family":"qmldir","type_name":"FancyRemote","version":"1.0"}'
+            WHERE structural_fact_id='fact-remote';
+            UPDATE structural_facts
+            SET metadata_json='{"directive":"typeinfo","file":"Missing.qmltypes","pattern_version":1,"query_family":"qmldir"}'
+            WHERE structural_fact_id='fact-typeinfo';
+            """);
+        using SqliteConnection fullConnection = fixture.OpenRead();
+        using SqliteConnection boundedConnection = fixture.OpenRead();
+        RevisionFactCache fullCache = RevisionFactCache.Load(fullConnection, fixture.Visibility());
+        RevisionFactCache boundedCache = RevisionFactCache.LoadBounded(boundedConnection, fixture.Visibility());
+        IResolutionFacts full = fullCache;
+        IResolutionFacts bounded = boundedCache;
+
+        QmlVisibleType[] fullCandidates = full.QmlTypesVisibleTo(1).ToArray();
+        QmlVisibleType[] boundedCandidates = bounded.QmlTypesVisibleTo(1).ToArray();
+
+        Assert.Equal(JsonSerializer.Serialize(fullCandidates), JsonSerializer.Serialize(boundedCandidates));
+        Assert.Contains(fullCandidates, candidate => candidate.ExportedName == "FancyRemote" && candidate.ImportAlias == "EC");
+        Assert.DoesNotContain(fullCandidates, candidate => candidate.ExportedName == "InternalCard" && candidate.ImportAlias == "EC");
+    }
+
+    [Fact]
     public void BoundedQmlCatalogReadsOnlyRelevantStructuralFactDirectories()
     {
         using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();

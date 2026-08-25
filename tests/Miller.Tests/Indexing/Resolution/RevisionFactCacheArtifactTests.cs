@@ -157,6 +157,54 @@ public sealed class RevisionFactCacheArtifactTests
     }
 
     [Fact]
+    public void ArtifactCatalog_RetainsPublicEntriesWhenTypeInfoModelIsMissing()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.ExecuteWrite(
+            """
+            UPDATE structural_facts
+            SET metadata_json='{"directive":"typeinfo","file":"Missing.qmltypes","pattern_version":1,"query_family":"qmldir"}'
+            WHERE structural_fact_id='fact-typeinfo';
+            """);
+
+        using SqliteConnection connection = fixture.OpenRead();
+        IResolutionFacts facts = RevisionFactCache.LoadFromArtifact(connection);
+
+        QmlVisibleType remote = Assert.Single(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.ExportedName == "RemoteCard" && candidate.ImportAlias == "EC");
+        Assert.Equal("remote", remote.Target.SymbolId);
+        Assert.DoesNotContain(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.ExportedName == "InternalCard" && candidate.ImportAlias == "EC");
+    }
+
+    [Fact]
+    public void ArtifactCatalog_BindsExportAliasToTheComponentTarget()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        QmlVisibilityFixtureSupport.Populate(fixture);
+        fixture.ExecuteWrite(
+            """
+            UPDATE structural_facts
+            SET metadata_json='{"directive":"object_type","file":"RemoteCard.qml","pattern_version":1,"query_family":"qmldir","type_name":"FancyRemote","version":"1.0"}'
+            WHERE structural_fact_id='fact-remote';
+            """);
+
+        using SqliteConnection connection = fixture.OpenRead();
+        IResolutionFacts facts = RevisionFactCache.LoadFromArtifact(connection);
+
+        QmlVisibleType remote = Assert.Single(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.ExportedName == "FancyRemote" && candidate.ImportAlias == "Components");
+        Assert.Equal("remote", remote.Target.SymbolId);
+        Assert.Contains(
+            facts.QmlTypesVisibleTo(1),
+            candidate => candidate.ExportedName == "FancyRemote" && candidate.ImportAlias == "EC");
+    }
+
+    [Fact]
     public void ReleasedQmlArtifact_ProducesDirectoryVisibilityCandidates()
     {
         string path = Path.Combine(
