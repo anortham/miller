@@ -204,6 +204,49 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void ARetryableFailureKeepsTheJournalSoTheRetryReusesTheRequestId()
+    {
+        using var workspace = new TempWorkspace();
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            exitCode: 1,
+            failureClass: StoreWorkspaceOperationException.CoordinatorQuantumFailureCode,
+            stateOverride: StoreRequestState.Failed);
+        StoreWorkspaceCoordinator coordinator = workspace.Coordinator(client);
+
+        Assert.Throws<StoreWorkspaceOperationException>(() => coordinator.Update(workspace.SourcePath));
+        Assert.NotEmpty(Directory.GetFiles(workspace.JournalDirectory, "*.json"));
+        Assert.Throws<StoreWorkspaceOperationException>(() => coordinator.Update(workspace.SourcePath));
+
+        Assert.Equal(2, client.Requests.Count);
+        Assert.NotEmpty(Directory.GetFiles(workspace.JournalDirectory, "*.json"));
+        Assert.Equal(
+            ((StoreUpdateRequest)client.Requests[0]).Request.RequestId,
+            ((StoreUpdateRequest)client.Requests[1]).Request.RequestId);
+    }
+
+    [Fact]
+    public void ANonRetryableFailureStillRetiresTheJournalSoTheRetryIsANewRequest()
+    {
+        using var workspace = new TempWorkspace();
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            exitCode: 1,
+            failureClass: "extract_failed",
+            stateOverride: StoreRequestState.Failed);
+        StoreWorkspaceCoordinator coordinator = workspace.Coordinator(client);
+
+        Assert.Throws<StoreWorkspaceOperationException>(() => coordinator.Update(workspace.SourcePath));
+        Assert.Empty(Directory.GetFiles(workspace.JournalDirectory, "*.json"));
+        Assert.Throws<StoreWorkspaceOperationException>(() => coordinator.Update(workspace.SourcePath));
+
+        Assert.Equal(2, client.Requests.Count);
+        Assert.NotEqual(
+            ((StoreUpdateRequest)client.Requests[0]).Request.RequestId,
+            ((StoreUpdateRequest)client.Requests[1]).Request.RequestId);
+    }
+
+    [Fact]
     public void FailedImportRecordsFailedPhasesAndPreservesFailurePropagation()
     {
         var phases = new RecordingPhaseSink();
@@ -1445,6 +1488,43 @@ public sealed class StoreWorkspaceCoordinatorTests
     private sealed class ThrowingPhaseSink : IIndexerPhaseSink
     {
         public void Record(IndexerPhaseRecord record) => throw new InvalidOperationException("sink failed");
+    }
+
+    private sealed class TempWorkspace : IDisposable
+    {
+        private readonly string _root;
+
+        public TempWorkspace()
+        {
+            _root = Path.Combine(Path.GetTempPath(), "miller-store-journal-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path.Combine(_root, "src"));
+            Directory.CreateDirectory(Path.Combine(_root, "home"));
+            SourcePath = Path.Combine(_root, "src", "a.cs");
+            File.WriteAllText(SourcePath, "class A;");
+        }
+
+        public string SourcePath { get; }
+
+        public string JournalDirectory => Path.Combine(_root, ".miller", "store-requests");
+
+        public StoreWorkspaceCoordinator Coordinator(IJulieStoreClient client) =>
+            new(
+                new StoreFamilyBinding(
+                    Binding.FamilyId,
+                    Path.Combine(_root, "family"),
+                    Binding.ViewId,
+                    _root,
+                    StoreBindingState.Ready),
+                client,
+                () => IndexLevelPolicy.Full,
+                _ => new StoreWorkspaceState(41, "full"),
+                mintRequestId: null,
+                fromArtifact: null,
+                phaseSink: null,
+                inspectTree: null,
+                millerDirectory: Path.Combine(_root, "home"));
+
+        public void Dispose() => Directory.Delete(_root, recursive: true);
     }
 
     private sealed class RecordingStoreClient(

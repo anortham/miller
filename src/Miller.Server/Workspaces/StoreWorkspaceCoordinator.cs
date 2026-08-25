@@ -802,6 +802,17 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             $"julie-extract store request '{result.Request.Id}' returned non-terminal state '{result.State}'.");
     }
 
+    /// <summary>
+    /// Applies <see cref="RequireCommitted"/> and retires the request journal entry when the request reached a
+    /// terminal state that will never be retried.
+    ///
+    /// <para><b>A RETRYABLE failure keeps its journal entry (load-bearing).</b> Retiring it on every terminal
+    /// report meant the next attempt minted a FRESH request id, so julie's idempotency key never matched and
+    /// each retry of a coordinator-quantum timeout left one more poison row in the coordinator queue. Keeping
+    /// the entry makes the retry re-submit the SAME request id, which julie dedupes against the row already
+    /// there. A non-retryable failure is a real terminal outcome and still retires the entry, so the next
+    /// attempt is a genuinely new request.</para>
+    /// </summary>
     private void RequireCommittedAndCompleteJournal(StoreRequest request, StoreRequestResult result)
     {
         bool terminal = result.State is StoreRequestState.Committed
@@ -811,9 +822,9 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         {
             RequireCommitted(request, result);
         }
-        catch
+        catch (Exception failure)
         {
-            if (terminal)
+            if (terminal && !StoreWorkspaceOperationException.IsRetryableProducerFailure(failure))
             {
                 try
                 {
