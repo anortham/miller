@@ -1,6 +1,7 @@
 using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server.Hosting;
 using Miller.Server.Workspaces;
 using Microsoft.Data.Sqlite;
@@ -24,7 +25,8 @@ internal static class WorkspaceFactsAssembler
         WorkspaceReadSnapshot snapshot,
         bool legacyArtifactPresent,
         string? storeRoot = null,
-        StoreMemberSummary? members = null)
+        StoreMemberSummary? members = null,
+        StoreCoordinatorQueueFacts? queue = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         if (snapshot.Mode != WorkspaceReadMode.FamilyStore ||
@@ -51,7 +53,8 @@ internal static class WorkspaceFactsAssembler
             legacyArtifactPresent ? "available" : "export_required",
             storeRoot,
             members?.DisplayLabels,
-            members?.TotalCount ?? 0);
+            members?.TotalCount ?? 0,
+            Queue: queue);
     }
 
     /// <summary>
@@ -128,16 +131,23 @@ internal static class WorkspaceFactsAssembler
     /// view does NOT reflect the workspace:</para>
     /// <list type="bullet">
     ///   <item>a persisted scan-failure record — new work is not reaching the store at all;</item>
+    ///   <item>a wedged coordinator queue — Miller's own submissions reached julie-extract and stopped there;</item>
     ///   <item>a stale or unavailable search/content sidecar — the derived artifacts lag the store (an intentionally
     ///   disabled search sidecar is supported because the in-memory backend remains available).</item>
     /// </list>
     /// <para>All healthy ⇒ fresh. Otherwise the reason is named, never glossed.</para>
+    ///
+    /// <para>The queue reason exists because a wedge is INVISIBLE to every other signal: the served view stays
+    /// perfectly readable and perfectly stale, no scan fails, and the sidecars converge onto a store nothing new
+    /// reaches. A workspace whose coordinator queue cannot drain reported <c>index_fresh: true</c> throughout
+    /// the 2026-08-25 field incident.</para>
     /// </remarks>
     internal static (bool? Fresh, string Status, string? Warning) StoreFreshness(
         ScanFailureRecord? scanFailure,
         WorkspaceReadSnapshot snapshot,
         SearchSidecarFacts search,
-        ContentCorpusFacts content)
+        ContentCorpusFacts content,
+        StoreCoordinatorQueueFacts? queue = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
@@ -149,6 +159,16 @@ internal static class WorkspaceFactsAssembler
                 $"{failure.ConsecutiveFailures} consecutive scan failure(s) since " +
                 $"{failure.LastFailureAtUtc:u}; the next attempt is not before " +
                 $"{failure.NextAttemptAtUtc:u}. The served view may not reflect the workspace.");
+        }
+
+        if (queue is { Wedged: true } wedged)
+        {
+            return (
+                false,
+                "store_queue_wedged",
+                $"The family-store coordinator queue cannot drain ({wedged.Description}). New work is not " +
+                "reaching the store, so the served view will not advance; `miller workspace refresh` submits " +
+                "into the same blocked queue.");
         }
 
         if (!string.Equals(search.State, "current", StringComparison.Ordinal) &&
@@ -272,8 +292,9 @@ internal static class WorkspaceFactsAssembler
                 ScanFailureRecord? storeScanFailure = ScanFailureFacts(row.IndexDbPath);
                 SearchSidecarFacts storeSearch = sidecar.InspectStore(storeRoot, session.Snapshot);
                 ContentCorpusFacts storeContent = contentSidecar.InspectStore(storeRoot, session.Snapshot);
+                StoreCoordinatorQueueFacts? storeQueue = StoreCoordinatorQueueReader.Read(storeRoot);
                 (bool? storeFresh, string storeFreshness, string? storeWarning) =
-                    StoreFreshness(storeScanFailure, session.Snapshot, storeSearch, storeContent);
+                    StoreFreshness(storeScanFailure, session.Snapshot, storeSearch, storeContent, storeQueue);
                 return new WorkspaceFacts(
                     Root: row.CanonicalRoot,
                     WorkspaceId: row.WorkspaceId,
@@ -303,7 +324,8 @@ internal static class WorkspaceFactsAssembler
                         session.Snapshot,
                         File.Exists(row.IndexDbPath),
                         storeRoot,
-                        members));
+                        members,
+                        storeQueue));
             }
 
             return new WorkspaceFacts(

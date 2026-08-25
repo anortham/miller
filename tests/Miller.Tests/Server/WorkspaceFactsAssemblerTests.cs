@@ -2,6 +2,7 @@ using System.Text.Json;
 using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
@@ -825,6 +826,52 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
         Assert.Null(warning);
         Assert.NotEqual("resolving", status);
     }
+
+    [Fact]
+    public void StoreFreshness_AWedgedCoordinatorQueue_IsNotFresh_AndSaysARefreshCannotHelp()
+    {
+        var (fresh, status, warning) = WorkspaceFactsAssembler.StoreFreshness(
+            null, StoreSnapshot(), Search("current"), Content("current"), WedgedQueue());
+
+        Assert.False(fresh);
+        Assert.Equal("store_queue_wedged", status);
+        Assert.Contains("cannot drain", warning);
+        Assert.Contains("same blocked queue", warning);
+    }
+
+    [Fact]
+    public void StoreFreshness_APendingButHealthyQueue_IsFresh()
+    {
+        var (fresh, status, warning) = WorkspaceFactsAssembler.StoreFreshness(
+            null,
+            StoreSnapshot(),
+            Search("current"),
+            Content("current"),
+            new StoreCoordinatorQueueFacts(1, 0, 5, null, [], 300));
+
+        Assert.True(fresh);
+        Assert.Equal("current", status);
+        Assert.Null(warning);
+    }
+
+    [Fact]
+    public void StoreFreshness_ScanFailureOutranksAWedgedQueue()
+    {
+        var (fresh, status, _) = WorkspaceFactsAssembler.StoreFreshness(
+            Failing(2), StoreSnapshot(), Search("current"), Content("current"), WedgedQueue());
+
+        Assert.False(fresh);
+        Assert.Equal("scan_failing", status);
+    }
+
+    private static StoreCoordinatorQueueFacts WedgedQueue() =>
+        new(
+            QueuedCount: 3,
+            ClaimedCount: 1,
+            OldestQueuedAgeSeconds: 4200,
+            DeadClaimOwner: "cli-4242",
+            Groups: [new StoreCoordinatorQueueGroup("update", "queued", 3)],
+            WedgedAfterSeconds: 300);
 
     [Fact]
     public void StoreFreshness_ScanFailureOutranksSidecarState()

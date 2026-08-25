@@ -282,6 +282,36 @@ the rebuild stays owed and retries on the next allowed attempt. A direct user re
 runs the force scan or reports why it did not. Read the object as "scans are failing and here is when the next
 one is allowed", and use the existing freshness/health fields for whether the artifact itself is usable.
 
+### `store.queue` (additive, conditional)
+
+`workspace status --json` and `workspace health --json` gain an OPTIONAL `queue` object INSIDE the existing
+`store` object, carrying the family-store coordinator queue (`<store root>/coord.db`) as Miller read it. It is
+**omitted entirely** when the queue holds no `queued` or `claimed` request, and equally when `coord.db` is
+missing, locked, or unreadable — the read is fail-soft and never an error — so default output stays
+byte-identical to the previous contract and Eros must treat its absence as "no pending coordinator work",
+never as an error. Unlike `scan_failure`, it IS part of `workspace health --format json-summary`, where it
+appears as `index.queue`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `wedged` | boolean | True when the queue cannot drain on its own: a claim whose owner process is gone, or a request unclaimed for at least `wedged_after_seconds`. |
+| `queued_count` | number | Requests waiting for a writer to claim them. |
+| `claimed_count` | number | Requests a writer has claimed. |
+| `oldest_queued_age_seconds` | number \| null | Age of the oldest `queued` request. Null when nothing is queued. |
+| `dead_claim_owner` | string \| null | A `claimed` request's owner id whose process the liveness probe proved gone. Null when every owner is live, when no request is claimed, or when the owner id carries no readable pid — an unreadable identity is unknown, never dead. |
+| `wedged_after_seconds` | number | The unclaimed-age threshold this reading was judged against (default `300`; override with `MILLER_STORE_QUEUE_WEDGED_SECONDS`, where `0` means any unclaimed request counts). |
+| `groups` | array | Bounded `(kind, state, count)` buckets over pending requests, ordered by kind then state. |
+
+`wedged: true` also drives the top-level freshness fields: `index_fresh` becomes `false` and
+`freshness_status` becomes `store_queue_wedged`, ranked BELOW `scan_failing` and ABOVE `sidecar_stale`. This
+reason exists because a wedge is invisible to every other signal — the served view stays perfectly readable
+and perfectly stale, no scan fails, and the derived sidecars converge onto a store that nothing new reaches.
+The warning says plainly that `miller workspace refresh` submits into the same blocked queue, and the vector
+sidecar's unavailable reason says the same rather than advising a refresh that cannot work.
+
+Miller only READS `coord.db`. It never deletes a row, never rewrites a claim, and never repairs the queue —
+coordinator repair belongs to julie-extract.
+
 ### `rebound_from` (additive, conditional)
 
 `workspace status --json` and `workspace health --json` gain an OPTIONAL top-level `rebound_from` object naming

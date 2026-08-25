@@ -7,6 +7,7 @@ using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
+using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
@@ -65,7 +66,8 @@ public sealed record StoreWorkspaceFacts(
     int MemberCount = 0,
     string State = "ready",
     string? Failure = null,
-    string? Error = null)
+    string? Error = null,
+    StoreCoordinatorQueueFacts? Queue = null)
 {
     public static StoreWorkspaceFacts Unavailable(string state, string failure, string error) =>
         new(
@@ -503,7 +505,12 @@ public static class WorkspaceRender
         if (RebindProvenanceLabel(facts.RebindProvenance) is { } rebindLabel)
             sb.Append("rebound_from: ").Append(rebindLabel).Append('\n');
         if (facts.Store is { } store)
+        {
             sb.Append("store: ").Append(StoreProvenanceLabel(store)).Append('\n');
+            if (StoreQueueLabel(store.Queue) is { } storeQueueLabel)
+                sb.Append("store_queue: ").Append(storeQueueLabel).Append('\n');
+        }
+
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
         if (bootstrap is { Phase: BootstrapPhase.Running, CanonicalRoot.Length: > 0 })
@@ -728,8 +735,44 @@ public static class WorkspaceRender
         foreach (string label in facts.MemberDisplayLabels ?? [])
             w.WriteStringValue(label);
         w.WriteEndArray();
+        WriteStoreQueueJson(w, facts.Queue);
         w.WriteEndObject();
     }
+
+    // Null ⇒ write no `queue` key at all. An empty or unreadable coordinator queue produces a null fact, so a
+    // healthy workspace's store block stays byte-identical to a build without the reader — the same
+    // conditional-presence rule `scan_failure` follows.
+    private static void WriteStoreQueueJson(Utf8JsonWriter w, StoreCoordinatorQueueFacts? queue)
+    {
+        if (queue is null)
+            return;
+
+        w.WriteStartObject("queue");
+        w.WriteBoolean("wedged", queue.Wedged);
+        w.WriteNumber("queued_count", queue.QueuedCount);
+        w.WriteNumber("claimed_count", queue.ClaimedCount);
+        if (queue.OldestQueuedAgeSeconds is { } age) w.WriteNumber("oldest_queued_age_seconds", age);
+        else w.WriteNull("oldest_queued_age_seconds");
+        if (queue.DeadClaimOwner is null) w.WriteNull("dead_claim_owner");
+        else w.WriteString("dead_claim_owner", queue.DeadClaimOwner);
+        w.WriteNumber("wedged_after_seconds", queue.WedgedAfterSeconds);
+        w.WriteStartArray("groups");
+        foreach (StoreCoordinatorQueueGroup group in queue.Groups)
+        {
+            w.WriteStartObject();
+            w.WriteString("kind", group.Kind);
+            w.WriteString("state", group.State);
+            w.WriteNumber("count", group.Count);
+            w.WriteEndObject();
+        }
+
+        w.WriteEndArray();
+        w.WriteEndObject();
+    }
+
+    // Null ⇒ render no `store_queue:` line at all, for the same reason WriteStoreQueueJson writes no key.
+    internal static string? StoreQueueLabel(StoreCoordinatorQueueFacts? queue) =>
+        queue is null ? null : (queue.Wedged ? "WEDGED  " : string.Empty) + queue.Description;
 
     private static long RemainingSeconds(DateTimeOffset untilUtc) =>
         Math.Max(0, (long)(untilUtc - DateTimeOffset.UtcNow).TotalSeconds);
@@ -1325,7 +1368,12 @@ public static class WorkspaceRender
         if (RebindProvenanceLabel(status.RebindProvenance) is { } rebindLabel)
             sb.Append("rebound_from: ").Append(HealthCompactValue(rebindLabel)).Append('\n');
         if (status.Store is { } store)
+        {
             sb.Append("store: ").Append(HealthCompactValue(StoreProvenanceLabel(store))).Append('\n');
+            if (StoreQueueLabel(store.Queue) is { } storeQueueLabel)
+                sb.Append("store_queue: ").Append(HealthCompactValue(storeQueueLabel)).Append('\n');
+        }
+
         if (facts.History is { } history)
             sb.Append("history_db: ").Append(HealthCompactValue(HistorySidecarLabel(history))).Append('\n');
         sb.Append("quality: ")
@@ -1638,6 +1686,7 @@ public static class WorkspaceRender
             WriteVectorsJson(writer, status.Vectors);
             writer.WritePropertyName("history_db");
             WriteHistorySidecarJson(writer, facts.History);
+            WriteStoreQueueJson(writer, status.Store?.Queue);
             writer.WriteEndObject();
 
             WorkspaceExtractionHealthFacts extraction = facts.Extraction;

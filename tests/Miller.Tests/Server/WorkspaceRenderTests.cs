@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -376,6 +377,75 @@ public sealed class WorkspaceRenderTests
         Assert.Equal("available", healthJson.GetProperty("store").GetProperty("rollback_state").GetString());
         Assert.DoesNotContain("\"store\"", WorkspaceRender.Status(Facts(), TelemetrySummary.Empty, json: true));
     }
+
+    [Fact]
+    public void Status_AndHealth_SurfaceAWedgedCoordinatorQueue()
+    {
+        var queue = new StoreCoordinatorQueueFacts(
+            QueuedCount: 3,
+            ClaimedCount: 1,
+            OldestQueuedAgeSeconds: 4200,
+            DeadClaimOwner: "cli-4242",
+            Groups: [new StoreCoordinatorQueueGroup("update", "queued", 3)],
+            WedgedAfterSeconds: 300);
+        WorkspaceFacts facts = Facts() with { Store = StoreFacts() with { Queue = queue } };
+
+        string compact = WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false);
+        string healthCompact = WorkspaceRender.Health(HealthFacts(facts), json: false);
+        JsonElement statusJson = Json(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true));
+        JsonElement healthJson = Json(WorkspaceRender.Health(HealthFacts(facts), json: true));
+        JsonElement summaryJson = Json(
+            WorkspaceRender.Health(HealthFacts(facts), WorkspaceHealthFormat.JsonSummary));
+
+        Assert.Contains("store_queue: WEDGED  queued 3, claimed 1; claim owner 'cli-4242' is gone", compact);
+        Assert.Contains("store_queue: WEDGED  queued 3, claimed 1", healthCompact);
+
+        JsonElement statusQueue = statusJson.GetProperty("store").GetProperty("queue");
+        Assert.True(statusQueue.GetProperty("wedged").GetBoolean());
+        Assert.Equal(3, statusQueue.GetProperty("queued_count").GetInt64());
+        Assert.Equal(1, statusQueue.GetProperty("claimed_count").GetInt64());
+        Assert.Equal(4200, statusQueue.GetProperty("oldest_queued_age_seconds").GetInt64());
+        Assert.Equal("cli-4242", statusQueue.GetProperty("dead_claim_owner").GetString());
+        Assert.Equal(300, statusQueue.GetProperty("wedged_after_seconds").GetInt64());
+        JsonElement group = Assert.Single(statusQueue.GetProperty("groups").EnumerateArray().ToArray());
+        Assert.Equal("update", group.GetProperty("kind").GetString());
+        Assert.Equal("queued", group.GetProperty("state").GetString());
+        Assert.Equal(3, group.GetProperty("count").GetInt64());
+
+        Assert.True(healthJson.GetProperty("store").GetProperty("queue").GetProperty("wedged").GetBoolean());
+        Assert.True(summaryJson.GetProperty("index").GetProperty("queue").GetProperty("wedged").GetBoolean());
+    }
+
+    [Fact]
+    public void Status_AndHealth_StayByteIdenticalWhenTheCoordinatorQueueIsClean()
+    {
+        WorkspaceFacts facts = Facts() with { Store = StoreFacts() };
+
+        Assert.Equal(
+            WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false),
+            WorkspaceRender.Status(facts with { Store = StoreFacts() with { Queue = null } },
+                TelemetrySummary.Empty, json: false));
+        Assert.DoesNotContain("store_queue:", WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false));
+        Assert.DoesNotContain("store_queue:", WorkspaceRender.Health(HealthFacts(facts), json: false));
+        Assert.DoesNotContain("\"queue\"", WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true));
+        Assert.DoesNotContain("\"queue\"", WorkspaceRender.Health(HealthFacts(facts), json: true));
+        Assert.DoesNotContain(
+            "\"queue\"",
+            WorkspaceRender.Health(HealthFacts(facts), WorkspaceHealthFormat.JsonSummary));
+    }
+
+    private static StoreWorkspaceFacts StoreFacts() => new(
+        FamilyId: "11111111-1111-4111-8111-111111111111",
+        ViewId: "view-worktree",
+        GenerationName: "GEN-00000000000000000007",
+        ManifestGeneration: 7,
+        ManifestHash: "blake3:manifest",
+        StoreLogSequence: 91,
+        IndexLevel: "full",
+        LegacyArtifactPresent: true,
+        MigrationState: "legacy_preserved",
+        RollbackState: "available",
+        StoreRoot: "/family/store");
 
     [Fact]
     public void Status_SurfacesStoreIncompatibilityWithoutInventingManifestFacts()
