@@ -1297,6 +1297,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--max-calls", type=int, default=8)
     parser.add_argument("--max-output-tokens", type=int, default=12000)
     parser.add_argument("--timeout-seconds", type=float, default=120)
+    parser.add_argument("--max-void-attempts", type=int, default=3)
     parser.add_argument("--codex", default="codex")
     parser.add_argument("--codex-home", default=str(Path.home() / ".codex"))
     parser.add_argument("--preflight-only", action="store_true")
@@ -1402,6 +1403,7 @@ def _run_cli(args: argparse.Namespace) -> int:
         seed=args.seed,
         identity_sha256=identity_hash,
         void_ledger_path=out / "void-ledger.jsonl",
+        max_void_attempts=args.max_void_attempts,
     )
     export_scorer_artifacts(exports, selection.tasks, execution, identity)
     print((exports / "agent-score-command.txt").read_text(encoding="utf-8"), end="")

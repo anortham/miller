@@ -274,6 +274,12 @@ class CodexAgentRunner:
         target = child_home / "auth.json"
         shutil.copyfile(source, target)
         target.chmod(0o600)
+        # An ephemeral home without a models cache makes every spawn fetch the remote model list
+        # before it will talk to its MCP servers; a hung fetch races the 30s MCP startup watchdog
+        # and voids the pair. Seeding the operator home's cache keeps startup off the network.
+        models_cache = self._source_codex_home / "models_cache.json"
+        if models_cache.is_file():
+            shutil.copyfile(models_cache, child_home / "models_cache.json")
 
     def _command(
         self,
