@@ -129,7 +129,7 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
             EnvironmentFor(request.Workspace, paths));
         var processResult = await RunProcessAsync(command, cancellationToken).ConfigureAwait(false);
         RequireComplete(processResult, "CTest run");
-        if (processResult.ExitCode != 0)
+        if (processResult.ExitCode != 0 && !File.Exists(artifactPath))
             throw Failure(
                 $"CTest run failed with exit code {processResult.ExitCode}: {FailureSummary(processResult)}",
                 artifactPath);
@@ -148,6 +148,11 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
 
         if (parsed.Cases.Count == 0)
             throw Failure("CTest JUnit artifact contained zero test cases.", artifactPath);
+        if (processResult.ExitCode != 0 && !parsed.Cases.Any(testCase =>
+                testCase.Status is "failed" or "errored"))
+            throw Failure(
+                $"CTest run failed with exit code {processResult.ExitCode}: {FailureSummary(processResult)}",
+                artifactPath);
 
         var selectedIds = request.TestCaseIds.ToHashSet(StringComparer.Ordinal);
         var results = parsed.Cases

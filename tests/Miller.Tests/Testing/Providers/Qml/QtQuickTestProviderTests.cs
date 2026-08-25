@@ -461,6 +461,50 @@ public sealed class QtQuickTestProviderTests : IDisposable
         Assert.NotNull(exception.GenerationId);
     }
 
+    [Fact]
+    public async Task Nonzero_ctest_exit_with_parseable_failure_returns_failed_case()
+    {
+        var runner = new ScriptedTestProcessRunner(command =>
+        {
+            if (command.FileName == "cmake" && command.Arguments.SequenceEqual(["--version"]))
+                return new TestProcessResult(0, "cmake version 3.27.9\n", string.Empty);
+            if (command.FileName == "cmake" && command.Arguments.Contains("-S"))
+            {
+                var buildDirectory = ArgumentAfter(command, "-B");
+                Directory.CreateDirectory(buildDirectory);
+                File.WriteAllText(Path.Combine(buildDirectory, "CMakeCache.txt"), "cache");
+                File.WriteAllText(Path.Combine(buildDirectory, "CTestTestfile.cmake"), "tests");
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            }
+            if (command.FileName == "cmake")
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            if (command.FileName == "ctest" && command.Arguments.Contains("--show-only=json-v1"))
+                return new TestProcessResult(0, DiscoveryJson("A/basic"), string.Empty);
+            if (command.FileName == "ctest")
+            {
+                var artifact = ArgumentAfter(command, "--output-junit");
+                Directory.CreateDirectory(Path.GetDirectoryName(artifact)!);
+                File.WriteAllText(
+                    artifact,
+                    "<testsuite name=\"CTest\"><testcase classname=\"CTest\" name=\"A/basic\" time=\"0.25\"><failure message=\"assertion failed\">expected true</failure></testcase></testsuite>");
+                return new TestProcessResult(8, string.Empty, "CTest failed tests");
+            }
+            throw new Xunit.Sdk.XunitException($"unexpected command: {command.ToDisplayString()}");
+        });
+        var provider = new QtQuickTestProvider(runner);
+        var workspace = Workspace();
+        var discovered = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        var result = await provider.RunAsync(
+            Request(workspace, [Assert.Single(discovered).Id]),
+            TestContext.Current.CancellationToken);
+
+        var caseResult = Assert.Single(result.CaseResults);
+        Assert.Equal("failed", caseResult.Status);
+        Assert.Equal("expected true", caseResult.FailureSummary);
+        Assert.Equal("run:qml", result.RunId);
+    }
+
     private string ConfigureRoot => Path.Combine(_root, "source");
 
     private string BuildRoot => Path.Combine(_root, "build");
