@@ -8,6 +8,11 @@ namespace Miller.Indexing;
 [JsonSerializable(typeof(ExtractReport))]
 internal sealed partial class JulieExtractJsonContext : JsonSerializerContext;
 
+[JsonSourceGenerationOptions]
+[JsonSerializable(typeof(long[]))]
+[JsonSerializable(typeof(string[]))]
+internal sealed partial class QmlVisibilityJsonContext : JsonSerializerContext;
+
 [JsonSourceGenerationOptions(
     AllowTrailingCommas = true,
     PropertyNameCaseInsensitive = true,

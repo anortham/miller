@@ -496,7 +496,9 @@ internal sealed class QmlVisibilityCatalog
             """;
         command.Parameters.AddWithValue("$view_id", visibility.ViewId);
         command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
-        command.Parameters.AddWithValue("$versions", JsonSerializer.Serialize(versions));
+        command.Parameters.AddWithValue(
+            "$versions",
+            JsonSerializer.Serialize(versions.ToArray(), QmlVisibilityJsonContext.Default.Int64Array));
         using SqliteDataReader reader = command.ExecuteReader();
         var rows = new List<QmlSymbolRow>();
         while (reader.Read())
@@ -639,8 +641,12 @@ internal sealed class QmlVisibilityCatalog
             """;
         command.Parameters.AddWithValue("$view_id", visibility.ViewId);
         command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
-        command.Parameters.AddWithValue("$modules", JsonSerializer.Serialize(modules));
-        command.Parameters.AddWithValue("$directories", JsonSerializer.Serialize(directories));
+        command.Parameters.AddWithValue(
+            "$modules",
+            JsonSerializer.Serialize(modules.ToArray(), QmlVisibilityJsonContext.Default.StringArray));
+        command.Parameters.AddWithValue(
+            "$directories",
+            JsonSerializer.Serialize(directories.ToArray(), QmlVisibilityJsonContext.Default.StringArray));
         return ReadFacts(command, intern);
     }
 
@@ -667,7 +673,9 @@ internal sealed class QmlVisibilityCatalog
             """;
         command.Parameters.AddWithValue("$view_id", visibility.ViewId);
         command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
-        command.Parameters.AddWithValue("$directories", JsonSerializer.Serialize(directories));
+        command.Parameters.AddWithValue(
+            "$directories",
+            JsonSerializer.Serialize(directories.ToArray(), QmlVisibilityJsonContext.Default.StringArray));
         return ReadFacts(command, intern);
     }
 
