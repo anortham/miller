@@ -20,12 +20,13 @@ public sealed record StoreWorkspaceState(long StoreLogSequence, string IndexLeve
 /// paths the manifest already lists and applies no eligibility gate at all: julie-extract's <c>update</c>
 /// retires the rows of a file that became ignored, unsupported, or oversized, so a gate there would leave
 /// stale symbols serving forever. The DISCOVERY loop applies julie-extract's full discovery rule
-/// (<see cref="WatchPathFilter.IsDiscoverableSource"/>), because a file julie refuses never enters the
-/// manifest and so is rediscovered — and re-submitted — on every single pass.</para>
+/// (<see cref="WatchPathFilter.IsDiscoverableSource"/>) plus Miller's refusal memory, because a file julie
+/// refuses never enters the manifest and so is rediscovered — and re-submitted — on every single pass.</para>
 /// </summary>
 /// <param name="ChangedOrAdded">Every path to submit as an update, stored-and-changed plus newly discovered.</param>
 /// <param name="Deleted">Manifest paths whose file no longer exists.</param>
-/// <param name="Added">The subset of <paramref name="ChangedOrAdded"/> the manifest did not list.</param>
+/// <param name="Added">The subset of <paramref name="ChangedOrAdded"/> the manifest did not list. Only these
+/// paths can be recorded as refusals — a manifest path is julie's to retire, never Miller's to forget.</param>
 internal readonly record struct StoreTreeDelta(
     IReadOnlyList<string> ChangedOrAdded,
     IReadOnlyList<string> Deleted,
@@ -40,7 +41,8 @@ internal readonly record struct StoreTreeDelta(
     public static StoreTreeDelta Diff(
         IReadOnlyDictionary<string, string> stored,
         string root,
-        IReadOnlySet<string>? supportedExtensions)
+        IReadOnlySet<string>? supportedExtensions,
+        IReadOnlyDictionary<string, string>? refusals = null)
     {
         ArgumentNullException.ThrowIfNull(stored);
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
@@ -73,6 +75,16 @@ internal readonly record struct StoreTreeDelta(
             string relativePath = Path.GetRelativePath(root, absolutePath).Replace(Path.DirectorySeparatorChar, '/');
             if (stored.ContainsKey(relativePath))
                 continue;
+            if (refusals is not null
+                && refusals.TryGetValue(relativePath, out string? refusedHash)
+                && string.Equals(
+                    ContentHasher.NormalizeHash(refusedHash),
+                    ContentHasher.Blake3FileHex(absolutePath),
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             changedOrAdded.Add(relativePath);
             added.Add(relativePath);
         }
@@ -128,6 +140,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     private readonly Func<StoreFamilyBinding, StoreWorkspaceState?> _readState;
     private readonly Func<string> _mintRequestId;
     private readonly StoreRequestJournal? _requestJournal;
+    private readonly StoreRefusalLedger _refusals;
     private readonly string _millerDirectory;
     private readonly HashSet<string> _replayedImportRequestIds = new(StringComparer.Ordinal);
     private readonly string? _fromArtifact;
@@ -177,6 +190,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         _requestJournal = mintRequestId is null
             ? new StoreRequestJournal(binding.WorkspaceRoot)
             : null;
+        _refusals = new StoreRefusalLedger(binding.WorkspaceRoot);
         _fromArtifact = fromArtifact;
         _millerDirectory = Path.GetFullPath(millerDirectory ?? MillerHome.ResolveMillerDirectory());
         _phaseSink = phaseSink ?? NullIndexerPhaseSink.Instance;
@@ -500,8 +514,10 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     {
         using FamilyStoreReadSession session = FamilyStoreReadSession.Open(_binding);
         Dictionary<string, string> stored = session.Read(ReadStoredFileHashes);
-        return StoreTreeDelta.Diff(stored, _binding.WorkspaceRoot, _supportedExtensions);
+        return StoreTreeDelta.Diff(stored, _binding.WorkspaceRoot, _supportedExtensions, _refusals.Read());
     }
+
+    internal StoreRefusalLedger Refusals => _refusals;
 
     private ExtractReport ApplyIncrementalFileDelta(
         StoreWorkspaceState before,
@@ -517,6 +533,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         long deletedFiles = 0;
         StoreRequestResult? last = null;
         bool anyCreated = false;
+        var refused = new List<StoreRefusalEntry>();
+        var published = new List<string>();
 
         using (var importPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.Import))
         {
@@ -525,8 +543,9 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             {
                 foreach (string relativePath in delta.ChangedOrAdded)
                 {
+                    string contentHash = CurrentContentFingerprint(relativePath);
                     StoreRequestControls controls = Controls(
-                        $"update|{_binding.FamilyId:D}|{_binding.ViewId}|{relativePath}|{level}|{CurrentContentFingerprint(relativePath)}",
+                        $"update|{_binding.FamilyId:D}|{_binding.ViewId}|{relativePath}|{level}|{contentHash}",
                         StoreOperation.Update);
                     var request = new StoreUpdateRequest(
                         _binding.StoreRoot,
@@ -544,6 +563,12 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
                         changedFiles++;
                         anyCreated = true;
                         importDidWork = true;
+                        if (delta.IsAdded(relativePath))
+                            published.Add(relativePath);
+                    }
+                    else if (delta.IsAdded(relativePath))
+                    {
+                        refused.Add(new StoreRefusalEntry(relativePath, contentHash));
                     }
                 }
 
@@ -573,11 +598,13 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             }
             catch
             {
+                _refusals.Update(refused, published);
                 importPhase.Fail();
                 throw;
             }
         }
 
+        _refusals.Update(refused, published);
         StoreWorkspaceState after = ReadRequiredState();
         PublishFreshnessStamp();
         bool changed = anyCreated || !string.Equals(before.IndexLevel, after.IndexLevel, StringComparison.Ordinal);

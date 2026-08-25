@@ -746,6 +746,106 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void Diff_SkipsARefusedAddUntilItsContentChanges()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-tree-delta-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        try
+        {
+            string source = Path.Combine(root, "src", "Refused.cs");
+            File.WriteAllText(source, "class Refused;");
+            var stored = new Dictionary<string, string>(StringComparer.Ordinal);
+            var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs" };
+            var refusals = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["src/Refused.cs"] = ContentHasher.Blake3FileHex(source),
+            };
+
+            Assert.Empty(StoreTreeDelta.Diff(stored, root, extensions, refusals).ChangedOrAdded);
+
+            File.WriteAllText(source, "class Refused { }");
+
+            Assert.Equal(
+                ["src/Refused.cs"],
+                StoreTreeDelta.Diff(stored, root, extensions, refusals).ChangedOrAdded);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ARefusedAddIsSubmittedOnceUntilItsContentChanges()
+    {
+        using var workspace = new TempWorkspace();
+        var stored = new Dictionary<string, string>(StringComparer.Ordinal);
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs" };
+        var ledger = new StoreRefusalLedger(workspace.Root);
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            manifestDisposition: StoreManifestDisposition.Reused);
+        StoreWorkspaceCoordinator coordinator = workspace.Coordinator(
+            client,
+            () => StoreTreeDelta.Diff(stored, workspace.Root, extensions, ledger.Read()));
+
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+        Assert.Single(client.Requests);
+
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+        Assert.Single(client.Requests);
+
+        File.WriteAllText(workspace.SourcePath, "class A { }");
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+        Assert.Equal(2, client.Requests.Count);
+
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+        Assert.Equal(2, client.Requests.Count);
+    }
+
+    [Fact]
+    public void APublishedAddLeavesNoRefusalBehind()
+    {
+        using var workspace = new TempWorkspace();
+        var stored = new Dictionary<string, string>(StringComparer.Ordinal);
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs" };
+        var ledger = new StoreRefusalLedger(workspace.Root);
+        var client = new RecordingStoreClient(StoreOperation.Update);
+        StoreWorkspaceCoordinator coordinator = workspace.Coordinator(
+            client,
+            () => StoreTreeDelta.Diff(stored, workspace.Root, extensions, ledger.Read()));
+
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+
+        Assert.Single(client.Requests);
+        Assert.Empty(ledger.Read());
+    }
+
+    [Fact]
+    public void ARefusedChangeToAStoredFileIsNeverRemembered()
+    {
+        using var workspace = new TempWorkspace();
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs" };
+        var stored = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["src/a.cs"] = "blake3:deadbeef",
+        };
+        var ledger = new StoreRefusalLedger(workspace.Root);
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            manifestDisposition: StoreManifestDisposition.Reused);
+        StoreWorkspaceCoordinator coordinator = workspace.Coordinator(
+            client,
+            () => StoreTreeDelta.Diff(stored, workspace.Root, extensions, ledger.Read()));
+
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+
+        Assert.Equal(2, client.Requests.Count);
+        Assert.Empty(ledger.Read());
+    }
+
+    [Fact]
     public void Diff_SubmitsAnOverLimitFileTheManifestAlreadyLists()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-tree-delta-" + Guid.NewGuid().ToString("N"));
@@ -1503,11 +1603,15 @@ public sealed class StoreWorkspaceCoordinatorTests
             File.WriteAllText(SourcePath, "class A;");
         }
 
+        public string Root => _root;
+
         public string SourcePath { get; }
 
         public string JournalDirectory => Path.Combine(_root, ".miller", "store-requests");
 
-        public StoreWorkspaceCoordinator Coordinator(IJulieStoreClient client) =>
+        public StoreWorkspaceCoordinator Coordinator(
+            IJulieStoreClient client,
+            Func<StoreTreeDelta>? inspectTree = null) =>
             new(
                 new StoreFamilyBinding(
                     Binding.FamilyId,
@@ -1521,7 +1625,7 @@ public sealed class StoreWorkspaceCoordinatorTests
                 mintRequestId: null,
                 fromArtifact: null,
                 phaseSink: null,
-                inspectTree: null,
+                inspectTree: inspectTree,
                 millerDirectory: Path.Combine(_root, "home"));
 
         public void Dispose() => Directory.Delete(_root, recursive: true);
