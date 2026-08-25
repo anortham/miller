@@ -185,6 +185,45 @@ public sealed class ContinuousTestDebouncedAutoRunTests : IDisposable
         Assert.Equal(2, provider.RunCount);
     }
 
+    [Theory]
+    [InlineData("other/CMakeLists.txt")]
+    [InlineData("other/tests/runner.cpp")]
+    public void A_production_qml_change_request_does_not_select_a_sibling_project(string changedPath)
+    {
+        string projectPath = Path.Combine(_root, "qml", "CMakeLists.txt");
+        var workspace = EngineTestSupport.Workspace(_root, projectPath);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(new ContinuousTestCase(
+            Id: "tc:qml",
+            WorkspaceId: EngineTestSupport.WorkspaceId,
+            Name: "Smoke/smoke",
+            QualifiedName: "Smoke/smoke",
+            Selector: "Smoke/smoke",
+            FilePath: Path.Combine(_root, "qml", "tests"),
+            Framework: "qt-quick-test",
+            Role: ContinuousTestRole.TestCase,
+            Source: "ct-provider:qml",
+            Confidence: 1.0,
+            Metadata: new Dictionary<string, object?>
+            {
+                ["ct_project_path"] = projectPath,
+                ["source_path"] = Path.Combine(_root, "qml", "tests"),
+            }));
+        var provider = new FakeContinuousTestProvider { RunResult = Passed("tc:qml", "3") };
+        ContinuousTestDaemonQueue queue = Queue(store, provider, revision: 3);
+
+        ContinuousTestDaemonEnqueueResult result = queue.Enqueue(EngineTestSupport.Change(
+            workspace,
+            revision: "3",
+            changedPaths: [Path.Combine(_root, changedPath)],
+            from: 2,
+            to: 3));
+
+        Assert.Empty(result.Selection.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Selection.Outcome);
+        Assert.Empty(provider.RunRequests);
+    }
+
     [Fact]
     public async Task Zero_debounce_executes_on_the_same_tick()
     {

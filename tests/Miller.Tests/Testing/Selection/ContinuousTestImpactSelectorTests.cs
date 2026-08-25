@@ -977,6 +977,52 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.Equal(["tc:qml"], result.StaleTestCaseIds);
     }
 
+    [Theory]
+    [InlineData("CMakeLists.txt")]
+    [InlineData("tests/runner.cpp")]
+    [InlineData("tests/tst_smoke.cpp")]
+    [InlineData("tests/tst_smoke.hpp")]
+    public void Select_project_scoped_qml_changes_require_the_changed_path_to_be_in_the_project(
+        string changedPath)
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.Combine(_dir, "qml", "CMakeLists.txt");
+        string evidenceRoot = Path.Combine(_dir, "qml", "tests");
+        SeedQmlCase(store, "tc:qml", "Smoke/smoke", projectPath, evidenceRoot);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: [Path.Combine(_dir, "other", changedPath)],
+            ProjectPath: projectPath));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.Equal(["tc:qml"], result.StaleTestCaseIds);
+    }
+
+    [Theory]
+    [InlineData("tests/tst_smoke.cpp")]
+    [InlineData("tests/tst_smoke.hpp")]
+    public void Select_quick_test_harness_source_and_header_changes_select_the_qml_project(
+        string changedPath)
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.Combine(_dir, "qml", "CMakeLists.txt");
+        string evidenceRoot = Path.Combine(_dir, "qml", "tests");
+        SeedQmlCase(store, "tc:qml", "Smoke/smoke", projectPath, evidenceRoot);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: [Path.Combine(_dir, "qml", changedPath)],
+            ProjectPath: projectPath));
+
+        Assert.Equal(["tc:qml"], result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+        Assert.All(result.Evidence, evidence => Assert.Equal("project_scope", evidence.Tier));
+    }
+
     [Fact]
     public void Select_unscoped_qml_change_chooses_only_the_matching_quick_test_project()
     {

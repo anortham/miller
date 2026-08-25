@@ -517,18 +517,20 @@ public sealed class ContinuousTestImpactSelector
         TestCaseFact testCase,
         string changedPath)
     {
-        if (!string.IsNullOrWhiteSpace(request.ProjectPath))
-            return ProjectMatches(testCase.ProjectPath, request.ProjectPath);
-
-        if (string.IsNullOrWhiteSpace(testCase.ProjectPath)
-            && string.IsNullOrWhiteSpace(testCase.SourcePath))
+        if (!ProjectMatches(testCase.ProjectPath, request.ProjectPath))
         {
             return false;
         }
 
-        string? projectRoot = string.IsNullOrWhiteSpace(testCase.ProjectPath)
+        string? projectPath = string.IsNullOrWhiteSpace(request.ProjectPath)
+            ? testCase.ProjectPath
+            : request.ProjectPath;
+        string? projectRoot = string.IsNullOrWhiteSpace(projectPath)
             ? null
-            : Path.GetDirectoryName(testCase.ProjectPath);
+            : Path.GetDirectoryName(projectPath);
+        if (projectRoot is null && string.IsNullOrWhiteSpace(testCase.SourcePath))
+            return false;
+
         return IsPathUnderRoot(changedPath, projectRoot)
             || IsPathUnderRoot(changedPath, testCase.SourcePath);
     }
@@ -570,7 +572,11 @@ public sealed class ContinuousTestImpactSelector
         if (!extension.Equals(".c", StringComparison.OrdinalIgnoreCase)
             && !extension.Equals(".cc", StringComparison.OrdinalIgnoreCase)
             && !extension.Equals(".cpp", StringComparison.OrdinalIgnoreCase)
-            && !extension.Equals(".cxx", StringComparison.OrdinalIgnoreCase))
+            && !extension.Equals(".cxx", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".h", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".hh", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".hpp", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".hxx", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
@@ -579,7 +585,8 @@ public sealed class ContinuousTestImpactSelector
         return stem.Equals("runner", StringComparison.OrdinalIgnoreCase)
             || stem.EndsWith("runner", StringComparison.OrdinalIgnoreCase)
             || stem.Equals("test_main", StringComparison.OrdinalIgnoreCase)
-            || stem.Equals("tst_main", StringComparison.OrdinalIgnoreCase);
+            || stem.Equals("tst_main", StringComparison.OrdinalIgnoreCase)
+            || stem.StartsWith("tst_", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsProjectOrConfigPath(string? path)
