@@ -13,13 +13,29 @@ namespace Miller.Server.Workspaces;
 
 public sealed record StoreWorkspaceState(long StoreLogSequence, string IndexLevel);
 
+/// <summary>
+/// One incremental comparison of the workspace tree against the store's manifest.
+///
+/// <para><b>The two loops are deliberately asymmetric (load-bearing).</b> The STORED loop compares hashes for
+/// paths the manifest already lists and applies no eligibility gate at all: julie-extract's <c>update</c>
+/// retires the rows of a file that became ignored, unsupported, or oversized, so a gate there would leave
+/// stale symbols serving forever. The DISCOVERY loop applies julie-extract's full discovery rule
+/// (<see cref="WatchPathFilter.IsDiscoverableSource"/>), because a file julie refuses never enters the
+/// manifest and so is rediscovered — and re-submitted — on every single pass.</para>
+/// </summary>
+/// <param name="ChangedOrAdded">Every path to submit as an update, stored-and-changed plus newly discovered.</param>
+/// <param name="Deleted">Manifest paths whose file no longer exists.</param>
+/// <param name="Added">The subset of <paramref name="ChangedOrAdded"/> the manifest did not list.</param>
 internal readonly record struct StoreTreeDelta(
     IReadOnlyList<string> ChangedOrAdded,
-    IReadOnlyList<string> Deleted)
+    IReadOnlyList<string> Deleted,
+    IReadOnlySet<string>? Added = null)
 {
     public static StoreTreeDelta Empty { get; } = new([], []);
 
     public bool IsEmpty => ChangedOrAdded.Count == 0 && Deleted.Count == 0;
+
+    public bool IsAdded(string relativePath) => Added?.Contains(relativePath) == true;
 
     public static StoreTreeDelta Diff(
         IReadOnlyDictionary<string, string> stored,
@@ -30,6 +46,7 @@ internal readonly record struct StoreTreeDelta(
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         var changedOrAdded = new List<string>();
         var deleted = new List<string>();
+        var added = new HashSet<string>(StringComparer.Ordinal);
 
         foreach ((string relativePath, string storedHash) in stored)
         {
@@ -51,19 +68,18 @@ internal readonly record struct StoreTreeDelta(
 
         foreach (string absolutePath in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
-            bool accept = supportedExtensions is { Count: > 0 }
-                ? WatchPathFilter.IsExtractableSource(root, absolutePath, supportedExtensions)
-                : WatchPathFilter.ShouldProcess(root, absolutePath);
-            if (!accept)
+            if (!WatchPathFilter.IsDiscoverableSource(root, absolutePath, supportedExtensions))
                 continue;
             string relativePath = Path.GetRelativePath(root, absolutePath).Replace(Path.DirectorySeparatorChar, '/');
-            if (!stored.ContainsKey(relativePath))
-                changedOrAdded.Add(relativePath);
+            if (stored.ContainsKey(relativePath))
+                continue;
+            changedOrAdded.Add(relativePath);
+            added.Add(relativePath);
         }
 
         changedOrAdded.Sort(StringComparer.Ordinal);
         deleted.Sort(StringComparer.Ordinal);
-        return new StoreTreeDelta(changedOrAdded, deleted);
+        return new StoreTreeDelta(changedOrAdded, deleted, added);
     }
 }
 

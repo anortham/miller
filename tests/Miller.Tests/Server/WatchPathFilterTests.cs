@@ -78,9 +78,36 @@ public sealed class WatchPathFilterTests
     [InlineData("/repo/.cache/build/some.o")]
     [InlineData("/repo/.julie/indexes/workspace/symbols.db")]
     [InlineData("/repo/.memories/2026-06-11-checkpoint.md")]
+    [InlineData("/repo/vendor/github.com/pkg/errors/errors.go")]
+    [InlineData("/repo/dist/app.js")]
+    [InlineData("/repo/build/generated/Parser.java")]
+    [InlineData("/repo/TestResults/run/coverage.cobertura.xml")]
     public void Skips_NoiseDirectories(string path)
     {
         Assert.False(WatchPathFilter.ShouldProcess(Root, path));
+    }
+
+    [Theory]
+    [InlineData("/repo/wwwroot/site.min.js")]
+    [InlineData("/repo/wwwroot/site.bundle.js")]
+    [InlineData("/repo/src/schema.generated.js")]
+    [InlineData("/repo/src/schema.generated.jsx")]
+    [InlineData("/repo/src/schema.generated.ts")]
+    [InlineData("/repo/src/schema.generated.tsx")]
+    [InlineData("/repo/src/schema.generated.d.ts")]
+    public void Skips_GeneratedArtifactSuffixes(string path)
+    {
+        Assert.False(WatchPathFilter.ShouldProcess(Root, path));
+        Assert.False(WatchPathFilter.IsDiscoverableSource(
+            Root, path, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "js", "jsx", "ts", "tsx" }));
+    }
+
+    [Fact]
+    public void Skips_GeneratedSuffixes_ButNotTheirOrdinarySiblings()
+    {
+        Assert.True(WatchPathFilter.ShouldProcess(Root, "/repo/wwwroot/site.js"));
+        Assert.True(WatchPathFilter.ShouldProcess(Root, "/repo/src/generated.ts"));
+        Assert.True(WatchPathFilter.ShouldProcess(Root, "/repo/src/index.d.ts"));
     }
 
     // An empty-name FileSystemWatcher notification (a rename whose old-name record landed in the previous

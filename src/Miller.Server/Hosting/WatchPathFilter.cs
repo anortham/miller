@@ -1,3 +1,4 @@
+using Miller.Core.Freshness;
 using Miller.Indexing;
 
 namespace Miller.Server.Hosting;
@@ -22,12 +23,21 @@ namespace Miller.Server.Hosting;
 /// memory checkpoints (<c>.memories</c>), nested worktrees (<c>.worktrees</c> and <c>.claude/worktrees</c> —
 /// the same two locations Miller's invariant ignore file excludes from extraction, so a repo-root worktree
 /// pool is neither indexed by the parent workspace nor watched), and the usual
-/// build-output trees (<c>node_modules</c>,
-/// <c>target</c>, <c>bin</c>, <c>obj</c>) — parity with julie-extract's own hard-excluded directories, so
+/// build-output trees (<c>node_modules</c>, <c>vendor</c>, <c>target</c>, <c>dist</c>, <c>build</c>,
+/// <c>bin</c>, <c>obj</c>, <c>TestResults</c>) — parity with julie-extract's own hard-excluded directories, so
 /// the watcher never spawns a subprocess for a file julie would refuse anyway. Matching is on whole path
-/// SEGMENTS, so a <c>.github</c> dir or an <c>object.cs</c> file is not caught by a substring. It also
+/// SEGMENTS, so a <c>.github</c> dir or an <c>object.cs</c> file is not caught by a substring. Generated
+/// artifacts julie hard-excludes by suffix (<c>.min.js</c>, <c>.bundle.js</c>, <c>.generated.*</c>) are
+/// rejected for the same reason. It also
 /// applies workspace ignore files (<c>.gitignore</c> plus <c>.julieignore</c>) so live per-file updates do
 /// not churn on files a full scan would skip.</para>
+///
+/// <para><b>File SIZE is not part of this filter.</b> julie-extract refuses a source file over
+/// <see cref="ExtractSourceLimits.DefaultMaxSourceFileBytes"/>, but its <c>update</c> verb still REMOVES the
+/// rows of a file that grew past the limit — so a watcher event on such a file must reach julie, or its stale
+/// symbols would serve forever. The size gate therefore lives only on the DISCOVERY entry point
+/// (<see cref="IsDiscoverableSource"/>), where an oversized file can never be in the manifest and so would be
+/// re-submitted on every pass.</para>
 ///
 /// <para><b>The skip set is matched ROOT-RELATIVE.</b> These are directory names INSIDE a workspace, so a
 /// workspace whose own root sits under one of them — <c>&lt;repo&gt;/.worktrees/&lt;branch&gt;</c>, the agent
@@ -52,9 +62,13 @@ public static class WatchPathFilter
         ".memories",
         ".worktrees",
         "node_modules",
+        "vendor",
         "target",
+        "dist",
+        "build",
         "bin",
         "obj",
+        "TestResults",
     };
 
     private static readonly HashSet<string> IgnorePolicyFiles = new(SegmentComparer)
@@ -122,9 +136,52 @@ public static class WatchPathFilter
             return false;
         if (HasSkippedSegment(root, absolutePath))
             return false;
+        if (ExtractSourceLimits.HasGeneratedSuffix(absolutePath, SegmentComparison))
+            return false;
         if (HasUnsupportedExtension(absolutePath, supportedExtensions))
             return false;
         return !WorkspaceIgnorePolicy.IsIgnored(root, absolutePath, millerDirectory);
+    }
+
+    /// <summary>
+    /// True when a file the store's manifest does not list should be SUBMITTED as an add by the incremental
+    /// tree diff. This is <see cref="IsExtractableSource"/> (or, with no extension catalog,
+    /// <see cref="ShouldProcess(string,string)"/>) plus julie-extract's size ceiling.
+    ///
+    /// <para>The size gate belongs here and nowhere else. A file julie refuses for size never enters the
+    /// manifest, so every later diff finds it missing and submits it again — one coordinator request per pass,
+    /// forever, which is how a 32 MB generated <c>src/parser.c</c> wedged the family-store queue. A file
+    /// ALREADY in the manifest takes the diff's stored loop, which has no size gate at all, because julie's
+    /// <c>update</c> retires the rows of a file that grew past the limit and skipping it would serve those
+    /// stale symbols indefinitely.</para>
+    /// </summary>
+    /// <exception cref="ArgumentNullException">Either path argument is null.</exception>
+    public static bool IsDiscoverableSource(
+        string root,
+        string absolutePath,
+        IReadOnlySet<string>? supportedExtensions)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(absolutePath);
+        bool eligible = supportedExtensions is { Count: > 0 }
+            ? IsExtractableSource(root, absolutePath, supportedExtensions)
+            : ShouldProcess(root, absolutePath);
+        return eligible && !IsOversized(absolutePath);
+    }
+
+    // Fail-open on an unreadable length, the same way julie-extract's is_oversized_source_file does: a file
+    // whose size cannot be measured is judged by the rest of the filter, never refused on a guess.
+    private static bool IsOversized(string absolutePath)
+    {
+        try
+        {
+            var file = new FileInfo(absolutePath);
+            return file.Exists && ExtractSourceLimits.IsOversized(file.Length, MaxSourceFileBytes);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -229,4 +286,9 @@ public static class WatchPathFilter
 
     private static StringComparer SegmentComparer =>
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private static StringComparison SegmentComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static readonly long MaxSourceFileBytes = ExtractSourceLimits.MaxSourceFileBytesFromEnvironment();
 }

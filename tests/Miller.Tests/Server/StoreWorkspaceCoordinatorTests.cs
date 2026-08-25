@@ -673,11 +673,15 @@ public sealed class StoreWorkspaceCoordinatorTests
         Directory.CreateDirectory(Path.Combine(root, "src"));
         try
         {
+            Directory.CreateDirectory(Path.Combine(root, "dist"));
             File.WriteAllText(Path.Combine(root, "src", "App.cs"), "class App;");
             File.WriteAllText(Path.Combine(root, "LICENSE"), "MIT");
             File.WriteAllBytes(Path.Combine(root, "icon.png"), [1, 2, 3, 4]);
             File.WriteAllText(Path.Combine(root, "src", "App.csproj"), "<Project />");
             File.WriteAllText(Path.Combine(root, "src", "Changed.cs"), "class Changed;");
+            File.WriteAllText(Path.Combine(root, "src", "Generated.cs"), OverLimitText());
+            File.WriteAllText(Path.Combine(root, "src", "vendor.min.js"), "var a=1;");
+            File.WriteAllText(Path.Combine(root, "dist", "Bundled.cs"), "class Bundled;");
             var stored = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["src/Changed.cs"] = "deadbeef",
@@ -686,9 +690,10 @@ public sealed class StoreWorkspaceCoordinatorTests
             StoreTreeDelta delta = StoreTreeDelta.Diff(
                 stored,
                 root,
-                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs" });
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs", "js" });
 
             Assert.Equal(["src/App.cs", "src/Changed.cs"], delta.ChangedOrAdded);
+            Assert.Equal(["src/App.cs"], delta.Added?.Order(StringComparer.Ordinal));
             Assert.Empty(delta.Deleted);
         }
         finally
@@ -696,6 +701,36 @@ public sealed class StoreWorkspaceCoordinatorTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public void Diff_SubmitsAnOverLimitFileTheManifestAlreadyLists()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-tree-delta-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "src", "Grown.cs"), OverLimitText());
+            var stored = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["src/Grown.cs"] = "blake3:deadbeef",
+            };
+
+            StoreTreeDelta delta = StoreTreeDelta.Diff(
+                stored,
+                root,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs" });
+
+            Assert.Equal(["src/Grown.cs"], delta.ChangedOrAdded);
+            Assert.False(delta.IsAdded("src/Grown.cs"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string OverLimitText() =>
+        new('x', (int)ExtractSourceLimits.DefaultMaxSourceFileBytes + 1);
 
     [Fact]
     public void Diff_WithoutCatalogStillAddsSourceFiles()
