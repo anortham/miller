@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Miller vs a bare agent - measured</title>
-  <meta name="description" content="Paired benchmark: the same coding agent with Miller v1.22.1 versus generic grep/read tools, at two budgets. 2.2x correct tasks and half the wrong-action rate, replicated on 2026-08-25.">
+  <meta name="description" content="Paired benchmark: the same coding agent with Miller v1.22.1 versus generic grep/read tools, at two budgets. 2.2x the correct tasks and half the wrong-action rate, replicated on 2026-08-25.">
   <link rel="canonical" href="https://anortham.github.io/miller/benchmark.html">
 
   <meta property="og:type" content="article">
@@ -97,11 +97,11 @@
           </tbody>
         </table>
         <p class="metrics-note">
-          Doubling the calls and tokens did not close the gap. The bare agent stayed flat at 5 correct tasks
-          and kept the same 26.7% wrong-action rate, while Miller went from 11 to 12 correct and from 13.3%
-          to zero wrong actions. Starving the baseline does not explain the gap. Miller is not perfect at
-          either budget: at the frozen budget there was one task the bare agent answered in 3 calls that
-          Miller lost by spending all 8, so the gap is a large average, not a clean sweep.
+          Doubling the calls and tokens did not close the gap, so starving the baseline does not explain it.
+          The bare agent stayed flat at 5 correct tasks and kept the same 26.7% wrong-action rate, while
+          Miller went from 11 to 12 correct and from 13.3% to zero wrong actions. Miller is not perfect at
+          either budget. At the frozen budget the bare agent answered one task in 3 calls that Miller lost
+          by spending all 8. The gap is a large average, not a clean sweep.
         </p>
       </div>
     </section>
@@ -123,9 +123,9 @@
           The bare agent often finds the right evidence and then fumbles it. Counting evidence found
           regardless of answer quality, the arms are close: 0.72 for bare against 0.77 for Miller at the
           frozen budget, and 0.65 against 0.77 at the doubled budget. The rewritten baseline adapter finds
-          materially more evidence than the July one did, and its correct-task count did not move. That
-          sharpens the reading rather than softening it: the bare agent's deficit is not finding the
-          evidence, it is exact identity plus acting correctly on what it found. Miller is also not the
+          more evidence than July's did (0.72 against July's 0.59 to 0.66) and still gets the same five
+          tasks right. That strengthens the conclusion. The bare agent's problem is not finding evidence.
+          It is exact identity, and acting correctly on what it found. Miller is also not the
           cheap option. It spends more calls and tokens per task than a baseline that fails fast, and that
           spend is what buys the correct answers.
         </p>
