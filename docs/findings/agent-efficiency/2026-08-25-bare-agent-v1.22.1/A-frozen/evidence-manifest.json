@@ -1,0 +1,35 @@
+{
+  "artifacts": [
+    {
+      "bytes": 5356,
+      "path": "agent-tasks.jsonl",
+      "sha256": "97db97ece395ec8932f52b4e4d0009296bb176eec577c89c09e958740d8c0293"
+    },
+    {
+      "bytes": 13910,
+      "path": "baseline-results.jsonl",
+      "sha256": "9b1dd3898fcd4f366483eb83ff2b0d40f1c37c5b45e692dce8ed6470cddc28c1"
+    },
+    {
+      "bytes": 13606,
+      "path": "candidate-results.jsonl",
+      "sha256": "ff63b5cdfece94bb6840946e8bc7f6daf0be7874620e882acac58ab5566511fd"
+    },
+    {
+      "bytes": 11660,
+      "path": "identity-manifest.json",
+      "sha256": "574fe43347ee6e3e1dc0fe36c50370aa8214c06b096c1261b6d24515be1894bb"
+    },
+    {
+      "bytes": 33,
+      "path": "void-status.json",
+      "sha256": "892c7e95cbcfc90057abfc454e08423bfb17f80cdc9d2f12291ef3ad7c58811f"
+    },
+    {
+      "bytes": 540,
+      "path": "agent-score-command.txt",
+      "sha256": "00ea4f666e0a00bdf0c19ca31cca67b17b7df3f739e4c33ede7e3c68d728a88f"
+    }
+  ],
+  "schema_version": 1
+}

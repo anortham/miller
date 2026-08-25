@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Miller vs a bare agent - measured</title>
-  <meta name="description" content="Paired benchmark: the same coding agent with Miller v1.14.0 versus generic grep/read tools, at two budgets. 2.2x correct tasks, 0% vs 27% wrong actions, and doubling the bare agent's budget made it worse.">
+  <meta name="description" content="Paired benchmark: the same coding agent with Miller v1.22.1 versus generic grep/read tools, at two budgets. 2.2x correct tasks and half the wrong-action rate, replicated on 2026-08-25.">
   <link rel="canonical" href="https://anortham.github.io/miller/benchmark.html">
 
   <meta property="og:type" content="article">
@@ -30,7 +30,7 @@
   <main>
     <section class="section intro-section">
       <div class="section-heading">
-        <p class="eyebrow">Measured 2026-07-29 · Miller v1.14.0</p>
+        <p class="eyebrow">Measured 2026-07-29 · replicated 2026-08-25 on Miller v1.22.1</p>
         <h2>Same agent, same tasks, same budgets, with and without Miller.</h2>
       </div>
       <div class="split-copy">
@@ -42,9 +42,17 @@
         <p>
           We ran the same agent (Codex, <code>gpt-5.6-sol</code>) on 15 real code-navigation tasks across five
           pinned repositories, in paired runs: one arm with only <code>grep</code> / <code>read_file</code> /
-          <code>list_files</code>, one arm with the published Miller v1.14.0 archive in its default
+          <code>list_files</code>, one arm with the published Miller v1.22.1 archive in its default
           configuration. Prompts, scoring, and the tool-call and token budgets (enforced by a recording
-          proxy) were the same in both arms. Then we doubled the bare agent's budget to rule out starvation.
+          proxy) were the same in both arms. Then we doubled both budgets to rule out starvation.
+        </p>
+        <p>
+          The numbers on this page come from the 2026-08-25 rerun on Miller v1.22.1: same 15 tasks, same
+          five pinned commits, same model, same seed, same budgets as the first run on 2026-07-29. Three
+          things about the method did change, and they are stated in the finding: the bare-agent adapter was
+          rewritten from its recorded spec because the original source was lost, the harness gained a
+          void-retry limit, and a defect in the recording proxy that could void a task pair was fixed before
+          these runs. The bare arm is therefore a rebuilt baseline, not a byte-identical rerun of July's.
         </p>
       </div>
     </section>
@@ -60,17 +68,17 @@
           <span>tasks correct out of 15, Miller vs bare agent at the same 8-call budget</span>
         </div>
         <div>
-          <strong>0% vs 27%</strong>
-          <span>wrong-action rate at the frozen budget</span>
+          <strong>13% vs 27%</strong>
+          <span>wrong-action rate at the frozen budget; 0% vs 27% at the doubled budget</span>
         </div>
         <div>
-          <strong>0</strong>
-          <span>tasks the bare agent solved that Miller missed, across all four runs</span>
+          <strong>0 of 5</strong>
+          <span>tasks needing exact symbol identity that the bare agent solved, in every bare run of both measurements</span>
         </div>
       </div>
       <div class="metrics-table-wrap">
         <table class="metrics-table">
-          <caption>Bare agent vs Miller v1.14.0, 15 visible tasks, seed-paired runs.</caption>
+          <caption>Bare agent vs Miller v1.22.1, 15 visible tasks, seed-paired runs, measured 2026-08-25.</caption>
           <thead>
             <tr>
               <th scope="col"></th>
@@ -81,16 +89,19 @@
             </tr>
           </thead>
           <tbody>
-            <tr><td>correct tasks / 15</td><td>5</td><td><strong>11</strong></td><td>4</td><td><strong>10</strong></td></tr>
-            <tr><td>wrong-action rate</td><td>26.7%</td><td><strong>0%</strong></td><td>40.0%</td><td>20.0%</td></tr>
-            <tr><td>evidence recall@6</td><td>28.2%</td><td><strong>67.9%</strong></td><td>23.1%</td><td>55.1%</td></tr>
-            <tr><td>hard errors</td><td>4</td><td>1</td><td>4</td><td>0</td></tr>
-            <tr><td>budget-exhausted failures</td><td>12</td><td>2</td><td>7</td><td>0</td></tr>
+            <tr><td>correct tasks / 15</td><td>5</td><td><strong>11</strong></td><td>5</td><td><strong>12</strong></td></tr>
+            <tr><td>wrong-action rate</td><td>26.7%</td><td><strong>13.3%</strong></td><td>26.7%</td><td><strong>0%</strong></td></tr>
+            <tr><td>evidence recall@6</td><td>28.2%</td><td><strong>53.8%</strong></td><td>28.2%</td><td><strong>65.4%</strong></td></tr>
+            <tr><td>hard errors</td><td>4</td><td>1</td><td>2</td><td>0</td></tr>
+            <tr><td>budget-exhausted failures</td><td>6</td><td>3</td><td>4</td><td>0</td></tr>
           </tbody>
         </table>
         <p class="metrics-note">
-          Doubling the bare agent's calls and tokens made it worse: correct tasks fell from 5 to 4 and the
-          wrong-action rate rose from 26.7% to 40%. Starving the baseline does not explain the gap.
+          Doubling the calls and tokens did not close the gap. The bare agent stayed flat at 5 correct tasks
+          and kept the same 26.7% wrong-action rate, while Miller went from 11 to 12 correct and from 13.3%
+          to zero wrong actions. Starving the baseline does not explain the gap. Miller is not perfect at
+          either budget: at the frozen budget there was one task the bare agent answered in 3 calls that
+          Miller lost by spending all 8, so the gap is a large average, not a clean sweep.
         </p>
       </div>
     </section>
@@ -104,29 +115,43 @@
         <p>
           Five of the fifteen tasks need exact symbol identity: who references this specific function rather
           than everything sharing its name, the call path between two symbols, proof that a rename touches
-          every site. Grep has no way to answer those, and the bare agent went 0 for 20 on them across all
-          runs. On the ten tasks that don't need identity, Miller still wins 7 to 5.
+          every site. Grep has no way to answer those, and the bare agent went 0 for 5 in every bare run of
+          both measurements, at both budgets. On the ten tasks that don't need identity, Miller wins 7 to 5
+          at each budget.
         </p>
         <p>
           The bare agent often finds the right evidence and then fumbles it. Counting evidence found
-          regardless of answer quality, the arms are closer: 0.59 to 0.66 for bare against 0.73 to 0.81 for
-          Miller. Miller's advantage is knowing exactly which symbol it has and acting correctly on the
-          evidence within a bounded context. It is also not the cheap option. It spends more calls and
-          tokens per task than a baseline that fails fast, and that spend is what buys the correct answers.
+          regardless of answer quality, the arms are close: 0.72 for bare against 0.77 for Miller at the
+          frozen budget, and 0.65 against 0.77 at the doubled budget. The rewritten baseline adapter finds
+          materially more evidence than the July one did, and its correct-task count did not move. That
+          sharpens the reading rather than softening it: the bare agent's deficit is not finding the
+          evidence, it is exact identity plus acting correctly on what it found. Miller is also not the
+          cheap option. It spends more calls and tokens per task than a baseline that fails fast, and that
+          spend is what buys the correct answers.
         </p>
         <p>
-          With semantic retrieval disabled Miller still scored 11/15, so the lexical core carries most of
-          the result. The semantic arm adds one to two more correct tasks and 8 to 13 points of recall, and
-          it never lost a task the lexical arm solved.
+          The lexical core carries most of the result: with semantic retrieval disabled Miller scored 12/15
+          at the frozen budget and 11/15 at the doubled one, against the semantic arm's 10 and 12. This
+          rerun does not show semantic retrieval as a clear win. At the frozen budget the semantic arm lost
+          two tasks the lexical arm solved, one of them evidence-critical; at the doubled budget it won one
+          the lexical arm lost. The same configuration measured twice at the frozen budget scored 11 and 10
+          and disagreed on five individual tasks, so this design cannot separate a real semantic regression
+          from run-to-run variation. A multi-repetition run of the frozen-budget semantic arm is the
+          experiment that would settle it. <code>MILLER_SEMANTIC=off</code> remains a supported switch, and
+          lexical output is byte-identical either way.
         </p>
       </div>
       <div class="metrics-table-wrap">
         <p class="metrics-note">
           Full method, per-run aggregates, and raw scorer rows are committed in the repository:
-          <a href="https://github.com/anortham/miller/blob/main/docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md" target="_blank" rel="noopener">the calibration finding</a>
-          and <a href="https://github.com/anortham/miller/tree/main/docs/findings/agent-efficiency/2026-07-29-bare-agent" target="_blank" rel="noopener">the evidence exports</a>.
-          Caveats stated there apply: one model, 15 author-written tasks, five author-controlled repos. The
-          harness is in-repo (<code>scripts/bench-agent-efficiency.py</code>) so the runs can be reproduced.
+          <a href="https://github.com/anortham/miller/blob/main/docs/findings/2026-08-25-miller-vs-bare-agent-v1.22.1-calibration.md" target="_blank" rel="noopener">the 2026-08-25 calibration finding</a>
+          and <a href="https://github.com/anortham/miller/tree/main/docs/findings/agent-efficiency/2026-08-25-bare-agent-v1.22.1" target="_blank" rel="noopener">its evidence exports</a>.
+          The first measurement is kept beside it:
+          <a href="https://github.com/anortham/miller/blob/main/docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md" target="_blank" rel="noopener">the 2026-07-29 finding</a>
+          and <a href="https://github.com/anortham/miller/tree/main/docs/findings/agent-efficiency/2026-07-29-bare-agent" target="_blank" rel="noopener">its exports</a>.
+          Caveats stated there apply: one model, 15 author-written tasks, five author-controlled repos, one
+          repetition per configuration. The harness is in-repo
+          (<code>scripts/bench-agent-efficiency.py</code>) so the runs can be reproduced.
         </p>
       </div>
     </section>
@@ -153,7 +178,7 @@
   <footer class="site-footer">
     <span>Miller</span>
     <a href="https://github.com/anortham/miller" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://github.com/anortham/miller/blob/main/docs/release-notes/v1.14.1.md" target="_blank" rel="noopener">Release notes</a>
+    <a href="https://github.com/anortham/miller/blob/main/docs/release-notes/v1.22.1.md" target="_blank" rel="noopener">Release notes</a>
   </footer>
 
   <script src="script.js"></script>

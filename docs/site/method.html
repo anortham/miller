@@ -132,9 +132,11 @@
           whether the tool is worth installing. That takes measurement against the baseline users
           actually have, which for a code tool in 2026 is a capable agent with shell access rather than a
           rival product. After remediation, Miller ran that experiment too: same agent, same tasks, same
-          budgets, with and without the tool. The agent got 2.2× more tasks right with Miller and made no
-          wrong-action errors, against a 27% wrong-action rate without it. The details are on the
-          <a href="benchmark.html">benchmark page</a>.
+          budgets, with and without the tool. The agent got 2.2× more tasks right with Miller and halved
+          the wrong-action rate, from 27% to 13%; at the doubled budget it made no wrong-action errors at
+          all. The experiment was rerun on Miller v1.22.1 on 2026-08-25 with the same tasks, repositories,
+          model, seed, and budgets, and the 2.2× result held. The details, including what the rerun did
+          not reproduce, are on the <a href="benchmark.html">benchmark page</a>.
         </p>
         <p>
           To run this on your own tool: write the replacement standard down first, counting calls,
@@ -158,11 +160,15 @@ docs/findings/2026-07-22-miller-julie-takeover-matrix.md
 
 # the paired benchmark that followed it
 docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md
-docs/findings/agent-efficiency/2026-07-29-bare-agent/</code></pre>
+docs/findings/agent-efficiency/2026-07-29-bare-agent/
+
+# the 2026-08-25 rerun on Miller v1.22.1
+docs/findings/2026-08-25-miller-vs-bare-agent-v1.22.1-calibration.md
+docs/findings/agent-efficiency/2026-08-25-bare-agent-v1.22.1/</code></pre>
         <div class="limits">
           <ul>
             <li>The audit's rejected-claims record is preserved alongside the accepted findings; the misfires are part of the evidence.</li>
-            <li>The benchmark harness is in-repo (<code>scripts/bench-agent-efficiency.py</code>) so the follow-up experiment can be rerun.</li>
+            <li>The benchmark harness is in-repo (<code>scripts/bench-agent-efficiency.py</code>) so the follow-up experiment can be rerun. It was rerun on 2026-08-25, and both measurements are kept.</li>
             <li>The extraction layer under Miller has its own depth story: <a href="https://anortham.github.io/julie-extractors/extractors.html" target="_blank" rel="noopener">hand-written extractors, not query files</a>.</li>
           </ul>
         </div>
@@ -173,7 +179,7 @@ docs/findings/agent-efficiency/2026-07-29-bare-agent/</code></pre>
   <footer class="site-footer">
     <span>Miller</span>
     <a href="https://github.com/anortham/miller" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://github.com/anortham/miller/blob/main/docs/release-notes/v1.14.1.md" target="_blank" rel="noopener">Release notes</a>
+    <a href="https://github.com/anortham/miller/blob/main/docs/release-notes/v1.22.1.md" target="_blank" rel="noopener">Release notes</a>
   </footer>
 
   <script src="script.js"></script>

@@ -1,0 +1,90 @@
+{
+  "contract_id": "takeover-evaluation-v1",
+  "schema_version": 1,
+  "decision_scope": "full",
+  "decision_verdict": "not_decisional",
+  "action_verdict": "fail",
+  "task_count": 15,
+  "completion": {
+    "both_correct": 4,
+    "baseline_only": 1,
+    "candidate_only": 7,
+    "neither_correct": 3
+  },
+  "outcome_counts": {
+    "baseline": {
+      "success": 4,
+      "empty": 1,
+      "refusal": 0,
+      "hard_error": 4,
+      "wrong_answer": 6
+    },
+    "candidate": {
+      "success": 9,
+      "empty": 1,
+      "refusal": 1,
+      "hard_error": 1,
+      "wrong_answer": 3
+    }
+  },
+  "relevance": {
+    "verdict": "pass",
+    "task_count": 13,
+    "baseline": {
+      "recall_at_6": 0.28205128205128205,
+      "ndcg_at_6": 0.28964312592220165,
+      "mrr": 0.3076923076923077,
+      "top_1": 0.3076923076923077
+    },
+    "candidate": {
+      "recall_at_6": 0.5384615384615384,
+      "ndcg_at_6": 0.5784312350125046,
+      "mrr": 0.6923076923076923,
+      "top_1": 0.6923076923076923
+    }
+  },
+  "correctness": {
+    "verdict": "pass",
+    "baseline_correct_count": 5,
+    "candidate_correct_count": 11,
+    "critical_loss_count": 0,
+    "baseline_wrong_action_task_count": 4,
+    "candidate_wrong_action_task_count": 2,
+    "baseline_wrong_action_rate": 0.26666666666666666,
+    "candidate_wrong_action_rate": 0.13333333333333333
+  },
+  "efficiency": {
+    "verdict": "fail",
+    "measurable": true,
+    "both_correct_task_count": 4,
+    "token_route_passed": false,
+    "call_route_passed": false,
+    "wall_guard_passed": false
+  },
+  "baseline": {
+    "median_tool_output_tokens": 1062,
+    "median_tool_calls": 1.5,
+    "p75_duration_ms": 27726
+  },
+  "candidate": {
+    "median_tool_output_tokens": 4468,
+    "median_tool_calls": 6,
+    "p75_duration_ms": 43147
+  },
+  "failure_counts": {
+    "baseline": {
+      "budget_exceeded": 6,
+      "incorrect": 14,
+      "insufficient_evidence": 3
+    },
+    "candidate": {
+      "budget_exceeded": 3,
+      "incorrect": 5,
+      "insufficient_evidence": 1
+    }
+  },
+  "by_workflow": {},
+  "by_capability": {},
+  "by_repo": {},
+  "by_language": {}
+}
