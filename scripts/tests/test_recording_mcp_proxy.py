@@ -371,6 +371,44 @@ class RecordingMcpProxyTests(unittest.TestCase):
         )
         self.assertGreater(transition["used"], transition["limit"])
 
+    def test_coalesced_requests_on_an_open_pipe_are_forwarded_without_waiting_for_more_input(self) -> None:
+        initialize = {"jsonrpc": "2.0", "id": "init-1", "method": "initialize", "params": {}}
+        initialized = {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+        tools_list = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+        with tempfile.TemporaryDirectory() as directory:
+            events = Path(directory) / "events.jsonl"
+            process = subprocess.Popen(
+                _proxy_command(events, Path(directory), []),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                assert process.stdin is not None and process.stdout is not None
+                process.stdin.write(_json_line(initialize))
+                process.stdin.flush()
+                self.assertIn(b'"init-1"', process.stdout.readline())
+                process.stdin.write(_json_line(initialized) + _json_line(tools_list))
+                process.stdin.flush()
+                response: list[bytes] = []
+
+                def _read_until_tools_response() -> None:
+                    for _ in range(8):
+                        line = process.stdout.readline()
+                        if not line or b'"tools"' in line:
+                            response.append(line)
+                            return
+
+                reader = threading.Thread(target=_read_until_tools_response)
+                reader.start()
+                reader.join(timeout=5)
+                self.assertFalse(reader.is_alive(), "tools/list response did not arrive while stdin stayed open")
+                self.assertTrue(response and b'"tools"' in response[0], response)
+            finally:
+                if process.stdin and not process.stdin.closed:
+                    process.stdin.close()
+                process.wait(timeout=10)
+
     def test_product_crash_is_recorded_without_stdout_contamination(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

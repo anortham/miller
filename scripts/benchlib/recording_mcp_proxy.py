@@ -468,13 +468,36 @@ class RecordingProxy:
     def _pump_controller(self) -> None:
         assert self._process is not None
         assert self._process.stdin is not None
+        # Read the raw fd, never sys.stdin.buffer: a BufferedReader can swallow several newline-delimited
+        # requests in one read, and select() on the drained fd then blocks while the later requests sit in
+        # the userspace buffer. Codex writes notifications/initialized and tools/list in one burst, so that
+        # mix stalled the handshake until codex's 30s startup watchdog killed the proxy.
+        pending = bytearray()
+        fd = sys.stdin.fileno() if os.name != "nt" else None
         try:
             while not self._stop.is_set():
-                if os.name != "nt":
-                    readable, _, _ = select.select([sys.stdin.buffer], [], [], 0.05)
-                    if not readable:
-                        continue
-                line = sys.stdin.buffer.readline()
+                if fd is not None:
+                    newline = pending.find(b"\n")
+                    if newline < 0:
+                        # A dead product ends the pump directly: fd 0 may be silently reused once the
+                        # shutdown path closes stdin, so waiting for a close-induced select error is
+                        # not a reliable wake.
+                        if self._process.poll() is not None:
+                            return
+                        readable, _, _ = select.select([fd], [], [], 0.05)
+                        if not readable:
+                            continue
+                        chunk = os.read(fd, 65536)
+                        if not chunk:
+                            line = b""
+                        else:
+                            pending.extend(chunk)
+                            continue
+                    else:
+                        line = bytes(pending[: newline + 1])
+                        del pending[: newline + 1]
+                else:
+                    line = sys.stdin.buffer.readline()
                 if not line:
                     self._controller_eof.set()
                     self._process.stdin.close()
