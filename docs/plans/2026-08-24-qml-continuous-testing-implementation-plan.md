@@ -134,11 +134,11 @@ Commit mode: Tasks 1-2 use `parallel-lead-commit`; Tasks 3-5 use `serial-worker-
 **Approach:** Parse JSON with bounded existing .NET facilities and preserve exact Unicode test names. Build argv as argument arrays, never shell strings, and centralize regex escaping for exact CTest selection.
 
 **Acceptance criteria:**
-- [ ] Versions below 3.21 and incomplete version output fail clearly.
-- [ ] JSON v1 targets produce deterministic stable records independent of array order.
-- [ ] Malformed, truncated, duplicate, and zero-test discovery fail without partial cases.
-- [ ] Exact target-name regex construction handles metacharacters safely.
-- [ ] Worker-scope verification passes and the change is handed to the lead per `parallel-lead-commit`.
+- [x] Versions below 3.21 and incomplete version output fail clearly.
+- [x] JSON v1 targets produce deterministic stable records independent of array order.
+- [x] Malformed, truncated, duplicate, and zero-test discovery fail without partial cases.
+- [x] Exact target-name regex construction handles metacharacters safely.
+- [x] Worker-scope verification passes and the change is handed to the lead per `parallel-lead-commit`.
 
 ### Task 3: Implement Qt Quick Test discovery and runs
 

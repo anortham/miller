@@ -2,6 +2,8 @@
 
 Date: 2026-08-24
 
+Final gate update: 2026-08-25
+
 ## Scope
 
 Task 5 adds a real Qt Quick Test Scale fixture under
@@ -48,23 +50,25 @@ Result: 34 passed, 1 skipped, 0 failed. The real Qt Scale test skipped during th
 Qt development-package preflight. Linux real configure/build/discovery/run evidence is
 therefore **NOT VERIFIED** on this machine.
 
-The branch-level Linux gates were recorded separately from the real-Qt fixture preflight:
+The first two pre-fix Linux fast-suite attempts failed only an existing Julie-adoption test
+under full-suite load. The focused test and stress replay passed; the collection was made
+nonparallel at `a7e04ecb`, and the final fast gate is green.
 
-- At `b5e1b78c`, `scripts/test.sh` built with 0 warnings and 0 errors and reported 8,446
-  passed, 9 skipped, and 0 failed.
-- At `9f383d69`, the final affected-tree `scripts/test.sh scale` run reported 196 passed,
+The final branch-level Linux gates were recorded separately from the real-Qt fixture
+preflight:
+
+- At `a7e04ecb`, `scripts/test.sh all` built Release with 0 warnings and 0 errors; the fast
+  suite reported 8,462 passed, 9 skipped, and 0 failed, and Scale reported 196 passed,
   17 skipped, and 0 failed.
-- No production-code changes landed between the fast and later affected tree; subsequent
-  commits changed only Scale-test behavior and the documented `.gitleaks.toml` model-ID
-  allowlist. The gate results remain attributable to their recorded SHAs.
 
 ## Windows evidence
 
-The clean NTFS guest ran the exact source SHAs through the PowerShell wrapper:
+The clean NTFS guest ran exact `a7e04ecb` through the PowerShell wrapper:
 
-- At `b5e1b78c`, the fast suite reported 8,430 passed, 25 platform skips, and 0 failed.
-- At `9f383d69`, the final affected-tree Scale suite reported 199 passed, 14 skipped, and
-  0 failed after the publication-grace test correction.
+- The Release build reported 0 warnings and 0 errors.
+- The fast suite reported 8,446 passed, 25 skipped, and 0 failed.
+- Scale reported 199 passed, 14 skipped, and 0 failed after the publication-grace test
+  correction.
 
 The original Windows Scale failure was diagnosed as a suite-load race: the launcher returned
 the accepted `not_published_within_grace` result during its fixed probe even though the daemon
@@ -78,11 +82,11 @@ coverage for a guest with the required Qt development package.
 
 ## Final gates and security
 
-- Linux and Windows claims above are backed by the recorded fast/Scale logs at the listed SHAs;
+- Linux and Windows claims above are backed by the final fast/Scale logs at `a7e04ecb`;
   missing Qt development toolchains are explicitly **NOT VERIFIED**, not counted as fixture
   execution.
-- `scripts/test.sh all` passed on the affected Linux tree, and the triggered Windows fast/Scale
-  verification passed with the scope reuse recorded above.
+- `scripts/test.sh all` and `scripts/test.ps1 all` both passed on the exact final tree with
+  0 warnings and 0 errors.
 - `gitleaks detect --source . --no-banner --redact --verbose` at `92ed4333` exited 0 after the
   narrow public model-ID allowlist in `.gitleaks.toml`; it scanned 1,895 commits and found no
   secrets. The allowlist is limited to the exact public identifiers and does not disable the
