@@ -231,8 +231,8 @@ Commit mode: Tasks 1-2 use `parallel-lead-commit`; Tasks 3-5 use `serial-worker-
 - [ ] The Scale fixture really configures, builds, discovers, and runs through the provider.
 - [ ] Whole-suite and one exact selection produce correctly attributed JUnit results.
 - [ ] Source tree remains unchanged by configure/build/run.
-- [ ] Linux and Windows claims are backed by executed logs at the same commit; missing toolchains are reported as `NOT VERIFIED`.
-- [ ] `scripts/test.sh all` and triggered Windows verification pass; the worker commits per `serial-worker-commit`.
+- [x] Linux and Windows claims are backed by executed logs at the same commit; missing toolchains are reported as `NOT VERIFIED`.
+- [x] `scripts/test.sh all` and triggered Windows verification pass; the worker commits per `serial-worker-commit`.
 
 ## Execution Handoff
 

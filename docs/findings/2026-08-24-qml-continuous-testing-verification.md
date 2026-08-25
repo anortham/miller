@@ -48,11 +48,50 @@ Result: 34 passed, 1 skipped, 0 failed. The real Qt Scale test skipped during th
 Qt development-package preflight. Linux real configure/build/discovery/run evidence is
 therefore **NOT VERIFIED** on this machine.
 
+The branch-level Linux gates were recorded separately from the real-Qt fixture preflight:
+
+- At `b5e1b78c`, `scripts/test.sh` built with 0 warnings and 0 errors and reported 8,446
+  passed, 9 skipped, and 0 failed.
+- At `9f383d69`, the final affected-tree `scripts/test.sh scale` run reported 196 passed,
+  17 skipped, and 0 failed.
+- No production-code changes landed between the fast and later affected tree; subsequent
+  commits changed only Scale-test behavior and the documented `.gitleaks.toml` model-ID
+  allowlist. The gate results remain attributable to their recorded SHAs.
+
 ## Windows evidence
 
-Windows NTFS `win-test` verification is owned by the lead and was not executed in this Task 5
-worker packet. Windows real evidence is **NOT VERIFIED** here. The fixture and provider include
-the spaced-path and multi-config behavior that the clean-SHA Windows run must exercise.
+The clean NTFS guest ran the exact source SHAs through the PowerShell wrapper:
+
+- At `b5e1b78c`, the fast suite reported 8,430 passed, 25 platform skips, and 0 failed.
+- At `9f383d69`, the final affected-tree Scale suite reported 199 passed, 14 skipped, and
+  0 failed after the publication-grace test correction.
+
+The original Windows Scale failure was diagnosed as a suite-load race: the launcher returned
+the accepted `not_published_within_grace` result during its fixed probe even though the daemon
+obtained the lease immediately afterward. The correction accepts that documented result while
+retaining the live-daemon, PID, stop, and log-growth assertions. It changed tests only; no
+production grace, sleep, or launcher behavior changed.
+
+The real Qt fixture itself remains **NOT VERIFIED** on the golden Windows guest because CMake,
+CTest, and `qtpaths6` are absent. The fixture still carries the spaced-path and multi-config
+coverage for a guest with the required Qt development package.
+
+## Final gates and security
+
+- Linux and Windows claims above are backed by the recorded fast/Scale logs at the listed SHAs;
+  missing Qt development toolchains are explicitly **NOT VERIFIED**, not counted as fixture
+  execution.
+- `scripts/test.sh all` passed on the affected Linux tree, and the triggered Windows fast/Scale
+  verification passed with the scope reuse recorded above.
+- `gitleaks detect --source . --no-banner --redact --verbose` at `92ed4333` exited 0 after the
+  narrow public model-ID allowlist in `.gitleaks.toml`; it scanned 1,895 commits and found no
+  secrets. The allowlist is limited to the exact public identifiers and does not disable the
+  default rules globally.
+- `dotnet list Miller.slnx package --vulnerable --include-transitive` reported no vulnerable
+  packages.
+- The QML CMake/CTest command-injection review found argument-array construction through
+  `TestProcessCommand`, an anchored escaped test-name regex passed as one argv item, no shell
+  command construction, and typed launch exceptions.
 
 ## External contracts
 
