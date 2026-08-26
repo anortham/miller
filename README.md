@@ -25,7 +25,7 @@ across files, SQL DDL/DML shapes, and owned grammar forks (Razor, T-SQL, C#) whe
 gaps. The full argument is
 [hand-written extractors, not query files](https://anortham.github.io/julie-extractors/extractors.html).
 
-> **Current release: [v1.23.1](https://github.com/anortham/miller/releases/tag/v1.23.1)** ·
+> **Current release: [v1.23.2](https://github.com/anortham/miller/releases/tag/v1.23.2)** ·
 > Website: [anortham.github.io/miller](https://anortham.github.io/miller/)
 
 ## Quickstart
@@ -63,10 +63,10 @@ never starts the daemon.
 
 Every other install path is covered step by step in [docs/install.md](docs/install.md):
 
-- **Manual binary:** download a platform archive directly — [macOS arm64](https://github.com/anortham/miller/releases/download/v1.23.1/miller-1.23.1-aarch64-apple-darwin.tar.gz),
-  [macOS x64](https://github.com/anortham/miller/releases/download/v1.23.1/miller-1.23.1-x86_64-apple-darwin.tar.gz),
-  [Linux x64](https://github.com/anortham/miller/releases/download/v1.23.1/miller-1.23.1-x86_64-unknown-linux-gnu.tar.gz),
-  or [Windows x64](https://github.com/anortham/miller/releases/download/v1.23.1/miller-1.23.1-x86_64-pc-windows-msvc.zip). Verify the matching `.sha256`
+- **Manual binary:** download a platform archive directly — [macOS arm64](https://github.com/anortham/miller/releases/download/v1.23.2/miller-1.23.2-aarch64-apple-darwin.tar.gz),
+  [macOS x64](https://github.com/anortham/miller/releases/download/v1.23.2/miller-1.23.2-x86_64-apple-darwin.tar.gz),
+  [Linux x64](https://github.com/anortham/miller/releases/download/v1.23.2/miller-1.23.2-x86_64-unknown-linux-gnu.tar.gz),
+  or [Windows x64](https://github.com/anortham/miller/releases/download/v1.23.2/miller-1.23.2-x86_64-pc-windows-msvc.zip). Verify the matching `.sha256`
   sidecar, extract it, and point your MCP client at the binary. No .NET SDK or Node.js required.
 - **Any other MCP harness:** same binary, plus a routing block from `miller rules --harness <name>`.
 - **Source checkout (development):** needs the .NET 10 SDK, then
