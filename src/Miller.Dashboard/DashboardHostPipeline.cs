@@ -50,10 +50,8 @@ internal static partial class DashboardHostPipeline
     {
         string dashboardCssPath = Path.Combine(paths.WebRoot, "dashboard.css");
         string htmxPath = Path.Combine(paths.WebRoot, "lib", "htmx", "htmx.min.js");
-        string alpinePath = Path.Combine(paths.WebRoot, "lib", "alpine", "cspalpine.min.js");
         string themeInitPath = Path.Combine(paths.WebRoot, "js", "theme-init.js");
         string siteJsPath = Path.Combine(paths.WebRoot, "js", "dashboard-site.js");
-        string alpineComponentsPath = Path.Combine(paths.WebRoot, "js", "alpine-components.js");
         string idiomorphPath = Path.Combine(paths.WebRoot, "lib", "idiomorph", "idiomorph-ext.min.js");
         string archivoFontPath = Path.Combine(paths.WebRoot, "fonts", "archivo-latin.woff2");
         string jetbrainsMonoFontPath = Path.Combine(paths.WebRoot, "fonts", "jetbrains-mono-latin.woff2");
@@ -97,10 +95,6 @@ internal static partial class DashboardHostPipeline
                 ["GET", "HEAD"],
                 (HttpContext context) => StaticAsset(context, htmxPath, "text/javascript; charset=utf-8"));
             endpoints.MapMethods(
-                "/lib/alpine/cspalpine.min.js",
-                ["GET", "HEAD"],
-                (HttpContext context) => StaticAsset(context, alpinePath, "text/javascript; charset=utf-8"));
-            endpoints.MapMethods(
                 "/js/theme-init.js",
                 ["GET", "HEAD"],
                 (HttpContext context) => StaticAsset(context, themeInitPath, "text/javascript; charset=utf-8"));
@@ -108,10 +102,6 @@ internal static partial class DashboardHostPipeline
                 "/js/dashboard-site.js",
                 ["GET", "HEAD"],
                 (HttpContext context) => StaticAsset(context, siteJsPath, "text/javascript; charset=utf-8"));
-            endpoints.MapMethods(
-                "/js/alpine-components.js",
-                ["GET", "HEAD"],
-                (HttpContext context) => StaticAsset(context, alpineComponentsPath, "text/javascript; charset=utf-8"));
             endpoints.MapMethods(
                 "/lib/idiomorph/idiomorph-ext.min.js",
                 ["GET", "HEAD"],

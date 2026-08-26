@@ -1491,7 +1491,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Contains("alpha-abcd1234", html);
         Assert.Contains("csharp", html);
         Assert.Contains("id=\"workspace-filter\"", html);
-        Assert.Contains("x-data=\"workspaceIndexFilter\"", html);
+        Assert.Contains("data-sort-col=\"workspace\"", html);
         Assert.Contains("ws-stale-collapse", html);
         Assert.Contains("miller workspace prune", html);
         Assert.Contains("root missing", html);
@@ -1570,7 +1570,6 @@ public sealed class DashboardRegistryReadTests : IDisposable
         });
 
         Assert.Contains("role=\"columnheader\" aria-sort=\"none\"", html);
-        Assert.DoesNotContain("aria-sort=\"none\" x-on:click", html);
         Assert.DoesNotContain("class=\"col-sort\" data-sort-col=\"workspace\" aria-sort", html);
     }
 
