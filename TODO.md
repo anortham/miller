@@ -59,6 +59,90 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
 - On windows memory usage seems high, investigate.
 - Docs will need updating for CT and should list supported langs/frameworks and state that support for more is ongoing
 
+## Campaign 2026-08-26 — CT dogfood findings (status)
+
+All findings below were addressed on branch `worktree-ct-dogfood-campaign`
+(worktree `.claude/worktrees/ct-dogfood-campaign`, 17 commits over 2a5a80ec, fast+Scale green) —
+**awaiting merge/push approval**. Plan: `docs/plans/2026-08-26-ct-dogfood-campaign.md`; full report:
+`.memories/autonomous-run-2026-08-26-ct-dogfood-campaign.md` (on the branch).
+
+1. Build-output relocation — **done** (workspace-local `.miller/ct/build/<proj12>`, Windows MAX_PATH fallback;
+   infra-shaped failure classification shipped under finding 7's `group=error_class`)
+2. Vitest visibility — **done**, with a corrected diagnosis: vitest RAN and passed 30s after daemon start
+   (ct.db evidence); "557 untouched" was the whole not-yet-run set. Shipped per-project status rows,
+   project-named `covers_all`, `reason=no_selection` drain logging, daemon stdout breadcrumb → real logs are
+   `.miller/logs/miller-<date>.log` (`role:ct`)
+3. Disable retires red cases — **done** (SQL predicate; re-enable restores)
+4. `run wait=true` joins the active run — **done** (`run already active` reason)
+5. Stale spike — **done** (watermark seeding never worked — 0 rows on two live DBs; fixed + poller cursor invariant)
+6. Red ledger continuity — **done** (reds keep state on every staling path; no red loop)
+7. `failures` size/filter/grouping — **done** (12 KiB MCP paging, 400-byte summaries, `project=`, `group=error_class` + `infra_shaped`)
+8. csproj search — **Miller half done**; julie-extractors `feat/msbuild-xml-extensions` @ ee0da1a7 committed
+   (NOT pushed/released). Needs: julie-extract release + pin bump (user approval)
+9. `inspect <file>::<symbol>` — **done** (resolver parse, shared by trace/impact/edit/CLI)
+10. Status run-block omission — **done** (honest compact line)
+
+Open user decisions: merge/push the branch; julie-extract release + pin bump; general answer for hostile
+repo build hooks (`npm ci` per build) — see the run report.
+
+## CT dogfood findings 2026-08-26 — Tycho workspace (5 projects: 3 nunit, 2 vitest)
+
+The core loop works: plant a bug in `RecurrenceService` → the watcher auto-ran an impacted-scope
+foreground run (exactly the 6 cases `impact` predicted) → `failures` showed the one red case with the
+exact assertion → revert → auto-rerun → green. Enable/disable UX is clean. The findings below are
+everything that made the session harder than that loop.
+
+1. **Out-of-tree execution silently breaks repo-root-relative tests — and the fix must be
+   zero-config on the project side.** The dotnet provider builds with `--artifacts-path
+   <BuildOutputRoot>`, so `TestContext.CurrentContext.TestDirectory` is outside the repo. 87 of the
+   140 baseline failures were `DirectoryNotFoundException` from tests that walk up to find
+   `Tycho.slnx` or a sibling source dir; all pass under plain `dotnet test`. User direction
+   (2026-08-26): a project must NOT need Miller-specific settings to go green under CT — "most users
+   are not going to want to fiddle with that". So `MILLER_CT_WORKSPACE_ROOT`-aware test helpers are
+   NOT an acceptable answer, and Tycho commit 5dba115 (csproj conditions on that variable) is the
+   kind of per-project fiddling to eliminate, not the model. Candidate zero-config fix: put the CT
+   build-output root INSIDE the workspace (e.g. `.miller/ct/artifacts/<generation>/`) so walk-up
+   repo-root discovery keeps working; the watcher/indexer must ignore `.miller/**` so this adds no
+   churn. Residual even then: repo-defined build hooks that are hostile to repeated out-of-band
+   builds (Tycho's `npm ci` on every test build) need a general answer, not an env-var contract each
+   repo must opt into. Independent of the fix, `tests failures` should classify infra-shaped errors
+   (DirectoryNotFoundException / missing-browser / native-lib-init) and say "fails only under CT,
+   passes under plain `dotnet test`" when that is knowable.
+2. **vitest projects never ran and nothing says why.** Both vitest projects enabled cleanly
+   (`unsupported_reason=null`), the ClientApp suite passes locally in 5.7s (478 tests), yet after
+   enable + start + a full `run` only `ct-provider:dotnet` executed (`known=992` of `selected_count=1549`).
+   Verdict stays `partial` forever with no per-project row explaining which project is missing a run or
+   why. Worse, the workspace-scope run reported `covers_all=true` while 557 vitest cases were never
+   touched. Daemon logs (`.miller/ct/daemon.{out,err}.log`) are 0 bytes — no diagnosability at all.
+3. **Disabling a project does not retire its red cases.** After `tests disable
+   project=src/Tycho.UiTests/...` the project left the roster but its 45 Playwright reds still count in
+   `failures` (total stayed 140) and in the stale ledger, so the verdict can never clear.
+4. **`run wait=true` during an active run returns instantly with `verdict=unknown unacked`.** The
+   command file shows the request WAS acknowledged ~25s later. Expected: join the in-flight run or
+   wait for the ack; at minimum say "a run is already active".
+5. **Stale count spikes to the full selected set on every revision bump, then recomputes down.** A
+   plain manual `dotnet test` (bin/obj churn only, zero symbol changes) drove rev 2892→3260 and stale
+   105→245; a one-line source edit reset stale to all 1549 before trimming to ~145 within a minute.
+   The number is meaningless while it swings; show the post-trim stale count, and don't mark cases
+   stale when no indexed content changed.
+6. **The red ledger loses failures between revision churn and rerun.** `failures` showed "20 of 140",
+   then "(1)" right after an edit-driven revision bump (only the freshly-red case), then 140 again once
+   the backfill re-ran the old cases. An agent reading the "(1)" snapshot would conclude 139 problems
+   were fixed. Red cases should stay listed until they pass.
+7. **`failures format=json limit=200` blows the MCP token cap** (80k chars on one line, saved to a
+   spill file). No size guard on the JSON path, and no server-side grouping/filtering — a
+   `group=error-class` or `project=` filter would answer "what is actually broken" without paging 140
+   rows.
+8. **`search` cannot find text in `.csproj` files in any mode.** `MILLER_CT_WORKSPACE_ROOT` sits in two
+   csproj files (comment + attribute condition); modes `source`, `content`, and `all-text` all return
+   no hits. Had to fall back to git grep — the exact reflex Miller tells agents to drop. MSBuild XML
+   should be in at least one text corpus.
+9. **`inspect target="<file>::<symbol>"` fails with a misleading diagnostic** (`file_not_indexed`,
+   suggesting a file search). The `scope` parameter works fine. Either support the `::` form or make
+   the diagnostic say "use scope=".
+10. **`status` sometimes omits the run block while `activity: executing`** (observed once, 17:30:39Z:
+    header said executing, no provider/selection/progress lines). Cosmetic but confuses polling.
+
 ## Closed
 
 - Semantic activation after `miller semantic prepare` no longer needs a session restart on Miller's side
