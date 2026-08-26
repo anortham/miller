@@ -483,6 +483,9 @@ public sealed class InspectTool
     {
         int separator = path.LastIndexOfAny(['/', '\\']);
         string segment = separator >= 0 ? path[(separator + 1)..] : path;
+        int qualifier = segment.IndexOf("::", StringComparison.Ordinal);
+        if (qualifier > 0)
+            segment = segment[..qualifier];
         return segment.Length == 0 ? path : segment;
     }
 

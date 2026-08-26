@@ -75,6 +75,17 @@ public sealed partial class SmartTargetResolver
                 break; // Auto — infer below.
         }
 
+        // A '::' target with a path-shaped head ("src/Foo.cs::Method") is a file-scoped member lookup, tried
+        // before rule 1 turns the whole string into a path. Safe ahead of the '::' id shape (rule 2): no
+        // indexed symbol name carries both '::' and a separator (Rust '::' paths and CSS pseudo-elements are
+        // slash-free), and a slash-free head must carry an indexed extension to qualify.
+        if (TryParseFileScopedMember(target, out string fileScope, out string memberTarget))
+        {
+            TargetResolution scoped = ResolveByName(memberTarget, fileScope);
+            if (scoped is not TargetResolution.NotFound)
+                return scoped;
+        }
+
         // Rule 1: explicit path separators → file (language-agnostic).
         if (target.Contains('/') || target.Contains('\\'))
             return new TargetResolution.File(Index.ResolveIndexedFilePath(target) ?? target);
@@ -125,6 +136,26 @@ public sealed partial class SmartTargetResolver
                 : new TargetResolution.NotFound(target);
         }
         return ResolveByName(target, scope);
+    }
+
+    private bool TryParseFileScopedMember(string target, out string fileScope, out string memberTarget)
+    {
+        fileScope = string.Empty;
+        memberTarget = string.Empty;
+        if (!target.Contains("::", StringComparison.Ordinal))
+            return false;
+
+        string[] parts = target.Split("::", StringSplitOptions.None);
+        if (parts.Length < 2 || parts.Any(string.IsNullOrWhiteSpace))
+            return false;
+
+        string head = parts[0];
+        if (!head.Contains('/') && !head.Contains('\\') && !HasKnownExtension(head))
+            return false;
+
+        fileScope = Index.ResolveIndexedFilePath(head) ?? head;
+        memberTarget = string.Join('.', parts[1..]);
+        return true;
     }
 
     private static bool TryNormalizeColonQualifiedMember(string target, out string normalized)

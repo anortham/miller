@@ -79,6 +79,31 @@ public sealed class InspectMissingFileTests : IDisposable
     }
 
     [Fact]
+    public void Inspect_FileScopedSymbolTarget_ResolvesTheSymbolInsteadOfFileNotIndexed()
+    {
+        InspectTool tool = ToolOver(SymbolsLevelArtifact.Create(Workspace()));
+
+        string compact = tool.Inspect("src/Alpha.cs::Run");
+
+        Assert.Contains("Run", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("file_not_indexed", compact, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("src/Aplha.cs::Missing")]
+    [InlineData("src/Aplha.cs::Outer::Inner")]
+    public void Inspect_FileScopedTargetOnAnUnindexedPath_StripsTheQualifierFromTheFileSearchHint(string target)
+    {
+        InspectTool tool = ToolOver(SymbolsLevelArtifact.Create(Workspace()));
+
+        string compact = tool.Inspect(target);
+
+        Assert.Contains("diagnostic_code=file_not_indexed", compact, StringComparison.Ordinal);
+        Assert.Contains("search(query=\"Aplha.cs\", mode=\"file\")", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("query=\"Aplha.cs::", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Inspect_IndexedFileCarryingNoSymbols_KeepsNoFileSymbolsUnchanged()
     {
         string workspace = Workspace();

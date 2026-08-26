@@ -565,6 +565,94 @@ public sealed class SmartTargetResolverTests
         Assert.Equal(methodId, Assert.IsType<TargetResolution.Symbol>(result).Value.SymbolId);
     }
 
+    [Theory]
+    [InlineData("auth/UserService.cs::GetUser")]
+    [InlineData(@"auth\UserService.cs::GetUser")]
+    public void Resolve_FileScopedMember_ResolvesTheSymbolWithinThatFile(string target)
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        var resolver = new SmartTargetResolver(BuildIndex(fx));
+
+        var sym = Assert.IsType<TargetResolution.Symbol>(resolver.Resolve(target));
+
+        Assert.Equal("GetUser", sym.Value.Name);
+        Assert.Equal("auth/UserService.cs", sym.Value.FilePath);
+    }
+
+    [Fact]
+    public void Resolve_FileScopedMember_DisambiguatesAnAmbiguousNameToTheNamedFile()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "Handle", "method", "csharp",
+                "a/First.cs", "void Handle()", 3, null),
+            new JulieDbFixture.SymbolRow("bb11223344556677889900aabbccddee", "Handle", "method", "csharp",
+                "b/Second.cs", "void Handle()", 7, null),
+        });
+        var resolver = new SmartTargetResolver(BuildIndex(fx));
+
+        var sym = Assert.IsType<TargetResolution.Symbol>(resolver.Resolve("b/Second.cs::Handle"));
+
+        Assert.Equal("b/Second.cs", sym.Value.FilePath);
+    }
+
+    [Fact]
+    public void Resolve_FileScopedMember_WithBareBasename_CanonicalizesThroughTheIndex()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "Handle", "method", "csharp",
+                "a/First.cs", "void Handle()", 3, null),
+            new JulieDbFixture.SymbolRow("bb11223344556677889900aabbccddee", "Handle", "method", "csharp",
+                "b/Second.cs", "void Handle()", 7, null),
+        });
+        var resolver = new SmartTargetResolver(BuildIndex(fx));
+
+        var sym = Assert.IsType<TargetResolution.Symbol>(resolver.Resolve("Second.cs::Handle"));
+
+        Assert.Equal("b/Second.cs", sym.Value.FilePath);
+    }
+
+    [Fact]
+    public void Resolve_FileScopedQualifiedMember_SplitsTheMemberAtTheLastSeparator()
+    {
+        const string firstNamespaceId = "aa11223344556677889900aabbccd101";
+        const string firstTypeId = "aa11223344556677889900aabbccd102";
+        const string firstMethodId = "aa11223344556677889900aabbccd103";
+        const string secondNamespaceId = "aa11223344556677889900aabbccd201";
+        const string secondTypeId = "aa11223344556677889900aabbccd202";
+        const string secondMethodId = "aa11223344556677889900aabbccd203";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(firstNamespaceId, "Ns1", "namespace", "csharp", "src/Ns1.cs", "namespace Ns1", 1, null),
+                new(firstTypeId, "Widget", "class", "csharp", "src/Ns1.cs", "class Widget", 2, firstNamespaceId),
+                new(firstMethodId, "Render", "method", "csharp", "src/Ns1.cs", "void Render()", 3, firstTypeId),
+                new(secondNamespaceId, "Ns2", "namespace", "csharp", "src/Ns2.cs", "namespace Ns2", 1, null),
+                new(secondTypeId, "Widget", "class", "csharp", "src/Ns2.cs", "class Widget", 2, secondNamespaceId),
+                new(secondMethodId, "Render", "method", "csharp", "src/Ns2.cs", "void Render()", 3, secondTypeId),
+            ]);
+        var resolver = new SmartTargetResolver(BuildIndex(fixture));
+
+        var result = resolver.Resolve("src/Ns1.cs::Widget::Render");
+
+        Assert.Equal(
+            firstMethodId,
+            Assert.IsType<TargetResolution.Symbol>(result).Value.SymbolId);
+    }
+
+    [Fact]
+    public void Resolve_FileScopedMember_AbsentSymbol_FallsThroughToFileResolution()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        var resolver = new SmartTargetResolver(BuildIndex(fx));
+
+        var file = Assert.IsType<TargetResolution.File>(resolver.Resolve("auth/UserService.cs::NoSuchMember"));
+
+        Assert.Equal("auth/UserService.cs::NoSuchMember", file.Path);
+    }
+
     [Fact]
     public void Resolve_AsFile_ForcesNameLikeStringToFile()
     {
