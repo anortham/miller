@@ -173,9 +173,72 @@ public sealed class SemanticPrepareCliTests : IDisposable
     }
 
     [Theory]
+    [InlineData("Activated", "reports ready")]
+    [InlineData("StillNotReady", "Restart the Miller session")]
+    [InlineData("NoLiveBroker", "next Miller session loads the model")]
+    [InlineData("SemanticDisabled", "MILLER_SEMANTIC=off")]
+    public void Prepare_Success_CompactExplainsTheActivationOutcomeInPlainWords(
+        string outcomeName,
+        string expectedPhrase)
+    {
+        SemanticPrepareActivationOutcome outcome =
+            Enum.Parse<SemanticPrepareActivationOutcome>(outcomeName);
+        var cli = Build(
+            binaryExists: true,
+            preflight: Ok(),
+            runner: (_, _, _, _) => 0,
+            activator: () => outcome);
+
+        var (code, outText, _) = Run(cli, new SemanticPrepareRequest(Model: null, Json: false));
+
+        Assert.Equal(0, code);
+        Assert.Contains(expectedPhrase, outText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Prepare_Success_JsonCarriesNoPlainWordsExplanation()
+    {
+        var cli = Build(
+            binaryExists: true,
+            preflight: Ok(),
+            runner: (_, _, _, _) => 0,
+            activator: () => SemanticPrepareActivationOutcome.StillNotReady);
+
+        var (_, outText, _) = Run(cli, new SemanticPrepareRequest(Model: null, Json: true));
+
+        Assert.DoesNotContain("Restart the Miller session", outText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Prepare_Success_ProbeFailureExplanationNamesTheRestart()
+    {
+        var cli = Build(
+            binaryExists: true,
+            preflight: Ok(),
+            runner: (_, _, _, _) => 0,
+            activator: () => throw new IOException("broker disappeared"));
+
+        var (code, outText, _) = Run(cli, new SemanticPrepareRequest(Model: null, Json: false));
+
+        Assert.Equal(0, code);
+        Assert.Contains("Restart the Miller session", outText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EveryActivationOutcome_HasAPlainWordsExplanation()
+    {
+        foreach (SemanticPrepareActivationOutcome outcome
+            in Enum.GetValues<SemanticPrepareActivationOutcome>())
+        {
+            Assert.False(string.IsNullOrWhiteSpace(SemanticPrepareCli.ActivationExplanation(outcome)));
+        }
+    }
+
+    [Theory]
     [InlineData("Activated", "activated")]
     [InlineData("NoLiveBroker", "no_live_broker")]
     [InlineData("StillNotReady", "still_not_ready")]
+    [InlineData("SemanticDisabled", "semantic_disabled")]
     public void Prepare_Success_JsonReportsPassiveActivationOutcome(
         string outcomeName,
         string expected)

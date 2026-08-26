@@ -37,6 +37,10 @@ internal enum SemanticPrepareActivationOutcome
     Activated,
     NoLiveBroker,
     StillNotReady,
+
+    /// <summary><c>MILLER_SEMANTIC=off</c>: no broker was probed, so neither of the other three states is true.
+    /// Reporting one of them would tell the user a broker answered when nothing was asked.</summary>
+    SemanticDisabled,
 }
 
 /// <summary>
@@ -170,7 +174,7 @@ internal sealed class SemanticPrepareCli
     private static SemanticPrepareActivationOutcome ActivateExistingBroker(string toolsRoot, string millerHome)
     {
         if (SemanticActivation.FromEnvironment() is SemanticMode.Off)
-            return SemanticPrepareActivationOutcome.NoLiveBroker;
+            return SemanticPrepareActivationOutcome.SemanticDisabled;
 
         var factory = new SharedSemanticBrokerConnectionFactory(
             toolsRoot,
@@ -207,6 +211,7 @@ internal sealed class SemanticPrepareCli
             SemanticPrepareActivationOutcome.Activated => "activated",
             SemanticPrepareActivationOutcome.NoLiveBroker => "no_live_broker",
             SemanticPrepareActivationOutcome.StillNotReady => "still_not_ready",
+            SemanticPrepareActivationOutcome.SemanticDisabled => "semantic_disabled",
             _ => throw new ArgumentOutOfRangeException(nameof(outcome)),
         };
         if (json)
@@ -216,7 +221,30 @@ internal sealed class SemanticPrepareCli
         }
 
         stdout.WriteLine($"semantic activation: {value}");
+        stdout.WriteLine(ActivationExplanation(outcome));
     }
+
+    /// <summary>
+    /// The plain-English half of the activation report. The token line above stays machine-stable; this line tells
+    /// the person who just waited out a download whether the running session picked the model up, and if not, what
+    /// makes it pick it up. Without it the verb ended on a state name that reads as success.
+    /// </summary>
+    internal static string ActivationExplanation(SemanticPrepareActivationOutcome outcome) => outcome switch
+    {
+        SemanticPrepareActivationOutcome.Activated =>
+            "  the running broker reports ready. This session uses semantic retrieval now.",
+        SemanticPrepareActivationOutcome.StillNotReady =>
+            "  the running broker still reports the model is not prepared. Restart the Miller session, or " +
+            "reconnect the MCP server, to use semantic retrieval. A later sidecar release will pick the model " +
+            "up without a restart.",
+        SemanticPrepareActivationOutcome.NoLiveBroker =>
+            "  no live broker answered, so there was nothing to tell. The next Miller session loads the model " +
+            "at startup.",
+        SemanticPrepareActivationOutcome.SemanticDisabled =>
+            "  semantic retrieval is off (MILLER_SEMANTIC=off), so no broker was probed. The model is ready for " +
+            "a session that has semantic retrieval on.",
+        _ => throw new ArgumentOutOfRangeException(nameof(outcome)),
+    };
 
     private static IReadOnlyList<string> BuildArguments(string model) =>
         ["prepare", "--model", model];

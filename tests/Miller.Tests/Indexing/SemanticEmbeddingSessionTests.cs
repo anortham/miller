@@ -405,6 +405,27 @@ public sealed class SemanticEmbeddingSessionTests
     }
 
     [Fact]
+    public async Task ModelNotPrepared_ABrokerThatNeverFlipsReady_CostsOneConnectPerProbeAndNeverOpensTheCircuit()
+    {
+        await using var factory = new RecordingConnectionFactory(
+            FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.ModelNotPrepared));
+        await using var session = new SemanticEmbeddingSession(factory, FastOptions);
+
+        for (int tick = 0; tick < 8; tick++)
+        {
+            Assert.Null(await session.EnsureStartedAsync(TestContext.Current.CancellationToken));
+            SemanticEmbedOutcome parked =
+                await session.EmbedBatchAsync(["alpha"], TestContext.Current.CancellationToken);
+            Assert.False(parked.Succeeded);
+        }
+
+        Assert.Equal(8, factory.ConnectCount);
+        Assert.Equal(SemanticSessionState.ModelNotPrepared, session.State);
+        Assert.Equal(0, session.RestartCount);
+        Assert.All(factory.Methods, method => Assert.Equal("health", method));
+    }
+
+    [Fact]
     public async Task DisposedSession_RefusesFurtherCallsInsteadOfRelaunching()
     {
         var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher(), FastOptions);
