@@ -45,6 +45,7 @@ public static partial class ToolOutputBudget
     public const int PatternsMcpDiagnosticReserveBytes = 1024;
     public const int WorkspaceMcpMaxBytes = 12 * 1024;
     public const int WorkspaceHealthMcpMaxBytes = WorkspaceMcpMaxBytes;
+    public const int TestsMcpMaxBytes = 12 * 1024;
 
     private static readonly UTF8Encoding StrictUtf8 = new(
         encoderShouldEmitUTF8Identifier: false,

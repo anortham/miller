@@ -42,7 +42,7 @@ public sealed partial class ContinuousTestStore
             });
     }
 
-    internal IReadOnlyList<ContinuousTestStatus> ListContinuousTestStatusesForProject(
+    public IReadOnlyList<ContinuousTestStatus> ListContinuousTestStatusesForProject(
         string workspaceId,
         string projectPath)
     {

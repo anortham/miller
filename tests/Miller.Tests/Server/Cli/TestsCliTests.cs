@@ -796,6 +796,34 @@ public sealed class TestsCliTests : IDisposable
     }
 
     [Fact]
+    public void Failures_group_error_class_is_a_cli_flag()
+    {
+        SeedRedCases(3);
+
+        var (code, outText, errText) = Run("tests", "failures", "--group", "error_class", "--json");
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument document = JsonDocument.Parse(outText);
+        JsonElement root = document.RootElement;
+        Assert.False(root.TryGetProperty("failures", out _));
+        JsonElement group = root.GetProperty("groups")[0];
+        Assert.Equal("unclassified", group.GetProperty("error_class").GetString());
+        Assert.Equal(3, group.GetProperty("count").GetInt32());
+        Assert.False(group.GetProperty("infra_shaped").GetBoolean());
+        Assert.Equal(3, root.GetProperty("total").GetInt32());
+    }
+
+    [Fact]
+    public void An_unknown_group_value_is_a_usage_error()
+    {
+        var (code, _, errText) = Run("tests", "failures", "--group", "bogus");
+
+        Assert.Equal(2, code);
+        Assert.Contains("error_class", errText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void An_unknown_tests_operation_reports_the_verb_list_and_exits_non_zero()
     {
         var (code, _, errText) = Run("tests", "bogus");

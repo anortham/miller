@@ -227,6 +227,27 @@ public sealed record TestsFailuresResult(
     public string Render(bool json) => json ? TestsCore.RenderFailuresJson(this) : TestsCore.RenderFailuresCompact(this);
 }
 
+public sealed record TestsFailureGroup(
+    string ErrorClass,
+    int Count,
+    bool InfraShaped,
+    string SampleTestCaseId,
+    string? SampleFailureSummary);
+
+/// <summary>
+/// Red cases grouped by derived error class. The class comes from the <c>failure_summary</c> prefix, not a
+/// stored column, so it is a reading of the text — <c>unclassified</c> collects every summary whose prefix is
+/// not a dotted type name. <paramref name="TruncatedGroups"/> counts classes a byte-bounded page dropped.
+/// </summary>
+public sealed record TestsFailureGroupsResult(
+    IReadOnlyList<TestsFailureGroup> Groups,
+    int Total,
+    int TruncatedGroups = 0)
+{
+    public string Render(bool json) =>
+        json ? TestsCore.RenderFailureGroupsJson(this) : TestsCore.RenderFailureGroupsCompact(this);
+}
+
 /// <summary>
 /// Shared CT verb core for the CLI and the MCP <c>tests</c> tool. Status reads never create
 /// <c>ct.db</c> or a daemon. Start is explicit.
@@ -239,7 +260,7 @@ public static class TestsCore
     private const int MaxDaemonActivityNames = 8;
     private const string TestsUsage =
         "miller tests <status|failures|serve|run|enable|disable|stop> [--json] [--wait] [--limit N] [--offset N] "
-        + "[--project PATH] [--workspace-id SELECTOR] [--workspace DIR]";
+        + "[--project PATH] [--group error_class] [--workspace-id SELECTOR] [--workspace DIR]";
 
     /// <summary>Rows one <c>failures</c> page returns when the caller names no limit.</summary>
     public const int FailuresDefaultLimit = 20;
@@ -250,6 +271,30 @@ public static class TestsCore
     /// <c>offset</c> reaches everything past it.
     /// </summary>
     public const int FailuresMaxLimit = 200;
+
+    /// <summary>
+    /// Longest <c>failure_summary</c> either failures renderer emits per row, in UTF-8 bytes. One 80KB stack
+    /// trace in a single row used to blow the whole MCP page on its own; the full text stays in <c>ct.db</c>.
+    /// </summary>
+    public const int FailureSummaryMaxBytes = 400;
+
+    /// <summary>The group every summary lands in when its prefix is not a dotted type name.</summary>
+    public const string UnclassifiedErrorClass = "unclassified";
+
+    // Error names that in dogfood practice meant the CT environment, not the code under test — 87 of Tycho's
+    // 140 baseline reds were DirectoryNotFoundException rows indistinguishable from real assertion failures.
+    // Matched on the LAST dotted segment so a namespace-qualified summary qualifies.
+    private static readonly IReadOnlySet<string> InfraShapedErrorNames = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "DirectoryNotFoundException",
+        "FileNotFoundException",
+        "DllNotFoundException",
+        "UnauthorizedAccessException",
+        "IOException",
+    };
+
+    private const string InfraShapedAdvice =
+        "often an environment difference under CT — verify with a plain provider run";
 
     // Same request reason the daemon records, so `budget_holder.reason` reads the same whether the
     // suite runs in a daemon or in the foreground.
@@ -434,16 +479,106 @@ public static class TestsCore
         int limit = Math.Clamp(maxItems, 1, FailuresMaxLimit);
         int skip = Math.Max(0, offset);
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
-        ContinuousTestStatus[] red = store.ListContinuousTestStatuses(workspaceId)
-            .Where(row => row.State == ContinuousTestState.Red)
-            .OrderBy(row => row.TestCaseId, StringComparer.Ordinal)
-            .ToArray();
+        ContinuousTestStatus[] red = RedRows(store, root, workspaceId, request.ProjectPath);
         ContinuousTestStatus[] page = red.Skip(skip).Take(limit).ToArray();
         return new TestsFailuresResult(
             page,
             Math.Max(0, red.Length - skip - page.Length),
             red.Length,
             skip);
+    }
+
+    /// <summary>
+    /// The red cases grouped by derived error class, over the same (optionally project-filtered) red set the
+    /// row listing pages through. Groups summarize everything, so <c>limit</c>/<c>offset</c> do not apply.
+    /// </summary>
+    public static TestsFailureGroupsResult FailureGroups(TestsCoreRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        string root = RequireRoot(request);
+        string workspaceId = ResolveWorkspaceId(request, root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        ContinuousTestStatus[] red = RedRows(store, root, workspaceId, request.ProjectPath);
+        TestsFailureGroup[] groups = red
+            .GroupBy(static row => DeriveErrorClass(row.FailureSummary), StringComparer.Ordinal)
+            .Select(static group =>
+            {
+                ContinuousTestStatus sample = group.First();
+                return new TestsFailureGroup(
+                    group.Key,
+                    group.Count(),
+                    IsInfraShaped(group.Key),
+                    sample.TestCaseId,
+                    sample.FailureSummary);
+            })
+            .OrderByDescending(static group => group.Count)
+            .ThenBy(static group => group.ErrorClass, StringComparer.Ordinal)
+            .ToArray();
+        return new TestsFailureGroupsResult(groups, red.Length);
+    }
+
+    private static ContinuousTestStatus[] RedRows(
+        ContinuousTestStore store,
+        string root,
+        string workspaceId,
+        string? projectPath)
+    {
+        IReadOnlyList<ContinuousTestStatus> rows;
+        if (string.IsNullOrWhiteSpace(projectPath))
+        {
+            rows = store.ListContinuousTestStatuses(workspaceId);
+        }
+        else if (TryResolveProject(root, projectPath, out string full, out string? error))
+        {
+            rows = store.ListContinuousTestStatusesForProject(workspaceId, full);
+        }
+        else
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal("invalid_project", error!));
+        }
+
+        return rows
+            .Where(static row => row.State == ContinuousTestState.Red)
+            .OrderBy(static row => row.TestCaseId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    internal static string DeriveErrorClass(string? failureSummary)
+    {
+        if (string.IsNullOrWhiteSpace(failureSummary))
+            return UnclassifiedErrorClass;
+        int split = failureSummary.IndexOf(": ", StringComparison.Ordinal);
+        if (split <= 0)
+            return UnclassifiedErrorClass;
+        string prefix = failureSummary[..split];
+        return LooksLikeDottedTypeName(prefix) ? prefix : UnclassifiedErrorClass;
+    }
+
+    internal static bool IsInfraShaped(string errorClass)
+    {
+        if (string.Equals(errorClass, UnclassifiedErrorClass, StringComparison.Ordinal))
+            return false;
+        int lastDot = errorClass.LastIndexOf('.');
+        string name = lastDot < 0 ? errorClass : errorClass[(lastDot + 1)..];
+        return InfraShapedErrorNames.Contains(name);
+    }
+
+    private static bool LooksLikeDottedTypeName(string candidate)
+    {
+        foreach (string segment in candidate.Split('.'))
+        {
+            if (segment.Length == 0)
+                return false;
+            if (!char.IsLetter(segment[0]) && segment[0] != '_')
+                return false;
+            foreach (char c in segment)
+            {
+                if (!char.IsLetterOrDigit(c) && c != '_')
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     public static TestsMutationResult Enable(TestsCoreRequest request)
@@ -1481,7 +1616,7 @@ public static class TestsCore
                 if (row.FailureSummary is null)
                     writer.WriteNull("failure_summary");
                 else
-                    writer.WriteString("failure_summary", row.FailureSummary);
+                    writer.WriteString("failure_summary", BoundedFailureSummary(row.FailureSummary));
                 WriteFailureCorrelation(writer, row);
                 writer.WriteEndObject();
             }
@@ -1505,7 +1640,8 @@ public static class TestsCore
             : $"# tests failures ({shown})");
         foreach (ContinuousTestStatus row in result.Failures)
         {
-            sb.Append("  - ").Append(row.TestCaseId).Append(": ").Append(row.FailureSummary ?? row.State.ToString());
+            sb.Append("  - ").Append(row.TestCaseId).Append(": ")
+                .Append(BoundedFailureSummary(row.FailureSummary) ?? row.State.ToString());
             AppendFailureCorrelation(sb, row);
             sb.AppendLine();
         }
@@ -1519,6 +1655,92 @@ public static class TestsCore
 
         return sb.ToString().TrimEnd().ReplaceLineEndings("\n");
     }
+
+    internal static string RenderFailureGroupsJson(TestsFailureGroupsResult result)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = NewWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName("groups");
+            writer.WriteStartArray();
+            foreach (TestsFailureGroup group in result.Groups)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("error_class", group.ErrorClass);
+                writer.WriteNumber("count", group.Count);
+                writer.WriteBoolean("infra_shaped", group.InfraShaped);
+                writer.WritePropertyName("sample");
+                writer.WriteStartObject();
+                writer.WriteString("test_case_id", group.SampleTestCaseId);
+                if (group.SampleFailureSummary is null)
+                    writer.WriteNull("failure_summary");
+                else
+                    writer.WriteString("failure_summary", BoundedFailureSummary(group.SampleFailureSummary));
+                writer.WriteEndObject();
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            writer.WriteNumber("total", result.Total);
+            writer.WriteNumber("truncated_groups", result.TruncatedGroups);
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    internal static string RenderFailureGroupsCompact(TestsFailureGroupsResult result)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(
+            $"# tests failures by error_class ({result.Groups.Count.ToString(CultureInfo.InvariantCulture)}"
+            + $" class(es), {result.Total.ToString(CultureInfo.InvariantCulture)} red)");
+        foreach (TestsFailureGroup group in result.Groups)
+        {
+            sb.Append("  - ").Append(group.ErrorClass)
+                .Append(" (").Append(group.Count.ToString(CultureInfo.InvariantCulture)).AppendLine(")");
+            sb.Append("    sample ").Append(group.SampleTestCaseId).Append(": ")
+                .AppendLine(BoundedFailureSummary(group.SampleFailureSummary) ?? "(no summary)");
+            // ADR-0001: advice is compact-only; the JSON carries only the infra_shaped fact.
+            if (group.InfraShaped)
+                sb.Append("    ").AppendLine(InfraShapedAdvice);
+        }
+
+        if (result.TruncatedGroups > 0)
+            sb.AppendLine($"truncated: {result.TruncatedGroups.ToString(CultureInfo.InvariantCulture)} class(es)");
+
+        return sb.ToString().TrimEnd().ReplaceLineEndings("\n");
+    }
+
+    /// <summary>
+    /// The MCP page of red rows: the longest row prefix whose render fits <paramref name="maxBytes"/>. Rows a
+    /// byte bound sheds join <c>truncated</c>, so the compact footer and the JSON both name the next offset the
+    /// caller pages from — the continuation identity is the stable test-case-id ordering itself.
+    /// </summary>
+    internal static string RenderFailuresWithinByteBudget(TestsFailuresResult result, bool json, int maxBytes) =>
+        ToolOutputBudget.RenderPrefixWithinByteBudget(
+            result.Failures,
+            maxBytes,
+            (rows, dropped) => new TestsFailuresResult(
+                rows,
+                result.Truncated + dropped,
+                result.Total,
+                result.Offset).Render(json));
+
+    internal static string RenderFailureGroupsWithinByteBudget(
+        TestsFailureGroupsResult result,
+        bool json,
+        int maxBytes) =>
+        ToolOutputBudget.RenderPrefixWithinByteBudget(
+            result.Groups,
+            maxBytes,
+            (groups, dropped) => new TestsFailureGroupsResult(groups, result.Total, dropped).Render(json));
+
+    private static string? BoundedFailureSummary(string? summary) =>
+        summary is null
+            ? null
+            : ToolOutputBudget.TruncateUtf8(summary, FailureSummaryMaxBytes, "…");
 
     private static void WriteFailureCorrelation(Utf8JsonWriter writer, ContinuousTestStatus row)
     {

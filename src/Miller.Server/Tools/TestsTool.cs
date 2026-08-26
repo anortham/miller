@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text;
 using Miller.Indexing;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
@@ -47,8 +48,10 @@ public sealed class TestsTool
         bool wait = false,
         [Description("For operation=run with wait=true, timeout in seconds. Default 240; allowed range 1-240.")]
         int? wait_seconds = null,
-        [Description("Test project path for enable/disable, relative to the workspace or absolute. Optional.")]
+        [Description("Test project path for enable/disable/failures, relative to the workspace or absolute. Optional.")]
         string? project = null,
+        [Description("For operation=failures: error_class groups red rows by derived exception class. Optional.")]
+        string? group = null,
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
         string? workspace_id = null,
         [Description("For operation=failures, rows per page. 1-200, default 20.")]
@@ -82,6 +85,21 @@ public sealed class TestsTool
                     "tests wait_seconds is only valid when operation=run and wait=true."));
             }
 
+            string? normalizedGroup = string.IsNullOrWhiteSpace(group) ? null : group.Trim().ToLowerInvariant();
+            if (normalizedGroup is not null && normalized != "failures")
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "invalid_group",
+                    "tests group is only valid when operation=failures."));
+            }
+
+            if (normalizedGroup is not (null or "error_class"))
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "invalid_group",
+                    "tests group must be error_class."));
+            }
+
             if (wait_seconds is < McpWaitSecondsMinimum or > McpWaitSecondsMaximum)
             {
                 throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
@@ -104,10 +122,21 @@ public sealed class TestsTool
                     hint = StatusHint(result);
                     break;
                 }
+                case "failures" when normalizedGroup is "error_class":
+                {
+                    TestsFailureGroupsResult result = TestsCore.FailureGroups(request);
+                    output = TestsCore.RenderFailureGroupsWithinByteBudget(
+                        result, json, ToolOutputBudget.TestsMcpMaxBytes);
+                    hint = result.Groups.Count == 0
+                        ? NextStepHint.Render("tests operation=status", "re-check verdict")
+                        : NextStepHint.Render("inspect", "open a failing test");
+                    break;
+                }
                 case "failures":
                 {
                     TestsFailuresResult result = TestsCore.Failures(request, limit, offset);
-                    output = result.Render(json);
+                    output = TestsCore.RenderFailuresWithinByteBudget(
+                        result, json, ToolOutputBudget.TestsMcpMaxBytes);
                     hint = result.Failures.Count == 0
                         ? NextStepHint.Render("tests operation=status", "re-check verdict")
                         : NextStepHint.Render("inspect", "open a failing test");
@@ -172,7 +201,7 @@ public sealed class TestsTool
 
             if (!json && hint is not null)
                 output = output + "\n" + hint;
-            return output;
+            return RequireTestsMcpOutput(output);
         }
         catch (Exception ex)
         {
@@ -241,6 +270,16 @@ public sealed class TestsTool
         if (result.Verdict == ContinuousTestVerdict.Red)
             return NextStepHint.Render("tests operation=failures", "inspect red cases");
         return NextStepHint.Render("tests operation=failures", "inspect recent results");
+    }
+
+    private static string RequireTestsMcpOutput(string output)
+    {
+        if (Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.TestsMcpMaxBytes)
+            return output;
+
+        throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+            "output_metadata_too_large",
+            "tests output exceeds the 12 KiB MCP budget; narrow with limit, offset, project, or group=error_class."));
     }
 
     private static string NormalizeOperation(string? operation) =>

@@ -2572,7 +2572,7 @@ public static class CliDispatch
             return 0;
         }
 
-        foreach (string flag in new[] { "workspace-id", "workspace", "project" })
+        foreach (string flag in new[] { "workspace-id", "workspace", "project", "group" })
         {
             if (o.Has(flag) && string.IsNullOrWhiteSpace(o.Value(flag)))
             {
@@ -2600,12 +2600,31 @@ public static class CliDispatch
                 outw.WriteLine(TestsCore.Status(request).Render(request.Json));
                 return 0;
             case "failures":
-                outw.WriteLine(TestsCore.Failures(
-                        request,
-                        o.Int("limit", TestsCore.FailuresDefaultLimit),
-                        o.Int("offset", 0))
-                    .Render(request.Json));
-                return 0;
+            {
+                string? group = o.Value("group");
+                if (group is not null && !string.Equals(group.Trim(), "error_class", StringComparison.OrdinalIgnoreCase))
+                {
+                    err.WriteLine($"unknown --group '{group}'. Use error_class.");
+                    return 2;
+                }
+
+                try
+                {
+                    outw.WriteLine(group is null
+                        ? TestsCore.Failures(
+                                request,
+                                o.Int("limit", TestsCore.FailuresDefaultLimit),
+                                o.Int("offset", 0))
+                            .Render(request.Json)
+                        : TestsCore.FailureGroups(request).Render(request.Json));
+                    return 0;
+                }
+                catch (ToolDiagnosticException ex)
+                {
+                    err.WriteLine(ex.Message);
+                    return 2;
+                }
+            }
             case "serve":
             {
                 TestsServeResult result = TestsCore.Start(request);
@@ -4316,7 +4335,8 @@ public static class CliDispatch
 
         Operations:
           status   Cheap honest status. Creates nothing. Default when no op is given. [--json]
-          failures One page of red test cases, newest verdict per case. [--limit N] [--offset N] [--json]
+          failures One page of red test cases, newest verdict per case. [--limit N] [--offset N] [--project PATH]
+                   [--group error_class] groups reds by derived exception class instead of listing rows. [--json]
           serve    Start the detached CT daemon. Explicit start only.
           run      Live daemon: command channel. No daemon: foreground one-shot. [--wait] [--json]
           enable   Discover test projects and persist rows in ct.db. [--project PATH]
@@ -4324,7 +4344,7 @@ public static class CliDispatch
           stop     Graceful daemon stop.
 
         Selectors / flags: [--workspace-id SELECTOR] [--workspace DIR] [--json] [--wait] [--project PATH]
-                           [--limit N] [--offset N]
+                           [--limit N] [--offset N] [--group error_class]
         """;
 }
 
