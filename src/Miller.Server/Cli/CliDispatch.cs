@@ -292,13 +292,19 @@ public static class CliDispatch
         TextWriter err,
         IDashboardLauncher launcher)
     {
-        CliOptions o = CliOptions.Parse(args, "json");
+        CliOptions o = CliOptions.Parse(args, "json", "stop");
         if (o.Positionals.Count > 0)
-            return Usage(err, "miller dashboard [--port N] [--json]");
+            return Usage(err, "miller dashboard [--port N] [--stop] [--json]");
+
+        if (o.Has("stop"))
+            return DashboardStop(ctx, outw, err, launcher, o.Has("json"));
 
         int port = o.Int("port", DashboardCliLauncher.DefaultPort);
-        DashboardLaunchResult result = launcher.EnsureRunning(
-            new DashboardLaunchRequest(ctx, port, StartupTimeout: TimeSpan.FromSeconds(5)));
+        DashboardLaunchResult result = launcher.EnsureRunning(new DashboardLaunchRequest(
+            ctx,
+            port,
+            StartupTimeout: TimeSpan.FromSeconds(5),
+            OwnVersion: MillerVersion.Current));
         if (o.Has("json"))
         {
             outw.WriteLine(ServerJson.Serialize(new DashboardLaunchJson(
@@ -315,15 +321,59 @@ public static class CliDispatch
             return 3;
         }
 
-        string status = result.Outcome == DashboardLaunchOutcome.Started
-            ? "dashboard started"
-            : "dashboard already running";
+        string status = result.Outcome switch
+        {
+            DashboardLaunchOutcome.Started => "dashboard started",
+            DashboardLaunchOutcome.Replaced => "dashboard replaced",
+            _ => "dashboard already running",
+        };
         if (result.ProcessId is { } pid)
             outw.WriteLine($"{status} (pid {pid}): {result.Url}");
         else
             outw.WriteLine($"{status}: {result.Url}");
+
+        // The bare status word cannot carry a version mismatch or a refused replace, so the message
+        // follows whenever it says more than the status already did.
+        if (result.Message is { Length: > 0 } message && message is not ("started" or "already running"))
+            outw.WriteLine(message);
         return 0;
     }
+
+    private static int DashboardStop(
+        WorkspaceContext ctx,
+        TextWriter outw,
+        TextWriter err,
+        IDashboardLauncher launcher,
+        bool json)
+    {
+        DashboardStopResult result = launcher.Stop(
+            new DashboardStopRequest(ctx, StopTimeout: TimeSpan.FromSeconds(5)));
+        if (json)
+        {
+            outw.WriteLine(ServerJson.Serialize(new DashboardStopJson(
+                Status: DashboardStopStatus(result.Outcome),
+                Pid: result.ProcessId,
+                Version: result.Version,
+                Message: result.Message)));
+            return result.Success ? 0 : 3;
+        }
+
+        if (!result.Success)
+        {
+            err.WriteLine(result.Message);
+            return 3;
+        }
+
+        outw.WriteLine(result.Message);
+        return 0;
+    }
+
+    private static string DashboardStopStatus(DashboardStopOutcome outcome) => outcome switch
+    {
+        DashboardStopOutcome.Stopped => "stopped",
+        DashboardStopOutcome.NotRunning => "not_running",
+        _ => "failed",
+    };
 
     // `semantic prepare` is the explicit, consented model-download entry point: it shells out to the pinned
     // julie-semantic-sidecar's `prepare` subcommand (all download mechanics sidecar-owned, design §4.4), streams
@@ -4183,8 +4233,9 @@ public static class CliDispatch
                              [--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]
           trace <symbol>     Follow exact references, a dependency path, or a cross-language bridge.
                              [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode refs|path|bridge] [--to SYMBOL] [--path-kind call|dependency] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--continuation TOKEN] [--full] [--json]
-          dashboard          Start or reuse the machine-global loopback dashboard.
-                             [--port N] [--json]
+          dashboard          Start, reuse, or replace the machine-global loopback dashboard.
+                             A dashboard on an older build is stopped and replaced by this one.
+                             [--port N] [--stop] [--json]
           workspace [op]     Index lifecycle. op = status (default) | health | onboarding | leader | list | refresh | full | open | remove | prune.
                              open   [--path DIR] [--full]   Register + index a directory (creates .miller/symbols.db).
                              leader [--handoff] [--wait]    Diagnose current leader and optionally request graceful handoff.

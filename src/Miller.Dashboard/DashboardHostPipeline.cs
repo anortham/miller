@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Net.Http.Headers;
 using Miller.Dashboard.Endpoints;
+using Miller.Server;
 
 namespace Miller.Dashboard;
 
@@ -116,8 +117,10 @@ internal static partial class DashboardHostPipeline
                 (HttpContext context) => StaticAsset(context, jetbrainsMonoFontPath, "font/woff2"));
             endpoints.MapMethods("/favicon.ico", ["GET", "HEAD"], () =>
                 Results.Text(FaviconSvg, "image/svg+xml; charset=utf-8"));
+            // The "miller-dashboard ok" PREFIX is the stable part every existing probe matches; the
+            // build follows it so a plugin upgrade can see which dashboard is answering.
             endpoints.MapGet("/healthz", () => Results.Text(
-                "miller-dashboard ok",
+                $"miller-dashboard ok {MillerVersion.Current}",
                 "text/plain; charset=utf-8"));
 
             DashboardEndpoints.MapDashboardEndpoints(endpoints, paths, launchDirectory);

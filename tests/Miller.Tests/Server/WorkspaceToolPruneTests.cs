@@ -279,5 +279,8 @@ public sealed class WorkspaceToolPruneTests : IDisposable
     private sealed class RecordingDashboardLauncher(DashboardLaunchResult result) : IDashboardLauncher
     {
         public DashboardLaunchResult EnsureRunning(DashboardLaunchRequest request) => result;
+
+        public DashboardStopResult Stop(DashboardStopRequest request) =>
+            throw new InvalidOperationException("stop is not part of this test");
     }
 }

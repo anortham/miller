@@ -72,7 +72,7 @@ Current `json_commands` include:
 | `references export --jsonl` | Bulk-export one row per identifier/reference usage fact. |
 | `complexity export --jsonl` | Bulk-export per-symbol/per-file complexity metric rows for fleet hotspot ranking. |
 | `patterns export --jsonl` | Bulk-export structural fact rows for fleet code-shape inventory. |
-| `dashboard --json` | Start/reuse the local dashboard helper and return its URL. |
+| `dashboard --json` | Start/reuse the local dashboard helper and return its URL. `status` is `alreadyrunning`, `started`, `replaced` (a dashboard on an older build was stopped and replaced by this one), or `failed`. `dashboard --stop --json` stops the recorded dashboard and returns `stopped`, `not_running`, or `failed`. The launch statuses keep their original unseparated spelling (`alreadyrunning`) because changing them would break existing readers; the stop statuses are snake_case, matching the MCP `workspace operation=dashboard` status map (`already_running`). |
 | `tests status --json` | Continuous-test status: enabled projects, daemon running/paused + reason, aggregate verdict, selected `(index_identity, revision)`, stale counts, last run, and budget holder. Creates nothing. See [`tests-cli-v1.md`](tests-cli-v1.md). |
 | `tests run --json` | Request a CT run: live daemon uses the command channel; otherwise a foreground one-shot. `--wait` observes daemon activity completion and reports a typed wait outcome, not a verdict transition. See [`tests-cli-v1.md`](tests-cli-v1.md). |
 | `capabilities --json` | Discover this contract surface. |

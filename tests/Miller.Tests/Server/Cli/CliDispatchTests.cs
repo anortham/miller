@@ -348,7 +348,7 @@ public sealed class CliDispatchTests : IDisposable
     {
         var (code, outText, _) = Run(new[] { "version" }, Context(Path.Combine(_dir, "symbols.db")));
         Assert.Equal(0, code);
-        Assert.StartsWith("1.22.1", outText.Trim());
+        Assert.StartsWith("1.23.0", outText.Trim());
     }
 
     [Fact]
@@ -363,7 +363,7 @@ public sealed class CliDispatchTests : IDisposable
         using JsonDocument doc = JsonDocument.Parse(outText);
         JsonElement root = doc.RootElement;
 
-        Assert.StartsWith("1.22.1", root.GetProperty("miller").GetProperty("version").GetString());
+        Assert.StartsWith("1.23.0", root.GetProperty("miller").GetProperty("version").GetString());
 
         JsonElement julie = root.GetProperty("julie_extract");
         Assert.Equal("2.37.0", julie.GetProperty("pinned_version").GetString());
@@ -878,6 +878,168 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(3, code);
         Assert.Empty(outText);
         Assert.Contains("dashboard binary not found", errText);
+    }
+
+    [Fact]
+    public void Dashboard_PassesThisBuildAsTheCallerVersion()
+    {
+        var launcher = new RecordingDashboardLauncher(
+            new DashboardLaunchResult(
+                DashboardLaunchOutcome.AlreadyRunning,
+                new Uri("http://127.0.0.1:4977/workspace?workspace_id=ws-current"),
+                ProcessId: null,
+                Message: "already running"));
+
+        Run(new[] { "dashboard" }, Context(Path.Combine(_dir, "symbols.db")), launcher);
+
+        Assert.Equal(MillerVersion.Current, launcher.Requests.Single().OwnVersion);
+    }
+
+    [Fact]
+    public void Dashboard_WhenItReplacedAnOlderBuild_SaysSoAndNamesTheOldVersion()
+    {
+        var launcher = new RecordingDashboardLauncher(
+            new DashboardLaunchResult(
+                DashboardLaunchOutcome.Replaced,
+                new Uri("http://127.0.0.1:4977/workspace?workspace_id=ws-current"),
+                ProcessId: 789,
+                Message: "replaced the dashboard on 1.22.0+aaaaaaa"));
+
+        var (code, outText, errText) = Run(
+            new[] { "dashboard" },
+            Context(Path.Combine(_dir, "symbols.db")),
+            launcher);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("dashboard replaced (pid 789)", outText);
+        Assert.Contains("replaced the dashboard on 1.22.0+aaaaaaa", outText);
+    }
+
+    [Fact]
+    public void Dashboard_WhenAVersionMismatchBlocksTheReplace_ReportsTheReason()
+    {
+        var launcher = new RecordingDashboardLauncher(
+            new DashboardLaunchResult(
+                DashboardLaunchOutcome.AlreadyRunning,
+                new Uri("http://127.0.0.1:4977/workspace?workspace_id=ws-current"),
+                ProcessId: null,
+                Message: "already running; the dashboard runs a newer build (2.0.0); this is 1.23.0"));
+
+        var (code, outText, _) = Run(
+            new[] { "dashboard" },
+            Context(Path.Combine(_dir, "symbols.db")),
+            launcher);
+
+        Assert.Equal(0, code);
+        Assert.Contains("dashboard already running", outText);
+        Assert.Contains("the dashboard runs a newer build (2.0.0)", outText);
+    }
+
+    [Fact]
+    public void Dashboard_Stop_WhenRunning_ReportsWhatItStopped()
+    {
+        var launcher = new RecordingDashboardLauncher(
+            new DashboardStopResult(
+                DashboardStopOutcome.Stopped,
+                ProcessId: 789,
+                Version: "1.22.0+aaaaaaa",
+                Message: "stopped the dashboard on 1.22.0+aaaaaaa (pid 789)"));
+
+        var (code, outText, errText) = Run(
+            new[] { "dashboard", "--stop" },
+            Context(Path.Combine(_dir, "symbols.db")),
+            launcher);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("stopped the dashboard on 1.22.0+aaaaaaa (pid 789)", outText);
+        Assert.Empty(launcher.Requests);
+        Assert.Single(launcher.StopRequests);
+    }
+
+    [Fact]
+    public void Dashboard_Stop_WhenNotRunning_IsSuccess()
+    {
+        var launcher = new RecordingDashboardLauncher(
+            new DashboardStopResult(
+                DashboardStopOutcome.NotRunning,
+                ProcessId: null,
+                Version: null,
+                Message: "no dashboard is recorded as running"));
+
+        var (code, outText, errText) = Run(
+            new[] { "dashboard", "--stop" },
+            Context(Path.Combine(_dir, "symbols.db")),
+            launcher);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("no dashboard is recorded as running", outText);
+    }
+
+    [Fact]
+    public void Dashboard_Stop_Json_EmitsStatusPidAndVersion()
+    {
+        var launcher = new RecordingDashboardLauncher(
+            new DashboardStopResult(
+                DashboardStopOutcome.NotRunning,
+                ProcessId: 42,
+                Version: null,
+                Message: "process 42 is not running; no dashboard was stopped"));
+
+        var (code, outText, _) = Run(
+            new[] { "dashboard", "--stop", "--json" },
+            Context(Path.Combine(_dir, "symbols.db")),
+            launcher);
+
+        Assert.Equal(0, code);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal("not_running", doc.RootElement.GetProperty("status").GetString());
+        Assert.Equal(42, doc.RootElement.GetProperty("pid").GetInt32());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("version").ValueKind);
+    }
+
+    [Fact]
+    public void Dashboard_Stop_Json_WhenTheStopFails_StaysJsonOnStdoutAndExitsThree()
+    {
+        var launcher = new RecordingDashboardLauncher(
+            new DashboardStopResult(
+                DashboardStopOutcome.Failed,
+                ProcessId: 42,
+                Version: "1.22.0",
+                Message: "process 42 refused to stop"));
+
+        var (code, outText, errText) = Run(
+            new[] { "dashboard", "--stop", "--json" },
+            Context(Path.Combine(_dir, "symbols.db")),
+            launcher);
+
+        Assert.Equal(3, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal("failed", doc.RootElement.GetProperty("status").GetString());
+        Assert.Equal("process 42 refused to stop", doc.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Dashboard_Stop_WhenTheStopFails_IsOperationalExitThree()
+    {
+        var launcher = new RecordingDashboardLauncher(
+            new DashboardStopResult(
+                DashboardStopOutcome.Failed,
+                ProcessId: 42,
+                Version: "1.22.0",
+                Message: "process 42 refused to stop"));
+
+        var (code, outText, errText) = Run(
+            new[] { "dashboard", "--stop" },
+            Context(Path.Combine(_dir, "symbols.db")),
+            launcher);
+
+        Assert.Equal(3, code);
+        Assert.Empty(outText);
+        Assert.Contains("process 42 refused to stop", errText);
     }
 
     [Fact]
@@ -3396,7 +3558,7 @@ public sealed class CliDispatchTests : IDisposable
         // binary's version into the status header (the dogfooding "which build is live" signal).
         var (code, outText, _) = Run(new[] { "workspace", "status" }, Context(fx.DbPath));
         Assert.Equal(0, code);
-        Assert.Contains("miller 1.22.1", outText);
+        Assert.Contains("miller 1.23.0", outText);
         Assert.Contains("pid ", outText);
         Assert.Contains("symbols:", outText);
     }
@@ -4661,17 +4823,31 @@ public sealed class CliDispatchTests : IDisposable
         return false;
     }
 
-    private sealed class RecordingDashboardLauncher(DashboardLaunchResult result) : IDashboardLauncher
+    private sealed class RecordingDashboardLauncher : IDashboardLauncher
     {
-        private readonly DashboardLaunchResult _result = result;
+        private readonly DashboardLaunchResult? _launch;
+        private readonly DashboardStopResult? _stop;
         private readonly List<DashboardLaunchRequest> _requests = new();
+        private readonly List<DashboardStopRequest> _stopRequests = new();
+
+        public RecordingDashboardLauncher(DashboardLaunchResult result) => _launch = result;
+
+        public RecordingDashboardLauncher(DashboardStopResult result) => _stop = result;
 
         public IReadOnlyList<DashboardLaunchRequest> Requests => _requests;
+
+        public IReadOnlyList<DashboardStopRequest> StopRequests => _stopRequests;
 
         public DashboardLaunchResult EnsureRunning(DashboardLaunchRequest request)
         {
             _requests.Add(request);
-            return _result;
+            return _launch ?? throw new InvalidOperationException("no launch result was configured");
+        }
+
+        public DashboardStopResult Stop(DashboardStopRequest request)
+        {
+            _stopRequests.Add(request);
+            return _stop ?? throw new InvalidOperationException("no stop result was configured");
         }
     }
 

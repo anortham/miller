@@ -19,6 +19,9 @@ internal static class ServerJson
     public static string Serialize(DashboardLaunchJson value) =>
         JsonSerializer.Serialize(value, ServerJsonContext.Default.DashboardLaunchJson);
 
+    public static string Serialize(DashboardStopJson value) =>
+        JsonSerializer.Serialize(value, ServerJsonContext.Default.DashboardStopJson);
+
     public static string Serialize(DashboardProcessMetadata value) =>
         JsonSerializer.Serialize(value, DashboardMetadataJsonContext.Default.DashboardProcessMetadata);
 
@@ -43,10 +46,13 @@ internal static class ServerJson
 
 internal sealed record DashboardLaunchJson(string Status, string Url, int? Pid, string? Message);
 
+internal sealed record DashboardStopJson(string Status, int? Pid, string? Version, string? Message);
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(ImmutableArray<string>))]
 [JsonSerializable(typeof(DashboardLaunchJson))]
+[JsonSerializable(typeof(DashboardStopJson))]
 [JsonSerializable(typeof(TestsStatusResult))]
 [JsonSerializable(typeof(TestsFailuresResult))]
 [JsonSerializable(typeof(TestsMutationResult))]

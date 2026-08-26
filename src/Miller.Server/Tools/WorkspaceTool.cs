@@ -1328,8 +1328,11 @@ public sealed class WorkspaceTool
     private (string output, int resultCount, TelemetryOutcome outcome) Dashboard(int? port, bool json)
     {
         int launchPort = port is > 0 and <= 65535 ? port.Value : DashboardCliLauncher.DefaultPort;
-        DashboardLaunchResult launch = _dashboardLauncher.EnsureRunning(
-            new DashboardLaunchRequest(_workspace, launchPort, StartupTimeout: TimeSpan.FromSeconds(5)));
+        DashboardLaunchResult launch = _dashboardLauncher.EnsureRunning(new DashboardLaunchRequest(
+            _workspace,
+            launchPort,
+            StartupTimeout: TimeSpan.FromSeconds(5),
+            OwnVersion: MillerVersion.Current));
         var result = new WorkspaceDashboardResult(
             DashboardStatus(launch.Outcome),
             launch.Success,
@@ -1346,6 +1349,7 @@ public sealed class WorkspaceTool
     {
         DashboardLaunchOutcome.AlreadyRunning => "already_running",
         DashboardLaunchOutcome.Started => "started",
+        DashboardLaunchOutcome.Replaced => "replaced",
         DashboardLaunchOutcome.Failed => "failed",
         _ => outcome.ToString().ToLowerInvariant(),
     };

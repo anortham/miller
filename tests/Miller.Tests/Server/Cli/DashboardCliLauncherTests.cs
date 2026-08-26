@@ -278,6 +278,515 @@ public sealed class DashboardCliLauncherTests : IDisposable
         Assert.Equal(DashboardLaunchOutcome.Started, result.Outcome);
     }
 
+    [Fact]
+    public void EnsureRunning_WhenTheRunningDashboardIsThisBuild_ReusesIt()
+    {
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.23.0+aaaaaaa");
+        var kills = new List<int>();
+        int starts = 0;
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: _ => { starts++; return Process.GetCurrentProcess(); },
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart),
+            killProcess: pid => { kills.Add(pid); return true; })
+            .EnsureRunning(Request(port: 4977, ownVersion: "1.23.0+aaaaaaa"));
+
+        Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
+        Assert.Equal("already running", result.Message);
+        Assert.Empty(kills);
+        Assert.Equal(0, starts);
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenTheRunningDashboardIsAnOlderBuild_StopsItAndStartsThisOne()
+    {
+        Environment.SetEnvironmentVariable("MILLER_DASHBOARD_DLL", _dashboardDll);
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+        var kills = new List<int>();
+        bool stopped = false;
+        bool started = false;
+        DashboardProcessMetadata? written = null;
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: info => { started = true; WritePidFile(info); return Process.GetCurrentProcess(); },
+            isHealthy: _ => started || !stopped,
+            probeProcess: _ => stopped ? null : new DashboardProcessProbe(RecordedStart),
+            killProcess: pid => { kills.Add(pid); stopped = true; return true; },
+            writeMetadata: (_, value) => written = value)
+            .EnsureRunning(Request(port: 4977, ownVersion: "1.23.0+bbbbbbb"));
+
+        Assert.Equal(DashboardLaunchOutcome.Replaced, result.Outcome);
+        Assert.Equal("replaced the dashboard on 1.22.0+aaaaaaa", result.Message);
+        Assert.Equal(42, Assert.Single(kills));
+        Assert.Equal("1.23.0+bbbbbbb", written!.MillerVersion);
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenTheRecordPredatesTheVersionField_ReplacesTheDashboard()
+    {
+        Environment.SetEnvironmentVariable("MILLER_DASHBOARD_DLL", _dashboardDll);
+        WriteRecordText($$"""
+            {
+              "ProcessId": 42,
+              "Url": "http://127.0.0.1:4977",
+              "StartedAtUtc": "{{RecordedStart:O}}"
+            }
+            """);
+        bool stopped = false;
+        bool started = false;
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: info => { started = true; WritePidFile(info); return Process.GetCurrentProcess(); },
+            isHealthy: _ => started || !stopped,
+            probeProcess: _ => stopped ? null : new DashboardProcessProbe(RecordedStart),
+            killProcess: _ => { stopped = true; return true; })
+            .EnsureRunning(Request(port: 4977, ownVersion: "1.23.0+bbbbbbb"));
+
+        Assert.Equal(DashboardLaunchOutcome.Replaced, result.Outcome);
+        Assert.Equal("replaced the dashboard on unknown", result.Message);
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenTheRunningDashboardIsANewerBuild_ReusesItAndReportsTheMismatch()
+    {
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "2.0.0+ccccccc");
+        var kills = new List<int>();
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("a newer dashboard must not be replaced"),
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart),
+            killProcess: pid => { kills.Add(pid); return true; })
+            .EnsureRunning(Request(port: 4977, ownVersion: "1.23.0+bbbbbbb"));
+
+        Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
+        Assert.Contains("newer build (2.0.0+ccccccc)", result.Message!);
+        Assert.Empty(kills);
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenNeitherBuildCanBeOrdered_ReusesItAndReportsTheMismatch()
+    {
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "nightly");
+        var kills = new List<int>();
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("an unorderable pair must be left alone"),
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart),
+            killProcess: pid => { kills.Add(pid); return true; })
+            .EnsureRunning(Request(port: 4977, ownVersion: "experimental"));
+
+        Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
+        Assert.Contains("neither can be ordered", result.Message!);
+        Assert.Empty(kills);
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenTheRecordedPidIsNotTheDashboard_ReusesRatherThanKillingBlindly()
+    {
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+        var kills = new List<int>();
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("an unproven pid must not be replaced"),
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart.AddHours(-3)),
+            killProcess: pid => { kills.Add(pid); return true; })
+            .EnsureRunning(Request(port: 4977, ownVersion: "1.23.0+bbbbbbb"));
+
+        Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
+        Assert.Contains("could not be replaced", result.Message!);
+        Assert.Contains("is not the recorded dashboard", result.Message!);
+        Assert.Empty(kills);
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenThereIsNoBinaryToStart_LeavesTheOlderDashboardRunning()
+    {
+        File.Delete(_dashboardDll);
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+        var kills = new List<int>();
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("there is no binary to start"),
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart),
+            killProcess: pid => { kills.Add(pid); return true; })
+            .EnsureRunning(Request(port: 4977, ownVersion: "1.23.0+bbbbbbb"));
+
+        Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
+        Assert.Contains("dashboard binary not found", result.Message!);
+        Assert.Empty(kills);
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenTheCallerNamesNoBuild_ReusesARecordWrittenBeforeTheVersionField()
+    {
+        WriteRecordText($$"""
+            {
+              "ProcessId": 42,
+              "Url": "http://127.0.0.1:4977",
+              "StartedAtUtc": "{{RecordedStart:O}}"
+            }
+            """);
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("an unversioned caller must not replace"),
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart),
+            killProcess: _ => throw new InvalidOperationException("an unversioned caller must not kill"))
+            .EnsureRunning(Request(port: 4977, ownVersion: null));
+
+        Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
+        Assert.Equal("already running", result.Message);
+    }
+
+    [Fact]
+    public void Stop_WhenTheRecordedDashboardIsRunning_KillsItAndClearsTheRecord()
+    {
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+        bool stopped = false;
+        var kills = new List<int>();
+
+        DashboardStopResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("stop must not launch"),
+            isHealthy: _ => !stopped,
+            probeProcess: _ => stopped ? null : new DashboardProcessProbe(RecordedStart),
+            killProcess: pid => { kills.Add(pid); stopped = true; return true; })
+            .Stop(new DashboardStopRequest(Context(), TimeSpan.FromSeconds(1)));
+
+        Assert.Equal(DashboardStopOutcome.Stopped, result.Outcome);
+        Assert.Equal(42, Assert.Single(kills));
+        Assert.Equal("1.22.0+aaaaaaa", result.Version);
+        Assert.Contains("stopped the dashboard on 1.22.0+aaaaaaa", result.Message);
+        Assert.False(File.Exists(RecordPath));
+    }
+
+    [Fact]
+    public void Stop_WhenNoDashboardIsRecorded_SucceedsWithAnHonestMessage()
+    {
+        DashboardStopResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("stop must not launch"),
+            isHealthy: _ => throw new InvalidOperationException("nothing to probe"),
+            probeProcess: _ => throw new InvalidOperationException("nothing to probe"),
+            killProcess: _ => throw new InvalidOperationException("nothing to kill"))
+            .Stop(new DashboardStopRequest(Context(), TimeSpan.FromSeconds(1)));
+
+        Assert.Equal(DashboardStopOutcome.NotRunning, result.Outcome);
+        Assert.True(result.Success);
+        Assert.Equal("no dashboard is recorded as running", result.Message);
+    }
+
+    [Fact]
+    public void Stop_WhenTheRecordedPidIsNotTheDashboard_RefusesToKillAndReportsWhy()
+    {
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+        var kills = new List<int>();
+
+        DashboardStopResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("stop must not launch"),
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart.AddHours(-3)),
+            killProcess: pid => { kills.Add(pid); return true; })
+            .Stop(new DashboardStopRequest(Context(), TimeSpan.FromSeconds(1)));
+
+        Assert.Equal(DashboardStopOutcome.Failed, result.Outcome);
+        Assert.Empty(kills);
+        Assert.Contains("is not the recorded dashboard", result.Message);
+        Assert.True(File.Exists(RecordPath));
+    }
+
+    [Fact]
+    public void EnsureRunning_RecordsTheStartTimeOfTheProcessItSpawned()
+    {
+        Environment.SetEnvironmentVariable("MILLER_DASHBOARD_DLL", _dashboardDll);
+        DateTimeOffset spawnedStart = RecordedStart.AddMinutes(-7);
+        bool started = false;
+        DashboardProcessMetadata? written = null;
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: info => { started = true; WritePidFile(info); return Process.GetCurrentProcess(); },
+            isHealthy: _ => started,
+            probeProcess: _ => new DashboardProcessProbe(spawnedStart),
+            killProcess: _ => throw new InvalidOperationException("nothing to kill"),
+            writeMetadata: (_, value) => written = value)
+            .EnsureRunning(Request(port: 5010, ownVersion: "1.23.0+bbbbbbb"));
+
+        Assert.Equal(DashboardLaunchOutcome.Started, result.Outcome);
+        Assert.Equal(spawnedStart, written!.ProcessStartedAtUtc);
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenTheDashboardNeverAnswers_LeavesNoRecordNamingIt()
+    {
+        Environment.SetEnvironmentVariable("MILLER_DASHBOARD_DLL", _dashboardDll);
+        WriteRecord(pid: 42, port: 5011, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: info => { WritePidFile(info); return Process.GetCurrentProcess(); },
+            isHealthy: _ => false,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart),
+            killProcess: _ => throw new InvalidOperationException("nothing to kill"),
+            writeMetadata: (_, _) => throw new InvalidOperationException("a silent dashboard must not be recorded"))
+            .EnsureRunning(Request(port: 5011, ownVersion: "1.23.0+bbbbbbb", timeout: TimeSpan.Zero));
+
+        Assert.Equal(DashboardLaunchOutcome.Failed, result.Outcome);
+        Assert.False(File.Exists(RecordPath));
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenTheOldDashboardRefusesToStop_LeavesItRunning()
+    {
+        Environment.SetEnvironmentVariable("MILLER_DASHBOARD_DLL", _dashboardDll);
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("a dashboard that would not stop must not be replaced"),
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart),
+            killProcess: _ => false)
+            .EnsureRunning(Request(port: 4977, ownVersion: "1.23.0+bbbbbbb"));
+
+        Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
+        Assert.Contains("could not be replaced", result.Message!);
+        Assert.Contains("refused to stop", result.Message!);
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenTheSignalledDashboardKeepsAnswering_FailsRatherThanClaimingItStillRuns()
+    {
+        Environment.SetEnvironmentVariable("MILLER_DASHBOARD_DLL", _dashboardDll);
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+        var kills = new List<int>();
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("a dashboard still answering must not be replaced"),
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart),
+            killProcess: pid => { kills.Add(pid); return true; })
+            .EnsureRunning(Request(port: 4977, ownVersion: "1.23.0+bbbbbbb", timeout: TimeSpan.Zero));
+
+        Assert.Equal(DashboardLaunchOutcome.Failed, result.Outcome);
+        Assert.Contains("still answering", result.Message!);
+        Assert.Equal(42, Assert.Single(kills));
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenTheSystemWillNotReportTheProcessStartTime_ReusesRatherThanKillingBlindly()
+    {
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+        var kills = new List<int>();
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("an unproven pid must not be replaced"),
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(null),
+            killProcess: pid => { kills.Add(pid); return true; })
+            .EnsureRunning(Request(port: 4977, ownVersion: "1.23.0+bbbbbbb"));
+
+        Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
+        Assert.Contains("would not report when process 42 started", result.Message!);
+        Assert.Empty(kills);
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenTheRecordedProcessStartTimeIsMinutesOff_ReusesRatherThanKillingBlindly()
+    {
+        WriteRecord(
+            pid: 42,
+            port: 4977,
+            startedAt: RecordedStart,
+            version: "1.22.0+aaaaaaa",
+            processStartedAt: RecordedStart);
+        var kills = new List<int>();
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("a recycled pid must not be replaced"),
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart.AddMinutes(4)),
+            killProcess: pid => { kills.Add(pid); return true; })
+            .EnsureRunning(Request(port: 4977, ownVersion: "1.23.0+bbbbbbb"));
+
+        Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
+        Assert.Contains("is not the recorded dashboard", result.Message!);
+        Assert.Empty(kills);
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenAnotherLaunchReplacedTheDashboardWhileThisOneWaited_ReusesTheNewBuild()
+    {
+        Environment.SetEnvironmentVariable("MILLER_DASHBOARD_DLL", _dashboardDll);
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+        var kills = new List<int>();
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("the replace already happened"),
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart),
+            killProcess: pid => { kills.Add(pid); return true; },
+            tryAcquireLaunchLock: _ =>
+            {
+                WriteRecord(pid: 99, port: 4977, startedAt: RecordedStart, version: "1.23.0+bbbbbbb");
+                return new NoopDisposable();
+            })
+            .EnsureRunning(Request(port: 4977, ownVersion: "1.23.0+bbbbbbb"));
+
+        Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
+        Assert.Equal("already running", result.Message);
+        Assert.Empty(kills);
+    }
+
+    [Fact]
+    public void EnsureRunning_WhenAnotherLaunchHoldsTheLock_ReportsThatItDidNotReplace()
+    {
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+        var kills = new List<int>();
+
+        DashboardLaunchResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("a contended lock must not launch"),
+            isHealthy: _ => true,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart),
+            killProcess: pid => { kills.Add(pid); return true; },
+            tryAcquireLaunchLock: _ => null)
+            .EnsureRunning(Request(port: 4977, ownVersion: "1.23.0+bbbbbbb"));
+
+        Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
+        Assert.Contains("was not replaced", result.Message!);
+        Assert.Empty(kills);
+    }
+
+    [Fact]
+    public void Stop_WhenTheRecordedDashboardIsAlreadyGone_SucceedsAndClearsTheStaleRecord()
+    {
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+
+        DashboardStopResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("stop must not launch"),
+            isHealthy: _ => false,
+            probeProcess: _ => null,
+            killProcess: _ => throw new InvalidOperationException("a dead pid must not be killed"))
+            .Stop(new DashboardStopRequest(Context(), TimeSpan.FromSeconds(1)));
+
+        Assert.Equal(DashboardStopOutcome.NotRunning, result.Outcome);
+        Assert.True(result.Success);
+        Assert.Contains("process 42 is not running", result.Message);
+        Assert.False(File.Exists(RecordPath));
+    }
+
+    [Fact]
+    public void Stop_WhenARecordWithoutAProcessStartTimeHasASilentUrl_RefusesToKillThePid()
+    {
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+
+        DashboardStopResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("stop must not launch"),
+            isHealthy: _ => false,
+            probeProcess: _ => new DashboardProcessProbe(RecordedStart),
+            killProcess: _ => throw new InvalidOperationException("an unproven pid must not be killed"))
+            .Stop(new DashboardStopRequest(Context(), TimeSpan.FromSeconds(1)));
+
+        Assert.Equal(DashboardStopOutcome.NotRunning, result.Outcome);
+        Assert.Contains("predates the process-start check", result.Message);
+    }
+
+    [Fact]
+    public void Stop_WhenALaunchReplacedTheDashboardWhileThisOneWaited_StopsThePidRecordedUnderTheLock()
+    {
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+        bool stopped = false;
+        var kills = new List<int>();
+
+        DashboardStopResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("stop must not launch"),
+            isHealthy: _ => !stopped,
+            probeProcess: _ => stopped ? null : new DashboardProcessProbe(RecordedStart),
+            killProcess: pid => { kills.Add(pid); stopped = true; return true; },
+            tryAcquireLaunchLock: _ =>
+            {
+                WriteRecord(
+                    pid: 99,
+                    port: 4977,
+                    startedAt: RecordedStart,
+                    version: "1.23.0+bbbbbbb",
+                    processStartedAt: RecordedStart);
+                return new NoopDisposable();
+            })
+            .Stop(new DashboardStopRequest(Context(), TimeSpan.FromSeconds(1)));
+
+        Assert.Equal(DashboardStopOutcome.Stopped, result.Outcome);
+        Assert.Equal(99, Assert.Single(kills));
+        Assert.Equal("1.23.0+bbbbbbb", result.Version);
+    }
+
+    [Fact]
+    public void Stop_WhenALaunchHoldsTheLock_StopsNothing()
+    {
+        WriteRecord(pid: 42, port: 4977, startedAt: RecordedStart, version: "1.22.0+aaaaaaa");
+
+        DashboardStopResult result = Launcher(
+            startProcess: _ => throw new InvalidOperationException("stop must not launch"),
+            isHealthy: _ => throw new InvalidOperationException("a contended lock must not probe"),
+            probeProcess: _ => throw new InvalidOperationException("a contended lock must not probe"),
+            killProcess: _ => throw new InvalidOperationException("a contended lock must not kill"),
+            tryAcquireLaunchLock: _ => null)
+            .Stop(new DashboardStopRequest(Context(), TimeSpan.FromSeconds(1)));
+
+        Assert.Equal(DashboardStopOutcome.Failed, result.Outcome);
+        Assert.Contains("holds the launch lock", result.Message);
+        Assert.True(File.Exists(RecordPath));
+    }
+
+    private static readonly DateTimeOffset RecordedStart =
+        new(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+
+    private string RecordPath => Path.Combine(_home, ".miller", "dashboard.json");
+
+    private void WriteRecord(
+        int pid,
+        int port,
+        DateTimeOffset startedAt,
+        string? version,
+        DateTimeOffset? processStartedAt = null) =>
+        WriteRecordText(ServerJson.Serialize(new DashboardProcessMetadata(
+            pid,
+            $"http://127.0.0.1:{port}",
+            startedAt,
+            version,
+            processStartedAt)));
+
+    private void WriteRecordText(string json)
+    {
+        Directory.CreateDirectory(Path.Combine(_home, ".miller"));
+        File.WriteAllText(RecordPath, json);
+    }
+
+    private DashboardLaunchRequest Request(int port, string? ownVersion, TimeSpan? timeout = null) =>
+        new(Context(), port, timeout ?? TimeSpan.FromSeconds(1), ownVersion);
+
+    private DashboardCliLauncher Launcher(
+        Func<ProcessStartInfo, Process?> startProcess,
+        Func<Uri, bool> isHealthy,
+        Func<int, DashboardProcessProbe?> probeProcess,
+        Func<int, bool> killProcess,
+        Action<string, DashboardProcessMetadata>? writeMetadata = null,
+        Func<string, IDisposable?>? tryAcquireLaunchLock = null) =>
+        new(
+            startProcess,
+            isHealthy,
+            tryAcquireLaunchLock ?? (_ => new NoopDisposable()),
+            writeMetadata ?? ((_, _) => { }),
+            _ => { },
+            probeProcess,
+            killProcess);
+
+    private static void WritePidFile(ProcessStartInfo info)
+    {
+        if (info.Environment.TryGetValue("MILLER_DASHBOARD_PID_FILE", out string? pidPath) && pidPath is not null)
+            File.WriteAllText(pidPath, Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));
+    }
+
     private WorkspaceContext Context() =>
         WorkspaceContext.Create(_root, _dir, _home);
 

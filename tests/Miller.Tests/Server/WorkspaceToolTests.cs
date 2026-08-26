@@ -375,11 +375,16 @@ public sealed class WorkspaceToolTests : IDisposable
             _requests.Add(request);
             return _result;
         }
+
+        public DashboardStopResult Stop(DashboardStopRequest request) =>
+            throw new InvalidOperationException("stop is not part of this test");
     }
 
     private sealed class ThrowingDashboardLauncher(Exception exception) : IDashboardLauncher
     {
         public DashboardLaunchResult EnsureRunning(DashboardLaunchRequest request) => throw exception;
+
+        public DashboardStopResult Stop(DashboardStopRequest request) => throw exception;
     }
 
     // ---- status ----
@@ -1759,6 +1764,30 @@ public sealed class WorkspaceToolTests : IDisposable
         DashboardLaunchRequest request = launcher.Requests.Single();
         Assert.Equal(4977, request.Port);
         Assert.Equal(harness.Workspace, request.Context);
+        Assert.Equal(MillerVersion.Current, request.OwnVersion);
+    }
+
+    [Fact]
+    public void Dashboard_WhenItReplacedAnOlderBuild_ReportsTheReplacedStatusAndMessage()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var launcher = new RecordingDashboardLauncher(new DashboardLaunchResult(
+            DashboardLaunchOutcome.Replaced,
+            new Uri("http://127.0.0.1:4977/workspace?workspace_id=ws-tool-001"),
+            ProcessId: 4242,
+            Message: "replaced the dashboard on 1.22.0+aaaaaaa"));
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            dashboardLauncher: launcher);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "dashboard", format: "json"));
+
+        JsonElement root = doc.RootElement;
+        Assert.Equal("replaced", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("success").GetBoolean());
+        Assert.Equal("replaced the dashboard on 1.22.0+aaaaaaa", root.GetProperty("message").GetString());
     }
 
     [Fact]
