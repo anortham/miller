@@ -1053,10 +1053,8 @@ public static class TestsCore
     /// Human-facing freshness key: the full index identity is a store cursor that can run to
     /// hundreds of characters, so compact output keeps the revision and a recognizable identity
     /// prefix. JSON output carries the full identity.
-    /// </summary>
-    /// <summary>
-    /// The selected freshness key in its one-line display form. Public because the dashboard's Tests
-    /// panel renders the same key and must not grow a second copy of this formatting.
+    /// <para>Public because the dashboard's Tests panel renders the same key and must not grow a
+    /// second copy of this formatting.</para>
     /// </summary>
     public static string CompactFreshness(CtFreshnessKey key)
     {
