@@ -173,6 +173,43 @@ internal static class DashboardEndpoints
         endpoints.MapGet("/fragments/refresh-status", (string workspace_id) =>
             DetailStackResult(paths, launchDirectory, workspace_id, DashboardRefreshJobs.Peek(workspace_id)));
 
+        // Tests-panel lifecycle triggers. Same CSRF proof as the other htmx POSTs; the action itself
+        // runs the public `miller tests` verb so the dashboard reuses the CLI's refusal, anchoring,
+        // and daemon-replacement rules instead of growing CT logic of its own.
+        endpoints.MapPost("/workspaces/{workspace_id}/tests/{action}", (string workspace_id, string action, HttpContext context) =>
+        {
+            if (RequireDashboardRequestHeader(context) is IResult rejected)
+            {
+                return rejected;
+            }
+
+            if (!DashboardTestsActions.IsAllowed(action))
+            {
+                return Results.NotFound($"Unknown tests action '{action}'.");
+            }
+
+            var workspace = DashboardData.ReadWorkspaces(paths.RegistryDbPath)
+                .FirstOrDefault(w => string.Equals(w.WorkspaceId, workspace_id, StringComparison.Ordinal));
+            if (workspace is null)
+            {
+                return Results.NotFound("Workspace not found in registry.");
+            }
+
+            DashboardTestsActionOutcome outcome = DashboardTestsActions.Run(
+                paths.ToolsRoot,
+                workspace.CanonicalRoot,
+                action);
+            return (IResult)new RazorComponentResult<WorkspaceTestsPanel>(new
+            {
+                Tests = DashboardData.ReadTests(paths.RegistryDbPath, workspace_id),
+                ActionNotice = outcome.Message,
+                ActionFailed = !outcome.Success,
+            })
+            {
+                PreventStreamingRendering = true,
+            };
+        });
+
         endpoints.MapPost("/workspaces/{workspace_id}/open-folder", (string workspace_id, HttpContext context) =>
         {
             if (RequireDashboardRequestHeader(context) is IResult rejected)

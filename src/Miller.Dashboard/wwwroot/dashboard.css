@@ -388,7 +388,6 @@ html[data-theme="dark"] .theme-label-light { display: inline; }
 
 .panel:hover {
   box-shadow: var(--lift-hover);
-  transform: translate(-2px, -2px);
 }
 
 .panel-heading {
@@ -1320,6 +1319,10 @@ tr.has-errors td:nth-child(6) {
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+}
+
+.tests-actions {
+  padding: 12px 18px 0;
 }
 
 .refresh-status {

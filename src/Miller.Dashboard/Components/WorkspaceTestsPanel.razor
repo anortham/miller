@@ -21,6 +21,11 @@
         }
     </div>
 
+    @if (ActionNotice is { Length: > 0 })
+    {
+        <p class="notice @(ActionFailed ? "error-notice" : null)">@ActionNotice</p>
+    }
+
     @if (Tests is null)
     {
         <p class="empty">Select a workspace to view tests.</p>
@@ -38,6 +43,38 @@
         @if (!Tests.Enabled)
         {
             <p class="notice">@DisabledNotice</p>
+        }
+        @if (ShowEnable || ShowStart || ShowRun)
+        {
+            <div class="detail-actions tests-actions">
+                @if (ShowEnable)
+                {
+                    <button class="refresh-button"
+                            type="button"
+                            hx-post="/workspaces/@Esc(Tests.WorkspaceId)/tests/enable"
+                            hx-target="#workspace-tests-panel"
+                            hx-swap="outerHTML"
+                            hx-disabled-elt="this">Enable continuous testing</button>
+                }
+                @if (ShowStart)
+                {
+                    <button class="refresh-button"
+                            type="button"
+                            hx-post="/workspaces/@Esc(Tests.WorkspaceId)/tests/start"
+                            hx-target="#workspace-tests-panel"
+                            hx-swap="outerHTML"
+                            hx-disabled-elt="this">Start test daemon</button>
+                }
+                @if (ShowRun)
+                {
+                    <button class="refresh-button"
+                            type="button"
+                            hx-post="/workspaces/@Esc(Tests.WorkspaceId)/tests/run"
+                            hx-target="#workspace-tests-panel"
+                            hx-swap="outerHTML"
+                            hx-disabled-elt="this">Run stale tests</button>
+                }
+            </div>
         }
 
         <div class="stats-grid metric-band">
@@ -150,6 +187,24 @@
 
 @code {
     [Parameter] public DashboardTestsPanel? Tests { get; set; }
+
+    // Outcome of a tests-action POST; rendered once in that response and gone on the next poll.
+    [Parameter] public string? ActionNotice { get; set; }
+    [Parameter] public bool ActionFailed { get; set; }
+
+    /// <summary>
+    /// The enable button follows the never-decided rule the notice already applies: it appears only
+    /// when the projects came from discovery, never to argue with a recorded opt-out.
+    /// </summary>
+    private bool ShowEnable => CanAct && Tests is { Enabled: false, ProjectsDiscovered: true, Projects.Count: > 0 };
+
+    private bool ShowStart => CanAct && Tests is { Enabled: true } && !DaemonRunning;
+
+    private bool ShowRun => CanAct && Tests is { Enabled: true } && DaemonRunning;
+
+    private bool CanAct => Tests is { Error: null, KillSwitchOff: false, WorkspaceId.Length: > 0 };
+
+    private bool DaemonRunning => string.Equals(Tests?.DaemonState, "running", StringComparison.Ordinal);
 
     // One "now" per render so every timestamp on the panel humanizes against the same instant.
     private readonly DateTimeOffset Now = DateTimeOffset.UtcNow;

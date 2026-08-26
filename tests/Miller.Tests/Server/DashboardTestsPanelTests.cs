@@ -242,6 +242,85 @@ public sealed class DashboardTestsPanelTests : IDisposable
     }
 
     [Fact]
+    public async Task Panel_NeverDecidedWorkspaceOffersTheEnableButton()
+    {
+        DashboardTestsPanel panel = DashboardTestsPanel.From(
+            "ws-a",
+            Status(
+                enabled: false,
+                projectsDiscovered: true,
+                projects: [new TestsStatusProject("p1", "tests/A.csproj", "xunit", null, true, [])]),
+            Failures());
+
+        string html = await RenderAsync(panel);
+
+        Assert.Contains("hx-post=\"/workspaces/ws-a/tests/enable\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("/tests/start", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("/tests/run", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Panel_RecordedOptOutGetsNoEnableButton()
+    {
+        DashboardTestsPanel panel = DashboardTestsPanel.From(
+            "ws-a",
+            Status(
+                enabled: false,
+                projectsDiscovered: false,
+                projects: [new TestsStatusProject("p1", "tests/A.csproj", "xunit", null, false, [])]),
+            Failures());
+
+        string html = await RenderAsync(panel);
+
+        Assert.DoesNotContain("/tests/enable", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Panel_EnabledWithStoppedDaemonOffersStart()
+    {
+        DashboardTestsPanel panel = DashboardTestsPanel.From(
+            "ws-a",
+            Status(enabled: true, daemonState: CtDaemonLifecycleState.Stopped),
+            Failures());
+
+        string html = await RenderAsync(panel);
+
+        Assert.Contains("hx-post=\"/workspaces/ws-a/tests/start\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("/tests/run", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("/tests/enable", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Panel_EnabledWithRunningDaemonOffersRun()
+    {
+        DashboardTestsPanel panel = DashboardTestsPanel.From(
+            "ws-a",
+            Status(enabled: true, daemonState: CtDaemonLifecycleState.Running, daemonReason: "leader"),
+            Failures());
+
+        string html = await RenderAsync(panel);
+
+        Assert.Contains("hx-post=\"/workspaces/ws-a/tests/run\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("/tests/start", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Panel_ActionNoticeRendersOnceWithTheOutcomeTone()
+    {
+        DashboardTestsPanel panel = DashboardTestsPanel.From("ws-a", Status(enabled: true), Failures());
+
+        string ok = await RenderAsync(panel, actionNotice: "tests serve started");
+        string failed = await RenderAsync(panel, actionNotice: "process refused", actionFailed: true);
+        string plain = await RenderAsync(panel);
+
+        Assert.Contains("tests serve started", ok, StringComparison.Ordinal);
+        Assert.DoesNotContain("error-notice", ok, StringComparison.Ordinal);
+        Assert.Contains("process refused", failed, StringComparison.Ordinal);
+        Assert.Contains("error-notice", failed, StringComparison.Ordinal);
+        Assert.DoesNotContain("tests serve started", plain, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Panel_KillSwitchRendersTheOffStateOnly()
     {
         string html = await RenderAsync(DashboardTestsPanel.From("ws-a", Status(enabled: false, killSwitchOff: true), null));
@@ -538,7 +617,10 @@ public sealed class DashboardTestsPanelTests : IDisposable
             Revision: 1,
             FailureSummary: summary);
 
-    private static async Task<string> RenderAsync(DashboardTestsPanel? tests)
+    private static async Task<string> RenderAsync(
+        DashboardTestsPanel? tests,
+        string? actionNotice = null,
+        bool actionFailed = false)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -547,7 +629,12 @@ public sealed class DashboardTestsPanelTests : IDisposable
         return await renderer.Dispatcher.InvokeAsync(async () =>
         {
             var output = await renderer.RenderComponentAsync<WorkspaceTestsPanel>(
-                ParameterView.FromDictionary(new Dictionary<string, object?> { ["Tests"] = tests }));
+                ParameterView.FromDictionary(new Dictionary<string, object?>
+                {
+                    ["Tests"] = tests,
+                    ["ActionNotice"] = actionNotice,
+                    ["ActionFailed"] = actionFailed,
+                }));
             return output.ToHtmlString();
         });
     }
