@@ -370,7 +370,39 @@ public sealed class TestsWaitOutcomeTests
         TestsServeResult result = new(0, "started", null, null);
 
         Assert.Equal("{\"status\":\"started\",\"reason\":null,\"pid\":null}", result.Render(json: true));
-        Assert.Equal("tests serve started", result.Render(json: false));
+        Assert.Equal(
+            "tests serve started\nnext: the daemon is status-only until a change; tests operation=run executes the owed backlog for a first verdict.",
+            result.Render(json: false));
+    }
+
+    [Fact]
+    public void Replaced_serve_output_points_at_run()
+    {
+        TestsServeResult result = new(0, "replaced", "stopped 1.22.1", null);
+
+        string compact = result.Render(json: false);
+
+        Assert.Contains(
+            "next: the daemon is status-only until a change; tests operation=run executes the owed backlog for a first verdict.",
+            compact,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Refused_serve_output_carries_no_next_hint()
+    {
+        TestsServeResult result = new(3, "refused", "not enabled; run miller tests enable first", null);
+
+        Assert.DoesNotContain("next:", result.Render(json: false), StringComparison.Ordinal);
+        Assert.DoesNotContain("next:", result.Render(json: true), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Already_running_serve_output_carries_no_next_hint()
+    {
+        TestsServeResult result = new(0, "alreadyrunning", null, 4242);
+
+        Assert.DoesNotContain("next:", result.Render(json: false), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -71,6 +71,68 @@ public sealed class ForbiddenEnqueueTests : IDisposable
         Assert.Single(store.ListTestRuns(EngineTestSupport.WorkspaceId));
     }
 
+    [Fact]
+    public async Task Unknown_on_a_never_discovered_project_owes_discovery_then_runs_the_first_baseline()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        var provider = new FakeContinuousTestProvider
+        {
+            DiscoverCases =
+            [
+                new ProviderTestCase(
+                    Id: "test:app",
+                    DisplayName: "test:app",
+                    FullyQualifiedName: "App.Tests.test:app",
+                    Selector: "App.Tests.test:app",
+                    Framework: "xunit",
+                    SourcePath: "tests/AppTests.cs"),
+            ],
+        };
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(provider, store));
+
+        ContinuousTestDaemonEnqueueResult result = queue.Enqueue(
+            EngineTestSupport.Change(workspace, changedPaths: ["tests/AppTests.cs"]));
+
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Selection.Outcome);
+        Assert.True(queue.HasReadyWork(DateTimeOffset.UtcNow.AddMinutes(1)));
+
+        await queue.DrainReadyAsync(
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(store.ListTestCasesForProject(EngineTestSupport.WorkspaceId, workspace.ProjectPath));
+        Assert.Single(provider.RunRequests);
+    }
+
+    [Fact]
+    public async Task Inventory_seed_is_attempted_once_per_project()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        var provider = new FakeContinuousTestProvider();
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(provider, store));
+
+        queue.Enqueue(EngineTestSupport.Change(workspace, changedPaths: ["src/Mystery.xyz"]));
+        Assert.True(queue.HasReadyWork(DateTimeOffset.UtcNow.AddMinutes(1)));
+        await queue.DrainReadyAsync(
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            TestContext.Current.CancellationToken);
+        Assert.Empty(provider.RunRequests);
+
+        ContinuousTestDaemonEnqueueResult second = queue.Enqueue(
+            EngineTestSupport.Change(workspace, changedPaths: ["src/Mystery.xyz"]));
+
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, second.Selection.Outcome);
+        Assert.False(queue.HasReadyWork(DateTimeOffset.UtcNow.AddMinutes(2)));
+    }
+
     /// <summary>
     /// Contract clause (b): a KNOWN-EMPTY selection (the changed file resolves in the index and
     /// its complete impact read reaches no test) leaves committed-fresh results untouched and

@@ -42,6 +42,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     private readonly Dictionary<string, CtFreshnessKey> _latestByWorkspace = new(StringComparer.Ordinal);
     private readonly Dictionary<PendingKey, CancellationTokenSource> _backfillCancellationByProject = [];
     private readonly Dictionary<PendingKey, string> _runFailureRetrySpentAtRevision = [];
+    private readonly HashSet<PendingKey> _inventorySeedAttempts = [];
     private readonly object _lock = new();
 
     public ContinuousTestDaemonQueue(
@@ -192,6 +193,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             // and NEVER a full-suite fallback. It still SUPERSEDES older pendings for the
             // project, exactly like an executable enqueue would.
             ReconcilePendingOnNoRun(change, selection.Outcome);
+            if (TryEnqueueInventorySeed(change, selection) is { } seed)
+                return new ContinuousTestDaemonEnqueueResult(selection, seed);
             Log($"ct enqueue no-run workspace={change.Workspace.WorkspaceId} revision={change.CurrentRevision} "
                 + $"outcome={selection.Outcome} stale={selection.StaleTestCaseIds.Count}");
             return new ContinuousTestDaemonEnqueueResult(selection, rejected);
@@ -532,6 +535,59 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 })
                 .ToArray();
         }
+    }
+
+    /// <summary>
+    /// The one exception to Unknown-executes-nothing: a project whose store holds NO test cases is
+    /// not "reachability could not be established" — nobody ever looked. Discovery runs only inside
+    /// a drain, and a drain only follows an enqueued pending, so without this seed the first change
+    /// after enabling selected Unknown forever and the daemon stayed silent (2026-08-26 field
+    /// report: every save logged <c>no-run outcome=Unknown stale=0</c> across four projects). The
+    /// seed enqueues no execution ids: it owes the drain a provider DISCOVERY
+    /// (<see cref="RefreshInventoryIfNeededAsync"/>), after which the selection is rebuilt from real
+    /// cases and the drain executes the owed backlog — the project's first baseline. One attempt per
+    /// project per daemon lifetime: a discovery that finds nothing, or fails and records its
+    /// failure row, must not respawn a provider on every save.
+    /// </summary>
+    private ContinuousTestDaemonPendingRun? TryEnqueueInventorySeed(
+        ContinuousTestDaemonChange change,
+        ContinuousTestSelectionResult selection)
+    {
+        if (selection.Outcome != ContinuousTestSelectionOutcome.Unknown)
+            return null;
+        if (HasProviderInventory(change.Workspace.WorkspaceId, change.Workspace.ProjectPath))
+            return null;
+
+        PendingKey key = PendingKey.FromWorkspace(change.Workspace, ContinuousTestRunLane.Foreground);
+        ContinuousTestDaemonPendingRun seed;
+        lock (_lock)
+        {
+            if (!_inventorySeedAttempts.Add(key))
+                return null;
+            TrackLatest(key, change.Freshness);
+            seed = new ContinuousTestDaemonPendingRun(
+                Workspace: change.Workspace,
+                SelectedRevision: change.CurrentRevision,
+                CurrentRevision: change.CurrentRevision,
+                IndexIdentity: change.IndexIdentity,
+                TestCaseIds: [],
+                FilterArguments: change.FilterArguments,
+                Command: change.Command,
+                Framework: change.Framework,
+                RefreshInventory: true,
+                ObservedAt: change.ObservedAt,
+                ReadyAt: change.ObservedAt + change.DebounceDelay)
+            {
+                Lane = ContinuousTestRunLane.Foreground,
+                ImpactPriority = PriorityFor(false, selection),
+                Scope = selection.Outcome,
+            };
+            _pending[key] = seed;
+        }
+
+        Log($"ct enqueue discovery-owed workspace={change.Workspace.WorkspaceId} "
+            + $"revision={change.CurrentRevision} project={change.Workspace.ProjectPath}");
+        return seed;
     }
 
     private static int PriorityFor(bool workspaceScope, ContinuousTestSelectionResult selection)

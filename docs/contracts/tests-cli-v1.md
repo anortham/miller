@@ -335,7 +335,12 @@ case whose reachability is unknown reads stale. A run executes the stale set (th
 plus the already-owed backlog) as an explicit test-ID list; a user-requested run adds every red case
 on top of it (see "What an explicit run selects"). Truncated, degraded, or unavailable
 impact data yields the Unknown outcome: everything goes stale and NOTHING executes — never a
-whole-suite fallback. Green requires complete results at the selected composite key.
+whole-suite fallback. One bounded exception: an Unknown selection on a project whose store holds
+NO test cases at all (nobody ever ran discovery) enqueues a discovery-owed pending instead of
+silence — the drain runs provider discovery, rebuilds the selection from the discovered cases, and
+executes that owed backlog as the project's first baseline. The attempt happens once per project
+per daemon lifetime, so a discovery that finds nothing never respawns a provider on every save.
+Green requires complete results at the selected composite key.
 
 ## Auto-run debounce
 

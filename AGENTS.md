@@ -487,6 +487,11 @@ scripts/test.ps1 all
   path — an auto-run that re-ran every failing test on every debounce is a red loop on every save.
   Truncated/degraded/
   unavailable impact means Unknown — everything stale, NOTHING executes, never a whole-suite fallback.
+  ONE bounded exception (2026-08-26 field report): Unknown on a project whose store holds NO test cases
+  (never discovered) enqueues a discovery-owed pending — the drain runs provider discovery, re-selects,
+  and executes the owed backlog as the first baseline; once per project per daemon lifetime
+  (`ContinuousTestDaemonQueue.TryEnqueueInventorySeed`). Without it the first change after enabling
+  selected Unknown forever and the daemon stayed silent.
   Auto-runs debounce trailing-edge (`MILLER_CT_DEBOUNCE` seconds, default 2, `0` immediate, invalid/>3600
   falls back); changes during a run queue a follow-up, never kill a healthy run. The status `selected` key
   is the LIVE index key, never derived from stored rows; no readable index means `selected: null` and an

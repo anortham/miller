@@ -1259,6 +1259,8 @@ public static class TestsCore
         foreach (TestsStatusProject project in result.Projects)
             sb.AppendLine($"  - {project.ProjectPath}");
         AppendUnsupportedProjects(sb, result.UnsupportedProjects ?? []);
+        if (string.Equals(result.Operation, "enable", StringComparison.Ordinal) && result.EnabledCount > 0)
+            sb.AppendLine("next: tests operation=start watches for changes; operation=run executes the owed backlog now.");
         return sb.ToString().TrimEnd();
     }
 
@@ -1314,6 +1316,11 @@ public static class TestsCore
         {
             output += $" publication: {Snake(publication.Readiness.ToString())}"
                 + $" elapsed={FormatSeconds(publication.Elapsed.TotalSeconds)}s";
+        }
+
+        if (result.ExitCode == 0 && result.Status is "started" or "replaced")
+        {
+            output += "\nnext: the daemon is status-only until a change; tests operation=run executes the owed backlog for a first verdict.";
         }
 
         return output;

@@ -252,6 +252,35 @@ public sealed class TestsCliTests : IDisposable
     }
 
     [Fact]
+    public void Enable_Compact_EndsWithTheStartAndRunHint()
+    {
+        string project = WriteTestProject("tests/New.Tests/New.Tests.csproj");
+
+        var (code, outText, errText) = Run("tests", "enable");
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        string[] lines = CompactLines(outText);
+        Assert.Equal("enable 1 project(s)", lines[0]);
+        Assert.Equal("  - " + Path.GetFullPath(project), lines[1]);
+        Assert.Equal(
+            "next: tests operation=start watches for changes; operation=run executes the owed backlog now.",
+            lines[2]);
+        Assert.Equal(3, lines.Length);
+    }
+
+    [Fact]
+    public void Enable_Json_CarriesNoHint()
+    {
+        WriteTestProject("tests/New.Tests/New.Tests.csproj");
+
+        var (code, outText, _) = Run("tests", "enable", "--json");
+
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("next:", outText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Status_OnANeverDecidedWorkspace_NamesTheXunitV2ReasonAndOffersNoEnableLadder()
     {
         string project = WriteTestProject(frameworkHint: "xunit-v2");
