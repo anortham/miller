@@ -18,7 +18,11 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
 7. JSON diagnostics during family-store resolution convergence (Active item) — queued
 8. Cross-tool discoverability empty states (backlog entry below) — queued
 9. Windows memory investigation (Active item; needs the win-test guest) — queued
-10. MCP SDK / stateless MCP evaluation → plan doc only — queued
+10. MCP SDK / stateless MCP evaluation → plan doc only — **done**
+    (docs/plans/2026-08-25-mcp-sdk-stateless-evaluation.md: upgrade for maintenance not speed; hard
+    blocker — SDK 2.x deprecates Roots (`MCP9005` = build error under warnings-as-errors) and the
+    spec forbids the `RequestRootsAsync` call `WorkspaceBindingService` makes; spike = read-only
+    streamable-HTTP endpoint behind `MILLER_HTTP_MCP` in the dashboard process)
 11. Workspace blacklist + explicit registration gate → design docs for a user decision, no
     implementation without approval — **decision paper done**
     (docs/plans/2026-08-25-workspace-safety-design.md; recommends path-class deny list at every bind
