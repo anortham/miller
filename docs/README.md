@@ -5,6 +5,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [`plans/2026-08-26-dashboard-interaction-cleanup.md`](plans/2026-08-26-dashboard-interaction-cleanup.md) - audit of every dashboard interaction by stack, the decision to converge on htmx plus one plain-JS file, and the removal of Alpine from the four platform packages.
 - [`plans/2026-08-25-workspace-safety-design.md`](plans/2026-08-25-workspace-safety-design.md) - decision paper (awaiting user choice, nothing implemented) on path-class root policy and an explicit workspace registration gate, from the 2026-08-10 station incident where `~/.hermes/hermes-agent` became a 4.3GB index.
 - [`plans/2026-08-25-mcp-sdk-stateless-evaluation.md`](plans/2026-08-25-mcp-sdk-stateless-evaluation.md) - evaluation of the ModelContextProtocol 2.x C# SDK and the 2026-07-28 stateless-first spec against Miller's stdio one-process-per-session shape: current cost per session, what stateless actually fixes (HTTP fan-in, not stdio process count), the Roots deprecation that breaks deferred workspace binding, and a phased plan with a dashboard-hosted shared-reader spike.
 - [`plans/2026-08-25-v1.22.0-release-plan.md`](plans/2026-08-25-v1.22.0-release-plan.md) - approved stable minor release plan for first-class QML indexing/resolution and CMake/CTest Qt Quick Test support, with package-only validation, non-overwriting promotion, and live-evidence gates.
