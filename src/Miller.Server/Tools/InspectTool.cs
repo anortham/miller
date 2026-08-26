@@ -320,7 +320,7 @@ public sealed class InspectTool
                     out resultCount,
                     out int matchedCount);
                 if (matchedCount == 0)
-                    diagnostic = FileEmptyDiagnostic(index, dbPath, file.Path);
+                    diagnostic = FileEmptyDiagnostic(index, dbPath, file.Path, kind);
                 return ReadToolWorkspaceRouting.PrefixCompact(
                     fileOutput,
                     json ? null : compactBanner);
@@ -370,7 +370,7 @@ public sealed class InspectTool
                         ? [new ToolDiagnosticAction(
                             $"search(query=\"{EscapeDiagnosticTarget(target)}\")",
                             "inspect related or renamed symbols")]
-                        : null);
+                        : [CrossToolHandoff.SearchForUnresolvedName(target)]);
                 string notFoundOutput = json
                     ? RenderNotFoundJson(nf)
                     : nf.RenderMessage();
@@ -432,13 +432,20 @@ public sealed class InspectTool
     /// render an empty listing, so without the distinction a typo'd path reads as a real, symbol-free file and
     /// the agent moves on instead of checking the path.
     /// </summary>
-    private static ToolDiagnostic FileEmptyDiagnostic(ISymbolLookupIndex index, WorkspaceReadHandle dbPath, string path)
+    private static ToolDiagnostic FileEmptyDiagnostic(
+        ISymbolLookupIndex index,
+        WorkspaceReadHandle dbPath,
+        string path,
+        string? kind)
     {
         if (IsIndexedFile(index, dbPath, path))
         {
             return ToolDiagnostic.ExpectedEmpty(
                 "no_file_symbols",
-                $"No indexed symbols matched '{path}' and the requested filters.");
+                $"No indexed symbols matched '{path}' and the requested filters.",
+                [string.IsNullOrWhiteSpace(kind)
+                    ? CrossToolHandoff.FileStructureFacts(path)
+                    : CrossToolHandoff.InspectFileWithoutKind(path)]);
         }
 
         return ToolDiagnostic.ExpectedEmpty(

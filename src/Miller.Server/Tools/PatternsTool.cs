@@ -193,9 +193,7 @@ public sealed class PatternsTool
                 diagnostic = ToolDiagnostic.ExpectedEmpty(
                     result.EmptyReason ?? "no_facts",
                     "No structural facts matched the request.",
-                    [new ToolDiagnosticAction(
-                        "patterns(operation=\"list\")",
-                        "list pattern ids observed in this workspace")]);
+                    EmptyPatternActions(result.EmptyReason, query));
             }
 
             if (telemetry is not null)
@@ -1300,7 +1298,7 @@ public sealed class PatternsTool
         if (!string.IsNullOrWhiteSpace(filters))
             sb.Append(": ").Append(filters);
         sb.AppendLine(".");
-        sb.Append("Try again with this pattern_id and loosen language, path, or where.");
+        sb.AppendLine("Try again with this pattern_id and loosen language, path, or where.");
         AppendNextActions(sb, PatternIdRecoveryNextActions(patternId));
         return sb.ToString().TrimEnd();
     }
@@ -1411,6 +1409,25 @@ public sealed class PatternsTool
 
     private static PatternNextAction NextAction(string tool, string reason, params (string Key, string Value)[] args) =>
         new(tool, reason, args.Select(static arg => new KeyValuePair<string, string>(arg.Key, arg.Value)).ToArray());
+
+    /// <summary>
+    /// Actions for an empty patterns result. The raw-text handoff rides ONLY on <c>query_no_match</c>: that
+    /// reason means the free-text query named no pattern id, so the words the caller typed may still appear in
+    /// source. A filtered-out or fact-free pattern id is a different failure — searching source for a
+    /// <c>pattern_id</c> string finds nothing, so no handoff is offered there.
+    /// </summary>
+    internal static IReadOnlyList<ToolDiagnosticAction> EmptyPatternActions(string? emptyReason, string? query)
+    {
+        var listAction = new ToolDiagnosticAction(
+            "patterns(operation=\"list\")",
+            "list pattern ids observed in this workspace");
+        bool queryMiss =
+            string.Equals(emptyReason, "query_no_match", StringComparison.Ordinal) &&
+            !string.IsNullOrWhiteSpace(query);
+        return queryMiss
+            ? [CrossToolHandoff.SearchRawTextForPattern(query!.Trim()), listAction]
+            : [listAction];
+    }
 
     private static void AppendNextActions(StringBuilder sb, IReadOnlyList<PatternNextAction> actions)
     {
