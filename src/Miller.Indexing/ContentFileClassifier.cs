@@ -18,6 +18,7 @@ internal static class ContentFileClassifier
     {
         // config
         ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+        ".csproj", ".props", ".targets", ".vbproj", ".fsproj", ".slnx", ".nuspec", ".resx",
     };
 
     public static bool IsDocsLike(string path, string language)
@@ -66,6 +67,7 @@ internal static class ContentFileClassifier
         return string.Equals(language, "json", StringComparison.OrdinalIgnoreCase)
             || string.Equals(language, "yaml", StringComparison.OrdinalIgnoreCase)
             || string.Equals(language, "toml", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(language, "ini", StringComparison.OrdinalIgnoreCase);
+            || string.Equals(language, "ini", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(language, "xml", StringComparison.OrdinalIgnoreCase);
     }
 }

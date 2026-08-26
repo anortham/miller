@@ -53,6 +53,28 @@ public sealed class ContentFileClassifierTests
     public void IsDocsLike_ExtensionIsCaseInsensitive() =>
         Assert.True(ContentFileClassifier.IsDocsLike("READXME.MD", "x"));
 
+    [Theory]
+    [InlineData("src/Miller.Server/Miller.Server.csproj", "xml")]
+    [InlineData("Directory.Build.props", "xml")]
+    [InlineData("build/common.targets", "xml")]
+    [InlineData("src/App/App.vbproj", "xml")]
+    [InlineData("src/App/App.fsproj", "xml")]
+    [InlineData("Miller.slnx", "xml")]
+    [InlineData("pack/Miller.nuspec", "xml")]
+    [InlineData("src/App/Resources.resx", "xml")]
+    public void WorkspaceContentKind_MsBuildXml_IsWorkspaceConfig(string path, string language) =>
+        Assert.Equal(TextContentKind.WorkspaceConfig, ContentFileClassifier.WorkspaceContentKind(path, language));
+
+    [Fact]
+    public void WorkspaceContentKind_LanguageXml_IsWorkspaceConfig() =>
+        Assert.Equal(TextContentKind.WorkspaceConfig, ContentFileClassifier.WorkspaceContentKind("nuget.config", "xml"));
+
+    [Theory]
+    [InlineData("src/Miller.Server/Miller.Server.csproj")]
+    [InlineData("Directory.Build.props")]
+    public void IsDocsLike_MsBuildXml_True(string path) =>
+        Assert.True(ContentFileClassifier.IsDocsLike(path, "xml"));
+
     [Fact]
     public void IsDocsLike_DocSubstringInDirName_DoesNotFalseMatch()
     {
