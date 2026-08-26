@@ -29,7 +29,7 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
    (the renderer fix shipped in 877fa992; query-time resolution then deleted the `resolution_converging`
    layer and its guard tests, leaving `trace`/`impact` with no converging-JSON coverage — closed with
    `TraceImpactLevelGuardTests` and the standalone-envelope contract section)
-8. Cross-tool discoverability empty states (backlog entry below) — queued
+8. Cross-tool discoverability empty states (backlog entry below) — in progress
 9. Windows memory investigation (Active item; needs the win-test guest) — queued
 10. MCP SDK / stateless MCP evaluation → plan doc only — **done**
     (docs/plans/2026-08-25-mcp-sdk-stateless-evaluation.md: upgrade for maintenance not speed; hard
