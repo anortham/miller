@@ -127,11 +127,11 @@ Commit mode: **parallel-lead-commit** for every task (workers hand verified diff
 **Approach:** Widen the seed predicate to `(s.index_identity = $identity AND s.status-is-green AND committed-revision <= $from) OR existing-watermark >= $from` — the exact SQL shape is the implementer's, but the rule is: same identity + green ⟹ seedable. For the poller: inspect the paths that move the saved cursor without calling `ApplyRevisionAdvance` (the `unavailable_delta` returns at ~lines 254-282); the invariant to establish is **the cursor never advances past a revision whose staleness consequences were not applied**. When the delta is readable and empty, apply an advance that carries watermarks forward for all projects. Do NOT touch `StoreLogCursor.MaxSequenceSql` — it is shared with sidecar stamps.
 
 **Acceptance criteria:**
-- [ ] Green rows committed at an older revision on the same identity stay fresh (not stale) across a revision advance.
-- [ ] A revision bump with an empty delta leaves `stale_count` unchanged.
-- [ ] Red and skipped rows still never ride a watermark.
-- [ ] Identity change still fail-safes everything stale.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Green rows committed at an older revision on the same identity stay fresh (not stale) across a revision advance.
+- [x] A revision bump with an empty delta leaves `stale_count` unchanged.
+- [x] Red and skipped rows still never ride a watermark.
+- [x] Identity change still fail-safes everything stale.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 3: Reds survive the automatic advance (finding 6)
 
@@ -184,9 +184,9 @@ Commit mode: **parallel-lead-commit** for every task (workers hand verified diff
 **What to build:** The two one-liners that would have made the Tycho session self-diagnosing.
 
 **Acceptance criteria:**
-- [ ] A drained project with zero selected cases produces a log line naming the project and reason.
-- [ ] Daemon stdout carries exactly one startup breadcrumb naming the shared log path.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] A drained project with zero selected cases produces a log line naming the project and reason.
+- [x] Daemon stdout carries exactly one startup breadcrumb naming the shared log path.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 5: Honest run line while discovering (finding 10)
 
@@ -235,10 +235,10 @@ Commit mode: **parallel-lead-commit** for every task (workers hand verified diff
 **Approach:** Read daemon status when the ack misses. Busy (`Executing`/`Queued`) + `wait=false` → exit 0-or-3 per existing contract but with the honest reason. Busy + `wait=true` → enter the settle wait (the daemon will pick the command up next loop; the settle loop already tolerates runs it learns from snapshots). Not busy → keep today's unacked failure.
 
 **Acceptance criteria:**
-- [ ] Unacked submit against a busy daemon reports `run already active`.
-- [ ] `wait=true` against a busy daemon waits for settle and returns the resulting verdict.
-- [ ] Unacked submit against a dead/idle daemon keeps today's behavior.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Unacked submit against a busy daemon reports `run already active`.
+- [x] `wait=true` against a busy daemon waits for settle and returns the resulting verdict.
+- [x] Unacked submit against a dead/idle daemon keeps today's behavior.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 7: `failures` output bounds, project filter, grouping (finding 7 + finding 1's classification ask)
 
@@ -320,10 +320,10 @@ Commit mode: **parallel-lead-commit** for every task (workers hand verified diff
 **What to build:** `inspect target="src/Foo/Bar.cs::Method"` works instead of returning a misleading `file_not_indexed` with a useless retry hint.
 
 **Acceptance criteria:**
-- [ ] `<file>::<symbol>` resolves to the symbol scoped to the file; `<file>::<a>::<b>` splits at the last `::`.
-- [ ] All existing `::` id-shape and CSS/Rust-name tests stay green.
-- [ ] The `file_not_indexed` fallback hint no longer embeds `::` in a file-search query.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] `<file>::<symbol>` resolves to the symbol scoped to the file; `<file>::<a>::<b>` resolves via the qualified-member machinery (documented deviation: head-keyed parse instead of last-`::` split).
+- [x] All existing `::` id-shape and CSS/Rust-name tests stay green.
+- [x] The `file_not_indexed` fallback hint no longer embeds `::` in a file-search query.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 10: CT build output inside the workspace (finding 1)
 
@@ -397,8 +397,8 @@ Commit mode: **parallel-lead-commit** for every task (workers hand verified diff
 **Dependency reason:** None - safe parallel batch (separate repository).
 
 **Acceptance criteria:**
-- [ ] Extension detection tests cover the new extensions; focused cargo tests pass.
-- [ ] Committed on the new branch with that repo's state reported (path, branch, commit, dirty state); nothing released or pinned.
+- [x] Extension detection tests cover the new extensions; focused cargo tests pass.
+- [x] Committed on the new branch with that repo's state reported (path, branch, commit, dirty state); nothing released or pinned.
 
 ### Task 13: Docs, contracts, CLAUDE.md (last)
 

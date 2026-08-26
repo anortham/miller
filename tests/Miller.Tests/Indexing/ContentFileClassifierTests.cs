@@ -59,7 +59,7 @@ public sealed class ContentFileClassifierTests
     [InlineData("build/common.targets", "xml")]
     [InlineData("src/App/App.vbproj", "xml")]
     [InlineData("src/App/App.fsproj", "xml")]
-    [InlineData("Miller.slnx", "xml")]
+    [InlineData("Sample.slnx", "xml")]
     [InlineData("pack/Miller.nuspec", "xml")]
     [InlineData("src/App/Resources.resx", "xml")]
     public void WorkspaceContentKind_MsBuildXml_IsWorkspaceConfig(string path, string language) =>
