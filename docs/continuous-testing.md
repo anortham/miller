@@ -144,6 +144,25 @@ runs normally under `dotnet test`; only continuous testing needs the v3 shape.
 **One environment per jest project.** CT invokes jest once under its default environment. A
 repository whose own `npm test` runs jest twice under two environments is covered for one of them.
 
+**Gate expensive MSBuild build hooks on `MILLER_CT_WORKSPACE_ROOT`.** CT builds a .NET test
+project with `--artifacts-path` pointed away from the workspace, so the build itself writes
+nothing into the tree. But a csproj `Exec` hook the project carries — `npm ci` plus a SPA build is
+the common one — runs inside that build and writes wherever it always writes. One measured field
+case (2026-08-26): a test project referenced an ASP.NET project whose build hook reinstalled the
+SPA's `node_modules` on every build — roughly 40,000 file events in the workspace per CT run,
+overflowing the file watcher and forcing rescans, and paying the npm install in every run's wall
+time. Every process CT starts, builds included, carries `MILLER_CT_WORKSPACE_ROOT` in its
+environment, and MSBuild reads environment variables as properties — so a repository can skip such
+hooks under CT with one property condition:
+
+```xml
+<SkipClientAppBuild
+    Condition="'$(SkipClientAppBuild)' == '' and '$(MILLER_CT_WORKSPACE_ROOT)' != ''">true</SkipClientAppBuild>
+```
+
+Tests that serve or read the built SPA assets should not opt in to CT this way; tests that never
+touch them (the normal case for unit suites) lose nothing.
+
 **QML is CMake/CTest only.** qmake projects, function-level QML coverage, and native QML coverage
 are out of scope for the v1.22.0 provider.
 
