@@ -19,7 +19,7 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
 3. CT xUnit v2 detection (backlog entry below) — **done**
 4. Dashboard Tests section (backlog entry below) — **done**
 5. Dashboard cleanup pass (backlog entry below) — in progress
-6. Semantic activation requires session restart after `prepare` (Active item) — queued
+6. Semantic activation requires session restart after `prepare` (Active item) — in progress
 7. JSON diagnostics during family-store resolution convergence (Active item) — **done**
    (the renderer fix shipped in 877fa992; query-time resolution then deleted the `resolution_converging`
    layer and its guard tests, leaving `trace`/`impact` with no converging-JSON coverage — closed with
