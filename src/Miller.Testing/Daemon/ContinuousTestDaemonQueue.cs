@@ -967,6 +967,12 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     /// the same rule and is NOT excepted: a skipped test skips again, so an explicit run has nothing
     /// to prove about it. Both statements are the contract's, so keep them in step
     /// (<c>docs/contracts/tests-cli-v1.md</c>).</para>
+    ///
+    /// <para>A RED carrying a needs-rerun stamp survives on every path, explicit or not: staling
+    /// keeps a red's state string and records the owed run in <c>stale_since_revision</c>, so a
+    /// stamped red trimmed as committed-fresh would silently cancel that run — the flaky retry,
+    /// stamped at the very key it is fresh at, would never execute. A run commit clears the stamp,
+    /// so an unstamped red at the live key is still trimmed and no automatic red loop opens.</para>
     /// </summary>
     private IReadOnlyList<string> DropFreshAt(
         string workspaceId,
@@ -990,6 +996,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
         string[] survivors = testCaseIds
             .Where(id => !(statusesById.TryGetValue(id, out ContinuousTestStatus? status)
                 && !(keepRed && status.State == ContinuousTestState.Red)
+                && !(status.State == ContinuousTestState.Red && status.StaleSinceRevision is not null)
                 && ContinuousTestDurableFreshness.IsFreshAt(status, selected, watermarks)))
             .ToArray();
         return survivors.Length == testCaseIds.Count ? testCaseIds : survivors;

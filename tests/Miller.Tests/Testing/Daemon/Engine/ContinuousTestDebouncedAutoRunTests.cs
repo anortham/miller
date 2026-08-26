@@ -280,6 +280,38 @@ public sealed class ContinuousTestDebouncedAutoRunTests : IDisposable
     }
 
     [Fact]
+    public async Task An_automatic_flaky_retry_executes_a_red_kept_red_under_its_needs_rerun_stamp()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        CommitOutcome(store, "test:app", 1, "passed");
+        CommitOutcome(store, "test:app", 2, "failed");
+        CommitOutcome(store, "test:app", 3, "passed");
+        CommitOutcome(store, "test:app", 4, "failed");
+        var provider = new FlakyRetryProvider("test:app");
+        ContinuousTestDaemonQueue queue = Queue(store, provider, revision: 5);
+
+        ContinuousTestDaemonEnqueueResult enqueued = queue.Enqueue(EngineTestSupport.Change(
+            workspace, revision: "5", from: 4, to: 5, observedAt: T0));
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, enqueued.Selection.Outcome);
+        Assert.Equal(["test:app"], enqueued.Selection.SelectedTestCaseIds);
+
+        Assert.Single(await queue.DrainReadyAsync(T0, TestContext.Current.CancellationToken));
+        ContinuousTestStatus afterFirstRun =
+            Assert.Single(store.ListContinuousTestStatuses(EngineTestSupport.WorkspaceId));
+        Assert.Equal(ContinuousTestState.Red, afterFirstRun.State);
+        Assert.NotNull(afterFirstRun.StaleSinceRevision);
+
+        Assert.Single(await queue.DrainReadyAsync(T0, TestContext.Current.CancellationToken));
+        Assert.Equal(2, provider.RunCount);
+        ContinuousTestStatus afterRetry =
+            Assert.Single(store.ListContinuousTestStatuses(EngineTestSupport.WorkspaceId));
+        Assert.Equal(ContinuousTestState.Green, afterRetry.State);
+        Assert.Null(afterRetry.StaleSinceRevision);
+    }
+
+    [Fact]
     public async Task An_unknown_selection_never_becomes_ready_work_even_after_the_quiet_period()
     {
         var workspace = EngineTestSupport.Workspace(_root);

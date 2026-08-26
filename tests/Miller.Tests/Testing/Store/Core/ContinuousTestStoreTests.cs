@@ -249,6 +249,89 @@ public sealed class ContinuousTestStoreTests : IDisposable
     }
 
     [Fact]
+    public void Mark_stale_on_a_red_case_keeps_the_verdict_and_stamps_needs_rerun()
+    {
+        using var store = CreateStoreWithTests("test:1");
+        CompleteRun(store, "run:1", "test:1", 1, "failed");
+        Exec("""
+            INSERT INTO ct_case_fresh_watermarks(test_case_id, workspace_id, index_identity, revision)
+            VALUES ('test:1', 'ws:1', 'gen-1', 7);
+            """);
+
+        store.MarkContinuousTestsStale(Workspace, ["test:1"], Key(2));
+
+        ContinuousTestStatus red = Assert.Single(store.ListContinuousTestStatuses(Workspace));
+        Assert.Equal(ContinuousTestState.Red, red.State);
+        Assert.Equal("2", red.StaleSinceRevision);
+        Assert.Equal(Identity, red.IndexIdentity);
+        Assert.Equal(1, red.Revision);
+        Assert.Equal(new CtFreshnessKey(Identity, 1), red.ProvenFreshKey);
+        Assert.False(ContinuousTestDurableFreshness.IsFreshAt(red, Key(2), watermarks: null));
+        Assert.Equal(
+            0L,
+            Convert.ToInt64(
+                Scalar("SELECT COUNT(*) FROM ct_case_fresh_watermarks WHERE test_case_id = 'test:1';"),
+                CultureInfo.InvariantCulture));
+
+        store.MarkContinuousTestsStale(Workspace, ["test:1"], Key(3));
+        ContinuousTestStatus remarked = Assert.Single(store.ListContinuousTestStatuses(Workspace));
+        Assert.Equal(ContinuousTestState.Red, remarked.State);
+        Assert.Equal("2", remarked.StaleSinceRevision);
+    }
+
+    [Fact]
+    public void Mark_stale_on_a_red_case_reads_stale_in_aggregate_and_projection()
+    {
+        using var store = CreateStoreWithTests("test:red", "test:green");
+        CompleteRun(store, "run:r", "test:red", 1, "failed");
+        CompleteRun(store, "run:g", "test:green", 2, "passed");
+
+        store.MarkContinuousTestsStale(Workspace, ["test:red"], Key(2));
+
+        CtFreshnessKey selected = Key(2);
+        IReadOnlyList<ContinuousTestStatus> statuses = store.ListContinuousTestStatuses(Workspace);
+        ContinuousTestProjectedStatus detailed = ContinuousTestStatusProjection.Project(selected, statuses);
+        ContinuousTestStatusAggregate aggregate = store.AggregateContinuousTestStatuses(Workspace, selected);
+        ContinuousTestProjectedStatus projected = ContinuousTestStatusProjection.Project(selected, aggregate);
+
+        Assert.Equal(detailed, projected);
+        Assert.Equal(1, aggregate.Stale);
+        Assert.Equal(0, aggregate.FreshRed);
+        Assert.Equal(ContinuousTestVerdict.Partial, projected.Verdict);
+        Assert.Equal(
+            ContinuousTestState.Red,
+            statuses.Single(row => row.TestCaseId == "test:red").State);
+    }
+
+    [Fact]
+    public void Mark_stale_at_a_new_identity_keeps_the_red_verdict_while_everything_reads_stale()
+    {
+        using var store = CreateStoreWithTests("test:red", "test:green");
+        CompleteRun(store, "run:r", "test:red", 5, "failed");
+        CompleteRun(store, "run:g", "test:green", 5, "passed");
+
+        var rebuilt = new CtFreshnessKey("gen-2", 1);
+        store.MarkContinuousTestsStale(Workspace, ["test:red", "test:green"], rebuilt);
+
+        IReadOnlyList<ContinuousTestStatus> statuses = store.ListContinuousTestStatuses(Workspace);
+        ContinuousTestStatus red = statuses.Single(row => row.TestCaseId == "test:red");
+        Assert.Equal(ContinuousTestState.Red, red.State);
+        Assert.Equal(Identity, red.IndexIdentity);
+        Assert.Equal(5, red.Revision);
+        Assert.False(ContinuousTestDurableFreshness.IsCommittedFreshAt(red, rebuilt));
+        Assert.Equal(
+            ContinuousTestState.Stale,
+            statuses.Single(row => row.TestCaseId == "test:green").State);
+
+        ContinuousTestStatusAggregate aggregate = store.AggregateContinuousTestStatuses(Workspace, rebuilt);
+        Assert.Equal(2, aggregate.Stale);
+        Assert.Equal(0, aggregate.FreshRed);
+        Assert.Equal(
+            ContinuousTestVerdict.Partial,
+            ContinuousTestStatusProjection.Project(rebuilt, aggregate).Verdict);
+    }
+
+    [Fact]
     public void Mark_stale_while_live_then_same_revision_completion_commits_fresh()
     {
         using var store = CreateStoreWithTests("test:1");

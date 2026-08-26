@@ -222,9 +222,11 @@ public sealed class ContinuousTestImpactSelector
     }
 
     /// <summary>
-    /// The already-owed backlog: cases the store marked stale and cases with no committed result
-    /// at all. A green or red row at an older key is NOT owed here — carrying or staling it is the
-    /// watermark's decision, not the selector's.
+    /// The already-owed backlog: cases the store marked stale, cases with no committed result at
+    /// all, and RED cases carrying a needs-rerun stamp — a staled red keeps its state string, so
+    /// the stamp is what records the owed run. A green row at an older key, or a red no advance
+    /// ever stamped, is NOT owed here — carrying or staling it is the watermark's decision, not
+    /// the selector's.
     /// </summary>
     private string[] AlreadyOwedTestCaseIds(
         string workspaceId,
@@ -241,7 +243,8 @@ public sealed class ContinuousTestImpactSelector
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         return testCases
             .Where(row => !statuses.TryGetValue(row.Id, out ContinuousTestStatus? status)
-                || status.State is ContinuousTestState.Stale or ContinuousTestState.Unknown)
+                || status.State is ContinuousTestState.Stale or ContinuousTestState.Unknown
+                || (status.State == ContinuousTestState.Red && status.StaleSinceRevision is not null))
             .Select(row => row.Id)
             .Order(StringComparer.Ordinal)
             .ToArray();

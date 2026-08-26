@@ -416,6 +416,12 @@ public sealed partial class ContinuousTestStore : IDisposable
             });
     }
 
+    /// <summary>
+    /// Marks the named cases as needing a run at <paramref name="staleAt"/>. Two rows keep their
+    /// state string: a case held by a live running run, and a RED case — the red is the standing
+    /// verdict, so it keeps its state and its committed key while the stamped
+    /// <c>stale_since_revision</c> and the deleted watermark rows record that a rerun is owed.
+    /// </summary>
     public void MarkContinuousTestsStale(
         string workspaceId,
         IReadOnlyList<string> testCaseIds,
@@ -448,20 +454,22 @@ public sealed partial class ContinuousTestStore : IDisposable
                         ON CONFLICT(test_case_id) DO UPDATE SET
                             workspace_id = excluded.workspace_id,
                             state = CASE
-                                WHEN ct_test_states.running_run_id IS NOT NULL
-                                     AND EXISTS (
-                                         SELECT 1 FROM test_runs tr
-                                         WHERE tr.id = ct_test_states.running_run_id
-                                           AND tr.status = 'running')
+                                WHEN ct_test_states.state = 'red'
+                                     OR (ct_test_states.running_run_id IS NOT NULL
+                                         AND EXISTS (
+                                             SELECT 1 FROM test_runs tr
+                                             WHERE tr.id = ct_test_states.running_run_id
+                                               AND tr.status = 'running'))
                                 THEN ct_test_states.state
                                 ELSE 'stale'
                             END,
                             stale_since_revision = CASE
-                                WHEN ct_test_states.running_run_id IS NOT NULL
-                                     AND EXISTS (
-                                         SELECT 1 FROM test_runs tr
-                                         WHERE tr.id = ct_test_states.running_run_id
-                                           AND tr.status = 'running')
+                                WHEN ct_test_states.state = 'red'
+                                     OR (ct_test_states.running_run_id IS NOT NULL
+                                         AND EXISTS (
+                                             SELECT 1 FROM test_runs tr
+                                             WHERE tr.id = ct_test_states.running_run_id
+                                               AND tr.status = 'running'))
                                 THEN coalesce(ct_test_states.stale_since_revision, $staleSince)
                                 ELSE $staleSince
                             END,
@@ -484,20 +492,22 @@ public sealed partial class ContinuousTestStore : IDisposable
                                 ELSE NULL
                             END,
                             index_identity = CASE
-                                WHEN ct_test_states.running_run_id IS NOT NULL
-                                     AND EXISTS (
-                                         SELECT 1 FROM test_runs tr
-                                         WHERE tr.id = ct_test_states.running_run_id
-                                           AND tr.status = 'running')
+                                WHEN ct_test_states.state = 'red'
+                                     OR (ct_test_states.running_run_id IS NOT NULL
+                                         AND EXISTS (
+                                             SELECT 1 FROM test_runs tr
+                                             WHERE tr.id = ct_test_states.running_run_id
+                                               AND tr.status = 'running'))
                                 THEN ct_test_states.index_identity
                                 ELSE excluded.index_identity
                             END,
                             revision = CASE
-                                WHEN ct_test_states.running_run_id IS NOT NULL
-                                     AND EXISTS (
-                                         SELECT 1 FROM test_runs tr
-                                         WHERE tr.id = ct_test_states.running_run_id
-                                           AND tr.status = 'running')
+                                WHEN ct_test_states.state = 'red'
+                                     OR (ct_test_states.running_run_id IS NOT NULL
+                                         AND EXISTS (
+                                             SELECT 1 FROM test_runs tr
+                                             WHERE tr.id = ct_test_states.running_run_id
+                                               AND tr.status = 'running'))
                                 THEN ct_test_states.revision
                                 ELSE excluded.revision
                             END,

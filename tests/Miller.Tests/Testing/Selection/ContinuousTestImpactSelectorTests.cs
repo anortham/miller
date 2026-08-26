@@ -593,6 +593,37 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.True(result.MayExecute);
     }
 
+    [Fact]
+    public void Select_owed_backlog_includes_a_stamped_red_and_excludes_a_standing_red()
+    {
+        using ContinuousTestStore store = OpenStore();
+        SeedLinkedCase(store, "tc:hit", "sym:test-hit", "tests/payments/HitTests.cs", "test_hit");
+        SeedLinkedCase(store, "tc:red-owed", "sym:test-owed", "tests/other/OwedTests.cs", "test_owed");
+        SeedLinkedCase(store, "tc:red-standing", "sym:test-standing", "tests/other/StandingTests.cs", "test_standing");
+        SeedCommittedResult(store, "tc:red-owed", status: "failed");
+        SeedCommittedResult(store, "tc:red-standing", status: "failed");
+        store.MarkContinuousTestsStale(Workspace, ["tc:red-owed"], new CtFreshnessKey("gen-1", 2));
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:charge", "charge", "src/payments/service.cs"));
+        facts.Tests.Add(FakeMillerFactSource.Hit(
+            "sym:test-hit",
+            "test_hit",
+            "tests/payments/HitTests.cs",
+            isTest: true,
+            edgeKind: "calls",
+            edgeSource: "relationship"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["src/payments/service.cs"]));
+
+        Assert.Equal(["tc:hit"], result.SelectedTestCaseIds);
+        Assert.Equal(["tc:hit", "tc:red-owed"], result.StaleTestCaseIds);
+        Assert.DoesNotContain("tc:red-standing", result.StaleTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+    }
+
     /// <summary>
     /// Contract clause (b): a change whose files the index fully accounts for, and whose complete
     /// impact read reaches no test, is a KNOWN-EMPTY selection — an empty stale delta and no run.
@@ -1590,7 +1621,8 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         ContinuousTestStore store,
         string testCaseId,
         string identity = "gen-1",
-        long revision = 1)
+        long revision = 1,
+        string status = "passed")
     {
         string revisionText = revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
         string runId = "run:" + testCaseId;
@@ -1610,7 +1642,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             CurrentRevision: revisionText,
             IndexIdentity: identity,
             Revision: revision,
-            Status: "passed",
+            Status: status,
             Results:
             [
                 new ContinuousTestResult(
@@ -1618,7 +1650,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
                     WorkspaceId: Workspace,
                     TestCaseId: testCaseId,
                     TestRunId: runId,
-                    Status: "passed",
+                    Status: status,
                     ResultRevision: revisionText,
                     IndexIdentity: identity,
                     Revision: revision),

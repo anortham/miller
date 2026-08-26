@@ -200,6 +200,31 @@ public sealed class DurableFreshnessTests : IDisposable
     }
 
     [Fact]
+    public void Impacted_advance_keeps_a_red_verdict_and_still_reads_stale_for_execution()
+    {
+        using var store = new ContinuousTestStore(DbPath);
+        SeedProviderCase(store, "red", ProjectA());
+        SeedProviderCase(store, "kept", ProjectA());
+        CommitResult(store, "red", Identity, 267, "failed");
+        CommitGreen(store, "kept", Identity, 267);
+
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(267), Key(273), ["red"], ContinuousTestSelectionOutcome.Impacted);
+
+        IReadOnlyDictionary<string, CtFreshnessKey> watermarks = store.ListContinuousTestFreshWatermarks(Workspace, Identity);
+        Assert.False(watermarks.ContainsKey("red"));
+        Assert.Equal(273, watermarks["kept"].Revision);
+        ContinuousTestStatus red = Assert.Single(
+            store.ListContinuousTestStatuses(Workspace), row => row.TestCaseId == "red");
+        Assert.Equal(ContinuousTestState.Red, red.State);
+        Assert.Equal("273", red.StaleSinceRevision);
+        Assert.False(ContinuousTestDurableFreshness.IsFreshAt(red, Key(273), watermarks));
+        ContinuousTestProjectedStatus projected = ProjectedAt(store, Key(273));
+        Assert.Equal(1, projected.StaleCount);
+        Assert.Equal(ContinuousTestVerdict.Partial, projected.Verdict);
+    }
+
+    [Fact]
     public void Unknown_advance_stales_everything_and_advances_nothing()
     {
         using var store = new ContinuousTestStore(DbPath);
