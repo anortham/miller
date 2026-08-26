@@ -70,3 +70,5 @@ TestResults/
 
 # razorback working-tree scratch (reports, progress ledger)
 .razorback/
+
+__pycache__/
