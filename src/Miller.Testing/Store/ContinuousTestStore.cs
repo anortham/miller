@@ -65,7 +65,7 @@ public sealed partial class ContinuousTestStore : IDisposable
           ON p.workspace_id = tc.workspace_id
          AND p.project_path = tc.project_path
         WHERE s.workspace_id = $workspace
-          AND (tc.source <> 'ct-project-status' OR p.enabled IS NULL OR p.enabled = 1);
+          AND (p.enabled IS NULL OR p.enabled = 1);
         """;
 
     internal const string AggregateContinuousTestStatusesSelectedSql = """
@@ -92,7 +92,7 @@ public sealed partial class ContinuousTestStore : IDisposable
            AND w.workspace_id = s.workspace_id
            AND w.index_identity = $identity
         WHERE s.workspace_id = $workspace
-          AND (tc.source <> 'ct-project-status' OR p.enabled IS NULL OR p.enabled = 1);
+          AND (p.enabled IS NULL OR p.enabled = 1);
         """;
 
     private readonly object _gate = new();
@@ -344,7 +344,7 @@ public sealed partial class ContinuousTestStore : IDisposable
                       ON p.workspace_id = tc.workspace_id
                      AND p.project_path = tc.project_path
                     WHERE s.workspace_id = $ws
-                      AND (tc.source <> 'ct-project-status' OR p.enabled IS NULL OR p.enabled = 1)
+                      AND (p.enabled IS NULL OR p.enabled = 1)
                     ORDER BY s.state, s.test_case_id;
                     """;
                 command.Parameters.AddWithValue("$ws", workspaceId);
