@@ -231,6 +231,53 @@ public sealed class TestsToolTests : IDisposable
             TestsCore.RenderStatusJson(result));
     }
 
+    [Fact]
+    public void Compact_status_names_the_discovery_gap_when_executing_has_no_run()
+    {
+        var result = new TestsStatusResult(
+            Enabled: true,
+            KillSwitchOff: false,
+            Projects: [],
+            DaemonState: CtDaemonLifecycleState.Running,
+            DaemonReason: "executing",
+            Verdict: ContinuousTestVerdict.Partial,
+            Selected: null,
+            StaleCount: 1,
+            SelectedCount: 0,
+            LastRun: null,
+            BudgetHolder: null,
+            DaemonActivity: CtDaemonActivity.Executing,
+            DaemonRun: null,
+            DaemonVersion: CtDaemonVersion.Evaluate("1.0.0+own", "1.0.0+own"));
+
+        string compact = TestsCore.RenderStatusCompact(result);
+        Assert.Contains(
+            "activity: executing\n  run: none selected yet (project discovery or between projects)\n",
+            compact,
+            StringComparison.Ordinal);
+
+        Assert.Contains("\"run\":null", TestsCore.RenderStatusJson(result), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Compact_status_adds_no_run_line_when_the_daemon_is_not_executing()
+    {
+        var result = new TestsStatusResult(
+            Enabled: true,
+            KillSwitchOff: false,
+            Projects: [],
+            DaemonState: CtDaemonLifecycleState.Running,
+            DaemonReason: "idle",
+            Verdict: ContinuousTestVerdict.Green,
+            Selected: null,
+            StaleCount: 0,
+            SelectedCount: 0,
+            LastRun: null,
+            BudgetHolder: null);
+
+        Assert.DoesNotContain("\n  run:", TestsCore.RenderStatusCompact(result), StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// Two builds of the SAME release — two worktrees of one repo on different commits — is a
     /// symmetric verdict: each reads the other as build_differs. Miller must report it and must NOT

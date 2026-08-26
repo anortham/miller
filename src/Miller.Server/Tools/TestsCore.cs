@@ -1080,6 +1080,11 @@ public static class TestsCore
                 + $" started={running.RunStartedAtUtc:O} child={Snake(running.Activity.ToString())}");
             AppendDaemonRunFacts(sb, running);
         }
+        // ADR-0001 compact-only honesty line for the accepted daemon gap: the loop reports
+        // executing while it discovers a project's inventory or moves between projects in one
+        // drain, and no run exists yet. JSON keeps "run": null.
+        else if (result.DaemonActivity == CtDaemonActivity.Executing)
+            sb.AppendLine("  run: none selected yet (project discovery or between projects)");
         // Only when a live daemon disagrees with this build. The reason names both builds, so the
         // line needs no second copy of the version.
         if (result.DaemonVersion is { Mismatch: true } version)
