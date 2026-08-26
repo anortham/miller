@@ -229,13 +229,27 @@ optimistic green. An index rebuild changes the generation identity, which stales
 | Rust | `cargo` | yes — `julie-extractors`, 4,173 cases |
 | Python | `pytest` | yes — `more-itertools`, 736 tests |
 | JavaScript and TypeScript | `vitest`, `jest`, `node-test` | yes — `jest` proven on `vercel/ms` (runs the suite once, under jest's default environment) |
+| QML and Qt | `qt-quick-test` (CMake/CTest) | not yet — shipped in v1.22.0, proven by fixtures; no host with the Qt Quick Test development package |
+
+That is the whole supported set today. Support for more languages and frameworks is ongoing: Go,
+Ruby, Java, PHP, and every other toolchain are not supported yet. `miller tests enable` on a repo
+with no supported test project refuses with exit `3` and writes nothing, rather than leaving the
+workspace enabled with zero projects.
 
 `miller tests enable` discovers projects from the files already in the repo: test-signal `.csproj`
-files, `Cargo.toml`, `package.json`, and the usual Python config files. JavaScript and Python cases are
-discovered by test-file naming — `*.test.*` or `*.spec.*` for JavaScript and TypeScript, `test_*.py` or
-`*_test.py` for Python — so a suite named some other way reports no cases rather than a false green.
-Cross-repo evidence and the open provider gaps are recorded in
-[the CT dogfood finding](docs/findings/2026-08-21-ct-cross-repo-dogfood.md).
+files, `Cargo.toml`, `package.json`, the usual Python config files, and `CMakeLists.txt` with Qt
+Quick Test evidence. JavaScript and Python cases are discovered by test-file naming — `*.test.*` or
+`*.spec.*` for JavaScript and TypeScript, `test_*.py` or `*_test.py` for Python — so a suite named
+some other way reports no cases rather than a false green.
+
+One known sharp edge: CT runs the built self-executing test assembly, which only xUnit v3 and
+Microsoft.Testing.Platform produce. An xUnit v2 project builds no such executable and fails
+discovery with a raw "error occurred trying to start process" message; migrate the project to xUnit
+v3. `dotnet new xunit` still scaffolds v2 on SDK 10.0.400.
+
+The authoritative supported matrix, the full discovery rules, and the known limits live in
+[docs/continuous-testing.md](docs/continuous-testing.md). Cross-repo evidence and the open provider
+gaps are recorded in [the CT dogfood finding](docs/findings/2026-08-21-ct-cross-repo-dogfood.md).
 
 ### Safety
 

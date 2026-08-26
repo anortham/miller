@@ -401,12 +401,19 @@
             <li><code>node-test</code></li>
           </ul>
         </article>
+        <article>
+          <h3>QML and Qt</h3>
+          <ul>
+            <li><code>qt-quick-test</code></li>
+          </ul>
+        </article>
       </div>
       <p class="language-note">
         Run on real repositories: .NET on Miller's own suite, <code>cargo</code> on
         <code>julie-extractors</code> (4,173 cases), <code>pytest</code> on <code>more-itertools</code>
-        (736 tests), plus <code>vitest</code> and <code>node-test</code> on live JavaScript projects.
-        <code>jest</code> is exercised by Miller's own test fixtures and has no real-repo run yet.
+        (736 tests), <code>jest</code> on <code>vercel/ms</code>, plus <code>vitest</code> and
+        <code>node-test</code> on live JavaScript projects. <code>qt-quick-test</code> shipped in
+        v1.22.0 and is proven by fixtures, not yet on a real Qt repository.
         JavaScript and Python cases are discovered by test-file naming
         (<code>*.test.*</code> or <code>*.spec.*</code>, <code>test_*.py</code> or
         <code>*_test.py</code>), so a suite named some other way reports no cases rather than a false

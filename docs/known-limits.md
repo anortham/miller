@@ -68,3 +68,10 @@
 - A rebuilt MCP server is picked up only after the MCP client restarts the Miller subprocess. Use
   `workspace status` and compare the `pid` in the header to confirm the restart actually loaded a new
   process.
+- Continuous testing supports .NET (`xunit`, `nunit`, `mstest`, `dotnet`), Rust (`cargo`), Python
+  (`pytest`), JavaScript and TypeScript (`vitest`, `jest`, `node-test`), and QML/Qt
+  (`qt-quick-test`, CMake/CTest only). Support for more languages and frameworks is ongoing; an
+  enable on an unsupported toolchain refuses with exit `3` and writes nothing. CT runs the built
+  self-executing test assembly, so an xUnit v2 project fails discovery with a raw process error and
+  must migrate to xUnit v3; `dotnet new xunit` still scaffolds v2 on SDK 10.0.400. The full matrix,
+  discovery rules, and limits are in [continuous testing](continuous-testing.md).

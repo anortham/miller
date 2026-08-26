@@ -348,6 +348,8 @@ has never decided about continuous testing. It writes nothing in that case — n
 (cargo), Python (pytest), JavaScript and TypeScript (vitest/jest/node --test), and Qt/QML (CTest).
 An enable that reverses an opt-out tombstone is always allowed, because a linked worktree of an
 enabled main checkout has no projects of its own to discover and refusing would strand it opted out.
+The authoritative supported matrix, the per-ecosystem discovery rules, and the known limits live in
+[`../continuous-testing.md`](../continuous-testing.md); support for more languages is ongoing.
 `--project` on a file with no identifiable framework is refused the same way; a `.csproj` whose
 contents name no test package is still accepted, because it runs under `dotnet test` regardless.
 

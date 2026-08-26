@@ -1,5 +1,30 @@
 # TODO
 
+## Campaign 2026-08-25 — do all of it, in this order
+
+Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
+
+1. CT docs: supported languages/frameworks, ongoing-support note — **done** (docs/continuous-testing.md
+   is the authoritative matrix; README/known-limits/tests contract point at it; site #testing gained the
+   QML row and the jest vercel/ms fact)
+2. julie-extract 2.37.0 pin bump + consumption (verify `ExtractSourceLimits` against published
+   `languages.discovery_limits`, map the new `unsupported` update disposition into the refusal ledger,
+   surface `quantum_overruns` in the queue reader, wire `store maintain` into a Miller lifecycle path) —
+   **blocked on the v2.37.0 release publish + the semantic-noise batch finishing (machine must be quiet)**
+3. CT xUnit v2 detection (backlog entry below) — queued
+4. Dashboard Tests section (backlog entry below) — queued
+5. Dashboard cleanup pass (backlog entry below) — queued
+6. Semantic activation requires session restart after `prepare` (Active item) — queued
+7. JSON diagnostics during family-store resolution convergence (Active item) — queued
+8. Cross-tool discoverability empty states (backlog entry below) — queued
+9. Windows memory investigation (Active item; needs the win-test guest) — queued
+10. MCP SDK / stateless MCP evaluation → plan doc only — queued
+11. Workspace blacklist + explicit registration gate → design docs for a user decision, no
+    implementation without approval — queued
+
+Semantic-noise experiment (8 reps, off-vs-on at the frozen budget) runs until ~02:50 UTC; its analysis
+and the findings/site update land when it completes.
+
 ## Active
 
 - On windows memory usage seems high, investigate.
