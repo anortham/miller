@@ -599,12 +599,11 @@ public sealed class ContinuousTestWholeSuiteRunTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(project)!);
         File.WriteAllText(project, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
 
-        // The build output root must live OUTSIDE the workspace root; the queue validates it.
         return new ContinuousTestWorkspace(
             WorkspaceId,
             _root,
             project,
-            Path.Combine(_root + "-build", "whole-suite"));
+            Path.Combine(_root, ".miller", "ct", "build", "whole-suite"));
     }
 
     private static ContinuousTestImpactSelector SelectorFor(ContinuousTestStore store) =>

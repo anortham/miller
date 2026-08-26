@@ -20,7 +20,7 @@ internal static class EngineTestSupport
             WorkspaceId,
             root,
             project,
-            Path.Combine(Path.GetTempPath(), "miller-ct-build", Guid.NewGuid().ToString("N")));
+            Path.Combine(root, ".miller", "ct", "build", Guid.NewGuid().ToString("N")[..12]));
     }
 
     internal static ContinuousTestCase Case(

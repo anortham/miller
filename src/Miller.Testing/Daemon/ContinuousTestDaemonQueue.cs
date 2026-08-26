@@ -1219,16 +1219,26 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     {
         string workspaceRoot = Path.GetFullPath(workspace.WorkspaceRoot);
         string buildOutputRoot = Path.GetFullPath(workspace.BuildOutputRoot);
-        string relative = Path.GetRelativePath(workspaceRoot, buildOutputRoot);
+        if (IsInside(Path.Combine(workspaceRoot, ".miller"), buildOutputRoot)
+            || IsInside(Path.GetFullPath(CtTempPaths.BuildRoot), buildOutputRoot))
+        {
+            return;
+        }
+
+        throw new ArgumentException(
+            "continuous test build output root must live inside <workspace root>/.miller/ "
+            + $"or under the machine temp build root {CtTempPaths.BuildRoot}",
+            nameof(ContinuousTestWorkspace.BuildOutputRoot));
+    }
+
+    private static bool IsInside(string root, string path)
+    {
+        string relative = Path.GetRelativePath(root, path);
         StringComparison comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-        if (relative == "." || (!relative.StartsWith("..", comparison) && !Path.IsPathRooted(relative)))
-        {
-            throw new ArgumentException(
-                "continuous test build output root must live outside the workspace root",
-                nameof(ContinuousTestWorkspace.BuildOutputRoot));
-        }
+        return relative == "."
+            || (!relative.StartsWith("..", comparison) && !Path.IsPathRooted(relative));
     }
 
     private readonly record struct PendingKey(

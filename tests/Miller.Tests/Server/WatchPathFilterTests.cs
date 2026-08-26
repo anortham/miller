@@ -88,6 +88,15 @@ public sealed class WatchPathFilterTests
     }
 
     [Theory]
+    [InlineData("/repo/.miller/ct/build/0123456789ab/g0123456789ab/App.Tests.dll")]
+    [InlineData("/repo/.miller/ct/build/0123456789ab/g0123456789ab.allocated")]
+    [InlineData("/repo/.miller/ct/build/0123456789ab/g0123456789ab/TestResults/run-abc.trx")]
+    public void Skips_ContinuousTestBuildOutput_UnderTheMillerSidecar(string path)
+    {
+        Assert.False(WatchPathFilter.ShouldProcess(Root, path));
+    }
+
+    [Theory]
     [InlineData("/repo/wwwroot/site.min.js")]
     [InlineData("/repo/wwwroot/site.bundle.js")]
     [InlineData("/repo/src/schema.generated.js")]

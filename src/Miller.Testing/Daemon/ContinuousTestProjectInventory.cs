@@ -5,9 +5,17 @@ using Miller.Indexing;
 
 namespace Miller.Testing;
 
+/// <summary>
+/// One enabled project with its materialized run workspace.
+/// <see cref="BuildRootFallbackReason"/> is null for the default workspace-local build root; when the
+/// workspace root is too long for that root (see
+/// <see cref="ContinuousTestProjectInventory.WorkspaceRootLengthBudget"/>), it names why the legacy
+/// machine temp root was chosen instead, so callers can report the choice.
+/// </summary>
 public sealed record ContinuousTestProjectWorkItem(
     ContinuousTestProject Project,
-    ContinuousTestWorkspace Workspace);
+    ContinuousTestWorkspace Workspace,
+    string? BuildRootFallbackReason = null);
 
 public static class ContinuousTestProjectInventory
 {
@@ -255,6 +263,7 @@ public static class ContinuousTestProjectInventory
             throw new ArgumentException("must not be empty", nameof(workspaceRoot));
 
         string root = Path.GetFullPath(workspaceRoot);
+        bool overBudget = root.Length > WorkspaceRootLengthBudget;
         var workItems = new List<ContinuousTestProjectWorkItem>();
         foreach (ContinuousTestProject project in projects.Where(static project => project.Enabled))
         {
@@ -266,11 +275,23 @@ public static class ContinuousTestProjectInventory
                     nameof(ContinuousTestProject.ProjectPath));
             }
 
-            string buildRoot = Path.Combine(
-                CtTempPaths.Root,
-                "build",
-                ShortSegment(project.WorkspaceId),
-                ShortSegment(project.Id));
+            string? fallbackReason = null;
+            string buildRoot;
+            if (overBudget)
+            {
+                buildRoot = Path.Combine(
+                    CtTempPaths.BuildRoot,
+                    ShortSegment(project.WorkspaceId),
+                    ShortSegment(project.Id));
+                fallbackReason =
+                    $"workspace root is {root.Length} characters, over the {WorkspaceRootLengthBudget}-character "
+                    + $"budget for a workspace-local build root; building under {buildRoot}";
+            }
+            else
+            {
+                buildRoot = Path.Combine(root, ".miller", "ct", "build", ShortSegment(project.Id));
+            }
+
             var workspace = new ContinuousTestWorkspace(
                 WorkspaceId: project.WorkspaceId,
                 WorkspaceRoot: root,
@@ -280,32 +301,69 @@ public static class ContinuousTestProjectInventory
                 Command: project.Command,
                 ExcludeTraits: project.ExcludeTraits,
                 Metadata: project.Metadata);
-            workItems.Add(new ContinuousTestProjectWorkItem(project, workspace));
+            workItems.Add(new ContinuousTestProjectWorkItem(project, workspace, fallbackReason));
         }
 
         return workItems;
     }
 
     /// <summary>
+    /// The whole-path bound the build root protects: Windows MAX_PATH is 260 characters, and a
+    /// machine without long paths enabled fails there.
+    /// </summary>
+    internal const int WindowsPathBudget = 260;
+
+    /// <summary>
+    /// The longest file name a provider composes under a generation's TestResults directory:
+    /// <c>run-&lt;64-character run hash&gt;.part000.junit.xml</c>, one chunk of a split xunit v3 run.
+    /// </summary>
+    private const int LongestProviderArtifactNameLength = 86;
+
+    /// <summary>
+    /// Every character below the workspace root in the deepest composed provider artifact path:
+    /// <c>/.miller/ct/build/&lt;project&gt;/g&lt;generation&gt;/TestResults/&lt;artifact&gt;</c>.
+    /// </summary>
+    private static readonly int WorkspaceLocalTailLength =
+        "/.miller/ct/build/".Length
+        + SegmentHashLength
+        + "/g".Length + SegmentHashLength
+        + "/TestResults/".Length
+        + LongestProviderArtifactNameLength;
+
+    /// <summary>
+    /// The longest workspace root whose workspace-local build root keeps the deepest composed
+    /// provider artifact path inside <see cref="WindowsPathBudget"/>. A longer root falls back to
+    /// the legacy machine temp build root (<see cref="CtTempPaths.BuildRoot"/>): tests that walk up
+    /// from the build output to find the repo root are broken for such a project either way, and
+    /// MAX_PATH breakage is worse.
+    /// </summary>
+    internal static readonly int WorkspaceRootLengthBudget = WindowsPathBudget - WorkspaceLocalTailLength;
+
+    /// <summary>
     /// One fixed-width path segment for an identifier of any length.
     ///
-    /// Windows MAX_PATH is 260 characters and a machine without long paths enabled fails there. The
-    /// composed continuous-test artifact path stacks the ambient temp root, this build root, a
-    /// generation id, a results directory, and a provider file name whose run hash alone is 64
-    /// characters - so a build root that spelled the workspace id (a full 64-character digest) and
-    /// the project id (a mangled relative path) in full handed pytest a 263-character
-    /// <c>--junitxml</c> path before the project's own directory nesting was even counted. Both
-    /// segments are therefore the same 12 hex characters
-    /// <see cref="CtGenerationPaths"/> and <see cref="CtTempPaths"/> already use.
+    /// The default build root lives inside the workspace at
+    /// <c>&lt;workspace&gt;/.miller/ct/build/&lt;project segment&gt;</c>, so tests that walk up from
+    /// the test binary to find the repo root pass under continuous testing with zero project-side
+    /// configuration. The root is per-workspace already, so only the project needs a segment there;
+    /// the over-budget fallback under <see cref="CtTempPaths.BuildRoot"/> keeps both the workspace
+    /// and the project segment because that root is machine-shared.
     ///
-    /// Nothing reads an id back out of these segments: the coordinator walks only the LAYOUT (the
-    /// parent directory is the workspace, its children are that workspace's projects), the temp and
-    /// generation helpers hash the whole composed root, and <c>ct.db</c> stores it as an opaque key.
+    /// Windows MAX_PATH is 260 characters and a machine without long paths enabled fails there. The
+    /// composed continuous-test artifact path stacks the build root, a generation id, a results
+    /// directory, and a provider file name whose run hash alone is 64 characters - so a build root
+    /// that spelled the workspace id (a full 64-character digest) and the project id (a mangled
+    /// relative path) in full handed pytest a 263-character <c>--junitxml</c> path before the
+    /// project's own directory nesting was even counted. Every segment is therefore the same 12 hex
+    /// characters <see cref="CtGenerationPaths"/> and <see cref="CtTempPaths"/> already use.
+    ///
+    /// Nothing reads an id back out of these segments: the temp and generation helpers hash the
+    /// whole composed root, and <c>ct.db</c> stores it as an opaque key.
     ///
     /// A Miller workspace id is already a SHA-256 hex digest, so its own prefix is reused rather
-    /// than re-hashed: the directory name is then the same 12 characters <c>workspace list</c>
-    /// prints as the display id, which a person can match by eye. Anything else - a continuous-test
-    /// project id is a path, not a digest - is hashed first.
+    /// than re-hashed: the fallback directory name is then the same 12 characters
+    /// <c>workspace list</c> prints as the display id, which a person can match by eye. Anything
+    /// else - a continuous-test project id is a path, not a digest - is hashed first.
     /// </summary>
     private static string ShortSegment(string value)
     {

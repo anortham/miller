@@ -14,7 +14,7 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
     }
 
     [Fact]
-    public void Materialize_keeps_build_output_outside_the_workspace()
+    public void Materialize_puts_build_output_inside_the_workspace_miller_sidecar()
     {
         string project = Path.Combine(_root, "src", "App.Tests.csproj");
         Directory.CreateDirectory(Path.GetDirectoryName(project)!);
@@ -25,97 +25,120 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
 
         ContinuousTestProjectWorkItem item = Assert.Single(items);
         Assert.Equal(Path.GetFullPath(project), item.Workspace.ProjectPath);
-        Assert.False(IsInside(_root, item.Workspace.BuildOutputRoot));
-        Assert.Contains("miller-ct", item.Workspace.BuildOutputRoot, StringComparison.Ordinal);
+        Assert.True(IsInside(_root, item.Workspace.BuildOutputRoot));
+        Assert.Equal(
+            Path.Combine(_root, ".miller", "ct", "build"),
+            Path.GetDirectoryName(item.Workspace.BuildOutputRoot));
+        Assert.Null(item.BuildRootFallbackReason);
     }
 
     [Fact]
-    public void Build_output_segments_stay_fixed_width_for_real_workspace_and_project_ids()
+    public void Build_output_keeps_one_fixed_width_project_segment()
     {
-        ContinuousTestProjectWorkItem item = MaterializeDeeplyNestedPytestProject();
+        ContinuousTestProjectWorkItem item = MaterializeDeeplyNestedPytestProject(_root);
 
-        string[] segments = BuildRootSegments(item.Workspace.BuildOutputRoot);
-        Assert.Equal(3, segments.Length);
-        Assert.Equal("build", segments[0]);
-        Assert.Equal(ContinuousTestProjectInventory.SegmentHashLength, segments[1].Length);
-        Assert.Equal(ContinuousTestProjectInventory.SegmentHashLength, segments[2].Length);
-        // The workspace segment is the same 12 characters `workspace list` prints as the display id,
-        // so a person can match a build directory to a workspace by eye.
-        Assert.Equal(RealWorkspaceId[..ContinuousTestProjectInventory.SegmentHashLength], segments[1]);
+        string segment = Path.GetFileName(item.Workspace.BuildOutputRoot);
+        Assert.Equal(ContinuousTestProjectInventory.SegmentHashLength, segment.Length);
+        Assert.Matches("^[0-9a-f]+$", segment);
+        Assert.Equal(
+            Path.Combine(_root, ".miller", "ct", "build"),
+            Path.GetDirectoryName(item.Workspace.BuildOutputRoot));
     }
 
     [Fact]
     public void Composed_provider_artifact_paths_stay_inside_the_windows_path_budget()
     {
-        ContinuousTestProjectWorkItem item = MaterializeDeeplyNestedPytestProject();
+        string root = WorkspaceRootOfLength(ContinuousTestProjectInventory.WorkspaceRootLengthBudget);
+        ContinuousTestProjectWorkItem item = MaterializeDeeplyNestedPytestProject(root);
 
+        Assert.True(IsInside(root, item.Workspace.BuildOutputRoot));
+        Assert.Null(item.BuildRootFallbackReason);
+        int longestComposed = 0;
         foreach (string artifactName in LongestProviderArtifactNames)
         {
-            // <build root>/<generation id>/TestResults/<artifact> — the deepest path CT hands a
-            // provider. CtGenerationPaths writes the generation id as 'g' plus 12 hex characters.
             string composed = Path.Combine(
                 item.Workspace.BuildOutputRoot,
                 "g0123456789ab",
                 "TestResults",
                 artifactName);
-            string tail = Path.GetRelativePath(CtTempPaths.Root, composed);
+            longestComposed = Math.Max(longestComposed, composed.Length);
             Assert.True(
-                tail.Length <= BuildRootTailBudget,
-                $"{tail.Length} characters below the CT temp root exceeds the {BuildRootTailBudget} budget: {tail}");
+                composed.Length <= ContinuousTestProjectInventory.WindowsPathBudget,
+                $"{composed.Length} characters exceeds the {ContinuousTestProjectInventory.WindowsPathBudget} budget: {composed}");
+        }
+
+        Assert.Equal(ContinuousTestProjectInventory.WindowsPathBudget, longestComposed);
+    }
+
+    [Fact]
+    public void An_over_budget_workspace_root_falls_back_to_the_machine_temp_build_root()
+    {
+        string root = WorkspaceRootOfLength(ContinuousTestProjectInventory.WorkspaceRootLengthBudget + 1);
+        ContinuousTestProjectWorkItem item = MaterializeDeeplyNestedPytestProject(root);
+
+        Assert.False(IsInside(root, item.Workspace.BuildOutputRoot));
+        Assert.NotNull(item.BuildRootFallbackReason);
+        string[] segments = Path.GetRelativePath(CtTempPaths.BuildRoot, item.Workspace.BuildOutputRoot)
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        Assert.Equal(2, segments.Length);
+        Assert.Equal(RealWorkspaceId[..ContinuousTestProjectInventory.SegmentHashLength], segments[0]);
+        Assert.Equal(ContinuousTestProjectInventory.SegmentHashLength, segments[1].Length);
+        foreach (string artifactName in LongestProviderArtifactNames)
+        {
+            string tail = Path.GetRelativePath(CtTempPaths.Root, Path.Combine(
+                item.Workspace.BuildOutputRoot,
+                "g0123456789ab",
+                "TestResults",
+                artifactName));
+            Assert.True(
+                tail.Length <= LegacyBuildRootTailBudget,
+                $"{tail.Length} characters below the CT temp root exceeds the {LegacyBuildRootTailBudget} budget: {tail}");
         }
     }
 
-    /// <summary>
-    /// Windows MAX_PATH is 260 characters and a machine without long paths enabled fails there. Only
-    /// the part BELOW the continuous-test temp root belongs to Miller, so the budget covers that tail
-    /// and leaves the other 100 characters for the ambient temp root (a Windows
-    /// <c>&lt;temp&gt;\miller-ct</c> is about 45).
-    /// </summary>
-    private const int BuildRootTailBudget = 160;
+    private const int LegacyBuildRootTailBudget = 160;
 
-    /// <summary>A real Miller workspace id: the 64-character SHA-256 digest of the canonical root.</summary>
     private const string RealWorkspaceId =
         "9f2b7c1d4e6a8035c1d9e7f3a5b40628d9c3e1f7a24b60d8c5e39f1a7b04c26d";
 
-    /// <summary>A 64-character run hash, the width every provider stamps into an artifact name.</summary>
     private const string RunHash =
         "3c81f0a5b6d2e47390af51c8b6d0e2f4a7c93b15d8e604f2a1c7b3d90e58f24a";
 
-    /// <summary>
-    /// The longest artifact file name each provider composes under a generation's TestResults
-    /// directory. Every one carries a full 64-character run hash, which is why the build root above
-    /// it must stay short.
-    /// </summary>
     private static readonly string[] LongestProviderArtifactNames =
     [
-        $"run-{RunHash}.xml",               // PythonTestProvider: the pytest --junitxml argument.
-        $"run-{RunHash}.part000.junit.xml", // DotnetTestProvider: one chunk of a split xunit v3 run.
-        $"run-{RunHash}.trx",               // DotnetTestProvider: the VSTest trx.
-        $"run-{RunHash}.json",              // JavaScriptTestProvider: vitest and jest.
-        $"run-{RunHash}.cargo.log",         // RustTestProvider: the cargo log.
+        $"run-{RunHash}.xml",
+        $"run-{RunHash}.part000.junit.xml",
+        $"run-{RunHash}.trx",
+        $"run-{RunHash}.json",
+        $"run-{RunHash}.cargo.log",
     ];
 
-    private ContinuousTestProjectWorkItem MaterializeDeeplyNestedPytestProject()
+    private string WorkspaceRootOfLength(int length)
+    {
+        int padLength = length - _root.Length - 1;
+        Assert.True(padLength >= 1, $"temp root {_root} is already longer than {length} characters");
+        string root = Path.Combine(_root, new string('a', padLength));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static ContinuousTestProjectWorkItem MaterializeDeeplyNestedPytestProject(string root)
     {
         string project = Path.Combine(
-            _root, "tests", "integration", "python", "services", "billing", "pyproject.toml");
+            root, "tests", "integration", "python", "services", "billing", "pyproject.toml");
         Directory.CreateDirectory(Path.GetDirectoryName(project)!);
         File.WriteAllText(project, "[tool.pytest.ini_options]");
 
         return Assert.Single(ContinuousTestProjectInventory.MaterializeProjectWorkItems(
             [
                 new ContinuousTestProject(
-                    ContinuousTestProjectInventory.ProjectId(RealWorkspaceId, _root, project),
+                    ContinuousTestProjectInventory.ProjectId(RealWorkspaceId, root, project),
                     RealWorkspaceId,
                     project,
                     Framework: "pytest"),
             ],
-            _root));
+            root));
     }
-
-    private static string[] BuildRootSegments(string buildOutputRoot) =>
-        Path.GetRelativePath(CtTempPaths.Root, buildOutputRoot)
-            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
     [Fact]
     public void Discover_skips_a_class_library_whose_name_contains_Test()
