@@ -199,12 +199,16 @@ public enum TestsWaitState
     LeaseLost,
 }
 
+/// <summary>
+/// <paramref name="CommandId"/> is null when the wait JOINED a run already in flight: the submit's
+/// ack window expired before the daemon read the command file, so no ack ever named an id.
+/// </summary>
 public sealed record TestsWaitResult(
     bool WaitComplete,
     TestsWaitState State,
     double ElapsedSeconds,
     double TimeoutSeconds,
-    string CommandId,
+    string? CommandId,
     string? RunId,
     [property: JsonIgnore]
     CtDaemonRunProgress? Run = null);
@@ -791,15 +795,53 @@ public static class TestsCore
                 // verdict unknown, null selected, the channel reason in the payload. An unacked
                 // submit does NOT fall through to a foreground run - the daemon most likely HAS the
                 // request, and a duplicate would run the suite twice.
+                //
+                // A MISSED ack window is not proof of a dead daemon: the daemon reads command files
+                // only between drains, so a submit that lands mid-drain acks one loop pass later by
+                // design. A BUSY status record (executing or queued) separates that daemon from a
+                // dead or idle one; a dead daemon's record reads Stopped through the liveness probe
+                // and keeps the unacked failure.
                 if (submitted.Ack is not { State: CtDaemonCommandState.Acknowledged })
                 {
+                    ContinuousTestDaemonSnapshot? busy = submitted.Ack is null
+                        ? TryReadBusyDaemon(request, endpointRoot)
+                        : null;
+                    if (busy is null)
+                    {
+                        return new TestsRunResult(
+                            ExitCode: 3,
+                            Execution: CtRunExecution.Daemon,
+                            Verdict: ContinuousTestVerdict.Unknown,
+                            Reason: submitted.Reason ?? submitted.Ack?.Reason ?? "not acknowledged",
+                            Waited: false,
+                            Selected: null);
+                    }
+
+                    string activeReason = ActiveRunReason(busy);
+                    if (!request.Wait)
+                    {
+                        return new TestsRunResult(
+                            ExitCode: 3,
+                            Execution: CtRunExecution.Daemon,
+                            Verdict: ContinuousTestVerdict.Unknown,
+                            Reason: activeReason,
+                            Waited: false,
+                            Selected: null);
+                    }
+
+                    // Join the in-flight work: the daemon picks the queued command file up on its
+                    // next loop pass, and the settle wait already learns runs from snapshots. There
+                    // is no command id to correlate because no ack ever named one.
+                    (TestsStatusResult joined, TestsWaitResult joinedWait) =
+                        WaitForDaemonToSettle(request, endpointRoot, commandId: null);
                     return new TestsRunResult(
-                        ExitCode: 3,
-                        Execution: CtRunExecution.Daemon,
-                        Verdict: ContinuousTestVerdict.Unknown,
-                        Reason: submitted.Reason ?? submitted.Ack?.Reason ?? "not acknowledged",
-                        Waited: false,
-                        Selected: null);
+                        0,
+                        CtRunExecution.Daemon,
+                        joined.Verdict,
+                        activeReason,
+                        Waited: true,
+                        joined.Selected,
+                        Wait: joinedWait);
                 }
 
                 (TestsStatusResult status, TestsWaitResult? wait) = request.Wait
@@ -1382,7 +1424,10 @@ public static class TestsCore
                 writer.WriteString("state", Snake(wait.State.ToString()));
                 writer.WriteNumber("elapsed_seconds", wait.ElapsedSeconds);
                 writer.WriteNumber("timeout_seconds", wait.TimeoutSeconds);
-                writer.WriteString("command_id", wait.CommandId);
+                if (wait.CommandId is null)
+                    writer.WriteNull("command_id");
+                else
+                    writer.WriteString("command_id", wait.CommandId);
                 if (wait.RunId is null)
                     writer.WriteNull("run_id");
                 else
@@ -1404,7 +1449,7 @@ public static class TestsCore
         {
             output += $" wait: {Snake(wait.State.ToString())} complete={(wait.WaitComplete ? "true" : "false")}"
                 + $" elapsed={FormatSeconds(wait.ElapsedSeconds)}s/{FormatSeconds(wait.TimeoutSeconds)}s"
-                + $" command={wait.CommandId} run={wait.RunId ?? "-"}";
+                + $" command={wait.CommandId ?? "-"} run={wait.RunId ?? "-"}";
         }
 
         if (result.Wait?.Run is { } run && HasDaemonRunFacts(run))
@@ -1631,7 +1676,7 @@ public static class TestsCore
     private static (TestsStatusResult Status, TestsWaitResult Wait) WaitForDaemonToSettle(
         TestsCoreRequest request,
         string endpointRoot,
-        string commandId)
+        string? commandId)
     {
         TimeSpan timeout = request.WaitTimeout ?? TimeSpan.FromMinutes(10);
         TestsWaitProbe probe = request.Hooks?.WaitProbe ?? new TestsWaitProbe();
@@ -1711,7 +1756,7 @@ public static class TestsCore
         bool complete,
         TimeSpan elapsed,
         TimeSpan timeout,
-        string commandId,
+        string? commandId,
         string? runId,
         CtDaemonRunProgress? run) =>
         (
@@ -1724,6 +1769,27 @@ public static class TestsCore
                 commandId,
                 runId,
                 run));
+
+    /// <summary>
+    /// The endpoint daemon's snapshot when it is busy (executing or queued, or a named run), or null
+    /// when it is dead or idle. Reads through the LIVE status path so a dead daemon's stale record
+    /// answers Stopped, never busy.
+    /// </summary>
+    private static ContinuousTestDaemonSnapshot? TryReadBusyDaemon(TestsCoreRequest request, string endpointRoot)
+    {
+        Func<string, ContinuousTestDaemonSnapshot> readStatus =
+            request.Hooks?.WaitProbe?.ReadStatus
+            ?? (root => ContinuousTestDaemonHost.ReadLiveStatus(root));
+        ContinuousTestDaemonSnapshot snapshot = readStatus(endpointRoot);
+        return IsExecuting(snapshot) || IsQueued(snapshot) || snapshot.Run is not null
+            ? snapshot
+            : null;
+    }
+
+    private static string ActiveRunReason(ContinuousTestDaemonSnapshot snapshot) =>
+        snapshot.Run is { } run
+            ? $"run already active (run {run.RunId}, project {run.ProjectPath})"
+            : "run already active";
 
     /// <summary>
     /// A run is in flight. The activity field is authoritative; the reason string is the fallback for a

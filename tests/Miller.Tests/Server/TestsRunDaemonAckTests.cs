@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
@@ -150,6 +151,103 @@ public sealed class TestsRunDaemonAckTests : IDisposable
         Assert.Equal(IndexRevision, result.Selected?.Revision);
     }
 
+    [Fact]
+    public void An_unacked_submit_against_a_busy_daemon_reports_run_already_active()
+    {
+        SeedGreenVerdict();
+        using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "test");
+        Assert.NotNull(lease);
+
+        TestsRunResult result = TestsCore.Run(SubmitRequest(
+            new CtRunResult(CtRunExecution.Daemon, null, null),
+            probe: new TestsWaitProbe(ReadStatus: _ => ExecutingSnapshot())));
+
+        Assert.Equal(3, result.ExitCode);
+        Assert.Equal(CtRunExecution.Daemon, result.Execution);
+        Assert.Equal(ContinuousTestVerdict.Unknown, result.Verdict);
+        Assert.Equal(
+            "run already active (run run-active, project tests/Sample.Tests/Sample.Tests.csproj)",
+            result.Reason);
+        Assert.False(result.Waited);
+        Assert.Null(result.Selected);
+        Assert.Null(result.Wait);
+    }
+
+    [Fact]
+    public void An_unacked_submit_against_a_queued_daemon_reports_run_already_active_without_run_facts()
+    {
+        SeedGreenVerdict();
+        using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "test");
+        Assert.NotNull(lease);
+
+        TestsRunResult result = TestsCore.Run(SubmitRequest(
+            new CtRunResult(CtRunExecution.Daemon, null, null),
+            probe: new TestsWaitProbe(ReadStatus: _ => QueuedSnapshot())));
+
+        Assert.Equal(3, result.ExitCode);
+        Assert.Equal(ContinuousTestVerdict.Unknown, result.Verdict);
+        Assert.Equal("run already active", result.Reason);
+        Assert.False(result.Waited);
+    }
+
+    [Fact]
+    public void A_busy_daemon_with_wait_joins_the_in_flight_run_and_returns_the_settled_verdict()
+    {
+        SeedGreenVerdict();
+        using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "test");
+        Assert.NotNull(lease);
+
+        var clock = new ManualTimeProvider();
+        ContinuousTestDaemonSnapshot[] snapshots = [ExecutingSnapshot(), ExecutingSnapshot(), IdleSnapshot()];
+        int readIndex = 0;
+        TestsRunResult result = TestsCore.Run(SubmitRequest(
+            new CtRunResult(CtRunExecution.Daemon, null, null),
+            wait: true,
+            probe: new TestsWaitProbe(
+                ReadStatus: _ => snapshots[Math.Min(readIndex++, snapshots.Length - 1)],
+                IsLeaseLive: _ => true,
+                Clock: clock,
+                Delay: clock.Advance)));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(CtRunExecution.Daemon, result.Execution);
+        Assert.Equal(ContinuousTestVerdict.Green, result.Verdict);
+        Assert.True(result.Waited);
+        Assert.StartsWith("run already active", result.Reason, StringComparison.Ordinal);
+        Assert.NotNull(result.Wait);
+        Assert.Equal(TestsWaitState.Completed, result.Wait.State);
+        Assert.True(result.Wait.WaitComplete);
+        Assert.Equal("run-active", result.Wait.RunId);
+        Assert.Null(result.Wait.CommandId);
+        Assert.Equal(IndexIdentity, result.Selected?.IndexIdentity);
+        Assert.Equal(IndexRevision, result.Selected?.Revision);
+
+        using JsonDocument doc = JsonDocument.Parse(result.Render(json: true));
+        JsonElement wait = doc.RootElement.GetProperty("wait");
+        Assert.Equal(JsonValueKind.Null, wait.GetProperty("command_id").ValueKind);
+        Assert.Equal("run-active", wait.GetProperty("run_id").GetString());
+    }
+
+    [Fact]
+    public void An_unacked_submit_against_a_dead_daemon_keeps_the_unacked_failure()
+    {
+        SeedGreenVerdict();
+        using CtDaemonLease? lease = CtDaemonLease.TryAcquire(_root, "test");
+        Assert.NotNull(lease);
+
+        TestsRunResult result = TestsCore.Run(SubmitRequest(
+            new CtRunResult(CtRunExecution.Daemon, null, null),
+            wait: true,
+            probe: new TestsWaitProbe(ReadStatus: _ => StoppedSnapshot())));
+
+        Assert.Equal(3, result.ExitCode);
+        Assert.Equal(ContinuousTestVerdict.Unknown, result.Verdict);
+        Assert.Equal("not acknowledged", result.Reason);
+        Assert.False(result.Waited);
+        Assert.Null(result.Selected);
+        Assert.Null(result.Wait);
+    }
+
     /// <summary>
     /// Runs one real foreground drain so the store holds a GREEN verdict at the live key. Without it
     /// a status read reports unknown on its own and the unknown assertions prove nothing.
@@ -181,16 +279,80 @@ public sealed class TestsRunDaemonAckTests : IDisposable
         Assert.Equal(ContinuousTestVerdict.Green, seeded.Verdict);
     }
 
-    private TestsCoreRequest SubmitRequest(CtRunResult submitted) =>
+    private TestsCoreRequest SubmitRequest(CtRunResult submitted, bool wait = false, TestsWaitProbe? probe = null) =>
         new(
             WorkspaceRoot: _root,
             WorkspaceId: WorkspaceId.FromCanonicalRoot(_root),
             MillerHome: _home,
+            Wait: wait,
             Hooks: new TestsCoreHooks(
                 Budget: CtExecutionBudget.ForMillerHome(_home),
                 OpenFacts: OpenFacts,
-                SubmitRun: (_, _) => submitted),
+                SubmitRun: (_, _) => submitted)
+            {
+                WaitProbe = probe,
+            },
             Json: true);
+
+    private static ContinuousTestDaemonSnapshot ExecutingSnapshot() => new(
+        CtDaemonLifecycleState.Running,
+        "executing",
+        ContinuousTestVerdict.Unknown,
+        null,
+        0,
+        0,
+        Enabled: true,
+        Executing: true,
+        Activity: CtDaemonActivity.Executing,
+        Run: new CtDaemonRunProgress(
+            "tests/Sample.Tests/Sample.Tests.csproj",
+            "run-active",
+            1,
+            DateTimeOffset.UnixEpoch,
+            CtRunActivity.Active));
+
+    private static ContinuousTestDaemonSnapshot QueuedSnapshot() => new(
+        CtDaemonLifecycleState.Running,
+        "execution budget held",
+        ContinuousTestVerdict.Unknown,
+        null,
+        0,
+        0,
+        Enabled: true,
+        Executing: false,
+        Activity: CtDaemonActivity.Queued);
+
+    private static ContinuousTestDaemonSnapshot IdleSnapshot() => new(
+        CtDaemonLifecycleState.Running,
+        "idle",
+        ContinuousTestVerdict.Unknown,
+        null,
+        0,
+        0,
+        Enabled: true,
+        Executing: false,
+        Activity: CtDaemonActivity.Idle);
+
+    private static ContinuousTestDaemonSnapshot StoppedSnapshot() => new(
+        CtDaemonLifecycleState.Stopped,
+        "stopped",
+        ContinuousTestVerdict.Unknown,
+        null,
+        0,
+        0,
+        Enabled: true,
+        Executing: false,
+        Activity: CtDaemonActivity.Idle);
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+
+        public override long GetTimestamp() => _timestamp;
+
+        public void Advance(TimeSpan duration) =>
+            _timestamp += (long)(duration.TotalSeconds * Stopwatch.Frequency);
+    }
 
     private TestsCoreRequest StatusRequest() =>
         new(
