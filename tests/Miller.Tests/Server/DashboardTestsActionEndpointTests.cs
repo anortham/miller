@@ -143,6 +143,62 @@ public sealed class DashboardTestsActionEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task Post_Run_PassesJsonAndTranslatesTheDaemonSubmitIntoAPlainNotice()
+    {
+        SeedWorkspace("ws-a", "alpha-abcd1234");
+        ProcessStartInfo? received = null;
+        DashboardTestsActions.RunProcessOverride = startInfo =>
+        {
+            received = startInfo;
+            return new DashboardTestsActionOutcome(
+                true,
+                "{\"execution\":\"daemon\",\"verdict\":\"unknown\",\"reason\":null,\"waited\":false,\"paused\":false,\"selected\":null}");
+        };
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        HttpResponseMessage response = await SendAsync(client, "/workspaces/ws-a/tests/run");
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(["tests", "run", "--json"], received!.ArgumentList);
+        Assert.Contains("run submitted to the test daemon", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("error-notice", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TranslateRunOutcome_TreatsAnUnackedSubmitAsLikelyBusyNotFailure()
+    {
+        DashboardTestsActionOutcome outcome = DashboardTestsActions.TranslateRunOutcome(
+            new DashboardTestsActionOutcome(
+                false,
+                "{\"execution\":\"daemon\",\"verdict\":\"unknown\",\"reason\":\"not acknowledged\",\"waited\":false,\"paused\":false,\"selected\":null}"));
+
+        Assert.True(outcome.Success);
+        Assert.Contains("did not confirm within 5 seconds", outcome.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TranslateRunOutcome_SurfacesARealRefusalReason()
+    {
+        DashboardTestsActionOutcome outcome = DashboardTestsActions.TranslateRunOutcome(
+            new DashboardTestsActionOutcome(
+                false,
+                "{\"execution\":\"daemon\",\"verdict\":\"unknown\",\"reason\":\"paused by MILLER_CT=off\",\"waited\":false,\"paused\":true,\"selected\":null}"));
+
+        Assert.False(outcome.Success);
+        Assert.Equal("paused by MILLER_CT=off", outcome.Message);
+    }
+
+    [Fact]
+    public void TranslateRunOutcome_PassesNonJsonOutputThrough()
+    {
+        var raw = new DashboardTestsActionOutcome(false, "tests run failed: not enabled");
+
+        Assert.Equal(raw, DashboardTestsActions.TranslateRunOutcome(raw));
+    }
+
+    [Fact]
     public void Run_WithoutAMillerExecutableBesideTheToolsRoot_FailsWithTheHonestReason()
     {
         DashboardTestsActionOutcome outcome = DashboardTestsActions.Run(

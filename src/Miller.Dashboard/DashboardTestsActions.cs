@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace Miller.Dashboard;
 
@@ -54,10 +55,56 @@ internal static class DashboardTestsActions
         };
         startInfo.ArgumentList.Add("tests");
         startInfo.ArgumentList.Add(action);
+        bool isRun = string.Equals(action, "run", StringComparison.Ordinal);
+        if (isRun)
+            startInfo.ArgumentList.Add("--json");
 
-        if (RunProcessOverride is { } run)
-            return run(startInfo);
-        return RunProcess(startInfo, action);
+        DashboardTestsActionOutcome outcome = RunProcessOverride is { } run
+            ? run(startInfo)
+            : RunProcess(startInfo, action);
+        return isRun ? TranslateRunOutcome(outcome) : outcome;
+    }
+
+    /// <summary>
+    /// The run verb submits and returns the STANDING verdict — right after a click that reads
+    /// "verdict=unknown", and a daemon whose loop is busy inside a drain misses the five-second ack
+    /// and exits 3 even though it holds the request and will run it (observed 2026-08-26: the
+    /// button reported failure while the daemon executed the submitted runs). So the run action
+    /// asks for <c>--json</c> and rewrites the two known submit shapes into what the panel reader
+    /// needs; anything else passes through, honest and unstyled.
+    /// </summary>
+    internal static DashboardTestsActionOutcome TranslateRunOutcome(DashboardTestsActionOutcome raw)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(raw.Message);
+            JsonElement root = doc.RootElement;
+            string? execution = root.TryGetProperty("execution", out JsonElement e) ? e.GetString() : null;
+            string? verdict = root.TryGetProperty("verdict", out JsonElement v) ? v.GetString() : null;
+            string? reason = root.TryGetProperty("reason", out JsonElement r) ? r.GetString() : null;
+            if (raw.Success && string.Equals(execution, "daemon", StringComparison.Ordinal))
+            {
+                return new DashboardTestsActionOutcome(
+                    true,
+                    "run submitted to the test daemon — results appear here as they land");
+            }
+
+            if (raw.Success)
+                return new DashboardTestsActionOutcome(true, $"tests ran — verdict {verdict ?? "unknown"}");
+            if (string.Equals(reason, "not acknowledged", StringComparison.Ordinal))
+            {
+                return new DashboardTestsActionOutcome(
+                    true,
+                    "run submitted; the daemon did not confirm within 5 seconds — it is likely busy "
+                        + "executing. Watch this panel.");
+            }
+
+            return new DashboardTestsActionOutcome(false, reason ?? raw.Message);
+        }
+        catch (JsonException)
+        {
+            return raw;
+        }
     }
 
     /// <summary>
