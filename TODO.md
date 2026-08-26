@@ -19,7 +19,12 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
 3. CT xUnit v2 detection (backlog entry below) — **done**
 4. Dashboard Tests section (backlog entry below) — **done**
 5. Dashboard cleanup pass (backlog entry below) — in progress
-6. Semantic activation requires session restart after `prepare` (Active item) — in progress
+6. Semantic activation requires session restart after `prepare` (Active item) — **done**
+   (the park/re-probe state machine, the compact `workspace status` reason + prepare hint, and the health
+   recommended-action all shipped in bedbdbfe; this pass added the plain-English activation line the verb
+   prints after the probe, the honest `semantic_disabled` outcome for `MILLER_SEMANTIC=off`, and an
+   old-sidecar bound test. The broker half — re-stat the model cache on `health` while unready — rides the
+   next `julie-semantic-sidecar` pin bump.)
 7. JSON diagnostics during family-store resolution convergence (Active item) — **done**
    (the renderer fix shipped in 877fa992; query-time resolution then deleted the `resolution_converging`
    layer and its guard tests, leaving `trace`/`impact` with no converging-JSON coverage — closed with
@@ -47,17 +52,24 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
 
 - On windows memory usage seems high, investigate.
 - Docs will need updating for CT and should list supported langs/frameworks and state that support for more is ongoing
-- Semantic activation after `miller semantic prepare` requires a session restart (found 2026-08-02 fresh-machine
-  dogfood; evidence `.memories/2026-08-02/224155_d317.md`). Two latches: the broker stats the model cache only at
-  spawn, and Miller's embedding session opens its circuit permanently on `model_not_prepared`. Fix:
-  1. julie-extractors: broker re-stats the cache on `health` while unready, loads and flips ready.
-  2. Miller: park (don't latch) on `model_not_prepared`; re-probe health on the converge tick. Never respawn the
-     sidecar — the no-restart-loop invariant stays.
-  3. `semantic prepare`: after download, send one health probe to a live broker and print the outcome; surface the
-     reason + prepare hint in compact `workspace status`; fix the misleading health recommended-action.
-     Miller side ships first and is safe with old sidecars; the broker fix rides the next sidecar pin bump.
 
 ## Closed
+
+- Semantic activation after `miller semantic prepare` no longer needs a session restart on Miller's side
+  (found 2026-08-02 fresh-machine dogfood; evidence `.memories/2026-08-02/224155_d317.md`). Of the two latches,
+  Miller's is gone: `SemanticEmbeddingSession` PARKS on `model_not_prepared` instead of latching, so
+  `EnsureStartedAsync` re-probes and `TryEnterCall` fails the embed fast without counting a fatal. Every converge
+  drain opens with that probe (`VectorConvergeService.DrainAsync`), and the 5-minute held-cursor retry is what
+  keeps the ticks coming on a quiet workspace, so a broker that flips ready resumes embedding with no restart.
+  Compact `workspace status` renders the reason plus the `miller semantic prepare` hint, and `workspace health`
+  recommends `prepare` instead of the wrong "keep a resident leader running". `semantic prepare` sends ONE health
+  probe to a live broker after the download (connect-only, never a spawn) and now prints the outcome in plain
+  English beside the machine token, including the honest `semantic_disabled` state under `MILLER_SEMANTIC=off`.
+  Against an old sidecar that never flips ready the cost is one connect plus one `health` per tick, no respawn,
+  no circuit trip, and no log line.
+  Residual: the sidecar half — the broker re-stats the model cache on `health` while unready, then loads and
+  flips ready — lives in julie-extractors and rides the next `julie-semantic-sidecar` pin bump. Until then
+  `still_not_ready` is the honest answer and a restart is the user's recovery.
 
 - JSON diagnostics during convergence no longer reach a `--json` consumer as `invalid_json_output`
   (found 2026-08-11 dogfood; evidence `.memories/2026-08-11/125539_bf6d.md`). `AttachJson` renders the
