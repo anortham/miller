@@ -419,9 +419,9 @@ Commit mode: **parallel-lead-commit** for every task (workers hand verified diff
 **Dependency reason:** Documents all prior tasks; runs last, solo.
 
 **Acceptance criteria:**
-- [ ] Every behavior change above is documented in the contract or operating doc that owns it.
-- [ ] `cmp -s CLAUDE.md AGENTS.md` passes.
-- [ ] Worker-scope verification passes (`AgentInstructionsTests` and doc-guard tests) and the diff is handed to the lead.
+- [x] Every behavior change above is documented in the contract or operating doc that owns it.
+- [x] `cmp -s CLAUDE.md AGENTS.md` passes.
+- [x] Worker-scope verification passes (`AgentInstructionsTests` and doc-guard tests) and the diff is handed to the lead.
 
 ---
 
