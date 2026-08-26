@@ -20,7 +20,7 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
 4. Dashboard Tests section (backlog entry below) — **done**
 5. Dashboard cleanup pass (backlog entry below) — in progress
 6. Semantic activation requires session restart after `prepare` (Active item) — queued
-7. JSON diagnostics during family-store resolution convergence (Active item) — queued
+7. JSON diagnostics during family-store resolution convergence (Active item) — in progress
 8. Cross-tool discoverability empty states (backlog entry below) — queued
 9. Windows memory investigation (Active item; needs the win-test guest) — queued
 10. MCP SDK / stateless MCP evaluation → plan doc only — **done**
