@@ -5,6 +5,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [`plans/2026-08-25-workspace-safety-design.md`](plans/2026-08-25-workspace-safety-design.md) - decision paper (awaiting user choice, nothing implemented) on path-class root policy and an explicit workspace registration gate, from the 2026-08-10 station incident where `~/.hermes/hermes-agent` became a 4.3GB index.
+- [`plans/2026-08-25-mcp-sdk-stateless-evaluation.md`](plans/2026-08-25-mcp-sdk-stateless-evaluation.md) - evaluation of the ModelContextProtocol 2.x C# SDK and the 2026-07-28 stateless-first spec against Miller's stdio one-process-per-session shape: current cost per session, what stateless actually fixes (HTTP fan-in, not stdio process count), the Roots deprecation that breaks deferred workspace binding, and a phased plan with a dashboard-hosted shared-reader spike.
 - [`plans/2026-08-25-v1.22.0-release-plan.md`](plans/2026-08-25-v1.22.0-release-plan.md) - approved stable minor release plan for first-class QML indexing/resolution and CMake/CTest Qt Quick Test support, with package-only validation, non-overwriting promotion, and live-evidence gates.
 - [`release-notes/v1.22.1.md`](release-notes/v1.22.1.md) - current v1.22.1 release notes: a stalled plugin download can no longer hang the launcher, launcher and startup-failure logging so a failed launch is never silent, bounded plugin cache, and Windows install robustness.
 - [`findings/2026-08-25-v1.22.0-release-verification.md`](findings/2026-08-25-v1.22.0-release-verification.md) - live v1.22.0 publication evidence: corrected package and promotion runs, stable release state, all eight asset checksums, package smoke, and source/security gates.

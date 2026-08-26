@@ -20,7 +20,10 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
 9. Windows memory investigation (Active item; needs the win-test guest) — queued
 10. MCP SDK / stateless MCP evaluation → plan doc only — queued
 11. Workspace blacklist + explicit registration gate → design docs for a user decision, no
-    implementation without approval — queued
+    implementation without approval — **decision paper done**
+    (docs/plans/2026-08-25-workspace-safety-design.md; recommends path-class deny list at every bind
+    entry point + pending state for flagged roots only; §7 holds the seven decision questions —
+    awaiting user answers)
 
 Semantic-noise experiment (8 reps, off-vs-on at the frozen budget) runs until ~02:50 UTC; its analysis
 and the findings/site update land when it completes.
