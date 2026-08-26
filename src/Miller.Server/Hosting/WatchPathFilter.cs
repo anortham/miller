@@ -48,7 +48,7 @@ namespace Miller.Server.Hosting;
 public static class WatchPathFilter
 {
     // Whole-segment skip set. NOT an extension list — these are directory names anywhere in the path.
-    // Keep in step with julie-extract's hard-excluded directories (the extractor refuses these regardless
+    // Must CONTAIN julie-extract's published hard_exclude_directories (the extractor refuses these regardless
     // of ignore files; Miller's watcher should not spawn subprocesses for them either).
     private static readonly HashSet<string> SkipSegments = new(SegmentComparer)
     {
@@ -70,6 +70,16 @@ public static class WatchPathFilter
         "obj",
         "TestResults",
     };
+
+    /// <summary>
+    /// The whole-segment skip set, exposed so the pinned binary's published
+    /// <c>languages --json</c> <c>discovery_limits.hard_exclude_directories</c> can be checked against it at the
+    /// branch gate (<c>JulieExtractLanguagesScaleTests</c>). Miller's set is deliberately a SUPERSET — it also
+    /// drops Miller's own sidecar, IDE caches, and nested worktrees — so the contract is containment, not
+    /// equality: a directory julie refuses that Miller still watches produces a per-file update julie answers
+    /// <c>unsupported</c>, forever.
+    /// </summary>
+    public static IReadOnlyCollection<string> SkippedDirectorySegments => SkipSegments;
 
     private static readonly HashSet<string> IgnorePolicyFiles = new(SegmentComparer)
     {

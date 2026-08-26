@@ -13,6 +13,12 @@ namespace Miller.Core.Freshness;
 /// <para>Mirrors <c>julie-extract-cli/src/limits.rs</c> (<c>MAX_SOURCE_FILE_BYTES</c>) and
 /// <c>julie-extract-cli/src/discovery.rs</c> (<c>HARD_EXCLUDE_SUFFIXES</c>). Both sides use a STRICT
 /// greater-than comparison, so a file of exactly the limit is still extractable.</para>
+///
+/// <para>julie-extract 2.37.0 PUBLISHES both values as <c>languages.discovery_limits</c> in
+/// <c>languages --json</c>. Miller keeps mirroring them as constants — the decision runs on the watcher's hot
+/// path, where a subprocess is not affordable — but the mirror is no longer taken on trust:
+/// <c>JulieExtractLanguagesScaleTests</c> runs the pinned binary and fails when a published value and this
+/// mirror disagree, so a pin bump that moves a limit fails the branch gate instead of drifting silently.</para>
 /// </summary>
 public static class ExtractSourceLimits
 {
@@ -22,7 +28,6 @@ public static class ExtractSourceLimits
     /// <summary>julie-extract's <c>MAX_SOURCE_FILE_BYTES</c>: 1 MiB.</summary>
     public const long DefaultMaxSourceFileBytes = 1024 * 1024;
 
-    // julie-extract's HARD_EXCLUDE_SUFFIXES, verbatim and in the same order.
     private static readonly string[] GeneratedSuffixes =
     [
         ".min.js",
@@ -33,6 +38,13 @@ public static class ExtractSourceLimits
         ".generated.tsx",
         ".generated.d.ts",
     ];
+
+    /// <summary>
+    /// julie-extract's <c>HARD_EXCLUDE_SUFFIXES</c>, verbatim and in the same order. Exposed so the pinned
+    /// binary's published <c>languages --json</c> <c>discovery_limits</c> can be compared against this mirror
+    /// at the build gate, which is what turns a pin bump that moves the limits into a loud failure.
+    /// </summary>
+    public static IReadOnlyList<string> HardExcludeSuffixes => GeneratedSuffixes;
 
     /// <summary>Resolve the byte ceiling from the process environment.</summary>
     public static long MaxSourceFileBytesFromEnvironment() =>

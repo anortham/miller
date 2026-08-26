@@ -1,5 +1,7 @@
 using System.Text.Json;
+using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Server.Hosting;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -85,6 +87,37 @@ public sealed class JulieExtractLanguagesScaleTests
             "languages={0} role_cells={1} supported={2} not_applicable={3} open_gaps={4}",
             languageCount, languageCount * expectedRoles.Length,
             supportedCount, notApplicableCount, openGapCount);
+    }
+
+    [Fact]
+    public void DiscoveryLimits_LiveBinary_MatchMillerMirroredConstants()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        string json = ScaleTestSupport.RunJulie(binary, "languages", "--json");
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement limits = doc.RootElement.GetProperty("languages").GetProperty("discovery_limits");
+
+        Assert.Equal(
+            ExtractSourceLimits.DefaultMaxSourceFileBytes,
+            limits.GetProperty("max_source_file_bytes").GetInt64());
+
+        string[] publishedSuffixes = limits.GetProperty("hard_exclude_suffixes")
+            .EnumerateArray().Select(static s => s.GetString()!).ToArray();
+        Assert.Equal(ExtractSourceLimits.HardExcludeSuffixes, publishedSuffixes);
+
+        string[] publishedDirectories = limits.GetProperty("hard_exclude_directories")
+            .EnumerateArray().Select(static s => s.GetString()!).ToArray();
+        Assert.NotEmpty(publishedDirectories);
+        string[] unwatched = publishedDirectories
+            .Where(static d => !WatchPathFilter.SkippedDirectorySegments.Contains(d))
+            .ToArray();
+        Assert.True(unwatched.Length == 0,
+            $"julie hard-excludes {string.Join(", ", unwatched)}; WatchPathFilter would still submit files there");
+
+        _output.WriteLine(
+            "max_source_file_bytes={0} suffixes={1} directories={2}",
+            limits.GetProperty("max_source_file_bytes").GetInt64(),
+            publishedSuffixes.Length, publishedDirectories.Length);
     }
 
     private static void CountRole(
