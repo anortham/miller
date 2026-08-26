@@ -19,8 +19,11 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
 3. CT xUnit v2 detection (backlog entry below) — **done**
 4. Dashboard Tests section (backlog entry below) — **done**
 5. Dashboard cleanup pass (backlog entry below) — **done**
-6. Semantic activation requires session restart after `prepare` (Active item) — queued
-7. JSON diagnostics during family-store resolution convergence (Active item) — queued
+6. Semantic activation requires session restart after `prepare` (Active item) — in progress
+7. JSON diagnostics during family-store resolution convergence (Active item) — **done**
+   (the renderer fix shipped in 877fa992; query-time resolution then deleted the `resolution_converging`
+   layer and its guard tests, leaving `trace`/`impact` with no converging-JSON coverage — closed with
+   `TraceImpactLevelGuardTests` and the standalone-envelope contract section)
 8. Cross-tool discoverability empty states (backlog entry below) — queued
 9. Windows memory investigation (Active item; needs the win-test guest) — queued
 10. MCP SDK / stateless MCP evaluation → plan doc only — **done**
@@ -54,13 +57,16 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
      reason + prepare hint in compact `workspace status`; fix the misleading health recommended-action.
      Miller side ships first and is safe with old sidecars; the broker fix rides the next sidecar pin bump.
 
-- JSON diagnostics during family-store resolution convergence: `inspect`, `trace`, and `impact` with
-  `format=json` pass an empty result into `ToolDiagnosticRenderer.AttachJson` and return
-  `invalid_json_output`; compact correctly returns `resolution_converging`. Add JSON variants to
-  `ResolutionLayerGuardTests` and render a standalone diagnostic when the attached output is empty
-  (found 2026-08-11 dogfood; evidence `.memories/2026-08-11/125539_bf6d.md`).
-
 ## Closed
+
+- JSON diagnostics during convergence no longer reach a `--json` consumer as `invalid_json_output`
+  (found 2026-08-11 dogfood; evidence `.memories/2026-08-11/125539_bf6d.md`). `AttachJson` renders the
+  standalone `{schema_version, tool, diagnostic}` document when there is no payload to attach to, so every
+  caller with that shape is covered at the renderer rather than per tool. The `resolution_converging` layer
+  the dogfood hit was deleted by query-time resolution, which took `ResolutionLayerGuardTests` with it and
+  left the successor `reference_layer_converging` diagnostic unguarded for `trace` and `impact` in both
+  formats; `TraceImpactLevelGuardTests` closes that gap on the MCP and CLI paths and pins the standalone
+  envelope. `docs/contracts/cli-eros-v1.md` now documents both diagnostic shapes and how to tell them apart.
 
 - julie-extract 2.32.0 scoped resolution no longer expands a one-file change into the pathological closure found
   during dogfood. Clean replay measured an 18.309s scoped median versus 31.971s forced full with zero canonical
