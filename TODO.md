@@ -94,7 +94,10 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
   plain reason instead of the raw OS process error. Docs: `docs/continuous-testing.md` known limit rewritten,
   `docs/contracts/tests-cli-v1.md` documents `xunit-v2`, `unsupported_reason`, and `unsupported_*`. (Same
   report confirmed the watch loop end-to-end: unprompted pickup of a broken assertion, exact failing test
-  named, auto-green on revert — no action needed there.)
+  named, auto-green on revert — no action needed there.) Open follow-up, user decision required: CT could
+  RUN xUnit v2 through the generic `dotnet test <dll>` path the fallback provider already uses, instead of
+  refusing. Real risk: a second execution path per framework, different filter shapes, new Scale evidence
+  needed — do not build without a real repo that needs it.
 
 - Dashboard CT visibility (dogfood 2026-08-25): watching the dashboard during a live CT session gives no view
   of test status. Add a Tests section to the workspace detail view fed read-only from the CT sidecar facts the
