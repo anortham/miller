@@ -523,6 +523,19 @@ scripts/test.ps1 all
   `tests enable --project go.mod` enabled a Go module file rendered as `(unknown)`. The `.csproj`-with-no-test-package
   fallback STAYS: it runs under `dotnet test` regardless. The enabled-but-empty status line is silent while a
   run is in flight — a run refutes "will never report a verdict" whatever the project count says.
+  **A framework Miller can NAME but never run takes the same refusal.** CT runs the built self-executing test
+  assembly, which only xUnit v3 produces, so discovery classifies the generation from the csproj PACKAGE IDS
+  (`ContinuousTestFrameworkSupport`): an `xunit.v3` id keeps `framework: "xunit"`, a v2-only id
+  (`xunit`, `xunit.core`, `xunit.assert`, `xunit.abstractions`, `xunit.extensibility.*`) yields
+  `framework: "xunit-v2"` plus `unsupported_reason`. The two SHARED ids (`xunit.runner.visualstudio`,
+  `xunit.analyzers`) prove nothing and must never decide — either would refuse a working v3 project — and a
+  project carrying both generations reads as v3. A v2-only enable exits 3 writing nothing; a MIXED repo enables
+  the supported projects and REPORTS the rest (`unsupported_projects`), because a project dropped in silence
+  stops being tested with nobody told; status lists a v2 project with its reason and withholds the enable
+  ladder only when nothing found is runnable. `DotnetTestProvider.RequireSelfExecutingTestAssembly` is the
+  backstop for a project that slips classification: dll present + executable absent names the same cause
+  before the spawn, instead of `Process.Start`'s raw missing-file error, which reads as a broken build and
+  sent a user hunting for one (2026-08-25 field report).
   **The daemon runs from a PRIVATE per-build copy, never from the install or the build output.**
   [`CtDaemonShadowCopy`](src/Miller.Testing/Daemon/CtDaemonShadowCopy.cs) materializes the binaries under
   `~/.miller/ct-daemon/<version>-<build stamp>` and `CtDaemonLauncher.SpawnDetached` launches THAT: a live

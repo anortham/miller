@@ -153,10 +153,18 @@ facts are inferred from project paths or private database state.
 |---|---|---|
 | `id` | string | Stable project id (`ct-project:` + workspace-relative path). |
 | `project_path` | string | Absolute project file path. |
-| `framework` | string \| null | Provider framework (`xunit`, `nunit`, `mstest`, `dotnet`, `cargo`, `vitest`, `jest`, `pytest`, …). |
+| `framework` | string \| null | Provider framework (`xunit`, `xunit-v2`, `nunit`, `mstest`, `dotnet`, `cargo`, `vitest`, `jest`, `pytest`, …). |
 | `command` | string \| null | Optional whole-command override. Unused for dotnet projects. |
 | `enabled` | bool | Always `true` in status output (disabled rows are omitted). |
+| `unsupported_reason` | string \| null | Why CT cannot run this project, or `null` when it can. |
 | `exclude_traits` | string[] | Trait exclusions (`Name=Value`). |
+
+`framework: "xunit-v2"` is a project that references xUnit v2 rather than `xunit.v3`. CT runs the
+built self-executing test assembly, which only xUnit v3 / Microsoft.Testing.Platform produces, so
+such a project carries `unsupported_reason: "xUnit v2 detected; CT needs the v3 self-executing
+assembly"` and is never enabled. It is still REPORTED by a discovering status read, because a reader
+has to be able to tell an unsupported project from one nobody looked for. See
+[`../continuous-testing.md`](../continuous-testing.md) for the classification rules.
 
 `budget_holder` when present:
 
@@ -353,6 +361,13 @@ The authoritative supported matrix, the per-ecosystem discovery rules, and the k
 `--project` on a file with no identifiable framework is refused the same way; a `.csproj` whose
 contents name no test package is still accepted, because it runs under `dotnet test` regardless.
 
+A project whose framework CT classified and cannot run — today `xunit-v2` — takes the SAME refusal:
+`tests enable` exits `3` and writes nothing when every discovered project is one of these, and
+`--project` on one is refused directly. Both errors name the reason, the project paths, and the
+migration. A MIXED repository is not refused: it enables the supported projects and reports the rest
+in `unsupported_projects` with `unsupported_reason`, so a project that stopped being a candidate is
+never dropped in silence.
+
 A workspace already opted in with no projects reports `enabled: true` and `projects: []`, and the
 compact output says plainly that CT will never report a verdict there and how to turn it back off.
 
@@ -381,6 +396,8 @@ Enable and disable do not start the daemon.
 | `projects` | array | The projects enabled after the call, in the `projects[]` row shape above. |
 | `changed_count` | number | Projects whose enabled state THIS call flipped. |
 | `changed_projects` | array | Those projects, in the same row shape. `enabled` is `true` for an enable and `false` for a disable. |
+| `unsupported_count` | number | Projects discovery found and this call deliberately did not enable. |
+| `unsupported_projects` | array | Those projects, in the same row shape, each carrying `unsupported_reason`. |
 | `error` | string | Present only on a refusal (exit `3`), for example under `MILLER_CT=off`. |
 
 `changed_*` reports what the call DID; `enabled_count` / `projects` report what is left enabled. The
@@ -393,6 +410,16 @@ disable 1 project(s)
   - /repo/tests/One.Tests/One.Tests.csproj
 remaining enabled: 1
   - /repo/tests/Two.Tests/Two.Tests.csproj
+```
+
+`unsupported_*` is empty on every call that enabled everything it found. It is populated by a MIXED
+enable, and compact output prints the same facts under an `unsupported:` heading:
+
+```
+enable 1 project(s)
+  - /repo/tests/New.Tests/New.Tests.csproj
+unsupported: 1 project(s)
+  - /repo/tests/Old.Tests/Old.Tests.csproj — xUnit v2 detected; CT needs the v3 self-executing assembly
 ```
 
 ## `tests run --json`

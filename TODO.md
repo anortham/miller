@@ -16,7 +16,7 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
    `quantum_overruns` in store.queue; `workspace prune` runs `store maintain gc --apply` per family.
    Open policy question moved to backlog: an oversized manifest file now keeps serving stale symbols
    until the next full rebuild — julie refuses the update and Miller stops resubmitting.)
-3. CT xUnit v2 detection (backlog entry below) — queued
+3. CT xUnit v2 detection (backlog entry below) — **done**
 4. Dashboard Tests section (backlog entry below) — queued
 5. Dashboard cleanup pass (backlog entry below) — queued
 6. Semantic activation requires session restart after `prepare` (Active item) — queued
@@ -81,18 +81,20 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
 
 ## Product Backlog
 
-- CT xUnit v2 detection (field report 2026-08-25, EpicTrackerboard): CT runs the built self-executing test
-  assembly (`DotnetTestProvider.TestAssemblyPath` + `ExecutableExtension`), which only xUnit v3 /
-  Microsoft.Testing.Platform produces. An xUnit v2 project builds only a dll plus `testhost.exe`, so CT fails
-  late with `ct-discovery-failure: An error occurred trying to start process '...\<Project>.Tests.exe'` — the
-  user went hunting for a broken build. Fix in two places: (1) classify the runner generation at
-  enable/inventory time (xunit v3 vs v2 package reference in the csproj) and say plainly "xUnit v2 detected;
-  CT needs the v3 self-executing assembly" in `tests enable`/`status` output — same honesty rule as the
-  refused no-toolchain enable; (2) when discovery fails because the exe is missing but the dll exists next to
-  it, name the real cause in the failure message instead of the raw process error. Docs note: `dotnet new
-  xunit` still scaffolds v2 on SDK 10.0.400, so standard scaffolding hits this. (Same report confirmed the
-  watch loop end-to-end: unprompted pickup of a broken assertion, exact failing test named, auto-green on
-  revert — no action needed there.)
+- CT xUnit v2 detection (field report 2026-08-25, EpicTrackerboard) — **done**. Discovery classifies the
+  runner generation from the csproj package ids: an `xunit.v3` reference keeps `framework: "xunit"`, a
+  v2-only reference (`xunit`, `xunit.core`, `xunit.assert`, `xunit.abstractions`, `xunit.extensibility.*`)
+  reports `framework: "xunit-v2"` plus `unsupported_reason: "xUnit v2 detected; CT needs the v3
+  self-executing assembly"`. The shared packages (`xunit.runner.visualstudio`, `xunit.analyzers`) decide
+  nothing and a project carrying both generations reads as v3. `tests status` lists a v2 project with its
+  reason and drops the enable ladder when nothing found is runnable; a v2-ONLY `tests enable` (and
+  `--project` on one) is refused at exit 3 writing nothing, the same rule as the no-toolchain refusal; a
+  MIXED repo enables the supported projects and reports the rest under `unsupported_projects`. The provider
+  also probes before spawning: a build that produced the dll but no executable beside it fails with the same
+  plain reason instead of the raw OS process error. Docs: `docs/continuous-testing.md` known limit rewritten,
+  `docs/contracts/tests-cli-v1.md` documents `xunit-v2`, `unsupported_reason`, and `unsupported_*`. (Same
+  report confirmed the watch loop end-to-end: unprompted pickup of a broken assertion, exact failing test
+  named, auto-green on revert — no action needed there.)
 
 - Dashboard CT visibility (dogfood 2026-08-25): watching the dashboard during a live CT session gives no view
   of test status. Add a Tests section to the workspace detail view fed read-only from the CT sidecar facts the

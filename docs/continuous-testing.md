@@ -107,19 +107,39 @@ green.
 
 ## Known limits
 
-**xUnit v2 projects fail discovery.** CT builds a .NET test project and runs the built
-self-executing test assembly, which only xUnit v3 and Microsoft.Testing.Platform produce. An xUnit
-v2 project builds a dll plus `testhost.exe` and no such executable, so CT fails late with a raw
-process error such as:
+**xUnit v2 projects are detected and refused, not run.** CT builds a .NET test project and runs the
+built self-executing test assembly, which only xUnit v3 and Microsoft.Testing.Platform produce. An
+xUnit v2 project builds a dll plus `testhost.exe` and no such executable, so CT cannot run it.
+`dotnet new xunit` still scaffolds v2 on SDK 10.0.400, so a freshly scaffolded project hits this.
 
-```
-ct-discovery-failure: An error occurred trying to start process '...\<Project>.Tests.exe'
-```
+Discovery classifies the generation from the project's package ids: an `xunit.v3` reference is v3
+and reports `framework: "xunit"`, while a v2-only reference (`xunit`, `xunit.core`, `xunit.assert`,
+`xunit.abstractions`, `xunit.extensibility.*`) reports `framework: "xunit-v2"` plus
+`unsupported_reason`. `xunit.runner.visualstudio` and `xunit.analyzers` ship for both generations
+and decide nothing; a project carrying both generations reads as v3.
 
-The message names a missing file, so it reads like a broken build. It is not. The workaround is to
-migrate the project to xUnit v3. `dotnet new xunit` still scaffolds v2 on SDK 10.0.400, so a
-freshly scaffolded project hits this. A fix to classify the runner generation at enable time and to
-name the real cause in the failure message is in the backlog (field report 2026-08-25).
+What each command does with that:
+
+- `tests status` lists a v2 project with its framework and the reason
+  `xUnit v2 detected; CT needs the v3 self-executing assembly`. It never hides the project — a
+  reader has to be able to tell "unsupported" from "nobody looked". When every project found is
+  unsupported, the compact output drops the `enable` suggestion and keeps the direct-run one.
+- `tests enable` on a repository whose ONLY test projects are v2 refuses with exit `3` and writes
+  nothing — no opt-in marker, no `ct.db`, no `.miller/` — the same refusal a repository with no
+  supported toolchain gets. The error names the reason, every affected project path, and the
+  migration.
+- `tests enable --project <v2 project>` is refused the same way.
+- A MIXED repository enables the supported projects and reports the v2 ones under `unsupported:`
+  with their reason. They are never silently dropped.
+
+If a v2 project slips classification (its only xunit package is one of the shared runner packages),
+the provider still catches it before spawning anything: a build that produced the dll but no
+executable beside it fails with the same plain reason instead of the raw OS error for a missing
+file. That raw error was the original report — it named a missing path, so it read like a broken
+build and sent a user hunting for one (field report 2026-08-25).
+
+The fix is to migrate the project to xUnit v3 (`dotnet new xunit3` scaffolds v3). A v2 suite still
+runs normally under `dotnet test`; only continuous testing needs the v3 shape.
 
 **One environment per jest project.** CT invokes jest once under its default environment. A
 repository whose own `npm test` runs jest twice under two environments is covered for one of them.
