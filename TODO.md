@@ -10,7 +10,12 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
 2. julie-extract 2.37.0 pin bump + consumption (verify `ExtractSourceLimits` against published
    `languages.discovery_limits`, map the new `unsupported` update disposition into the refusal ledger,
    surface `quantum_overruns` in the queue reader, wire `store maintain` into a Miller lifecycle path) —
-   **blocked on the v2.37.0 release publish + the semantic-noise batch finishing (machine must be quiet)**
+   **done** (merged e4a3ec16..: pin 2.37.0 + guard green; Scale-tagged limits-parity test; `unsupported`
+   terminal disposition parsed (was a hard delta-abort), journal retires on ANY terminal row (a failed
+   terminal row can only replay its failure), refusal ledger covers oversized manifest files;
+   `quantum_overruns` in store.queue; `workspace prune` runs `store maintain gc --apply` per family.
+   Open policy question moved to backlog: an oversized manifest file now keeps serving stale symbols
+   until the next full rebuild — julie refuses the update and Miller stops resubmitting.)
 3. CT xUnit v2 detection (backlog entry below) — queued
 4. Dashboard Tests section (backlog entry below) — queued
 5. Dashboard cleanup pass (backlog entry below) — queued
@@ -105,6 +110,13 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
   (`wwwroot/lib/htmx`, `lib/idiomorph`, `lib/alpine`, `js/alpine-components.js`) and their CSP/config residue.
   Release packaging note: dashboard wwwroot assets ship in every archive, so removing dead ones shrinks all
   four platform packages.
+
+- Oversized-manifest staleness policy (found in the 2.37.0 consumption slice): a manifest file that grows
+  past julie's 1 MiB limit can no longer have its rows retired by `store update` (2.37.0 refuses it), so
+  its stale symbols serve until the next full rebuild. Miller's refusal ledger stops the resubmit loop but
+  nothing surfaces the staleness. Options when it matters: surface a per-file `stale_oversized` marker in
+  status/health, or teach a force scan to retire such rows. Deleting rows for a file that still exists was
+  judged worse than serving them; decide only with a real-world case in hand.
 
 - Cross-tool discoverability: keep improving high-traffic empty states so `search`, `trace`, `impact`, and `inspect` hand agents to `content`, `patterns`, source-region search, or complexity when those are the better next tool.
 
