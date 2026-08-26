@@ -133,6 +133,30 @@ public sealed class ForbiddenEnqueueTests : IDisposable
         Assert.False(queue.HasReadyWork(DateTimeOffset.UtcNow.AddMinutes(2)));
     }
 
+    [Fact]
+    public async Task A_drain_that_selects_nothing_logs_the_skip_with_reason_no_selection()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        var provider = new FakeContinuousTestProvider();
+        var log = new List<string>();
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(provider, store),
+            lifecycleLog: log.Add);
+
+        queue.Enqueue(EngineTestSupport.Change(workspace, changedPaths: ["src/Mystery.xyz"]));
+        await queue.DrainReadyAsync(
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(provider.RunRequests);
+        Assert.Contains(
+            $"ct drain skip workspace={EngineTestSupport.WorkspaceId} project={workspace.ProjectPath} reason=no_selection",
+            log);
+    }
+
     /// <summary>
     /// Contract clause (b): a KNOWN-EMPTY selection (the changed file resolves in the index and
     /// its complete impact read reaches no test) leaves committed-fresh results untouched and

@@ -729,10 +729,27 @@ public sealed class TestsCliTests : IDisposable
 
         Assert.Equal(0, code);
         Assert.Empty(errText);
-        using JsonDocument doc = JsonDocument.Parse(outText);
+        string[] lines = outText.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.StartsWith("ct daemon start ", lines[0], StringComparison.Ordinal);
+        using JsonDocument doc = JsonDocument.Parse(string.Join(Environment.NewLine, lines.Skip(1)));
         Assert.Equal("disabled", doc.RootElement.GetProperty("reason").GetString());
         Assert.False(File.Exists(CtSchema.DbPathFor(_root)));
         Assert.False(Directory.Exists(CtDaemonProtocol.RootDirectory(_root)));
+    }
+
+    [Fact]
+    public void CtDaemonVerb_PrintsExactlyOneStartupBreadcrumbNamingTheSharedLog()
+    {
+        var (_, outText, _) = Run("ct-daemon");
+
+        string[] breadcrumbs = outText
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.StartsWith("ct daemon start ", StringComparison.Ordinal))
+            .ToArray();
+        string breadcrumb = Assert.Single(breadcrumbs);
+        Assert.Contains($"version={MillerVersion.Current}", breadcrumb);
+        Assert.Contains($"pid={Environment.ProcessId}", breadcrumb);
+        Assert.Contains(Path.Combine(_root, ".miller", "logs", "miller-"), breadcrumb);
     }
 
     private WorkspaceContext Context() =>

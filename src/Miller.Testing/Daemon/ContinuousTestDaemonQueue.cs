@@ -370,6 +370,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 if (readyPending.TestCaseIds.Count == 0)
                 {
                     ClearRetryAttempts(key, readyPending);
+                    Log($"ct drain skip workspace={readyPending.Workspace.WorkspaceId} "
+                        + $"project={readyPending.Workspace.ProjectPath} reason=no_selection");
                     continue;
                 }
 

@@ -340,6 +340,34 @@ public sealed class ContinuousTestDaemonHost
         _stopDetached = new HashSet<string>(PathKeyComparer);
     }
 
+    /// <summary>
+    /// The one stdout line the daemon prints at start. The launcher redirects daemon stdout into
+    /// <c>daemon.out.log</c>, which holds nothing else on a healthy run, so this line is what turns
+    /// a 0-byte mystery file into a pointer at the real diagnostics: the shared
+    /// <c>.miller/logs/miller-&lt;yyyyMMdd&gt;.log</c> daily pair (<c>role:ct</c> lines). Total by
+    /// design: a root the path helpers refuse degrades the path, never the line, and every input is
+    /// flattened so the result is always exactly one line. Writes nothing anywhere.
+    /// </summary>
+    public static string StartupBreadcrumb(
+        string workspaceRoot, string millerVersion, int pid, DateTimeOffset utcNow)
+    {
+        string diagnostics;
+        try
+        {
+            (diagnostics, _) = CtDaemonLog.LogFilePaths(CtDaemonLog.LogsDirectory(workspaceRoot), utcNow);
+        }
+        catch (Exception)
+        {
+            diagnostics = "unavailable";
+        }
+
+        string line = $"ct daemon start version={millerVersion} pid={pid} "
+            + $"diagnostics={diagnostics} (role:ct in the shared daily log)";
+        return string.Join(
+            " ",
+            line.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
     public ContinuousTestDaemonSnapshot? LastSnapshot { get; private set; }
 
     /// <summary>

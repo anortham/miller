@@ -2661,6 +2661,8 @@ public static class CliDispatch
         string root = CtEnvironment.ResolveDaemonWorkspaceRoot(
             ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
             Environment.GetEnvironmentVariable)!;
+        outw.WriteLine(ContinuousTestDaemonHost.StartupBreadcrumb(
+            root, MillerVersion.Current, Environment.ProcessId, DateTimeOffset.UtcNow));
         TestsServeResult result = TestsCore.ServeHost(new TestsCoreRequest(
             WorkspaceRoot: root,
             MillerHome: MillerHomeFor(ctx),
