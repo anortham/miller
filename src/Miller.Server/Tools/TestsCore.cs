@@ -83,7 +83,15 @@ public sealed record TestsStatusProject(
     string? Framework,
     string? Command,
     bool Enabled,
-    IReadOnlyList<string> ExcludeTraits);
+    IReadOnlyList<string> ExcludeTraits,
+
+    /// <summary>
+    /// Why continuous testing cannot run this project, or null when it can. Set for a framework Miller
+    /// classified and refused — today an xUnit v2 project, which builds no self-executing assembly for CT to
+    /// run. Such a project is REPORTED rather than dropped: dropping it leaves a reader with the same
+    /// unexplained silence the raw process error used to leave them with.
+    /// </summary>
+    string? UnsupportedReason = null);
 
 public sealed record TestsBudgetHolder(int Pid, string WorkspaceRoot, string Reason);
 
@@ -140,7 +148,13 @@ public sealed record TestsMutationResult(
     // turned off by a disable. EnabledCount and Projects report the enabled set left AFTER the call,
     // which is not what a disable did: reporting only that is how a disable of 1 of 3 projects
     // printed the other 2 under a "disable" heading. Null means none.
-    IReadOnlyList<TestsStatusProject>? ChangedProjects = null)
+    IReadOnlyList<TestsStatusProject>? ChangedProjects = null,
+
+    // UnsupportedProjects: the projects discovery FOUND and this call deliberately did not enable, each
+    // carrying the reason. A mixed repository (an xUnit v2 project beside a v3 one) enables what works and
+    // says why the rest was left out; dropping them silently is how a project stops being tested without
+    // anyone being told.
+    IReadOnlyList<TestsStatusProject>? UnsupportedProjects = null)
 {
     public string Render(bool json) => json ? TestsCore.RenderMutationJson(this) : TestsCore.RenderMutationCompact(this);
 }
@@ -437,6 +451,7 @@ public static class TestsCore
 
         string workspaceId = ResolveWorkspaceId(request, root);
         IReadOnlyList<ContinuousTestProject> discovered;
+        IReadOnlyList<ContinuousTestProject> unsupported = [];
         if (!string.IsNullOrWhiteSpace(request.ProjectPath))
         {
             if (!TryResolveProject(root, request.ProjectPath, out string full, out string? error))
@@ -448,19 +463,47 @@ public static class TestsCore
                     "enable",
                     $"not a supported test project: {full}. " + SupportedFrameworksSentence());
             }
+
+            // A framework Miller classified and refused is the same dead end as an unsupported language, and
+            // takes the same refusal: exit 3, nothing written. The difference is that Miller knows exactly why
+            // and can say so, instead of leaving the reader to meet the failure during a run.
+            if (ContinuousTestFrameworkSupport.ReasonFor(identified.Framework) is { } reason)
+            {
+                return MutationError(
+                    "enable",
+                    $"not a supported test project: {full}. {reason}. "
+                    + ContinuousTestFrameworkSupport.RemedyFor(identified.Framework)
+                    + " Nothing was enabled and nothing was written.");
+            }
+
             discovered = [identified];
         }
         else
         {
-            discovered = ContinuousTestProjectInventory.Discover(root, workspaceId);
+            IReadOnlyList<ContinuousTestProject> found =
+                ContinuousTestProjectInventory.Discover(root, workspaceId);
+            discovered = found
+                .Where(project => ContinuousTestFrameworkSupport.IsSupported(project.Framework))
+                .ToArray();
+            unsupported = found
+                .Where(project => !ContinuousTestFrameworkSupport.IsSupported(project.Framework))
+                .ToArray();
 
             // Enabling a workspace CT can never watch used to "succeed": it wrote the opt-in marker, created
             // ct.db, reported "enable 0 project(s)", and exited 0. A Go or Ruby repo was then permanently
             // enabled: true / projects: 0, a state nothing can ever move, and the status hint that would have
             // explained it is suppressed by the very marker the failed enable wrote. Refusing before any write
             // keeps the workspace exactly as it was and names the languages that would work.
+            //
+            // A repository whose ONLY test projects are ones Miller classified and refused reaches the same
+            // dead end, so it takes the same refusal — with the classified reason and the project paths in
+            // place of the language list alone.
             if (discovered.Count == 0 && !HasContinuousTestHistory(root, workspaceId))
-                return MutationError("enable", NoSupportedProjectsMessage(root));
+            {
+                return MutationError("enable", unsupported.Count > 0
+                    ? UnsupportedProjectsMessage(root, unsupported)
+                    : NoSupportedProjectsMessage(root));
+            }
         }
 
         string marker = ContinuousTestPolicy.EnabledMarkerPath(root);
@@ -494,7 +537,8 @@ public static class TestsCore
             enabled.Count,
             enabled.Select(ToStatusProject).ToArray(),
             null,
-            turnedOn);
+            turnedOn,
+            unsupported.Select(ToStatusProject).ToArray());
     }
 
     public static TestsMutationResult Disable(TestsCoreRequest request)
@@ -1054,7 +1098,11 @@ public static class TestsCore
         sb.AppendLine($"projects: {result.Projects.Count.ToString(CultureInfo.InvariantCulture)}"
             + (result.ProjectsDiscovered ? " discovered (not tracked yet)" : string.Empty));
         foreach (TestsStatusProject project in result.Projects)
-            sb.AppendLine($"  - {project.ProjectPath} ({project.Framework ?? "unknown"})");
+        {
+            sb.AppendLine($"  - {project.ProjectPath} ({project.Framework ?? "unknown"})"
+                + (project.UnsupportedReason is { } reason ? " — " + reason : string.Empty));
+        }
+
         AppendDisabledNextStep(sb, result);
         return sb.ToString().TrimEnd().ReplaceLineEndings("\n");
     }
@@ -1095,7 +1143,11 @@ public static class TestsCore
         sb.AppendLine(result.Projects.Count > 0
             ? "next: for a one-off answer, run these tests directly."
             : "next: no test projects found, so CT has nothing to watch here.");
-        if (result.Projects.Count > 0)
+
+        // The enable ladder is offered only when something here can actually take it. A workspace whose every
+        // project carries an unsupported reason would be sent to an enable that refuses, which is the dead end
+        // the reason line above already explained. Running those tests directly still works, so that line stays.
+        if (result.Projects.Any(static project => project.UnsupportedReason is null))
             sb.AppendLine("      for ongoing verdicts: tests operation=enable, then operation=start.");
     }
 
@@ -1170,6 +1222,10 @@ public static class TestsCore
             writer.WriteNumber("changed_count", changed.Count);
             writer.WritePropertyName("changed_projects");
             WriteProjects(writer, changed);
+            IReadOnlyList<TestsStatusProject> unsupported = result.UnsupportedProjects ?? [];
+            writer.WriteNumber("unsupported_count", unsupported.Count);
+            writer.WritePropertyName("unsupported_projects");
+            WriteProjects(writer, unsupported);
             if (result.Error is not null)
                 writer.WriteString("error", result.Error);
             writer.WriteEndObject();
@@ -1200,7 +1256,24 @@ public static class TestsCore
         sb.AppendLine($"{result.Operation} {result.EnabledCount.ToString(CultureInfo.InvariantCulture)} project(s)");
         foreach (TestsStatusProject project in result.Projects)
             sb.AppendLine($"  - {project.ProjectPath}");
+        AppendUnsupportedProjects(sb, result.UnsupportedProjects ?? []);
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// The projects an enable found and deliberately left out, each with its reason. A mixed repository
+    /// otherwise reports a clean success over a project that quietly stopped being a candidate.
+    /// </summary>
+    private static void AppendUnsupportedProjects(
+        StringBuilder sb,
+        IReadOnlyList<TestsStatusProject> unsupported)
+    {
+        if (unsupported.Count == 0)
+            return;
+
+        sb.AppendLine($"unsupported: {unsupported.Count.ToString(CultureInfo.InvariantCulture)} project(s)");
+        foreach (TestsStatusProject project in unsupported)
+            sb.AppendLine($"  - {project.ProjectPath} — {project.UnsupportedReason}");
     }
 
     internal static string RenderServeJson(TestsServeResult result)
@@ -1692,7 +1765,14 @@ public static class TestsCore
         {
             IReadOnlyList<ContinuousTestProject> projects = store.ListContinuousTestProjects(workspaceId);
             if (projects.Count == 0)
-                projects = ContinuousTestProjectInventory.Discover(root, workspaceId);
+            {
+                // Discovery reports every project it finds so a reader can be told why one is unsupported;
+                // this list is what the daemon RUNS, so the refused frameworks are filtered out here. An
+                // enable would never have recorded them either.
+                projects = ContinuousTestProjectInventory.Discover(root, workspaceId)
+                    .Where(project => ContinuousTestFrameworkSupport.IsSupported(project.Framework))
+                    .ToArray();
+            }
             var selector = new ContinuousTestImpactSelector(
                 store,
                 new ReopeningMillerFactSource(() => OpenLiveFacts(root, workspaceId)));
@@ -1776,7 +1856,14 @@ public static class TestsCore
     }
 
     private static TestsStatusProject ToStatusProject(ContinuousTestProject project) =>
-        new(project.Id, project.ProjectPath, project.Framework, project.Command, project.Enabled, project.ExcludeTraits);
+        new(
+            project.Id,
+            project.ProjectPath,
+            project.Framework,
+            project.Command,
+            project.Enabled,
+            project.ExcludeTraits,
+            ContinuousTestFrameworkSupport.ReasonFor(project.Framework));
 
     /// <summary>
     /// The <see cref="HasContinuousTestHistory(string, ContinuousTestStore, string)"/> question for a caller
@@ -1796,6 +1883,37 @@ public static class TestsCore
     private static string NoSupportedProjectsMessage(string root) =>
         $"no supported test projects found under {root}. " + SupportedFrameworksSentence()
         + " Nothing was enabled and nothing was written.";
+
+    /// <summary>
+    /// Why an enable found only projects Miller classified and refused. It names the reason, then every
+    /// project path it applies to: "0 projects" on a repository plainly full of test projects is the reading
+    /// this whole slice exists to prevent.
+    /// </summary>
+    private static string UnsupportedProjectsMessage(
+        string root,
+        IReadOnlyList<ContinuousTestProject> unsupported)
+    {
+        var sb = new StringBuilder();
+        sb.Append("no supported test projects found under ").Append(root).Append('.');
+        foreach (IGrouping<string, ContinuousTestProject> group in unsupported
+                     .GroupBy(
+                         project => ContinuousTestFrameworkSupport.ReasonFor(project.Framework)!,
+                         StringComparer.Ordinal)
+                     .OrderBy(group => group.Key, StringComparer.Ordinal))
+        {
+            sb.Append(' ').Append(group.Key).Append(": ")
+                .Append(string.Join(", ", group
+                    .Select(project => project.ProjectPath)
+                    .Order(StringComparer.Ordinal)))
+                .Append('.')
+                .Append(' ')
+                .Append(ContinuousTestFrameworkSupport.RemedyFor(group.First().Framework));
+        }
+
+        return sb.Append(' ').Append(SupportedFrameworksSentence())
+            .Append(" Nothing was enabled and nothing was written.")
+            .ToString();
+    }
 
     /// <summary>The one copy of the supported-toolchain list, so two refusals cannot drift apart.</summary>
     private static string SupportedFrameworksSentence() =>
@@ -1860,6 +1978,10 @@ public static class TestsCore
             else
                 writer.WriteString("command", project.Command);
             writer.WriteBoolean("enabled", project.Enabled);
+            if (project.UnsupportedReason is null)
+                writer.WriteNull("unsupported_reason");
+            else
+                writer.WriteString("unsupported_reason", project.UnsupportedReason);
             writer.WritePropertyName("exclude_traits");
             writer.WriteStartArray();
             foreach (string trait in project.ExcludeTraits)

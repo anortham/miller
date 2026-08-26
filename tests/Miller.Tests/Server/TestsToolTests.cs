@@ -858,7 +858,7 @@ public sealed class TestsToolTests : IDisposable
         File.WriteAllText(path, """
             <Project Sdk="Microsoft.NET.Sdk">
               <ItemGroup>
-                <PackageReference Include="xunit" Version="2.9.2" />
+                <PackageReference Include="xunit.v3" Version="1.0.0" />
               </ItemGroup>
             </Project>
             """);

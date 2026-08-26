@@ -177,6 +177,115 @@ public sealed class TestsCliTests : IDisposable
     }
 
     [Fact]
+    public void Enable_WithOnlyXunitV2Projects_RefusesNamesTheReasonAndWritesNothing()
+    {
+        string project = WriteTestProject(frameworkHint: "xunit-v2");
+
+        var (code, _, errText) = Run("tests", "enable");
+
+        Assert.Equal(3, code);
+        Assert.Contains(ContinuousTestFrameworkSupport.XunitV2Reason, errText, StringComparison.Ordinal);
+        Assert.Contains(Path.GetFullPath(project), errText, StringComparison.Ordinal);
+        Assert.Contains("xunit.v3", errText, StringComparison.Ordinal);
+        Assert.Contains("Nothing was enabled and nothing was written.", errText, StringComparison.Ordinal);
+        Assert.False(File.Exists(ContinuousTestPolicy.EnabledMarkerPath(_root)));
+        Assert.False(File.Exists(CtSchema.DbPathFor(_root)));
+    }
+
+    [Fact]
+    public void Enable_ByProject_RefusesAnXunitV2ProjectNamedDirectly()
+    {
+        string project = WriteTestProject(frameworkHint: "xunit-v2");
+
+        var (code, _, errText) = Run("tests", "enable", "--project", project);
+
+        Assert.Equal(3, code);
+        Assert.Contains(ContinuousTestFrameworkSupport.XunitV2Reason, errText, StringComparison.Ordinal);
+        Assert.Contains(Path.GetFullPath(project), errText, StringComparison.Ordinal);
+        Assert.False(File.Exists(ContinuousTestPolicy.EnabledMarkerPath(_root)));
+        Assert.False(File.Exists(CtSchema.DbPathFor(_root)));
+    }
+
+    [Fact]
+    public void Enable_OnAMixedRepository_EnablesTheSupportedProjectsAndReportsTheRest()
+    {
+        string v2 = WriteTestProject("tests/Old.Tests/Old.Tests.csproj", frameworkHint: "xunit-v2");
+        string v3 = WriteTestProject("tests/New.Tests/New.Tests.csproj");
+
+        var (code, outText, errText) = Run("tests", "enable", "--json");
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal(1, doc.RootElement.GetProperty("enabled_count").GetInt32());
+        Assert.Equal(
+            Path.GetFullPath(v3),
+            Assert.Single(doc.RootElement.GetProperty("projects").EnumerateArray())
+                .GetProperty("project_path").GetString());
+
+        Assert.Equal(1, doc.RootElement.GetProperty("unsupported_count").GetInt32());
+        JsonElement unsupported = Assert.Single(doc.RootElement.GetProperty("unsupported_projects").EnumerateArray());
+        Assert.Equal(Path.GetFullPath(v2), unsupported.GetProperty("project_path").GetString());
+        Assert.Equal(ContinuousTestFrameworkSupport.XunitV2, unsupported.GetProperty("framework").GetString());
+        Assert.Equal(
+            ContinuousTestFrameworkSupport.XunitV2Reason,
+            unsupported.GetProperty("unsupported_reason").GetString());
+
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        ContinuousTestProject row = Assert.Single(
+            store.ListContinuousTestProjects(WorkspaceId.FromCanonicalRoot(_root), includeDisabled: true));
+        Assert.Equal(Path.GetFullPath(v3), row.ProjectPath);
+    }
+
+    [Fact]
+    public void Enable_OnAMixedRepository_SaysWhyTheUnsupportedProjectWasLeftOut()
+    {
+        string v2 = WriteTestProject("tests/Old.Tests/Old.Tests.csproj", frameworkHint: "xunit-v2");
+        WriteTestProject("tests/New.Tests/New.Tests.csproj");
+
+        var (code, outText, _) = Run("tests", "enable");
+
+        Assert.Equal(0, code);
+        Assert.Contains("unsupported: 1 project(s)", outText, StringComparison.Ordinal);
+        Assert.Contains(Path.GetFullPath(v2), outText, StringComparison.Ordinal);
+        Assert.Contains(ContinuousTestFrameworkSupport.XunitV2Reason, outText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_OnANeverDecidedWorkspace_NamesTheXunitV2ReasonAndOffersNoEnableLadder()
+    {
+        string project = WriteTestProject(frameworkHint: "xunit-v2");
+
+        var (code, outText, _) = Run("tests", "status");
+
+        Assert.Equal(0, code);
+        Assert.Contains(Path.GetFullPath(project), outText, StringComparison.Ordinal);
+        Assert.Contains(ContinuousTestFrameworkSupport.XunitV2Reason, outText, StringComparison.Ordinal);
+        Assert.Contains("run these tests directly", outText, StringComparison.Ordinal);
+        Assert.DoesNotContain("tests operation=enable", outText, StringComparison.Ordinal);
+
+        var json = Run("tests", "status", "--json");
+        using JsonDocument doc = JsonDocument.Parse(json.Out);
+        JsonElement row = Assert.Single(doc.RootElement.GetProperty("projects").EnumerateArray());
+        Assert.Equal(ContinuousTestFrameworkSupport.XunitV2, row.GetProperty("framework").GetString());
+        Assert.Equal(
+            ContinuousTestFrameworkSupport.XunitV2Reason,
+            row.GetProperty("unsupported_reason").GetString());
+    }
+
+    [Fact]
+    public void Status_OnANeverDecidedWorkspaceWithARunnableProject_StillOffersTheEnableLadder()
+    {
+        WriteTestProject("tests/Old.Tests/Old.Tests.csproj", frameworkHint: "xunit-v2");
+        WriteTestProject("tests/New.Tests/New.Tests.csproj");
+
+        var (code, outText, _) = Run("tests", "status");
+
+        Assert.Equal(0, code);
+        Assert.Contains("tests operation=enable", outText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Enable_ByProject_StillAcceptsADotnetProjectWithNoRecognizedPackageReference()
     {
         string project = Path.Combine(_root, "App.Tests.csproj");
@@ -743,7 +852,8 @@ public sealed class TestsCliTests : IDisposable
         {
             "nunit" => "NUnit",
             "mstest" => "MSTest.TestFramework",
-            _ => "xunit",
+            "xunit-v2" => "xunit",
+            _ => "xunit.v3",
         };
         File.WriteAllText(path, $"""
             <Project Sdk="Microsoft.NET.Sdk">
