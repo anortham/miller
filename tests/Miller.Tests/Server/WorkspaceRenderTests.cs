@@ -2419,4 +2419,81 @@ public sealed class WorkspaceRenderTests
         Assert.DoesNotContain("reclaimed", WorkspaceRender.Prune(silent, json: false));
         Assert.Contains("reclaimed 4 store sidecar files", WorkspaceRender.Prune(loud, json: false));
     }
+
+    [Fact]
+    public void Prune_ReportsStoreMaintenanceOnlyWhenThereIsSomethingToSay()
+    {
+        var silent = new WorkspacePruneResult(
+            DryRun: false,
+            Pruned: [new WorkspacePruneEntry("ws-gone-0001", "gone-repo", "/gone/repo")],
+            Kept: 0);
+        var loud = silent with { StoreMaintenance = new StoreMaintenanceOutcome(2_163, null) };
+
+        Assert.DoesNotContain("store maintenance", WorkspaceRender.Prune(silent, json: false));
+        Assert.DoesNotContain("store_maintenance", WorkspaceRender.Prune(silent, json: true));
+        Assert.Contains(
+            "store maintenance: pruned 2163 coordinator request rows",
+            WorkspaceRender.Prune(loud, json: false));
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Prune(loud, json: true));
+        JsonElement maintenance = doc.RootElement.GetProperty("store_maintenance");
+        Assert.Equal(2_163, maintenance.GetProperty("pruned_request_rows").GetInt64());
+        Assert.Equal(JsonValueKind.Null, maintenance.GetProperty("error").ValueKind);
+    }
+
+    [Fact]
+    public void Prune_ReportsAMaintenanceErrorBesideTheRowsItStillPruned()
+    {
+        var result = new WorkspacePruneResult(
+            DryRun: false,
+            Pruned: [new WorkspacePruneEntry("ws-gone-0001", "gone-repo", "/gone/repo")],
+            Kept: 0,
+            StoreMaintenance: new StoreMaintenanceOutcome(4, "store maintenance timed out"));
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Prune(result, json: true));
+
+        Assert.Equal(1, doc.RootElement.GetProperty("pruned_total").GetInt32());
+        Assert.Equal(
+            "store maintenance timed out",
+            doc.RootElement.GetProperty("store_maintenance").GetProperty("error").GetString());
+        Assert.Contains(
+            "store maintenance: pruned 4 coordinator request rows; store maintenance timed out",
+            WorkspaceRender.Prune(result, json: false));
+    }
+
+    [Fact]
+    public void Status_ReportsCoordinatorQuantumOverrunsOnlyWhenThereAreSome()
+    {
+        var quiet = new StoreCoordinatorQueueFacts(
+            QueuedCount: 2,
+            ClaimedCount: 0,
+            OldestQueuedAgeSeconds: 5,
+            DeadClaimOwner: null,
+            Groups: [new StoreCoordinatorQueueGroup("update", "queued", 2)],
+            WedgedAfterSeconds: 300);
+        var loud = quiet with { MaxQuantumOverruns = 2 };
+
+        JsonElement quietJson = Json(
+            WorkspaceRender.Status(
+                Facts() with { Store = StoreFacts() with { Queue = quiet } },
+                TelemetrySummary.Empty,
+                json: true));
+        JsonElement loudJson = Json(
+            WorkspaceRender.Status(
+                Facts() with { Store = StoreFacts() with { Queue = loud } },
+                TelemetrySummary.Empty,
+                json: true));
+
+        Assert.False(
+            quietJson.GetProperty("store").GetProperty("queue").TryGetProperty("quantum_overruns", out _));
+        Assert.Equal(
+            2,
+            loudJson.GetProperty("store").GetProperty("queue").GetProperty("quantum_overruns").GetInt64());
+        Assert.Contains(
+            "quantum overruns 2",
+            WorkspaceRender.Status(
+                Facts() with { Store = StoreFacts() with { Queue = loud } },
+                TelemetrySummary.Empty,
+                json: false));
+    }
 }

@@ -300,6 +300,7 @@ appears as `index.queue`.
 | `oldest_queued_age_seconds` | number \| null | Age of the oldest `queued` request. Null when nothing is queued. |
 | `dead_claim_owner` | string \| null | A `claimed` request's owner id whose process the liveness probe proved gone. Null when every owner is live, when no request is claimed, or when the owner id carries no readable pid — an unreadable identity is unknown, never dead. |
 | `wedged_after_seconds` | number | The unclaimed-age threshold this reading was judged against (default `300`; override with `MILLER_STORE_QUEUE_WEDGED_SECONDS`, where `0` means any unclaimed request counts). |
+| `quantum_overruns` | number | OPTIONAL. The highest `quantum_overruns` charged to any pending request. **Omitted** when the count is zero and when `coord.db` predates the column (julie-extract < 2.37.0), so its absence means "no overrun to report", never an error. A nonzero value says a request has already outrun the coordinator quantum; julie-extract requeues it twice and FAILS it on the third overrun with the `coordinator_quantum` error class, so the queue drains itself rather than starving behind one request. |
 | `groups` | array | Bounded `(kind, state, count)` buckets over pending requests, ordered by kind then state. |
 
 `wedged: true` also drives the top-level freshness fields: `index_fresh` becomes `false` and
@@ -566,6 +567,17 @@ because `files_retained` counts only files PROVED undeletable and a failed listi
 not guaranteed. A skip is otherwise owed, not lost — a later
 `workspace prune --json` discharges it and reports the files in its own `store_sidecar_reclaim` totals, so a
 non-null `skip_reason` means "run prune again later", not "these bytes are gone forever".
+
+A real (non dry-run) `workspace prune` also runs julie-extract's family-store maintenance
+(`store maintain gc --apply`) once per registered family, which is the only thing that reclaims the
+coordinator's terminal request rows — a lagging consumer cursor pinned 2,163 committed rows in one Miller family
+store. `workspace prune --json` then carries an OPTIONAL `store_maintenance` object with
+`pruned_request_rows` (number, summed across families) and a nullable `error` (free text). The object is
+**omitted entirely** when there was nothing to say: no rows pruned and no error, a dry run, or no julie-extract
+binary beside the caller — so default output stays byte-identical to the previous contract, and its absence must
+never be read as an error. Maintenance never fails the prune: a missing binary, a busy store, a timeout, or an
+unreadable report reports `error` and leaves `pruned` and `kept` exactly as they were. The dashboard's prune
+endpoint stays registry-only and spawns nothing, so it never emits this object.
 
 `miller context <query> --json` returns ranked `symbol` pivots and neighbours with `role`, `reason`, and
 `confidence`, plus a top-level evidence `disposition`. `--entry-symbol`, `--edited-files`, `--failing-test`, and

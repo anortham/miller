@@ -410,7 +410,8 @@ public readonly record struct WorkspacePruneResult(
     bool DryRun,
     IReadOnlyList<WorkspacePruneEntry> Pruned,
     int Kept,
-    StoreSidecarReclaimResult SidecarReclaim = default);
+    StoreSidecarReclaimResult SidecarReclaim = default,
+    StoreMaintenanceOutcome StoreMaintenance = default);
 
 /// <summary>One registry row removed (or that would be removed in dry-run) by <c>prune</c>.</summary>
 public readonly record struct WorkspacePruneEntry(string WorkspaceId, string DisplayId, string Root);
@@ -756,6 +757,10 @@ public static class WorkspaceRender
         if (queue.DeadClaimOwner is null) w.WriteNull("dead_claim_owner");
         else w.WriteString("dead_claim_owner", queue.DeadClaimOwner);
         w.WriteNumber("wedged_after_seconds", queue.WedgedAfterSeconds);
+        // Zero and absent are both silent, so a store with no overruns — and one written before julie-extract
+        // 2.37.0 added the column — render the same bytes they always did.
+        if (queue.MaxQuantumOverruns is > 0)
+            w.WriteNumber("quantum_overruns", queue.MaxQuantumOverruns.Value);
         w.WriteStartArray("groups");
         foreach (StoreCoordinatorQueueGroup group in queue.Groups)
         {
@@ -2949,7 +2954,36 @@ public static class WorkspaceRender
         lines.Add($"kept: {result.Kept}");
         if (result.SidecarReclaim.HasReport)
             lines.Add(SidecarReclaimText(result.SidecarReclaim));
+        if (StoreMaintenanceText(result.StoreMaintenance) is { } maintenance)
+            lines.Add(maintenance);
         return string.Join('\n', lines);
+    }
+
+    /// <summary>
+    /// What julie-extract's family-store maintenance reclaimed, or why it could not. Null when there is nothing
+    /// to say — no callback, no rows, no error — so a prune with no coordinator work reads exactly as before.
+    /// </summary>
+    internal static string? StoreMaintenanceText(StoreMaintenanceOutcome maintenance)
+    {
+        if (!maintenance.HasReport)
+            return null;
+        string pruned = string.Create(
+            CultureInfo.InvariantCulture,
+            $"store maintenance: pruned {maintenance.PrunedRequestRows} coordinator request rows");
+        return maintenance.Error is { } error ? $"{pruned}; {error}" : pruned;
+    }
+
+    // Absent ⇒ write no `store_maintenance` key at all, so a prune that ran no maintenance stays byte-identical
+    // to the previous contract.
+    private static void WriteStoreMaintenance(Utf8JsonWriter w, StoreMaintenanceOutcome maintenance)
+    {
+        if (!maintenance.HasReport)
+            return;
+        w.WriteStartObject("store_maintenance");
+        w.WriteNumber("pruned_request_rows", maintenance.PrunedRequestRows);
+        if (maintenance.Error is null) w.WriteNull("error");
+        else w.WriteString("error", maintenance.Error);
+        w.WriteEndObject();
     }
 
     private static string PruneJson(WorkspacePruneResult result) =>
@@ -2980,6 +3014,7 @@ public static class WorkspaceRender
             w.WriteEndArray();
             w.WriteNumber("kept", result.Kept);
             WriteSidecarReclaim(w, result.SidecarReclaim);
+            WriteStoreMaintenance(w, result.StoreMaintenance);
             w.WriteEndObject();
         }
         return Utf8(buffer);

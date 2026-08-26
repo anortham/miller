@@ -3612,19 +3612,24 @@ public static class CliDispatch
     // ---------- prune (registry GC for gone roots) ----------
 
     // Remove registry rows whose canonical_root no longer exists. Never prunes the current workspace row (guarded
-    // by workspace_id). Does not open symbols.db or spawn julie-extract.
+    // by workspace_id). Does not open symbols.db. A real prune also runs julie-extract's family-store
+    // maintenance, which is the only thing that reclaims the coordinator's terminal request rows.
     private static int WorkspacePrune(
         WorkspaceContext ctx, bool json, bool dryRun, TextWriter outw)
     {
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
         WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
         WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
-            registry, currentRow?.WorkspaceId, dryRun);
+            registry,
+            currentRow?.WorkspaceId,
+            dryRun,
+            maintainStore: StoreMaintenanceRunner.ForToolsRoot(ctx.ToolsRoot));
         var rendered = new WorkspacePruneResult(
             result.DryRun,
             result.Pruned.Select(e => new WorkspacePruneEntry(e.WorkspaceId, e.DisplayId, e.Root)).ToArray(),
             result.Kept,
-            result.SidecarReclaim);
+            result.SidecarReclaim,
+            result.StoreMaintenance);
         outw.WriteLine(WorkspaceRender.Prune(rendered, json));
         return 0;
     }

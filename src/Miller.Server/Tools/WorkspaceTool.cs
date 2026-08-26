@@ -1353,16 +1353,21 @@ public sealed class WorkspaceTool
     // ---------- prune ----------
 
     // Remove registry rows whose canonical_root no longer exists. Never prunes the current workspace row (guarded
-    // by workspace_id). Does not open symbols.db or spawn julie-extract.
+    // by workspace_id). Does not open symbols.db. A real prune also runs julie-extract's family-store
+    // maintenance, which is the only thing that reclaims the coordinator's terminal request rows.
     private (string output, int resultCount, TelemetryOutcome outcome) Prune(bool json, bool dryRun)
     {
-        WorkspaceRegistryPrune.Result result =
-            WorkspaceRegistryPrune.Run(_registry, _workspace.WorkspaceId, dryRun);
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            _workspace.WorkspaceId,
+            dryRun,
+            maintainStore: StoreMaintenanceRunner.ForToolsRoot(_workspace.ToolsRoot));
         var rendered = new WorkspacePruneResult(
             result.DryRun,
             result.Pruned.Select(e => new WorkspacePruneEntry(e.WorkspaceId, e.DisplayId, e.Root)).ToArray(),
             result.Kept,
-            result.SidecarReclaim);
+            result.SidecarReclaim,
+            result.StoreMaintenance);
         int count = result.Pruned.Count;
         return (
             WorkspaceRender.PruneWithinBudget(

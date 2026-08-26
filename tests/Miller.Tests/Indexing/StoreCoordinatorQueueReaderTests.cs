@@ -136,6 +136,45 @@ public sealed class StoreCoordinatorQueueReaderTests : IDisposable
         Assert.Equal(expected, StoreCoordinatorQueueReader.ParseWedgedAfterSeconds(raw));
     }
 
+    [Fact]
+    public void ACoordinatorWithoutTheOverrunColumnStillReportsItsQueue()
+    {
+        CreateCoordinator();
+        Insert("r-1", "update", "queued", Now.AddSeconds(-30).ToUnixTimeMilliseconds());
+
+        StoreCoordinatorQueueFacts facts = Assert.IsType<StoreCoordinatorQueueFacts>(Read());
+
+        Assert.Null(facts.MaxQuantumOverruns);
+        Assert.Equal(1, facts.QueuedCount);
+        Assert.DoesNotContain("quantum overruns", facts.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AQueueWithNoOverrunsReportsZeroAndSaysNothing()
+    {
+        CreateCoordinator(withQuantumOverruns: true);
+        Insert("r-1", "update", "queued", Now.AddSeconds(-30).ToUnixTimeMilliseconds());
+
+        StoreCoordinatorQueueFacts facts = Assert.IsType<StoreCoordinatorQueueFacts>(Read());
+
+        Assert.Equal(0, facts.MaxQuantumOverruns);
+        Assert.DoesNotContain("quantum overruns", facts.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheHighestOverrunCountAmongPendingRequestsIsReported()
+    {
+        CreateCoordinator(withQuantumOverruns: true);
+        Insert("r-1", "update", "queued", Now.AddSeconds(-30).ToUnixTimeMilliseconds(), quantumOverruns: 1);
+        Insert("r-2", "update", "queued", Now.AddSeconds(-20).ToUnixTimeMilliseconds(), quantumOverruns: 2);
+        Insert("r-3", "import", "committed", Now.ToUnixTimeMilliseconds(), quantumOverruns: 9);
+
+        StoreCoordinatorQueueFacts facts = Assert.IsType<StoreCoordinatorQueueFacts>(Read());
+
+        Assert.Equal(2, facts.MaxQuantumOverruns);
+        Assert.Contains("quantum overruns 2", facts.Description, StringComparison.Ordinal);
+    }
+
     private StoreCoordinatorQueueFacts? Read(bool alive = true) =>
         StoreCoordinatorQueueReader.Read(
             _storeRoot,
@@ -145,11 +184,14 @@ public sealed class StoreCoordinatorQueueReaderTests : IDisposable
 
     private string CoordinatorPath => Path.Combine(_storeRoot, "coord.db");
 
-    private void CreateCoordinator()
+    private void CreateCoordinator(bool withQuantumOverruns = false)
     {
         using SqliteConnection connection = Open();
         using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = """
+        string overrunColumn = withQuantumOverruns
+            ? ",\n              quantum_overruns INTEGER NOT NULL DEFAULT 0"
+            : string.Empty;
+        command.CommandText = $"""
             CREATE TABLE requests (
               request_id TEXT PRIMARY KEY,
               idempotency_key TEXT NOT NULL,
@@ -160,7 +202,7 @@ public sealed class StoreCoordinatorQueueReaderTests : IDisposable
               claim_owner TEXT,
               claim_heartbeat_at INTEGER,
               created_at INTEGER NOT NULL,
-              updated_at INTEGER NOT NULL
+              updated_at INTEGER NOT NULL{overrunColumn}
             ) STRICT;
             """;
         command.ExecuteNonQuery();
@@ -171,16 +213,27 @@ public sealed class StoreCoordinatorQueueReaderTests : IDisposable
         string kind,
         string state,
         long createdAt,
-        string? claimOwner = null)
+        string? claimOwner = null,
+        long? quantumOverruns = null)
     {
         using SqliteConnection connection = Open();
         using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = """
-            INSERT INTO requests
-              (request_id, idempotency_key, kind, payload_json, state, requester_id,
-               claim_owner, claim_heartbeat_at, created_at, updated_at)
-            VALUES ($id, $id, $kind, '{}', $state, 'miller', $owner, $heartbeat, $created, $created);
-            """;
+        command.CommandText = quantumOverruns is null
+            ? """
+              INSERT INTO requests
+                (request_id, idempotency_key, kind, payload_json, state, requester_id,
+                 claim_owner, claim_heartbeat_at, created_at, updated_at)
+              VALUES ($id, $id, $kind, '{}', $state, 'miller', $owner, $heartbeat, $created, $created);
+              """
+            : """
+              INSERT INTO requests
+                (request_id, idempotency_key, kind, payload_json, state, requester_id,
+                 claim_owner, claim_heartbeat_at, created_at, updated_at, quantum_overruns)
+              VALUES ($id, $id, $kind, '{}', $state, 'miller', $owner, $heartbeat, $created, $created,
+                      $overruns);
+              """;
+        if (quantumOverruns is { } overruns)
+            command.Parameters.AddWithValue("$overruns", overruns);
         command.Parameters.AddWithValue("$id", requestId);
         command.Parameters.AddWithValue("$kind", kind);
         command.Parameters.AddWithValue("$state", state);

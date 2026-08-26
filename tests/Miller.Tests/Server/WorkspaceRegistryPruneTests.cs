@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server.Workspaces;
 using Xunit;
 
@@ -139,6 +140,81 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         Assert.False(result.SidecarReclaim.HasReport);
         Assert.All(paths, p => Assert.True(File.Exists(p)));
         Assert.NotNull(_registry.GetStoreMember("ws-prune-dry-00001"));
+    }
+
+    [Fact]
+    public void Run_WithoutAMaintainer_SpawnsNothingAndReportsNoMaintenance()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-no-maintain");
+        string goneRoot = Register("ws-prune-nom-00001", "no-maintain-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-nom-00001", goneRoot, "view-no-maintain");
+
+        WorkspaceRegistryPrune.Result result =
+            WorkspaceRegistryPrune.Run(_registry, protectedWorkspaceId: null, dryRun: false);
+
+        Assert.Single(result.Pruned);
+        Assert.False(result.StoreMaintenance.HasReport);
+    }
+
+    [Fact]
+    public void Run_MaintainsEveryRegisteredFamilyAndSumsThePrunedRows()
+    {
+        StoreFamilyRegistryRow first = SeedFamily("lineage-maintain-one");
+        StoreFamilyRegistryRow second = SeedFamily("lineage-maintain-two");
+        string goneRoot = Register("ws-prune-mnt-00001", "maintain-repo", rootExists: false);
+        JoinFamily(first, "ws-prune-mnt-00001", goneRoot, "view-maintain");
+        var visited = new List<string>();
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            maintainStore: storeRoot =>
+            {
+                visited.Add(storeRoot);
+                return new StoreMaintenanceOutcome(7, null);
+            });
+
+        Assert.Equal(
+            new[] { first.StoreRoot, second.StoreRoot }.Order(StringComparer.Ordinal),
+            visited.Order(StringComparer.Ordinal));
+        Assert.Equal(14, result.StoreMaintenance.PrunedRequestRows);
+        Assert.Null(result.StoreMaintenance.Error);
+    }
+
+    [Fact]
+    public void Run_AFailedMaintenanceIsReportedAndNeverFailsThePrune()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-maintain-fails");
+        string goneRoot = Register("ws-prune-mff-00001", "maintain-fails-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-mff-00001", goneRoot, "view-maintain-fails");
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            maintainStore: _ => new StoreMaintenanceOutcome(0, "store maintenance timed out"));
+
+        Assert.Single(result.Pruned);
+        Assert.Null(_registry.GetStoreMember("ws-prune-mff-00001"));
+        Assert.Equal("store maintenance timed out", result.StoreMaintenance.Error);
+    }
+
+    [Fact]
+    public void Run_DryRun_RunsNoMaintenance()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-maintain-dry");
+        string goneRoot = Register("ws-prune-mdr-00001", "maintain-dry-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-mdr-00001", goneRoot, "view-maintain-dry");
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: true,
+            maintainStore: _ => throw new InvalidOperationException("a dry run must never maintain"));
+
+        Assert.Single(result.Pruned);
+        Assert.False(result.StoreMaintenance.HasReport);
     }
 
     [Fact]

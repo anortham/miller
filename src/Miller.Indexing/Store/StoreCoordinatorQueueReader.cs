@@ -17,13 +17,18 @@ public sealed record StoreCoordinatorQueueGroup(string Kind, string State, long 
 /// <param name="DeadClaimOwner">A claim owner the liveness probe proved gone, or null.</param>
 /// <param name="Groups">The (kind, state) counts, ordered by kind then state.</param>
 /// <param name="WedgedAfterSeconds">The queued-age threshold this reading was judged against.</param>
+/// <param name="MaxQuantumOverruns">The highest <c>quantum_overruns</c> charged to any pending request, or
+/// null when the store predates the column (julie-extract &lt; 2.37.0). Zero and null are both silent; a
+/// nonzero count says a request has already outrun the coordinator quantum and will be FAILED on its third
+/// overrun rather than requeued forever.</param>
 public sealed record StoreCoordinatorQueueFacts(
     long QueuedCount,
     long ClaimedCount,
     long? OldestQueuedAgeSeconds,
     string? DeadClaimOwner,
     IReadOnlyList<StoreCoordinatorQueueGroup> Groups,
-    long WedgedAfterSeconds)
+    long WedgedAfterSeconds,
+    long? MaxQuantumOverruns = null)
 {
     /// <summary>
     /// True when the queue cannot drain on its own: a request whose claim owner is gone will never be
@@ -41,13 +46,16 @@ public sealed record StoreCoordinatorQueueFacts(
             string counts =
                 $"queued {QueuedCount.ToString(CultureInfo.InvariantCulture)}, " +
                 $"claimed {ClaimedCount.ToString(CultureInfo.InvariantCulture)}";
+            string overruns = MaxQuantumOverruns is > 0
+                ? $"; quantum overruns {MaxQuantumOverruns.Value.ToString(CultureInfo.InvariantCulture)}"
+                : string.Empty;
             if (DeadClaimOwner is { } owner)
-                return $"{counts}; claim owner '{owner}' is gone";
+                return $"{counts}; claim owner '{owner}' is gone{overruns}";
             if (OldestQueuedAgeSeconds is { } age && Wedged)
-                return $"{counts}; oldest queued {age.ToString(CultureInfo.InvariantCulture)}s with no writer";
+                return $"{counts}; oldest queued {age.ToString(CultureInfo.InvariantCulture)}s with no writer{overruns}";
             if (OldestQueuedAgeSeconds is { } waiting)
-                return $"{counts}; oldest queued {waiting.ToString(CultureInfo.InvariantCulture)}s";
-            return counts;
+                return $"{counts}; oldest queued {waiting.ToString(CultureInfo.InvariantCulture)}s{overruns}";
+            return $"{counts}{overruns}";
         }
     }
 }
@@ -137,7 +145,8 @@ public static class StoreCoordinatorQueueReader
                 oldestQueuedAge,
                 claimed == 0 ? null : FirstDeadClaimOwner(connection, isProcessAlive),
                 groups,
-                wedgedAfterSeconds);
+                wedgedAfterSeconds,
+                ReadMaxQuantumOverruns(connection));
         }
         catch (Exception failure) when (
             failure is SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -193,6 +202,30 @@ public static class StoreCoordinatorQueueReader
         }
 
         return (groups, oldestQueuedMillis);
+    }
+
+    /// <summary>
+    /// The highest overrun count charged to a pending request, or null when this <c>coord.db</c> has no
+    /// <c>quantum_overruns</c> column. The column probe comes FIRST because a store written by an older
+    /// julie-extract is an ordinary, healthy store: selecting a column it does not have would throw, and the
+    /// caller's catch would discard the whole queue reading — turning an additive field into a total loss of
+    /// the wedge diagnosis this reader exists to give.
+    /// </summary>
+    private static long? ReadMaxQuantumOverruns(SqliteConnection connection)
+    {
+        using SqliteCommand probe = connection.CreateCommand();
+        probe.CommandText =
+            "SELECT COUNT(*) FROM pragma_table_info('requests') WHERE name = 'quantum_overruns';";
+        if (Convert.ToInt64(probe.ExecuteScalar(), CultureInfo.InvariantCulture) == 0)
+            return null;
+
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COALESCE(MAX(quantum_overruns), 0)
+            FROM requests
+            WHERE state IN ('queued', 'claimed');
+            """;
+        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
     private static string? FirstDeadClaimOwner(SqliteConnection connection, Func<int, bool> isProcessAlive)
