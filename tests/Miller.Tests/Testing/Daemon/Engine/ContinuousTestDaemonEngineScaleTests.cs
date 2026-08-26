@@ -61,7 +61,7 @@ public sealed class ContinuousTestDaemonEngineScaleTests : IDisposable
             "ws:scale",
             workspaceRoot,
             projectPath,
-            Path.Combine(_dir, "ct-build"));
+            Path.Combine(workspaceRoot, ".miller", "ct", "build", "proj"));
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(workspaceRoot));
         var provider = new DotnetTestProvider(new TestProcessRunner());
         IReadOnlyList<ProviderTestCase> cases = await provider.DiscoverAsync(workspace, ct);
