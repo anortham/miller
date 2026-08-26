@@ -18,7 +18,7 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
    until the next full rebuild — julie refuses the update and Miller stops resubmitting.)
 3. CT xUnit v2 detection (backlog entry below) — **done**
 4. Dashboard Tests section (backlog entry below) — **done**
-5. Dashboard cleanup pass (backlog entry below) — in progress
+5. Dashboard cleanup pass (backlog entry below) — **done**
 6. Semantic activation requires session restart after `prepare` (Active item) — queued
 7. JSON diagnostics during family-store resolution convergence (Active item) — queued
 8. Cross-tool discoverability empty states (backlog entry below) — queued
@@ -118,13 +118,23 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
   read hydrates no index — the core opens the artifact only for the live freshness cursor, which is what
   ADR-0002 permits. 25 tests in `tests/Miller.Tests/Server/DashboardTestsPanelTests.cs` (fast suite).
 
-- Dashboard cleanup pass: the dashboard is Razor Components running the static-SSR + htmx + Alpine hybrid —
-  `DashboardHead.razor` still loads and configures htmx (`selfRequestsOnly`), `DashboardScripts.razor` loads
-  idiomorph + Alpine + `alpine-components.js`, so none of it is provably dead today. Audit which interactions
-  still ride htmx/Alpine vs Razor, converge on one interaction model, then delete the losing stack's assets
-  (`wwwroot/lib/htmx`, `lib/idiomorph`, `lib/alpine`, `js/alpine-components.js`) and their CSP/config residue.
-  Release packaging note: dashboard wwwroot assets ship in every archive, so removing dead ones shrinks all
-  four platform packages.
+- Dashboard cleanup pass — **done** (2026-08-26). Audit + decision:
+  [`docs/plans/2026-08-26-dashboard-interaction-cleanup.md`](docs/plans/2026-08-26-dashboard-interaction-cleanup.md).
+  The premise "we've swapped to blazor" was wrong — `DashboardHostPipeline` calls only `AddRazorComponents()`,
+  so Razor Components is a static-SSR template engine here with no circuit and no interactivity. The audit
+  scored the two client stacks: **htmx carried 8 in-page interactions across 6 panels** (activity 5s, refresh
+  status 2s, telemetry 30s + manual, workspaces 30s, tests 5s, plus the refresh and open-folder POSTs), 31
+  attribute uses, and 8 `dashboard-site.js` event hooks that implement the fragment ETag/304 protocol and the
+  `X-Miller-Dashboard` CSRF header. **Alpine carried 2** (the workspace filter, two table sorts) through 16
+  directives, with no reactive template and its state already living in plain-JS module stores. So htmx won and
+  Alpine was removed: both controllers moved into `dashboard-site.js` as delegated `[data-sort-col]` /
+  `#workspace-filter` handlers, and `wwwroot/lib/alpine/cspalpine.min.js` + `wwwroot/js/alpine-components.js`
+  were deleted with their script tags, pipeline routes, and `release.yml` asset checks. idiomorph stays — it is
+  the htmx `morph` extension every polling panel names, not a third stack. Dashboard `wwwroot` 268 KB → 196 KB
+  in all four platform archives. Verified by 274 fast-suite dashboard tests plus a 27-check Playwright run
+  against the live dashboard (filter, empty note, `/` shortcut, both tables' sort direction and `aria-sort`
+  placement, sort surviving a morph poll, theme toggle, copy button, remove-confirm cancel, zero console
+  errors). Load-bearing rule recorded in `CLAUDE.md`.
 
 - Oversized-manifest staleness policy (found in the 2.37.0 consumption slice): a manifest file that grows
   past julie's 1 MiB limit can no longer have its rows retired by `store update` (2.37.0 refuses it), so
