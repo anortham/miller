@@ -52,6 +52,10 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
 
 ## Active
 
+- Intermittent single-test failure, name not captured: seen once in the fast suite (2026-08-26, dashboard
+  cleanup worktree, 4 later runs green) and once in the Scale suite (2026-08-26 release gate, rerun green).
+  Both sightings lost the test name to truncated output. On the next occurrence, keep the full log or a
+  `--logger trx` file and record the test here.
 - On windows memory usage seems high, investigate.
 - Docs will need updating for CT and should list supported langs/frameworks and state that support for more is ongoing
 
