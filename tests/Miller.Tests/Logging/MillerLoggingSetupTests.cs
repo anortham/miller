@@ -205,8 +205,13 @@ public sealed class MillerLoggingSetupTests : IDisposable
     [Fact]
     public void SinkThatCannotOpenItsFileReportsThroughSerilogSelfLog()
     {
-        string blocked = Path.Combine(_dir, "miller-" + DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + ".log");
-        Directory.CreateDirectory(blocked);
+        // rollOnFileSizeLimit makes the sink try `_001`, `_002`, … when its own path cannot be opened, so blocking
+        // only the base name proves nothing: Serilog would quietly write the successor and SelfLog would stay
+        // empty. Block the whole day's family so the sink genuinely has nowhere to go.
+        string day = DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        Directory.CreateDirectory(Path.Combine(_dir, $"miller-{day}.log"));
+        for (int sequence = 1; sequence <= 4; sequence++)
+            Directory.CreateDirectory(Path.Combine(_dir, $"miller-{day}_{sequence:000}.log"));
         var selfLog = new StringWriter();
         Serilog.Debugging.SelfLog.Enable(selfLog);
 
