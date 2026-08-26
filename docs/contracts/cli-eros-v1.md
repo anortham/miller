@@ -392,6 +392,32 @@ At symbols level the emitting commands are `search --mode markers`, `search --re
 `0` and the payload stays ingestable — `diagnostic.code = reference_layer_converging` means "this result is
 empty or undercounted because the layer is still converging", NOT "this workspace has no such facts".
 
+### Standalone diagnostic document (no payload to attach to)
+
+Some diagnostics are raised before the command produces any payload — a refusal such as an invalid `mode`,
+`format`, or continuation token, or an unavailable index. There is nothing to attach a `diagnostic` field to,
+so the whole JSON document IS the diagnostic:
+
+```json
+{"schema_version":1,"tool":"trace","diagnostic":{"code":"invalid_mode","class":"refusal","outcome":"error","message":"...","next_actions":[]}}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema_version` | integer | Diagnostic envelope version; currently `1`. |
+| `tool` | string | The command that produced it: `search`, `inspect`, `context`, `trace`, `impact`, `patterns`, `content`, `edit`, `tests`, or `workspace`. |
+| `diagnostic` | object | The same object documented in the table above. |
+
+Tell the two shapes apart by the top-level keys, not by the diagnostic: the standalone document carries
+`schema_version` and `tool` and NO command payload, while the additive shape carries the command's normal
+fields plus `diagnostic_schema_version`. A consumer that wants only "did this degrade or refuse" can test for
+`diagnostic` in both; a consumer that needs facts must confirm the payload is present before reading it.
+
+This document is always valid JSON — an empty result never reaches a `--json` consumer as unparseable output.
+Exit codes follow the diagnostic class rather than the shape: a converging read stays `0`, while a refusal or
+unsupported input exits `2` and writes the standalone document to **stdout** under `--json` (compact mode
+writes the same diagnostic to stderr instead).
+
 `miller patterns export` is a JSONL feed, so it signals the same degradation on **stderr** rather than in the
 stream: stdout stays a pure sequence of `structural_facts` rows (empty at symbols level), the exit code stays
 `0`, and stderr carries the compact rendering of the same diagnostic — a `diagnostic_code=` /
