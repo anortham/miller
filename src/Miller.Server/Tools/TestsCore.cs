@@ -91,7 +91,25 @@ public sealed record TestsStatusProject(
     /// run. Such a project is REPORTED rather than dropped: dropping it leaves a reader with the same
     /// unexplained silence the raw process error used to leave them with.
     /// </summary>
-    string? UnsupportedReason = null);
+    string? UnsupportedReason = null,
+    int CaseCount = 0,
+    int StaleCount = 0,
+    int RedCount = 0,
+
+    /// <summary>
+    /// The per-project verdict, projected over this project's own rows at the same live key the
+    /// workspace verdict uses. Null on surfaces that carry no per-project status (enable/disable
+    /// results), and the renderers withhold every per-project field when it is null. A status read
+    /// always sets it — a project with zero rows reads <see cref="ContinuousTestVerdict.Unknown"/>,
+    /// visibly distinct from a green one.
+    /// </summary>
+    ContinuousTestVerdict? Verdict = null,
+
+    /// <summary>
+    /// When this project's tests last reported a result: the newest <c>last_result_at</c> across its
+    /// rows. Null means never — the answer the whole field exists to make visible per project.
+    /// </summary>
+    DateTimeOffset? LastRunAt = null);
 
 public sealed record TestsBudgetHolder(int Pid, string WorkspaceRoot, string Reason);
 
@@ -379,12 +397,13 @@ public static class TestsCore
         // derived from the rows it judges reads uniformly stale rows as green forever, and flips
         // between consecutive reads when rows carry mixed keys (observed live 2026-08-20).
         CtFreshnessKey? liveKey = TryReadLiveFreshness(request, root, workspaceId);
+        IReadOnlyDictionary<string, CtFreshnessKey>? watermarks = liveKey is { } live
+            ? store.ListContinuousTestFreshWatermarks(workspaceId, live.IndexIdentity)
+            : null;
         ContinuousTestProjectedStatus projected = ContinuousTestStatusProjection.Project(
             liveKey,
             statuses,
-            liveKey is { } live
-                ? store.ListContinuousTestFreshWatermarks(workspaceId, live.IndexIdentity)
-                : null);
+            watermarks);
         TestsBudgetHolder? budget = ReadBudgetHolder(request.MillerHome);
         // The build the daemon runs lives in its LEASE, not its status record, and an adopted
         // worktree's lease lives on the repo's main checkout — so the endpoint resolver is the right
@@ -399,7 +418,9 @@ public static class TestsCore
         return new TestsStatusResult(
             Enabled: optedIn || (!discovered && stored.Count > 0),
             KillSwitchOff: false,
-            Projects: stored.Select(ToStatusProject).ToArray(),
+            Projects: stored
+                .Select(project => ToStatusProjectWithRows(project, store, workspaceId, liveKey, watermarks))
+                .ToArray(),
             DaemonState: snapshot.State,
             DaemonReason: snapshot.Reason,
             Verdict: projected.Verdict,
@@ -1284,6 +1305,15 @@ public static class TestsCore
         foreach (TestsStatusProject project in result.Projects)
         {
             sb.AppendLine($"  - {project.ProjectPath} ({project.Framework ?? "unknown"})"
+                + (project.Verdict is { } verdict
+                    ? " verdict=" + Snake(verdict.ToString())
+                        + " cases=" + project.CaseCount.ToString(CultureInfo.InvariantCulture)
+                        + " stale=" + project.StaleCount.ToString(CultureInfo.InvariantCulture)
+                        + " red=" + project.RedCount.ToString(CultureInfo.InvariantCulture)
+                        + " last_run=" + (project.LastRunAt is { } lastRun
+                            ? lastRun.ToString("O", CultureInfo.InvariantCulture)
+                            : "never")
+                    : string.Empty)
                 + (project.UnsupportedReason is { } reason ? " — " + reason : string.Empty));
         }
 
@@ -1347,7 +1377,11 @@ public static class TestsCore
                 + " pre_trim=" + selection.PreTrimSelectedCount.ToString(CultureInfo.InvariantCulture)
                 + " post_trim=" + selection.PostTrimSelectedCount.ToString(CultureInfo.InvariantCulture)
                 + " retained_red=" + selection.RetainedRedCount.ToString(CultureInfo.InvariantCulture)
-                + " covers_all=" + (selection.CoversEveryKnownCase ? "true" : "false")
+                // Named for its project: covers_all is a per-project fact, and the bare label read as
+                // a workspace claim beside the workspace-scoped counts (the "covers_all=true while 557
+                // untouched" misreading). JSON keeps covers_every_known_case unchanged.
+                + " covers_all(" + Path.GetFileName(run.ProjectPath) + ")="
+                + (selection.CoversEveryKnownCase ? "true" : "false")
                 + " eligible=" + (selection.Eligible ? "true" : "false")
                 + " reason=" + selection.ReasonCode
                 + " digest=" + selection.SelectionDigest);
@@ -2168,6 +2202,38 @@ public static class TestsCore
             ContinuousTestFrameworkSupport.ReasonFor(project.Framework));
 
     /// <summary>
+    /// The status row for one project, judged over that project's OWN <c>ct.db</c> rows at the same
+    /// live key and watermark set the workspace verdict uses — so the two never disagree about what
+    /// fresh means. The read goes through the store handle the status read already holds and its
+    /// non-creating fallback: a workspace with no <c>ct.db</c> answers zero rows, never a new file.
+    ///
+    /// <para>Why this exists: in a five-project workspace the flat project list could not answer
+    /// "which project is missing a run and why" — a vitest project with a green baseline was
+    /// indistinguishable from one that had never run, and the reader concluded it never ran
+    /// (2026-08-25 dogfood).</para>
+    /// </summary>
+    private static TestsStatusProject ToStatusProjectWithRows(
+        ContinuousTestProject project,
+        ContinuousTestStore store,
+        string workspaceId,
+        CtFreshnessKey? liveKey,
+        IReadOnlyDictionary<string, CtFreshnessKey>? watermarks)
+    {
+        IReadOnlyList<ContinuousTestStatus> rows =
+            store.ListContinuousTestStatusesForProject(workspaceId, project.ProjectPath);
+        ContinuousTestProjectedStatus projected =
+            ContinuousTestStatusProjection.Project(liveKey, rows, watermarks);
+        return ToStatusProject(project) with
+        {
+            CaseCount = rows.Count,
+            StaleCount = projected.StaleCount,
+            RedCount = rows.Count(static row => row.State == ContinuousTestState.Red),
+            Verdict = projected.Verdict,
+            LastRunAt = rows.Max(static row => row.LastResultAt),
+        };
+    }
+
+    /// <summary>
     /// The <see cref="HasContinuousTestHistory(string, ContinuousTestStore, string)"/> question for a caller
     /// with no store open. Opened WITHOUT <c>EnsureSchemaForWrite</c>, so asking never creates <c>ct.db</c>.
     /// </summary>
@@ -2284,6 +2350,20 @@ public static class TestsCore
                 writer.WriteNull("unsupported_reason");
             else
                 writer.WriteString("unsupported_reason", project.UnsupportedReason);
+            // Per-project status facts exist only where a status read projected them; a mutation
+            // result's project rows carry none, and writing zeros there would claim a count nobody
+            // measured. The null verdict is the one signal, so the block appears whole or not at all.
+            if (project.Verdict is { } verdict)
+            {
+                writer.WriteNumber("case_count", project.CaseCount);
+                writer.WriteNumber("stale_count", project.StaleCount);
+                writer.WriteNumber("red_count", project.RedCount);
+                writer.WriteString("verdict", Snake(verdict.ToString()));
+                if (project.LastRunAt is { } lastRun)
+                    writer.WriteString("last_run_at", lastRun.ToString("O", CultureInfo.InvariantCulture));
+                else
+                    writer.WriteNull("last_run_at");
+            }
             writer.WritePropertyName("exclude_traits");
             writer.WriteStartArray();
             foreach (string trait in project.ExcludeTraits)
