@@ -18,7 +18,7 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
    until the next full rebuild — julie refuses the update and Miller stops resubmitting.)
 3. CT xUnit v2 detection (backlog entry below) — **done**
 4. Dashboard Tests section (backlog entry below) — **done**
-5. Dashboard cleanup pass (backlog entry below) — queued
+5. Dashboard cleanup pass (backlog entry below) — in progress
 6. Semantic activation requires session restart after `prepare` (Active item) — queued
 7. JSON diagnostics during family-store resolution convergence (Active item) — queued
 8. Cross-tool discoverability empty states (backlog entry below) — queued
