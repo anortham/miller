@@ -177,6 +177,182 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
     }
 
     [Fact]
+    public void Discover_classifies_an_xunit_v2_project_as_the_generation_continuous_testing_cannot_run()
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="xunit" Version="2.9.2" />
+                <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal(ContinuousTestFrameworkSupport.XunitV2, project.Framework);
+        Assert.False(ContinuousTestFrameworkSupport.IsSupported(project.Framework));
+        Assert.Equal(ContinuousTestFrameworkSupport.XunitV2Reason,
+            ContinuousTestFrameworkSupport.ReasonFor(project.Framework));
+    }
+
+    [Fact]
+    public void Discover_classifies_an_xunit_v3_project_as_the_generation_continuous_testing_runs()
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="xunit.v3" Version="1.0.0" />
+                <PackageReference Include="xunit.runner.visualstudio" Version="3.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal("xunit", project.Framework);
+        Assert.True(ContinuousTestFrameworkSupport.IsSupported(project.Framework));
+    }
+
+    [Theory]
+    [InlineData("xunit.v3.core")]
+    [InlineData("xunit.v3.assert")]
+    [InlineData("xunit.v3.extensibility.core")]
+    public void Discover_reads_every_v3_package_as_the_v3_generation(string package)
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", $"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="{package}" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        Assert.Equal("xunit", Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1")).Framework);
+    }
+
+    [Theory]
+    [InlineData("xunit.core")]
+    [InlineData("xunit.assert")]
+    [InlineData("xunit.abstractions")]
+    [InlineData("xunit.extensibility.execution")]
+    public void Discover_reads_every_v2_only_package_as_the_v2_generation(string package)
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", $"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="{package}" Version="2.9.2" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        Assert.Equal(
+            ContinuousTestFrameworkSupport.XunitV2,
+            Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1")).Framework);
+    }
+
+    /// <summary>
+    /// A project migrating to v3 may still carry a v2 package for a compatibility shim. It builds the v3
+    /// self-executing assembly, so v3 wins outright.
+    /// </summary>
+    [Fact]
+    public void Discover_reads_a_project_carrying_both_generations_as_v3()
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="xunit.abstractions" Version="2.0.3" />
+                <PackageReference Include="xunit.v3" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        Assert.Equal("xunit", Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1")).Framework);
+    }
+
+    /// <summary>
+    /// Both generations ship <c>xunit.runner.visualstudio</c> and <c>xunit.analyzers</c>, so neither proves
+    /// anything. Guessing v2 here would refuse the enable of a project that runs perfectly well; the
+    /// provider's missing-executable message names the same cause if the guess would have been right.
+    /// </summary>
+    [Fact]
+    public void Discover_keeps_xunit_for_a_project_whose_only_xunit_packages_are_shared_by_both_generations()
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+                <PackageReference Include="xunit.analyzers" Version="1.16.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        Assert.Equal("xunit", Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1")).Framework);
+    }
+
+    /// <summary>
+    /// Under central package management the csproj names the id and the version lives in
+    /// <c>Directory.Packages.props</c>. The id alone has to decide.
+    /// </summary>
+    [Fact]
+    public void Discover_classifies_a_versionless_package_reference()
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="xunit" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        Assert.Equal(
+            ContinuousTestFrameworkSupport.XunitV2,
+            Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1")).Framework);
+    }
+
+    [Fact]
+    public void Discover_classifies_a_mixed_repository_project_by_project()
+    {
+        WriteProject("tests/Old.Tests/Old.Tests.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="xunit" Version="2.9.2" />
+              </ItemGroup>
+            </Project>
+            """);
+        WriteProject("tests/New.Tests/New.Tests.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="xunit.v3" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        Dictionary<string, string?> frameworks = ContinuousTestProjectInventory.Discover(_root, "ws:1")
+            .ToDictionary(project => Path.GetFileName(project.ProjectPath), project => project.Framework);
+
+        Assert.Equal(ContinuousTestFrameworkSupport.XunitV2, frameworks["Old.Tests.csproj"]);
+        Assert.Equal("xunit", frameworks["New.Tests.csproj"]);
+    }
+
+    [Fact]
+    public void Identify_classifies_an_xunit_v2_project_named_by_a_person()
+    {
+        WriteProject("tests/App.Tests/App.Tests.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="xunit" Version="2.9.2" />
+              </ItemGroup>
+            </Project>
+            """);
+        string project = Path.Combine(_root, "tests", "App.Tests", "App.Tests.csproj");
+
+        ContinuousTestProject? identified =
+            ContinuousTestProjectInventory.Identify(_root, "ws:1", project);
+
+        Assert.NotNull(identified);
+        Assert.Equal(ContinuousTestFrameworkSupport.XunitV2, identified.Framework);
+    }
+
+    [Fact]
     public void Discover_seeds_trait_exclusions_from_the_projects_default_test_case_filter()
     {
         WriteProject("tests/App.Tests/App.Tests.csproj", """

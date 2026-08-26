@@ -227,6 +227,8 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
             throw Failure();
 
         private ContinuousTestProviderException Failure() =>
-            new($"Continuous test framework '{_framework}' is unsupported for project '{_projectPath}'.");
+            new(ContinuousTestFrameworkSupport.ReasonFor(_framework) is { } reason
+                ? $"{reason}: '{_projectPath}'. {ContinuousTestFrameworkSupport.RemedyFor(_framework)}"
+                : $"Continuous test framework '{_framework}' is unsupported for project '{_projectPath}'.");
     }
 }

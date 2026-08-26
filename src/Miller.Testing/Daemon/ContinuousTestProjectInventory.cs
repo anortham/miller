@@ -60,6 +60,27 @@ public static class ContinuousTestProjectInventory
         ".vbproj",
     };
 
+    /// <summary>
+    /// The v3 package id. Every v3 package is this id or a child of it (<c>xunit.v3.core</c>,
+    /// <c>xunit.v3.assert</c>, <c>xunit.v3.extensibility.core</c>), so one prefix covers the generation.
+    /// </summary>
+    private const string XunitV3Package = "xunit.v3";
+
+    /// <summary>
+    /// Package ids that exist ONLY in xunit v2. The two shared ones — <c>xunit.runner.visualstudio</c> and
+    /// <c>xunit.analyzers</c> — are deliberately absent: both ship for v3 as well, so either would classify a
+    /// working v3 project as unsupported and refuse its enable.
+    /// </summary>
+    private static readonly HashSet<string> XunitV2Packages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "xunit",
+        "xunit.core",
+        "xunit.assert",
+        "xunit.abstractions",
+        "xunit.extensibility.core",
+        "xunit.extensibility.execution",
+    };
+
     private static readonly HashSet<string> QmlSourceExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".qml",
@@ -1109,7 +1130,7 @@ public static class ContinuousTestProjectInventory
             excludeTraits = ParseDefaultFilterExclusions(text);
             if (ContainsToken(text, "xunit"))
             {
-                framework = "xunit";
+                framework = XunitFramework(text);
                 return true;
             }
 
@@ -1138,6 +1159,104 @@ public static class ContinuousTestProjectInventory
 
         framework = null;
         return false;
+    }
+
+    /// <summary>
+    /// Which xunit generation a dotnet project references: <c>xunit</c> for the v3 shape continuous testing
+    /// runs, or <see cref="ContinuousTestFrameworkSupport.XunitV2"/> for the one it cannot.
+    ///
+    /// <para>CT runs the built self-executing test assembly, which only xUnit v3 produces. A v2 project
+    /// builds a dll plus <c>testhost.exe</c>, so CT used to fail LATE, during discovery, with the raw OS
+    /// error for a missing <c>&lt;Project&gt;.exe</c> — a message that names a missing file and therefore
+    /// reads as a broken build. <c>dotnet new xunit</c> still scaffolds v2, so this is the default trap.</para>
+    ///
+    /// <para>The decision reads PACKAGE IDS, never the raw text: every xunit project contains the word
+    /// <c>xunit</c> somewhere, and <c>xunit.runner.visualstudio</c> / <c>xunit.analyzers</c> ship for both
+    /// generations, so neither word settles anything. A <c>xunit.v3</c> id wins outright — a project that
+    /// carries both is building against v3. Only the ids below prove v2.</para>
+    ///
+    /// <para>A project this cannot classify — one whose only xunit id is a shared runner package — keeps
+    /// <c>xunit</c>, the answer it has always had. Guessing v2 there would refuse an enable on a project
+    /// that runs perfectly well, and the missing-executable message the provider now raises names the same
+    /// cause at the same moment the old raw error appeared.</para>
+    /// </summary>
+    internal static string XunitFramework(string projectText)
+    {
+        var sawVersionTwo = false;
+        foreach (string package in PackageReferenceIds(projectText))
+        {
+            if (string.Equals(package, XunitV3Package, StringComparison.OrdinalIgnoreCase)
+                || package.StartsWith(XunitV3Package + ".", StringComparison.OrdinalIgnoreCase))
+            {
+                return "xunit";
+            }
+
+            sawVersionTwo |= XunitV2Packages.Contains(package);
+        }
+
+        return sawVersionTwo ? ContinuousTestFrameworkSupport.XunitV2 : "xunit";
+    }
+
+    /// <summary>
+    /// The <c>Include</c> / <c>Update</c> package ids of every <c>PackageReference</c> in a project file.
+    ///
+    /// <para>Scanned rather than parsed as XML: <see cref="ReadHead"/> returns the first 64 KB, which can end
+    /// mid-element, and a truncated document fails to parse entirely. Under central package management the
+    /// version lives elsewhere but the id still sits on this element, so the ids alone are the right read.</para>
+    /// </summary>
+    private static IEnumerable<string> PackageReferenceIds(string projectText)
+    {
+        const string element = "<PackageReference";
+        var cursor = 0;
+        while ((cursor = projectText.IndexOf(element, cursor, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            cursor += element.Length;
+            int close = projectText.IndexOf('>', cursor);
+            string tag = close < 0 ? projectText[cursor..] : projectText[cursor..close];
+            if (AttributeValue(tag, "Include") is { } include)
+                yield return include;
+            if (AttributeValue(tag, "Update") is { } update)
+                yield return update;
+            if (close < 0)
+                yield break;
+            cursor = close + 1;
+        }
+    }
+
+    /// <summary>
+    /// One double- or single-quoted XML attribute value out of an element's attribute text, or null when the
+    /// element does not carry it.
+    /// </summary>
+    private static string? AttributeValue(string tag, string name)
+    {
+        int at = tag.IndexOf(name, StringComparison.OrdinalIgnoreCase);
+        while (at >= 0)
+        {
+            int cursor = at + name.Length;
+            while (cursor < tag.Length && char.IsWhiteSpace(tag[cursor]))
+                cursor++;
+            if (cursor < tag.Length
+                && tag[cursor] == '='
+                && (at == 0 || char.IsWhiteSpace(tag[at - 1])))
+            {
+                cursor++;
+                while (cursor < tag.Length && char.IsWhiteSpace(tag[cursor]))
+                    cursor++;
+                if (cursor < tag.Length && tag[cursor] is '"' or '\'')
+                {
+                    char quote = tag[cursor];
+                    int end = tag.IndexOf(quote, cursor + 1);
+                    if (end > 0)
+                        return tag[(cursor + 1)..end].Trim();
+                }
+
+                return null;
+            }
+
+            at = tag.IndexOf(name, at + 1, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return null;
     }
 
     /// <summary>

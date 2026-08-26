@@ -1,0 +1,61 @@
+namespace Miller.Testing;
+
+/// <summary>
+/// Which discovered frameworks continuous testing can actually run, and the plain reason for the ones it
+/// cannot.
+///
+/// <para>A framework this refuses is one Miller can NAME but never execute. Discovery still reports such a
+/// project — silently dropping it would put a reader back where the raw process error left them, hunting a
+/// build that is not broken — but <c>tests enable</c> never records it, so no daemon ever tries to run it.</para>
+///
+/// <para>The reason travels with the framework value rather than with each call site, so the enable refusal,
+/// the mixed-enable report, the status project line, and the provider factory's unsupported provider all say
+/// the same sentence.</para>
+/// </summary>
+public static class ContinuousTestFrameworkSupport
+{
+    /// <summary>
+    /// An xunit project whose packages are xunit v2, not <c>xunit.v3</c>.
+    ///
+    /// <para>It is a separate framework value rather than a flag beside <c>xunit</c> because the framework
+    /// string is what already reaches every consumer that has to tell them apart: the provider factory
+    /// resolves a provider from it, <c>ct.db</c> stores it, and the JSON contract publishes it. CT runs the
+    /// built self-executing test assembly, which only xUnit v3 / Microsoft.Testing.Platform produces; a v2
+    /// project builds a dll plus <c>testhost.exe</c> and has no such executable.</para>
+    /// </summary>
+    public const string XunitV2 = "xunit-v2";
+
+    /// <summary>
+    /// The one-line reason, kept short enough for a <c>ct.db</c> status column and a compact project line.
+    /// </summary>
+    public const string XunitV2Reason = "xUnit v2 detected; CT needs the v3 self-executing assembly";
+
+    /// <summary>What to do about it, appended where a message has room for more than the reason.</summary>
+    public const string XunitV2Remedy =
+        "Migrate the project to xunit.v3, or run it directly with dotnet test. "
+        + "(dotnet new xunit still scaffolds v2; dotnet new xunit3 scaffolds v3.)";
+
+    private static readonly Dictionary<string, (string Reason, string Remedy)> Unsupported =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            [XunitV2] = (XunitV2Reason, XunitV2Remedy),
+        };
+
+    /// <summary>True when continuous testing can run a project with this framework value.</summary>
+    public static bool IsSupported(string? framework) => ReasonFor(framework) is null;
+
+    /// <summary>
+    /// Why continuous testing cannot run a project with this framework value, or null when it can. An
+    /// unrecognized framework answers null: this names the shapes Miller classified and refused, not every
+    /// framework no provider happens to serve.
+    /// </summary>
+    public static string? ReasonFor(string? framework) => Lookup(framework)?.Reason;
+
+    /// <summary>What the reader can do instead, or null when the framework is supported.</summary>
+    public static string? RemedyFor(string? framework) => Lookup(framework)?.Remedy;
+
+    private static (string Reason, string Remedy)? Lookup(string? framework) =>
+        framework is not null && Unsupported.TryGetValue(framework.Trim(), out (string, string) entry)
+            ? entry
+            : null;
+}
