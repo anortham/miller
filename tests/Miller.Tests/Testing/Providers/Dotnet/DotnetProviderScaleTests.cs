@@ -24,6 +24,82 @@ public sealed class DotnetProviderScaleTests : IDisposable
     }
 
     /// <summary>
+    /// The real-toolchain proof for the xUnit v2 refusal: a genuine v2 project, built by a genuine
+    /// <c>dotnet build</c>, produces the dll-without-executable shape the provider now names.
+    ///
+    /// <para>A fake runner can only assert the message; it cannot prove that a v2 build really leaves no
+    /// self-executing assembly beside the dll. That claim is the whole basis of the classification, and it is
+    /// what the field report met as a raw OS process error naming a missing file (2026-08-25).</para>
+    ///
+    /// <para>The project's csproj carries no <c>OutputType</c>, exactly as <c>dotnet new xunit</c> scaffolds
+    /// it.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_real_xunit_v2_project_is_refused_by_name_rather_than_by_a_raw_process_error()
+    {
+        CtProviderTestSupport.RequireDotnet();
+
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        string workspaceRoot = Path.Combine(_dir, "v2-repo");
+        string projectDir = Path.Combine(workspaceRoot, "tests", "Sample.Tests");
+        Directory.CreateDirectory(projectDir);
+        await File.WriteAllTextAsync(
+            Path.Combine(projectDir, "Sample.Tests.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
+                <IsPackable>false</IsPackable>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="xunit" Version="2.9.2" />
+                <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+              </ItemGroup>
+            </Project>
+            """,
+            ct);
+        await File.WriteAllTextAsync(
+            Path.Combine(projectDir, "CalculatorTests.cs"),
+            """
+            using Xunit;
+
+            namespace Sample.Tests;
+
+            public sealed class CalculatorTests
+            {
+                [Fact]
+                public void Adds() => Assert.Equal(2, 1 + 1);
+            }
+            """,
+            ct);
+
+        string projectPath = Path.Combine(projectDir, "Sample.Tests.csproj");
+        Assert.Equal(
+            ContinuousTestFrameworkSupport.XunitV2,
+            ContinuousTestProjectInventory.Identify(workspaceRoot, "ws:v2", projectPath)?.Framework);
+
+        var workspace = new ContinuousTestWorkspace(
+            "ws:v2",
+            workspaceRoot,
+            projectPath,
+            Path.Combine(_dir, "v2-ct-build"),
+            Framework: "xunit");
+        _ctTemps.Add(CtTempPaths.ForWorkspace(workspace));
+        var provider = new DotnetTestProvider(new TestProcessRunner());
+
+        ContinuousTestProviderException exception =
+            await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+                provider.DiscoverAsync(workspace, ct));
+
+        Assert.Contains(ContinuousTestFrameworkSupport.XunitV2Reason, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Sample.Tests.dll", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("xunit.v3", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("An error occurred trying to start process", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The real-runner proof for <c>-preEnumerateTheories</c>, which a fake runner cannot give: without the
     /// flag xunit v3 reports one entry per test METHOD at discovery and folds every row of a theory onto one
     /// <c>TestCaseUniqueID</c> at run time. Measured on Miller's own suite, that was 6,233 discovered against

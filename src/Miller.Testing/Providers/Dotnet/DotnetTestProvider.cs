@@ -147,6 +147,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         }
         else
         {
+            RequireSelfExecutingTestAssembly(workspace, paths);
             command = BuildDiscoverCommand(workspace, paths);
         }
         var result = await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
@@ -184,6 +185,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
                 .ConfigureAwait(false);
         }
 
+        RequireSelfExecutingTestAssembly(request.Workspace, paths);
         var coverage = request.CoverageMode == ContinuousTestCoverageMode.PerTest
             ? await StartCoverageSessionAsync(request.Workspace, paths, cancellationToken).ConfigureAwait(false)
             : null;
@@ -545,6 +547,39 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         ArgumentNullException.ThrowIfNull(workspace);
 
         return TestAssemblyPath(workspace, CtGenerationPaths.ResolveLatestOrFirst(workspace));
+    }
+
+    /// <summary>
+    /// Refuses an xunit operation whose build produced the test DLL but no self-executing assembly beside it,
+    /// naming the cause instead of letting the spawn fail.
+    ///
+    /// <para>That pair — dll present, executable absent — is exactly what an xUnit v2 project builds: v2 runs
+    /// under VSTest (a dll plus <c>testhost.exe</c>), while CT runs the executable that xUnit v3 /
+    /// Microsoft.Testing.Platform produces. Without this the operation reached <c>Process.Start</c> and failed
+    /// with the raw OS error for a missing file, which names a path and therefore reads as a broken build. A
+    /// user hunted one that did not exist (field report 2026-08-25).</para>
+    ///
+    /// <para>The check is the SHAPE, not the framework value, so it also covers a v2 project that slipped the
+    /// enable-time classification (a csproj whose only xunit package is a runner shared by both generations)
+    /// and any future project type that builds the same way. When the DLL is missing too the build itself
+    /// failed or wrote somewhere else, which this must not describe as an xunit generation problem — it says
+    /// nothing and lets the original error stand.</para>
+    /// </summary>
+    private static void RequireSelfExecutingTestAssembly(
+        ContinuousTestWorkspace workspace,
+        CtGenerationPaths paths)
+    {
+        string executable = TestExecutablePath(workspace, paths);
+        if (File.Exists(executable))
+            return;
+        string assembly = TestAssemblyPath(workspace, paths);
+        if (!File.Exists(assembly))
+            return;
+
+        throw new ContinuousTestProviderException(
+            $"{ContinuousTestFrameworkSupport.XunitV2Reason}: '{workspace.ProjectPath}' built "
+            + $"{Path.GetFileName(assembly)} but no executable at {executable}. "
+            + ContinuousTestFrameworkSupport.XunitV2Remedy);
     }
 
     private static string TestExecutablePath(ContinuousTestWorkspace workspace, CtGenerationPaths paths) =>

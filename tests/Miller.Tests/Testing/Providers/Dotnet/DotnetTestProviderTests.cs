@@ -224,6 +224,60 @@ public sealed class DotnetTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Discover_names_the_missing_self_executing_assembly_instead_of_the_raw_process_error()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace();
+        var assembly = Path.Combine(FirstGeneration(workspace).OutDir, "Sample.Tests", "Sample.Tests.dll");
+        runner.Enqueue();
+        runner.OnRun = command => WriteBuiltAssembly(command, assembly);
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
+
+        Assert.Contains(ContinuousTestFrameworkSupport.XunitV2Reason, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Sample.Tests.dll", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("xunit.v3", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(FirstGeneration(workspace).GenerationId, exception.GenerationId);
+        Assert.Single(runner.Calls);
+    }
+
+    [Fact]
+    public async Task Run_names_the_missing_self_executing_assembly_instead_of_the_raw_process_error()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace();
+        var assembly = Path.Combine(FirstGeneration(workspace).OutDir, "Sample.Tests", "Sample.Tests.dll");
+        runner.Enqueue();
+        runner.OnRun = command => WriteBuiltAssembly(command, assembly);
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.RunAsync(Request(workspace), TestContext.Current.CancellationToken));
+
+        Assert.Contains(ContinuousTestFrameworkSupport.XunitV2Reason, exception.Message, StringComparison.Ordinal);
+        Assert.Single(runner.Calls);
+    }
+
+    /// <summary>
+    /// No dll either means the build wrote nothing, or wrote somewhere else. Calling that an xunit
+    /// generation problem would send a reader after the wrong cause, so the original failure stands.
+    /// </summary>
+    [Fact]
+    public async Task Discover_stays_silent_about_the_xunit_generation_when_the_build_produced_no_assembly()
+    {
+        var runner = new FakeTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue("[]");
+        var provider = new DotnetTestProvider(runner);
+
+        await provider.DiscoverAsync(Workspace(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, runner.Calls.Count);
+    }
+
+    [Fact]
     public async Task Discover_for_nunit_rejects_target_path_outside_build_root()
     {
         var runner = new FakeTestProcessRunner();
@@ -1028,10 +1082,7 @@ public sealed class DotnetTestProviderTests : IDisposable
         {
             if (command.Arguments.FirstOrDefault() == "build")
             {
-                var projectOutput = Path.Combine(generation.OutDir, "Sample.Tests");
-                Directory.CreateDirectory(projectOutput);
-                File.WriteAllText(Path.Combine(projectOutput, "Sample.Tests.dll"), string.Empty);
-                File.WriteAllText(Path.Combine(projectOutput, "Sample.Tests.pdb"), string.Empty);
+                WriteBuiltXunitOutput(generation);
                 return;
             }
 
@@ -1981,10 +2032,7 @@ public sealed class DotnetTestProviderTests : IDisposable
         {
             if (command.Arguments.FirstOrDefault() == "build")
             {
-                var projectOutput = Path.Combine(generation.OutDir, "Sample.Tests");
-                Directory.CreateDirectory(projectOutput);
-                File.WriteAllText(Path.Combine(projectOutput, "Sample.Tests.dll"), string.Empty);
-                File.WriteAllText(Path.Combine(projectOutput, "Sample.Tests.pdb"), string.Empty);
+                WriteBuiltXunitOutput(generation);
                 return;
             }
 
@@ -2129,6 +2177,31 @@ public sealed class DotnetTestProviderTests : IDisposable
             IndexIdentity: IndexIdentity,
             RunId: "run:generation",
             TestCaseIds: testCaseIds);
+
+    /// <summary>
+    /// What an xUnit v3 build leaves in the generation's project output: the assembly, its symbols, and the
+    /// self-executing host CT actually spawns. The executable is the load-bearing one — without it the
+    /// provider refuses the operation and names the xunit generation as the cause.
+    /// </summary>
+    private static void WriteBuiltXunitOutput(CtGenerationPaths generation)
+    {
+        var projectOutput = Path.Combine(generation.OutDir, "Sample.Tests");
+        Directory.CreateDirectory(projectOutput);
+        File.WriteAllText(Path.Combine(projectOutput, "Sample.Tests.dll"), string.Empty);
+        File.WriteAllText(Path.Combine(projectOutput, "Sample.Tests.pdb"), string.Empty);
+        File.WriteAllText(
+            Path.Combine(projectOutput, "Sample.Tests" + (OperatingSystem.IsWindows() ? ".exe" : string.Empty)),
+            string.Empty);
+    }
+
+    private static void WriteBuiltAssembly(TestProcessCommand command, string assemblyPath)
+    {
+        if (command.Arguments.FirstOrDefault() != "build")
+            return;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(assemblyPath)!);
+        File.WriteAllText(assemblyPath, string.Empty);
+    }
 
     private static void WriteEmptyJunitArtifact(TestProcessCommand command)
     {
