@@ -6,7 +6,7 @@ Commands:
 
 ```bash
 miller tests status --json [--workspace-id SELECTOR] [--workspace DIR]
-miller tests failures --json [--limit N] [--offset N] [--workspace-id SELECTOR] [--workspace DIR]
+miller tests failures --json [--limit N] [--offset N] [--project PATH] [--group error_class] [--workspace-id SELECTOR] [--workspace DIR]
 miller tests run --json [--wait] [--workspace-id SELECTOR] [--workspace DIR]
 miller tests enable [--project PATH] [--json]
 miller tests disable [--project PATH] [--json]
@@ -26,7 +26,8 @@ explicit (`tests serve` / MCP `start`).
 The existing `tests` MCP tool uses the same schema-1 status, run, failure, and start/stop result
 objects as the CLI. Its `operation` values are `status` (default), `failures`, `start`, `stop`,
 `enable`, `disable`, and `run`; `format` is `compact` or `json`; `workspace_id`, `project`,
-`limit`, and `offset` retain their CLI meanings.
+`group`, `limit`, and `offset` retain their CLI meanings. `group` is accepted only with
+`operation=failures` and only as `error_class`; any other pairing is refused with `invalid_group`.
 
 `wait` is accepted for `operation=run` and defaults to `false`. When `wait=true`, it observes
 daemon activity completion, not a verdict value. `wait_seconds` is an optional integer accepted
@@ -158,6 +159,22 @@ facts are inferred from project paths or private database state.
 | `enabled` | bool | Always `true` in status output (disabled rows are omitted). |
 | `unsupported_reason` | string \| null | Why CT cannot run this project, or `null` when it can. |
 | `exclude_traits` | string[] | Trait exclusions (`Name=Value`). |
+| `case_count` | number | This project's stored case rows. Present only on a projected row — see below. |
+| `stale_count` | number | This project's cases that need a run to be green at the live key, judged watermark-aware exactly as the workspace `stale_count` is. Present only on a projected row. |
+| `red_count` | number | This project's red cases. Present only on a projected row. |
+| `verdict` | string | This project's own verdict (`green`, `red`, `partial`, or `unknown`), projected over its rows at the SAME live key and watermark set the workspace verdict uses, so the two never disagree about what fresh means. A project with zero rows reads `unknown`, visibly distinct from a green one. Present only on a projected row. |
+| `last_run_at` | string \| null | Newest stored result time across this project's rows, ISO-8601 UTC. `null` means the project never reported a result. Present only on a projected row. |
+
+The five per-project status fields are ADDITIVE at `schema_version` 1 and appear only on a row a
+STATUS read projected — a status read always projects them, while `enable`/`disable` result rows
+carry none (writing zeros there would claim a count nobody measured; the whole block appears
+together or not at all). They exist because a flat project list could not answer "which project is
+missing a run and why": a project with a green baseline was indistinguishable from one that never
+ran. Compact status renders the same facts on each project line
+(`verdict=… cases=… stale=… red=… last_run=…`, with `last_run=never` for a null `last_run_at`).
+Compact run lines label per-project selection coverage as `covers_all(<project file name>)=` —
+the bare `covers_all=` label read as a workspace claim beside the workspace-scoped counts. The
+JSON key `covers_every_known_case` is unchanged.
 
 `framework: "xunit-v2"` is a project that references xUnit v2 rather than `xunit.v3`. CT runs the
 built self-executing test assembly, which only xUnit v3 / Microsoft.Testing.Platform produces, so
@@ -297,7 +314,10 @@ fabricates a lag the loop never had, and a backward one hides a real stall.
   every provider process, discovery included, runs through the one shared runner that kills a child which
   passes `MILLER_CT_STALL_TIMEOUT` in silence. What stays unreported is a daemon wedged in its OWN code
   between two projects of one drain; `daemon.activity` still reads `executing` there, so the state is honest
-  even though the loop cannot be judged.
+  even though the loop cannot be judged. Compact status names the gap —
+  `run: none selected yet (project discovery or between projects)` — so `executing` with no run block
+  reads as the accepted window, not a rendering hole. The line is compact-only; JSON keeps
+  `"run": null` byte-identical.
 - Absence proves nothing. A record with no `loop_tick_at_utc` — a build that predates the field, or the
   transition record a family daemon writes for an adopted worktree — reports `loop_stalled: false` with
   `loop_stall_seconds: null`, never a stall. A `stalled` child on a record that carries no silence
@@ -331,7 +351,18 @@ Within one identity, a revision advance moves a per-case fresh watermark instead
 everything (`ContinuousTestStore.ApplyRevisionAdvance`, one transaction, staleness first):
 currently fresh GREEN cases the change cannot reach carry forward to the new revision; impacted
 cases go stale and lose their watermark rows; red and skipped results never ride the watermark; a
-case whose reachability is unknown reads stale. A run executes the stale set (the impacted set
+case whose reachability is unknown reads stale. An impacted RED keeps its state string and its
+committed key while the stamped `stale_since_revision` (and its deleted watermark rows) records
+that a rerun is owed — see "What an explicit run selects" below.
+
+Watermark seeding is committed-key-tolerant on purpose: a GREEN committed on the SAME index
+identity seeds a fresh watermark at the advance target regardless of its committed revision,
+because staleness lands FIRST in the same transaction, so every green that survives it is one the
+interval provably cannot reach. The invariant that makes this safe is the poller's: it never saves
+its poll cursor past a revision interval whose staleness consequences were not applied (zero
+materialized work items means nothing landed, so the cursor stays put). Without the
+revision-tolerant seed no watermark ever seeded on live workspaces and every revision advance read
+the full selected set as stale until runs recomputed it down. A run executes the stale set (the impacted set
 plus the already-owed backlog) as an explicit test-ID list; a user-requested run adds every red case
 on top of it (see "What an explicit run selects"). Truncated, degraded, or unavailable
 impact data yields the Unknown outcome: everything goes stale and NOTHING executes — never a
@@ -381,6 +412,13 @@ per-project rows to `<workspace>/.miller/ct.db` (path, framework, command, exclu
 writes `.miller/ct.enabled`. `--project PATH` scopes one file. `disable` mirrors: `--project`
 disables one row; omitting it disables every stored row and removes the opt-in marker when none
 remain enabled.
+
+A disabled project's CASES stop counting everywhere, for every case source: they leave the
+workspace `verdict`, `stale_count`, and `selected_count`, the `failures` listing and its
+`total`/`truncated`, and the error-class groups. A disabled project's standing reds must not hold
+the workspace verdict red forever — that is the whole point of turning it off. The rows are never
+DELETED: `ct.db` keeps every case row and its verdict, and re-enabling the project restores them
+exactly as they stood, so disable/re-enable is a visibility toggle, not a reset.
 
 Discovery accepts a dotnet project only on a real test signal: an xunit/NUnit/MSTest reference,
 `Microsoft.NET.Test.Sdk`, `Microsoft.NET.Sdk.Test`, or `Microsoft.Testing.Platform`. A test-like
@@ -447,7 +485,7 @@ unsupported: 1 project(s)
 | `wait.state` | string | Lower-snake wait outcome: `completed`, `queued_timeout`, `not_picked_up`, `wait_timeout`, `daemon_stopped`, or `lease_lost`. |
 | `wait.elapsed_seconds` | number | Time spent observing the daemon activity. |
 | `wait.timeout_seconds` | number | Bound used by this caller. The CLI default is 600 seconds. |
-| `wait.command_id` | string | Accepted command-channel id. |
+| `wait.command_id` | string \| null | Accepted command-channel id. `null` when the wait JOINED a run already in flight — the ack window expired before the daemon read the command file, so no ack ever named an id (see "Unacknowledged or rejected" below). Compact output renders `command=-`. |
 | `wait.run_id` | string \| null | Run id observed in daemon activity, or null when the run was never identified. |
 
 When the wait observed a run snapshot, the top-level optional `run` object carries only bounded
@@ -486,6 +524,18 @@ answers and each picks a different branch:
   have started. There is no foreground retry here: an unacked request has most likely reached the
   daemon, and a duplicate would run the suite twice.
 
+  A missed ack window is not proof of a dead daemon: the daemon reads command files only between
+  drains, so a submit that lands mid-drain acks one loop pass later by design. An expired ack wait
+  therefore probes the LIVE status record (through the liveness probe, so a dead daemon's stale
+  record answers stopped, never busy). A BUSY daemon — `executing`, `queued`, or a named run — turns
+  the reason into `run already active (run <id>, project <path>)` (bare `run already active` when no
+  run is named). Without `wait` that is still the exit-`3` refusal above, just with an honest cause.
+  With `wait=true` the caller JOINS the in-flight work instead: the queued command file is picked up
+  on the daemon's next loop pass, the settle wait observes the daemon to idle, and the response
+  reports exit `0`, `waited: true`, the SETTLED verdict and `selected`, `reason: "run already
+  active…"`, and a `wait` object whose `command_id` is JSON `null` — no ack ever named one. A dead
+  or idle daemon keeps the plain unacked failure.
+
 ### What an explicit run selects
 
 An explicit run (`miller tests run`, MCP `tests operation=run`, the daemon `run` command) executes
@@ -510,7 +560,15 @@ carries it forward on its own fresh watermark like any other green. A red that f
 red at the live key, and the next explicit run selects it once more.
 
 Reds are added to what EXECUTES, never to what is marked stale. Marking a red stale would erase the
-standing verdict for the whole length of the run that is about to replace it.
+standing verdict for the whole length of the run that is about to replace it. That preservation is
+UNIVERSAL, not an explicit-run special case: EVERY staling path — an automatic revision advance as
+much as an explicit run — keeps a red's state string and its committed key, and records the owed
+rerun by stamping `stale_since_revision` (and deleting the red's watermark rows). So `failures`
+listings and totals hold steady across automatic advances instead of collapsing to only the
+freshly-red cases. A stamped red is OWED: the selector's backlog and the drain's fresh-trim both
+treat it as work, so an impacted red still executes on the next automatic run. An UNSTAMPED red at
+the live key is still trimmed from automatic selections — a run commit clears the stamp — so no
+automatic red loop opens.
 
 `--wait` waits for the daemon to FINISH the accepted run, then reports whatever verdict is true at
 that moment. It does not wait for a verdict VALUE: accepting a run marks the selected cases stale,
@@ -578,6 +636,62 @@ invent provider metadata.
 `--limit` defaults to 20 and is clamped to 1-200; `--offset` defaults to 0. The ceiling is a page
 size, not the end of the list — `--offset` reaches everything past it. Compact output names the next
 offset (`truncated: 10 (next: offset=20)`) so a reader can ask for the rest.
+
+`--project PATH` (MCP `project=`) filters the red set to one project's cases before paging or
+grouping — the path is workspace-relative or absolute, and a path that resolves to no known project
+is refused (`invalid_project`; CLI exit `2`).
+
+Every rendered `failure_summary` — row listing and group sample, compact and JSON alike — is
+bounded to **400 UTF-8 bytes** with a trailing `…`. One 80 KB stack trace in a single row used to
+blow a whole page on its own; the full text stays in `ct.db`.
+
+The MCP `tests` tool additionally pages `failures` output within a **12 KiB** byte budget: the page
+is cut to the longest row prefix whose render fits, and the shed rows join `truncated`, so the
+`next: offset=N` footer and the JSON counters stay honest continuation points (the stable
+test-case-id ordering is the continuation identity). A payload that cannot fit even bounded is
+refused with `output_metadata_too_large`, naming `limit`/`offset`/`project`/`group=error_class` as
+the narrowing levers. The CLI renders the full requested page; only the summary bound applies there.
+
+### `tests failures --group error_class`
+
+`--group error_class` (MCP `group=error_class`) returns `groups` INSTEAD of `failures`: the same
+(optionally project-filtered) red set, grouped by an error class DERIVED from each row's
+`failure_summary` — the dotted-type-name prefix before the first `: `, or `unclassified` when the
+prefix is not a dotted type name. It is a reading of the stored text, not a stored column. Group
+mode summarizes the whole red set, so `limit`/`offset` do not apply.
+
+```json
+{
+  "groups": [
+    {
+      "error_class": "System.IO.DirectoryNotFoundException",
+      "count": 87,
+      "infra_shaped": true,
+      "sample": {
+        "test_case_id": "xunit:Sample.Tests.FindsRepoRoot",
+        "failure_summary": "System.IO.DirectoryNotFoundException: Could not find…"
+      }
+    }
+  ],
+  "total": 140,
+  "truncated_groups": 0
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `groups` | array | One entry per error class, ordered by `count` descending, then class name. |
+| `groups[].error_class` | string | The derived class, or `unclassified`. |
+| `groups[].count` | number | Red cases in this class. |
+| `groups[].infra_shaped` | bool | The class's last dotted segment is one of `DirectoryNotFoundException`, `FileNotFoundException`, `DllNotFoundException`, `UnauthorizedAccessException`, `IOException` — errors that in dogfood practice meant the CT environment, not the code under test. `unclassified` is never infra-shaped. |
+| `groups[].sample` | object | One representative case: `test_case_id` plus its bounded `failure_summary` (or null). |
+| `total` | number | All red cases in the grouped set. |
+| `truncated_groups` | number | Classes the MCP byte budget dropped from this render. `0` on the CLI. |
+
+Compact group output prints each class with its count and sample, and adds a one-line
+infra-shaped advice nudge ("often an environment difference under CT — verify with a plain
+provider run"). That advice is compact-only; the JSON carries only the `infra_shaped` fact
+(ADR-0001).
 
 ## `tests serve` / `tests stop`
 

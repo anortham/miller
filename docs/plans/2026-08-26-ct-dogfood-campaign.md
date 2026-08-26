@@ -157,10 +157,10 @@ Commit mode: **parallel-lead-commit** for every task (workers hand verified diff
 **Approach:** Extend the `state = CASE ... END` to keep `'red'` as well as running-state rows. Then verify what drives execution selection: if the stale execution set is derived from `state = 'stale'` anywhere (rather than freshness), include red-with-stale-stamp rows in the impacted/backfill selection so impacted reds still re-run. Prove the no-red-loop rule: a NON-impacted red must not enter the automatic execution set. `DemotePriorGreen` (identity change) flows through the same function — reds stay red there too, while still reading stale for execution; state the reasoning in the test names.
 
 **Acceptance criteria:**
-- [ ] `failures` total is stable across an automatic revision advance that impacts red cases.
-- [ ] An impacted red still executes on the next drain; a non-impacted red does not.
-- [ ] The explicit-run `keepRed` pinned tests stay green unmodified.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] `failures` total is stable across an automatic revision advance that impacts red cases.
+- [x] An impacted red still executes on the next drain; a non-impacted red does not.
+- [x] The explicit-run `keepRed` pinned tests stay green unmodified.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 4: Drain visibility + daemon log breadcrumb (finding 2, diagnosability)
 
@@ -265,11 +265,11 @@ Commit mode: **parallel-lead-commit** for every task (workers hand verified diff
 **What to build:** `failures` answers "what is actually broken" within the MCP budget: bounded rows, a project filter, and error-class grouping that separates 87 infra-shaped `DirectoryNotFoundException` rows from real assertion failures.
 
 **Acceptance criteria:**
-- [ ] `failures format=json limit=200` output stays under the tests byte cap on a 140-red fixture (page/refusal proves it).
-- [ ] `project=` returns only that project's reds.
-- [ ] `group=error_class` groups the Tycho-shaped fixture correctly and flags `DirectoryNotFoundException` as infra-shaped.
-- [ ] Existing failures JSON fields unchanged.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] `failures format=json limit=200` output stays under the tests byte cap on a 140-red fixture (page/refusal proves it).
+- [x] `project=` returns only that project's reds.
+- [x] `group=error_class` groups the Tycho-shaped fixture correctly and flags `DirectoryNotFoundException` as infra-shaped.
+- [x] Existing failures JSON fields unchanged.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 8: Per-project status rows + covers_all scope honesty (finding 2, visibility)
 
@@ -292,11 +292,11 @@ Commit mode: **parallel-lead-commit** for every task (workers hand verified diff
 **What to build:** `tests status` answers "which project is missing a run and why" at a glance — the question the whole Tycho session could not answer.
 
 **Acceptance criteria:**
-- [ ] Status lists every enabled project with verdict, case/stale/red counts, and last run.
-- [ ] A never-run project reads `verdict=unknown, last_run=never` — visibly distinct from a green one.
-- [ ] Compact `covers_all` names its project; JSON shape unchanged.
-- [ ] `DashboardTestsPanelTests` stay green unmodified.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Status lists every enabled project with verdict, case/stale/red counts, and last run.
+- [x] A never-run project reads `verdict=unknown, last_run=never` — visibly distinct from a green one.
+- [x] Compact `covers_all` names its project; JSON shape unchanged.
+- [x] `DashboardTestsPanelTests` stay green unmodified.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 9: Resolver `::` parse (finding 9)
 
@@ -349,11 +349,11 @@ Commit mode: **parallel-lead-commit** for every task (workers hand verified diff
 **What to build:** Tests that walk up from `TestContext.TestDirectory` to find the repo root pass under CT with zero project-side configuration, because the test binary now runs from inside the workspace tree.
 
 **Acceptance criteria:**
-- [ ] Default materialized build root is `<workspace>/.miller/ct/build/<proj12>`; validation rejects anything in the workspace outside `.miller/` and accepts the temp-root fallback.
-- [ ] The Windows tail-budget math is recomputed from the workspace root; an over-budget workspace falls back to the temp root with a logged reason.
-- [ ] `WatchPathFilter` skips `.miller/ct/build/**` (pinned by a test).
-- [ ] The three renamed/inverted pinning tests state the new invariant; dotnet provider generation-shape tests pass unmodified.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Default materialized build root is `<workspace>/.miller/ct/build/<proj12>`; validation rejects anything in the workspace outside `.miller/` and accepts the temp-root fallback.
+- [x] The Windows tail-budget math is recomputed from the workspace root; an over-budget workspace falls back to the temp root with the reason carried on the work item (no caller logs it yet — deferred).
+- [x] `WatchPathFilter` skips `.miller/ct/build/**` (pinned by a test).
+- [x] The three renamed/inverted pinning tests state the new invariant; dotnet provider generation-shape tests pass unmodified.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 11: MSBuild XML as config content — Miller side (finding 8)
 

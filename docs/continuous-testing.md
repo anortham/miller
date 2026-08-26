@@ -9,6 +9,11 @@ CT is opt-in per workspace and off until you enable it. It keeps a verdict for e
 stamped with the index generation and revision the verdict was proved at. A file change stales only
 the cases the change can reach; a run executes that stale set as an explicit test-ID list.
 
+`tests status` reports a verdict row per project — case, stale, and red counts, a per-project
+verdict projected at the same live key the workspace verdict uses, and when that project last
+reported a result (`never` when it has not) — so a project with a green baseline is
+distinguishable from one that never ran. The JSON shape is in the contract.
+
 ## Supported languages and frameworks
 
 The `framework` value is what `tests status --json` and `tests enable --json` report for a project.
@@ -105,6 +110,39 @@ green.
   line.
 - pytest takes `test_*.py` and `*_test.py`.
 
+## Where CT builds
+
+The default build output root is INSIDE the workspace:
+`<workspace>/.miller/ct/build/<project segment>` (a fixed 12-hex segment per project, with the
+per-run generation directories below it). Building inside the workspace is what makes repo-root
+discovery work with zero project-side settings: a test that walks up from its own binary
+(`TestContext.TestDirectory` and the like) to find the repository root finds it, because the
+binary IS under the repository root. Under the old machine-temp root that walk failed only under
+CT — 87 of 140 baseline failures in one dogfood repository.
+
+`.miller/**` is invisible to Miller's file watcher and to the extractor, so building there adds no
+index churn, no watcher events, and no rescans.
+
+One bounded fallback: a workspace root longer than the derived Windows MAX_PATH budget (260
+characters minus the deepest composed provider artifact path below the workspace root) falls back
+to the legacy machine temp root `<os-temp>/miller-ct/build/<workspace segment>/<project segment>`,
+and the reason is carried on the work item. Repo-root-walking tests are broken for such a project
+either way; MAX_PATH breakage is worse. The daemon's enqueue validation accepts exactly these two
+shapes and nothing else.
+
+## Where the daemon logs
+
+`<main checkout>/.miller/ct/daemon.out.log` and `daemon.err.log` are the daemon's RAW STDIO only.
+On a healthy run `daemon.out.log` holds exactly one startup breadcrumb line — the daemon's
+version, pid, and the path of the shared daily log — and `daemon.err.log` stays empty. A 0-byte
+`daemon.err.log` is a healthy daemon, not missing diagnostics.
+
+The real diagnostics are the `role:ct` lines in the shared daily pair
+`<workspace>/.miller/logs/miller-<yyyyMMdd>.log` (and `.jsonl`) — the same files every other
+Miller process on the workspace appends to. That is where the breadcrumb points. A drain that
+selects zero cases logs `ct drain skip … reason=no_selection` there, so a project that keeps
+draining without running anything is visible rather than silent.
+
 ## Known limits
 
 **xUnit v2 projects are detected and refused, not run.** CT builds a .NET test project and runs the
@@ -144,14 +182,15 @@ runs normally under `dotnet test`; only continuous testing needs the v3 shape.
 **One environment per jest project.** CT invokes jest once under its default environment. A
 repository whose own `npm test` runs jest twice under two environments is covered for one of them.
 
-**Gate expensive MSBuild build hooks on `MILLER_CT_WORKSPACE_ROOT`.** CT builds a .NET test
-project with `--artifacts-path` pointed away from the workspace, so the build itself writes
-nothing into the tree. But a csproj `Exec` hook the project carries — `npm ci` plus a SPA build is
-the common one — runs inside that build and writes wherever it always writes. One measured field
-case (2026-08-26): a test project referenced an ASP.NET project whose build hook reinstalled the
-SPA's `node_modules` on every build — roughly 40,000 file events in the workspace per CT run,
+**Expensive MSBuild build hooks still run.** CT builds a .NET test project with
+`--artifacts-path` pointed at the supervised build root (see "Where CT builds"), which the watcher
+and the extractor ignore. But a csproj `Exec` hook the project carries — `npm ci` plus a SPA build
+is the common one — runs inside that build and writes wherever it always writes. One measured
+field case (2026-08-26): a test project referenced an ASP.NET project whose build hook reinstalled
+the SPA's `node_modules` on every build — roughly 40,000 file events in the workspace per CT run,
 overflowing the file watcher and forcing rescans, and paying the npm install in every run's wall
-time. Every process CT starts, builds included, carries `MILLER_CT_WORKSPACE_ROOT` in its
+time. No project-side setting is needed for CT to go green; this gate is only for trimming hook
+cost. Every process CT starts, builds included, carries `MILLER_CT_WORKSPACE_ROOT` in its
 environment, and MSBuild reads environment variables as properties — so a repository can skip such
 hooks under CT with one property condition:
 
@@ -187,8 +226,9 @@ CT runs real test processes, so every part of it is explicit and bounded.
   `MILLER_CT_STALL_TIMEOUT` overrides it; `off` disables it.
 - Automatic runs debounce on the trailing edge (2 seconds, `MILLER_CT_DEBOUNCE`). Changes during a
   run queue a follow-up instead of killing the run.
-- Providers write build, result, and temp artifacts only under supervised CT paths, never into your
-  workspace `bin` or `obj`.
+- Providers write build, result, and temp artifacts only under supervised CT paths — the
+  workspace-local `.miller/ct/build` root (or its bounded temp fallback) and the `miller-ct` temp
+  namespace — never into your workspace `bin` or `obj`.
 - Green means complete results at the current index key. When impact data is truncated, degraded, or
   unavailable, Miller marks everything stale and runs nothing. There is no whole-suite fallback and
   no optimistic green.

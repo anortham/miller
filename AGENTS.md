@@ -466,7 +466,12 @@ scripts/test.ps1 all
 - **Continuous testing sidecar.** CT verdicts live in the Miller-owned `<workspace>/.miller/ct.db` (a
   revision-keyed sidecar, same pattern as `telemetry.db` / `history.db`). Providers may write only bounded
   build/result/temp artifacts under supervised CT paths (`BuildOutputRoot` generations and `miller-ct`
-  temps) — never workspace `bin`/`obj`. `ct.db` is self-contained: no foreign keys into `symbols.db` or
+  temps) — never workspace `bin`/`obj`. The default build root is WORKSPACE-LOCAL:
+  `<workspace>/.miller/ct/build/<proj12>`, so tests that walk up from their own binary to find the repo
+  root pass under CT with zero project-side settings (`.miller/**` is invisible to the watcher and the
+  extractor, so building there adds no churn). A workspace root longer than the derived Windows MAX_PATH
+  budget falls back to the legacy `<os-temp>/miller-ct/build/<ws12>/<proj12>` root with the reason carried
+  on the work item; enqueue validation accepts exactly those two shapes. `ct.db` is self-contained: no foreign keys into `symbols.db` or
   `search.db`; rows name files by path+blake3 hash and symbols by name+path. Freshness is the composite
   `(IndexGenerationIdentity, revision)` from the LIVE `WorkspaceReadSnapshot`
   (`ctgen1:store:<family>:<view>:<generation>` / `ctgen1:artifact:<id>:<hash-algorithm>`). The identity
@@ -475,7 +480,16 @@ scripts/test.ps1 all
   upgrade / schema heal); an identity change makes EVERY result stale — the rebuild fail-safe. Within one
   identity, a revision advance is a watermark keep-set (`ContinuousTestStore.ApplyRevisionAdvance`, one
   transaction, staleness first): fresh GREEN cases the change cannot reach carry forward; impacted cases go
-  stale and lose their watermark rows; red/skipped never advance; unknown reachability reads stale. A run
+  stale and lose their watermark rows; red/skipped never advance; unknown reachability reads stale. A green
+  committed on the SAME identity seeds a watermark regardless of its committed revision — staleness lands
+  first in the transaction, so every surviving green is provably unreachable by the interval; the old
+  `last_run_revision >= from` seed arm never matched live and every bump read all-stale. The matching
+  invariant is the poller's: it never saves its cursor past an interval whose staleness was not applied
+  (zero materialized work items ⟹ cursor stays put). An impacted RED keeps its state string and committed
+  key on EVERY staling path; the stamped `stale_since_revision` (plus deleted watermark rows) records the
+  owed rerun, so `failures` totals hold across automatic advances. A stamped red is OWED — the selector
+  backlog and the drain trim both execute it — while an unstamped live-key red is still trimmed from
+  automatic selections (a run commit clears the stamp), so no automatic red loop opens. A run
   executes the stale set (impacted ∪ owed backlog) as an explicit test-ID list. An EXPLICIT run
   (`tests run`, MCP `operation=run`, the daemon run command) adds every RED case: a red
   is committed-fresh by the same rule a green is, so the fresh-case trim dropped it and a user-requested
@@ -483,8 +497,9 @@ scripts/test.ps1 all
   user asked (2026-08-21). "Every red" is the whole rule — the trim's red exception short-circuits the
   freshness test rather than narrowing it, and a red at an older key was never fresh at the live key
   anyway. SKIPPED is committed-fresh too and is NOT excepted: a skipped test skips again. Reds join what
-  EXECUTES, never what is marked stale, and only on the explicit
-  path — an auto-run that re-ran every failing test on every debounce is a red loop on every save.
+  EXECUTES, never what is marked stale; "every red" is explicit-path-only — an auto-run that re-ran every
+  failing test on every debounce is a red loop on every save — while automatic runs execute only the
+  STAMPED (owed) reds above.
   Truncated/degraded/
   unavailable impact means Unknown — everything stale, NOTHING executes, never a whole-suite fallback.
   ONE bounded exception (2026-08-26 field report): Unknown on a project whose store holds NO test cases
@@ -506,6 +521,13 @@ scripts/test.ps1 all
   routed `run` reaches the worktree's own queue and ct.db. Explicit start only:
   `miller tests serve`, the dashboard, or MCP `tests operation=start`. Status reads never create `ct.db`,
   never create `.miller/ct/`, and never start the daemon.
+  `tests disable` retires a project's CASES from every read — verdict, stale/selected counts, `failures`
+  and its groups — for every case source, because a disabled project's standing reds must not pin the
+  workspace verdict; rows are never DELETED, so re-enable restores them exactly as they stood.
+  Daemon stdio (`.miller/ct/daemon.{out,err}.log`) is raw stdio only: startup prints ONE breadcrumb line
+  (version, pid, the shared `.miller/logs` daily pair) so a 0-byte file reads as healthy, real diagnostics
+  are the `role:ct` lines in `miller-<date>.log`, and a zero-selection drain logs `reason=no_selection`
+  instead of silence.
   **A status read on a workspace that never DECIDED discovers projects (load-bearing).** CT off means
   nothing ever ran discovery, so the recorded count is 0 on a tree full of test projects and reads as
   "none exist" rather than "nobody looked" — an agent asking whether the tests passed took that at face
