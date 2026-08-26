@@ -463,7 +463,7 @@ public sealed class DashboardActivityFeedTests : IDisposable
             ["SelectedWorkspaceId"] = "ws-a",
         });
 
-        Assert.Contains("x-data=\"telemetryTableSort\"", html);
+        Assert.Contains("id=\"telemetry-panel\"", html);
         Assert.Contains("data-sort-col=\"tool\"", html);
         Assert.Contains("data-sort-col=\"calls\"", html);
         Assert.Contains("data-sort-col=\"avg\"", html);
@@ -557,8 +557,7 @@ public sealed class DashboardActivityFeedTests : IDisposable
         });
 
         Assert.Contains("/js/dashboard-site.js", landingHtml);
-        Assert.Contains("/js/alpine-components.js", landingHtml);
-        Assert.Contains("/lib/alpine/cspalpine.min.js", landingHtml);
+        Assert.DoesNotContain("alpine", landingHtml, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("onclick=", landingHtml);
 
         var snapshot = new DashboardSnapshot(
@@ -922,14 +921,35 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.Contains("/fonts/archivo-latin.woff2", pipeline, StringComparison.Ordinal);
         Assert.Contains("/fonts/jetbrains-mono-latin.woff2", pipeline, StringComparison.Ordinal);
         Assert.Contains("/js/dashboard-site.js", pipeline, StringComparison.Ordinal);
-        Assert.Contains("/lib/alpine/cspalpine.min.js", pipeline, StringComparison.Ordinal);
+        Assert.Contains("/lib/idiomorph/idiomorph-ext.min.js", pipeline, StringComparison.Ordinal);
         Assert.Contains("@font-face", css, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(dashboardRoot, "wwwroot", "fonts", "archivo-latin.woff2")));
         Assert.True(File.Exists(Path.Combine(dashboardRoot, "wwwroot", "fonts", "jetbrains-mono-latin.woff2")));
     }
 
     [Fact]
-    public void AlpineComponents_QueryTheComponentRootNotTheDirectiveElement()
+    public void Dashboard_ShipsNoAlpineRuntimeOrDirective()
+    {
+        string dashboardRoot = Path.Combine(
+            Miller.Tests.ScaleTestSupport.RepoRoot(),
+            "src",
+            "Miller.Dashboard");
+
+        Assert.False(Directory.Exists(Path.Combine(dashboardRoot, "wwwroot", "lib", "alpine")));
+        Assert.False(File.Exists(Path.Combine(dashboardRoot, "wwwroot", "js", "alpine-components.js")));
+
+        foreach (string razor in Directory.EnumerateFiles(
+            Path.Combine(dashboardRoot, "Components"), "*.razor", SearchOption.AllDirectories))
+        {
+            string markup = File.ReadAllText(razor);
+            Assert.DoesNotContain("x-data", markup, StringComparison.Ordinal);
+            Assert.DoesNotContain("x-on:", markup, StringComparison.Ordinal);
+            Assert.DoesNotContain("x-bind:", markup, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void DashboardSite_OwnsTheSortAndFilterControllers()
     {
         string js = File.ReadAllText(Path.Combine(
             Miller.Tests.ScaleTestSupport.RepoRoot(),
@@ -937,10 +957,14 @@ public sealed class DashboardActivityFeedTests : IDisposable
             "Miller.Dashboard",
             "wwwroot",
             "js",
-            "alpine-components.js"));
+            "dashboard-site.js"));
 
-        Assert.DoesNotContain("this.$el", js, StringComparison.Ordinal);
-        Assert.Contains("this.$root", js, StringComparison.Ordinal);
+        Assert.DoesNotContain("Alpine", js, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("data-sort-col", js, StringComparison.Ordinal);
+        Assert.Contains("workspace-filter", js, StringComparison.Ordinal);
+        Assert.Contains("__millerWorkspaceIndexState", js, StringComparison.Ordinal);
+        Assert.Contains("__millerTelemetrySortState", js, StringComparison.Ordinal);
+        Assert.Contains("rehydrateSortableTables", js, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -983,10 +1007,9 @@ public sealed class DashboardActivityFeedTests : IDisposable
 
         Assert.Contains("dashboard/wwwroot/js/theme-init.js", workflow, StringComparison.Ordinal);
         Assert.Contains("dashboard/wwwroot/js/dashboard-site.js", workflow, StringComparison.Ordinal);
-        Assert.Contains("dashboard/wwwroot/js/alpine-components.js", workflow, StringComparison.Ordinal);
-        Assert.Contains("dashboard/wwwroot/lib/alpine/cspalpine.min.js", workflow, StringComparison.Ordinal);
         Assert.Contains("dashboard/wwwroot/lib/htmx/htmx.min.js", workflow, StringComparison.Ordinal);
         Assert.Contains("dashboard/wwwroot/lib/idiomorph/idiomorph-ext.min.js", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("alpine", workflow, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

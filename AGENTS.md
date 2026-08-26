@@ -627,6 +627,23 @@ scripts/test.ps1 all
 - **Web research.** Miller has a mirrored `miller-web-research` skill. Web fetching stays outside Miller in the
   skill layer via `browser39`; Miller imports fetched markdown as `web` content and supports bounded
   search/read through the content corpus.
+- **The dashboard is htmx plus ONE plain-JS file (load-bearing).** `DashboardHostPipeline.ConfigureServices` calls
+  only `AddRazorComponents()` — there is no interactive render mode, no Blazor circuit, and no WASM runtime, so
+  Razor Components is a static-SSR template engine here and contributes ZERO interactivity. Every live behaviour is
+  an htmx fragment swap or a delegated `data-*` handler in `wwwroot/js/dashboard-site.js`. Do not add Alpine, a
+  second client framework, or an interactive render mode; a Blazor Server circuit would put a persistent WebSocket
+  behind a local-first, self-contained, non-AOT executable. Alpine was REMOVED on 2026-08-26 after the audit in
+  [`docs/plans/2026-08-26-dashboard-interaction-cleanup.md`](docs/plans/2026-08-26-dashboard-interaction-cleanup.md):
+  htmx carried 8 interactions across 6 panels plus the ETag/304 fragment protocol and the `X-Miller-Dashboard` CSRF
+  header, while Alpine carried 2 (workspace filter, two table sorts) with no reactive template and its state already
+  in plain-JS module stores. `idiomorph-ext.min.js` STAYS and must load before `dashboard-site.js`: it registers the
+  htmx `morph` extension that every polling panel names via `hx-ext="morph"`, and morphing in place is what preserves
+  scroll, focus, and open `<details>` across a poll. State that must outlive a poll lives at module scope
+  (`window.__miller*State`), never on a DOM node — morph rewrites node attributes, so a value parked on the node is
+  clobbered by the very swap it must survive. `data-poll-trigger` is not a second stack: it is the durable copy of
+  `hx-trigger` that `applyVisibilityPolling` restores after a hidden tab drops the attribute. Guards:
+  `Dashboard_ShipsNoAlpineRuntimeOrDirective`, `DashboardSite_OwnsTheSortAndFilterControllers`,
+  `DashboardScripts_LoadsIdiomorphBeforeTheSiteGlue`.
 - **Dashboard launch requests.** If the user asks to start, open, or show the Miller dashboard, use the Miller
   `workspace` tool with `operation=dashboard`. Do not search plugin cache directories for dashboard files; dashboard
   launch is a workspace tool operation.

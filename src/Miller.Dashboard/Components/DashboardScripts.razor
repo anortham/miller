@@ -1,8 +1,7 @@
 @namespace Miller.Dashboard.Components
 
-@* Shared footer scripts — load order matches the static SSR + htmx + Alpine pattern. *@
+@* Shared footer scripts. idiomorph registers the htmx "morph" extension every polling panel names,
+   so it must load before any swap can fire. *@
 <div id="dashboard-toast-container" class="dashboard-toast-container" aria-live="polite"></div>
 <script src="@Asset("/lib/idiomorph/idiomorph-ext.min.js")"></script>
 <script src="@Asset("/js/dashboard-site.js")"></script>
-<script defer src="@Asset("/js/alpine-components.js")"></script>
-<script defer src="@Asset("/lib/alpine/cspalpine.min.js")"></script>

@@ -168,8 +168,6 @@ jobs:
           test -f "${publish_dir}/dashboard/wwwroot/fonts/jetbrains-mono-latin.woff2"
           test -f "${publish_dir}/dashboard/wwwroot/js/theme-init.js"
           test -f "${publish_dir}/dashboard/wwwroot/js/dashboard-site.js"
-          test -f "${publish_dir}/dashboard/wwwroot/js/alpine-components.js"
-          test -f "${publish_dir}/dashboard/wwwroot/lib/alpine/cspalpine.min.js"
           test -f "${publish_dir}/dashboard/wwwroot/lib/htmx/htmx.min.js"
           test -f "${publish_dir}/dashboard/wwwroot/lib/idiomorph/idiomorph-ext.min.js"
           test ! -e "${publish_dir}/dashboard/.tools/julie-extract"
@@ -252,8 +250,6 @@ jobs:
           foreach ($asset in @(
             "js/theme-init.js",
             "js/dashboard-site.js",
-            "js/alpine-components.js",
-            "lib/alpine/cspalpine.min.js",
             "lib/htmx/htmx.min.js",
             "lib/idiomorph/idiomorph-ext.min.js"
           )) {

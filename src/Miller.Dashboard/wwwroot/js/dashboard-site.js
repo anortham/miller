@@ -5,16 +5,21 @@
 
     // Filter/sort/stale-open state for the #workspace-index section. It survives the 30s htmx
     // poll that swaps the whole section (mirrors openIssueDetails above): the store lives at
-    // module scope, outside the swapped DOM, so a swap cannot clear it. The workspaceIndexFilter
-    // Alpine component (alpine-components.js) rehydrates from this store on init() and writes back
-    // on every change; declaring it here guarantees the shape exists before Alpine's deferred load.
-    window.__millerWorkspaceIndexState = window.__millerWorkspaceIndexState || {
+    // module scope, outside the swapped DOM, so a swap cannot clear it — morph rewrites node
+    // attributes, so state parked on a node would be clobbered by the very swap it must outlive.
+    var workspaceIndexState = window.__millerWorkspaceIndexState || (window.__millerWorkspaceIndexState = {
         query: '',
         autoOpenedStale: false,
         sortColumn: null,
         sortDir: 'asc',
         staleOpen: false,
-    };
+    });
+
+    // Same contract for the 30s #telemetry-panel poll.
+    var telemetrySortState = window.__millerTelemetrySortState || (window.__millerTelemetrySortState = {
+        sortColumn: null,
+        sortDir: 'desc',
+    });
 
     // ETag per polled element id. Module scope, not the DOM: a morph swap replaces attributes on the
     // live element, so an ETag parked on the node itself would be clobbered by the very swap it guards.
@@ -136,6 +141,177 @@
         });
     }
 
+    // The two sortable tables. Each descriptor names its panel, the grids whose rows are reordered
+    // (re-appending rows inside them leaves the header row/thead in place), and the ancestor that
+    // carries aria-sort — a button is not a table header, so the state must land on the element with
+    // role="columnheader" or on the <th> itself.
+    var sortableTables = [
+        {
+            panelId: 'workspace-index',
+            store: workspaceIndexState,
+            gridSelector: '.ws-index',
+            rowSelector: '.ws-index-row',
+            nameColumn: 'workspace',
+            nameAttribute: 'data-sort-name',
+            headerSelector: '[role="columnheader"]',
+        },
+        {
+            panelId: 'telemetry-panel',
+            store: telemetrySortState,
+            gridSelector: 'tbody',
+            rowSelector: '.telemetry-row',
+            nameColumn: 'tool',
+            nameAttribute: 'data-sort-tool',
+            headerSelector: 'th',
+        },
+    ];
+
+    function sortablePanel(table) {
+        return document.getElementById(table.panelId);
+    }
+
+    function tableForElement(el) {
+        for (var i = 0; i < sortableTables.length; i++) {
+            if (el.closest('#' + sortableTables[i].panelId)) {
+                return sortableTables[i];
+            }
+        }
+        return null;
+    }
+
+    function applyTableSort(table) {
+        var panel = sortablePanel(table);
+        var col = table.store.sortColumn;
+        if (!panel || !col) {
+            return;
+        }
+        var dir = table.store.sortDir === 'desc' ? -1 : 1;
+        panel.querySelectorAll(table.gridSelector).forEach(function (grid) {
+            var rows = Array.prototype.slice.call(grid.querySelectorAll(table.rowSelector));
+            rows.sort(function (a, b) {
+                if (col === table.nameColumn) {
+                    var an = (a.getAttribute(table.nameAttribute) || '').toLowerCase();
+                    var bn = (b.getAttribute(table.nameAttribute) || '').toLowerCase();
+                    if (an < bn) return -dir;
+                    if (an > bn) return dir;
+                    return 0;
+                }
+                var av = parseFloat(a.getAttribute('data-sort-' + col));
+                var bv = parseFloat(b.getAttribute('data-sort-' + col));
+                if (isNaN(av)) av = -1;
+                if (isNaN(bv)) bv = -1;
+                return (av - bv) * dir;
+            });
+            rows.forEach(function (row) { grid.appendChild(row); });
+        });
+    }
+
+    function reflectSortButtons(table) {
+        var panel = sortablePanel(table);
+        if (!panel) {
+            return;
+        }
+        panel.querySelectorAll('[data-sort-col]').forEach(function (button) {
+            var header = button.closest(table.headerSelector) || button;
+            if (table.store.sortColumn === button.getAttribute('data-sort-col')) {
+                header.setAttribute('aria-sort', table.store.sortDir === 'desc' ? 'descending' : 'ascending');
+            } else {
+                header.setAttribute('aria-sort', 'none');
+            }
+        });
+    }
+
+    function onSortClick(button) {
+        var table = tableForElement(button);
+        var col = button.getAttribute('data-sort-col');
+        if (!table || !col) {
+            return;
+        }
+        if (table.store.sortColumn === col) {
+            table.store.sortDir = table.store.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+            table.store.sortColumn = col;
+            // Numeric columns default to descending (biggest first); the name column to ascending.
+            table.store.sortDir = col === table.nameColumn ? 'asc' : 'desc';
+        }
+        applyTableSort(table);
+        reflectSortButtons(table);
+    }
+
+    // A row's own textContent also carries the remove-confirm form ("Cancel", "rebuildable via
+    // workspace open"), so filtering on it matches every row for those words. Read the data cells only.
+    function workspaceRowFilterText(row) {
+        var text = '';
+        row.querySelectorAll('.workspace-row-main, .ws-cell:not(.ws-row-actions)').forEach(function (cell) {
+            text += cell.textContent + ' ';
+        });
+        return text.toLowerCase();
+    }
+
+    function persistStaleOpen(panel) {
+        var stale = panel.querySelector('.ws-stale-collapse');
+        workspaceIndexState.staleOpen = stale ? stale.open : false;
+    }
+
+    function applyWorkspaceFilter() {
+        var panel = document.getElementById('workspace-index');
+        if (!panel) {
+            return;
+        }
+        var q = (workspaceIndexState.query || '').trim().toLowerCase();
+        var anyVisible = false;
+        panel.querySelectorAll('.ws-index-row').forEach(function (row) {
+            var hide = q.length > 0 && workspaceRowFilterText(row).indexOf(q) < 0;
+            row.hidden = hide;
+            if (!hide) anyVisible = true;
+        });
+        // Matches inside the collapsed stale section are invisible unless it is open;
+        // auto-open while filtering, and restore only what we auto-opened.
+        var stale = panel.querySelector('.ws-stale-collapse');
+        if (stale) {
+            if (q.length > 0 && !stale.open) {
+                stale.open = true;
+                workspaceIndexState.autoOpenedStale = true;
+            } else if (q.length === 0 && workspaceIndexState.autoOpenedStale) {
+                stale.open = false;
+                workspaceIndexState.autoOpenedStale = false;
+            }
+        }
+        var emptyNote = panel.querySelector('.ws-filter-empty');
+        if (emptyNote) emptyNote.hidden = q.length === 0 || anyVisible;
+        persistStaleOpen(panel);
+    }
+
+    // A morph swap patches these panels in place, so the server's freshly rendered rows arrive
+    // unsorted, unfiltered, and with the stale section closed. Reapply the reader's view.
+    function rehydrateSortableTables() {
+        sortableTables.forEach(function (table) {
+            applyTableSort(table);
+            reflectSortButtons(table);
+        });
+
+        var panel = document.getElementById('workspace-index');
+        if (!panel) {
+            return;
+        }
+        var stale = panel.querySelector('.ws-stale-collapse');
+        if (stale) {
+            if (workspaceIndexState.staleOpen) {
+                stale.open = true;
+            }
+            if (stale.getAttribute('data-stale-bound') !== '1') {
+                stale.setAttribute('data-stale-bound', '1');
+                stale.addEventListener('toggle', function () { persistStaleOpen(panel); });
+            }
+        }
+        var filter = panel.querySelector('#workspace-filter');
+        // Reassigning an identical value can move the caret, so only write a value that differs.
+        if (filter && filter.value !== workspaceIndexState.query) {
+            filter.value = workspaceIndexState.query;
+        }
+        applyWorkspaceFilter();
+    }
+
     function applyVisibilityPolling() {
         document.querySelectorAll('[data-poll-trigger]').forEach(function (el) {
             if (document.visibilityState === 'hidden') {
@@ -199,6 +375,12 @@
             return;
         }
 
+        var sortButton = event.target.closest('[data-sort-col]');
+        if (sortButton) {
+            onSortClick(sortButton);
+            return;
+        }
+
         var copyButton = event.target.closest('[data-copy-target]');
         if (copyButton) {
             var targetId = copyButton.getAttribute('data-copy-target');
@@ -216,10 +398,20 @@
         }
     });
 
+    document.addEventListener('input', function (event) {
+        var filter = event.target.closest && event.target.closest('#workspace-filter');
+        if (!filter) {
+            return;
+        }
+        workspaceIndexState.query = filter.value;
+        applyWorkspaceFilter();
+    });
+
     document.addEventListener('DOMContentLoaded', function () {
         updateThemeButton(document.documentElement.getAttribute('data-theme') || 'light');
         updateRelativeTimes(document);
         window.rememberIssueDetailsState(document);
+        rehydrateSortableTables();
         applyVisibilityPolling();
         // Runs before the first 30s poll, whose fragment carries no notice and morphs the inline
         // paragraph away — the toast is what survives for a reader who looked away.
@@ -291,6 +483,7 @@
     document.addEventListener('htmx:afterSwap', function (event) {
         updateRelativeTimes(event.target);
         window.rememberIssueDetailsState(event.target);
+        rehydrateSortableTables();
         applyVisibilityPolling();
     });
 

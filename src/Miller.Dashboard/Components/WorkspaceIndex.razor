@@ -3,7 +3,6 @@
 
 <section id="workspace-index"
          class="panel ws-index-panel"
-         x-data="workspaceIndexFilter"
          aria-label="Registered workspaces"
          hx-get="/fragments/workspaces"
          data-poll-trigger="every 30s"
@@ -21,9 +20,7 @@
                    class="workspace-filter"
                    type="search"
                    placeholder="Filter workspaces"
-                   autocomplete="off"
-                   x-bind:value="query"
-                   x-on:input="onInput($event)">
+                   autocomplete="off">
             <a href="/workspaces.json" class="subtle-link">json</a>
         </div>
     </div>
@@ -60,21 +57,21 @@
                 <div class="ws-index-head" role="row">
                     <span aria-hidden="true"></span>
                     <span class="ws-col" role="columnheader" aria-sort="none">
-                        <button type="button" class="col-sort" data-sort-col="workspace" x-on:click="onSort($event)">Workspace</button>
+                        <button type="button" class="col-sort" data-sort-col="workspace">Workspace</button>
                     </span>
                     <span class="ws-col" role="columnheader">State</span>
                     <span class="ws-col ws-col-num" role="columnheader" aria-sort="none">
-                        <button type="button" class="col-sort ws-num" data-sort-col="files" x-on:click="onSort($event)">Files</button>
+                        <button type="button" class="col-sort ws-num" data-sort-col="files">Files</button>
                     </span>
                     <span class="ws-col ws-col-num" role="columnheader" aria-sort="none">
-                        <button type="button" class="col-sort ws-num" data-sort-col="symbols" x-on:click="onSort($event)">Symbols</button>
+                        <button type="button" class="col-sort ws-num" data-sort-col="symbols">Symbols</button>
                     </span>
                     <span class="ws-col" role="columnheader">Languages</span>
                     <span class="ws-col ws-col-num" role="columnheader" aria-sort="none">
-                        <button type="button" class="col-sort ws-num" data-sort-col="rev" x-on:click="onSort($event)">Rev</button>
+                        <button type="button" class="col-sort ws-num" data-sort-col="rev">Rev</button>
                     </span>
                     <span class="ws-col ws-col-num" role="columnheader" aria-sort="none">
-                        <button type="button" class="col-sort ws-num" data-sort-col="activity" x-on:click="onSort($event)">Last used</button>
+                        <button type="button" class="col-sort ws-num" data-sort-col="activity">Last used</button>
                     </span>
                     <span class="ws-col ws-col-actions" role="columnheader"><span class="sr-only">Actions</span></span>
                 </div>

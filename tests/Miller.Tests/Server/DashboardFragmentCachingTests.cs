@@ -235,8 +235,6 @@ public sealed class DashboardFragmentCachingTests : IDisposable
         Assert.Contains("/js/theme-init.js?v=", head, StringComparison.Ordinal);
         Assert.Contains("/lib/idiomorph/idiomorph-ext.min.js?v=", scripts, StringComparison.Ordinal);
         Assert.Contains("/js/dashboard-site.js?v=", scripts, StringComparison.Ordinal);
-        Assert.Contains("/js/alpine-components.js?v=", scripts, StringComparison.Ordinal);
-        Assert.Contains("/lib/alpine/cspalpine.min.js?v=", scripts, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -252,16 +250,17 @@ public sealed class DashboardFragmentCachingTests : IDisposable
     }
 
     [Fact]
-    public void DashboardScripts_LoadsIdiomorphBeforeAlpine()
+    public void DashboardScripts_LoadsIdiomorphBeforeTheSiteGlue()
     {
         string markup = File.ReadAllText(Path.Combine(
             RepoRoot(), "src", "Miller.Dashboard", "Components", "DashboardScripts.razor"));
 
         int idiomorph = markup.IndexOf("/lib/idiomorph/idiomorph-ext.min.js", StringComparison.Ordinal);
-        int alpine = markup.IndexOf("/lib/alpine/cspalpine.min.js", StringComparison.Ordinal);
+        int siteGlue = markup.IndexOf("/js/dashboard-site.js", StringComparison.Ordinal);
 
         Assert.True(idiomorph >= 0, "DashboardScripts must load the idiomorph extension");
-        Assert.True(idiomorph < alpine, "idiomorph must load before Alpine");
+        Assert.True(idiomorph < siteGlue, "the morph extension must register before any swap can fire");
+        Assert.DoesNotContain("alpine", markup, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
