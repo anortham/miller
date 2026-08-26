@@ -17,7 +17,7 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
    Open policy question moved to backlog: an oversized manifest file now keeps serving stale symbols
    until the next full rebuild — julie refuses the update and Miller stops resubmitting.)
 3. CT xUnit v2 detection (backlog entry below) — **done**
-4. Dashboard Tests section (backlog entry below) — in progress
+4. Dashboard Tests section (backlog entry below) — **done**
 5. Dashboard cleanup pass (backlog entry below) — queued
 6. Semantic activation requires session restart after `prepare` (Active item) — queued
 7. JSON diagnostics during family-store resolution convergence (Active item) — queued
@@ -99,14 +99,24 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
   refusing. Real risk: a second execution path per framework, different filter shapes, new Scale evidence
   needed — do not build without a real repo that needs it.
 
-- Dashboard CT visibility (dogfood 2026-08-25): watching the dashboard during a live CT session gives no view
-  of test status. Add a Tests section to the workspace detail view fed read-only from the CT sidecar facts the
-  contract already exposes (`tests status --json` core: enabled state, project inventory, verdict, stale/selected
-  counts, daemon liveness/version, last run + failures with test name and exception type — the one-line failure
-  shape the field report praised). `ct.db` is self-contained and cheap to read, so this fits the ADR-0002
-  dashboard rule (aggregate facts only, no index hydration); status reads must stay create-nothing. Lesser
-  fallback if the section stalls: show tool RESPONSES (not just calls) for `tests` in Live Activity — noted as
-  strictly less useful than a dedicated section.
+- Dashboard CT visibility (dogfood 2026-08-25) — **DONE**: the workspace detail view has a Tests section
+  between Workspace health and Pattern inventory. `DashboardTestsPanel` (in `DashboardData.cs`) is a pure
+  projection of `TestsCore.Status` + `TestsCore.Failures` — the same core that backs `miller tests status
+  --json` — so the dashboard owns no CT logic; `WorkspaceTestsPanel.razor` renders it in the existing
+  static-SSR + htmx pattern, and `GET /fragments/tests` serves the poll (ETag/304 come free from the
+  `/fragments` middleware). Shown: verdict chip, stale/tracked case counts, daemon state + activity, project
+  count, the daemon build mismatch and wedged-loop notices, the selected freshness key, last run, the run in
+  flight, the project list with framework and `unsupported_reason` (the new `xunit-v2` classification lands
+  here), and the last five red cases in the one-line `test id` + `failure summary` shape. Decisions worth
+  keeping: (a) the section polls ONLY while `Enabled && !KillSwitchOff && no error` — a never-decided
+  workspace would otherwise re-run the core's filesystem project scan every 5s to report the same standing
+  answer; (b) `ReadTests` resolves one registry row and reads only the panel, so a poll never pays for a whole
+  snapshot; (c) the panel is read from `selectedWorkspace` alone, not from index facts, because `ct.db` is
+  self-contained and stays readable when the index is not; (d) `TestsCore.CompactFreshness` became public
+  rather than being re-implemented dashboard-side. Status reads stay create-nothing (guarded by
+  `DashboardTestsPanelTests.ReadTests_OnANeverDecidedWorkspaceDiscoversProjectsAndCreatesNothing`), and the
+  read hydrates no index — the core opens the artifact only for the live freshness cursor, which is what
+  ADR-0002 permits. 25 tests in `tests/Miller.Tests/Server/DashboardTestsPanelTests.cs` (fast suite).
 
 - Dashboard cleanup pass: the dashboard is Razor Components running the static-SSR + htmx + Alpine hybrid —
   `DashboardHead.razor` still loads and configures htmx (`selfRequestsOnly`), `DashboardScripts.razor` loads

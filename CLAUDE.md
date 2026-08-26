@@ -600,6 +600,14 @@ scripts/test.ps1 all
   The tenth MCP tool is `tests` (approved 2026-08-18): `status|failures|start|stop|enable|disable|run`.
   Status is cheap. Start is the only spawn. JSON contract:
   [`docs/contracts/tests-cli-v1.md`](docs/contracts/tests-cli-v1.md).
+  **The dashboard's Tests section is a PROJECTION of the status core, and polls only when something can
+  move.** `DashboardTestsPanel.From` renames the fields `TestsCore.Status`/`TestsCore.Failures` returned and
+  adds no CT logic of its own — a second reading of `ct.db` would drift from the contract the CLI and the MCP
+  tool share. `GET /fragments/tests` reads ONE registry row, never a whole snapshot, and never index facts:
+  `ct.db` is self-contained and stays readable when the index is not. The 5s poll attributes are emitted only
+  while `Enabled && !KillSwitchOff` and the read succeeded, because a workspace that never DECIDED runs the
+  filesystem project scan on every status read — polling it re-scans the tree forever to reprint the same
+  standing answer, and nothing on that page can change until the reader enables CT.
 - **Content corpus and text search.** File/content text search is served from the Miller-owned content corpus
   sidecar `<workspace>/.miller/content.db`, plus explicit external/web imports. Keep symbol search narrow
   (`name + signature`) unless real dogfood shows the explicit text modes fail an agent task. Route by intent:

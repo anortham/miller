@@ -1054,7 +1054,11 @@ public static class TestsCore
     /// hundreds of characters, so compact output keeps the revision and a recognizable identity
     /// prefix. JSON output carries the full identity.
     /// </summary>
-    internal static string CompactFreshness(CtFreshnessKey key)
+    /// <summary>
+    /// The selected freshness key in its one-line display form. Public because the dashboard's Tests
+    /// panel renders the same key and must not grow a second copy of this formatting.
+    /// </summary>
+    public static string CompactFreshness(CtFreshnessKey key)
     {
         const int identityPrefixLength = 24;
         string identity = key.IndexIdentity.Length <= identityPrefixLength

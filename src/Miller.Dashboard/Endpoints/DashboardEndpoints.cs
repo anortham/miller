@@ -124,6 +124,17 @@ internal static class DashboardEndpoints
                 PreventStreamingRendering = true,
             });
 
+        // The Tests section polls this while a daemon can move; it reads the CT sidecar through the
+        // tests-status core and creates nothing.
+        endpoints.MapGet("/fragments/tests", (string? workspace_id) =>
+            new RazorComponentResult<WorkspaceTestsPanel>(new
+            {
+                Tests = DashboardData.ReadTests(paths.RegistryDbPath, workspace_id),
+            })
+            {
+                PreventStreamingRendering = true,
+            });
+
         endpoints.MapGet("/fragments/workspaces", () =>
             new RazorComponentResult<WorkspaceIndex>(new
             {

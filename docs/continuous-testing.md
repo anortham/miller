@@ -174,6 +174,18 @@ CT runs real test processes, so every part of it is explicit and bounded.
   unavailable, Miller marks everything stale and runs nothing. There is no whole-suite fallback and
   no optimistic green.
 
+## Watching a session on the dashboard
+
+The workspace detail view has a Tests section. It shows the verdict, the stale and tracked case
+counts, the daemon state and activity, the run in flight, the selected index key, the last run, the
+test projects with their framework (and the reason for one CT cannot run), and the last red cases in
+the same one-line shape `miller tests failures` prints.
+
+The section reads the same status core the CLI and the MCP tool read, so it never disagrees with
+them. It creates nothing: no `ct.db`, no `.miller/ct/`, no daemon. It refreshes every 5 seconds only
+when CT is enabled for that workspace and the read succeeded — a workspace with CT off has nothing
+that can change, so that page stays as rendered until you reload it.
+
 ## Related docs
 
 - [`contracts/tests-cli-v1.md`](contracts/tests-cli-v1.md) - the `tests` CLI and MCP JSON contract.

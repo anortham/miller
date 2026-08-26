@@ -1,0 +1,218 @@
+@namespace Miller.Dashboard.Components
+
+<section id="workspace-tests-panel"
+         class="panel tests-panel"
+         aria-label="Tests"
+         @attributes="PollAttributes">
+    <div class="panel-heading">
+        <div>
+            <h2>Tests</h2>
+            <p>@Subtitle</p>
+        </div>
+        @if (Tests is not null)
+        {
+            <div class="panel-heading-side">
+                <span class="workspace-state @ChipClass">@ChipLabel</span>
+                @if (Tests.Watching)
+                {
+                    <span class="live-dot" aria-label="Updating every 5 seconds when tab is visible"></span>
+                }
+            </div>
+        }
+    </div>
+
+    @if (Tests is null)
+    {
+        <p class="empty">Select a workspace to view tests.</p>
+    }
+    else if (!string.IsNullOrWhiteSpace(Tests.Error))
+    {
+        <p class="notice error-notice"><strong>Tests unavailable</strong> @Tests.Error</p>
+    }
+    else if (Tests.KillSwitchOff)
+    {
+        <p class="empty">Continuous testing is switched off for this machine (MILLER_CT=off).</p>
+    }
+    else
+    {
+        @if (!Tests.Enabled)
+        {
+            <p class="notice">@DisabledNotice</p>
+        }
+
+        <div class="stats-grid metric-band">
+            <div class="metric">
+                <strong>@Tests.Verdict</strong>
+                <span>verdict at the live index</span>
+            </div>
+            <div class="metric">
+                <strong>@FormatCount(Tests.StaleCount, "stale case")</strong>
+                <span>of @FormatCount(Tests.TrackedCaseCount, "tracked case")</span>
+            </div>
+            <div class="metric">
+                <strong>@DaemonLabel</strong>
+                <span>@Tests.DaemonReason</span>
+            </div>
+            <div class="metric">
+                <strong>@FormatCount(Tests.Projects.Count, "project")</strong>
+                <span>@ProjectSourceLabel</span>
+            </div>
+        </div>
+
+        @if (Tests.DaemonVersionMismatch)
+        {
+            <p class="notice"><strong>Daemon build differs</strong> @Tests.DaemonVersionReason</p>
+        }
+        @if (Tests.DaemonLoopStalled)
+        {
+            <p class="notice error-notice"><strong>Daemon loop wedged</strong> @Tests.DaemonLoopReason Run <code>miller tests stop</code> to clear it.</p>
+        }
+
+        <dl class="fact-list fact-list-wide">
+            <div>
+                <dt>Selected index</dt>
+                <dd>@(Tests.Selected ?? "none (no live index)")</dd>
+            </div>
+            <div>
+                <dt>Last run</dt>
+                <dd>
+                    @if (Tests.LastRun is { } lastRun)
+                    {
+                        <time class="rel-ts" datetime="@lastRun" data-ts="@lastRun">@RelativeTime(lastRun, Now)</time>
+                    }
+                    else
+                    {
+                        @("—")
+                    }
+                </dd>
+            </div>
+            <div>
+                <dt>Activity</dt>
+                <dd>@RunLabel</dd>
+            </div>
+        </dl>
+
+        <div class="breakdown-grid detail-grid">
+            <section class="breakdown" aria-label="Test projects">
+                <h3>Projects</h3>
+                @if (Tests.Projects.Count == 0)
+                {
+                    <p class="empty-inline">No test projects found.</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach (DashboardTestsProject project in Tests.Projects)
+                        {
+                            <li>
+                                <div class="breakdown-row">
+                                    <span>@project.ProjectPath</span>
+                                    <span>@(project.Framework ?? "unknown")</span>
+                                </div>
+                                @if (project.UnsupportedReason is { } reason)
+                                {
+                                    <small>@reason</small>
+                                }
+                            </li>
+                        }
+                    </ol>
+                }
+            </section>
+
+            <section class="breakdown" aria-label="Failing tests">
+                <h3>Failures</h3>
+                @if (Tests.Failures.Count == 0)
+                {
+                    <p class="empty-inline">No failing tests recorded.</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach (DashboardTestsFailure failure in Tests.Failures)
+                        {
+                            <li>
+                                <div class="breakdown-row">
+                                    <code>@failure.TestCaseId</code>
+                                </div>
+                                <small>@failure.Summary</small>
+                            </li>
+                        }
+                    </ol>
+                    @if (Tests.FailuresTruncated > 0)
+                    {
+                        <p class="empty-inline">@FormatCount(Tests.FailuresTruncated, "more failure") not shown — run <code>miller tests failures</code>.</p>
+                    }
+                }
+            </section>
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter] public DashboardTestsPanel? Tests { get; set; }
+
+    // One "now" per render so every timestamp on the panel humanizes against the same instant.
+    private readonly DateTimeOffset Now = DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// Polling attributes, present only while something can change on its own. A workspace with
+    /// continuous testing off re-runs the core's project scan on every poll to report the same
+    /// standing answer, so that page stays static until the reader reloads it.
+    /// </summary>
+    private Dictionary<string, object>? PollAttributes => Tests is { Watching: true }
+        ? new Dictionary<string, object>
+        {
+            ["hx-get"] = $"/fragments/tests?workspace_id={Esc(Tests.WorkspaceId)}",
+            ["data-poll-trigger"] = "every 5s",
+            ["hx-trigger"] = "every 5s",
+            ["hx-ext"] = "morph",
+            ["hx-swap"] = "morph:outerHTML",
+        }
+        : null;
+
+    private string Subtitle => Tests switch
+    {
+        null => "No workspace selected",
+        { Error: not null } => "Continuous testing facts unavailable",
+        { KillSwitchOff: true } => "Continuous testing is off",
+        { Enabled: false } => "Continuous testing is opt-in here",
+        _ => "Verdicts from the continuous-testing sidecar",
+    };
+
+    private string ChipLabel => Tests switch
+    {
+        null => "unknown",
+        { Error: not null } => "unavailable",
+        { KillSwitchOff: true } => "off",
+        { Enabled: false } => "not enabled",
+        _ => Tests.Verdict,
+    };
+
+    private string ChipClass => Tests switch
+    {
+        { Error: not null } => "bad",
+        { KillSwitchOff: true } or { Enabled: false } => "neutral",
+        { Verdict: "green" } => "ok",
+        { Verdict: "red" } => "bad",
+        { Verdict: "partial" } => "warn",
+        _ => "neutral",
+    };
+
+    private string DisabledNotice => Tests is { ProjectsDiscovered: true, Projects.Count: > 0 }
+        ? $"Continuous testing is not enabled here — {FormatCount(Tests.Projects.Count, "test project")} discovered. Run "
+            + "miller tests enable to track verdicts."
+        : "Continuous testing is not enabled here.";
+
+    private string DaemonLabel => Tests is null
+        ? "unknown"
+        : Tests.DaemonState + " · " + Tests.DaemonActivity;
+
+    private string ProjectSourceLabel => Tests is { ProjectsDiscovered: true }
+        ? "discovered, not tracked"
+        : "tracked by continuous testing";
+
+    private string RunLabel => Tests?.DaemonRun is { } run
+        ? $"{run.ProjectPath} — {FormatCount(run.SelectedCaseCount, "case")}, child {run.ChildActivity}, "
+            + $"started {RelativeTime(run.RunStartedAtUtc, Now)}"
+        : "no run in flight";
+}

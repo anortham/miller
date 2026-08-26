@@ -9,6 +9,7 @@ using Miller.Indexing.Reads;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
+using Miller.Testing;
 
 namespace Miller.Dashboard;
 
@@ -231,6 +232,151 @@ public sealed record DashboardLocalMetricsPanel(
     [property: JsonPropertyName("clone_groups")] IReadOnlyList<DashboardMetricCloneGroup> CloneGroups,
     [property: JsonPropertyName("error")] string? Error = null);
 
+/// <summary>One test project the tests-status core reported, recorded or discovered.</summary>
+public sealed record DashboardTestsProject(
+    [property: JsonPropertyName("project_path")] string ProjectPath,
+    [property: JsonPropertyName("framework")] string? Framework,
+    [property: JsonPropertyName("enabled")] bool Enabled,
+    [property: JsonPropertyName("unsupported_reason")] string? UnsupportedReason = null);
+
+/// <summary>
+/// One red case in the same one-line shape <c>tests failures</c> renders: the test-case id plus the
+/// failure summary, which carries the exception type and message.
+/// </summary>
+public sealed record DashboardTestsFailure(
+    [property: JsonPropertyName("test_case_id")] string TestCaseId,
+    [property: JsonPropertyName("summary")] string Summary,
+    [property: JsonPropertyName("last_result_at")] string? LastResultAt = null);
+
+/// <summary>The run a live daemon is executing right now. Null when nothing runs.</summary>
+public sealed record DashboardTestsRun(
+    [property: JsonPropertyName("project_path")] string ProjectPath,
+    [property: JsonPropertyName("selected_case_count")] int SelectedCaseCount,
+    [property: JsonPropertyName("run_started_at_utc")] string RunStartedAtUtc,
+    [property: JsonPropertyName("child_activity")] string ChildActivity);
+
+/// <summary>
+/// The workspace-detail "Tests" panel model, projected from the tests-status core that backs
+/// <c>miller tests status --json</c> (<c>docs/contracts/tests-cli-v1.md</c>). The dashboard owns no CT
+/// logic of its own: every field here is a rename of a field the core returned.
+///
+/// <para><see cref="State"/> is the panel READ state — <c>ready</c> when the core answered,
+/// <c>unavailable</c> when it could not. It is not a verdict: a readable workspace with continuous
+/// testing switched off is <c>ready</c> with <see cref="Enabled"/> false.</para>
+///
+/// <para><see cref="ProjectsDiscovered"/> carries the core's never-decided rule through to the page: the
+/// listed projects then came from a filesystem scan rather than recorded CT state, so the panel says
+/// "discovered" instead of implying the workspace tracks them.</para>
+/// </summary>
+public sealed record DashboardTestsPanel(
+    [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
+    [property: JsonPropertyName("state")] string State,
+    [property: JsonPropertyName("enabled")] bool Enabled,
+    [property: JsonPropertyName("kill_switch_off")] bool KillSwitchOff,
+    [property: JsonPropertyName("projects_discovered")] bool ProjectsDiscovered,
+    [property: JsonPropertyName("projects")] IReadOnlyList<DashboardTestsProject> Projects,
+    [property: JsonPropertyName("verdict")] string Verdict,
+    [property: JsonPropertyName("selected")] string? Selected,
+    [property: JsonPropertyName("stale_count")] int StaleCount,
+    [property: JsonPropertyName("tracked_case_count")] int TrackedCaseCount,
+    [property: JsonPropertyName("last_run")] string? LastRun,
+    [property: JsonPropertyName("daemon_state")] string DaemonState,
+    [property: JsonPropertyName("daemon_reason")] string DaemonReason,
+    [property: JsonPropertyName("daemon_activity")] string DaemonActivity,
+    [property: JsonPropertyName("daemon_run")] DashboardTestsRun? DaemonRun,
+    [property: JsonPropertyName("daemon_version_mismatch")] bool DaemonVersionMismatch,
+    [property: JsonPropertyName("daemon_version_reason")] string? DaemonVersionReason,
+    [property: JsonPropertyName("daemon_loop_stalled")] bool DaemonLoopStalled,
+    [property: JsonPropertyName("daemon_loop_reason")] string? DaemonLoopReason,
+    [property: JsonPropertyName("failures")] IReadOnlyList<DashboardTestsFailure> Failures,
+    [property: JsonPropertyName("failures_truncated")] int FailuresTruncated,
+    [property: JsonPropertyName("error")] string? Error = null)
+{
+    /// <summary>
+    /// Whether anything on this panel can change on its own. Only then does the section poll: a
+    /// workspace that never decided about continuous testing re-runs the core's project scan on every
+    /// poll to report the same standing answer.
+    /// </summary>
+    [JsonIgnore]
+    public bool Watching => Enabled && !KillSwitchOff && Error is null;
+
+    public static DashboardTestsPanel Unavailable(string? workspaceId, string error) =>
+        new(
+            workspaceId,
+            "unavailable",
+            Enabled: false,
+            KillSwitchOff: false,
+            ProjectsDiscovered: false,
+            Array.Empty<DashboardTestsProject>(),
+            Verdict: "unknown",
+            Selected: null,
+            StaleCount: 0,
+            TrackedCaseCount: 0,
+            LastRun: null,
+            DaemonState: "stopped",
+            DaemonReason: "unknown",
+            DaemonActivity: "idle",
+            DaemonRun: null,
+            DaemonVersionMismatch: false,
+            DaemonVersionReason: null,
+            DaemonLoopStalled: false,
+            DaemonLoopReason: null,
+            Array.Empty<DashboardTestsFailure>(),
+            FailuresTruncated: 0,
+            Error: error);
+
+    public static DashboardTestsPanel From(
+        string? workspaceId,
+        TestsStatusResult status,
+        TestsFailuresResult? failures)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        return new DashboardTestsPanel(
+            workspaceId,
+            "ready",
+            status.Enabled,
+            status.KillSwitchOff,
+            status.ProjectsDiscovered,
+            status.Projects
+                .Select(static project => new DashboardTestsProject(
+                    project.ProjectPath,
+                    project.Framework,
+                    project.Enabled,
+                    project.UnsupportedReason))
+                .ToArray(),
+            Lower(status.Verdict.ToString()),
+            status.Selected is { } key ? TestsCore.CompactFreshness(key) : null,
+            status.StaleCount,
+            status.SelectedCount,
+            status.LastRun,
+            Lower(status.DaemonState.ToString()),
+            status.DaemonReason,
+            Lower(status.DaemonActivity.ToString()),
+            status.DaemonRun is { } run
+                ? new DashboardTestsRun(
+                    run.ProjectPath,
+                    run.SelectedCaseCount,
+                    run.RunStartedAtUtc.ToString("O", CultureInfo.InvariantCulture),
+                    Lower(run.Activity.ToString()))
+                : null,
+            status.DaemonVersion is { Mismatch: true },
+            status.DaemonVersion is { Mismatch: true } version ? version.Reason : null,
+            status.DaemonLoop is { Stalled: true },
+            status.DaemonLoop is { Stalled: true } loop ? loop.Reason : null,
+            (failures?.Failures ?? [])
+                .Select(static row => new DashboardTestsFailure(
+                    row.TestCaseId,
+                    row.FailureSummary ?? row.State.ToString(),
+                    row.LastResultAt?.ToString("O", CultureInfo.InvariantCulture)))
+                .ToArray(),
+            failures?.Truncated ?? 0);
+    }
+
+    // Every CT enum this panel renders is a single word, so the core's snake-case rendering and a
+    // lower-cased name agree; a multi-word member would need the core's own converter.
+    private static string Lower(string value) => value.ToLowerInvariant();
+}
+
 /// <summary>
 /// One metric's trend line for the workspace-detail Trends panel: the ordered per-snapshot values (already
 /// downsampled to at most <c>maxPoints</c> by the store) plus its first/latest for a compact delta label. A series
@@ -384,7 +530,8 @@ public sealed record DashboardSnapshot
         DashboardPatternInventoryPanel? PatternInventory = null,
         DashboardWorkspaceOnboardingPanel? Onboarding = null,
         DashboardLocalMetricsPanel? LocalMetrics = null,
-        DashboardWorkspaceTrendsPanel? Trends = null)
+        DashboardWorkspaceTrendsPanel? Trends = null,
+        DashboardTestsPanel? Tests = null)
     {
         this.Workspaces = Workspaces;
         this.Telemetry = Telemetry;
@@ -397,6 +544,7 @@ public sealed record DashboardSnapshot
         this.Onboarding = Onboarding;
         this.LocalMetrics = LocalMetrics;
         this.Trends = Trends;
+        this.Tests = Tests;
     }
 
     [JsonPropertyName("workspaces")]
@@ -431,6 +579,9 @@ public sealed record DashboardSnapshot
 
     [JsonPropertyName("trends")]
     public DashboardWorkspaceTrendsPanel? Trends { get; init; }
+
+    [JsonPropertyName("tests")]
+    public DashboardTestsPanel? Tests { get; init; }
 }
 
 public sealed record DashboardWorkspaceIndexEntry(
@@ -992,6 +1143,9 @@ public static class DashboardData
             DashboardWorkspaceTrendsPanel? trends = selectedWorkspace is null || selectedFacts is null
                 ? null
                 : DashboardIndexFactsReader.ReadTrends(selectedWorkspace);
+            DashboardTestsPanel? tests = selectedWorkspace is null
+                ? null
+                : ReadTestsPanel(selectedWorkspace);
             return new DashboardSnapshot(
                 workspaces,
                 telemetry,
@@ -1003,11 +1157,57 @@ public static class DashboardData
                 patternInventory,
                 onboarding,
                 localMetrics,
-                trends);
+                trends,
+                tests);
         }
         finally
         {
             storeSession?.Dispose();
+        }
+    }
+
+    /// <summary>Red cases the Tests panel lists before it reports the rest as a count.</summary>
+    private const int TestsFailurePageSize = 5;
+
+    /// <summary>
+    /// The Tests panel alone, for the fragment the section polls. It resolves the workspace from the
+    /// registry and reads nothing else — a poll must not pay for a whole snapshot. An id that names no
+    /// registered workspace returns null, which the panel renders as its no-selection state.
+    /// </summary>
+    public static DashboardTestsPanel? ReadTests(string registryDbPath, string? workspaceId)
+    {
+        if (string.IsNullOrWhiteSpace(workspaceId))
+            return null;
+
+        DashboardWorkspaceRow? workspace = ReadWorkspaces(registryDbPath)
+            .FirstOrDefault(row => string.Equals(row.WorkspaceId, workspaceId, StringComparison.Ordinal));
+        return workspace is null ? null : ReadTestsPanel(workspace);
+    }
+
+    /// <summary>
+    /// Reads the Tests panel through the same core that backs <c>miller tests status --json</c>, so the
+    /// dashboard reproduces no CT logic. The read creates nothing: no <c>ct.db</c>, no <c>.miller/ct/</c>,
+    /// no daemon. It hydrates no index either — the core opens the artifact only for the live freshness
+    /// cursor and closes it again, which is what ADR-0002 permits.
+    /// </summary>
+    private static DashboardTestsPanel ReadTestsPanel(DashboardWorkspaceRow workspace)
+    {
+        var request = new TestsCoreRequest(workspace.CanonicalRoot, workspace.WorkspaceId);
+        try
+        {
+            TestsStatusResult status = TestsCore.Status(request);
+            // The kill switch is a zero-WORK guarantee: no second ct.db open to list failures either.
+            TestsFailuresResult? failures = status.KillSwitchOff
+                ? null
+                : TestsCore.Failures(request, maxItems: TestsFailurePageSize);
+            return DashboardTestsPanel.From(workspace.WorkspaceId, status, failures);
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or KeyNotFoundException or SqliteException or IOException
+                or InvalidOperationException or UnauthorizedAccessException or IncompatibleExtractException
+                or ContinuousTestStoreSchemaException or ContinuousTestStoreUnreadableException)
+        {
+            return DashboardTestsPanel.Unavailable(workspace.WorkspaceId, ex.Message);
         }
     }
 

@@ -401,6 +401,12 @@ html[data-theme="dark"] .theme-label-light { display: inline; }
   background: var(--surface-inset);
 }
 
+.panel-heading-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .panel-heading p {
   margin: 3px 0 0;
   color: var(--muted);
@@ -491,6 +497,12 @@ html[data-theme="dark"] .theme-label-light { display: inline; }
   color: var(--accent-ink);
   background: var(--accent-soft);
   border-color: var(--accent);
+}
+
+.workspace-state.warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: var(--warn);
 }
 
 .workspace-state.bad,
