@@ -9,6 +9,22 @@ public enum StoreRequestState
     Committed,
     Acknowledged,
     Failed,
+
+    /// <summary>
+    /// julie-extract ≥ 2.37.0 refused the file at its discovery gate: no queue row was written, the process
+    /// exited 0, and <c>failure_class</c> is <c>none</c>. Terminal, and never a failure — the file is one a
+    /// full <c>scan</c> would also skip. The reason rides in <see cref="StoreRequestResult.Unsupported"/>.
+    /// </summary>
+    Unsupported,
+}
+
+/// <summary>Why julie-extract's discovery gate refused a <c>store update</c> target.</summary>
+public sealed record StoreUnsupported(string Reason, string RootRelativePath, string Message)
+{
+    public const string IgnoredReason = "ignored";
+    public const string HardExcludedReason = "hard_excluded";
+    public const string UnsupportedExtensionReason = "unsupported_extension";
+    public const string OversizedReason = "oversized";
 }
 
 public enum StoreManifestDisposition
@@ -65,7 +81,8 @@ public sealed record StoreRequestResult(
     StoreExportResult? Export,
     StoreCoordinatorDisposition Coordinator,
     StoreFailure Failure,
-    int ExitCode);
+    int ExitCode,
+    StoreUnsupported? Unsupported = null);
 
 internal sealed class StoreReportDto
 {
@@ -81,6 +98,7 @@ internal sealed class StoreReportDto
     public StoreManifestResultDto? Manifest { get; init; }
     public StoreRowCountsDto? RowCounts { get; init; }
     public StoreExportResultDto? Export { get; init; }
+    public StoreUnsupportedDto? Unsupported { get; init; }
     public string? Coordinator { get; init; }
     public string? FailureClass { get; init; }
     public StoreErrorDto? Error { get; init; }
@@ -118,6 +136,13 @@ internal sealed class StoreExportResultDto
 {
     public string? Output { get; init; }
     public string? Disposition { get; init; }
+}
+
+internal sealed class StoreUnsupportedDto
+{
+    public string? Reason { get; init; }
+    public string? RootRelativePath { get; init; }
+    public string? Message { get; init; }
 }
 
 internal sealed class StoreErrorDto

@@ -598,6 +598,10 @@ public sealed class JulieStoreClient : IJulieStoreClient
         StoreManifestResultDto manifest = dto.Manifest ?? throw ContractFailure("Store report omitted manifest.");
         StoreRowCountsDto rowCounts = dto.RowCounts ?? throw ContractFailure("Store report omitted row_counts.");
 
+        StoreRequestState state = ParseState(dto.State);
+        if (state is StoreRequestState.Unsupported && dto.Unsupported is null)
+            throw ContractFailure("An unsupported store report omitted the unsupported object.", exitCode);
+
         return new StoreRequestResult(
             dto.ReportSchemaVersion.Value,
             operation,
@@ -605,7 +609,7 @@ public sealed class JulieStoreClient : IJulieStoreClient
             RequireText(dto.FamilyId, "family_id"),
             RequireText(dto.ViewId, "view_id"),
             dto.Root ?? throw ContractFailure("Store report omitted root."),
-            ParseState(dto.State),
+            state,
             ParseLevel(dto.RequestedLevel),
             new StoreLevelCompletion(completion.L1, completion.L2, completion.L3),
             new StoreManifestResult(
@@ -620,7 +624,13 @@ public sealed class JulieStoreClient : IJulieStoreClient
                     RequireText(dto.Export.Disposition, "export.disposition")),
             ParseCoordinator(dto.Coordinator),
             new StoreFailure(failureClass, dto.Error?.Message),
-            exitCode);
+            exitCode,
+            dto.Unsupported is null
+                ? null
+                : new StoreUnsupported(
+                    RequireText(dto.Unsupported.Reason, "unsupported.reason"),
+                    RequireText(dto.Unsupported.RootRelativePath, "unsupported.root_relative_path"),
+                    RequireText(dto.Unsupported.Message, "unsupported.message")));
     }
 
     internal static StoreRequestResult Interpret(
@@ -765,6 +775,7 @@ public sealed class JulieStoreClient : IJulieStoreClient
         "committed" => StoreRequestState.Committed,
         "acknowledged" => StoreRequestState.Acknowledged,
         "failed" => StoreRequestState.Failed,
+        "unsupported" => StoreRequestState.Unsupported,
         _ => throw ContractFailure($"Unknown store request state '{value ?? "null"}'."),
     };
 

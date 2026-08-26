@@ -17,16 +17,23 @@ public sealed record StoreWorkspaceState(long StoreLogSequence, string IndexLeve
 /// One incremental comparison of the workspace tree against the store's manifest.
 ///
 /// <para><b>The two loops are deliberately asymmetric (load-bearing).</b> The STORED loop compares hashes for
-/// paths the manifest already lists and applies no eligibility gate at all: julie-extract's <c>update</c>
-/// retires the rows of a file that became ignored, unsupported, or oversized, so a gate there would leave
-/// stale symbols serving forever. The DISCOVERY loop applies julie-extract's full discovery rule
-/// (<see cref="WatchPathFilter.IsDiscoverableSource"/>) plus Miller's refusal memory, because a file julie
-/// refuses never enters the manifest and so is rediscovered — and re-submitted — on every single pass.</para>
+/// paths the manifest already lists and applies no eligibility gate of its own, so a file whose rows julie is
+/// still willing to retire always reaches it. The DISCOVERY loop applies julie-extract's full discovery rule
+/// (<see cref="WatchPathFilter.IsDiscoverableSource"/>), because a file julie refuses never enters the
+/// manifest and so is rediscovered — and re-submitted — on every single pass.</para>
+///
+/// <para><b>Both loops consult the refusal memory (load-bearing).</b> It used to gate only discovery, on the
+/// premise that julie-extract's <c>update</c> retires the rows of a manifest file that became ignored or
+/// oversized — so a refusal there was julie's to record, never Miller's to remember. julie-extract ≥ 2.37.0
+/// runs the scan discovery gate BEFORE it reads an update target, which ends that premise: such a file now
+/// reports <c>unsupported</c> and keeps both its stale rows and its stale manifest hash, so the stored loop
+/// sees the same mismatch and resubmits it on every pass, forever. Remembering the refusal at its CURRENT
+/// content hash stops the loop while still resubmitting the moment the file changes again — including the
+/// change that brings it back under the limit.</para>
 /// </summary>
 /// <param name="ChangedOrAdded">Every path to submit as an update, stored-and-changed plus newly discovered.</param>
 /// <param name="Deleted">Manifest paths whose file no longer exists.</param>
-/// <param name="Added">The subset of <paramref name="ChangedOrAdded"/> the manifest did not list. Only these
-/// paths can be recorded as refusals — a manifest path is julie's to retire, never Miller's to forget.</param>
+/// <param name="Added">The subset of <paramref name="ChangedOrAdded"/> the manifest did not list.</param>
 internal readonly record struct StoreTreeDelta(
     IReadOnlyList<string> ChangedOrAdded,
     IReadOnlyList<string> Deleted,
@@ -62,7 +69,8 @@ internal readonly record struct StoreTreeDelta(
             if (!string.Equals(
                     ContentHasher.NormalizeHash(storedHash),
                     ContentHasher.Blake3FileHex(absolutePath),
-                    StringComparison.Ordinal))
+                    StringComparison.Ordinal)
+                && !WasRefusedUnchanged(refusals, relativePath, absolutePath))
             {
                 changedOrAdded.Add(relativePath);
             }
@@ -75,15 +83,8 @@ internal readonly record struct StoreTreeDelta(
             string relativePath = Path.GetRelativePath(root, absolutePath).Replace(Path.DirectorySeparatorChar, '/');
             if (stored.ContainsKey(relativePath))
                 continue;
-            if (refusals is not null
-                && refusals.TryGetValue(relativePath, out string? refusedHash)
-                && string.Equals(
-                    ContentHasher.NormalizeHash(refusedHash),
-                    ContentHasher.Blake3FileHex(absolutePath),
-                    StringComparison.Ordinal))
-            {
+            if (WasRefusedUnchanged(refusals, relativePath, absolutePath))
                 continue;
-            }
 
             changedOrAdded.Add(relativePath);
             added.Add(relativePath);
@@ -93,6 +94,17 @@ internal readonly record struct StoreTreeDelta(
         deleted.Sort(StringComparer.Ordinal);
         return new StoreTreeDelta(changedOrAdded, deleted, added);
     }
+
+    private static bool WasRefusedUnchanged(
+        IReadOnlyDictionary<string, string>? refusals,
+        string relativePath,
+        string absolutePath) =>
+        refusals is not null
+        && refusals.TryGetValue(relativePath, out string? refusedHash)
+        && string.Equals(
+            ContentHasher.NormalizeHash(refusedHash),
+            ContentHasher.Blake3FileHex(absolutePath),
+            StringComparison.Ordinal);
 }
 
 public sealed class StoreWorkspaceOperationException(
@@ -535,6 +547,10 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         bool anyCreated = false;
         var refused = new List<StoreRefusalEntry>();
         var published = new List<string>();
+        // A published path is only worth reporting when the ledger actually remembers it: the stored loop now
+        // consults that memory too, so a surviving entry whose file later returns to the refused CONTENT would
+        // skip a real revert. Reading first keeps the empty-ledger case a pure no-op write.
+        IReadOnlyDictionary<string, string> recordedRefusals = _refusals.Read();
 
         using (var importPhase = new IndexerPhaseScope(_phaseSink, IndexerPhaseNames.Import))
         {
@@ -563,10 +579,10 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
                         changedFiles++;
                         anyCreated = true;
                         importDidWork = true;
-                        if (delta.IsAdded(relativePath))
+                        if (recordedRefusals.ContainsKey(relativePath))
                             published.Add(relativePath);
                     }
-                    else if (delta.IsAdded(relativePath))
+                    else if (result.State is StoreRequestState.Unsupported || delta.IsAdded(relativePath))
                     {
                         refused.Add(new StoreRefusalEntry(relativePath, contentHash));
                     }
@@ -804,11 +820,20 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     /// <para>A nonzero exit AFTER a commit says something about the producer's post-commit bookkeeping, not
     /// about the data — and the data is what Miller reads. A genuinely failed request reports
     /// <see cref="StoreRequestState.Failed"/>, which is still a hard failure here.</para>
+    ///
+    /// <para><b><see cref="StoreRequestState.Unsupported"/> is a refusal, not a failure.</b> julie-extract
+    /// ≥ 2.37.0 runs the scan discovery gate before it reads an <c>update</c> target, so a file a full scan
+    /// would also skip exits 0 with <c>failure_class=none</c> and no queue row at all. Throwing here would
+    /// abort a whole delta over one generated or oversized file; the caller records the refusal instead, which
+    /// is what stops the next pass resubmitting it.</para>
     /// </summary>
     private static void RequireCommitted(StoreRequest request, StoreRequestResult result)
     {
         // Durable outcomes win outright. Do NOT add an exit-code test to this branch.
         if (result.State is StoreRequestState.Committed or StoreRequestState.Acknowledged)
+            return;
+
+        if (result.State is StoreRequestState.Unsupported && result.ExitCode == 0)
             return;
 
         if (result.State is StoreRequestState.Failed || result.ExitCode != 0)
@@ -839,19 +864,29 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     /// the entry makes the retry re-submit the SAME request id, which julie dedupes against the row already
     /// there. A non-retryable failure is a real terminal outcome and still retires the entry, so the next
     /// attempt is a genuinely new request.</para>
+    ///
+    /// <para><b>A <see cref="StoreRequestState.Failed"/> row is terminal in julie's coordinator, whatever its
+    /// failure class (load-bearing).</b> The retryable rule above must therefore be read as "keep the entry
+    /// while the row can still move", and only a <c>queued</c>/<c>claimed</c> row can. julie-extract ≥ 2.37.0
+    /// caps a quantum overrun at three: the first two REQUEUE the row (state <c>queued</c>, class
+    /// <c>coordinator_quantum</c> — non-terminal, entry kept, and the retry's identical request id lets the
+    /// per-row <c>quantum_overruns</c> counter keep counting instead of restarting), the third FAILS it. From
+    /// there <c>request_by_idempotency</c> still finds the row and <c>adopt_live_request</c> returns a terminal
+    /// row unchanged, so resubmitting the same id can only ever replay the same failure — the retry never
+    /// re-executes and the workspace never indexes again. Retiring the entry mints a fresh id, which is the
+    /// only way the work can run at all; the persisted scan-failure backoff is what bounds how often it
+    /// does.</para>
     /// </summary>
     private void RequireCommittedAndCompleteJournal(StoreRequest request, StoreRequestResult result)
     {
-        bool terminal = result.State is StoreRequestState.Committed
-            or StoreRequestState.Acknowledged
-            or StoreRequestState.Failed;
+        bool terminal = IsTerminalState(result.State);
         try
         {
             RequireCommitted(request, result);
         }
-        catch (Exception failure)
+        catch
         {
-            if (terminal && !StoreWorkspaceOperationException.IsRetryableProducerFailure(failure))
+            if (terminal)
             {
                 try
                 {
@@ -872,6 +907,17 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         if (terminal)
             _requestJournal?.Complete(RequestControls(request).RequestId);
     }
+
+    /// <summary>
+    /// True when julie's coordinator row can never move again, so a retry that replays its idempotency key
+    /// could only ever read the same outcome back. <c>queued</c> and <c>claimed</c> rows are excluded: those a
+    /// retry legitimately re-adopts, which is what keeps a requeued quantum overrun counting on one row.
+    /// </summary>
+    private static bool IsTerminalState(StoreRequestState state) =>
+        state is StoreRequestState.Committed
+            or StoreRequestState.Acknowledged
+            or StoreRequestState.Failed
+            or StoreRequestState.Unsupported;
 
     private ExtractReport Report(
         StoreRequestResult result,

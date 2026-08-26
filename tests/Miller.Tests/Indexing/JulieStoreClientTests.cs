@@ -399,6 +399,37 @@ public sealed class JulieStoreClientTests
     }
 
     [Fact]
+    public void ParseReportReadsTheDiscoveryRefusalAsATerminalUnsupportedState()
+    {
+        StoreRequestResult result = JulieStoreClient.ParseReport(UnsupportedReport, StoreOperation.Update, 0);
+
+        Assert.Equal(StoreRequestState.Unsupported, result.State);
+        Assert.Equal(StoreCoordinatorDisposition.NotStarted, result.Coordinator);
+        Assert.Equal(StoreFailureClass.None, result.Failure.Class);
+        Assert.Equal(StoreManifestDisposition.NotPublished, result.Manifest.Disposition);
+        Assert.Equal(
+            new StoreUnsupported(
+                StoreUnsupported.OversizedReason,
+                "sub/big.rs",
+                "source file exceeds the 1048576-byte extraction limit and was skipped"),
+            result.Unsupported);
+    }
+
+    [Fact]
+    public void ParseReportRejectsAnUnsupportedStateThatNamesNoReason()
+    {
+        string json = UnsupportedReport.Replace(
+            """
+            ,"unsupported":{"reason":"oversized","root_relative_path":"sub/big.rs","message":"source file exceeds the 1048576-byte extraction limit and was skipped"}
+            """,
+            string.Empty,
+            StringComparison.Ordinal);
+
+        Assert.Throws<JulieStoreContractException>(
+            () => JulieStoreClient.ParseReport(json, StoreOperation.Update, 0));
+    }
+
+    [Fact]
     public void ParseReportReturnsTypedOperationalFailure()
     {
         StoreRequestResult result = JulieStoreClient.ParseReport(FailedReport, StoreOperation.Update, 1);
@@ -596,6 +627,11 @@ public sealed class JulieStoreClientTests
 
     private const string SuccessReport = """
         {"report_schema_version":1,"operation":"import","request":{"id":"request-a","idempotency_key":"key-a"},"family_id":"11111111-1111-4111-8111-111111111111","view_id":"view-a","root":"/workspace","state":"committed","requested_level":"l1","completion":{"l1":true,"l2":false,"l3":false},"manifest":{"generation":4,"hash":"abc123","disposition":"created"},"row_counts":{"file_versions":2,"l1":30,"l2":0,"l3":0},"resolution":{"state":"unbound","exact_at_matches":false},"coordinator":"committed","failure_class":"none","error":null}
+        """;
+
+    // Captured verbatim from julie-extract 2.37.0 refusing an oversized file at its discovery gate.
+    private const string UnsupportedReport = """
+        {"report_schema_version":1,"operation":"update","request":{"id":"request-a","idempotency_key":"request-a"},"family_id":"11111111-1111-4111-8111-111111111111","view_id":"view-a","root":"/workspace","state":"unsupported","requested_level":"full","completion":{"l1":false,"l2":false,"l3":false},"manifest":{"generation":null,"hash":null,"disposition":"not_published"},"row_counts":{"file_versions":0,"l1":0,"l2":0,"l3":0},"unsupported":{"reason":"oversized","root_relative_path":"sub/big.rs","message":"source file exceeds the 1048576-byte extraction limit and was skipped"},"coordinator":"not_started","failure_class":"none","error":null}
         """;
 
     private const string FailedReport = """

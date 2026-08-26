@@ -204,14 +204,14 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
-    public void ARetryableFailureKeepsTheJournalSoTheRetryReusesTheRequestId()
+    public void ARequeuedQuantumOverrunKeepsTheJournalSoTheRetryReusesTheRequestId()
     {
         using var workspace = new TempWorkspace();
         var client = new RecordingStoreClient(
             StoreOperation.Update,
             exitCode: 1,
             failureClass: StoreWorkspaceOperationException.CoordinatorQuantumFailureCode,
-            stateOverride: StoreRequestState.Failed);
+            stateOverride: StoreRequestState.Queued);
         StoreWorkspaceCoordinator coordinator = workspace.Coordinator(client);
 
         Assert.Throws<StoreWorkspaceOperationException>(() => coordinator.Update(workspace.SourcePath));
@@ -223,6 +223,45 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.Equal(
             ((StoreUpdateRequest)client.Requests[0]).Request.RequestId,
             ((StoreUpdateRequest)client.Requests[1]).Request.RequestId);
+    }
+
+    [Fact]
+    public void AFailedQuantumRequestRetiresTheJournalBecauseJulieCanNeverMoveThatRowAgain()
+    {
+        using var workspace = new TempWorkspace();
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            exitCode: 1,
+            failureClass: StoreWorkspaceOperationException.CoordinatorQuantumFailureCode,
+            stateOverride: StoreRequestState.Failed);
+        StoreWorkspaceCoordinator coordinator = workspace.Coordinator(client);
+
+        StoreWorkspaceOperationException failure = Assert.Throws<StoreWorkspaceOperationException>(
+            () => coordinator.Update(workspace.SourcePath));
+        Assert.True(failure.IsRetryable);
+        Assert.Empty(Directory.GetFiles(workspace.JournalDirectory, "*.json"));
+        Assert.Throws<StoreWorkspaceOperationException>(() => coordinator.Update(workspace.SourcePath));
+
+        Assert.Equal(2, client.Requests.Count);
+        Assert.NotEqual(
+            ((StoreUpdateRequest)client.Requests[0]).Request.RequestId,
+            ((StoreUpdateRequest)client.Requests[1]).Request.RequestId);
+    }
+
+    [Fact]
+    public void AnUnsupportedUpdateIsARefusalRatherThanAFailure()
+    {
+        using var workspace = new TempWorkspace();
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            manifestDisposition: StoreManifestDisposition.NotPublished,
+            stateOverride: StoreRequestState.Unsupported);
+        StoreWorkspaceCoordinator coordinator = workspace.Coordinator(client);
+
+        ExtractReport report = coordinator.Update(workspace.SourcePath);
+
+        Assert.Equal("no_change", report.Status);
+        Assert.Empty(Directory.GetFiles(workspace.JournalDirectory, "*.json"));
     }
 
     [Fact]
@@ -773,6 +812,70 @@ public sealed class StoreWorkspaceCoordinatorTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void Diff_SkipsARefusedManifestPathUntilItsContentChanges()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-tree-delta-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        try
+        {
+            string source = Path.Combine(root, "src", "Grew.cs");
+            File.WriteAllText(source, "class Grew;");
+            var stored = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["src/Grew.cs"] = "blake3:0000000000000000000000000000000000000000000000000000000000000000",
+            };
+            var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs" };
+            var refusals = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["src/Grew.cs"] = ContentHasher.Blake3FileHex(source),
+            };
+
+            Assert.Empty(StoreTreeDelta.Diff(stored, root, extensions, refusals).ChangedOrAdded);
+
+            File.WriteAllText(source, "class Grew { }");
+
+            Assert.Equal(
+                ["src/Grew.cs"],
+                StoreTreeDelta.Diff(stored, root, extensions, refusals).ChangedOrAdded);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AnUnsupportedManifestPathIsRememberedSoTheStoredLoopStopsResubmittingIt()
+    {
+        using var workspace = new TempWorkspace();
+        string relativePath = Path.GetRelativePath(workspace.Root, workspace.SourcePath)
+            .Replace(Path.DirectorySeparatorChar, '/');
+        var stored = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [relativePath] = "blake3:0000000000000000000000000000000000000000000000000000000000000000",
+        };
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs" };
+        var ledger = new StoreRefusalLedger(workspace.Root);
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            manifestDisposition: StoreManifestDisposition.NotPublished,
+            stateOverride: StoreRequestState.Unsupported);
+        StoreWorkspaceCoordinator coordinator = workspace.Coordinator(
+            client,
+            () => StoreTreeDelta.Diff(stored, workspace.Root, extensions, ledger.Read()));
+
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+        Assert.Single(client.Requests);
+
+        coordinator.Scan(ScanIntent.IncrementalReconcile, jobs: 1);
+        Assert.Single(client.Requests);
+
+        Assert.Equal(
+            ContentHasher.Blake3FileHex(workspace.SourcePath),
+            Assert.Contains(relativePath, ledger.Read()));
     }
 
     [Fact]

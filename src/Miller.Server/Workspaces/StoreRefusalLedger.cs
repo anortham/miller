@@ -13,8 +13,14 @@ internal sealed record StoreRefusalLedgerDocument(int SchemaVersion, IReadOnlyLi
 /// <para>A discovered file whose <c>update</c> comes back with any disposition other than
 /// <see cref="Miller.Indexing.Store.StoreManifestDisposition.Created"/> did not enter the manifest. The next
 /// tree diff therefore finds it missing again and submits it again — one coordinator request per pass, with
-/// nothing in the loop that can ever break it. The ledger remembers the (path, content hash) pair so the
-/// discovery loop skips it EXACTLY until the file's content changes.</para>
+/// nothing in the loop that can ever break it. The ledger remembers the (path, content hash) pair so the tree
+/// diff skips it EXACTLY until the file's content changes.</para>
+///
+/// <para>julie-extract ≥ 2.37.0 reports such a refusal EXPLICITLY, as the terminal state
+/// <see cref="Miller.Indexing.Store.StoreRequestState.Unsupported"/> with a reason, exit 0, and no queue row
+/// at all. That state is recorded here for a MANIFEST path as well as a discovered one: the same release moved
+/// the discovery gate ahead of the read, so an update can no longer retire the rows of a file that grew past
+/// the limit, and the stored-hash mismatch that used to be self-clearing would otherwise repeat forever.</para>
 ///
 /// <para>The key is the content hash, not the path, so the memory can never mask an extractor regression for
 /// more than the one refused revision of the file: any edit, and any fixed extractor re-running against
