@@ -52,7 +52,7 @@ public sealed class DurableFreshnessTests : IDisposable
     }
 
     [Fact]
-    public void Advance_skips_cases_not_fresh_at_the_from_key()
+    public void Advance_seeds_greens_committed_below_the_from_key_and_skips_uncommitted_cases()
     {
         using var store = new ContinuousTestStore(DbPath);
         SeedProviderCase(store, "committed-at-from", ProjectA());
@@ -76,9 +76,46 @@ public sealed class DurableFreshnessTests : IDisposable
 
         IReadOnlyDictionary<string, CtFreshnessKey> watermarks = store.ListContinuousTestFreshWatermarks(Workspace, Identity);
         Assert.Equal(273, watermarks["committed-at-from"].Revision);
-        Assert.False(watermarks.ContainsKey("committed-below-from"));
+        Assert.Equal(273, watermarks["committed-below-from"].Revision);
         Assert.False(watermarks.ContainsKey("running"));
         Assert.False(watermarks.ContainsKey("never-run"));
+    }
+
+    [Fact]
+    public void Older_green_stays_fresh_across_empty_advances_and_stale_count_does_not_move()
+    {
+        using var store = CreateStoreWithProviderCase("test:1", ProjectA());
+        CommitGreen(store, "test:1", Identity, 200);
+
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(267), Key(273), [], ContinuousTestSelectionOutcome.KnownEmpty);
+
+        Assert.Equal(273, store.ListContinuousTestFreshWatermarks(Workspace, Identity)["test:1"].Revision);
+        ContinuousTestProjectedStatus projected = ProjectedAt(store, Key(273));
+        Assert.Equal(ContinuousTestVerdict.Green, projected.Verdict);
+        Assert.Equal(0, projected.StaleCount);
+
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(273), Key(280), [], ContinuousTestSelectionOutcome.KnownEmpty);
+
+        Assert.Equal(280, store.ListContinuousTestFreshWatermarks(Workspace, Identity)["test:1"].Revision);
+        projected = ProjectedAt(store, Key(280));
+        Assert.Equal(ContinuousTestVerdict.Green, projected.Verdict);
+        Assert.Equal(0, projected.StaleCount);
+    }
+
+    [Fact]
+    public void Seeded_green_does_not_ride_when_the_advance_names_it_impacted()
+    {
+        using var store = CreateStoreWithProviderCase("test:1", ProjectA());
+        CommitGreen(store, "test:1", Identity, 200);
+
+        store.ApplyRevisionAdvance(
+            Workspace, ProjectA(), Key(267), Key(273), ["test:1"], ContinuousTestSelectionOutcome.Impacted);
+
+        Assert.Empty(store.ListContinuousTestFreshWatermarks(Workspace, Identity));
+        ContinuousTestProjectedStatus projected = ProjectedAt(store, Key(273));
+        Assert.Equal(1, projected.StaleCount);
     }
 
     [Fact]
@@ -88,9 +125,13 @@ public sealed class DurableFreshnessTests : IDisposable
         SeedProviderCase(store, "green", ProjectA());
         SeedProviderCase(store, "red", ProjectA());
         SeedProviderCase(store, "skipped", ProjectA());
+        SeedProviderCase(store, "red-below-from", ProjectA());
+        SeedProviderCase(store, "skipped-below-from", ProjectA());
         CommitGreen(store, "green", Identity, 267);
         CommitResult(store, "red", Identity, 267, "failed");
         CommitResult(store, "skipped", Identity, 267, "skipped");
+        CommitResult(store, "red-below-from", Identity, 200, "failed");
+        CommitResult(store, "skipped-below-from", Identity, 200, "skipped");
 
         store.ApplyRevisionAdvance(
             Workspace, ProjectA(), Key(267), Key(273), [], ContinuousTestSelectionOutcome.KnownEmpty);
@@ -99,10 +140,11 @@ public sealed class DurableFreshnessTests : IDisposable
         Assert.Equal(273, watermarks["green"].Revision);
         Assert.False(watermarks.ContainsKey("red"));
         Assert.False(watermarks.ContainsKey("skipped"));
+        Assert.False(watermarks.ContainsKey("red-below-from"));
+        Assert.False(watermarks.ContainsKey("skipped-below-from"));
 
-        // The red stays red and stale at the new key until its test reruns.
         ContinuousTestProjectedStatus projected = ProjectedAt(store, Key(273));
-        Assert.Equal(2, projected.StaleCount);
+        Assert.Equal(4, projected.StaleCount);
         Assert.Equal(ContinuousTestVerdict.Partial, projected.Verdict);
     }
 

@@ -887,6 +887,16 @@ public sealed partial class ContinuousTestStore
     /// The watermark write. Private on purpose: <see cref="ApplyRevisionAdvance"/> is the only
     /// path that may advance watermarks, so staleness and advance stay one atomic unit. The keep
     /// predicate is GREEN-ONLY — a red or skipped row never rides the watermark.
+    ///
+    /// <para>A green committed on the SAME index identity seeds a watermark at the advance target
+    /// regardless of its committed revision: staleness ran first in this transaction, so every
+    /// surviving green is one the interval provably cannot reach. The old seed arm required
+    /// <c>last_run_revision &gt;= $from</c>, which is false the moment the cursor outruns the last
+    /// run — on live workspaces it never matched, no watermark ever seeded, and every revision
+    /// bump read all-stale (2026-08-26 dogfood finding 5). Callers uphold the matching invariant:
+    /// the saved poll cursor never advances past a revision whose staleness consequences were not
+    /// applied, so seeding at or below <paramref name="from"/> never crosses an unreconciled
+    /// interval.</para>
     /// </summary>
     private void AdvanceContinuousTestFreshWatermark(
         string workspaceId,
@@ -913,9 +923,7 @@ public sealed partial class ContinuousTestStore
                   AND json_extract(tc.metadata_json, '$.ct_project_path') = $project
                   AND s.state = 'green'
                   AND (
-                        (s.index_identity = $identity
-                            AND s.last_run_revision IS NOT NULL
-                            AND CAST(s.last_run_revision AS INTEGER) >= $from)
+                        (s.index_identity = $identity AND s.last_run_revision IS NOT NULL)
                         OR (w.revision IS NOT NULL AND w.revision >= $from)
                   )
                 ON CONFLICT(test_case_id, index_identity) DO UPDATE SET

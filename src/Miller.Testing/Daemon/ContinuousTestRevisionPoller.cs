@@ -283,6 +283,19 @@ public sealed class ContinuousTestRevisionPoller
 
         IReadOnlyList<ContinuousTestProjectWorkItem> workItems =
             ContinuousTestProjectInventory.MaterializeProjectWorkItems(request.Projects, request.WorkspaceRoot);
+        if (workItems.Count == 0)
+        {
+            // The enqueuer's ApplyRevisionAdvance is what makes an interval's staleness land, and
+            // it runs once per work item. With zero work items nothing landed, so the cursor must
+            // stay put: saving here would let the next advance seed green watermarks across an
+            // interval nobody reconciled.
+            return Result(request.WorkspaceId, freshness, observation.Status, 0, "no_projects") with
+            {
+                DeltaFromRevision = from,
+                DeltaToRevision = to,
+            };
+        }
+
         int enqueued = 0;
         int selected = 0;
         IReadOnlyList<string> normalized = ContinuousTestDurableFreshness.NormalizeDeltaPaths(impact.ChangedPaths);
@@ -315,7 +328,7 @@ public sealed class ContinuousTestRevisionPoller
             freshness,
             observation.Status,
             enqueued,
-            empty ? "no_source_delta" : enqueued > 0 ? "enqueued" : "no_projects")
+            empty ? "no_source_delta" : "enqueued")
         {
             SelectedTests = selected,
             DeltaReason = empty ? impact.Reason ?? "no_source_delta" : null,

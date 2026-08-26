@@ -166,6 +166,103 @@ public sealed class ContinuousTestRevisionPollerTests
     }
 
     [Fact]
+    public async Task Poll_without_projects_leaves_the_saved_cursor_at_the_reconciled_revision()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-no-projects-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            var persisted = new CtFreshnessKey(EngineTestSupport.Identity, 2);
+            store.SaveLastReconciledCursor(EngineTestSupport.WorkspaceId, persisted);
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(Observation(3));
+            var impact = new ScriptedImpactSource
+            {
+                Result = new ContinuousTestImpactResult(
+                    EngineTestSupport.WorkspaceId,
+                    ["src/App.cs"],
+                    [new ContinuousTestImpactedSymbol(Name: "App", Path: "src/App.cs")],
+                    [new ContinuousTestImpactedTest(Name: "AppTests", Path: "tests/AppTests.cs")])
+                {
+                    Outcome = ContinuousTestImpactOutcome.Changed,
+                    FromRevision = 2,
+                    ToRevision = 3,
+                },
+            };
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(source, impact, cursorStore: store);
+
+            ContinuousTestRevisionPollResult first = await poller.PollAsync(
+                new ContinuousTestRevisionPollRequest(
+                    EngineTestSupport.WorkspaceId,
+                    workspace.WorkspaceRoot,
+                    [],
+                    enqueuer,
+                    EnqueueArmed: true),
+                TestContext.Current.CancellationToken);
+
+            Assert.Empty(enqueuer.Changes);
+            Assert.Equal(0, first.EnqueuedProjects);
+            Assert.Equal("no_projects", first.Reason);
+            Assert.Equal(persisted, store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+
+            ContinuousTestRevisionPollResult second = await poller.PollAsync(
+                Request(workspace, enqueuer, armed: true),
+                TestContext.Current.CancellationToken);
+
+            ContinuousTestDaemonChange change = Assert.Single(enqueuer.Changes);
+            Assert.Equal("enqueued", second.Reason);
+            Assert.Equal(2, change.DeltaFromRevision);
+            Assert.Equal(3, change.DeltaToRevision);
+            Assert.Equal(new CtFreshnessKey(EngineTestSupport.Identity, 3),
+                store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Unavailable_delta_leaves_the_saved_cursor_unchanged()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-unavailable-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            var persisted = new CtFreshnessKey(EngineTestSupport.Identity, 2);
+            store.SaveLastReconciledCursor(EngineTestSupport.WorkspaceId, persisted);
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(Observation(3));
+            var impact = new ScriptedImpactSource
+            {
+                Result = new ContinuousTestImpactResult(EngineTestSupport.WorkspaceId, [], [], [])
+                {
+                    Outcome = ContinuousTestImpactOutcome.Unavailable,
+                    Reason = "bridge_error",
+                },
+            };
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(source, impact, cursorStore: store);
+
+            ContinuousTestRevisionPollResult result = await poller.PollAsync(
+                Request(workspace, enqueuer, armed: true),
+                TestContext.Current.CancellationToken);
+
+            Assert.Empty(enqueuer.Changes);
+            Assert.Equal("unavailable_delta", result.Reason);
+            Assert.Equal("bridge_error", result.DeltaReason);
+            Assert.Equal(persisted, store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public async Task Restart_identity_mismatch_does_not_persist_an_unreconciled_cursor()
     {
         string root = Directory.CreateTempSubdirectory("miller-ct-restart-identity-").FullName;
