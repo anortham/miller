@@ -1,0 +1,121 @@
+{
+  "action_verdict": "fail",
+  "baseline": {
+    "median_tool_calls": 4.5,
+    "median_tool_output_tokens": 5181.5,
+    "p75_duration_ms": 73116.0
+  },
+  "by_capability": {},
+  "by_language": {},
+  "by_repo": {},
+  "by_workflow": {},
+  "candidate": {
+    "median_tool_calls": 4.0,
+    "median_tool_output_tokens": 4382.5,
+    "p75_duration_ms": 62412.0
+  },
+  "completion": {
+    "baseline_only": 2,
+    "both_correct": 6,
+    "candidate_only": 0,
+    "neither_correct": 7
+  },
+  "contract_id": "takeover-evaluation-v1",
+  "corpus_role": "calibration",
+  "correctness": {
+    "baseline_correct_count": 8,
+    "baseline_wrong_action_rate": 0.13333333333333333,
+    "baseline_wrong_action_task_count": 2,
+    "candidate_correct_count": 6,
+    "candidate_wrong_action_rate": 0.13333333333333333,
+    "candidate_wrong_action_task_count": 2,
+    "critical_loss_count": 2,
+    "verdict": "fail"
+  },
+  "decision_scope": "full",
+  "decision_verdict": "not_decisional",
+  "efficiency": {
+    "both_correct_task_count": 6,
+    "call_route_passed": false,
+    "measurable": true,
+    "token_route_passed": false,
+    "verdict": "fail",
+    "wall_guard_passed": true
+  },
+  "failure_counts": {
+    "baseline": {
+      "budget_exceeded": 3,
+      "incorrect": 6,
+      "insufficient_evidence": 1
+    },
+    "candidate": {
+      "budget_exceeded": 2,
+      "incorrect": 8,
+      "insufficient_evidence": 3,
+      "product_error": 1
+    }
+  },
+  "outcome_counts": {
+    "baseline": {
+      "empty": 1,
+      "hard_error": 3,
+      "refusal": 1,
+      "success": 6,
+      "wrong_answer": 4
+    },
+    "candidate": {
+      "empty": 1,
+      "hard_error": 3,
+      "refusal": 1,
+      "success": 4,
+      "wrong_answer": 6
+    }
+  },
+  "parent_manifest_sha256": "d8682abf1d06c8caa98b7c751ef2f54db17dd30c2c3514d71ee407d7b8cb848f",
+  "private_evidence_sha256": {
+    "artifact_001": "97db97ece395ec8932f52b4e4d0009296bb176eec577c89c09e958740d8c0293",
+    "artifact_002": "1a35a96496ca19adb129f52bbb537a937837c8c531b11f585dd436ea38f726a9",
+    "artifact_003": "4fae86fb75d2924efd0eebbe1cf6c0c550c59dced199be04d576c740e19e9e83",
+    "artifact_004": "1059155846caff5a6b5b3d69fca5de464c224d2c278deeb901717dc9dba9dfca",
+    "artifact_005": "892c7e95cbcfc90057abfc454e08423bfb17f80cdc9d2f12291ef3ad7c58811f",
+    "artifact_006": "00ea4f666e0a00bdf0c19ca31cca67b17b7df3f739e4c33ede7e3c68d728a88f",
+    "artifact_007": "774141bcc163eb74fb8326c111fa5bb9cdb7ba7153f82b9255008214ef7b6f5d"
+  },
+  "relevance": {
+    "baseline": {
+      "mrr": 0.4230769230769231,
+      "ndcg_at_6": 0.37827492932398343,
+      "recall_at_6": 0.37179487179487175,
+      "top_1": 0.38461538461538464
+    },
+    "candidate": {
+      "mrr": 0.3076923076923077,
+      "ndcg_at_6": 0.2598852176733908,
+      "recall_at_6": 0.24358974358974358,
+      "top_1": 0.3076923076923077
+    },
+    "task_count": 13,
+    "verdict": "fail"
+  },
+  "runtime_identity_sha256": "6b90d8ddbe45d8906b1d6ca167bb3a1dfa7c06a81db55c6013dd1e99c0868b4f",
+  "schema_version": 1,
+  "selected_capability_ids": [
+    "call_path",
+    "callees",
+    "callers",
+    "context_orientation",
+    "discovery",
+    "edit",
+    "exact_symbol_lookup",
+    "homonym_disambiguation",
+    "impact_tests",
+    "logs",
+    "patterns",
+    "rename",
+    "workspace_recovery"
+  ],
+  "selected_task_count": 15,
+  "selection_sha256": "ed6f89989f67ca5e956044088833e2bb959b0cf15d17d0c5f803f6a3217790df",
+  "snapshot_manifest_sha256": "33d86d0275648d9d791dd49ff4a65ac32fd556b088f219701e9b1d8b7c421114",
+  "unresolved_void_count": 0
+}

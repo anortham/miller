@@ -29,8 +29,11 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
     entry point + pending state for flagged roots only; §7 holds the seven decision questions —
     awaiting user answers)
 
-Semantic-noise experiment (8 reps, off-vs-on at the frozen budget) runs until ~02:50 UTC; its analysis
-and the findings/site update land when it completes.
+Semantic-noise experiment — **done**: 9 paired samples, mean on−off delta −0.2 tasks (SD 1.9), off and
+on each ahead in 4 reps. Verdict: noise; default-on semantic costs nothing measurable on this workload
+at tight budgets. Value measurement needs a concept-search task set (open idea, not scheduled).
+Findings doc + site updated; per-rep aggregates in
+docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
 
 ## Active
 

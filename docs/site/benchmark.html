@@ -130,15 +130,15 @@
           spend is what buys the correct answers.
         </p>
         <p>
-          The lexical core carries most of the result: with semantic retrieval disabled Miller scored 12/15
-          at the frozen budget and 11/15 at the doubled one, against the semantic arm's 10 and 12. This
-          rerun does not show semantic retrieval as a clear win. At the frozen budget the semantic arm lost
-          two tasks the lexical arm solved, one of them evidence-critical; at the doubled budget it won one
-          the lexical arm lost. The same configuration measured twice at the frozen budget scored 11 and 10
-          and disagreed on five individual tasks, so this design cannot separate a real semantic regression
-          from run-to-run variation. A multi-repetition run of the frozen-budget semantic arm is the
-          experiment that would settle it. <code>MILLER_SEMANTIC=off</code> remains a supported switch, and
-          lexical output is byte-identical either way.
+          The lexical core carries most of the result, and the semantic question got its own experiment.
+          After a single run showed the semantic arm losing two tasks at the frozen budget, we reran that
+          off-versus-on pair nine times overnight. The answer is noise: the lexical arm won 4 reps, the
+          semantic arm won 4, one tied, and the mean difference was 0.2 tasks against a run-to-run scatter
+          of 1.9. On this task set, at tight budgets, semantic retrieval neither helps nor hurts the
+          score. That closes the do-no-harm question for the default; it does not measure semantic's
+          value, because only 2 of the 15 tasks ask the concept-worded questions semantic retrieval was
+          built for. <code>MILLER_SEMANTIC=off</code> remains a supported switch, and lexical output is
+          byte-identical either way.
         </p>
       </div>
       <div class="metrics-table-wrap">

@@ -216,4 +216,43 @@ rerun:
 - **Run B is not powered to detect a semantic regression.** One repetition per configuration and a
   same-configuration run-to-run spread of 1 count / 5 tasks mean the B-frozen inversion can be neither
   claimed as a regression nor dismissed as noise. A multi-repetition frozen-budget run of the semantic-on arm
-  is the missing experiment.
+  is the missing experiment. **That experiment was run the same night — see the next section.**
+
+## The multi-repetition answer: the frozen-budget semantic delta is zero
+
+Ran overnight 2026-08-25→26: eight additional B-frozen runs (`semantic-noise-rep2`…`rep9`), identical
+configuration to the run above (seed 731, frozen budgets, identity B, hardened harness), zero voids in all
+eight. With the original B-frozen as rep 1, nine paired samples:
+
+| rep | off | on | on − off |
+|---|---:|---:|---:|
+| 1 | 12 | 10 | −2 |
+| 2 | 9 | 10 | +1 |
+| 3 | 8 | 9 | +1 |
+| 4 | 11 | 8 | −3 |
+| 5 | 8 | 8 | 0 |
+| 6 | 8 | 6 | −2 |
+| 7 | 7 | 9 | +2 |
+| 8 | 11 | 10 | −1 |
+| 9 | 8 | 10 | +2 |
+
+- **Verdict: noise.** Off ahead in 4 reps, on ahead in 4, one tie; mean delta −0.2 tasks with a
+  run-to-run SD of 1.9 (t ≈ −0.4). July's "+1..2" and this rerun's "−2" were both single-run draws from
+  the same distribution. At the frozen budget on this task set, semantic-on neither helps nor hurts the
+  correct-task count.
+- **Per-arm scatter dwarfs any effect.** The off arm alone ranged 7–12 correct and the on arm 6–10
+  (SD 1.8 / 1.4). Absolute scores also drifted lower overnight than in the daytime runs, which is why
+  only the within-rep paired comparison is a valid read.
+- **Evidence-critical flips happen anyway.** In 4 of 9 reps the on arm lost 1–3 evidence-critical tasks
+  the off arm solved (7 losses total) even though the totals are even. Semantic-on does not protect the
+  evidence-critical class; task-level reproducibility is the limiting factor of this benchmark, not the
+  semantic arm.
+- **What this does and does not say.** It says default-on semantic costs nothing measurable on
+  ordinary exact-lookup/reference/impact work at tight budgets — the do-no-harm question is closed. It
+  does not measure semantic's value: only 2 of the 15 tasks are concept-search shaped, and the
+  conceptual-recall gap semantic was built for
+  (`2026-07-27-context-conceptual-recall-gap.md`) needs its own task set.
+
+Per-rep `aggregate.json`/`safe-aggregate.json` are committed under
+[`agent-efficiency/2026-08-25-semantic-noise/`](agent-efficiency/2026-08-25-semantic-noise/); full raw
+exports remain reproducible from the in-repo harness.

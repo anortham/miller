@@ -1,0 +1,90 @@
+{
+  "contract_id": "takeover-evaluation-v1",
+  "schema_version": 1,
+  "decision_scope": "full",
+  "decision_verdict": "not_decisional",
+  "action_verdict": "fail",
+  "task_count": 15,
+  "completion": {
+    "both_correct": 10,
+    "baseline_only": 1,
+    "candidate_only": 0,
+    "neither_correct": 4
+  },
+  "outcome_counts": {
+    "baseline": {
+      "success": 9,
+      "empty": 1,
+      "refusal": 1,
+      "hard_error": 2,
+      "wrong_answer": 2
+    },
+    "candidate": {
+      "success": 8,
+      "empty": 1,
+      "refusal": 1,
+      "hard_error": 2,
+      "wrong_answer": 3
+    }
+  },
+  "relevance": {
+    "verdict": "fail",
+    "task_count": 13,
+    "baseline": {
+      "recall_at_6": 0.6282051282051283,
+      "ndcg_at_6": 0.6445006022887755,
+      "mrr": 0.6923076923076923,
+      "top_1": 0.6923076923076923
+    },
+    "candidate": {
+      "recall_at_6": 0.5512820512820513,
+      "ndcg_at_6": 0.5501702649402433,
+      "mrr": 0.5769230769230769,
+      "top_1": 0.5384615384615384
+    }
+  },
+  "correctness": {
+    "verdict": "fail",
+    "baseline_correct_count": 11,
+    "candidate_correct_count": 10,
+    "critical_loss_count": 0,
+    "baseline_wrong_action_task_count": 0,
+    "candidate_wrong_action_task_count": 2,
+    "baseline_wrong_action_rate": 0,
+    "candidate_wrong_action_rate": 0.13333333333333333
+  },
+  "efficiency": {
+    "verdict": "pass",
+    "measurable": true,
+    "both_correct_task_count": 10,
+    "token_route_passed": true,
+    "call_route_passed": false,
+    "wall_guard_passed": true
+  },
+  "baseline": {
+    "median_tool_output_tokens": 5779.5,
+    "median_tool_calls": 4,
+    "p75_duration_ms": 52791
+  },
+  "candidate": {
+    "median_tool_output_tokens": 4557.5,
+    "median_tool_calls": 4.5,
+    "p75_duration_ms": 60584
+  },
+  "failure_counts": {
+    "baseline": {
+      "budget_exceeded": 4,
+      "incorrect": 2,
+      "insufficient_evidence": 1
+    },
+    "candidate": {
+      "budget_exceeded": 4,
+      "incorrect": 5,
+      "product_error": 1
+    }
+  },
+  "by_workflow": {},
+  "by_capability": {},
+  "by_repo": {},
+  "by_language": {}
+}

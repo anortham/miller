@@ -1,0 +1,91 @@
+{
+  "contract_id": "takeover-evaluation-v1",
+  "schema_version": 1,
+  "decision_scope": "full",
+  "decision_verdict": "not_decisional",
+  "action_verdict": "fail",
+  "task_count": 15,
+  "completion": {
+    "both_correct": 6,
+    "baseline_only": 2,
+    "candidate_only": 0,
+    "neither_correct": 7
+  },
+  "outcome_counts": {
+    "baseline": {
+      "success": 6,
+      "empty": 1,
+      "refusal": 1,
+      "hard_error": 3,
+      "wrong_answer": 4
+    },
+    "candidate": {
+      "success": 4,
+      "empty": 1,
+      "refusal": 1,
+      "hard_error": 3,
+      "wrong_answer": 6
+    }
+  },
+  "relevance": {
+    "verdict": "fail",
+    "task_count": 13,
+    "baseline": {
+      "recall_at_6": 0.37179487179487175,
+      "ndcg_at_6": 0.37827492932398343,
+      "mrr": 0.4230769230769231,
+      "top_1": 0.38461538461538464
+    },
+    "candidate": {
+      "recall_at_6": 0.24358974358974358,
+      "ndcg_at_6": 0.2598852176733908,
+      "mrr": 0.3076923076923077,
+      "top_1": 0.3076923076923077
+    }
+  },
+  "correctness": {
+    "verdict": "fail",
+    "baseline_correct_count": 8,
+    "candidate_correct_count": 6,
+    "critical_loss_count": 2,
+    "baseline_wrong_action_task_count": 2,
+    "candidate_wrong_action_task_count": 2,
+    "baseline_wrong_action_rate": 0.13333333333333333,
+    "candidate_wrong_action_rate": 0.13333333333333333
+  },
+  "efficiency": {
+    "verdict": "fail",
+    "measurable": true,
+    "both_correct_task_count": 6,
+    "token_route_passed": false,
+    "call_route_passed": false,
+    "wall_guard_passed": true
+  },
+  "baseline": {
+    "median_tool_output_tokens": 5181.5,
+    "median_tool_calls": 4.5,
+    "p75_duration_ms": 73116
+  },
+  "candidate": {
+    "median_tool_output_tokens": 4382.5,
+    "median_tool_calls": 4,
+    "p75_duration_ms": 62412
+  },
+  "failure_counts": {
+    "baseline": {
+      "budget_exceeded": 3,
+      "incorrect": 6,
+      "insufficient_evidence": 1
+    },
+    "candidate": {
+      "budget_exceeded": 2,
+      "incorrect": 8,
+      "insufficient_evidence": 3,
+      "product_error": 1
+    }
+  },
+  "by_workflow": {},
+  "by_capability": {},
+  "by_repo": {},
+  "by_language": {}
+}
