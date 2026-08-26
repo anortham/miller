@@ -539,7 +539,7 @@ public sealed class PatternsToolTests
         Assert.Contains("path=Views/**", output);
         Assert.Contains("where=name=hx-get", output);
         Assert.Contains("where=value=/missing", output);
-        Assert.Contains("loosen language, path, or where", output);
+        Assert.Contains("loosen language, path, or where.\nNext:", output, StringComparison.Ordinal);
     }
 
     [Fact]

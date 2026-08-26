@@ -181,6 +181,8 @@ public static class ToolDiagnosticRenderer
         var actions = new JsonArray();
         foreach (ToolDiagnosticAction action in diagnostic.NextActions)
         {
+            if (action.CompactOnly)
+                continue;
             actions.Add((JsonNode)new JsonObject
             {
                 ["call"] = action.Call,

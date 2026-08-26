@@ -300,7 +300,7 @@ public sealed class TraceTool
     private static string NormalizeMode(string? mode) =>
         string.IsNullOrWhiteSpace(mode) ? ModeRefs : mode.Trim().ToLowerInvariant();
 
-    private static ToolDiagnostic TraceEmptyDiagnostic(string mode, string output, string target, string? to)
+    internal static ToolDiagnostic TraceEmptyDiagnostic(string mode, string output, string target, string? to)
     {
         if (mode is not (ModePath or ModeRefs or ModeBridge))
             return ToolDiagnostic.Unsupported("unsupported_mode", $"Trace mode '{mode}' is not supported.");
@@ -343,6 +343,7 @@ public sealed class TraceTool
                 "no_references",
                 "Trace produced no references.",
                 [
+                    CrossToolHandoff.StringLiteralUsages(target),
                     sourceSearch,
                     new ToolDiagnosticAction(
                         $"inspect(target=\"{ToolDiagnosticText.EscapeCallArgument(target)}\", depth=\"full\")",

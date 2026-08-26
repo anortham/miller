@@ -29,7 +29,9 @@ Status legend: `queued` / `in progress` / `blocked on <what>` / `done <commit>`.
    (the renderer fix shipped in 877fa992; query-time resolution then deleted the `resolution_converging`
    layer and its guard tests, leaving `trace`/`impact` with no converging-JSON coverage — closed with
    `TraceImpactLevelGuardTests` and the standalone-envelope contract section)
-8. Cross-tool discoverability empty states (backlog entry below) — in progress
+8. Cross-tool discoverability empty states (backlog entry below) — **done**
+   (`CrossToolHandoff` is the one decision table; `ToolDiagnosticAction.CompactOnly` carries every handoff
+   on the ADR-0001 nudge channel, so JSON `diagnostic.next_actions` stays byte-identical)
 9. Windows memory investigation (Active item; needs the win-test guest) — queued
 10. MCP SDK / stateless MCP evaluation → plan doc only — **done**
     (docs/plans/2026-08-25-mcp-sdk-stateless-evaluation.md: upgrade for maintenance not speed; hard
@@ -151,7 +153,26 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
   status/health, or teach a force scan to retire such rows. Deleting rows for a file that still exists was
   judged worse than serving them; decide only with a real-world case in hand.
 
-- Cross-tool discoverability: keep improving high-traffic empty states so `search`, `trace`, `impact`, and `inspect` hand agents to `content`, `patterns`, source-region search, or complexity when those are the better next tool.
+- Cross-tool discoverability empty states — **DONE.** Every empty read that had a better answer in a
+  DIFFERENT tool now names it, from one decision table
+  ([`CrossToolHandoff`](src/Miller.Server/Tools/CrossToolHandoff.cs)) rather than per-tool string soup.
+  Shipped handoffs: `search mode=content` → `mode=source` and the reverse; `search
+  mode=external|web|all-text` → `content operation=list`; `search regions=…` → whole source bodies;
+  `search mode=markers` → the marker words as literal source text; ANY filtered `search` miss with
+  out-of-scope hits → the same call with `file_pattern`/`language` dropped, which beats every mode
+  handoff because retrying a mode searches the same narrow scope again; `trace mode=refs` with no
+  references → `regions=string_literal` for the DI/reflection/config uses the graph cannot link;
+  `impact` on a change with no seed symbols → `patterns operation=summary path=…`, because a changed
+  file with no indexed symbols is docs, markup, or config; `inspect` on an unresolvable name → a search
+  across symbols, paths, and text (it offered nothing at all before); `inspect` on an indexed file with
+  no symbols → that file's structure facts, or the same call minus its own `kind` filter; `patterns`
+  free-text miss → the raw source text for those words. Every handoff is
+  `ToolDiagnosticAction.CompactOnly`, so JSON `diagnostic.next_actions` is unchanged; each is pinned by
+  an exact-line test in `CrossToolHandoffTests`. Also fixed the missing line break that ran the patterns
+  filtered-out sentence into its own `Next:` block.
+  Residual, needs telemetry evidence before acting: the CLI `search` verb attaches no empty diagnostic at
+  all (pre-existing — the MCP route does), so none of these lines reach `miller search`; and `trace
+  mode=path` still offers only graph recovery, where an `impact` handoff might read better.
 
 - MCP SDK / stateless MCP: with new stateless MCP support available now, evaluate and plan the upgrade to the new MCP SDK. Goal: drop long-lived reader process assumptions where they hurt, improve multi-client behavior under Hermes gateway + CLI, and reduce cold/warm path surprises. Capture current stdio multi-process shape (gateway child + per-session reader) before changing it.
 

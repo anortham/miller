@@ -426,7 +426,12 @@ public sealed class ImpactTool
             }, actions);
     }
 
-    private static IReadOnlyList<ToolDiagnosticAction> ChangedPathRecoveryActions(string? path) =>
+    /// <summary>
+    /// Recovery for a change impact could not seat on any symbol. The path-bearing form leads with the
+    /// structure-facts handoff: a changed file with no indexed symbols is usually docs, markup, or config, whose
+    /// content <c>patterns</c> holds and the symbol graph never will.
+    /// </summary>
+    internal static IReadOnlyList<ToolDiagnosticAction> ChangedPathRecoveryActions(string? path) =>
         string.IsNullOrWhiteSpace(path)
             ?
             [
@@ -436,6 +441,7 @@ public sealed class ImpactTool
             ]
             :
             [
+                CrossToolHandoff.FileStructureFacts(path),
                 new ToolDiagnosticAction(
                     $"search(query=\"{EscapeDiagnosticTarget(path)}\", mode=\"file\")",
                     "confirm the indexed file path"),

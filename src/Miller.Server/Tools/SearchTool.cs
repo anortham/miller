@@ -583,7 +583,7 @@ public sealed class SearchTool
             RequireSearchMcpOutput(output);
             ToolDiagnostic? diagnostic = regionsConverging
                 ?? markersConverging
-                ?? (count == 0 ? SearchEmptyDiagnostic(route, query) : null);
+                ?? (count == 0 ? SearchEmptyDiagnostic(route, query, file_pattern, language) : null);
             if (scope is not null)
             {
                 scope.SetTarget(query);
@@ -656,24 +656,68 @@ public sealed class SearchTool
             "source regions (comments/doc comments/string literals) have not been extracted yet.");
     }
 
-    private static ToolDiagnostic SearchEmptyDiagnostic(SearchRoute route, string query)
+    internal static ToolDiagnostic SearchEmptyDiagnostic(
+        SearchRoute route,
+        string query,
+        string? filePattern = null,
+        string? language = null)
     {
         string mode = ModeName(route.Mode);
         if (route.Kind == SearchRouteKind.Markers)
         {
             return ToolDiagnostic.ExpectedEmpty(
                 EmptyReasonFor(route),
-                "No requested source markers were found.");
+                "No requested source markers were found.",
+                [CrossToolHandoff.SearchMarkerText(query)]);
         }
 
         string recoveryMode = route.Kind == SearchRouteKind.Symbols ? "source" : "auto";
+        var actions = new List<ToolDiagnosticAction>(capacity: 2);
+        if (CrossToolHandoffFor(route, query, filePattern, language) is { } handoff)
+            actions.Add(handoff);
+        actions.Add(new ToolDiagnosticAction(
+            SearchCall(query, recoveryMode),
+            recoveryMode == "source" ? "search source-body text" : "retry automatic routing"));
         return ToolDiagnostic.ExpectedEmpty(
             EmptyReasonFor(route),
             $"No results matched the {mode} search route.",
-            [new ToolDiagnosticAction(
-                SearchCall(query, recoveryMode),
-                recoveryMode == "source" ? "search source-body text" : "retry automatic routing")]);
+            actions);
     }
+
+    /// <summary>
+    /// The better next TOOL for an empty search, or null when the route's own tailored hint already says
+    /// everything true about the miss. A filter beats the route every time: when <c>file_pattern</c>/
+    /// <c>language</c> narrowed the search, retrying another mode searches the same narrow scope again.
+    /// </summary>
+    private static ToolDiagnosticAction? CrossToolHandoffFor(
+        SearchRoute route,
+        string query,
+        string? filePattern,
+        string? language)
+    {
+        ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
+        if (filters.HasAny)
+            return CrossToolHandoff.SearchWithoutScope(query, ModeArgumentFor(route.Mode), filters.ScopeDescription);
+
+        if (route.Kind == SearchRouteKind.Regions)
+            return CrossToolHandoff.SearchWholeSourceBodies(query);
+
+        return route.Mode switch
+        {
+            SearchToolMode.Content => CrossToolHandoff.SearchSourceText(query),
+            SearchToolMode.Source => CrossToolHandoff.SearchDocsText(query),
+            SearchToolMode.External or SearchToolMode.Web or SearchToolMode.AllText =>
+                CrossToolHandoff.ContentInventory(),
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// The <c>mode=</c> argument a retry must carry to stay on this route, or null for the default route (the
+    /// call reads cleaner without a redundant <c>mode=auto</c>).
+    /// </summary>
+    private static string? ModeArgumentFor(SearchToolMode mode) =>
+        mode == SearchToolMode.Auto ? null : ModeName(mode);
 
     /// <summary>
     /// The assignment <c>utc_date</c> for this call: the telemetry scope's single captured call-start instant, so

@@ -644,6 +644,15 @@ scripts/test.ps1 all
   tail, or re-invent the deleted 12k budget without first reading
   [`docs/adr/ADR-0001-guidance-delivery-channels.md`](docs/adr/ADR-0001-guidance-delivery-channels.md); gates
   live in `AgentInstructionsTests`.
+  **An empty result's cross-tool handoff rides the same nudge channel.** When an empty read's real answer
+  lives in a DIFFERENT tool, the line comes from the one decision table
+  [`CrossToolHandoff`](src/Miller.Server/Tools/CrossToolHandoff.cs) and MUST be
+  `ToolDiagnosticAction.CompactOnly` — the renderer withholds those from JSON so
+  `diagnostic.next_actions` stays byte-identical for Eros and every other machine consumer, which is also
+  why a handoff may be placed FIRST in a tool's action list without reordering anything JSON reads.
+  A handoff must be honest about the INPUT SHAPE, not merely a neighbouring tool: a `file_pattern`/
+  `language` miss with hits outside the scope is a FILTER failure, so naming another mode sends the agent
+  back into the same narrow scope. Exact-line gates live in `CrossToolHandoffTests`.
 
 ## AGENTS.md is generated
 

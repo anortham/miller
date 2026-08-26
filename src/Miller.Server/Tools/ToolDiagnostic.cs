@@ -20,7 +20,15 @@ public enum ToolDiagnosticOutcome
     Error,
 }
 
-public sealed record ToolDiagnosticAction(string Call, string Reason);
+/// <summary>
+/// One copyable "call this next" line attached to a tool result.
+///
+/// <para><paramref name="CompactOnly"/> marks a cross-tool handoff that rides the ADR-0001 nudge channel:
+/// rendered in compact output, withheld from JSON so machine consumers keep byte-identical
+/// <c>diagnostic.next_actions</c>. Handoffs are advice for a reading agent, not facts about the result, so a
+/// JSON consumer must never have to filter them out.</para>
+/// </summary>
+public sealed record ToolDiagnosticAction(string Call, string Reason, bool CompactOnly = false);
 
 public sealed record ToolDiagnostic(
     string Code,
