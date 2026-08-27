@@ -27,8 +27,12 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
         Assert.Equal(Path.GetFullPath(project), item.Workspace.ProjectPath);
         Assert.True(IsInside(_root, item.Workspace.BuildOutputRoot));
         Assert.Equal(
-            Path.Combine(_root, ".miller", "ct", "build"),
+            Path.Combine(_root, ".miller"),
             Path.GetDirectoryName(item.Workspace.BuildOutputRoot));
+        Assert.StartsWith(
+            "ct-",
+            Path.GetFileName(item.Workspace.BuildOutputRoot),
+            StringComparison.Ordinal);
         Assert.Null(item.BuildRootFallbackReason);
     }
 
@@ -37,12 +41,27 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
     {
         ContinuousTestProjectWorkItem item = MaterializeDeeplyNestedPytestProject(_root);
 
-        string segment = Path.GetFileName(item.Workspace.BuildOutputRoot);
+        string name = Path.GetFileName(item.Workspace.BuildOutputRoot);
+        Assert.StartsWith("ct-", name, StringComparison.Ordinal);
+        string segment = name["ct-".Length..];
         Assert.Equal(ContinuousTestProjectInventory.SegmentHashLength, segment.Length);
         Assert.Matches("^[0-9a-f]+$", segment);
         Assert.Equal(
-            Path.Combine(_root, ".miller", "ct", "build"),
+            Path.Combine(_root, ".miller"),
             Path.GetDirectoryName(item.Workspace.BuildOutputRoot));
+    }
+
+    [Fact]
+    public void The_deepest_assembly_directory_sits_exactly_five_levels_below_the_workspace_root()
+    {
+        ContinuousTestProjectWorkItem item = MaterializeDeeplyNestedPytestProject(_root);
+
+        string assemblyDirectory = Path.Combine(
+            item.Workspace.BuildOutputRoot, "g0123456789ab", "out", "App.Tests");
+        string[] levels = Path.GetRelativePath(_root, assemblyDirectory)
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        Assert.Equal(5, levels.Length);
+        Assert.Equal(".miller", levels[0]);
     }
 
     [Fact]

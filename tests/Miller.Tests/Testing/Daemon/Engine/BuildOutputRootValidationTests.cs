@@ -29,6 +29,19 @@ public sealed class BuildOutputRootValidationTests : IDisposable
     }
 
     [Fact]
+    public void Enqueue_accepts_the_flattened_build_root_directly_under_the_miller_sidecar()
+    {
+        ContinuousTestWorkspace workspace = WorkspaceWithBuildRoot(
+            Path.Combine(_root, ".miller", "ct-0123456789ab"));
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        ContinuousTestDaemonQueue queue = Queue(store);
+
+        ContinuousTestDaemonEnqueueResult result = queue.Enqueue(EngineTestSupport.Change(workspace));
+
+        Assert.NotNull(result);
+    }
+
+    [Fact]
     public void Enqueue_accepts_a_build_root_under_the_machine_temp_build_root()
     {
         ContinuousTestWorkspace workspace = WorkspaceWithBuildRoot(

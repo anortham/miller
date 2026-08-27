@@ -25,6 +25,13 @@ public static class ContinuousTestProjectInventory
     /// </summary>
     internal const int SegmentHashLength = 12;
 
+    /// <summary>
+    /// Name prefix of a workspace-local build root directly under <c>.miller</c>. The prefix is what
+    /// lets peer-root scans tell a build root apart from every other <c>.miller</c> entry (logs,
+    /// sidecar databases, the legacy <c>ct/</c> control directory).
+    /// </summary>
+    internal const string WorkspaceLocalBuildRootPrefix = "ct-";
+
     private static readonly HashSet<string> SkipDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
     {
         ".git",
@@ -289,7 +296,10 @@ public static class ContinuousTestProjectInventory
             }
             else
             {
-                buildRoot = Path.Combine(root, ".miller", "ct", "build", ShortSegment(project.Id));
+                buildRoot = Path.Combine(
+                    root,
+                    ".miller",
+                    WorkspaceLocalBuildRootPrefix + ShortSegment(project.Id));
             }
 
             var workspace = new ContinuousTestWorkspace(
@@ -321,10 +331,10 @@ public static class ContinuousTestProjectInventory
 
     /// <summary>
     /// Every character below the workspace root in the deepest composed provider artifact path:
-    /// <c>/.miller/ct/build/&lt;project&gt;/g&lt;generation&gt;/TestResults/&lt;artifact&gt;</c>.
+    /// <c>/.miller/ct-&lt;project&gt;/g&lt;generation&gt;/TestResults/&lt;artifact&gt;</c>.
     /// </summary>
     private static readonly int WorkspaceLocalTailLength =
-        "/.miller/ct/build/".Length
+        ("/.miller/" + WorkspaceLocalBuildRootPrefix).Length
         + SegmentHashLength
         + "/g".Length + SegmentHashLength
         + "/TestResults/".Length
@@ -343,11 +353,15 @@ public static class ContinuousTestProjectInventory
     /// One fixed-width path segment for an identifier of any length.
     ///
     /// The default build root lives inside the workspace at
-    /// <c>&lt;workspace&gt;/.miller/ct/build/&lt;project segment&gt;</c>, so tests that walk up from
+    /// <c>&lt;workspace&gt;/.miller/ct-&lt;project segment&gt;</c>, so tests that walk up from
     /// the test binary to find the repo root pass under continuous testing with zero project-side
-    /// configuration. The root is per-workspace already, so only the project needs a segment there;
-    /// the over-budget fallback under <see cref="CtTempPaths.BuildRoot"/> keeps both the workspace
-    /// and the project segment because that root is machine-shared.
+    /// configuration. The flattened shape keeps the deepest assembly directory
+    /// (<c>.miller/ct-&lt;project&gt;/g&lt;generation&gt;/out/&lt;ProjectName&gt;</c>) exactly five
+    /// levels below the workspace root, so walk-up helpers capped at eight ascents clear it with
+    /// margin even after burning one on a trailing separator. The root is per-workspace already, so
+    /// only the project needs a segment there; the over-budget fallback under
+    /// <see cref="CtTempPaths.BuildRoot"/> keeps both the workspace and the project segment because
+    /// that root is machine-shared.
     ///
     /// Windows MAX_PATH is 260 characters and a machine without long paths enabled fails there. The
     /// composed continuous-test artifact path stacks the build root, a generation id, a results

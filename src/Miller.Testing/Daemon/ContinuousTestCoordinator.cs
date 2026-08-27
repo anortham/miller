@@ -529,6 +529,7 @@ public sealed class ContinuousTestCoordinator
             ledger.Debts.Add(new ReapDebt(
                 StoredRelativePath(workspace.BuildOutputRoot, debt.Path),
                 debt.Bytes));
+        SweepLegacyWorkspaceBuildTree(workspace);
         DiskAccounting accounting = MeasureGenerationDisk(workspace);
         CommitMaintenance(workspace, ledger, accounting);
         if (_buildCacheJanitor.IsMachineOwnedBuildRoot(workspace.BuildOutputRoot))
@@ -555,6 +556,79 @@ public sealed class ContinuousTestCoordinator
 
     private static string StoredRelativePath(string root, string path) =>
         Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
+
+    /// <summary>
+    /// Reclaims the pre-flattening build tree <c>&lt;workspace&gt;/.miller/ct/build</c> once the
+    /// workspace has migrated to the <c>.miller/ct-&lt;project&gt;</c> layout, so an upgrade does not
+    /// strand its old generations (~635MB observed). The no-live-process rule is the janitor's: a
+    /// root is swept only while its existing operation lock file is held exclusively; a root whose
+    /// lock is held, unreadable, or missing is left alone. A workspace still building under the
+    /// legacy tree never sweeps it — its own and its sibling projects' roots live there.
+    /// </summary>
+    private void SweepLegacyWorkspaceBuildTree(ContinuousTestWorkspace workspace)
+    {
+        string legacyTree = Path.Combine(
+            Path.GetFullPath(workspace.WorkspaceRoot), ".miller", "ct", "build");
+        if (!Directory.Exists(legacyTree))
+            return;
+        string ownRelative = Path.GetRelativePath(legacyTree, Path.GetFullPath(workspace.BuildOutputRoot));
+        bool ownInsideLegacyTree = ownRelative == "."
+            || (!ownRelative.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(ownRelative));
+        if (ownInsideLegacyTree)
+            return;
+        foreach (string name in DirectoryNames(legacyTree))
+        {
+            string root = Path.Combine(legacyTree, name);
+            CtOperationLockState state = CtBuildRootOperationLease.TryAcquireExisting(
+                root, out CtBuildRootOperationLease? lease);
+            if (state is not CtOperationLockState.Available)
+            {
+                lease?.Dispose();
+                if (state is CtOperationLockState.Held)
+                    _lifecycleLog?.Invoke($"legacy_build_root_held root={root}");
+                continue;
+            }
+
+            using (lease)
+            {
+                foreach (string entry in DirectoryNames(root))
+                    _options.ReapGenerationDirectory(Path.Combine(root, entry));
+            }
+
+            if (TryDeleteTree(root))
+                _lifecycleLog?.Invoke($"legacy_build_root_reclaimed root={root}");
+        }
+
+        TryDeleteEmptyDirectory(legacyTree);
+    }
+
+    private static bool TryDeleteTree(string directory)
+    {
+        try
+        {
+            Directory.Delete(directory, recursive: true);
+            return true;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryDeleteEmptyDirectory(string directory)
+    {
+        try
+        {
+            Directory.Delete(directory, recursive: false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
 
     private void ReapSupersededGenerations(
         ContinuousTestWorkspace workspace,
@@ -708,6 +782,12 @@ public sealed class ContinuousTestCoordinator
             $"generation_disk_over_budget bytes={accounting.TotalBytes} budget={_options.GenerationDiskBudgetBytes}");
     }
 
+    /// <summary>
+    /// A workspace-local build root sits directly under <c>.miller</c>, so its siblings include every
+    /// other <c>.miller</c> entry — logs, spool, the legacy <c>ct/</c> control directory. Only
+    /// <c>ct-</c>-prefixed siblings are peer build roots there; the over-budget temp fallback keeps
+    /// its bare-hash sibling names, and its parent holds nothing else.
+    /// </summary>
     private static IReadOnlyList<string> GenerationContentRoots(string ownBuildOutputRoot)
     {
         string? parent = Path.GetDirectoryName(ownBuildOutputRoot);
@@ -716,9 +796,12 @@ public sealed class ContinuousTestCoordinator
         IReadOnlyList<string>? names = TryDirectoryNames(parent);
         if (names is null)
             return [];
+        bool workspaceLocal = IsWorkspaceLocalBuildRootName(Path.GetFileName(ownBuildOutputRoot));
         var roots = new List<string>();
         foreach (string name in names)
         {
+            if (workspaceLocal && !IsWorkspaceLocalBuildRootName(name))
+                continue;
             string candidate = Path.Combine(parent, name);
             string root = BuildOutputRootComparer.Equals(candidate, ownBuildOutputRoot)
                 ? ownBuildOutputRoot
@@ -729,6 +812,12 @@ public sealed class ContinuousTestCoordinator
 
         return roots;
     }
+
+    private static bool IsWorkspaceLocalBuildRootName(string? directoryName) =>
+        directoryName is not null
+        && directoryName.StartsWith(
+            ContinuousTestProjectInventory.WorkspaceLocalBuildRootPrefix,
+            StringComparison.Ordinal);
 
     private static bool HoldsGenerationContent(string buildOutputRoot)
     {

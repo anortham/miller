@@ -113,12 +113,18 @@ green.
 ## Where CT builds
 
 The default build output root is INSIDE the workspace:
-`<workspace>/.miller/ct/build/<project segment>` (a fixed 12-hex segment per project, with the
+`<workspace>/.miller/ct-<project segment>` (a fixed 12-hex segment per project, with the
 per-run generation directories below it). Building inside the workspace is what makes repo-root
 discovery work with zero project-side settings: a test that walks up from its own binary
 (`TestContext.TestDirectory` and the like) to find the repository root finds it, because the
 binary IS under the repository root. Under the old machine-temp root that walk failed only under
 CT — 87 of 140 baseline failures in one dogfood repository.
+
+The layout guarantees a bounded depth: the deepest test-assembly directory,
+`.miller/ct-<project>/g<generation>/out/<ProjectName>`, sits exactly 5 levels below the workspace
+root. Walk-up helpers commonly cap at 8 ascents and burn one on a trailing path separator; 5
+levels clears that pattern with margin. A pre-flattening `<workspace>/.miller/ct/build` tree left
+by an older Miller is reclaimed by run maintenance once no live process holds its roots.
 
 `.miller/**` is invisible to Miller's file watcher and to the extractor, so building there adds no
 index churn, no watcher events, and no rescans.
@@ -227,8 +233,8 @@ CT runs real test processes, so every part of it is explicit and bounded.
 - Automatic runs debounce on the trailing edge (2 seconds, `MILLER_CT_DEBOUNCE`). Changes during a
   run queue a follow-up instead of killing the run.
 - Providers write build, result, and temp artifacts only under supervised CT paths — the
-  workspace-local `.miller/ct/build` root (or its bounded temp fallback) and the `miller-ct` temp
-  namespace — never into your workspace `bin` or `obj`.
+  workspace-local `.miller/ct-<project>` root (or its bounded temp fallback) and the `miller-ct`
+  temp namespace — never into your workspace `bin` or `obj`.
 - Green means complete results at the current index key. When impact data is truncated, degraded, or
   unavailable, Miller marks everything stale and runs nothing. There is no whole-suite fallback and
   no optimistic green.

@@ -215,6 +215,118 @@ public sealed class CtBuildCacheMaintenanceTests : IDisposable
         Assert.True(Directory.Exists(remnant));
     }
 
+    [Fact]
+    public async Task Disk_accounting_counts_only_ct_prefixed_peer_roots_under_the_miller_sidecar()
+    {
+        ContinuousTestWorkspace workspace = MigratedWorkspace("ct-aaaabbbbcccc");
+        Directory.CreateDirectory(Path.Combine(workspace.BuildOutputRoot, GenerationId));
+        string peer = Path.Combine(_root, ".miller", "ct-ddddeeeeffff");
+        Directory.CreateDirectory(Path.Combine(peer, GenerationId));
+        Directory.CreateDirectory(Path.Combine(_root, ".miller", "spool", "cache"));
+        Directory.CreateDirectory(Path.Combine(_root, ".miller", "logs"));
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+        ContinuousTestCoordinator coordinator = Coordinator(store, new PassingProvider());
+
+        await coordinator.RunSelectedAsync(RunRequest(workspace), TestContext.Current.CancellationToken);
+
+        string[] measured = store.ListCtGenerationDisk()
+            .Select(row => row.BuildOutputRoot)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(
+            new[] { workspace.BuildOutputRoot, peer }.Order(StringComparer.Ordinal).ToArray(),
+            measured);
+    }
+
+    [Fact]
+    public async Task The_maintenance_tail_reclaims_an_idle_legacy_build_tree()
+    {
+        ContinuousTestWorkspace workspace = MigratedWorkspace("ct-aaaabbbbcccc");
+        string legacyRoot = SeedLegacyRoot("0123456789ab", withLockFile: true);
+        string daemonStatus = Path.Combine(_root, ".miller", "ct", "daemon.status.json");
+        File.WriteAllText(daemonStatus, "{}");
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+        ContinuousTestCoordinator coordinator = Coordinator(store, new PassingProvider());
+
+        await coordinator.RunSelectedAsync(RunRequest(workspace), TestContext.Current.CancellationToken);
+
+        Assert.False(Directory.Exists(legacyRoot));
+        Assert.False(Directory.Exists(Path.Combine(_root, ".miller", "ct", "build")));
+        Assert.True(File.Exists(daemonStatus));
+    }
+
+    [Fact]
+    public async Task A_legacy_build_root_a_live_process_holds_survives_the_sweep()
+    {
+        ContinuousTestWorkspace workspace = MigratedWorkspace("ct-aaaabbbbcccc");
+        string legacyRoot = SeedLegacyRoot("0123456789ab", withLockFile: true);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+        ContinuousTestCoordinator coordinator = Coordinator(store, new PassingProvider());
+        using (CtBuildRootOperationLease.Acquire(legacyRoot, TestContext.Current.CancellationToken))
+        {
+            await coordinator.RunSelectedAsync(RunRequest(workspace), TestContext.Current.CancellationToken);
+        }
+
+        Assert.True(File.Exists(Path.Combine(legacyRoot, GenerationId, "stale.bin")));
+    }
+
+    [Fact]
+    public async Task A_legacy_build_root_without_an_operation_lock_file_is_left_alone()
+    {
+        ContinuousTestWorkspace workspace = MigratedWorkspace("ct-aaaabbbbcccc");
+        string legacyRoot = SeedLegacyRoot("0123456789ab", withLockFile: false);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+        ContinuousTestCoordinator coordinator = Coordinator(store, new PassingProvider());
+
+        await coordinator.RunSelectedAsync(RunRequest(workspace), TestContext.Current.CancellationToken);
+
+        Assert.True(File.Exists(Path.Combine(legacyRoot, GenerationId, "stale.bin")));
+    }
+
+    [Fact]
+    public async Task A_workspace_still_building_under_the_legacy_tree_never_sweeps_it()
+    {
+        string ownRoot = Path.Combine(_root, ".miller", "ct", "build", "aaaaaaaaaaaa");
+        ContinuousTestWorkspace workspace = WorkspaceAt(ownRoot);
+        string siblingRoot = SeedLegacyRoot("bbbbbbbbbbbb", withLockFile: true);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        SeedTestCase(store, workspace);
+        ContinuousTestCoordinator coordinator = Coordinator(store, new PassingProvider());
+
+        await coordinator.RunSelectedAsync(RunRequest(workspace), TestContext.Current.CancellationToken);
+
+        Assert.True(File.Exists(Path.Combine(siblingRoot, GenerationId, "stale.bin")));
+    }
+
+    private string SeedLegacyRoot(string projectSegment, bool withLockFile)
+    {
+        string legacyRoot = Path.Combine(_root, ".miller", "ct", "build", projectSegment);
+        Directory.CreateDirectory(Path.Combine(legacyRoot, GenerationId));
+        File.WriteAllText(Path.Combine(legacyRoot, GenerationId, "stale.bin"), "x");
+        if (withLockFile)
+            File.WriteAllText(Path.Combine(legacyRoot, CtBuildRootOperationLease.LockFileName), string.Empty);
+        return legacyRoot;
+    }
+
+    private ContinuousTestWorkspace MigratedWorkspace(string buildRootName) =>
+        WorkspaceAt(Path.Combine(_root, ".miller", buildRootName));
+
+    private ContinuousTestWorkspace WorkspaceAt(string buildOutputRoot)
+    {
+        string project = Path.Combine(_root, "src", "App.Tests.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        File.WriteAllText(project, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        return new ContinuousTestWorkspace(
+            WorkspaceId,
+            _root,
+            project,
+            buildOutputRoot);
+    }
+
     private ContinuousTestCoordinator Coordinator(ContinuousTestStore store, IContinuousTestProvider provider) =>
         new(
             provider,
