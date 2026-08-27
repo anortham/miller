@@ -72,6 +72,17 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             return _pending.Values.Any(pending => pending.ReadyAt <= now);
     }
 
+    /// <summary>
+    /// Whether ANY pending run exists, ready or still inside its debounce. The idle-drain guard
+    /// reads this rather than <see cref="HasReadyWork"/> because a pending that is merely not
+    /// ready yet is still owed work — draining beside it would race the run it debounces for.
+    /// </summary>
+    public bool HasPendingWork()
+    {
+        lock (_lock)
+            return _pending.Count > 0;
+    }
+
     public void ObserveFreshRevision(string workspaceId, CtFreshnessKey freshness)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
@@ -100,6 +111,19 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     public ContinuousTestDaemonEnqueueResult EnqueueExplicit(ContinuousTestDaemonChange change) =>
         EnqueueCore(change, requireCompleteDelta: false, explicitRun: true);
 
+    /// <summary>
+    /// The idle backlog drain (<see cref="CtIdleDrainPolicy"/>): a workspace-scope selection that
+    /// executes ONLY what is already owed — the stale set plus stamped reds that survive the
+    /// automatic fresh-case trim. It reuses the explicit run's stale-set selection but keeps the
+    /// automatic path's red rule (<c>keepRed: false</c>): an unstamped red is a standing verdict
+    /// with nothing to prove, and a drain that re-ran it every cooldown would be a slow red loop.
+    /// The pending is never whole-suite eligible — even a drain whose stale set spans every known
+    /// case travels as its explicit id list — and it never re-runs provider discovery: the store
+    /// already names the owed cases.
+    /// </summary>
+    public ContinuousTestDaemonEnqueueResult EnqueueIdleDrain(ContinuousTestDaemonChange change) =>
+        EnqueueCore(change, requireCompleteDelta: false, explicitRun: false, idleDrain: true);
+
     public ContinuousTestDaemonEnqueueResult Enqueue(ContinuousTestDaemonChange change) =>
         EnqueueCore(change, requireCompleteDelta: true, explicitRun: false);
 
@@ -116,7 +140,8 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
     private ContinuousTestDaemonEnqueueResult EnqueueCore(
         ContinuousTestDaemonChange change,
         bool requireCompleteDelta,
-        bool explicitRun)
+        bool explicitRun,
+        bool idleDrain = false)
     {
         ArgumentNullException.ThrowIfNull(change);
         ValidateBuildOutputRoot(change.Workspace);
@@ -145,13 +170,15 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
             ProjectPath: change.Workspace.ProjectPath),
             change.Freshness);
         IReadOnlyList<string> foregroundTestCaseIds = SelectForegroundTestCaseIds(change, selection);
-        if (explicitRun && change.WorkspaceScope)
+        if ((explicitRun || idleDrain) && change.WorkspaceScope)
         {
             // The explicit run executes the current stale set plus every red, so trim fresh cases
             // (committed or watermark-fresh) BEFORE the stale marking below would overwrite their
             // rows. The two trims differ on purpose: what EXECUTES keeps the reds, what is marked
             // STALE does not. Marking a red stale would erase the standing verdict for the whole
-            // length of the run it is about to be proved by.
+            // length of the run it is about to be proved by. The idle drain takes the same trim
+            // with keepRed off: it is an automatic run, so only the stale set and stamped reds
+            // survive, never a fresh unstamped red.
             selection = selection with
             {
                 SelectedTestCaseIds = DropFreshAt(
@@ -159,7 +186,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                     change.Workspace.ProjectPath,
                     selection.SelectedTestCaseIds,
                     change.Freshness,
-                    keepRed: true),
+                    keepRed: explicitRun),
                 StaleTestCaseIds = DropFreshAt(
                     change.Workspace.WorkspaceId,
                     change.Workspace.ProjectPath,
@@ -221,7 +248,10 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                     .ToArray();
             }
 
-            if (change.WorkspaceScope)
+            // The idle drain is never whole-suite eligible: its selection is the owed backlog,
+            // and even a backlog that happens to span every known case must travel as its
+            // explicit id list rather than collapse to a whole-suite provider run.
+            if (change.WorkspaceScope && !idleDrain)
                 _wholeSuiteEligible.Add(key);
             else
                 _wholeSuiteEligible.Remove(key);
@@ -235,7 +265,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 FilterArguments: change.FilterArguments,
                 Command: change.Command,
                 Framework: change.Framework,
-                RefreshInventory: change.WorkspaceScope,
+                RefreshInventory: change.WorkspaceScope && !idleDrain,
                 ObservedAt: change.ObservedAt,
                 ReadyAt: change.ObservedAt + change.DebounceDelay)
             {

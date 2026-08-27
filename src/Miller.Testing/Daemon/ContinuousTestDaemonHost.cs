@@ -82,6 +82,14 @@ public sealed class ContinuousTestDaemonHostOptions
     public IContinuousTestDaemonEnqueuer? Enqueuer { get; init; }
 
     /// <summary>
+    /// Quiet window the idle backlog drain requires before it may schedule the owed stale set
+    /// (<see cref="CtIdleDrainPolicy"/>). Null resolves the same <c>MILLER_CT_DEBOUNCE</c> value
+    /// the poller uses, so the drain waits at least one debounce of silence; a test injects a
+    /// fixed value to stay deterministic.
+    /// </summary>
+    public TimeSpan? IdleDrainQuietPeriod { get; init; }
+
+    /// <summary>
     /// The liveness cell shared with the provider factory and the queue. Supplied, the loop publishes what the
     /// daemon is doing and how lively its child is; left null, the status file carries the lifecycle state
     /// alone, exactly as before.
@@ -153,6 +161,28 @@ public sealed class ContinuousTestWorkspaceContext : IDisposable
     internal CtFreshnessKey? StartedAt;
 
     internal CtFreshnessKey? LatestFreshness;
+
+    /// <summary>
+    /// Whether the LAST poll proved the context settled: a healthy answer whose saved cursor
+    /// equals the live revision (the poller's <c>same_revision</c>). Any other answer — an
+    /// enqueue, a rebuild, a degradation, an unavailable delta — clears it, so the idle drain
+    /// only ever fires from a reconciled cursor.
+    /// </summary>
+    internal bool PollSettled;
+
+    /// <summary>
+    /// When a poll last observed anything other than a settled no-op, stamped on the loop's own
+    /// clock. The idle drain's quiet window counts from here; null means no activity was ever
+    /// observed, which reads as quiet.
+    /// </summary>
+    internal DateTimeOffset? LastActivityAt;
+
+    /// <summary>
+    /// The idle-drain cooldown anchor: the last idle drain this loop scheduled for the context,
+    /// initialized to the loop's FIRST evaluation so a freshly started daemon stays status-only
+    /// for one full cooldown before draining a backlog it did not watch grow.
+    /// </summary>
+    internal DateTimeOffset? LastIdleDrainAt;
 
     /// <summary>
     /// The record that is ON DISK for this workspace, not the one the host meant to write. Set only
@@ -240,6 +270,12 @@ public sealed class ContinuousTestDaemonHost
     /// </summary>
     private const string UnavailableDeltaReason = "unavailable_delta";
 
+    /// <summary>
+    /// The poll answer that proves the saved cursor equals the live revision: nothing changed,
+    /// nothing is owed by the poll path. It is the only answer the idle drain accepts as settled.
+    /// </summary>
+    private const string SettledPollReason = "same_revision";
+
     private readonly string _workspaceRoot;
     private readonly ContinuousTestDaemonHostOptions _options;
     private readonly CtExecutionBudget _budget;
@@ -259,6 +295,7 @@ public sealed class ContinuousTestDaemonHost
     /// </summary>
     private readonly HashSet<string> _stopDetached;
 
+    private readonly CtIdleDrainPolicy _idleDrainPolicy;
     private readonly ContinuousTestWorktreeAdoptionOptions? _adoption;
     private readonly Func<string, bool> _hasOwnLiveDaemon;
     private readonly Func<string, bool> _isOptedIn;
@@ -331,6 +368,10 @@ public sealed class ContinuousTestDaemonHost
             Projects = _options.Projects ?? [],
             Enqueuer = _options.Enqueuer,
         };
+        _idleDrainPolicy = new CtIdleDrainPolicy(
+            _options.IdleDrainQuietPeriod
+                ?? ContinuousTestRevisionPoller.ResolveDebounceDelay(
+                    Environment.GetEnvironmentVariable(ContinuousTestRevisionPoller.DebounceEnvironmentVariable)));
         _adoption = _options.WorktreeAdoption;
         _hasOwnLiveDaemon = _adoption?.HasOwnLiveDaemon
             ?? (root => CtDaemonLease.TryReadLive(root) is not null);
@@ -576,6 +617,9 @@ public sealed class ContinuousTestDaemonHost
                 break;
 
             DateTimeOffset now = _options.Clock();
+            foreach (ContinuousTestWorkspaceContext context in EnumerateContexts())
+                TryScheduleIdleDrain(context, now);
+
             bool executing = false;
             List<ContinuousTestWorkspaceContext>? ready = null;
             foreach (ContinuousTestWorkspaceContext context in EnumerateContexts())
@@ -624,7 +668,13 @@ public sealed class ContinuousTestDaemonHost
                         // Every ready context drains under the ONE budget lease taken above: N family
                         // worktrees never mean N concurrent suites.
                         foreach (ContinuousTestWorkspaceContext context in ready)
+                        {
                             await context.Queue!.DrainReadyAsync(now, cancellationToken).ConfigureAwait(false);
+
+                            // A run is activity: the idle drain's quiet window restarts behind it,
+                            // so a follow-up drain needs both fresh quiet and the cooldown.
+                            context.LastActivityAt = _options.Clock();
+                        }
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
@@ -1128,6 +1178,13 @@ public sealed class ContinuousTestDaemonHost
                     EnqueueArmed: context.StartedAt is not null && context.Backoff.CanEnqueue,
                     OnRebuild: rebuilt => DemotePriorGreen(context, rebuilt)),
                 cancellationToken).ConfigureAwait(false);
+            // Settled means the saved cursor equals the live revision and the poll was healthy;
+            // every other answer is activity, which restarts the idle drain's quiet window.
+            context.PollSettled = poll.Freshness is not null
+                && string.Equals(poll.Reason, SettledPollReason, StringComparison.Ordinal);
+            if (!context.PollSettled)
+                context.LastActivityAt = _options.Clock();
+
             if (poll.Freshness is { } freshness)
             {
                 context.StartedAt ??= freshness;
@@ -1181,6 +1238,8 @@ public sealed class ContinuousTestDaemonHost
         }
         catch (Exception exception)
         {
+            context.PollSettled = false;
+            context.LastActivityAt = _options.Clock();
             context.Backoff.RecordDegraded();
             context.Watch.RecordError("poll_error");
 
@@ -1191,6 +1250,71 @@ public sealed class ContinuousTestDaemonHost
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// One context's idle-drain check, run every pass right before the ready scan. Gathers the
+    /// tick's observation and consults <see cref="CtIdleDrainPolicy"/>; when the policy fires, one
+    /// workspace-scope change per project is minted through
+    /// <see cref="ContinuousTestDaemonQueue.EnqueueIdleDrain"/> at the LIVE key the poller last
+    /// observed, with no debounce — the quiet window already elapsed — so the same pass's ready
+    /// scan executes it under the ordinary user-global execution budget. The stale count comes
+    /// from the same aggregate the status projection reads; a store that cannot answer reads as
+    /// zero owed, which fails closed.
+    /// </summary>
+    private void TryScheduleIdleDrain(ContinuousTestWorkspaceContext context, DateTimeOffset now)
+    {
+        if (context.Queue is not { } queue || context.Store is null || context.Projects.Count == 0)
+            return;
+        if (context.LatestFreshness is not { } freshness)
+            return;
+
+        context.LastIdleDrainAt ??= now;
+        var observation = new CtIdleDrainObservation(
+            Now: now,
+            StaleCount: ReadStaleCount(context, freshness),
+            QueueHasPendingWork: queue.HasPendingWork(),
+            RunExecuting: _drainInFlight,
+            PollSettled: context.PollSettled,
+            AutoRunsPaused: context.Unavailable.StuckReason is not null || !context.Backoff.CanEnqueue,
+            LastActivityAt: context.LastActivityAt,
+            LastDrainAt: context.LastIdleDrainAt);
+        if (!_idleDrainPolicy.ShouldDrain(observation))
+            return;
+
+        context.LastIdleDrainAt = now;
+        foreach (ContinuousTestProjectWorkItem item in ContinuousTestProjectInventory.MaterializeProjectWorkItems(
+                     context.Projects, context.WorkspaceRoot))
+        {
+            queue.EnqueueIdleDrain(new ContinuousTestDaemonChange(
+                item.Workspace,
+                freshness.Revision.ToString(CultureInfo.InvariantCulture),
+                freshness.IndexIdentity,
+                WorkspaceScope: true,
+                ObservedAt: now,
+                Command: item.Project.Command,
+                Framework: item.Project.Framework));
+        }
+
+        Diagnostic($"ct idle drain scheduled workspace={context.WorkspaceId} "
+            + $"revision={freshness.Revision} stale={observation.StaleCount}");
+    }
+
+    /// <summary>
+    /// The owed-work signal for the idle drain, read from the same status aggregate every other
+    /// projection uses. An unreadable <c>ct.db</c> answers zero: nothing is provably owed, so
+    /// nothing drains.
+    /// </summary>
+    private static int ReadStaleCount(ContinuousTestWorkspaceContext context, CtFreshnessKey freshness)
+    {
+        try
+        {
+            return context.Store!.AggregateContinuousTestStatuses(context.WorkspaceId, freshness).Stale;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
     }
 
     /// <summary>

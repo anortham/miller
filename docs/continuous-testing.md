@@ -232,6 +232,16 @@ CT runs real test processes, so every part of it is explicit and bounded.
 - Green means complete results at the current index key. When impact data is truncated, degraded, or
   unavailable, Miller marks everything stale and runs nothing. There is no whole-suite fallback and
   no optimistic green.
+- That stale backlog is not stranded: an idle daemon drains it once the workspace has settled. The
+  drain fires only when every guard holds — the queue holds no pending work and no run is executing,
+  the last poll was healthy with the poll cursor at the live index revision, automatic runs are not
+  paused, the workspace has been quiet for at least the debounce window, and no idle drain ran for
+  this workspace in the last 5 minutes (a fixed cooldown, also counted from daemon start, so a
+  freshly started daemon stays status-only for its first cooldown). What it runs is the stale set
+  plus owed red reruns, selected exactly as an explicit run selects its stale set and executed as an
+  explicit test-ID list — never as a whole-suite run, even when every case is stale — under the same
+  one-workspace execution budget as any other run. A drain that goes green converges and stops; one
+  whose own build re-stales cases repeats at most once per cooldown.
 
 ## Watching a session on the dashboard
 
