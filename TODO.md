@@ -59,12 +59,14 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
      keeps type-only. Root cause still unknown — hunted and refuted: null `old_text` (classified
      refusal), fuzzy `matches.Min` (guarded), rename `.Value` sites (guarded, wrong op). Blocked on
      the next field occurrence, which the new log line will name.
-  2. `context` tool latency — p50 ~7 s / p95 20–37 s. Diagnosed AND fix A1 shipped 2026-08-27
-     (`docs/plans/2026-08-27-context-latency-diagnosis.md`): the cold fact-cache load no longer
-     blocks anchor_resolution (4,813 ms → 6 ms measured; promotion skips once with
-     `term_rescue: skipped_cold_facts` while the load runs in the background). REMAINING: fix B1 —
-     graph_reach rebuilds per revision advance (1.3–4 s cold); give the reachability graph the
-     advance-on-revision shape or converge it in the leader.
+  2. `context` tool latency — p50 ~7 s / p95 20–37 s. Fixes A1 AND B1 shipped 2026-08-27
+     (`docs/plans/2026-08-27-context-latency-diagnosis.md`). A1: the cold fact-cache load no longer
+     blocks anchor_resolution (4,813 ms → 6 ms; background load + `term_rescue: skipped_cold_facts`).
+     B1: the Blazor evidence read no longer scans the 908k-row symbols table per revision advance
+     (supplemental 1,192 → 135 ms; post-save graph_reach 1,285 → 223 ms; post-save call 3.1 → 2.0 s;
+     cold first call 7.6 → 4.8 s). OPTIONAL remainder: a fresh process's first call still joins the
+     background fact load inside graph_reach (~2.9 s, that call only) — re-read field telemetry
+     after release before spending more here.
   3. A source file deleted mid-scan fails the whole store delta (`RequireCommitted`, os error 2,
      Tycho 8/26 ×3) and starts scan-failure backoff. Treat a vanished file as a delete; fix may
      belong in julie-extract.

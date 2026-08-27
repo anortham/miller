@@ -397,6 +397,27 @@ public sealed class BlazorComponentGraphReaderTests
             BlazorComponentGraphReader.Read(fixture.DbPath, facts));
     }
 
+    [Fact]
+    public void Read_EscapedComponentTypeSpelling_StillProducesTheEdge()
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "Pages.PageA", "Pages/PageA.razor"),
+            new JulieDbFixture.SymbolRow(
+                SharedWidgetId, "SharedWidget", "class", "razor", "Shared/SharedWidget.razor",
+                "public partial class SharedWidget", 1, null)
+            {
+                Metadata =
+                    """{"type":"razor\u002Dcomponent","qualifiedName":"Shared.SharedWidget"}""",
+            });
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "SharedWidget", "PageA", "[\"Shared\"]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Equal(
+            [new GraphEdge(PageAId, SharedWidgetId, "uses")],
+            BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
     private static JulieDbFixture.SymbolRow Component(
         string id,
         string name,

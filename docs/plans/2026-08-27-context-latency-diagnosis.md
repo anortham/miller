@@ -83,11 +83,27 @@ one-shot-CLI-only for a reason — resident processes deliberately keep the full
 bounded mode into the resident context path relaxes that rule and needs the follow-on question
 answered: does the full load then ever happen, or does trace/impact still pay it on their first call?
 
-### B1 — advance the graph cache instead of rebuilding it
+### B1 — SHIPPED 2026-08-27: the per-advance graph cost was one unbounded SQL scan, not the cache shape
 
-Give the reachability graph the same advance-on-revision shape the fact cache has, or converge it in
-the leader alongside the search sidecar so readers never rebuild it. Bigger slice, separate
-measurement, worth doing after A lands and the field p50 is re-read.
+Statement-level measurement (`Graph statement phase` log lines) pinned the post-advance
+graph_reach almost entirely on the SUPPLEMENTAL edge reload: **1,192 ms for 25 edges**, unchanged
+across runs. Root cause: `BlazorComponentGraphReader.ReadEvidence` selected every class/import
+symbol with metadata from the session's `symbols` view — and the plan is a full `SCAN` of the
+family store's 908k-row symbols table (8.1 GB file), because no symbols index leads on the columns
+that query filters by, and the visibility join alone cannot drive one. 61k rows then streamed into
+managed JSON parsing to find ~70 razor rows.
+
+Fix: bound the query to razor files via
+`file_id IN (SELECT file_id FROM files WHERE language='razor' OR path LIKE '%.razor')` — the IN
+over version ids lets SQLite probe the version_id-leading index instead of scanning (0.25 ms for
+the same rows, measured), plus a razor-type LIKE prefilter with the TestLinkageReader-style
+escaped-spelling arm, and a `files`-exists guard for minimal legacy DBs. Proof on the same
+3-call probe: supplemental **1,192 → 135 ms**; post-advance graph_reach **1,285 → 223 ms**;
+post-advance call total **3.1 s → 2.0 s**; cold first call 7.6 s (pre-A1) → 4.8 s.
+
+Remaining cold-call cost: graph resolution joins the A1 background fact load (~2.9 s inside
+graph_reach on a fresh process only). Overlapping or advance-shaping that load further is the next
+candidate slice if the field p50 warrants it after these two fixes are read back from telemetry.
 
 ## Verification plan
 

@@ -89,10 +89,35 @@ public static class BlazorComponentGraphReader
     private static BlazorEvidence ReadEvidence(Microsoft.Data.Sqlite.SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = """
+        // Two bounds keep this off the whole-table scan that cost ~1s per supplemental reload on an 8GB
+        // family store (2026-08-27 measurement: SCAN over 908k symbol rows for ~70 razor rows).
+        // (1) The razor-file bound drives the plan: components and @using directives only come from the razor
+        // extractor, so restricting to razor files' ids lets SQLite probe a version_id-leading index instead
+        // of scanning symbols — 0.25ms for the same 70 rows. `file_id`/`files` exist in the family-store
+        // session projection and the current legacy artifact; a minimal legacy DB without a files table gets
+        // the unbounded shape it always had. The file set accepts the recorded language OR the .razor
+        // extension so a files row whose language field diverges (test fixtures write 'csharp' for every
+        // path) cannot silently drop a component file; `files` is the small visible set, so the arm is free.
+        // (2) The type prefilter is a SUPERSET of what the parsers below accept: LIKE matches the
+        // discriminator anywhere in the blob, and the backslash arm covers a JSON \u-escaped spelling raw
+        // text cannot see (same gate shape as TestLinkageReader.HasLinkageMetadata).
+        string razorFileBound = SqliteSchemaObjects.Exists(connection, "files")
+            ? """
+              file_id IN (
+                SELECT file_id FROM files
+                WHERE language = 'razor' OR path LIKE '%.razor')
+              AND
+              """
+            : string.Empty;
+        command.CommandText = $"""
             SELECT symbol_id, path, name, kind, metadata_json
             FROM symbols
-            WHERE metadata_json IS NOT NULL AND kind IN ('class', 'import')
+            WHERE {razorFileBound} metadata_json IS NOT NULL AND kind IN ('class', 'import')
+              AND (metadata_json LIKE '%razor-component%'
+                OR metadata_json LIKE '%razor-directive%'
+                OR (instr(metadata_json, '\') > 0
+                  AND json_valid(metadata_json)
+                  AND json_extract(metadata_json, '$.type') IN ('razor-component', 'razor-directive')))
             ORDER BY path, start_line, symbol_id;
             """;
 
