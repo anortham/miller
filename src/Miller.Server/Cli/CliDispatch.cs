@@ -2256,9 +2256,11 @@ public static class CliDispatch
 
             if (string.IsNullOrWhiteSpace(result.Diff))
             {
-                outw.WriteLine(o.Has("json")
-                    ? ServerJson.Note("No impact — git diff is empty.")
-                    : "No impact — git diff is empty.");
+                string note = !o.Has("staged") &&
+                    ImpactTool.StagedChangesExist(gitDiffReader, ctx.WorkspaceRoot, o.Value("base"))
+                    ? "No impact — git diff is empty. Staged changes exist; retry with --staged."
+                    : "No impact — git diff is empty.";
+                outw.WriteLine(o.Has("json") ? ServerJson.Note(note) : note);
                 return 0;
             }
 

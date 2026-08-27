@@ -285,10 +285,10 @@ Commit mode: **serial-worker-commit within a batch is forbidden** — this campa
 **Approach:** In the empty-diff branch, when `staged` is false, run one extra `GitDiffReader.Read` with `Staged=true` (bounded, only on the already-empty path); pass a `stagedChangesExist` flag into `ImpactEmptyDiagnostic`; the `empty_git_diff` arm emits the conditional action and extends the message ("Staged changes exist; retry with staged=true." on the MCP path, the CLI flag spelling on the CLI path). MCP and CLI mirrors both covered by tests.
 
 **Acceptance criteria:**
-- [ ] Staged-only tree: the empty-diff diagnostic names staged changes and `diagnostic.next_actions` carries the staged retry in JSON.
-- [ ] Genuinely empty tree (nothing staged): output byte-identical to today.
-- [ ] `staged=true` path itself unchanged.
-- [ ] Focused scope green: `dotnet test --filter "FullyQualifiedName~ImpactToolTests|FullyQualifiedName~CliDispatchTests"`; diff handed to lead.
+- [x] Staged-only tree: the empty-diff diagnostic names staged changes and `diagnostic.next_actions` carries the staged retry in JSON.
+- [x] Genuinely empty tree (nothing staged): output byte-identical to today.
+- [x] `staged=true` path itself unchanged.
+- [x] Focused scope green: `dotnet test --filter "FullyQualifiedName~ImpactToolTests|FullyQualifiedName~CliDispatchTests"`; diff handed to lead.
 
 ### Task 8: CT build path ≤5 levels below the workspace root (finding 7)
 

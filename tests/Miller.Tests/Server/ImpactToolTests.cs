@@ -2098,9 +2098,110 @@ public sealed class ImpactToolTests
 
         string output = tool.Impact(git: true);
 
-        Assert.Single(git.Requests);
+        Assert.Equal(2, git.Requests.Count);
+        Assert.False(git.Requests[0].Staged);
+        Assert.True(git.Requests[1].Staged);
         Assert.Contains("No impact", output);
         Assert.Contains("git diff is empty", output);
+        Assert.DoesNotContain("staged=true", output);
+    }
+
+    [Fact]
+    public void Impact_GitFlag_EmptyDiffWithStagedChanges_SuggestsStagedRetry()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(""), GitDiffResult.Ok(ValidateDiff()));
+        var tool = new ImpactTool(provider, git);
+
+        string output = tool.Impact(git: true);
+
+        Assert.Equal(2, git.Requests.Count);
+        Assert.False(git.Requests[0].Staged);
+        Assert.True(git.Requests[1].Staged);
+        Assert.Null(git.Requests[1].BaseRef);
+        Assert.Contains("git diff is empty", output);
+        Assert.Contains("next: impact(git=true, staged=true)", output);
+        Assert.Contains("staged changes exist", output);
+    }
+
+    [Fact]
+    public void Impact_GitFlag_EmptyDiffWithStagedChangesJson_EmitsStagedRetryInNextActions()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(""), GitDiffResult.Ok(ValidateDiff()));
+        var tool = new ImpactTool(provider, git);
+
+        using var document = JsonDocument.Parse(tool.Impact(git: true, format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Equal("empty_git_diff", diagnostic.GetProperty("code").GetString());
+        Assert.Equal(
+            "The selected git diff contains no changes. Staged changes exist; retry with staged=true.",
+            diagnostic.GetProperty("message").GetString());
+        JsonElement action = Assert.Single(diagnostic.GetProperty("next_actions").EnumerateArray());
+        Assert.Equal("impact(git=true, staged=true)", action.GetProperty("call").GetString());
+    }
+
+    [Fact]
+    public void Impact_GitBase_EmptyDiffWithStagedChanges_ProbesAndNamesSameBase()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(""), GitDiffResult.Ok(ValidateDiff()));
+        var tool = new ImpactTool(provider, git);
+
+        string output = tool.Impact(@base: "origin/main");
+
+        Assert.Equal(2, git.Requests.Count);
+        Assert.Equal("origin/main", git.Requests[1].BaseRef);
+        Assert.True(git.Requests[1].Staged);
+        Assert.Contains("next: impact(git=true, base=\"origin/main\", staged=true)", output);
+    }
+
+    [Fact]
+    public void Impact_StagedFlag_EmptyDiff_DoesNotProbeAgain()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(""));
+        var tool = new ImpactTool(provider, git);
+
+        using var document = JsonDocument.Parse(tool.Impact(staged: true, format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Single(git.Requests);
+        Assert.True(git.Requests[0].Staged);
+        Assert.Equal(
+            "The selected git diff contains no changes.",
+            diagnostic.GetProperty("message").GetString());
+        Assert.Empty(diagnostic.GetProperty("next_actions").EnumerateArray());
+    }
+
+    [Fact]
+    public void Impact_GitFlag_EmptyDiff_FailedStagedProbe_KeepsPlainDiagnostic()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var git = new RecordingGitDiffReader(
+            GitDiffResult.Ok(""),
+            GitDiffResult.Fail("fatal: not a git repository"));
+        var tool = new ImpactTool(provider, git);
+
+        using var document = JsonDocument.Parse(tool.Impact(git: true, format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Equal(2, git.Requests.Count);
+        Assert.Equal(
+            "The selected git diff contains no changes.",
+            diagnostic.GetProperty("message").GetString());
+        Assert.Empty(diagnostic.GetProperty("next_actions").EnumerateArray());
     }
 
     [Fact]
@@ -2119,6 +2220,7 @@ public sealed class ImpactToolTests
         Assert.Equal(
             "The selected git diff contains no changes.",
             diagnostic.GetProperty("message").GetString());
+        Assert.Empty(diagnostic.GetProperty("next_actions").EnumerateArray());
     }
 
     [Fact]
@@ -2202,7 +2304,8 @@ public sealed class ImpactToolTests
 
         string output = tool.Impact();
 
-        Assert.Single(git.Requests);
+        Assert.Equal(2, git.Requests.Count);
+        Assert.True(git.Requests[1].Staged);
         Assert.Contains("git diff is empty", output);
     }
 

@@ -151,6 +151,7 @@ public sealed class ImpactTool
             bool useGitDiff = explicitGit || noArgDefault;
 
             bool emptyGitDiff = false;
+            bool stagedChangesExist = false;
             if (useGitDiff)
             {
                 GitDiffResult gitResult = _gitDiffReader.Read(new GitDiffRequest(context.WorkspaceRoot, @base, staged));
@@ -183,6 +184,10 @@ public sealed class ImpactTool
                 if (string.IsNullOrWhiteSpace(gitResult.Diff))
                 {
                     emptyGitDiff = true;
+                    if (!staged)
+                    {
+                        stagedChangesExist = StagedChangesExist(_gitDiffReader, context.WorkspaceRoot, @base);
+                    }
                 }
                 else
                 {
@@ -270,7 +275,9 @@ public sealed class ImpactTool
                     emptyReason ?? ImpactEmptyReason.NoImpactedSymbols,
                     target,
                     unseededPaths.FirstOrDefault(),
-                    diagnosticTraceTarget);
+                    diagnosticTraceTarget,
+                    stagedChangesExist,
+                    @base);
             }
 
             if (telemetry is not null)
@@ -374,7 +381,9 @@ public sealed class ImpactTool
         ImpactEmptyReason reason,
         string? target,
         string? changedPath,
-        string? diagnosticTraceTarget)
+        string? diagnosticTraceTarget,
+        bool stagedChangesExist = false,
+        string? gitBaseRef = null)
     {
         string code = reason switch
         {
@@ -389,6 +398,12 @@ public sealed class ImpactTool
         string? actionTarget = string.IsNullOrWhiteSpace(target) ? changedPath : target;
         IReadOnlyList<ToolDiagnosticAction> actions = code switch
         {
+            "empty_git_diff" when stagedChangesExist =>
+            [
+                new ToolDiagnosticAction(
+                    StagedRetryCall(gitBaseRef),
+                    "staged changes exist; rerun impact over the staged diff"),
+            ],
             "no_seed_symbols" => ChangedPathRecoveryActions(actionTarget),
             "no_dependents" when
                 string.IsNullOrWhiteSpace(target) && !string.IsNullOrWhiteSpace(changedPath) =>
@@ -418,6 +433,8 @@ public sealed class ImpactTool
             ? ToolDiagnostic.Ambiguity(code, "Impact target is ambiguous.", actions)
             : ToolDiagnostic.ExpectedEmpty(code, code switch
             {
+                "empty_git_diff" when stagedChangesExist =>
+                    "The selected git diff contains no changes. Staged changes exist; retry with staged=true.",
                 "empty_git_diff" => "The selected git diff contains no changes.",
                 "no_seed_symbols" => "No indexed symbols intersected the supplied changes.",
                 "unresolved_target" => "Impact could not resolve an exact target.",
@@ -449,6 +466,19 @@ public sealed class ImpactTool
                     "workspace(operation=\"refresh\")",
                     "refresh changed files before retrying impact"),
             ];
+
+    /// <summary>Bounded probe behind the empty-diff hint: one staged read against the same base. A failed
+    /// probe reports false — the primary diff already succeeded, so the result stays an honest empty.</summary>
+    internal static bool StagedChangesExist(IGitDiffReader gitDiffReader, string workspaceRoot, string? baseRef)
+    {
+        GitDiffResult stagedProbe = gitDiffReader.Read(new GitDiffRequest(workspaceRoot, baseRef, Staged: true));
+        return stagedProbe.Success && !string.IsNullOrWhiteSpace(stagedProbe.Diff);
+    }
+
+    private static string StagedRetryCall(string? baseRef) =>
+        string.IsNullOrWhiteSpace(baseRef)
+            ? "impact(git=true, staged=true)"
+            : $"impact(git=true, base=\"{EscapeDiagnosticTarget(baseRef)}\", staged=true)";
 
     private static string EscapeDiagnosticTarget(string target)
     {

@@ -3348,9 +3348,87 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Equal(0, code);
         Assert.Empty(errText);
-        Assert.Single(git.Requests);
+        Assert.Equal(2, git.Requests.Count);
+        Assert.False(git.Requests[0].Staged);
+        Assert.True(git.Requests[1].Staged);
         Assert.Contains("No impact", outText);
         Assert.Contains("git diff is empty", outText);
+        Assert.DoesNotContain("Staged changes exist", outText);
+    }
+
+    [Fact]
+    public void Impact_GitFlag_EmptyDiffWithStagedChanges_SuggestsStagedFlag()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(""), GitDiffResult.Ok(GetUserDiff()));
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "--git" },
+            Context(fx.DbPath, fx.WorkspaceRoot),
+            gitDiffReader: git);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Equal(2, git.Requests.Count);
+        Assert.False(git.Requests[0].Staged);
+        Assert.True(git.Requests[1].Staged);
+        Assert.Null(git.Requests[1].BaseRef);
+        Assert.Contains("git diff is empty", outText);
+        Assert.Contains("Staged changes exist; retry with --staged.", outText);
+    }
+
+    [Fact]
+    public void Impact_GitBase_EmptyDiffWithStagedChanges_ProbesSameBase()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(""), GitDiffResult.Ok(GetUserDiff()));
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "--git", "--base", "HEAD~1" },
+            Context(fx.DbPath, fx.WorkspaceRoot),
+            gitDiffReader: git);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Equal(2, git.Requests.Count);
+        Assert.Equal("HEAD~1", git.Requests[1].BaseRef);
+        Assert.True(git.Requests[1].Staged);
+        Assert.Contains("Staged changes exist; retry with --staged.", outText);
+    }
+
+    [Fact]
+    public void Impact_GitFlag_EmptyDiffWithStagedChangesJson_ExtendsTheNote()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(""), GitDiffResult.Ok(GetUserDiff()));
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "--git", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot),
+            gitDiffReader: git);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("Staged changes exist; retry with --staged.", outText);
+    }
+
+    [Fact]
+    public void Impact_GitStagedFlag_EmptyDiff_DoesNotProbeAgain()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(""));
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "--git", "--staged" },
+            Context(fx.DbPath, fx.WorkspaceRoot),
+            gitDiffReader: git);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Single(git.Requests);
+        Assert.True(git.Requests[0].Staged);
+        Assert.Contains("git diff is empty", outText);
+        Assert.DoesNotContain("Staged changes exist", outText);
     }
 
     [Fact]
