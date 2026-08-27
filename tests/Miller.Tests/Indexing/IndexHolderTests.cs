@@ -175,6 +175,83 @@ public sealed class IndexHolderTests
     }
 
     [Fact]
+    public void LazyGeneration_AFaultedLoadIsDiscarded_TheNextAccessRerunsTheFactoryAndCanSucceed()
+    {
+        int loads = 0;
+        var holder = new IndexHolder(
+            () =>
+            {
+                loads++;
+                if (loads == 1)
+                    throw new InvalidOperationException("first load failed");
+                return IndexWith("Alpha");
+            },
+            builtRevision: 3,
+            documentCount: 1,
+            knownExtensionsCount: 1);
+
+        Assert.Throws<InvalidOperationException>(() => holder.Current);
+
+        var (index, revision) = holder.Snapshot();
+        Assert.NotEmpty(index.FindByName("Alpha"));
+        Assert.Equal(3, revision);
+        Assert.Equal(2, loads);
+        Assert.Same(holder.Current, holder.Current);
+        Assert.Equal(2, loads);
+    }
+
+    [Fact]
+    public void LazyGeneration_EveryAccessAfterAFaultRerunsTheFactory()
+    {
+        int loads = 0;
+        var holder = new IndexHolder(
+            () =>
+            {
+                loads++;
+                throw new InvalidOperationException("load failed");
+            },
+            builtRevision: 9,
+            documentCount: 4,
+            knownExtensionsCount: 2,
+            builtArtifactId: "store:gen");
+
+        Assert.Throws<InvalidOperationException>(() => holder.Current);
+        Assert.Throws<InvalidOperationException>(() => holder.Current);
+
+        Assert.Equal(2, loads);
+        IndexHolderMetadata metadata = holder.MetadataSnapshot();
+        Assert.Equal(9, metadata.Revision);
+        Assert.Equal("store:gen", metadata.ArtifactId);
+        Assert.Equal(4, metadata.DocumentCount);
+        Assert.Equal(2, metadata.KnownExtensionsCount);
+    }
+
+    [Fact]
+    public void LazyGeneration_ASwapDuringAFailingLoadWins_TheFaultDiscardNeverClobbersIt()
+    {
+        var replacement = IndexWith("Beta");
+        int faultyLoads = 0;
+        IndexHolder holder = null!;
+        holder = new IndexHolder(
+            () =>
+            {
+                faultyLoads++;
+                holder.Swap(replacement, revision: 2, artifactId: "store:new");
+                throw new InvalidOperationException("load failed");
+            },
+            builtRevision: 1,
+            documentCount: 1,
+            knownExtensionsCount: 1);
+
+        Assert.Throws<InvalidOperationException>(() => holder.Current);
+
+        Assert.Same(replacement, holder.Current);
+        Assert.Equal(2, holder.BuiltRevision);
+        Assert.Equal("store:new", holder.BuiltArtifactId);
+        Assert.Equal(1, faultyLoads);
+    }
+
+    [Fact]
     public void SwapLazy_ReplacesMetadataWithoutLoadingEitherGeneration()
     {
         int oldLoads = 0;

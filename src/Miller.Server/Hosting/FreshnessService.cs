@@ -393,23 +393,31 @@ public sealed class FreshnessService : BackgroundService
         return new WorkspaceIndexFacts(counts.Symbols, extensions);
     }
 
+    // A generation promoted between swap time and materialization is not an error: re-resolve the CURRENT
+    // identity and reload, bounded like the sidecar reopen loop (SymbolSearchSidecar.OpenStoreRequired).
+    // Only an identity that keeps moving on every attempt still throws. The pinned-read rule ("a bounded
+    // cache never advances onto a newer generation") governs fact reads within one open session, not which
+    // generation a fresh materialization loads.
     private MillerRepositoryIndex LoadPinnedStoreIndex(
         string dbPath,
         string workspaceRoot,
         string? workspaceId,
         string expectedIdentity)
     {
-        using WorkspaceReadHandle reader = _openReadSession(
-            dbPath,
-            workspaceRoot,
-            workspaceId,
-            true);
-        if (!string.Equals(reader.Snapshot.IndexIdentity, expectedIdentity, StringComparison.Ordinal))
+        string expected = expectedIdentity;
+        for (int attempt = 0; attempt < StoreSidecarCatalog.ReadableOpenAttempts; attempt++)
         {
-            throw new InvalidOperationException(
-                "The family-store generation changed before its lazy repository was loaded; retry after freshness converges.");
+            using WorkspaceReadHandle reader = _openReadSession(
+                dbPath,
+                workspaceRoot,
+                workspaceId,
+                true);
+            if (string.Equals(reader.Snapshot.IndexIdentity, expected, StringComparison.Ordinal))
+                return RepositoryIndexLoader.LoadSession(reader);
+            expected = reader.Snapshot.IndexIdentity;
         }
-        return RepositoryIndexLoader.LoadSession(reader);
+        throw new InvalidOperationException(
+            $"The family-store generation changed during every one of {StoreSidecarCatalog.ReadableOpenAttempts} load attempts; retry after freshness converges.");
     }
 }
 

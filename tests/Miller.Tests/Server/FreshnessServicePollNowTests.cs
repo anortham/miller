@@ -325,7 +325,7 @@ public sealed class FreshnessServicePollNowTests : IDisposable
     }
 
     [Fact]
-    public void PollNow_FamilyStoreLazyLoadRejectsANewerGenerationThanItsMetadata()
+    public void PollNow_FamilyStoreLazyLoadRetriesOntoTheCurrentGenerationAfterAPromote()
     {
         using var fx = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema,
@@ -347,18 +347,65 @@ public sealed class FreshnessServicePollNowTests : IDisposable
         };
         bootstrap.SeedForTest(workspace, holder);
         WorkspaceReadSnapshot snapshot = FamilySnapshot(fx.WorkspaceRoot, storeLogSequence: 5);
+        int opens = 0;
         var service = new FreshnessService(
             bootstrap,
             NullLogger<FreshnessService>.Instance,
             storeEnabled: static () => true,
             probe: (_, _, _, _) => new WorkspaceFreshnessProbe(5, "family:gen-002", "view-a"),
-            openReadSession: (_, _, _, _) => new WorkspaceReadHandle(new FixtureSession(snapshot, fx.DbPath)));
+            openReadSession: (_, _, _, _) =>
+            {
+                opens++;
+                return new WorkspaceReadHandle(new FixtureSession(snapshot, fx.DbPath));
+            });
 
         Assert.True(service.PollNow().Swapped);
         snapshot = FamilySnapshot(fx.WorkspaceRoot, storeLogSequence: 6);
 
+        int opensBeforeLoad = opens;
+        Assert.NotEmpty(holder.Current.FindByName(JulieDbFixture.DefaultRows[0].Name));
+        Assert.Equal(opensBeforeLoad + 2, opens);
+    }
+
+    [Fact]
+    public void PollNow_FamilyStoreLazyLoadThrowsWhenTheGenerationMovesOnEveryAttempt()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            JulieDbFixture.DefaultRows,
+            workspaceId: Ws,
+            revisions: new[] { new JulieDbFixture.RevisionRow(5) });
+        var holder = new IndexHolder(
+            MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath)),
+            builtRevision: 1,
+            builtArtifactId: "store:old");
+        string tempHome = CreateTempHome();
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = tempHome;
+        var workspace = WorkspaceContext.Create(fx.WorkspaceRoot, AppContext.BaseDirectory, tempHome) with
+        {
+            ExtractDbPath = fx.DbPath,
+            WorkspaceId = Ws,
+        };
+        bootstrap.SeedForTest(workspace, holder);
+        long sequence = 5;
+        var service = new FreshnessService(
+            bootstrap,
+            NullLogger<FreshnessService>.Instance,
+            storeEnabled: static () => true,
+            probe: (_, _, _, _) => new WorkspaceFreshnessProbe(5, "family:gen-002", "view-a"),
+            openReadSession: (_, _, _, _) => new WorkspaceReadHandle(
+                new FixtureSession(FamilySnapshot(fx.WorkspaceRoot, ++sequence), fx.DbPath)));
+
+        Assert.True(service.PollNow().Swapped);
+
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => holder.Current);
         Assert.Contains("generation changed", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            StoreSidecarCatalog.ReadableOpenAttempts.ToString(),
+            error.Message,
+            StringComparison.Ordinal);
     }
 
     private static WorkspaceReadSnapshot FamilySnapshot(string root, long storeLogSequence) =>

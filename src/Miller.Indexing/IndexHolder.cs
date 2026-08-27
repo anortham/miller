@@ -8,6 +8,7 @@ public sealed class IndexHolder
 {
     private sealed record IndexState(
         Lazy<MillerRepositoryIndex> Index,
+        Func<MillerRepositoryIndex> Factory,
         long Revision,
         string? ArtifactId,
         int DocumentCount,
@@ -42,8 +43,10 @@ public sealed class IndexHolder
             knownExtensionsCount);
     }
 
-    /// <summary>The current frozen index. Read per tool call; never null.</summary>
-    public MillerRepositoryIndex Current => _snapshot.Index.Value;
+    /// <summary>The current frozen index. Read per tool call; never null. A lazy factory that throws is
+    /// discarded rather than memoized, so the next read re-runs the factory instead of replaying one
+    /// race's exception until the next swap.</summary>
+    public MillerRepositoryIndex Current => Materialize(_snapshot);
 
     /// <summary>The revision the <see cref="Current"/> index was built from (its <c>extraction_revisions</c> cursor).</summary>
     public long BuiltRevision => _snapshot.Revision;
@@ -61,7 +64,7 @@ public sealed class IndexHolder
     public (MillerRepositoryIndex Index, long Revision) Snapshot()
     {
         var snapshot = _snapshot;
-        return (snapshot.Index.Value, snapshot.Revision);
+        return (Materialize(snapshot), snapshot.Revision);
     }
 
     /// <summary>Read generation metadata without materializing the repository.</summary>
@@ -103,16 +106,49 @@ public sealed class IndexHolder
             knownExtensionsCount);
     }
 
+    private MillerRepositoryIndex Materialize(IndexState state)
+    {
+        try
+        {
+            return state.Index.Value;
+        }
+        catch
+        {
+            DiscardFaultedState(state);
+            throw;
+        }
+    }
+
+    // Lazy<T> under ExecutionAndPublication memoizes a factory exception, so one transient race would
+    // replay it on every read until the next swap. Replacing the faulted state (only while it is still
+    // the published one — a concurrent Swap/SwapLazy always wins) lets the next read re-run the factory.
+    // CompareExchange, not lock-check-assign: Swap writes _snapshot without a lock, so a check-then-assign
+    // window could clobber a swap that landed between the two.
+    private void DiscardFaultedState(IndexState faulted)
+    {
+        IndexState replacement = faulted with { Index = NewLazy(faulted.Factory) };
+#pragma warning disable CS0420 // Interlocked treats the volatile field correctly by definition.
+        Interlocked.CompareExchange(ref _snapshot, replacement, faulted);
+#pragma warning restore CS0420
+    }
+
+    private static Lazy<MillerRepositoryIndex> NewLazy(Func<MillerRepositoryIndex> factory) =>
+        new(factory, LazyThreadSafetyMode.ExecutionAndPublication);
+
     private static IndexState CreateEagerState(
         MillerRepositoryIndex index,
         long revision,
-        string? artifactId) =>
-        new(
-            new Lazy<MillerRepositoryIndex>(() => index, LazyThreadSafetyMode.ExecutionAndPublication),
+        string? artifactId)
+    {
+        Func<MillerRepositoryIndex> factory = () => index;
+        return new IndexState(
+            NewLazy(factory),
+            factory,
             revision,
             artifactId,
             index.DocumentCount,
             index.KnownExtensions.Count);
+    }
 
     private static IndexState CreateLazyState(
         Func<MillerRepositoryIndex> indexFactory,
@@ -125,7 +161,8 @@ public sealed class IndexHolder
         ArgumentOutOfRangeException.ThrowIfNegative(documentCount);
         ArgumentOutOfRangeException.ThrowIfNegative(knownExtensionsCount);
         return new IndexState(
-            new Lazy<MillerRepositoryIndex>(indexFactory, LazyThreadSafetyMode.ExecutionAndPublication),
+            NewLazy(indexFactory),
+            indexFactory,
             revision,
             artifactId,
             documentCount,

@@ -1148,18 +1148,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             }
 
             var holder = new IndexHolder(
-                () =>
-                {
-                    using FamilyStoreReadSession lazySession =
-                        FamilyStoreReadSession.Open(servingBinding, stableWorkspaceId);
-                    if (!string.Equals(lazySession.Snapshot.IndexIdentity, indexIdentity, StringComparison.Ordinal))
-                    {
-                        throw new InvalidOperationException(
-                            "The family-store generation changed before its lazy repository was loaded; " +
-                            "retry after freshness converges.");
-                    }
-                    return RepositoryIndexLoader.LoadSession(lazySession);
-                },
+                () => LoadStoreGeneration(servingBinding, stableWorkspaceId, indexIdentity),
                 builtRevision,
                 checked((int)indexFacts.DocumentCount),
                 indexFacts.KnownExtensionsCount,
@@ -1185,6 +1174,26 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 ledger.Dispose();
             throw;
         }
+    }
+
+    // Mirrors FreshnessService.LoadPinnedStoreIndex: a generation promoted between bootstrap and
+    // materialization re-resolves to the CURRENT identity instead of failing; only an identity that keeps
+    // moving on every attempt still throws.
+    private static MillerRepositoryIndex LoadStoreGeneration(
+        StoreFamilyBinding binding,
+        string stableWorkspaceId,
+        string expectedIdentity)
+    {
+        string expected = expectedIdentity;
+        for (int attempt = 0; attempt < StoreSidecarCatalog.ReadableOpenAttempts; attempt++)
+        {
+            using FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding, stableWorkspaceId);
+            if (string.Equals(session.Snapshot.IndexIdentity, expected, StringComparison.Ordinal))
+                return RepositoryIndexLoader.LoadSession(session);
+            expected = session.Snapshot.IndexIdentity;
+        }
+        throw new InvalidOperationException(
+            $"The family-store generation changed during every one of {StoreSidecarCatalog.ReadableOpenAttempts} load attempts; retry after freshness converges.");
     }
 
     private static bool TryReadReadyStoreBinding(

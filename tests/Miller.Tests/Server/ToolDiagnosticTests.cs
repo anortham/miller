@@ -199,6 +199,47 @@ public sealed class ToolDiagnosticTests : IDisposable
     }
 
     [Fact]
+    public void FromException_IndexGenerationMovement_IsUnavailableWithARetryAction()
+    {
+        var exception = new InvalidOperationException(
+            "The family-store generation changed before its lazy repository was loaded; retry after freshness converges.");
+
+        ToolDiagnostic diagnostic = ToolDiagnostic.FromException(exception);
+
+        Assert.Equal("index_reloading", diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.Unavailable, diagnostic.Class);
+        Assert.Equal(ToolDiagnosticOutcome.Error, diagnostic.Outcome);
+        Assert.Equal(
+            "The index was replaced while loading. Retry the call; the next attempt loads the new index.",
+            diagnostic.Message);
+        Assert.Contains(
+            diagnostic.NextActions,
+            action => action.Call.Contains("retry", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void FromException_IndexGenerationMovementAfterExhaustedRetries_IsStillUnavailable()
+    {
+        var exception = new InvalidOperationException(
+            "The family-store generation changed during every one of 4 load attempts; retry after freshness converges.");
+
+        ToolDiagnostic diagnostic = ToolDiagnostic.FromException(exception);
+
+        Assert.Equal("index_reloading", diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.Unavailable, diagnostic.Class);
+    }
+
+    [Fact]
+    public void FromException_OtherInvalidOperationMessages_StayInternalFailures()
+    {
+        ToolDiagnostic diagnostic = ToolDiagnostic.FromException(
+            new InvalidOperationException("The family store import completed without a readable view binding."));
+
+        Assert.Equal("internal_failure", diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.InternalFailure, diagnostic.Class);
+    }
+
+    [Fact]
     public void FromException_AmbiguousWorkspaceSelector_IsAnInputRefusalNotAnInternalFailure()
     {
         using WorkspaceRegistry registry = OpenRegistryWithTwoSharedPrefixWorkspaces();

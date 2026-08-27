@@ -131,6 +131,11 @@ public sealed record ToolDiagnostic(
                 Refusal("invalid_request", exception.Message),
             InvalidOperationException when IsMarkerListMistake(exception.Message) =>
                 Refusal("invalid_request", exception.Message),
+            InvalidOperationException when IsIndexGenerationMovement(exception.Message) =>
+                Unavailable(
+                    "index_reloading",
+                    "The index was replaced while loading. Retry the call; the next attempt loads the new index.",
+                    [new ToolDiagnosticAction("retry the same call", "the next attempt loads the new index")]),
             NotSupportedException =>
                 Unsupported("unsupported", exception.Message),
             _ => InternalFailure("internal_failure", exception.Message),
@@ -154,6 +159,16 @@ public sealed record ToolDiagnostic(
     /// </summary>
     private static bool IsMarkerListMistake(string message) =>
         message.StartsWith("markers must be", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Recognizes the generation-movement rejection thrown by the lazy store-index factories
+    /// (<c>FreshnessService.LoadPinnedStoreIndex</c> and the bootstrap's store factory) after their bounded
+    /// reload retries are exhausted. The rule is keyed to that message rather than to the exception type
+    /// because a bare <see cref="InvalidOperationException"/> is a genuine internal fault and must keep
+    /// classifying as one.
+    /// </summary>
+    private static bool IsIndexGenerationMovement(string message) =>
+        message.StartsWith("The family-store generation changed", StringComparison.OrdinalIgnoreCase);
 
     public string ClassName() => Class switch
     {
