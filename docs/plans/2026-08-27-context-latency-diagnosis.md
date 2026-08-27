@@ -63,6 +63,13 @@ fresh server process (fully cold, same query as the baseline): anchor_resolution
 refinement restored). Cold-call total 7,633 → 5,666 ms; the remainder is Cost B (graph_reach
 3,978 ms in a fresh process), which is the next slice.
 
+Post-review hardening (same day, from the Codex review of the shipped slice): the background warm is
+store-owned and single-flight per scope (`RevisionFactCacheStore.WarmInBackground`) — concurrent cold
+calls share one task instead of each parking a thread-pool worker, a faulted warm clears itself for
+retry, and the ContextTool only probes/warms when promotion could actually run (non-blank query
+without test/def intent). The `IsWarm` probe is advisory by design: a swap between probe and read
+costs one blocking load — the pre-A1 behavior — never a wrong answer.
+
 In the resident server, term-rescue promotion asks the `RevisionFactCacheStore` whether it ALREADY
 holds (or can cheaply advance to) the pinned identity:
 
@@ -104,6 +111,33 @@ post-advance call total **3.1 s → 2.0 s**; cold first call 7.6 s (pre-A1) → 
 Remaining cold-call cost: graph resolution joins the A1 background fact load (~2.9 s inside
 graph_reach on a fresh process only). Overlapping or advance-shaping that load further is the next
 candidate slice if the field p50 warrants it after these two fixes are read back from telemetry.
+
+## Post-fix eval pass (2026-08-27, same machine, current build)
+
+Fresh-server probe of the other read tools — cold / warm / after a one-file revision advance:
+
+| Tool | cold | warm | post-advance |
+|---|---:|---:|---:|
+| search symbol | 141 ms | 46 ms | 60 ms |
+| search source | 79 ms | 47 ms | 57 ms |
+| inspect overview | 3,700 ms | 245 ms | 482 ms |
+| inspect full | 251 ms | 235 ms | 250 ms |
+| trace refs | 154 ms | 142 ms | 138 ms |
+| impact target | 1,464 ms | 946 ms | 1,124 ms |
+
+The 3.7 s cold inspect is the once-per-process fact-cache load — legitimate there (references ARE
+inspect's answer), and any earlier context call's A1 background warm absorbs it. Field telemetry
+ranked by total week wall-time puts `inspect full` first on volume (5,535 calls, p50 215 ms — per
+call healthy) and `impact git_diff` second (102 calls, p50 3.8 s, p95 22.5 s). The impact tail
+attributes to `wait_reason`: `workspace_refresh` p50 7.6 s (waiting for the dirty tree to index —
+the freshness contract, not waste) and `index_load` p50 3 s (the same once-per-identity cache
+loads). Probe confirms: impact git_diff right after a save waits ~10 s for converge, then answers
+in ~0.6 s once fresh.
+
+Follow-up candidate (recorded, not scheduled): trigger the A1 background fact-cache warm from the
+LEADER's converge completion instead of only the first context call, so every revision advance
+re-warms while the agent reads the diff. Would shave the `index_load` arm of inspect-full p95 and
+impact. The store advance is incremental, so the per-save cost is bounded.
 
 ## Verification plan
 

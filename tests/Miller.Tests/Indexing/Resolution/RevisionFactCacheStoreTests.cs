@@ -78,6 +78,62 @@ public sealed class RevisionFactCacheStoreTests
     }
 
     [Fact]
+    public async Task WarmInBackground_ColdConcurrentCallsShareOneLoad_AndAWarmScopeSpawnsNothing()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        fixture.AddFile(1, "a.cs");
+        fixture.AddSymbol(1, "a", "Alpha", "class", "a.cs");
+
+        var store = new RevisionFactCacheStore();
+        using var loadGate = new ManualResetEventSlim(initialState: false);
+        int opens = 0;
+        Func<Microsoft.Data.Sqlite.SqliteConnection> blockingOpen = () =>
+        {
+            Interlocked.Increment(ref opens);
+            loadGate.Wait(TimeSpan.FromSeconds(10));
+            return fixture.OpenRead();
+        };
+
+        Task first = store.WarmInBackground("ws-a", "rev-1", blockingOpen, fixture.Visibility());
+        Task second = store.WarmInBackground("ws-a", "rev-1", blockingOpen, fixture.Visibility());
+        Assert.Same(first, second);
+
+        loadGate.Set();
+        await first;
+
+        Assert.True(store.IsWarm("ws-a", "rev-1"));
+        Assert.Equal(1, opens);
+        Assert.Same(
+            Task.CompletedTask,
+            store.WarmInBackground("ws-a", "rev-1", blockingOpen, fixture.Visibility()));
+        Assert.Equal(1, opens);
+    }
+
+    [Fact]
+    public async Task WarmInBackground_AFaultedLoadClearsItself_SoTheNextCallRetries()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        fixture.AddFile(1, "a.cs");
+        fixture.AddSymbol(1, "a", "Alpha", "class", "a.cs");
+
+        var store = new RevisionFactCacheStore();
+        int calls = 0;
+        Func<Microsoft.Data.Sqlite.SqliteConnection> failingOnce = () =>
+            Interlocked.Increment(ref calls) == 1
+                ? throw new InvalidOperationException("simulated open failure")
+                : fixture.OpenRead();
+
+        Task first = store.WarmInBackground("ws-a", "rev-1", failingOnce, fixture.Visibility());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => first);
+        Assert.False(store.IsWarm("ws-a", "rev-1"));
+
+        await store.WarmInBackground("ws-a", "rev-1", failingOnce, fixture.Visibility());
+
+        Assert.True(store.IsWarm("ws-a", "rev-1"));
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
     public void Store_IsRegisteredAsSingleton()
     {
         var services = new ServiceCollection();

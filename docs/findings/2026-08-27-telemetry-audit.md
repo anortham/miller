@@ -44,6 +44,18 @@ Fix path, in order:
    metadata so recurrence is groupable without the message.
 3. Reproduce or wait for the next occurrence with the log in place, then fix the actual bug.
 
+**RESOLVED 2026-08-27 (same day).** The audit's "unrecoverable after the fact" premise was wrong:
+the JSONL EXPORT omits `error_message`/`error_detail`, but the local `~/.miller/telemetry.db`
+`tool_telemetry` table stores both. Reading them directly: all 107 rows (the 102 above plus 5 older)
+are ONE cause — `FreshnessService.LoadPinnedStoreIndex` throwing "The family-store generation changed
+before its lazy repository was loaded; retry after freshness converges" when `EditTool.Edit` forces
+`IndexHolder.Current` while a freshness poll swaps the pinned generation. The fix already shipped in
+v1.24.1 (550dc679: retry the lazy load when the generation moves, stop caching the failure, and map
+the residual message to the `index_reloading`/Unavailable diagnostic with a retry action). Telemetry
+confirms: zero occurrences on any 1.24.1+ build; the final row (2026-08-27T02:17Z) is a lingering
+1.24.0 process. The WRN backstop log line shipped anyway as defense in depth for the next NOVEL
+escape. Audit-method lesson: read the local DB's `error_message` before declaring a crash opaque.
+
 ## Priority 2 — the `context` tool is slow for everyone: p50 ~7 s, p95 20–37 s
 
 Per-phase telemetry names the cost: `read_lookup_count` is 1,300–2,000 per call, and the lookup

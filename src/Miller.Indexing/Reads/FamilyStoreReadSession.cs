@@ -111,8 +111,9 @@ public sealed class FamilyStoreReadSession :
 
     /// <summary>
     /// Load the shared fact cache for this session's pinned identity off the calling thread. The load opens
-    /// its own read-only connection, so it outlives this session safely; concurrent calls share one load
-    /// through the store's lazy. No-op without a shared store — there is nothing to warm for later readers.
+    /// its own read-only connection, so it outlives this session safely; concurrent cold calls share one
+    /// in-flight task through the store's single-flight warm. No-op without a shared store — there is
+    /// nothing to warm for later readers.
     /// </summary>
     internal Task WarmResolutionFactsInBackground()
     {
@@ -120,11 +121,12 @@ public sealed class FamilyStoreReadSession :
             return Task.CompletedTask;
 
         StoreVisibility visibility = Visibility;
-        string scope = FactCacheScope;
-        string identity = FactCacheIdentity;
         string databasePath = visibility.StoreDatabasePath;
-        return Task.Run(() =>
-            store.GetOrAdvance(scope, identity, () => OpenReadOnly(databasePath), visibility));
+        return store.WarmInBackground(
+            FactCacheScope,
+            FactCacheIdentity,
+            () => OpenReadOnly(databasePath),
+            visibility);
     }
 
     private QueryTimeResolutionReader CreateResolutionReader()

@@ -198,9 +198,12 @@ public sealed partial class ContextTool
                         // one thing on this path that can force the whole-generation fact-cache load (~5s on a
                         // 1.8k-file repo, measured 2026-08-27). When the shared store is cold, skip the
                         // refinement for THIS call and start the load in the background so the next call has it.
+                        // A call whose promotion never runs (blank query, test/def intent) neither probes nor
+                        // warms — warming there spends a whole-generation load nothing on this path will read.
                         // reference_mode=usage is untouched: there the caller asked for references by name.
-                        bool termRescueFactsWarm = context.ReadSession.ResolutionFactsWarm;
-                        if (!termRescueFactsWarm)
+                        bool termRescueCanRun = !string.IsNullOrWhiteSpace(query) && !HasTestOrDefIntent(query);
+                        bool termRescueFactsWarm = termRescueCanRun && context.ReadSession.ResolutionFactsWarm;
+                        if (termRescueCanRun && !termRescueFactsWarm)
                         {
                             telemetry?.SetMetadata("term_rescue", "skipped_cold_facts");
                             context.ReadSession.WarmResolutionFactsInBackground().ContinueWith(

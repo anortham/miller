@@ -176,9 +176,9 @@ public sealed class EditTool
             if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
             {
                 telemetry?.SetError(ex);
-                // Telemetry keeps only the exception TYPE (privacy rule); the local shared log is the one
-                // place the full stack survives, and without it a recurring escape is undiagnosable
-                // (2026-08-27 telemetry audit: 102 opaque unhandled_InvalidOperationException rows).
+                // The telemetry EXPORT carries only the exception type (privacy rule); message and stack live
+                // in the local-only telemetry.db columns and here in the shared log, where a recurring escape
+                // is diagnosable next to the tool's other lines (2026-08-27 telemetry audit).
                 _logger.LogWarning(
                     ex,
                     "edit {Operation} failed with an unhandled exception; reported to the caller as internal_failure",

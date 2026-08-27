@@ -53,12 +53,13 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
 ## Active
 
 - Telemetry audit 2026-08-27 (`docs/findings/2026-08-27-telemetry-audit.md`), in priority order:
-  1. `edit replace_text` unhandled `InvalidOperationException` — 53% error rate over the last 7 days,
-     every version 1.20.1→1.24.0, four workspaces. Diagnosability half DONE (uncommitted): the
-     `EditTool.Edit` backstop now logs the full exception + stack at WRN to the shared log; telemetry
-     keeps type-only. Root cause still unknown — hunted and refuted: null `old_text` (classified
-     refusal), fuzzy `matches.Min` (guarded), rename `.Value` sites (guarded, wrong op). Blocked on
-     the next field occurrence, which the new log line will name.
+  1. `edit replace_text` unhandled `InvalidOperationException` — RESOLVED 2026-08-27. The local
+     `~/.miller/telemetry.db` `error_message`/`error_detail` columns (which the JSONL export omits)
+     held the answer all along: all 107 rows are ONE cause — `FreshnessService.LoadPinnedStoreIndex`
+     throwing "generation changed before its lazy repository was loaded" when `EditTool.Edit` forces
+     `IndexHolder.Current` mid-swap. Already fixed in 1.24.1 (550dc679: retry the lazy load, map to
+     `index_reloading`/Unavailable, stop caching the failure); zero occurrences on 1.24.1+ (last row
+     is a 1.24.0 process). The WRN backstop log line stays as defense in depth for a NEXT novel escape.
   2. `context` tool latency — p50 ~7 s / p95 20–37 s. Fixes A1 AND B1 shipped 2026-08-27
      (`docs/plans/2026-08-27-context-latency-diagnosis.md`). A1: the cold fact-cache load no longer
      blocks anchor_resolution (4,813 ms → 6 ms; background load + `term_rescue: skipped_cold_facts`).

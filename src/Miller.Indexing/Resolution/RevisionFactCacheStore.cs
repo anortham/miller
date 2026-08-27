@@ -9,6 +9,7 @@ public sealed class RevisionFactCacheStore
 
     private readonly object _gate = new();
     private readonly Dictionary<string, ScopeEntry> _scopes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Task> _warms = new(StringComparer.Ordinal);
     private readonly long _byteBudget;
     private long _clock;
 
@@ -52,7 +53,10 @@ public sealed class RevisionFactCacheStore
     /// <summary>
     /// Whether a read for this scope would be answered without a whole-generation load: a cache is already
     /// loaded for the same identity, or a loaded cache can advance to the new identity as a bounded delta.
-    /// A load that is merely in flight reports cold — the caller must not block behind it.
+    /// A load that is merely in flight reports cold — the caller must not block behind it. The probe is
+    /// advisory: the entry can be replaced between this answer and the caller's read, in which case that one
+    /// read blocks on the load exactly as it did before the probe existed — a latency fallback, never a
+    /// correctness hazard.
     /// </summary>
     internal bool IsWarm(string workspaceScope, string revisionIdentity)
     {
@@ -64,6 +68,49 @@ public sealed class RevisionFactCacheStore
                 return false;
             return string.Equals(entry.Identity, revisionIdentity, StringComparison.Ordinal)
                 || entry.Lazy.Value.CanAdvance;
+        }
+    }
+
+    /// <summary>
+    /// Load (or advance) this scope's cache off the calling thread, single-flight per scope: concurrent cold
+    /// callers share ONE task instead of each parking a thread-pool worker on the lazy, and a warm scope
+    /// spawns nothing. A faulted warm clears itself, so the next probe retries. Best-effort by design — a
+    /// newer identity arriving mid-load is picked up by the next probe, never by a second concurrent load.
+    /// </summary>
+    internal Task WarmInBackground(
+        string workspaceScope,
+        string revisionIdentity,
+        Func<SqliteConnection> openRead,
+        StoreVisibility visibility)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceScope);
+        ArgumentException.ThrowIfNullOrWhiteSpace(revisionIdentity);
+        ArgumentNullException.ThrowIfNull(openRead);
+        ArgumentNullException.ThrowIfNull(visibility);
+
+        lock (_gate)
+        {
+            if (IsWarm(workspaceScope, revisionIdentity))
+                return Task.CompletedTask;
+            if (_warms.TryGetValue(workspaceScope, out Task? inflight))
+                return inflight;
+
+            // Removal in the finally needs no identity check: entries are inserted only here, and the
+            // single-flight guard above blocks a second insert for the scope until this one removes itself.
+            Task warm = Task.Run(() =>
+            {
+                try
+                {
+                    GetOrAdvance(workspaceScope, revisionIdentity, openRead, visibility);
+                }
+                finally
+                {
+                    lock (_gate)
+                        _warms.Remove(workspaceScope);
+                }
+            });
+            _warms[workspaceScope] = warm;
+            return warm;
         }
     }
 
