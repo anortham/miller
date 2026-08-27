@@ -14,12 +14,13 @@ public static class CtSchema
     /// <summary>
     /// Version 2 dropped <c>UNIQUE (workspace_id, selector, source)</c> from <c>test_cases</c>;
     /// version 3 adds durable continuous-test revision cursors; version 4 adds the normalized CT
-    /// project association used by project-filtered selection.
+    /// project association used by project-filtered selection; version 6 adds
+    /// <c>ct_test_states.pre_run_state</c>, the verdict a run start displaced.
     /// The number is stamped in TWO places that must always agree: <c>meta.schema_version</c>, which
     /// this class has always written, and <c>PRAGMA user_version</c>, which it did not write before
     /// version 2 and which therefore reads 0 on every file built by version 1.
     /// </summary>
-    public const int SchemaVersion = 5;
+    public const int SchemaVersion = 6;
     public const string DbFileName = "ct.db";
     public const string MillerDirectoryName = ".miller";
 
@@ -214,6 +215,7 @@ public static class CtSchema
             stale_since_revision TEXT,
             running_run_id TEXT REFERENCES test_runs(id) ON DELETE SET NULL,
             running_revision TEXT,
+            pre_run_state TEXT,
             last_result_status TEXT,
             last_result_at TEXT,
             failure_summary TEXT,
@@ -456,23 +458,30 @@ public static class CtSchema
         if (version < 3)
             DropTestCasesSelectorUniqueness(connection);
 
-        if (!HasColumn(connection, "test_cases", "project_path"))
-            Execute(connection, "ALTER TABLE test_cases ADD COLUMN project_path TEXT;");
+        if (version < 5)
+        {
+            if (!HasColumn(connection, "test_cases", "project_path"))
+                Execute(connection, "ALTER TABLE test_cases ADD COLUMN project_path TEXT;");
 
-        Execute(connection, "CREATE INDEX IF NOT EXISTS idx_test_cases_workspace_project_source ON test_cases(workspace_id, project_path, source, selector, id);");
-        BackfillProjectPaths(connection);
-        if (!HasColumn(connection, "test_results", "observed_at"))
-            Execute(connection, "ALTER TABLE test_results ADD COLUMN observed_at TEXT NOT NULL DEFAULT '0001-01-01T00:00:00.0000000+00:00';");
+            Execute(connection, "CREATE INDEX IF NOT EXISTS idx_test_cases_workspace_project_source ON test_cases(workspace_id, project_path, source, selector, id);");
+            BackfillProjectPaths(connection);
+            if (!HasColumn(connection, "test_results", "observed_at"))
+                Execute(connection, "ALTER TABLE test_results ADD COLUMN observed_at TEXT NOT NULL DEFAULT '0001-01-01T00:00:00.0000000+00:00';");
 
-        Execute(connection, """
-            UPDATE test_results
-            SET observed_at = coalesce(
-                (SELECT coalesce(ended_at, started_at)
-                 FROM test_runs
-                 WHERE test_runs.id = test_results.test_run_id),
-                '0001-01-01T00:00:00.0000000+00:00');
-            """);
-        Execute(connection, "CREATE INDEX IF NOT EXISTS idx_test_results_workspace_case_observed ON test_results(workspace_id, test_case_id, observed_at DESC, id DESC, status);");
+            Execute(connection, """
+                UPDATE test_results
+                SET observed_at = coalesce(
+                    (SELECT coalesce(ended_at, started_at)
+                     FROM test_runs
+                     WHERE test_runs.id = test_results.test_run_id),
+                    '0001-01-01T00:00:00.0000000+00:00');
+                """);
+            Execute(connection, "CREATE INDEX IF NOT EXISTS idx_test_results_workspace_case_observed ON test_results(workspace_id, test_case_id, observed_at DESC, id DESC, status);");
+        }
+
+        if (!HasColumn(connection, "ct_test_states", "pre_run_state"))
+            Execute(connection, "ALTER TABLE ct_test_states ADD COLUMN pre_run_state TEXT;");
+
         StampSchemaVersion(connection);
     }
 

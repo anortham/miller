@@ -5,6 +5,13 @@ namespace Miller.Testing;
 
 public sealed partial class ContinuousTestStore
 {
+    /// <summary>
+    /// Marks the selected cases <c>running</c> for <paramref name="run"/>. The state a start
+    /// displaces is captured in <c>pre_run_state</c> (carried through a restart of a still-running
+    /// case), and a RED case keeps its committed <c>index_identity</c>/<c>revision</c>: the red is
+    /// the standing verdict until a result commits over it, so the run key must not overwrite the
+    /// key the failure was proven at.
+    /// </summary>
     public void StartContinuousTestRun(ContinuousTestRun run, IReadOnlyList<string> testCaseIds)
     {
         ArgumentNullException.ThrowIfNull(run);
@@ -27,8 +34,24 @@ public sealed partial class ContinuousTestStore
                     WHERE workspace_id = $ws AND id = $id
                     ON CONFLICT(test_case_id) DO UPDATE SET
                         workspace_id = excluded.workspace_id,
-                        index_identity = excluded.index_identity,
-                        revision = excluded.revision,
+                        index_identity = CASE
+                            WHEN ct_test_states.state = 'red'
+                                 OR (ct_test_states.state = 'running'
+                                     AND ct_test_states.pre_run_state = 'red')
+                            THEN ct_test_states.index_identity
+                            ELSE excluded.index_identity
+                        END,
+                        revision = CASE
+                            WHEN ct_test_states.state = 'red'
+                                 OR (ct_test_states.state = 'running'
+                                     AND ct_test_states.pre_run_state = 'red')
+                            THEN ct_test_states.revision
+                            ELSE excluded.revision
+                        END,
+                        pre_run_state = CASE
+                            WHEN ct_test_states.state = 'running' THEN ct_test_states.pre_run_state
+                            ELSE ct_test_states.state
+                        END,
                         state = 'running',
                         running_run_id = $runId,
                         running_revision = $selected,
@@ -45,7 +68,11 @@ public sealed partial class ContinuousTestStore
         });
     }
 
-    public void CompleteContinuousTestRun(ContinuousTestRunCompletion completion)
+    /// <summary>
+    /// Commits the run's reported results and retires its unreported cases. Returns the count of
+    /// cases the run selected but never reported.
+    /// </summary>
+    public int CompleteContinuousTestRun(ContinuousTestRunCompletion completion)
     {
         ArgumentNullException.ThrowIfNull(completion);
 
@@ -58,6 +85,7 @@ public sealed partial class ContinuousTestStore
         if (completion.EndedAt is null)
             completion = completion with { EndedAt = DateTimeOffset.UtcNow };
 
+        int unreported = 0;
         Transaction(() =>
         {
             UpsertContinuousTestRun(new ContinuousTestRun(
@@ -97,8 +125,9 @@ public sealed partial class ContinuousTestStore
                     PreserveStaleResult(completion, result, score);
             }
 
-            MarkUnreportedRunCasesStale(completion);
+            unreported = MarkUnreportedRunCasesStale(completion);
         });
+        return unreported;
     }
 
     public void PutRunArtifact(ContinuousTestRunArtifact artifact)
@@ -286,6 +315,7 @@ public sealed partial class ContinuousTestStore
                 stale_since_revision = NULL,
                 running_run_id = NULL,
                 running_revision = NULL,
+                pre_run_state = NULL,
                 last_result_status = $status,
                 last_result_at = $ended,
                 failure_summary = $failure,
@@ -333,6 +363,7 @@ public sealed partial class ContinuousTestStore
                 END,
                 running_run_id = NULL,
                 running_revision = NULL,
+                pre_run_state = NULL,
                 last_result_status = $status,
                 last_result_at = $ended,
                 failure_summary = $failure,
@@ -352,13 +383,24 @@ public sealed partial class ContinuousTestStore
         command.ExecuteNonQuery();
     }
 
-    private void MarkUnreportedRunCasesStale(ContinuousTestRunCompletion completion)
+    /// <summary>
+    /// Retires the cases the run selected but never reported. A case that was RED before the run
+    /// keeps its verdict — the state string, the committed key <see cref="StartContinuousTestRun"/>
+    /// preserved, and a <c>stale_since_revision</c> stamped once record the owed rerun, the same
+    /// arms <c>MarkContinuousTestsStale</c> applies. Every other unreported case retires to
+    /// <c>stale</c>. Returns the unreported-case count.
+    /// </summary>
+    private int MarkUnreportedRunCasesStale(ContinuousTestRunCompletion completion)
     {
         using var command = _write!.CreateCommand();
         command.CommandText = """
             UPDATE ct_test_states
-            SET state = 'stale',
-                stale_since_revision = $current,
+            SET state = CASE WHEN pre_run_state = 'red' THEN 'red' ELSE 'stale' END,
+                stale_since_revision = CASE
+                    WHEN pre_run_state = 'red' THEN coalesce(stale_since_revision, $current)
+                    ELSE $current
+                END,
+                pre_run_state = NULL,
                 running_run_id = NULL,
                 running_revision = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -368,7 +410,7 @@ public sealed partial class ContinuousTestStore
         command.Parameters.AddWithValue("$ws", completion.WorkspaceId);
         command.Parameters.AddWithValue("$run", completion.TestRunId);
         command.Parameters.AddWithValue("$current", completion.CurrentRevision);
-        command.ExecuteNonQuery();
+        return command.ExecuteNonQuery();
     }
 
     private IReadOnlyList<ContinuousTestOutcome> RecentContinuousTestOutcomes(string workspaceId, string testCaseId)

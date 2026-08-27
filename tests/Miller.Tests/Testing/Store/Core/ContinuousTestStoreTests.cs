@@ -431,6 +431,122 @@ public sealed class ContinuousTestStoreTests : IDisposable
     }
 
     [Fact]
+    public void Completing_run_keeps_a_requested_but_unreported_red_with_its_committed_key_and_stamps_the_owed_rerun()
+    {
+        using var store = CreateStoreWithTests("test:red", "test:green");
+        CompleteRun(store, "run:seed-red", "test:red", 1, "failed");
+        CompleteRun(store, "run:seed-green", "test:green", 1, "passed");
+        store.StartContinuousTestRun(Running("run:2", 3), ["test:red", "test:green"]);
+
+        store.CompleteContinuousTestRun(Completion("run:2", 3, 3));
+
+        Dictionary<string, ContinuousTestStatus> statuses =
+            store.ListContinuousTestStatuses(Workspace).ToDictionary(row => row.TestCaseId);
+        ContinuousTestStatus red = statuses["test:red"];
+        Assert.Equal(ContinuousTestState.Red, red.State);
+        Assert.Equal(Identity, red.IndexIdentity);
+        Assert.Equal(1, red.Revision);
+        Assert.Equal("3", red.StaleSinceRevision);
+        Assert.Null(red.RunningRunId);
+        Assert.Equal(new CtFreshnessKey(Identity, 1), red.ProvenFreshKey);
+        Assert.Equal("failed", red.LastResultStatus);
+        Assert.Equal(ContinuousTestState.Stale, statuses["test:green"].State);
+        Assert.Equal("3", statuses["test:green"].StaleSinceRevision);
+    }
+
+    [Fact]
+    public void Completing_run_with_an_unreported_owed_red_keeps_the_earliest_owed_stamp()
+    {
+        using var store = CreateStoreWithTests("test:1");
+        CompleteRun(store, "run:1", "test:1", 1, "failed");
+        store.MarkContinuousTestsStale(Workspace, ["test:1"], Key(2));
+        store.StartContinuousTestRun(Running("run:2", 3), ["test:1"]);
+
+        store.CompleteContinuousTestRun(Completion("run:2", 3, 3));
+
+        ContinuousTestStatus red = Assert.Single(store.ListContinuousTestStatuses(Workspace));
+        Assert.Equal(ContinuousTestState.Red, red.State);
+        Assert.Equal("2", red.StaleSinceRevision);
+        Assert.Equal(Identity, red.IndexIdentity);
+        Assert.Equal(1, red.Revision);
+    }
+
+    [Fact]
+    public void Restarting_a_case_still_marked_running_carries_the_red_verdict_to_the_new_completion()
+    {
+        using var store = CreateStoreWithTests("test:1");
+        CompleteRun(store, "run:1", "test:1", 1, "failed");
+        store.StartContinuousTestRun(Running("run:2", 2), ["test:1"]);
+        store.StartContinuousTestRun(Running("run:3", 3), ["test:1"]);
+
+        store.CompleteContinuousTestRun(Completion("run:3", 3, 3));
+
+        ContinuousTestStatus red = Assert.Single(store.ListContinuousTestStatuses(Workspace));
+        Assert.Equal(ContinuousTestState.Red, red.State);
+        Assert.Equal(1, red.Revision);
+        Assert.Equal("3", red.StaleSinceRevision);
+    }
+
+    [Fact]
+    public void Completing_run_that_reruns_a_red_and_passes_commits_green_at_the_new_key()
+    {
+        using var store = CreateStoreWithTests("test:1");
+        CompleteRun(store, "run:1", "test:1", 1, "failed");
+        store.StartContinuousTestRun(Running("run:2", 3), ["test:1"]);
+
+        store.CompleteContinuousTestRun(Completion(
+            "run:2",
+            3,
+            3,
+            Result("result:2", "test:1", "run:2", 3, "passed")));
+
+        ContinuousTestStatus status = Assert.Single(store.ListContinuousTestStatuses(Workspace));
+        Assert.Equal(ContinuousTestState.Green, status.State);
+        Assert.Equal(3, status.Revision);
+        Assert.Null(status.StaleSinceRevision);
+    }
+
+    [Fact]
+    public void Completing_run_returns_the_count_of_selected_cases_the_results_never_named()
+    {
+        using var store = CreateStoreWithTests("test:1", "test:2", "test:3");
+        store.StartContinuousTestRun(Running("run:1", 1), ["test:1", "test:2", "test:3"]);
+
+        int unreported = store.CompleteContinuousTestRun(Completion(
+            "run:1",
+            1,
+            1,
+            Result("result:1", "test:1", "run:1", 1, "passed")));
+
+        Assert.Equal(2, unreported);
+    }
+
+    [Fact]
+    public void Applier_complete_run_with_unreported_cases_writes_one_ct_diagnostic_naming_count_and_run_id()
+    {
+        string root = Path.Combine(_dir, "applier-root");
+        Directory.CreateDirectory(root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+        store.PutTestCase(Case("test:1"));
+        store.PutTestCase(Case("test:2"));
+        var applier = new ContinuousTestStoreApplier(store);
+        applier.StartRun(new ContinuousTestProviderRunStart(
+            Workspace, "run:1", "1", Identity, 1, ["test:1", "test:2"]));
+
+        applier.CompleteRun(Workspace, "1", "1", Identity, 1, new ProviderRunResult(
+            "run:1",
+            "passed",
+            CaseResults: [new ProviderCaseResult("provider:1", "test:1", "passed", "1", Identity)]));
+
+        string logsDir = Path.Combine(root, ".miller", "logs");
+        string line = Assert.Single(
+            Directory.GetFiles(logsDir, "miller-*.log").SelectMany(File.ReadAllLines),
+            text => text.Contains("run_unreported_cases", StringComparison.Ordinal));
+        Assert.Contains("run=run:1", line);
+        Assert.Contains("count=1", line);
+    }
+
+    [Fact]
     public void Completing_stale_revision_records_history_without_clearing_freshness()
     {
         using var store = CreateStoreWithTests("test:1");

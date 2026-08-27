@@ -147,7 +147,35 @@ public sealed class ContinuousTestStoreApplier
             EndedAt: Result.EndedAt,
             Results: results);
 
-        _store.CompleteContinuousTestRun(completion);
+        int unreported = _store.CompleteContinuousTestRun(completion);
+        if (unreported > 0)
+            LogUnreportedCases(Result.RunId, unreported);
+    }
+
+    /// <summary>
+    /// One bounded <c>role:ct</c> line when a run's provider results named fewer cases than the run
+    /// selected — the silent gap that let standing red verdicts retire unexecuted. The workspace
+    /// root comes from the store path itself; a store outside a <c>.miller</c> layout has no shared
+    /// daily log, so the line is skipped rather than written into an unrelated directory.
+    /// </summary>
+    private void LogUnreportedCases(string runId, int count)
+    {
+        string? millerDirectory = Path.GetDirectoryName(_store.DbPath);
+        if (millerDirectory is null
+            || !string.Equals(
+                Path.GetFileName(millerDirectory),
+                CtSchema.MillerDirectoryName,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (Path.GetDirectoryName(millerDirectory) is not string workspaceRoot)
+            return;
+
+        CtDaemonLog.Write(
+            workspaceRoot,
+            $"run_unreported_cases run={runId} count={count.ToString(CultureInfo.InvariantCulture)}");
     }
 
     public void FailRunAndMarkStale(

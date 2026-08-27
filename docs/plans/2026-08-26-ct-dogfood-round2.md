@@ -100,11 +100,11 @@ Commit mode: **serial-worker-commit within a batch is forbidden** — this campa
 **Approach:** Pick the design after inspecting: either (a) capture the pre-run state (a `pre_run_state` column written by `StartContinuousTestRun`, cleared by every commit path), or (b) reconstruct red from `last_result_status='failed'` in `MarkUnreportedRunCasesStale`'s UPDATE. Prefer (b) if it is honest for every seeding path (a case whose last executed result failed and never passed since is legitimately still red); fall back to (a) if inspection finds a path where `last_result_status='failed'` coexists with a legitimately non-red state. The restored red keeps `index_identity`/`revision` (committed key) and gets `stale_since_revision` stamped once (owed), exactly like the `MarkContinuousTestsStale` CASE arms. Add the requested-vs-reported set difference count to the completion path and log one bounded `role:ct` diagnostic from the applier when it is nonzero (the `running_run_id = $run` predicate at commit time IS that set). ct.db schema changes, if any, follow the existing `CtSchema` versioning pattern.
 
 **Acceptance criteria:**
-- [ ] A red case selected into a run and absent from results is still `red` after `CompleteContinuousTestRun`, with its committed key intact and `stale_since_revision` stamped.
-- [ ] A green/stale case absent from results still retires to `stale` (existing `:412` behavior preserved for non-red seeds).
-- [ ] An executed red that passes goes green; an executed red that fails stays red — no regression in `CommitFreshResult`/`PreserveStaleResult` paths.
-- [ ] A nonzero unreported count logs one bounded diagnostic naming the count and run id.
-- [ ] Focused scope green: `dotnet test --filter "FullyQualifiedName~ContinuousTestStoreTests"`; diff handed to lead per commit mode.
+- [x] A red case selected into a run and absent from results is still `red` after `CompleteContinuousTestRun`, with its committed key intact and `stale_since_revision` stamped.
+- [x] A green/stale case absent from results still retires to `stale` (existing `:412` behavior preserved for non-red seeds).
+- [x] An executed red that passes goes green; an executed red that fails stays red — no regression in `CommitFreshResult`/`PreserveStaleResult` paths.
+- [x] A nonzero unreported count logs one bounded diagnostic naming the count and run id.
+- [x] Focused scope green: `dotnet test --filter "FullyQualifiedName~ContinuousTestStoreTests"`; diff handed to lead per commit mode.
 
 ### Task 2: Truncated impact becomes a first-class Unknown (finding 2, stall half)
 
