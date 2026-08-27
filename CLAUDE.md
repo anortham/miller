@@ -466,10 +466,16 @@ scripts/test.ps1 all
 - **Continuous testing sidecar.** CT verdicts live in the Miller-owned `<workspace>/.miller/ct.db` (a
   revision-keyed sidecar, same pattern as `telemetry.db` / `history.db`). Providers may write only bounded
   build/result/temp artifacts under supervised CT paths (`BuildOutputRoot` generations and `miller-ct`
-  temps) — never workspace `bin`/`obj`. The default build root is WORKSPACE-LOCAL:
-  `<workspace>/.miller/ct/build/<proj12>`, so tests that walk up from their own binary to find the repo
+  temps) — never workspace `bin`/`obj`. The default build root is WORKSPACE-LOCAL and FLAT:
+  `<workspace>/.miller/ct-<proj12>`, so tests that walk up from their own binary to find the repo
   root pass under CT with zero project-side settings (`.miller/**` is invisible to the watcher and the
-  extractor, so building there adds no churn). A workspace root longer than the derived Windows MAX_PATH
+  extractor, so building there adds no churn), and the deepest assembly dir
+  (`.miller/ct-<proj12>/g<gen12>/out/<Proj>`) sits exactly FIVE levels below the root — cap-8 walk-up
+  helpers clear it even after burning one ascent on `AppContext.BaseDirectory`'s trailing separator
+  (the pre-flattening `.miller/ct/build/<proj12>` shape was 7 levels and broke them; coordinator
+  maintenance sweeps that legacy tree under the janitor's lease rules). Peer-root scans recognize a
+  workspace-local build root ONLY by its `ct-` prefix — nothing else under `.miller` may read as one.
+  A workspace root longer than the derived Windows MAX_PATH
   budget falls back to the legacy `<os-temp>/miller-ct/build/<ws12>/<proj12>` root with the reason carried
   on the work item; enqueue validation accepts exactly those two shapes. `ct.db` is self-contained: no foreign keys into `symbols.db` or
   `search.db`; rows name files by path+blake3 hash and symbols by name+path. Freshness is the composite
@@ -486,8 +492,15 @@ scripts/test.ps1 all
   `last_run_revision >= from` seed arm never matched live and every bump read all-stale. The matching
   invariant is the poller's: it never saves its cursor past an interval whose staleness was not applied
   (zero materialized work items ⟹ cursor stays put). An impacted RED keeps its state string and committed
-  key on EVERY staling path; the stamped `stale_since_revision` (plus deleted watermark rows) records the
-  owed rerun, so `failures` totals hold across automatic advances. A stamped red is OWED — the selector
+  key on EVERY staling path — the RUN path included: run start captures the displaced state in
+  `pre_run_state` (ct.db schema v6) and keeps a red row's committed key, and a case a run SELECTED but the
+  provider never REPORTED (a filter term that silently matched nothing) restores red with one owed stamp at
+  run commit instead of retiring the verdict to `stale`, with a bounded `role:ct` line naming the
+  unreported count (2026-08-26 field report: 3 SkiaSharp reds retired unexecuted). The stamped
+  `stale_since_revision` (plus deleted watermark rows) records the
+  owed rerun, so `failures` totals hold across automatic advances. The persisted `failure_summary` is
+  shaped at WRITE time: first line plus the first later error-shaped line (TRX capture widened from
+  StackTrace/RunInfo), bounded to 400 UTF-8 bytes — a render bound cannot recover text the store dropped. A stamped red is OWED — the selector
   backlog and the drain trim both execute it — while an unstamped live-key red is still trimmed from
   automatic selections (a run commit clears the stamp), so no automatic red loop opens. A run
   executes the stale set (impacted ∪ owed backlog) as an explicit test-ID list. An EXPLICIT run
@@ -502,11 +515,29 @@ scripts/test.ps1 all
   STAMPED (owed) reds above.
   Truncated/degraded/
   unavailable impact means Unknown — everything stale, NOTHING executes, never a whole-suite fallback.
-  ONE bounded exception (2026-08-26 field report): Unknown on a project whose store holds NO test cases
+  A TRUNCATED impact read reaches that Unknown THROUGH the selector: `MillerFactImpactSource` delivers the
+  complete delta as Changed with the truncation reason, the selector fails it closed to Unknown, staleness
+  lands via `ApplyRevisionAdvance`, and the cursor legally advances. It must never answer Unavailable — that
+  pinned the cursor, grew the interval every poll, and paused auto-runs into a self-sustaining stall under
+  churn (2026-08-26 round-2 field report). Unavailable is reserved for genuinely unreadable deltas
+  (`moving_cursor`, store errors); a sticky unavailable streak pauses auto-runs, and that pause is a
+  FIRST-CLASS status fact — `daemon.auto_runs_paused` + `daemon.pause_reason` in the record and
+  `tests status` (compact prints `auto-runs paused: <reason>`), with one `role:ct` line on enter and clear.
+  TWO bounded exceptions to "Unknown executes nothing" (both 2026-08-26 field reports): (1) Unknown on a
+  project whose store holds NO test cases
   (never discovered) enqueues a discovery-owed pending — the drain runs provider discovery, re-selects,
   and executes the owed backlog as the first baseline; once per project per daemon lifetime
   (`ContinuousTestDaemonQueue.TryEnqueueInventorySeed`). Without it the first change after enabling
-  selected Unknown forever and the daemon stayed silent.
+  selected Unknown forever and the daemon stayed silent. (2) The IDLE DRAIN (`CtIdleDrainPolicy`): once the
+  workspace SETTLES — staleness exists, no pending work or executing run, the last poll healthy with the
+  saved cursor at the live revision, auto-runs not paused, quiet for a debounce window, and a fixed
+  5-minute per-context cooldown (also counted from daemon start) — the daemon schedules ONE drain of the
+  owed stale set, selected exactly as an explicit run selects its stale set (automatic red rule, explicit
+  test-ID list, never whole-suite eligible, no discovery). Without it a churn window that resolved to
+  Unknown stranded the whole case set stale forever (1,504 cases, five idle minutes); the cooldown plus the
+  settled guard bounds a drain whose own build re-stales cases to one slow visible cycle, and a
+  byte-identical rebuild re-stales nothing (julie no-ops unchanged content; the store delta reader's
+  content-hash gate is pinned by test).
   Auto-runs debounce trailing-edge (`MILLER_CT_DEBOUNCE` seconds, default 2, `0` immediate, invalid/>3600
   falls back); changes during a run queue a follow-up, never kill a healthy run. The status `selected` key
   is the LIVE index key, never derived from stored rows; no readable index means `selected: null` and an

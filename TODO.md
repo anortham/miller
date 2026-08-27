@@ -52,10 +52,6 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
 
 ## Active
 
-- Intermittent single-test failure, name not captured: seen once in the fast suite (2026-08-26, dashboard
-  cleanup worktree, 4 later runs green) and once in the Scale suite (2026-08-26 release gate, rerun green).
-  Both sightings lost the test name to truncated output. On the next occurrence, keep the full log or a
-  `--logger trx` file and record the test here.
 - On windows memory usage seems high, investigate.
 - Docs will need updating for CT and should list supported langs/frameworks and state that support for more is ongoing
 
@@ -83,7 +79,56 @@ All findings below were addressed on branch `worktree-ct-dogfood-campaign`
 10. Status run-block omission — **done** (honest compact line)
 
 Open user decisions: merge/push the branch; julie-extract release + pin bump; general answer for hostile
-repo build hooks (`npm ci` per build) — see the run report.
+repo build hooks (`npm ci` per build) — see the run report. (The round-2 campaign below IS the general
+answer candidate: truncation-as-Unknown + the idle drain make CT converge on a hostile repo with zero
+project-side settings.)
+
+## Campaign 2026-08-26 evening — CT dogfood round 2 (status)
+
+Round-2 findings from Tycho on miller 1.24.0+fa38f826 (the user's raw notes live in the main checkout's
+uncommitted TODO edit). All addressed on branch `worktree-ct-dogfood-round2`
+(worktree `.claude/worktrees/ct-dogfood-round2`) — **awaiting merge/push approval**.
+Plan: `docs/plans/2026-08-26-ct-dogfood-round2.md`.
+
+1. Red cases retired without a rerun — **done** (run start captures `pre_run_state` (ct.db schema v6) and
+   keeps a red row's committed key; requested-but-unreported cases restore red with one owed stamp at run
+   commit; bounded `role:ct` `run_unreported_cases` line)
+2. Self-inflicted churn loop — **done, two halves.** Diagnosis correction: julie already no-ops
+   byte-identical rewrites (`version_id` is content-keyed; the store delta reader's hash gate is now
+   pinned by test). The Miller-side stall was (a) truncated impact answering Unavailable — cursor pinned,
+   interval growing, auto-runs paused; now it delivers the delta as Changed and the selector fails it
+   closed to Unknown, staleness lands, the cursor advances; (b) no idle drain — `CtIdleDrainPolicy` now
+   schedules ONE owed-backlog drain when the workspace settles (healthy poll at live revision, quiet ≥
+   debounce, empty queue, auto-runs not paused, 5-min per-context cooldown), executed as an explicit
+   test-ID list, never whole-suite
+3. `edit` hard-fails while CT builds churn — **done** (both lazy index factories retry onto the current
+   generation, bounded by the sidecar reopen constant; `IndexHolder` discards a faulted lazy state instead
+   of replaying the cached exception; exhausted retries classify `unavailable`/`index_reloading` with a
+   plain retry message, not `internal_failure`)
+4. `failures` hides the real OneTimeSetUp error — **done** (write-time two-part summary: first line + first
+   error-shaped line, 400 UTF-8 bytes; TRX capture widened from StackTrace/sibling Messages; run-level
+   RunInfo errors folded into each failed case; contract doc updated)
+5. Auto-run pause invisible — **done** (`AutoRunsPaused`/`PauseReason` on the status record;
+   `daemon.auto_runs_paused`/`daemon.pause_reason` in `tests status` JSON; compact `auto-runs paused:`
+   line; one `role:ct` line on pause enter and clear)
+6. `impact git=true` ignores staged changes — **done** (empty unstaged diff probes the staged diff once;
+   when staged changes exist the diagnostic says so with a JSON-visible `staged=true` action; CLI note
+   spells `--staged`)
+7. CT bin depth breaks cap-8 walk-up helpers — **done** (build root flattened to `.miller/ct-<proj12>`;
+   deepest assembly dir exactly 5 levels below the root, pinned by a separator-count test; Windows tail
+   budget recomputed (root budget 117 → 123); peer scans filter to the `ct-` prefix; coordinator
+   maintenance sweeps the legacy `.miller/ct/build` tree under the janitor's lease rules)
+8. Impacted under-selection (1 case vs round 1's 6) — **watch item, open** (correct case was picked; no
+   code change)
+9. Watcher latency ~4 min under churn — **explained + addressed by finding 2's fixes** (the delay was the
+   index-convergence window plus sticky-unavailable backoff, not the debounce; truncation-as-Unknown
+   removes the stall arm)
+
+Also closed while gating this campaign: the Active "intermittent single-test failure" — it is
+`MillerLoggingSetupTests.SinkThatCannotOpenItsFileReportsThroughSerilogSelfLog`, which blocked only the
+UTC day's log family while Serilog rolls by LOCAL date, so it failed exactly in the evening window where
+the two dates diverge (both 2026-08-26 sightings were evening runs; proven TZ=UTC green / CDT red). The
+test now blocks both families.
 
 ## CT dogfood findings 2026-08-26 — Tycho workspace (5 projects: 3 nunit, 2 vitest)
 

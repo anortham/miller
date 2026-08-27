@@ -349,7 +349,7 @@ Commit mode: **serial-worker-commit within a batch is forbidden** — this campa
 **Approach:** Edit CLAUDE.md only, run `scripts/sync-agents.sh`, verify with `cmp`. Update TODO.md round-2 entries to done-with-one-line-evidence, keeping observation 8 (under-selection watch) open. Run `scripts/test.sh` and `scripts/test.sh all`; record the ledger. Goldfish checkpoint before the final commit.
 
 **Acceptance criteria:**
-- [ ] `cmp -s CLAUDE.md AGENTS.md` passes; docs name the new layout, drain, and pause facts.
-- [ ] TODO.md round-2 section shows per-finding status.
-- [ ] Branch gate green: fast suite + Scale suite (or honest skips), ledger recorded.
-- [ ] Checkpoint saved and included in the final commit.
+- [x] `cmp -s CLAUDE.md AGENTS.md` passes; docs name the new layout, drain, and pause facts.
+- [x] TODO.md round-2 section shows per-finding status.
+- [x] Branch gate green: fast suite + Scale suite (or honest skips), ledger recorded.
+- [x] Checkpoint saved and included in the final commit.
