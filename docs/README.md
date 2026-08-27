@@ -5,6 +5,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [`plans/2026-08-27-context-latency-diagnosis.md`](plans/2026-08-27-context-latency-diagnosis.md) - measured cost model for the context tool's p50 ~7 s: the whole-generation fact-cache load blocking anchor_resolution via term-rescue promotion, the per-revision graph rebuild, and the fix options (skip-when-cold + background load recommended).
 - [`findings/2026-08-27-telemetry-audit.md`](findings/2026-08-27-telemetry-audit.md) - full local telemetry read (36,130 calls, 8/02–8/27): the live `edit replace_text` unhandled-exception bug (53% error rate, invisible in logs/telemetry), the context tool's per-lookup latency (session_projection 54 ms vs sidecar 3.5 s for the same work), mid-scan file-deletion delta failures, and the lesser empty-rate/import signals.
 - [`plans/2026-08-26-dashboard-interaction-cleanup.md`](plans/2026-08-26-dashboard-interaction-cleanup.md) - audit of every dashboard interaction by stack, the decision to converge on htmx plus one plain-JS file, and the removal of Alpine from the four platform packages.
 - [`plans/2026-08-25-workspace-safety-design.md`](plans/2026-08-25-workspace-safety-design.md) - decision paper (awaiting user choice, nothing implemented) on path-class root policy and an explicit workspace registration gate, from the 2026-08-10 station incident where `~/.hermes/hermes-agent` became a 4.3GB index.

@@ -194,6 +194,24 @@ public sealed partial class ContextTool
                 switch (parsedReferenceMode)
                 {
                     case ReferenceMode.Off:
+                        // Term-rescue promotion is a ranking refinement, and its outgoing-reference read is the
+                        // one thing on this path that can force the whole-generation fact-cache load (~5s on a
+                        // 1.8k-file repo, measured 2026-08-27). When the shared store is cold, skip the
+                        // refinement for THIS call and start the load in the background so the next call has it.
+                        // reference_mode=usage is untouched: there the caller asked for references by name.
+                        bool termRescueFactsWarm = context.ReadSession.ResolutionFactsWarm;
+                        if (!termRescueFactsWarm)
+                        {
+                            telemetry?.SetMetadata("term_rescue", "skipped_cold_facts");
+                            context.ReadSession.WarmResolutionFactsInBackground().ContinueWith(
+                                static warm => Serilog.Log.Warning(
+                                    warm.Exception?.GetBaseException(),
+                                    "Background fact-cache warm for context term-rescue failed."),
+                                CancellationToken.None,
+                                TaskContinuationOptions.OnlyOnFaulted,
+                                TaskScheduler.Default);
+                        }
+
                         output = RunActionableWithCancellation(
                             contextIndex,
                             context.Graph,
@@ -211,7 +229,9 @@ public sealed partial class ContextTool
                                 context.ReadSession,
                                 context.WorkspaceRoot,
                                 symbol),
-                            readOutgoingMany: symbolIds => ReadOutgoingBatch(context.ReadSession, symbolIds),
+                            readOutgoingMany: termRescueFactsWarm
+                                ? symbolIds => ReadOutgoingBatch(context.ReadSession, symbolIds)
+                                : null,
                             json,
                             out selectedCount, out candidatesExamined,
                             cancellationToken,

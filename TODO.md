@@ -59,9 +59,12 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
      keeps type-only. Root cause still unknown — hunted and refuted: null `old_text` (classified
      refusal), fuzzy `matches.Min` (guarded), rename `.Value` sites (guarded, wrong op). Blocked on
      the next field occurrence, which the new log line will name.
-  2. `context` tool latency — p50 ~7 s / p95 20–37 s from 1,300–2,000 per-symbol lookups; the
-     `session_projection` backend does the same work in 54 ms but served 8 of ~270 calls. Route the
-     read lookups through it (or batch the sidecar lookups).
+  2. `context` tool latency — p50 ~7 s / p95 20–37 s. Diagnosed AND fix A1 shipped 2026-08-27
+     (`docs/plans/2026-08-27-context-latency-diagnosis.md`): the cold fact-cache load no longer
+     blocks anchor_resolution (4,813 ms → 6 ms measured; promotion skips once with
+     `term_rescue: skipped_cold_facts` while the load runs in the background). REMAINING: fix B1 —
+     graph_reach rebuilds per revision advance (1.3–4 s cold); give the reachability graph the
+     advance-on-revision shape or converge it in the leader.
   3. A source file deleted mid-scan fails the whole store delta (`RequireCommitted`, os error 2,
      Tycho 8/26 ×3) and starts scan-failure backoff. Treat a vanished file as a delete; fix may
      belong in julie-extract.

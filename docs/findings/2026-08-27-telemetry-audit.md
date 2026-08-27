@@ -57,10 +57,15 @@ backend decides everything.
 | `session_projection` | 8 | 8.0 s | 21.0 s | **0.054 s** |
 
 The same ~1,400–2,000 lookups cost 3.5 s through the sidecar and 54 ms through the session
-projection. The fast path exists and served 8 of ~270 calls. Direction: route the context read
-lookups through the session projection (or batch the sidecar lookups) so the sidecar path stops
-paying a per-lookup round trip. Worst observed all-time: `read_lookup_ms` 32–35 s on
-`lagging_sidecar` rows.
+projection. The fast path exists and served 8 of ~270 calls. Worst observed all-time:
+`read_lookup_ms` 32–35 s on `lagging_sidecar` rows.
+
+**Superseded by the measured cost model in
+[`../plans/2026-08-27-context-latency-diagnosis.md`](../plans/2026-08-27-context-latency-diagnosis.md):**
+the dominant cold cost is the whole-generation `RevisionFactCache` load (~4.8 s here) that
+term-rescue test-subject promotion pulls into `anchor_resolution` on every query call — even under
+the default `reference_mode=off` — plus a ~1.3 s graph_reach rebuild after every revision advance.
+The per-lookup sidecar cost is real but secondary (0.32 ms/lookup warm).
 
 ## Priority 3 — a file deleted mid-scan fails the whole store delta
 

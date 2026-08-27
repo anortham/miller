@@ -62,6 +62,22 @@ public sealed class RevisionFactCacheStoreTests
     }
 
     [Fact]
+    public void IsWarm_ReportsFalseUntilALoadCompletes_ThenTrueForTheLoadedAndAdvanceableIdentity()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        fixture.AddFile(1, "a.cs");
+        fixture.AddSymbol(1, "a", "Alpha", "class", "a.cs");
+
+        var store = new RevisionFactCacheStore();
+        Assert.False(store.IsWarm("ws-a", "rev-1"));
+
+        _ = store.GetOrAdvance("ws-a", "rev-1", fixture.OpenRead, fixture.Visibility());
+        Assert.True(store.IsWarm("ws-a", "rev-1"));
+        Assert.True(store.IsWarm("ws-a", "rev-2"));
+        Assert.False(store.IsWarm("ws-b", "rev-1"));
+    }
+
+    [Fact]
     public void Store_IsRegisteredAsSingleton()
     {
         var services = new ServiceCollection();

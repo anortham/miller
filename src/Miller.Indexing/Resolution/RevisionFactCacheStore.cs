@@ -49,6 +49,24 @@ public sealed class RevisionFactCacheStore
         }
     }
 
+    /// <summary>
+    /// Whether a read for this scope would be answered without a whole-generation load: a cache is already
+    /// loaded for the same identity, or a loaded cache can advance to the new identity as a bounded delta.
+    /// A load that is merely in flight reports cold — the caller must not block behind it.
+    /// </summary>
+    internal bool IsWarm(string workspaceScope, string revisionIdentity)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceScope);
+        ArgumentException.ThrowIfNullOrWhiteSpace(revisionIdentity);
+        lock (_gate)
+        {
+            if (!_scopes.TryGetValue(workspaceScope, out ScopeEntry? entry) || !entry.Lazy.IsValueCreated)
+                return false;
+            return string.Equals(entry.Identity, revisionIdentity, StringComparison.Ordinal)
+                || entry.Lazy.Value.CanAdvance;
+        }
+    }
+
     internal RevisionFactCache GetOrAdvance(
         string workspaceScope,
         string revisionIdentity,

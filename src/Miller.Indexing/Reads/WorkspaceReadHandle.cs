@@ -33,6 +33,18 @@ public sealed class WorkspaceReadHandle : IWorkspaceReadSession
     internal QueryTimeResolutionReader? ResolutionReader =>
         _session is IQueryTimeResolutionHost host ? host.Resolution : null;
 
+    /// <summary>Whether touching reference facts would run a whole-generation load on the calling thread. A
+    /// session type without the shared-store probe reports warm, keeping its behavior unchanged.</summary>
+    internal bool ResolutionFactsWarm =>
+        _session is not FamilyStoreReadSession family || family.ResolutionFactsWarm;
+
+    /// <summary>Start the shared fact-cache load off the calling thread; completed no-op when there is
+    /// nothing to warm.</summary>
+    internal Task WarmResolutionFactsInBackground() =>
+        _session is FamilyStoreReadSession family
+            ? family.WarmResolutionFactsInBackground()
+            : Task.CompletedTask;
+
     public TResult Read<TResult>(Func<SqliteConnection, TResult> query) => _session.Read(query);
 
     public void Dispose() => _session.Dispose();

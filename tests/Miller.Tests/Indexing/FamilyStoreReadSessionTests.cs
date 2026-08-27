@@ -2623,4 +2623,44 @@ public sealed class FamilyStoreReadSessionTests
             File.SetUnixFileMode(pointerPath, originalMode);
         }
     }
+
+    [Fact]
+    public async Task ResolutionFactsWarm_ColdSharedStoreReportsFalse_AndTheBackgroundWarmMakesItTrue()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var factCacheStore = new RevisionFactCacheStore();
+        using FamilyStoreReadSession session =
+            FamilyStoreReadSession.Open(fixture.Binding, "workspace-a", factCacheStore);
+
+        Assert.False(session.ResolutionFactsWarm);
+
+        await session.WarmResolutionFactsInBackground();
+
+        Assert.True(session.ResolutionFactsWarm);
+        using FamilyStoreReadSession next =
+            FamilyStoreReadSession.Open(fixture.Binding, "workspace-a", factCacheStore);
+        Assert.True(next.ResolutionFactsWarm);
+    }
+
+    [Fact]
+    public void ResolutionFactsWarm_StoreLessSessionAlwaysReportsWarm()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding, "workspace-a");
+
+        Assert.True(session.ResolutionFactsWarm);
+    }
+
+    [Fact]
+    public void ResolutionFactsWarm_TrueOnceThisSessionCreatedItsReader()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var factCacheStore = new RevisionFactCacheStore();
+        using FamilyStoreReadSession session =
+            FamilyStoreReadSession.Open(fixture.Binding, "workspace-a", factCacheStore);
+
+        _ = session.Resolution;
+
+        Assert.True(session.ResolutionFactsWarm);
+    }
 }

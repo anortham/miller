@@ -82,14 +82,59 @@ public sealed class FamilyStoreReadSession :
         _boundedFactsRequested = boundedFactsRequested;
     }
 
+    private string FactCacheScope =>
+        Visibility.FamilyId + "\0" + Visibility.ViewId + "\0" + Visibility.WorkspaceRoot;
+
+    private string FactCacheIdentity =>
+        Visibility.ManifestHash + ":" + Visibility.ManifestGeneration.ToString(CultureInfo.InvariantCulture) + ":" + Visibility.StoreLogSequence.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Whether reference facts for this session's pinned identity are already resident (or a bounded advance
+    /// away), so touching <see cref="Resolution"/> will not run a whole-generation load on the calling thread.
+    /// A store-less session always reports warm: its callers (the edit tool, the tests tool, the CT daemon)
+    /// deliberately keep the inline load, and reporting them cold would make optional consumers skip work
+    /// forever with nothing ever warming.
+    /// </summary>
+    internal bool ResolutionFactsWarm
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_resolution is not null)
+                    return true;
+            }
+
+            return _factCacheStore is not { } store || store.IsWarm(FactCacheScope, FactCacheIdentity);
+        }
+    }
+
+    /// <summary>
+    /// Load the shared fact cache for this session's pinned identity off the calling thread. The load opens
+    /// its own read-only connection, so it outlives this session safely; concurrent calls share one load
+    /// through the store's lazy. No-op without a shared store — there is nothing to warm for later readers.
+    /// </summary>
+    internal Task WarmResolutionFactsInBackground()
+    {
+        if (_factCacheStore is not { } store)
+            return Task.CompletedTask;
+
+        StoreVisibility visibility = Visibility;
+        string scope = FactCacheScope;
+        string identity = FactCacheIdentity;
+        string databasePath = visibility.StoreDatabasePath;
+        return Task.Run(() =>
+            store.GetOrAdvance(scope, identity, () => OpenReadOnly(databasePath), visibility));
+    }
+
     private QueryTimeResolutionReader CreateResolutionReader()
     {
         RevisionFactCache cache;
         if (_factCacheStore is { } store)
         {
             cache = store.GetOrAdvance(
-                Visibility.FamilyId + "\0" + Visibility.ViewId + "\0" + Visibility.WorkspaceRoot,
-                Visibility.ManifestHash + ":" + Visibility.ManifestGeneration.ToString(CultureInfo.InvariantCulture) + ":" + Visibility.StoreLogSequence.ToString(CultureInfo.InvariantCulture),
+                FactCacheScope,
+                FactCacheIdentity,
                 () => OpenReadOnly(Visibility.StoreDatabasePath),
                 Visibility);
         }
