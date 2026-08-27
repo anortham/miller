@@ -157,6 +157,30 @@ public sealed class CtDaemonJsonSharingTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// <see cref="ClassifiedRead"/> as production consumes it. TryRead's caller is a 50 ms poller: a
+    /// null answer keeps the last snapshot and the next tick reads again, so ONE refused open is
+    /// absorbed by design — an antivirus scan or a loaded runner can hold the file past the in-call
+    /// retries without any product defect (observed once in 300 reads on hosted windows-2025). Only a
+    /// lockout that PERSISTS across polls is the defect the refusal assertion names. The reverted
+    /// reader (FileShare.Read) stays caught: under a live writer it is refused on a large fraction of
+    /// opens, which a three-poll budget does not survive across 300 reads.
+    /// </summary>
+    private static (ReadOutcome Outcome, CtDaemonStatusRecord? Record) PolledRead(string path)
+    {
+        (ReadOutcome Outcome, CtDaemonStatusRecord? Record) read = default;
+        for (var poll = 1; poll <= 3; poll++)
+        {
+            read = ClassifiedRead(path);
+            if (read.Outcome != ReadOutcome.Refused)
+                return read;
+
+            Thread.Sleep(TimeSpan.FromMilliseconds(50));
+        }
+
+        return read;
+    }
+
     [Fact]
     public void A_reader_holding_the_file_open_does_not_block_the_atomic_replace()
     {
@@ -583,7 +607,7 @@ public sealed class CtDaemonJsonSharingTests : IDisposable
 
             for (var i = 0; i < Reads; i++)
             {
-                (ReadOutcome outcome, CtDaemonStatusRecord? read) = ClassifiedRead(path);
+                (ReadOutcome outcome, CtDaemonStatusRecord? read) = PolledRead(path);
                 switch (outcome)
                 {
                     case ReadOutcome.Torn:
