@@ -1711,14 +1711,26 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
                 }));
         }
 
+        var runInfoError = root
+            .Descendants(ns + "RunInfo")
+            .Select(row => row.Element(ns + "Text")?.Value.Trim())
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        if (runInfoError is not null)
+        {
+            for (var index = 0; index < caseResults.Count; index++)
+            {
+                var row = caseResults[index];
+                if (string.Equals(row.Status, "failed", StringComparison.Ordinal))
+                    caseResults[index] = row with
+                    {
+                        FailureSummary = FoldRunError(row.FailureSummary, runInfoError),
+                    };
+            }
+        }
+
         // Reported, never thrown. A part that matched nothing is a fact about THAT part's slice of the
         // selection; whether it fails the run depends on what the other parts produced.
-        var runError = caseResults.Count > 0
-            ? null
-            : root
-                .Descendants(ns + "RunInfo")
-                .Select(row => row.Element(ns + "Text")?.Value.Trim())
-                .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        var runError = caseResults.Count > 0 ? null : runInfoError;
 
         var times = root.Element(ns + "Times");
         var startedAt = TrxDateTimeOffset(times?.Attribute("start")?.Value);
@@ -2140,11 +2152,48 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             ? null
             : DateTimeOffset.Parse(value, CultureInfo.InvariantCulture);
 
-    private static string? TrxFailureSummary(XElement result, XNamespace ns) =>
-        result
+    /// <summary>
+    /// The first non-empty Message, widened with the first error-shaped line found anywhere else in the
+    /// result's Message/StackTrace text. An NUnit OneTimeSetUp failure carries only its banner in the
+    /// Message ("OneTimeSetUp: dotnet failed.") while the actual cause sits in the StackTrace; without
+    /// the widened capture the store can never surface the real error.
+    /// </summary>
+    private static string? TrxFailureSummary(XElement result, XNamespace ns)
+    {
+        var message = result
             .Descendants(ns + "Message")
-            .Select(message => message.Value.Trim())
-            .FirstOrDefault(message => !string.IsNullOrWhiteSpace(message));
+            .Select(element => element.Value.Trim())
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        string[] messageLines = message is null ? [] : FailureSummaryText.Lines(message);
+        var detail = result
+            .Descendants()
+            .Where(element => element.Name == ns + "Message" || element.Name == ns + "StackTrace")
+            .SelectMany(element => FailureSummaryText.Lines(element.Value))
+            .FirstOrDefault(line =>
+                FailureSummaryText.IsErrorShapedLine(line)
+                && !messageLines.Contains(line, StringComparer.Ordinal));
+        if (message is null)
+            return detail;
+        return detail is null ? message : message + "\n" + detail;
+    }
+
+    /// <summary>
+    /// Appends the run-level error's first error-shaped line to a failed case's summary. vstest records
+    /// environment-level causes (a failed pre-run build, a crashed host) as RunInfo text that no case
+    /// result carries; a red row that hides that text reads as a test bug instead of a broken run.
+    /// </summary>
+    private static string? FoldRunError(string? failureSummary, string runInfoError)
+    {
+        var detail = FailureSummaryText.FirstErrorShapedLine(runInfoError)
+            ?? FailureSummaryText.Lines(runInfoError).FirstOrDefault();
+        if (detail is null)
+            return failureSummary;
+        if (failureSummary is null)
+            return detail;
+        return FailureSummaryText.Lines(failureSummary).Contains(detail, StringComparer.Ordinal)
+            ? failureSummary
+            : failureSummary + "\n" + detail;
+    }
 
     private static string AggregateStatus(IEnumerable<string> statuses)
     {

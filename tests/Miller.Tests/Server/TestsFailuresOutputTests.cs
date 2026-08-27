@@ -225,6 +225,83 @@ public sealed class TestsFailuresOutputTests : IDisposable
             result.Render(json: true));
     }
 
+    [Fact]
+    public void A_multi_line_summary_persists_the_first_error_shaped_line_after_the_banner()
+    {
+        SeedRedCases(1, index =>
+            "OneTimeSetUp: dotnet failed.\n"
+            + "/repo/obj/Microsoft.NET.Sdk.StaticWebAssets.targets(475,5): error : "
+            + "No file exists for the asset '/repo/obj/tiptap-editor.js'.");
+
+        TestsFailuresResult result = TestsCore.Failures(CoreRequest());
+
+        string summary = Assert.Single(result.Failures).FailureSummary!;
+        Assert.StartsWith("OneTimeSetUp: dotnet failed. | ", summary, StringComparison.Ordinal);
+        Assert.Contains("StaticWebAssets", summary, StringComparison.Ordinal);
+        Assert.True(Encoding.UTF8.GetByteCount(summary) <= TestsCore.FailureSummaryMaxBytes);
+        Assert.DoesNotContain("\n", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_multi_line_summary_without_a_later_error_line_keeps_only_the_first_line()
+    {
+        SeedRedCases(1, index => "boom happened\nat Sample.Tests.Fails() in /x.cs:line 5");
+
+        TestsFailuresResult result = TestsCore.Failures(CoreRequest());
+
+        Assert.Equal("boom happened", Assert.Single(result.Failures).FailureSummary);
+    }
+
+    [Fact]
+    public void A_vitest_shaped_message_keeps_its_assertion_line()
+    {
+        SeedRedCases(1, index =>
+            "AssertionError: expected 2 to deeply equal 3\n- Expected\n+ Received\n- 3\n+ 2");
+
+        TestsFailuresResult result = TestsCore.Failures(CoreRequest());
+
+        string summary = Assert.Single(result.Failures).FailureSummary!;
+        Assert.StartsWith("AssertionError: expected 2 to deeply equal 3", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_persisted_summary_is_bounded_to_the_render_byte_cap()
+    {
+        SeedRedCases(1, index =>
+            "System.InvalidOperationException: " + new string('x', 900) + "\nSystem.IO.IOException: inner");
+
+        TestsFailuresResult result = TestsCore.Failures(CoreRequest());
+
+        string summary = Assert.Single(result.Failures).FailureSummary!;
+        Assert.True(Encoding.UTF8.GetByteCount(summary) <= TestsCore.FailureSummaryMaxBytes);
+        Assert.EndsWith("…", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Error_class_still_derives_from_the_first_line_of_a_widened_summary()
+    {
+        SeedRedCases(1, index => "Xunit.Sdk.EqualException: Assert.Equal() Failure\nExpected: 5\nActual:   4");
+
+        TestsFailureGroupsResult result = TestsCore.FailureGroups(CoreRequest());
+
+        TestsFailureGroup group = Assert.Single(result.Groups);
+        Assert.Equal("Xunit.Sdk.EqualException", group.ErrorClass);
+        Assert.Equal(
+            "Xunit.Sdk.EqualException: Assert.Equal() Failure | Expected: 5",
+            group.SampleFailureSummary);
+    }
+
+    [Theory]
+    [InlineData("boom", "boom")]
+    [InlineData("first\nsecond plain line", "first")]
+    [InlineData("first\nSystem.IO.IOException: gone", "first | System.IO.IOException: gone")]
+    [InlineData("banner\nnoise\n/x.targets(1,2): error : missing asset", "banner | /x.targets(1,2): error : missing asset")]
+    [InlineData("Assert.Equal() Failure\nExpected: 5\nActual: 4", "Assert.Equal() Failure | Expected: 5")]
+    [InlineData(null, null)]
+    [InlineData("   ", null)]
+    public void Summarize_keeps_the_first_line_plus_the_first_error_shaped_line(string? text, string? expected) =>
+        Assert.Equal(expected, FailureSummaryText.Summarize(text));
+
     [Theory]
     [InlineData("System.IO.DirectoryNotFoundException: gone", "System.IO.DirectoryNotFoundException")]
     [InlineData("DirectoryNotFoundException: gone", "DirectoryNotFoundException")]

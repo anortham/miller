@@ -641,9 +641,14 @@ offset (`truncated: 10 (next: offset=20)`) so a reader can ask for the rest.
 grouping — the path is workspace-relative or absolute, and a path that resolves to no known project
 is refused (`invalid_project`; CLI exit `2`).
 
-Every rendered `failure_summary` — row listing and group sample, compact and JSON alike — is
-bounded to **400 UTF-8 bytes** with a trailing `…`. One 80 KB stack trace in a single row used to
-blow a whole page on its own; the full text stays in `ct.db`.
+A stored `failure_summary` is a two-part summary shaped at write time: the first line of the
+provider's failure text, plus the first later error-shaped line — one carrying a dotted exception
+type, the word `error`, or an assertion marker — joined with ` | `, bounded to **400 UTF-8 bytes**
+with a trailing `…` when cut. The first line alone is stored when nothing later qualifies. This is
+what keeps the real cause visible when a framework banner ("OneTimeSetUp: dotnet failed.") leads a
+multi-line message whose actual error sits below it. Every rendered `failure_summary` — row listing
+and group sample, compact and JSON alike — is additionally bounded to the same **400 UTF-8 bytes**
+with a trailing `…`, so one oversized row can never blow a whole page.
 
 The MCP `tests` tool additionally pages `failures` output within a **12 KiB** byte budget: the page
 is cut to the longest row prefix whose render fits, and the shed rows join `truncated`, so the

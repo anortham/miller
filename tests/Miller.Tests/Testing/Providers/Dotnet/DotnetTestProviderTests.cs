@@ -824,6 +824,123 @@ public sealed class DotnetTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_for_nunit_keeps_the_error_line_below_a_onetimesetup_banner()
+    {
+        const string staticWebAssetsLine =
+            "/repo/obj/Microsoft.NET.Sdk.StaticWebAssets.targets(475,5): error : "
+            + "No file exists for the asset '/repo/obj/tiptap-editor.js'.";
+        var result = await RunNunitTrx(
+            $"""
+                <UnitTestResult executionId="exec-1" testId="test-def-1" testName="Adds" outcome="Failed" duration="00:00:00.1250000">
+                  <Output>
+                    <ErrorInfo>
+                      <Message>OneTimeSetUp: dotnet failed.</Message>
+                      <StackTrace>at Sample.Tests.Setup.Run() in /repo/Setup.cs:line 12
+            {staticWebAssetsLine}</StackTrace>
+                    </ErrorInfo>
+                  </Output>
+                </UnitTestResult>
+            """);
+
+        var caseResult = Assert.Single(result.CaseResults);
+        Assert.Equal("failed", caseResult.Status);
+        Assert.StartsWith("OneTimeSetUp: dotnet failed.", caseResult.FailureSummary, StringComparison.Ordinal);
+        Assert.Contains(staticWebAssetsLine, caseResult.FailureSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Run_for_nunit_folds_a_run_level_error_into_failed_case_summaries()
+    {
+        const string runLevelError =
+            "Build failed: /repo/obj/Microsoft.NET.Sdk.StaticWebAssets.targets(475,5): error : "
+            + "No file exists for the asset '/repo/obj/tiptap-editor.js'.";
+        var result = await RunNunitTrx(
+            """
+                <UnitTestResult executionId="exec-1" testId="test-def-1" testName="Adds" outcome="Failed" duration="00:00:00.1250000">
+                  <Output>
+                    <ErrorInfo>
+                      <Message>OneTimeSetUp: dotnet failed.</Message>
+                    </ErrorInfo>
+                  </Output>
+                </UnitTestResult>
+                <UnitTestResult executionId="exec-2" testId="test-def-2" testName="Passes" outcome="Passed" duration="00:00:00.0250000" />
+            """,
+            $"""
+              <ResultSummary outcome="Failed">
+                <RunInfos>
+                  <RunInfo computerName="ci" outcome="Error" timestamp="2026-06-14T01:00:01">
+                    <Text>{runLevelError}</Text>
+                  </RunInfo>
+                </RunInfos>
+              </ResultSummary>
+            """);
+
+        Assert.Equal(2, result.CaseResults.Count);
+        var failedCase = result.CaseResults.Single(row => row.Status == "failed");
+        Assert.StartsWith("OneTimeSetUp: dotnet failed.", failedCase.FailureSummary, StringComparison.Ordinal);
+        Assert.Contains("StaticWebAssets", failedCase.FailureSummary, StringComparison.Ordinal);
+        Assert.Null(result.CaseResults.Single(row => row.Status == "passed").FailureSummary);
+    }
+
+    private async Task<ProviderRunResult> RunNunitTrx(string resultRows, string extraSections = "")
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace("nunit");
+        var generation = FirstGeneration(workspace);
+        var targetPath = Path.Combine(generation.OutDir, "Sample.Tests", "Custom.Assembly.dll");
+        runner.Enqueue();
+        runner.Enqueue(targetPath);
+        runner.Enqueue(exitCode: 1);
+        runner.OnRun = command =>
+        {
+            if (command.Arguments.FirstOrDefault() == "build")
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+                File.WriteAllText(targetPath, string.Empty);
+            }
+
+            if (TrxArtifactPath(command) is not { } artifactPath)
+                return;
+
+            Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+            File.WriteAllText(
+                artifactPath,
+                $"""
+                <?xml version="1.0" encoding="utf-8"?>
+                <TestRun id="run-1" name="Sample" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+                  <Times start="2026-06-14T01:00:00.0000000Z" finish="2026-06-14T01:00:02.0000000Z" />
+                  <Results>
+                {resultRows}
+                  </Results>
+                  <TestDefinitions>
+                    <UnitTest name="Sample.Tests.CalculatorTests.Adds" id="test-def-1">
+                      <TestMethod className="Sample.Tests.CalculatorTests" name="Adds" />
+                    </UnitTest>
+                    <UnitTest name="Sample.Tests.CalculatorTests.Passes" id="test-def-2">
+                      <TestMethod className="Sample.Tests.CalculatorTests" name="Passes" />
+                    </UnitTest>
+                  </TestDefinitions>
+                {extraSections}
+                </TestRun>
+                """);
+        };
+        var provider = new DotnetTestProvider(runner);
+
+        return await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: workspace,
+                SelectedRevision: "rev-1",
+                IndexIdentity: IndexIdentity,
+                RunId: "run:nunit:summary",
+                TestCaseIds:
+                [
+                    "nunit:Sample.Tests.CalculatorTests.Adds",
+                    "nunit:Sample.Tests.CalculatorTests.Passes",
+                ]),
+            TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Sequential_runs_allocate_distinct_generation_directories()
     {
         var runner = new FakeTestProcessRunner();

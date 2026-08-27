@@ -285,7 +285,7 @@ public sealed partial class ContinuousTestStore
         command.Parameters.AddWithValue("$artifact", (object?)result.SourceArtifactId ?? DBNull.Value);
         command.Parameters.AddWithValue("$metadata", JsonText(result.Metadata));
         command.Parameters.AddWithValue("$resultRevision", result.ResultRevision);
-        command.Parameters.AddWithValue("$failure", (object?)OneLine(result.FailureSummary) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$failure", (object?)FailureSummaryText.Summarize(result.FailureSummary) ?? DBNull.Value);
         command.Parameters.AddWithValue("$observedAt", observedAt);
         command.ExecuteNonQuery();
     }
@@ -330,7 +330,7 @@ public sealed partial class ContinuousTestStore
         command.Parameters.AddWithValue("$lastRun", completion.CurrentRevision);
         command.Parameters.AddWithValue("$status", result.Status);
         command.Parameters.AddWithValue("$ended", DateTimeText(completion.EndedAt));
-        command.Parameters.AddWithValue("$failure", (object?)OneLine(result.FailureSummary) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$failure", (object?)FailureSummaryText.Summarize(result.FailureSummary) ?? DBNull.Value);
         command.Parameters.AddWithValue("$score", score.FailureRate);
         command.ExecuteNonQuery();
     }
@@ -378,7 +378,7 @@ public sealed partial class ContinuousTestStore
         command.Parameters.AddWithValue("$current", completion.CurrentRevision);
         command.Parameters.AddWithValue("$status", result.Status);
         command.Parameters.AddWithValue("$ended", DateTimeText(completion.EndedAt));
-        command.Parameters.AddWithValue("$failure", (object?)OneLine(result.FailureSummary) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$failure", (object?)FailureSummaryText.Summarize(result.FailureSummary) ?? DBNull.Value);
         command.Parameters.AddWithValue("$score", score.FailureRate);
         command.ExecuteNonQuery();
     }

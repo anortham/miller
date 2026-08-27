@@ -160,11 +160,11 @@ Commit mode: **serial-worker-commit within a batch is forbidden** — this campa
 **Approach:** Add the drain decision as a small pure policy (a method or type the loop consults each tick with: queue emptiness, stale count from the store, poller health + cursor/live-revision equality, last-activity timestamp, last-drain timestamp). When it fires, mint a backfill pending through the existing queue path with the stale/owed explicit ID selection. The cooldown plus Task 2's cursor advance bounds the loop: a drain whose own build re-stales cases fires again at most once per cooldown, and a byte-identical rebuild (the julie noop) re-stales nothing. Do not change `ReconcilePendingOnNoRun`'s Unknown-drop unless tests prove it fights the drain — the drain replaces the lost pendings by design. Existing debounce tests (`An_unknown_selection_never_becomes_ready_work_even_after_the_quiet_period`) stay green: the Unknown selection itself still never becomes ready work; the drain is a NEW selection made later under healthy conditions. Update `docs/continuous-testing.md` with the drain behavior and its guards.
 
 **Acceptance criteria:**
-- [ ] With staleness in the store, an empty queue, healthy poller, quiet ≥ debounce, and no recent drain, one backfill run is scheduled and executes the stale set as explicit IDs.
-- [ ] No drain while: a run executes, the poller is unhealthy/behind, auto-runs are paused, or the cooldown has not elapsed.
-- [ ] Two consecutive drains require the cooldown between them (loop-bound proof).
-- [ ] Existing debounce/Unknown tests green unmodified except where they pin the old dead-end (each such edit named in the worker report).
-- [ ] Focused scope green: `dotnet test --filter "FullyQualifiedName~ContinuousTestIdleDrainTests|FullyQualifiedName~ContinuousTestDebouncedAutoRunTests"`; diff handed to lead.
+- [x] With staleness in the store, an empty queue, healthy poller, quiet ≥ debounce, and no recent drain, one backfill run is scheduled and executes the stale set as explicit IDs.
+- [x] No drain while: a run executes, the poller is unhealthy/behind, auto-runs are paused, or the cooldown has not elapsed.
+- [x] Two consecutive drains require the cooldown between them (loop-bound proof).
+- [x] Existing debounce/Unknown tests green unmodified except where they pin the old dead-end (each such edit named in the worker report).
+- [x] Focused scope green: `dotnet test --filter "FullyQualifiedName~ContinuousTestIdleDrainTests|FullyQualifiedName~ContinuousTestDebouncedAutoRunTests"`; diff handed to lead.
 
 ### Task 4: edit survives index-generation movement (finding 3)
 
@@ -223,11 +223,11 @@ Commit mode: **serial-worker-commit within a batch is forbidden** — this campa
 **Approach:** (1) Replace `OneLine` with a summarizer that keeps the first line PLUS the first later error-shaped line (contains an exception type, `error`, or assertion marker) joined with ` | `, bounded to 400 bytes — first line alone when nothing later qualifies. (2) Dotnet TRX: `TrxFailureSummary` additionally scans the result's `ErrorInfo`/`StackTrace`/sibling `Message` text for the first error-shaped line and appends it; `ParseTrxRun` folds `RunInfo` error text into each failed case's summary when both case results AND a run-level error exist (today the run text is read only when zero cases parsed). (3) Vitest already supplies multi-line messages; verify the new summarizer surfaces its assertion line and only touch `JavaScriptTestProvider` if a fixture proves a gap. Fixture-based tests: a TRX with an NUnit OneTimeSetUp failure whose StaticWebAssets line sits below the banner must yield a `failure_summary` containing `StaticWebAssets`; existing 400-byte and `error_class` tests stay green.
 
 **Acceptance criteria:**
-- [ ] The OneTimeSetUp fixture's persisted `failure_summary` contains the real error line, within 400 bytes.
-- [ ] A single-line summary is unchanged; multi-line summaries keep first line + first error-shaped line.
-- [ ] `error_class` grouping still classifies the widened summaries (no `unclassified` regressions in existing fixtures).
-- [ ] Contract doc updated to describe the two-part summary.
-- [ ] Focused scope green: `dotnet test --filter "FullyQualifiedName~TestsFailuresOutputTests|FullyQualifiedName~DotnetTestProviderTests"`; diff handed to lead.
+- [x] The OneTimeSetUp fixture's persisted `failure_summary` contains the real error line, within 400 bytes.
+- [x] A single-line summary is unchanged; multi-line summaries keep first line + first error-shaped line.
+- [x] `error_class` grouping still classifies the widened summaries (no `unclassified` regressions in existing fixtures).
+- [x] Contract doc updated to describe the two-part summary.
+- [x] Focused scope green: `dotnet test --filter "FullyQualifiedName~TestsFailuresOutputTests|FullyQualifiedName~DotnetTestProviderTests"`; diff handed to lead.
 
 ### Task 6: pause state visible in tests status (finding 5)
 

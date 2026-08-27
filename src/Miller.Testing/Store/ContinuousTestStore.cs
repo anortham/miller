@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using Microsoft.Data.Sqlite;
 
 namespace Miller.Testing;
@@ -764,13 +765,74 @@ public sealed partial class ContinuousTestStore : IDisposable
             _ => ContinuousTestState.Red,
         };
 
-    private static string? OneLine(string? text)
+}
+
+/// <summary>
+/// Write-time failure-summary shaping: the first line of a provider's failure text plus the first
+/// later error-shaped line, joined with <c>" | "</c> and bounded to 400 UTF-8 bytes. The first line
+/// alone survives when nothing later qualifies.
+/// </summary>
+internal static class FailureSummaryText
+{
+    /// <summary>Twin of Miller.Server's <c>TestsCore.FailureSummaryMaxBytes</c>; Miller.Testing must not reference Miller.Server.</summary>
+    internal const int MaxBytes = 400;
+
+    private const string TruncationMarker = "…";
+
+    internal static string? Summarize(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return null;
-        string normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-        return normalized
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault();
+        string[] lines = Lines(text);
+        if (lines.Length == 0)
+            return null;
+        string first = lines[0];
+        string? detail = lines.Skip(1).FirstOrDefault(IsErrorShapedLine);
+        return Bounded(detail is null ? first : first + " | " + detail);
+    }
+
+    internal static bool IsErrorShapedLine(string line) =>
+        line.Contains("error", StringComparison.OrdinalIgnoreCase)
+        || line.Contains("Assert", StringComparison.Ordinal)
+        || line.StartsWith("Expected", StringComparison.OrdinalIgnoreCase)
+        || HasDottedExceptionToken(line);
+
+    internal static string? FirstErrorShapedLine(string? text) =>
+        string.IsNullOrWhiteSpace(text) ? null : Lines(text).FirstOrDefault(IsErrorShapedLine);
+
+    internal static string[] Lines(string text) => text
+        .Replace("\r\n", "\n", StringComparison.Ordinal)
+        .Replace('\r', '\n')
+        .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static bool HasDottedExceptionToken(string line)
+    {
+        foreach (string token in line.Split(' ', '\t', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string trimmed = token.TrimEnd(':', ',', '.', ')', ']', ';');
+            if (trimmed.Contains('.', StringComparison.Ordinal)
+                && trimmed.EndsWith("Exception", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string Bounded(string summary)
+    {
+        if (Encoding.UTF8.GetByteCount(summary) <= MaxBytes)
+            return summary;
+        int budget = MaxBytes - Encoding.UTF8.GetByteCount(TruncationMarker);
+        int utf16Length = 0;
+        int utf8Length = 0;
+        foreach (Rune rune in summary.EnumerateRunes())
+        {
+            if (utf8Length + rune.Utf8SequenceLength > budget)
+                break;
+            utf8Length += rune.Utf8SequenceLength;
+            utf16Length += rune.Utf16SequenceLength;
+        }
+
+        return summary[..utf16Length] + TruncationMarker;
     }
 }
