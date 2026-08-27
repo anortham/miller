@@ -82,6 +82,12 @@ Rules when adding tests:
 Process: [docs/release-process.md](docs/release-process.md) (two-step validate-then-promote).
 Rules that gate every release:
 
+- **Windows verification is a required pre-release gate.** CI runs no per-push Windows test job
+  (hosted runners were slow and flaky; removed 2026-08-27). Before validating packages, run the
+  fast suite on the local win-test guest (`win-test sync miller`, then
+  `win-test run miller -- powershell -Command "dotnet test --filter 'Category!=Scale'"`) and
+  record the result in the release verification finding.
+
 - Release archives ship `miller`, the matching `.tools/julie-extract`, the semantic runtime, and
   the dashboard executable + `wwwroot` assets (local-first — no font CDN). Keep the platform matrix
   in step with `scripts/julie-pins.json`.

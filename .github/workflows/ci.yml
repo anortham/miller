@@ -76,47 +76,11 @@ jobs:
       - name: Test (Scale suite)
         run: scripts/test.sh scale
 
-  windows-fast:
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
-    runs-on: windows-2025
-    # This is a generous liveness backstop for a stuck hosted runner, not a performance budget.
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7.0.0
-
-      - uses: actions/setup-dotnet@v5.3.0
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Restore
-        run: dotnet restore Miller.slnx
-
-      - name: Restore julie-extract (Windows)
-        shell: pwsh
-        run: ./scripts/restore-julie-extract.ps1
-
-      - name: Build (warnings are errors via Directory.Build.props)
-        run: dotnet build Miller.slnx --no-restore -c Release
-
-      - name: Test (default suite via PowerShell wrapper)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $results = Join-Path $PWD 'TestResults'
-          dotnet test Miller.slnx --no-build -c Release --filter "Category!=Scale" `
-            --results-directory "$results" `
-            --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type none
-          $code = $LASTEXITCODE
-
-          if ($code -ne 0) {
-            Get-ChildItem -Path "$results" -Recurse -Filter 'Sequence*.xml' -ErrorAction SilentlyContinue |
-              ForEach-Object {
-                Write-Host "::group::Blame sequence $($_.FullName)"
-                Get-Content $_.FullName
-                Write-Host "::endgroup::"
-            }
-            exit $code
-          }
+  # There is no per-push Windows test job. Hosted windows-2025 runners cost ~14 minutes per push and
+  # flake under load (antivirus file holds, slow disks), so Windows verification moved to the local
+  # win-test KVM guest as a REQUIRED PRE-RELEASE step — see docs/release-process.md "Windows
+  # verification". The schedule/dispatch-only windows-scale-smoke below stays, as does the win-x64
+  # AOT spike leg.
 
   # P0 HARD GATE for the semantic integration program: sqlite-vec must load and function under a
   # Native-AOT-published binary on every RID Miller releases for. This job is deliberately its own

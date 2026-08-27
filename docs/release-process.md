@@ -2,6 +2,22 @@
 
 Use a two-step release path so publishing does not rebuild the full platform matrix.
 
+## 0. Windows Verification (required before every release)
+
+CI runs no per-push Windows test job (hosted runners were slow and flaky). Windows proof comes from
+the local win-test KVM guest instead, and it is a REQUIRED gate before package validation:
+
+```bash
+win-test up            # if the guest is shut off
+win-test sync miller   # refuses a dirty host tree; syncs HEAD
+win-test run miller -- powershell -Command "dotnet test --filter 'Category!=Scale'"
+```
+
+The suite must report 0 failures on the release commit (or the source-final commit when later
+commits are docs-only). Record the result in the release verification finding. The win-test skill
+(`~/.claude/skills/win-test`) documents the guest; `scripts/test.ps1` mirrors the wrapper for runs
+inside the guest.
+
 ## 1. Validate Packages
 
 Run the release workflow with publication disabled:
