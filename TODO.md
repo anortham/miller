@@ -68,8 +68,10 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
      background fact load inside graph_reach (~2.9 s, that call only) — re-read field telemetry
      after release before spending more here.
   3. A source file deleted mid-scan fails the whole store delta (`RequireCommitted`, os error 2,
-     Tycho 8/26 ×3) and starts scan-failure backoff. Treat a vanished file as a delete; fix may
-     belong in julie-extract.
+     Tycho 8/26 ×3) — FIXED in julie-extract v2.37.2 (vanished files commit as deletions; only
+     NotFound; decision record `docs/decisions/2026-08-27-vanished-file-delta-semantics.md` in
+     that repo). Miller consumed it 2026-08-27: pin bump to 2.37.2 (pins.json, contract constant,
+     THIRD-PARTY-NOTICES, version-asserting tests).
 - On windows memory usage seems high, investigate.
 - Docs will need updating for CT and should list supported langs/frameworks and state that support for more is ongoing
 
