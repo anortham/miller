@@ -242,7 +242,7 @@ public sealed class TestsStatusProjectRowsTests : IDisposable
 
     private string PutProject(string id, string relativePath, string framework = "xunit")
     {
-        string fullPath = Path.Combine(_root, relativePath);
+        string fullPath = Path.GetFullPath(Path.Combine(_root, relativePath));
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
         store.Transaction(() => store.PutContinuousTestProject(new ContinuousTestProject(
             Id: id,

@@ -1075,17 +1075,17 @@ public sealed class PatternsTool
                 : $"No patterns.{Environment.NewLine}active filters: {activeFilters}";
 
         var sb = new StringBuilder();
-        sb.AppendLine("# patterns");
+        sb.Append("# patterns").Append('\n');
         if (activeFilters.Length > 0)
-            sb.Append("active filters: ").AppendLine(activeFilters);
-        sb.AppendLine("pattern_id\tcount\tlanguages\tcaptures");
+            sb.Append("active filters: ").Append(activeFilters).Append('\n');
+        sb.Append("pattern_id\tcount\tlanguages\tcaptures").Append('\n');
         foreach (PatternListRow row in rows)
         {
             sb.Append(row.PatternId).Append('\t')
               .Append(row.Count).Append('\t')
               .Append(string.Join(",", row.Languages)).Append('\t')
               .Append(string.Join(",", row.Captures))
-              .AppendLine();
+              .Append('\n');
         }
         AppendCollectionTruncationCompact(sb, "patterns", totalCount, rows.Count, omittedCount);
         AppendNextActions(sb, nextActions);
@@ -1107,31 +1107,31 @@ public sealed class PatternsTool
         {
             var empty = new StringBuilder("No pattern groups.");
             if (activeFilters.Length > 0)
-                empty.AppendLine().Append("active filters: ").Append(activeFilters);
+                empty.Append('\n').Append("active filters: ").Append(activeFilters);
             if (groupBy != PatternSummaryGroupBy.LanguagePatternCapture)
-                empty.AppendLine().Append("group_by=").Append(SummaryGroupByName(groupBy));
+                empty.Append('\n').Append("group_by=").Append(SummaryGroupByName(groupBy));
             if (!string.IsNullOrWhiteSpace(facet))
-                empty.AppendLine().Append("facet=").Append(facet.Trim());
+                empty.Append('\n').Append("facet=").Append(facet.Trim());
             return empty.ToString();
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine("# patterns summary");
+        sb.Append("# patterns summary").Append('\n');
         if (activeFilters.Length > 0)
-            sb.Append("active filters: ").AppendLine(activeFilters);
+            sb.Append("active filters: ").Append(activeFilters).Append('\n');
         if (groupBy != PatternSummaryGroupBy.LanguagePatternCapture)
-            sb.Append("group_by=").Append(SummaryGroupByName(groupBy)).AppendLine();
+            sb.Append("group_by=").Append(SummaryGroupByName(groupBy)).Append('\n');
         if (!string.IsNullOrWhiteSpace(facet))
-            sb.Append("facet=").Append(facet.Trim()).AppendLine();
+            sb.Append("facet=").Append(facet.Trim()).Append('\n');
 
         if (groupBy == PatternSummaryGroupBy.File)
-            sb.AppendLine("language\tpattern_id\tcapture\tpath\tcount");
+            sb.Append("language\tpattern_id\tcapture\tpath\tcount").Append('\n');
         else if (groupBy is PatternSummaryGroupBy.Directory or PatternSummaryGroupBy.TopDirectory)
-            sb.AppendLine("language\tpattern_id\tcapture\tdirectory\tcount");
+            sb.Append("language\tpattern_id\tcapture\tdirectory\tcount").Append('\n');
         else if (!string.IsNullOrWhiteSpace(facet))
-            sb.AppendLine("language\tpattern_id\tcapture\tfacet\tcount");
+            sb.Append("language\tpattern_id\tcapture\tfacet\tcount").Append('\n');
         else
-            sb.AppendLine("language\tpattern_id\tcapture\tcount");
+            sb.Append("language\tpattern_id\tcapture\tcount").Append('\n');
 
         foreach (PatternSummaryRow row in rows)
         {
@@ -1145,7 +1145,7 @@ public sealed class PatternsTool
             else if (!string.IsNullOrWhiteSpace(facet))
                 sb.Append(row.FacetValue).Append('\t');
             sb.Append(row.Count)
-              .AppendLine();
+              .Append('\n');
         }
         AppendCollectionTruncationCompact(sb, "groups", totalCount, rows.Count, omittedCount);
         return sb.ToString().TrimEnd();
@@ -1165,11 +1165,11 @@ public sealed class PatternsTool
             .Append(" returned=").Append(returnedCount)
             .Append(" omitted=").Append(omittedCount)
             .Append(" truncated=true")
-            .AppendLine();
+            .Append('\n');
         builder.Append(label == "patterns"
                 ? "next: refine pattern_id, language, or path to narrow the result."
                 : "next: refine pattern_id, language, path, where, or grouping to narrow the result.")
-            .AppendLine();
+            .Append('\n');
     }
 
     private static string RenderSearchCompact(
@@ -1191,17 +1191,17 @@ public sealed class PatternsTool
                 return $"No matches for {patternId}.";
 
             var empty = new StringBuilder();
-            empty.Append("No matches for ").Append(patternId).AppendLine(".");
-            empty.Append("Suggestions: ").AppendLine(string.Join(", ", suggestions));
+            empty.Append("No matches for ").Append(patternId).Append(".").Append('\n');
+            empty.Append("Suggestions: ").Append(string.Join(", ", suggestions)).Append('\n');
             AppendNextActions(empty, QueryNoMatchNextActions(suggestions));
             return empty.ToString().TrimEnd();
         }
 
         var sb = new StringBuilder();
-        sb.Append("# patterns search ").AppendLine(patternId);
+        sb.Append("# patterns search ").Append(patternId).Append('\n');
         string activeFilters = ActiveFiltersCompact(path, language, metadataFilters);
         if (activeFilters.Length > 0)
-            sb.Append("active filters: ").AppendLine(activeFilters);
+            sb.Append("active filters: ").Append(activeFilters).Append('\n');
         AppendMatchGroups(sb, rows, metadataFilters);
         AppendMatchTruncationCompact(sb, totalCount, rows.Count, omittedCount);
         return sb.ToString().TrimEnd();
@@ -1219,9 +1219,9 @@ public sealed class PatternsTool
         long omittedCount)
     {
         var sb = new StringBuilder();
-        sb.Append("# patterns search query='").Append(query).AppendLine("'");
+        sb.Append("# patterns search query='").Append(query).Append("'").Append('\n');
         AppendQueryFanoutCompact(sb, fanout);
-        sb.Append("matched_pattern_ids: ").Append(string.Join(", ", fanout.ReturnedPatternIds)).AppendLine();
+        sb.Append("matched_pattern_ids: ").Append(string.Join(", ", fanout.ReturnedPatternIds)).Append('\n');
         string filters = ActiveFiltersCompact(path, language, metadataFilters);
         if (rows.Count == 0 && omittedCount == 0)
         {
@@ -1230,17 +1230,17 @@ public sealed class PatternsTool
                 sb.Append("No facts for matched pattern IDs after filters");
                 if (filters.Length > 0)
                     sb.Append(": ").Append(filters);
-                sb.AppendLine(".");
+                sb.Append(".").Append('\n');
             }
             else
             {
-                sb.AppendLine("No facts for matched pattern IDs.");
+                sb.Append("No facts for matched pattern IDs.").Append('\n');
             }
         }
         else
         {
             if (filters.Length > 0)
-                sb.Append("active filters: ").AppendLine(filters);
+                sb.Append("active filters: ").Append(filters).Append('\n');
             AppendMatchGroups(sb, rows, metadataFilters);
         }
         AppendMatchTruncationCompact(sb, totalCount, rows.Count, omittedCount);
@@ -1257,12 +1257,12 @@ public sealed class PatternsTool
             return;
 
         if (returnedCount > 0)
-            builder.AppendLine();
+            builder.Append('\n');
         builder.Append("matches: total=").Append(totalCount)
             .Append(" returned=").Append(returnedCount)
             .Append(" omitted=").Append(omittedCount)
             .Append(" truncated=true")
-            .AppendLine();
+            .Append('\n');
         builder.Append("next: refine path, language, or where to narrow the result.");
     }
 
@@ -1275,13 +1275,13 @@ public sealed class PatternsTool
         IReadOnlyList<PatternMetadataFilter> metadataFilters)
     {
         var sb = new StringBuilder();
-        sb.Append("No patterns match '").Append(query).AppendLine("'. Try `patterns operation=list` to see observed pattern_id values.");
+        sb.Append("No patterns match '").Append(query).Append("'. Try `patterns operation=list` to see observed pattern_id values.").Append('\n');
         AppendQueryFanoutCompact(sb, fanout);
         if (nearMatches.Count > 0)
-            sb.Append("near matches: ").AppendLine(string.Join(", ", nearMatches));
+            sb.Append("near matches: ").Append(string.Join(", ", nearMatches)).Append('\n');
         string filters = ActiveFiltersCompact(path, language, metadataFilters);
         if (filters.Length > 0)
-            sb.Append("active filters: ").AppendLine(filters);
+            sb.Append("active filters: ").Append(filters).Append('\n');
         AppendNextActions(sb, QueryNoMatchNextActions(nearMatches));
         return sb.ToString().TrimEnd();
     }
@@ -1297,8 +1297,8 @@ public sealed class PatternsTool
         sb.Append("No matches for ").Append(patternId).Append(" after filters");
         if (!string.IsNullOrWhiteSpace(filters))
             sb.Append(": ").Append(filters);
-        sb.AppendLine(".");
-        sb.AppendLine("Try again with this pattern_id and loosen language, path, or where.");
+        sb.Append(".").Append('\n');
+        sb.Append("Try again with this pattern_id and loosen language, path, or where.").Append('\n');
         AppendNextActions(sb, PatternIdRecoveryNextActions(patternId));
         return sb.ToString().TrimEnd();
     }
@@ -1444,7 +1444,7 @@ public sealed class PatternsTool
               .Append(action.Reason)
               .Append('.');
         }
-        sb.AppendLine();
+        sb.Append('\n');
     }
 
     private static string FormatPatternActionCommand(PatternNextAction action)
@@ -1494,7 +1494,7 @@ public sealed class PatternsTool
     {
         foreach (IGrouping<string, PatternMatchRow> group in rows.GroupBy(static row => row.Path, StringComparer.Ordinal))
         {
-            sb.AppendLine(group.Key);
+            sb.Append(group.Key).Append('\n');
             foreach (PatternMatchRow row in group)
             {
                 sb.Append("  L")
@@ -1508,7 +1508,7 @@ public sealed class PatternsTool
                 if (metadata.Length > 0)
                     sb.Append(" metadata=").Append(metadata);
 
-                sb.AppendLine();
+                sb.Append('\n');
             }
         }
     }
@@ -1830,7 +1830,7 @@ public sealed class PatternsTool
           .Append(" returned=").Append(fanout.ReturnedCount)
           .Append(" omitted=").Append(fanout.OmittedCount)
           .Append(" truncated=").Append(fanout.Truncated ? "true" : "false")
-          .AppendLine();
+          .Append('\n');
     }
 
     private static void WriteQueryFanoutJson(Utf8JsonWriter writer, PatternQueryFanout fanout)
