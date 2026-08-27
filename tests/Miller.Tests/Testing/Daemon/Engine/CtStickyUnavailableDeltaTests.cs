@@ -1,4 +1,8 @@
+using Microsoft.Data.Sqlite;
+using Miller.Indexing.Testing;
 using Miller.Testing;
+using Miller.Tests.Indexing.Resolution;
+using Miller.Tests.Testing.Selection;
 using Xunit;
 
 namespace Miller.Tests.Testing.Daemon.Engine;
@@ -6,16 +10,20 @@ namespace Miller.Tests.Testing.Daemon.Engine;
 /// <summary>
 /// An <c>unavailable_delta</c> poll is not the string <c>degraded</c>, so the loop used to record it
 /// as a HEALTHY poll. The condition is sticky by design — the poller must not absorb an interval it
-/// could not read — so one truncating edit turned the daemon into a 250 ms poll loop that enqueued
-/// nothing and reported itself as healthy. These tests hold the bounded, reported behaviour.
+/// could not read — so a genuinely unreadable delta (a base that keeps moving, a store read failure)
+/// turned the daemon into a 250 ms poll loop that enqueued nothing and reported itself as healthy.
+/// These tests hold the bounded, reported behaviour, and pin that a TRUNCATED impact read is not
+/// unavailable: it enqueues as an Unknown selection, so it never feeds this pause.
 /// </summary>
 public sealed class CtStickyUnavailableDeltaTests
 {
+    private const string FixtureIdentity = "ctgen1:artifact:art-1:blake3";
+
     [Fact]
     public void One_unavailable_answer_is_tolerated()
     {
         var tracker = new CtUnavailableDeltaTracker(limit: 3);
-        Assert.False(tracker.RecordUnavailable("impact_truncated"));
+        Assert.False(tracker.RecordUnavailable("moving_cursor"));
         Assert.Equal(1, tracker.Streak);
         Assert.Null(tracker.StuckReason);
     }
@@ -24,14 +32,14 @@ public sealed class CtStickyUnavailableDeltaTests
     public void The_limit_of_consecutive_unavailable_answers_reports_stuck_with_the_delta_reason()
     {
         var tracker = new CtUnavailableDeltaTracker(limit: 3);
-        Assert.False(tracker.RecordUnavailable("impact_truncated"));
-        Assert.False(tracker.RecordUnavailable("impact_truncated"));
-        Assert.True(tracker.RecordUnavailable("impact_truncated"));
-        Assert.True(tracker.RecordUnavailable("impact_truncated"));
+        Assert.False(tracker.RecordUnavailable("moving_cursor"));
+        Assert.False(tracker.RecordUnavailable("moving_cursor"));
+        Assert.True(tracker.RecordUnavailable("moving_cursor"));
+        Assert.True(tracker.RecordUnavailable("moving_cursor"));
 
         Assert.NotNull(tracker.StuckReason);
         Assert.Contains("impact unavailable", tracker.StuckReason, StringComparison.Ordinal);
-        Assert.Contains("impact_truncated", tracker.StuckReason, StringComparison.Ordinal);
+        Assert.Contains("moving_cursor", tracker.StuckReason, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -87,7 +95,7 @@ public sealed class CtStickyUnavailableDeltaTests
                 Result = new ContinuousTestImpactResult(EngineTestSupport.WorkspaceId, [], [], [])
                 {
                     Outcome = ContinuousTestImpactOutcome.Unavailable,
-                    Reason = "impact_truncated",
+                    Reason = "moving_cursor",
                 },
             };
             var enqueuer = new RecordingEnqueuer();
@@ -107,7 +115,7 @@ public sealed class CtStickyUnavailableDeltaTests
                     {
                         lock (reasons) reasons.Add(reason);
                         if (reason.Contains("impact unavailable", StringComparison.Ordinal)
-                            && reason.Contains("impact_truncated", StringComparison.Ordinal))
+                            && reason.Contains("moving_cursor", StringComparison.Ordinal))
                             statusPublished.TrySetResult();
                     },
                 },
@@ -121,7 +129,7 @@ public sealed class CtStickyUnavailableDeltaTests
             Assert.InRange(
                 source.RefreshCount,
                 2,
-                CtUnavailableDeltaTracker.DefaultLimit + 4);
+                (CtUnavailableDeltaTracker.DefaultLimit + 2) * 3);
 
             string[] published;
             lock (reasons)
@@ -129,7 +137,7 @@ public sealed class CtStickyUnavailableDeltaTests
             Assert.Contains(
                 published,
                 reason => reason.Contains("impact unavailable", StringComparison.Ordinal)
-                    && reason.Contains("impact_truncated", StringComparison.Ordinal));
+                    && reason.Contains("moving_cursor", StringComparison.Ordinal));
         }
         finally
         {
@@ -143,6 +151,85 @@ public sealed class CtStickyUnavailableDeltaTests
         }
     }
 
+    [Fact]
+    public async Task A_truncated_impact_read_enqueues_and_never_feeds_the_pause()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        fixture.AddFile("file-service", "src/Service.cs");
+        fixture.AddSymbol("file-service", "cls-service", "Service", "class", "src/Service.cs");
+        string root = CreateWorkspaceRoot(fixture, out string dbPath);
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot>? run = null;
+        try
+        {
+            Execute(
+                dbPath,
+                """
+                CREATE TABLE revision_file_changes (path TEXT, revision_id INTEGER, change_kind TEXT);
+                INSERT INTO revision_file_changes VALUES ('src/Service.cs', 2, 'updated');
+                INSERT INTO extraction_revisions VALUES (2);
+                """);
+            var workspace = EngineTestSupport.Workspace(root);
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(FixtureObservation(1));
+            source.Observations.Enqueue(FixtureObservation(2));
+            var facts = new FakeCtFactSource();
+            facts.Inner.Symbols.Add(FakeMillerFactSource.Symbol("sym:service", "Service", "src/Service.cs"));
+            facts.Inner.ImpactTruncatedByLimit = true;
+            var enqueuer = new RecordingEnqueuer();
+            var reasons = new List<string>();
+            run = ContinuousTestDaemonHost.RunAsync(
+                root,
+                new ContinuousTestDaemonHostOptions
+                {
+                    Enabled = true,
+                    AcquireLease = false,
+                    WorkspaceId = EngineTestSupport.WorkspaceId,
+                    Enqueuer = enqueuer,
+                    Poller = new ContinuousTestRevisionPoller(
+                        source,
+                        new MillerFactImpactSource(_ => facts)),
+                    PollInterval = TimeSpan.FromMilliseconds(1),
+                    Projects =
+                    [
+                        new ContinuousTestProject("proj:1", EngineTestSupport.WorkspaceId, workspace.ProjectPath),
+                    ],
+                    StatusWriter = (_, reason) => { lock (reasons) reasons.Add(reason); },
+                },
+                cts.Token);
+
+            DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+            while ((enqueuer.Changes.Count == 0
+                    || source.RefreshCount < CtUnavailableDeltaTracker.DefaultLimit + 2)
+                && DateTimeOffset.UtcNow < deadline)
+            {
+                await Task.Delay(5, TestContext.Current.CancellationToken);
+            }
+
+            ContinuousTestDaemonChange change = Assert.Single(enqueuer.Changes);
+            Assert.Equal(ContinuousTestDeltaCompleteness.Complete, change.DeltaCompleteness);
+            Assert.Equal(["src/Service.cs"], change.ChangedPaths);
+            Assert.True(source.RefreshCount >= CtUnavailableDeltaTracker.DefaultLimit + 2);
+            string[] published;
+            lock (reasons)
+                published = [.. reasons];
+            Assert.DoesNotContain(
+                published,
+                reason => reason.Contains("impact unavailable", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            if (run is not null)
+            {
+                try { await run; } catch (OperationCanceledException) { }
+            }
+
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
     private static ContinuousTestRevisionObservation Observation(long revision) =>
         new(
             EngineTestSupport.WorkspaceId,
@@ -150,4 +237,37 @@ public sealed class CtStickyUnavailableDeltaTests
             true,
             "fresh",
             DateTimeOffset.UtcNow);
+
+    private static ContinuousTestRevisionObservation FixtureObservation(long revision) =>
+        new(
+            EngineTestSupport.WorkspaceId,
+            new CtFreshnessKey(FixtureIdentity, revision),
+            true,
+            "fresh",
+            DateTimeOffset.UtcNow);
+
+    private static string CreateWorkspaceRoot(ResolutionArtifactFixture fixture, out string dbPath)
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-sticky-trunc-").FullName;
+        string millerDir = Path.Combine(root, ".miller");
+        Directory.CreateDirectory(millerDir);
+        dbPath = Path.Combine(millerDir, "symbols.db");
+        SqliteConnection.ClearAllPools();
+        File.Copy(fixture.DbPath, dbPath);
+        return root;
+    }
+
+    private static void Execute(string dbPath, string sql)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
 }

@@ -75,9 +75,10 @@ public sealed class CtUnavailableDeltaTracker
     }
 
     /// <summary>
-    /// The published wording. The delta reason (for example <c>impact_truncated</c>) is named when
-    /// the poller supplied one, because it is the whole difference between "the index is busy" and
-    /// "this edit is too widely used for the impact bound".
+    /// The published wording. The delta reason (for example <c>moving_cursor</c>) is named when
+    /// the poller supplied one, because it distinguishes which unavailability keeps the poller
+    /// from reading a delta. A truncated impact read no longer reaches this tracker: it delivers
+    /// its delta as Changed and the selector fails it closed to Unknown.
     /// </summary>
     public static string Describe(string? deltaReason) =>
         string.IsNullOrWhiteSpace(deltaReason)

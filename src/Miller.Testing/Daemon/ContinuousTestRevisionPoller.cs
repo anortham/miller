@@ -452,7 +452,9 @@ public sealed class MillerArtifactRevisionSource : IContinuousTestRevisionSource
 
 /// <summary>
 /// Impact from <see cref="RevisionDeltaReader"/> plus <see cref="CtFactAdapter"/>. Unavailable
-/// deltas stay unavailable.
+/// deltas stay unavailable; a truncated impact read still delivers the complete delta as Changed
+/// with the <c>impact_truncated</c> reason, so the selector resolves it to Unknown instead of the
+/// poller stalling on an unadvanceable cursor.
 /// </summary>
 public sealed class MillerFactImpactSource : IContinuousTestImpactSource
 {
@@ -556,20 +558,16 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
                 IReadOnlyList<CtSymbolFact> symbols = facts.SymbolsForChangedFiles(delta.ChangedPaths);
                 string[] seedIds = symbols.Select(row => row.SymbolId).Distinct(StringComparer.Ordinal).ToArray();
                 CtImpactResult impact = facts.Impact(seedIds);
-                if (impact.TruncatedByDepth || impact.TruncatedByLimit)
-                {
-                    // A truncated read is an incomplete blast radius. Claiming "Changed" off it
-                    // would let the consumer run a silently narrow selection; Unavailable makes
-                    // the poller skip the enqueue and the selector treat the delta as Unknown.
-                    return new ContinuousTestImpactResult("", [], [], [])
-                    {
-                        Outcome = ContinuousTestImpactOutcome.Unavailable,
-                        Reason = "impact_truncated",
-                        FromRevision = delta.FromRevision,
-                        ToRevision = delta.ToRevision,
-                    };
-                }
 
+                // A truncated read is an incomplete blast radius, but the DELTA itself is complete:
+                // the changed paths come from the journal, not the impact traversal. Answering
+                // Unavailable here pinned the poller's cursor, grew the interval every poll, and
+                // paused auto-runs after eight misses (2026-08-26 field report). The delta is
+                // delivered as Changed instead; the selector re-runs the same bounded impact read
+                // over the same seeds, hits the same truncation, and fails the selection closed to
+                // Unknown — staleness lands via ApplyRevisionAdvance, nothing executes, and the
+                // cursor may legally advance.
+                bool truncated = impact.TruncatedByDepth || impact.TruncatedByLimit;
                 return new ContinuousTestImpactResult(
                     "",
                     delta.ChangedPaths,
@@ -577,6 +575,7 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
                     impact.Tests.Select(ToTest).ToArray())
                 {
                     Outcome = ContinuousTestImpactOutcome.Changed,
+                    Reason = truncated ? "impact_truncated" : null,
                     FromRevision = delta.FromRevision,
                     ToRevision = delta.ToRevision,
                 };

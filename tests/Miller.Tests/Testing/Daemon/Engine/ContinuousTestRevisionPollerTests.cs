@@ -8,6 +8,8 @@ namespace Miller.Tests.Testing.Daemon.Engine;
 
 public sealed class ContinuousTestRevisionPollerTests
 {
+    private const string FixtureIdentity = "ctgen1:artifact:art-1:blake3";
+
     [Fact]
     public async Task Restart_reconciles_a_persisted_empty_interval_before_enqueue_arm()
     {
@@ -604,14 +606,8 @@ public sealed class ContinuousTestRevisionPollerTests
         }
     }
 
-    /// <summary>
-    /// Carry-forward from the Task 4 review: the impact source used to drop the truncation flags of
-    /// its own fact read, so it could claim a COMPLETE impact ("Changed") off a truncated blast
-    /// radius. A truncated read must degrade to Unavailable, which the poller never enqueues and
-    /// the selector treats as Unknown — fail closed, never a silently narrow run.
-    /// </summary>
     [Fact]
-    public async Task Miller_impact_source_reports_a_truncated_impact_read_as_unavailable()
+    public async Task Miller_impact_source_delivers_a_truncated_impact_read_as_a_changed_delta()
     {
         using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
         fixture.AddFile("file-service", "src/Service.cs");
@@ -641,9 +637,85 @@ public sealed class ContinuousTestRevisionPollerTests
                 root, current, from, TestContext.Current.CancellationToken);
 
             Assert.NotNull(impact);
-            Assert.Equal(ContinuousTestImpactOutcome.Unavailable, impact!.Outcome);
+            Assert.Equal(ContinuousTestImpactOutcome.Changed, impact!.Outcome);
             Assert.Equal("impact_truncated", impact.Reason);
-            Assert.Empty(impact.ImpactedTests);
+            Assert.Equal(["src/Service.cs"], impact.ChangedPaths);
+            Assert.Equal(1, impact.FromRevision);
+            Assert.Equal(2, impact.ToRevision);
+            ContinuousTestImpactedTest test = Assert.Single(impact.ImpactedTests);
+            Assert.Equal("ServiceTests", test.Name);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Truncated_impact_read_advances_as_an_unknown_selection_and_saves_the_cursor()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        fixture.AddFile("file-service", "src/Service.cs");
+        fixture.AddSymbol("file-service", "cls-service", "Service", "class", "src/Service.cs");
+        string root = CreateWorkspaceRoot(fixture, out string dbPath);
+        try
+        {
+            Execute(
+                dbPath,
+                """
+                CREATE TABLE revision_file_changes (path TEXT, revision_id INTEGER, change_kind TEXT);
+                INSERT INTO revision_file_changes VALUES ('src/Service.cs', 2, 'updated');
+                INSERT INTO extraction_revisions VALUES (2);
+                """);
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+            CommitGreen(store, "test:app", FixtureIdentity, 1);
+            var selectorFacts = new Miller.Tests.Testing.Selection.FakeMillerFactSource
+            {
+                Current = new CtIndexCursor(FixtureIdentity, 2),
+                ImpactTruncatedByLimit = true,
+            };
+            selectorFacts.Symbols.Add(Miller.Tests.Testing.Selection.FakeMillerFactSource.Symbol(
+                "sym:service", "Service", "src/Service.cs"));
+            var enqueuer = new ForwardingEnqueuer(new ContinuousTestDaemonQueue(
+                store,
+                new ContinuousTestImpactSelector(store, selectorFacts),
+                new ContinuousTestCoordinator(new FakeContinuousTestProvider(), store)));
+            var impactFacts = new Miller.Tests.Testing.Selection.FakeCtFactSource();
+            impactFacts.Inner.Symbols.Add(Miller.Tests.Testing.Selection.FakeMillerFactSource.Symbol(
+                "sym:service", "Service", "src/Service.cs"));
+            impactFacts.Inner.ImpactTruncatedByLimit = true;
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(FixtureObservation(1));
+            var poller = new ContinuousTestRevisionPoller(
+                source,
+                new MillerFactImpactSource(_ => impactFacts),
+                cursorStore: store);
+
+            await poller.PollAsync(Request(workspace, enqueuer, armed: false), TestContext.Current.CancellationToken);
+            source.Observations.Enqueue(FixtureObservation(2));
+            ContinuousTestRevisionPollResult result = await poller.PollAsync(
+                Request(workspace, enqueuer, armed: true),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("enqueued", result.Reason);
+            Assert.Equal(1, result.EnqueuedProjects);
+            Assert.Equal(0, result.SelectedTests);
+            ContinuousTestDaemonEnqueueResult enqueue = Assert.Single(enqueuer.Results);
+            Assert.Equal(ContinuousTestSelectionOutcome.Unknown, enqueue.Selection.Outcome);
+            Assert.Equal(["test:app"], enqueue.Selection.StaleTestCaseIds);
+            Assert.Equal(
+                new CtFreshnessKey(FixtureIdentity, 2),
+                store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+            Assert.Empty(store.ListContinuousTestFreshWatermarks(EngineTestSupport.WorkspaceId, FixtureIdentity));
+            ContinuousTestProjectedStatus projected = ContinuousTestStatusProjection.Project(
+                new CtFreshnessKey(FixtureIdentity, 2),
+                store.ListContinuousTestStatuses(EngineTestSupport.WorkspaceId),
+                store.ListContinuousTestFreshWatermarks(EngineTestSupport.WorkspaceId, FixtureIdentity));
+            Assert.Equal(1, projected.StaleCount);
+            Assert.NotEqual(ContinuousTestVerdict.Green, projected.Verdict);
         }
         finally
         {
@@ -685,6 +757,49 @@ public sealed class ContinuousTestRevisionPollerTests
             "fresh",
             DateTimeOffset.UtcNow);
 
+    private static ContinuousTestRevisionObservation FixtureObservation(long revision) =>
+        new(
+            EngineTestSupport.WorkspaceId,
+            new CtFreshnessKey(FixtureIdentity, revision),
+            true,
+            "fresh",
+            DateTimeOffset.UtcNow);
+
+    private static void CommitGreen(ContinuousTestStore store, string testCaseId, string identity, long revision)
+    {
+        string revisionText = revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string runId = "seed-run:" + testCaseId + ":" + revisionText;
+        store.StartContinuousTestRun(
+            new ContinuousTestRun(
+                Id: runId,
+                WorkspaceId: EngineTestSupport.WorkspaceId,
+                Status: "running",
+                SelectedRevision: revisionText,
+                IndexIdentity: identity,
+                Revision: revision),
+            [testCaseId]);
+        store.CompleteContinuousTestRun(new ContinuousTestRunCompletion(
+            WorkspaceId: EngineTestSupport.WorkspaceId,
+            TestRunId: runId,
+            SelectedRevision: revisionText,
+            CurrentRevision: revisionText,
+            IndexIdentity: identity,
+            Revision: revision,
+            Status: "passed",
+            Results:
+            [
+                new ContinuousTestResult(
+                    Id: runId + ":result",
+                    WorkspaceId: EngineTestSupport.WorkspaceId,
+                    TestCaseId: testCaseId,
+                    TestRunId: runId,
+                    Status: "passed",
+                    ResultRevision: revisionText,
+                    IndexIdentity: identity,
+                    Revision: revision),
+            ]));
+    }
+
     private static ContinuousTestRevisionPollRequest Request(
         ContinuousTestWorkspace workspace,
         IContinuousTestDaemonEnqueuer enqueuer,
@@ -697,6 +812,25 @@ public sealed class ContinuousTestRevisionPollerTests
             ],
             enqueuer,
             EnqueueArmed: armed);
+
+    private sealed class ForwardingEnqueuer : IContinuousTestDaemonEnqueuer
+    {
+        private readonly IContinuousTestDaemonEnqueuer _inner;
+
+        public ForwardingEnqueuer(IContinuousTestDaemonEnqueuer inner)
+        {
+            _inner = inner;
+        }
+
+        public List<ContinuousTestDaemonEnqueueResult> Results { get; } = [];
+
+        public ContinuousTestDaemonEnqueueResult Enqueue(ContinuousTestDaemonChange change)
+        {
+            ContinuousTestDaemonEnqueueResult result = _inner.Enqueue(change);
+            Results.Add(result);
+            return result;
+        }
+    }
 
     private sealed class RealMovingImpactSource : IContinuousTestImpactSource
     {

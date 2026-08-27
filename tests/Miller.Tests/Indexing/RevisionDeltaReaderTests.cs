@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -208,6 +209,97 @@ public sealed class RevisionDeltaReaderTests
 
         Assert.Equal(RevisionDeltaStatus.Unavailable, result.Status);
         Assert.Equal("no_journal", result.Reason);
+    }
+
+    [Fact]
+    public void Read_StoreManifestEntryIdenticalAcrossGenerations_YieldsNoChangedPath()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        Execute(
+            connection,
+            """
+            CREATE TABLE store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO store_meta VALUES ('family_id','family-1');
+            CREATE TABLE manifests (
+              view_id TEXT NOT NULL,
+              generation INTEGER NOT NULL,
+              manifest_hash TEXT NOT NULL,
+              request_id TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(view_id,generation));
+            INSERT INTO manifests VALUES
+              ('view-a',1,'manifest-1','request-1','2026-08-25T00:00:00Z'),
+              ('view-a',2,'manifest-2','request-2','2026-08-26T00:00:00Z');
+            CREATE TABLE manifest_entries (
+              view_id TEXT NOT NULL,
+              generation INTEGER NOT NULL,
+              path TEXT NOT NULL,
+              language TEXT NOT NULL,
+              version_id INTEGER,
+              status TEXT NOT NULL,
+              observed_content_hash TEXT,
+              indexed_at TEXT NOT NULL,
+              error_class TEXT,
+              error_json TEXT,
+              PRIMARY KEY(view_id,generation,path));
+            INSERT INTO manifest_entries VALUES
+              ('view-a',1,'src/Unchanged.cs','csharp',7,'indexed','blake3:same','2026-08-25T00:00:00Z',NULL,NULL),
+              ('view-a',2,'src/Unchanged.cs','csharp',7,'indexed','blake3:same','2026-08-26T00:00:00Z',NULL,NULL),
+              ('view-a',1,'src/Touched.cs','csharp',8,'indexed','blake3:before','2026-08-25T00:00:00Z',NULL,NULL),
+              ('view-a',2,'src/Touched.cs','csharp',9,'indexed','blake3:after','2026-08-26T00:00:00Z',NULL,NULL);
+            CREATE TABLE store_log (
+              sequence INTEGER PRIMARY KEY,
+              request_id TEXT NOT NULL,
+              event_kind TEXT NOT NULL,
+              view_id TEXT,
+              generation INTEGER,
+              version_id INTEGER,
+              level INTEGER,
+              terminal INTEGER NOT NULL,
+              payload_json TEXT NOT NULL,
+              created_at TEXT NOT NULL);
+            INSERT INTO store_log VALUES
+              (1,'request-1','manifest_flipped','view-a',1,NULL,NULL,1,'{}','2026-08-25T00:00:00Z'),
+              (2,'request-2','manifest_flipped','view-a',2,NULL,NULL,1,'{}','2026-08-26T00:00:00Z');
+            CREATE TEMP TABLE _miller_session (view_id TEXT NOT NULL, generation INTEGER NOT NULL);
+            INSERT INTO _miller_session VALUES ('view-a',2);
+            """);
+        using var session = new RawConnectionSession(connection);
+
+        RevisionDeltaResult result = RevisionDeltaReader.Read(session, fromRevision: 1, fromArtifactId: "family-1");
+
+        Assert.Equal(RevisionDeltaStatus.Complete, result.Status);
+        Assert.Equal(1, result.FromRevision);
+        Assert.Equal(2, result.ToRevision);
+        Assert.Equal(["src/Touched.cs"], result.ChangedPaths);
+        Assert.DoesNotContain("src/Unchanged.cs", result.ChangedPaths);
+        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<string>>(result.DeletedPaths));
+    }
+
+    private static void Execute(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
+    private sealed class RawConnectionSession : IWorkspaceReadSession
+    {
+        private readonly SqliteConnection _connection;
+
+        public RawConnectionSession(SqliteConnection connection)
+        {
+            _connection = connection;
+        }
+
+        public WorkspaceReadSnapshot Snapshot => throw new NotSupportedException();
+
+        public TResult Read<TResult>(Func<SqliteConnection, TResult> query) => query(_connection);
+
+        public void Dispose()
+        {
+        }
     }
 
     private static void DropTable(string dbPath, string table)

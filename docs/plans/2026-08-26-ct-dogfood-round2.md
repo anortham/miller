@@ -129,10 +129,10 @@ Commit mode: **serial-worker-commit within a batch is forbidden** — this campa
 **Approach:** Change the truncation branch to return a successful read whose result carries the truncation hint the selector already consumes (`truncated`/`unmappableHint` inputs to `SelectAtRevision`) instead of `Unavailable`. Keep `moving_cursor`, identity drift, and store read failures as `Unavailable` — those are genuinely unreadable. Rewrite the sticky-unavailable test for truncation (`CtStickyUnavailableDeltaTests` — truncation no longer counts toward the pause) while keeping the pause behavior for real unavailability. Add one regression test in `RevisionDeltaReaderTests` pinning the now-load-bearing hash gate: a store fixture where a file's manifest entry is identical across generations (same `version_id`, same `observed_content_hash`) yields no changed path for that file.
 
 **Acceptance criteria:**
-- [ ] A `TruncatedByLimit` impact read produces an Unknown selection that reaches `ApplyRevisionAdvance` (staleness applied, watermarks cleared) and the poller saves its cursor to the interval end.
-- [ ] Truncation no longer increments the unavailable streak; `moving_cursor` still does and still pauses after the limit.
-- [ ] Byte-identical manifest entries produce no changed path (regression pin on `ReadStore`).
-- [ ] Focused scope green: `dotnet test --filter "FullyQualifiedName~ContinuousTestRevisionPollerTests|FullyQualifiedName~CtStickyUnavailableDeltaTests|FullyQualifiedName~RevisionDeltaReaderTests"`; diff handed to lead.
+- [x] A `TruncatedByLimit` impact read produces an Unknown selection that reaches `ApplyRevisionAdvance` (staleness applied, watermarks cleared) and the poller saves its cursor to the interval end.
+- [x] Truncation no longer increments the unavailable streak; `moving_cursor` still does and still pauses after the limit.
+- [x] Byte-identical manifest entries produce no changed path (regression pin on `ReadStore`).
+- [x] Focused scope green: `dotnet test --filter "FullyQualifiedName~ContinuousTestRevisionPollerTests|FullyQualifiedName~CtStickyUnavailableDeltaTests|FullyQualifiedName~RevisionDeltaReaderTests"`; diff handed to lead.
 
 ### Task 3: Idle owed-backlog drain (finding 2, convergence half; observation 9)
 
