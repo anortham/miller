@@ -8,7 +8,7 @@
     <!-- Single source of truth for the Miller build version. Surfaced at runtime via MillerVersion.Current
          (MCP ServerInfo.Version, `miller version`, and `workspace status`) so a session can tell WHICH build is
          live. The git short SHA is appended to InformationalVersion below when building inside the repo. -->
-    <Version>1.24.0</Version>
+    <Version>1.24.1</Version>
     <!-- We stamp the short SHA into InformationalVersion ourselves (below); stop the SDK from ALSO appending the
          full 40-char SourceRevisionId, which would double the suffix (0.4.0+<short>.<full>). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
