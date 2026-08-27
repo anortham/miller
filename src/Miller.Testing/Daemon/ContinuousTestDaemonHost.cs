@@ -14,6 +14,11 @@ namespace Miller.Testing;
 /// What the published record proves about the daemon's MAIN LOOP, or null when the snapshot was not read from
 /// a record at all. See <see cref="CtDaemonLoopHealth"/>.
 /// </param>
+/// <param name="AutoRunsPaused">
+/// Whether the published record says AUTOMATIC runs are paused, with <paramref name="PauseReason"/> naming
+/// why. A record from an older build reads as not paused. Distinct from
+/// <see cref="CtDaemonLifecycleState.Paused"/>, which is the lifecycle state.
+/// </param>
 public sealed record ContinuousTestDaemonSnapshot(
     CtDaemonLifecycleState State,
     string Reason,
@@ -25,7 +30,9 @@ public sealed record ContinuousTestDaemonSnapshot(
     bool Executing,
     CtDaemonActivity Activity = CtDaemonActivity.Idle,
     CtDaemonRunProgress? Run = null,
-    CtLoopHealthVerdict? LoopHealth = null);
+    CtLoopHealthVerdict? LoopHealth = null,
+    bool AutoRunsPaused = false,
+    string? PauseReason = null);
 
 public sealed class ContinuousTestDaemonHostOptions
 {
@@ -325,6 +332,7 @@ public sealed class ContinuousTestDaemonHost
     // reads a state one poll old costs nothing, where a lock would put the pulse behind the main loop.
     private volatile CtDaemonLifecycleState _publishedState = CtDaemonLifecycleState.Running;
     private volatile string _publishedReason = "starting";
+    private volatile string? _publishedPauseReason;
 
     /// <summary>
     /// When the MAIN LOOP last MOVED, as ticks so the field can be read and written atomically. Zero until
@@ -495,7 +503,9 @@ public sealed class ContinuousTestDaemonHost
             // Whether the loop behind that record is still turning. The pulse keeps this file moving even
             // when the loop is wedged, so the state above cannot answer it and the record's own two stamps
             // must.
-            LoopHealth: CtDaemonLoopHealth.Evaluate(record));
+            LoopHealth: CtDaemonLoopHealth.Evaluate(record),
+            AutoRunsPaused: record?.AutoRunsPaused ?? false,
+            PauseReason: record?.PauseReason);
     }
 
     /// <summary>
@@ -786,14 +796,31 @@ public sealed class ContinuousTestDaemonHost
     private void TryWriteStatus(CtDaemonLease? lease, CtDaemonLifecycleState state, string reason)
     {
         // Remembered so the pulse task can republish the SAME lifecycle state with fresh activity. The pulse
-        // must never invent a state of its own.
+        // must never invent a state of its own — that includes the pause, which only the loop may decide.
         _publishedState = state;
         _publishedReason = reason;
+        _publishedPauseReason = state == CtDaemonLifecycleState.Stopped
+            ? null
+            : PauseReasonOf(_primary.Unavailable.StuckReason);
 
         // Stamped before the write, so a write that fails still records that the loop moved — the tick
         // measures the loop, not the filesystem.
         StampLoopTick();
         PublishStatus(lease, state, reason);
+    }
+
+    /// <summary>
+    /// The reason code the status record and <c>tests status</c> carry: the tracker's published wording
+    /// minus its <c>auto-runs paused: </c> prefix, so the renderers can re-attach exactly one prefix.
+    /// </summary>
+    private static string? PauseReasonOf(string? stuckReason)
+    {
+        const string prefix = "auto-runs paused: ";
+        if (stuckReason is null)
+            return null;
+        return stuckReason.StartsWith(prefix, StringComparison.Ordinal)
+            ? stuckReason[prefix.Length..]
+            : stuckReason;
     }
 
     /// <summary>
@@ -834,8 +861,22 @@ public sealed class ContinuousTestDaemonHost
 
             // ONE clock stamps both halves of the pair a reader subtracts. The tick came from this clock
             // while the record's timestamp came from TimeProvider.System, and they agreed only because both
-            // default to UtcNow.
-            lease.WriteStatus(state, reason, activity, run, LoopTick(), LoopAgeSeconds(), _options.Clock());
+            // default to UtcNow. The record is built here rather than through the lease's convenience
+            // overload because the pause fields ride every publish, the pulse's republishes included.
+            string? pauseReason = _publishedPauseReason;
+            CtDaemonLease.WriteStatus(
+                lease.Record.WorkspaceRoot,
+                new CtDaemonStatusRecord(
+                    state,
+                    reason,
+                    lease.Record.Identity,
+                    _options.Clock(),
+                    activity,
+                    run,
+                    LoopTick(),
+                    LoopAgeSeconds(),
+                    AutoRunsPaused: pauseReason is not null,
+                    PauseReason: pauseReason));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -1185,6 +1226,7 @@ public sealed class ContinuousTestDaemonHost
             if (!context.PollSettled)
                 context.LastActivityAt = _options.Clock();
 
+            string? pauseBefore = context.Unavailable.StuckReason;
             if (poll.Freshness is { } freshness)
             {
                 context.StartedAt ??= freshness;
@@ -1231,6 +1273,8 @@ public sealed class ContinuousTestDaemonHost
                 context.Backoff.RecordDegraded();
                 context.Watch.RecordError(poll.Reason);
             }
+
+            LogPauseTransition(context, pauseBefore);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1250,6 +1294,26 @@ public sealed class ContinuousTestDaemonHost
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// One <c>role:ct</c> line on each auto-run pause EDGE — enter with the reason, clear on recovery —
+    /// judged where the tracker is fed, so a persistent pause logs once instead of once per poll. The
+    /// status record carries the standing state; the daily log used to carry nothing at all, which is how
+    /// a six-minute pause left no trace outside <c>daemon.status.json</c>.
+    /// </summary>
+    private void LogPauseTransition(ContinuousTestWorkspaceContext context, string? before)
+    {
+        string? after = context.Unavailable.StuckReason;
+        if (before is null && after is not null)
+        {
+            Diagnostic(
+                $"ct auto-runs paused workspace={context.WorkspaceId} reason={PauseReasonOf(after)}");
+        }
+        else if (before is not null && after is null)
+        {
+            Diagnostic($"ct auto-runs resumed workspace={context.WorkspaceId}");
+        }
     }
 
     /// <summary>
@@ -1545,7 +1609,16 @@ public sealed class ContinuousTestDaemonHost
         CtDaemonWriteMode mode = state == CtDaemonLifecycleState.Running
             ? CtDaemonWriteMode.CreateIfMissing
             : CtDaemonWriteMode.ReplaceExistingOnly;
-        var record = new CtDaemonStatusRecord(state, reason, _leaseIdentity, _options.Clock());
+        string? pauseReason = state == CtDaemonLifecycleState.Stopped
+            ? null
+            : PauseReasonOf(context.Unavailable.StuckReason);
+        var record = new CtDaemonStatusRecord(
+            state,
+            reason,
+            _leaseIdentity,
+            _options.Clock(),
+            AutoRunsPaused: pauseReason is not null,
+            PauseReason: pauseReason);
         try
         {
             if (_options.AdoptedStatusWriter is { } writer)

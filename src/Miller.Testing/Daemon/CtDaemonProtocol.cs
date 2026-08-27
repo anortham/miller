@@ -184,6 +184,17 @@ public sealed record CtDaemonRunProgress(
 /// <para>Null on a record from a build that predates the field, and whenever <see cref="LoopTickAtUtc"/> is
 /// null — there is no tick to measure from. A reader falls back to the two stamps then.</para>
 /// </param>
+/// <param name="AutoRunsPaused">
+/// Whether the daemon has paused AUTOMATIC runs, which the lifecycle state does not answer: the pause
+/// lived only as free text in <see cref="Reason"/>, so <c>tests status</c> printed
+/// <c>daemon: running (idle)</c> while auto-runs had been silently stopped for minutes. Trailing
+/// optional: a record from an older build reads as not paused, never as an error.
+/// </param>
+/// <param name="PauseReason">
+/// Why auto-runs are paused — the reason after the <c>auto-runs paused: </c> prefix of the published
+/// wording, for example <c>impact unavailable (moving_cursor)</c>. Null whenever
+/// <see cref="AutoRunsPaused"/> is false, and on a record from a build that predates the field.
+/// </param>
 public sealed record CtDaemonStatusRecord(
     CtDaemonLifecycleState State,
     string Reason,
@@ -192,7 +203,9 @@ public sealed record CtDaemonStatusRecord(
     CtDaemonActivity Activity = CtDaemonActivity.Idle,
     CtDaemonRunProgress? Run = null,
     DateTimeOffset? LoopTickAtUtc = null,
-    double? LoopAgeSeconds = null);
+    double? LoopAgeSeconds = null,
+    bool AutoRunsPaused = false,
+    string? PauseReason = null);
 
 /// <summary>
 /// File layout for the detached CT control plane under <c>&lt;workspace&gt;/.miller/ct/</c>.

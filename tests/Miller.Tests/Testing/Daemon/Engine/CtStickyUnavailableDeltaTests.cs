@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing.Testing;
 using Miller.Testing;
@@ -152,6 +153,90 @@ public sealed class CtStickyUnavailableDeltaTests
     }
 
     [Fact]
+    public async Task A_stuck_poll_publishes_the_pause_in_the_status_record_and_clears_on_recovery()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-pause-").FullName;
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot>? run = null;
+        try
+        {
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(Observation(2));
+            source.Observations.Enqueue(Observation(3));
+            var impact = new ScriptedImpactSource
+            {
+                Result = new ContinuousTestImpactResult(EngineTestSupport.WorkspaceId, [], [], [])
+                {
+                    Outcome = ContinuousTestImpactOutcome.Unavailable,
+                    Reason = "moving_cursor",
+                },
+            };
+            var diagnostics = new List<string>();
+            run = ContinuousTestDaemonHost.RunAsync(
+                root,
+                new ContinuousTestDaemonHostOptions
+                {
+                    Enabled = true,
+                    WorkspaceId = EngineTestSupport.WorkspaceId,
+                    Enqueuer = new RecordingEnqueuer(),
+                    Poller = new ContinuousTestRevisionPoller(source, impact),
+                    PollInterval = TimeSpan.FromMilliseconds(1),
+                    Diagnostic = line => { lock (diagnostics) diagnostics.Add(line); },
+                },
+                cts.Token);
+
+            CtDaemonStatusRecord paused = await WaitForRecordAsync(root, record => record.AutoRunsPaused);
+            Assert.Equal("impact unavailable (moving_cursor)", paused.PauseReason);
+            Assert.Contains("impact unavailable", paused.Reason, StringComparison.Ordinal);
+
+            impact.Result = new ContinuousTestImpactResult(EngineTestSupport.WorkspaceId, [], [], [])
+            {
+                Outcome = ContinuousTestImpactOutcome.Empty,
+                FromRevision = 2,
+                ToRevision = 3,
+            };
+            CtDaemonStatusRecord resumed = await WaitForRecordAsync(root, record => !record.AutoRunsPaused);
+            Assert.Null(resumed.PauseReason);
+
+            string[] lines;
+            lock (diagnostics)
+                lines = [.. diagnostics];
+            Assert.Single(
+                lines,
+                line => line.Contains("auto-runs paused", StringComparison.Ordinal)
+                    && line.Contains("moving_cursor", StringComparison.Ordinal));
+            Assert.Single(lines, line => line.Contains("auto-runs resumed", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            if (run is not null)
+            {
+                try { await run; } catch (OperationCanceledException) { }
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void An_old_status_record_without_the_pause_fields_reads_not_paused()
+    {
+        const string json =
+            """
+            {"state":"running","reason":"idle","identity":null,
+             "updated_at_utc":"2026-08-26T00:00:00.0000000+00:00"}
+            """;
+
+        CtDaemonStatusRecord? record = JsonSerializer.Deserialize(
+            json, CtDaemonJsonContext.Default.CtDaemonStatusRecord);
+
+        Assert.NotNull(record);
+        Assert.False(record.AutoRunsPaused);
+        Assert.Null(record.PauseReason);
+    }
+
+    [Fact]
     public async Task A_truncated_impact_read_enqueues_and_never_feeds_the_pause()
     {
         using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
@@ -228,6 +313,22 @@ public sealed class CtStickyUnavailableDeltaTests
             SqliteConnection.ClearAllPools();
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
+    }
+
+    private static async Task<CtDaemonStatusRecord> WaitForRecordAsync(
+        string root, Func<CtDaemonStatusRecord, bool> accept)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (CtDaemonLease.TryReadStatus(root) is { } record && accept(record))
+                return record;
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+        }
+
+        throw new TimeoutException(
+            "the status record did not reach the expected pause state; last: "
+            + (CtDaemonLease.TryReadStatus(root) is { } last ? CtDaemonJson.Serialize(last) : "none"));
     }
 
     private static ContinuousTestRevisionObservation Observation(long revision) =>

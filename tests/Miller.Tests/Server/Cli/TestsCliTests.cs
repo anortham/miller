@@ -1043,6 +1043,78 @@ public sealed class TestsCliTests : IDisposable
         Assert.NotNull(spawned);
     }
 
+    [Fact]
+    public void Status_SurfacesTheAutoRunPauseFromALiveDaemonRecord()
+    {
+        EnableWorkspace();
+        WriteDaemonStatusRecord(CtDaemonJson.Serialize(new CtDaemonStatusRecord(
+            CtDaemonLifecycleState.Running,
+            "auto-runs paused: impact unavailable (moving_cursor)",
+            CurrentProcessIdentity(),
+            DateTimeOffset.UtcNow,
+            AutoRunsPaused: true,
+            PauseReason: "impact unavailable (moving_cursor)")));
+
+        var (code, outText, _) = Run("tests", "status", "--json");
+
+        Assert.Equal(0, code);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement daemon = doc.RootElement.GetProperty("daemon");
+        Assert.True(daemon.GetProperty("auto_runs_paused").GetBoolean());
+        Assert.Equal("impact unavailable (moving_cursor)", daemon.GetProperty("pause_reason").GetString());
+        Assert.Equal("running", daemon.GetProperty("state").GetString());
+        Assert.False(daemon.GetProperty("paused").GetBoolean());
+
+        var (compactCode, compactOut, _) = Run("tests", "status");
+        Assert.Equal(0, compactCode);
+        Assert.Contains(
+            CompactLines(compactOut),
+            line => line == "auto-runs paused: impact unavailable (moving_cursor)");
+    }
+
+    [Fact]
+    public void Status_ReadsARecordWithoutThePauseFieldsAsNotPaused()
+    {
+        EnableWorkspace();
+        CtDaemonLeaseIdentity identity = CurrentProcessIdentity();
+        WriteDaemonStatusRecord(
+            $$"""
+            {"state":"running","reason":"idle",
+             "identity":{"pid":{{identity.Pid}},"process_start_time_utc":"{{identity.ProcessStartTimeUtc:O}}"},
+             "updated_at_utc":"{{DateTimeOffset.UtcNow:O}}"}
+            """);
+
+        var (code, outText, _) = Run("tests", "status", "--json");
+
+        Assert.Equal(0, code);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement daemon = doc.RootElement.GetProperty("daemon");
+        Assert.Equal("running", daemon.GetProperty("state").GetString());
+        Assert.False(daemon.GetProperty("auto_runs_paused").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, daemon.GetProperty("pause_reason").ValueKind);
+        Assert.DoesNotContain("auto-runs paused:", Run("tests", "status").Out, StringComparison.Ordinal);
+    }
+
+    private void EnableWorkspace()
+    {
+        string marker = ContinuousTestPolicy.EnabledMarkerPath(_root);
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        File.WriteAllText(marker, string.Empty);
+    }
+
+    private void WriteDaemonStatusRecord(string json)
+    {
+        Directory.CreateDirectory(CtDaemonProtocol.RootDirectory(_root));
+        File.WriteAllText(CtDaemonProtocol.StatusPath(_root), json);
+    }
+
+    private static CtDaemonLeaseIdentity CurrentProcessIdentity()
+    {
+        using var process = Process.GetCurrentProcess();
+        return new CtDaemonLeaseIdentity(
+            process.Id, new DateTimeOffset(process.StartTime.ToUniversalTime()));
+    }
+
     /// <summary>A stub that outlives the test, so a parked lease reads as live.</summary>
     private static Process StartStub()
     {
@@ -1074,6 +1146,8 @@ public sealed class TestsCliTests : IDisposable
         Assert.True(daemon.TryGetProperty("reason", out _));
         Assert.True(daemon.TryGetProperty("running", out _));
         Assert.True(daemon.TryGetProperty("paused", out _));
+        Assert.True(daemon.TryGetProperty("auto_runs_paused", out _));
+        Assert.True(daemon.TryGetProperty("pause_reason", out _));
         Assert.True(daemon.TryGetProperty("miller_version", out _));
         Assert.True(daemon.TryGetProperty("version_match", out _));
         Assert.True(daemon.TryGetProperty("version_mismatch", out _));

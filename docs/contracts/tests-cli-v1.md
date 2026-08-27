@@ -64,6 +64,8 @@ provider, selection, or chunk facts. Absent optional facts remain absent for com
     "reason": "stopped",
     "running": false,
     "paused": false,
+    "auto_runs_paused": false,
+    "pause_reason": null,
     "activity": "idle",
     "run": null,
     "miller_version": null,
@@ -95,7 +97,9 @@ provider, selection, or chunk facts. Absent optional facts remain absent for com
 | `daemon.state` | string | `running`, `paused`, or `stopped`. |
 | `daemon.reason` | string | Why the daemon is in that state. Wording is not a contract. |
 | `daemon.running` | bool | `true` only when `state` is `running`. |
-| `daemon.paused` | bool | `true` only when `state` is `paused`. |
+| `daemon.paused` | bool | `true` only when `state` is `paused`. LIFECYCLE state only (for example the execution budget is held elsewhere); it says nothing about automatic runs — a `running` daemon can have auto-runs paused. See `daemon.auto_runs_paused`. |
+| `daemon.auto_runs_paused` | bool | `true` while the daemon has paused AUTOMATIC runs — its poll cannot read the change delta, so no auto-run will fire until the pause clears. Independent of the lifecycle state: typically reported with `state: "running"`. ADDITIVE at `schema_version` 1, like the loop-stall pair. |
+| `daemon.pause_reason` | string \| null | Why auto-runs are paused, for example `impact unavailable (moving_cursor)`. Wording is not a contract. `null` whenever `auto_runs_paused` is `false`, and for a daemon build that predates the field — absence of the pair in an old record reads as not paused, never as an error. |
 | `daemon.miller_version` | string \| null | The build the LIVE daemon runs, read from its `daemon.lease.json`. `null` when no live daemon. |
 | `daemon.version_match` | string | `none`, `same`, `daemon_older`, `daemon_newer`, `build_differs`, or `unknown`. |
 | `daemon.version_mismatch` | bool | `true` when a live daemon runs a build that is not this one. |

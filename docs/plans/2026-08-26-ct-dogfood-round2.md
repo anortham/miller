@@ -255,11 +255,11 @@ Commit mode: **serial-worker-commit within a batch is forbidden** — this campa
 **Approach:** Publish `AutoRunsPaused`/`PauseReason` from the host wherever `StuckReason` is non-null (primary record; adopted-worktree records get the fields when their next transition write happens — a worktree reader judging the family daemon's record is the documented pattern). Surface through `ReadLiveStatus` → `TestsStatusResult` → JSON + compact. Log one `Diagnostic` line on enter (with reason) and one on clear. Update the contract doc: new fields, the clarified `daemon.paused` row, a sample payload.
 
 **Acceptance criteria:**
-- [ ] While the tracker reports stuck, `tests status --json` carries `daemon.auto_runs_paused: true` and the reason code; compact prints the pause line; both clear when the tracker clears.
-- [ ] An old record without the fields reads as not-paused/unknown, never crashes.
-- [ ] Pause enter and clear each write exactly one `role:ct` log line.
-- [ ] Contract doc documents the fields and the lifecycle-vs-auto-run distinction.
-- [ ] Focused scope green: `dotnet test --filter "FullyQualifiedName~CtStickyUnavailableDeltaTests|FullyQualifiedName~TestsToolTests|FullyQualifiedName~TestsCliTests"`; diff handed to lead.
+- [x] While the tracker reports stuck, `tests status --json` carries `daemon.auto_runs_paused: true` and the reason code; compact prints the pause line; both clear when the tracker clears.
+- [x] An old record without the fields reads as not-paused/unknown, never crashes.
+- [x] Pause enter and clear each write exactly one `role:ct` log line.
+- [x] Contract doc documents the fields and the lifecycle-vs-auto-run distinction.
+- [x] Focused scope green: `dotnet test --filter "FullyQualifiedName~CtStickyUnavailableDeltaTests|FullyQualifiedName~TestsToolTests|FullyQualifiedName~TestsCliTests"`; diff handed to lead.
 
 ### Task 7: impact suggests staged=true on a staged-only diff (finding 6)
 
@@ -316,12 +316,12 @@ Commit mode: **serial-worker-commit within a batch is forbidden** — this campa
 **Approach:** Change only the build-root prefix in `Materialize`: `Path.Combine(root, ".miller", "ct-" + ShortSegment(project.Id))`. Everything below (generation dirs, `out`, cache sibling, markers) keeps its shape, so `CtGenerationPaths` likely needs no change. Recompute `WorkspaceLocalTailLength` from the new literal and update the doc comment. Fix `GenerationContentRoots` and every sibling scan to filter on the `ct-` prefix under `.miller`. Extend the janitor to sweep `<root>/.miller/ct/build` (legacy location) under the same no-live-process rules, so upgraded workspaces do not strand ~635MB generations. Watcher/extractor invisibility holds automatically (`.miller` is excluded wholesale — `WatchPathFilter.cs:58`, `JulieIgnoreSeeder.cs:94`). Update `docs/continuous-testing.md` and note the depth guarantee (≤5 levels) as a documented property.
 
 **Acceptance criteria:**
-- [ ] The composed deepest assembly directory sits exactly 5 levels below the workspace root, and a test pins the depth (count of separators), not just the string.
-- [ ] The budget-equality test passes with the recomputed tail; the over-budget fallback still triggers at the new threshold.
-- [ ] Peer-root enumeration never treats non-`ct-` entries under `.miller` as build roots.
-- [ ] The janitor reclaims a fixture legacy `.miller/ct/build/<proj>` generation when idle, and never while a marker/process holds it.
-- [ ] Docs updated (`docs/continuous-testing.md`); the CLAUDE.md layout line is queued for Task 9.
-- [ ] Focused scope green: `dotnet test --filter "FullyQualifiedName~ContinuousTestProjectInventoryTests|FullyQualifiedName~BuildOutputRootValidationTests|FullyQualifiedName~CtBuildCacheJanitorTests|FullyQualifiedName~CtBuildCacheMaintenanceTests"`; diff handed to lead.
+- [x] The composed deepest assembly directory sits exactly 5 levels below the workspace root, and a test pins the depth (count of separators), not just the string.
+- [x] The budget-equality test passes with the recomputed tail; the over-budget fallback still triggers at the new threshold.
+- [x] Peer-root enumeration never treats non-`ct-` entries under `.miller` as build roots.
+- [x] The janitor reclaims a fixture legacy `.miller/ct/build/<proj>` generation when idle, and never while a marker/process holds it.
+- [x] Docs updated (`docs/continuous-testing.md`); the CLAUDE.md layout line is queued for Task 9.
+- [x] Focused scope green: `dotnet test --filter "FullyQualifiedName~ContinuousTestProjectInventoryTests|FullyQualifiedName~BuildOutputRootValidationTests|FullyQualifiedName~CtBuildCacheJanitorTests|FullyQualifiedName~CtBuildCacheMaintenanceTests"`; diff handed to lead.
 
 ### Task 9: docs, CLAUDE.md sync, TODO, branch gate
 

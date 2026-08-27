@@ -220,7 +220,8 @@ public sealed class TestsToolTests : IDisposable
             "{\"schema_version\":1,\"miller_version\":\"1.0.0+own\",\"enabled\":true,"
             + "\"kill_switch\":false,\"projects\":[],\"projects_discovered\":false,"
             + "\"daemon\":{\"state\":\"running\","
-            + "\"reason\":\"idle\",\"running\":true,\"paused\":false,\"activity\":\"executing\","
+            + "\"reason\":\"idle\",\"running\":true,\"paused\":false,"
+            + "\"auto_runs_paused\":false,\"pause_reason\":null,\"activity\":\"executing\","
             + "\"run\":{\"project_path\":\"/repo/Sample.Tests.csproj\",\"run_id\":\"run:42\","
             + "\"selected_case_count\":2,\"started_at\":\"2026-08-22T09:30:00.0000000+00:00\","
             + "\"child\":\"active\"},\"miller_version\":\"1.0.0+own\",\"version_match\":\"same\","
@@ -229,6 +230,61 @@ public sealed class TestsToolTests : IDisposable
             + "\"selected\":null,\"stale_count\":0,\"selected_count\":0,\"last_run\":null,"
             + "\"budget_holder\":null}",
             TestsCore.RenderStatusJson(result));
+    }
+
+    [Fact]
+    public void Status_renderers_surface_the_auto_run_pause()
+    {
+        var result = new TestsStatusResult(
+            Enabled: true,
+            KillSwitchOff: false,
+            Projects: [],
+            DaemonState: CtDaemonLifecycleState.Running,
+            DaemonReason: "auto-runs paused: impact unavailable (moving_cursor)",
+            Verdict: ContinuousTestVerdict.Unknown,
+            Selected: null,
+            StaleCount: 0,
+            SelectedCount: 0,
+            LastRun: null,
+            BudgetHolder: null,
+            DaemonAutoRunsPaused: true,
+            DaemonPauseReason: "impact unavailable (moving_cursor)");
+
+        using JsonDocument doc = JsonDocument.Parse(TestsCore.RenderStatusJson(result));
+        JsonElement daemon = doc.RootElement.GetProperty("daemon");
+        Assert.True(daemon.GetProperty("auto_runs_paused").GetBoolean());
+        Assert.Equal("impact unavailable (moving_cursor)", daemon.GetProperty("pause_reason").GetString());
+        Assert.False(daemon.GetProperty("paused").GetBoolean());
+
+        string compact = TestsCore.RenderStatusCompact(result);
+        string line = compact.Split('\n')
+            .Single(row => row.StartsWith("auto-runs paused:", StringComparison.Ordinal));
+        Assert.Equal("auto-runs paused: impact unavailable (moving_cursor)", line);
+    }
+
+    [Fact]
+    public void Status_renderers_stay_silent_when_auto_runs_are_not_paused()
+    {
+        var result = new TestsStatusResult(
+            Enabled: true,
+            KillSwitchOff: false,
+            Projects: [],
+            DaemonState: CtDaemonLifecycleState.Running,
+            DaemonReason: "idle",
+            Verdict: ContinuousTestVerdict.Green,
+            Selected: null,
+            StaleCount: 0,
+            SelectedCount: 0,
+            LastRun: null,
+            BudgetHolder: null);
+
+        using JsonDocument doc = JsonDocument.Parse(TestsCore.RenderStatusJson(result));
+        JsonElement daemon = doc.RootElement.GetProperty("daemon");
+        Assert.False(daemon.GetProperty("auto_runs_paused").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, daemon.GetProperty("pause_reason").ValueKind);
+
+        Assert.DoesNotContain(
+            "auto-runs paused:", TestsCore.RenderStatusCompact(result), StringComparison.Ordinal);
     }
 
     [Fact]

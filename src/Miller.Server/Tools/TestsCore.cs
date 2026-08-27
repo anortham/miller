@@ -151,7 +151,20 @@ public sealed record TestsStatusResult(
     /// adopted worktree this judges the FAMILY daemon's record, because a worktree has no periodic
     /// record of its own.
     /// </summary>
-    CtLoopHealthVerdict? DaemonLoop = null)
+    CtLoopHealthVerdict? DaemonLoop = null,
+
+    /// <summary>
+    /// Whether the daemon has paused AUTOMATIC runs, from the published status record. Distinct from
+    /// the lifecycle state: the pause lived only as free text in the record's reason, so status printed
+    /// <c>daemon: running (idle)</c> while auto-runs had been silently stopped for minutes.
+    /// </summary>
+    bool DaemonAutoRunsPaused = false,
+
+    /// <summary>
+    /// Why auto-runs are paused, for example <c>impact unavailable (moving_cursor)</c>. Null whenever
+    /// <see cref="DaemonAutoRunsPaused"/> is false, and for a daemon build that predates the field.
+    /// </summary>
+    string? DaemonPauseReason = null)
 {
     public string Render(bool json) => json ? TestsCore.RenderStatusJson(this) : TestsCore.RenderStatusCompact(this);
 }
@@ -292,7 +305,9 @@ public static class TestsCore
 
     /// <summary>
     /// Longest <c>failure_summary</c> either failures renderer emits per row, in UTF-8 bytes. One 80KB stack
-    /// trace in a single row used to blow the whole MCP page on its own; the full text stays in <c>ct.db</c>.
+    /// trace in a single row used to blow the whole MCP page on its own. <c>ct.db</c> persists a bounded
+    /// two-part summary shaped at write time (first line plus first error-shaped line, same byte budget),
+    /// so this render bound is the backstop for rows written before that shaping.
     /// </summary>
     public const int FailureSummaryMaxBytes = 400;
 
@@ -433,7 +448,9 @@ public static class TestsCore
             DaemonActivity: snapshot.Activity,
             DaemonRun: snapshot.Run,
             DaemonVersion: version,
-            DaemonLoop: loop);
+            DaemonLoop: loop,
+            DaemonAutoRunsPaused: snapshot.AutoRunsPaused,
+            DaemonPauseReason: snapshot.PauseReason);
     }
 
     /// <summary>
@@ -1224,6 +1241,13 @@ public static class TestsCore
             writer.WriteString("reason", result.DaemonReason);
             writer.WriteBoolean("running", result.DaemonState == CtDaemonLifecycleState.Running);
             writer.WriteBoolean("paused", result.DaemonState == CtDaemonLifecycleState.Paused);
+            // Lifecycle `paused` above; AUTOMATIC-run pause here. Always both keys, like the loop-stall
+            // pair: `auto_runs_paused` is what a reader acts on, `pause_reason` names why or stays null.
+            writer.WriteBoolean("auto_runs_paused", result.DaemonAutoRunsPaused);
+            if (result.DaemonPauseReason is { } pauseReason)
+                writer.WriteString("pause_reason", pauseReason);
+            else
+                writer.WriteNull("pause_reason");
             writer.WriteString("activity", Snake(result.DaemonActivity.ToString()));
             writer.WritePropertyName("run");
             WriteDaemonRun(writer, result.DaemonRun);
@@ -1270,6 +1294,10 @@ public static class TestsCore
         sb.AppendLine("enabled: " + (result.Enabled ? "true" : "false")
             + (result.Enabled ? string.Empty : " (continuous testing is opt-in here)"));
         sb.AppendLine($"daemon: {Snake(result.DaemonState.ToString())} ({result.DaemonReason})");
+        // Only while paused: the line names a fault a reader waiting on automatic runs cannot see
+        // anywhere else in compact output, and printing it on every healthy read would bury it.
+        if (result.DaemonAutoRunsPaused)
+            sb.AppendLine("auto-runs paused: " + (result.DaemonPauseReason ?? "unknown"));
         sb.AppendLine("activity: " + Snake(result.DaemonActivity.ToString()));
         if (result.DaemonRun is { } running)
         {
