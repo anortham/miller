@@ -1,737 +1,320 @@
 # Miller — agent working notes
 
-Miller is a read-only .NET 10 SQLite/MCP consumer of `julie-extract` output. It does not own
-tree-sitter extraction or embedding generation; parser-backed extraction is delegated to the pinned
-`julie-extract` binary and embedding generation to the pinned `julie-semantic-sidecar` binary. Miller
-can re-read workspace source text for content corpus, source-region snippets, and explicit text
-search using extractor hashes/spans as freshness guards. See
-[README.md](README.md) for the current architecture and [docs/README.md](docs/README.md) for the
-current-vs-historical documentation map.
+Miller is a read-only .NET 10 SQLite/MCP consumer of `julie-extract` output. Parser-backed
+extraction belongs to the pinned `julie-extract` binary; embedding generation belongs to the pinned
+`julie-semantic-sidecar` binary. Miller may re-read workspace source text (content corpus, source
+regions, explicit text search) with extractor hashes/spans as freshness guards. Architecture:
+[README.md](README.md). Documentation map (current vs historical): [docs/README.md](docs/README.md).
 
-## 1.0 replacement boundary
+This file is a rules and onboarding doc. Design history, field reports, and rationale live in
+`docs/` (plans, findings, ADRs) and in git history — link to them, do not inline them here.
 
-The Julie replacement story is Miller + `julie-extractors`, not Miller alone. Julie is retired as of
-2026-07-28 (v7.17.0 final, retirement note in its README, migration doc operative; sealed gate cancelled —
-`docs/findings/2026-07-28-sealed-gate-disposition.md`). Eros is archived as of 2026-07-29 (banner in its
-README); the ownership boundaries below still stand — do not absorb the fleet-level surfaces it reserved.
-The decisive baseline for Miller's value is recorded in
-`docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md`. Miller replaces Julie's
-deterministic local agent-tool core: search, inspect, context, refs, trace/path, impact, editing, workspace
-lifecycle, content/web/text import, patterns, marker audits, telemetry, JSON/JSONL feeds, **and deterministic
-local analysis reports** (`metrics churn|clones|complexity|risk`, the composed `miller report` rollup).
-`julie-extractors` / `julie-extract` owns parser-backed extraction and standalone extract workflows. Miller owns
-**default-on, off-switchable local semantic retrieval**; Eros owns fleet-level semantics: cross-workspace/fleet ranking, guidance
-and confidence/evidence views, embeddings-as-a-service orchestration, suppression persistence, and commercial
-orchestration.
+## Ownership boundary
 
-The versioned family store is a shared contract between `julie-extract` and Miller, but **both repos have the
-same owner and neither side is off-limits**. In normal operation `julie-extract` writes `store.db`, `coord.db`,
-manifests, and generation files while Miller reads a pinned view and writes its own derived
-sidecars — keep that split because it keeps the design clean, not because the files are sacred. When the store
-or coordinator is wedged (a stranded `claimed` row, a stale lease, a corrupt generation), **repair it directly
-and fix the root cause in whichever repo owns it.** Do not stall a diagnosis or leave a broken index in place
-out of deference to the boundary. Store mode is default-on when `MILLER_INDEX_STORE` is unset or blank.
-`MILLER_INDEX_STORE=off` exports the current view to the legacy standalone artifact before serving it; Miller
-must never fall back to a stale legacy artifact.
-
-Miller answers references at query time. `QueryTimeResolver` applies resolution policy v6 to the visible
-fact tables. `RevisionFactCache` keeps packed symbols, type facts, imports, and the propagation index
-for the pinned generation. Identifiers stay on disk and stream per query. Miller does not submit
-`store resolve`; julie-extract 2.34.0 removed the verb and materialized resolution (artifact schema 7,
-JSONL 5). The `views` table keeps its `resolution_state` column, permanently `unbound`.
-(2026-07-06 consensus, Eros not shipping: Miller absorbed the deterministic signals/hotspot workflows —
-see `docs/plans/2026-07-06-miller-standalone-bolstering-assessment.md`. Dead-code candidates were
-REMOVED on 2026-08-18 (user decision; retired contract `docs/contracts/references-candidates-v1.md`).
-Recorded `dead_code_*` history rows stay readable via explicit `--metric`. Metric history/trends SHIPPED
-as the P4 slice: an append-only `history.db` sidecar (hybrid converge/heavy-arm snapshots), the
-`miller metrics history` CLI verb (`docs/contracts/metrics-history-v1.md`), dashboard trend sparklines,
-and `workspace health` history status.)
-Local semantic retrieval is PERMITTED in Miller per
-[`docs/adr/ADR-0003-semantic-retrieval-ownership.md`](docs/adr/ADR-0003-semantic-retrieval-ownership.md) and
-[`docs/plans/2026-07-19-miller-semantic-integration-design.md`](docs/plans/2026-07-19-miller-semantic-integration-design.md):
-default-on, local-first, off-switchable (`MILLER_SEMANTIC=off` is a permanent zero-work guarantee), lexical-only
-output byte-identical, embeddings generated by the pinned shared `julie-semantic-sidecar` binary rather than by
-Miller. Concurrent sessions with the same broker/protocol/model identity share one broker and loaded model;
-one user-global accelerator lease allows at most one broker identity to own acceleration while non-holders use
-CPU. Do not add Miller surfaces that need fleet-level semantics — cross-workspace/fleet ranking,
-guidance/confidence views, or embeddings-as-a-service — and do not absorb `julie-extractors` extraction
-ownership.
-
-Adding a new MCP tool requires **explicit user approval** before implementation. Keep the MCP surface stingy:
-prefer improving an existing tool, adding a CLI/export contract, writing a skill, or surfacing data on the
-dashboard when those paths satisfy the workflow without increasing agent-facing tool count.
+- Miller owns the deterministic local agent-tool core (search, inspect, context, trace, impact,
+  edit, workspace lifecycle, content import, patterns, telemetry, metrics/reports) plus default-on,
+  off-switchable local semantic retrieval
+  ([ADR-0003](docs/adr/ADR-0003-semantic-retrieval-ownership.md); `MILLER_SEMANTIC=off` is a
+  permanent zero-work guarantee; lexical-only output stays byte-identical).
+- `julie-extractors` / `julie-extract` owns extraction and standalone extract workflows. Do not
+  absorb them, and do not add fleet-level semantic surfaces (cross-workspace ranking, guidance/
+  confidence views, embeddings-as-a-service) — those were reserved by the retired Eros.
+- The family store is a shared contract: `julie-extract` writes `store.db`/`coord.db`/manifests;
+  Miller reads a pinned view and writes its own sidecars. Both repos have the same owner — when the
+  store is wedged, repair it directly and fix the root cause in whichever repo owns it. Store mode
+  is default-on; `MILLER_INDEX_STORE=off` exports to the legacy artifact first — never serve a
+  stale legacy artifact.
+- References are answered at query time (`QueryTimeResolver`, policy v6, `RevisionFactCache`).
+  There is no materialized resolution; `views.resolution_state` is permanently `unbound`.
+- **Adding a new MCP tool requires explicit user approval.** Keep the MCP surface stingy: prefer
+  improving an existing tool, a CLI/export contract, a skill, or the dashboard.
 
 ## Language parity (load-bearing product rule)
 
-A feature built on `julie-extract` data (a new table/column/extraction capability) is **not done until it
-works for every language julie-extractors supports**, not just one. Verify per-language coverage on a real
-extract before shipping or depending on it (`SELECT language, kind, COUNT(*) FROM <table> GROUP BY 1,2`); a
-feature that silently covers only a subset but looks authoritative is a bug. When a capability needs new
-extraction, add it across all supported languages in `julie-extractors`, not one at a time. (Why: the
-`source_regions` table shipped in julie-extract 2.1.0 emitting only for JavaScript — Miller's consumer was
-deferred to the 2.1.1 all-language emission rather than shipping a C#-empty feature.)
+A feature built on `julie-extract` data is not done until it works for every language
+julie-extractors supports. Verify per-language coverage on a real extract before shipping
+(`SELECT language, kind, COUNT(*) FROM <table> GROUP BY 1,2`). When a capability needs new
+extraction, add it across all supported languages in `julie-extractors`, not one at a time.
 
 ## Testing — read this before running tests
 
-The suite is split into two categories. **Keep them separate; this is load-bearing.** julie's suite once
-grew to 30+ minutes because slow integration tests ran on every change — Miller's split exists to prevent
-that, and there are guards that will fail the build if the split erodes.
+The suite is split in two; keeping them separate is load-bearing (guards fail the build if the
+split erodes).
 
-- **Inner loop = focused tests.** While you develop, run only the test class or group that covers the
-  change: `dotnet test --filter "FullyQualifiedName~<TestClassName>"`. Do not run any suite after every
-  edit — suites run at the boundaries below.
-- **Fast suite at task boundaries.** A bare `dotnet test` runs ONLY `Category!=Scale` (pure logic + contract
-  tests, no subprocess). This is enforced by `VSTestTestCaseFilter=Category!=Scale` in
-  [`Miller.Tests.csproj`](tests/Miller.Tests/Miller.Tests.csproj) (the MSBuild default for `--filter`; a
-  command-line `--filter` overrides it). Run it once when a coherent task lands, not per edit.
-  Wall-clock duration is report-only;
-  compare repeated runs on the same local machine when measuring performance. (A well-formed
-  `.runsettings` `<TestCaseFilter>` works too; the csproj property is preferred because it needs no extra
-  file and fails the build loudly on a typo instead of silently running everything.)
-- **Scale suite is opt-in.** `Category=Scale` tests spawn the real `julie-extract`, spawn a real CT
-  provider (`dotnet test` / `cargo test` / node / pytest), or build large fixtures. Run them with
-  `scripts/test.sh scale` / `scripts/test.ps1 scale` (or `all`) once at the branch gate (before commit/PR),
-  or when you touch the indexing/extract or CT-provider path. They **skip** (not fail) if
-  `.tools/julie-extract` or the provider toolchain is missing.
-- **Never rerun a green suite on an unchanged tree.** A fast-forward merge, a branch switch, or a
-  metadata-only commit does not change the source tree. If a scope already passed on this exact tree,
-  cite that run instead of running it again.
+- **Inner loop = focused tests only:** `dotnet test --filter "FullyQualifiedName~<TestClassName>"`.
+  Do not run suites per edit.
+- **Fast suite at task boundaries:** a bare `dotnet test` runs only `Category!=Scale` (enforced by
+  `VSTestTestCaseFilter` in [`Miller.Tests.csproj`](tests/Miller.Tests/Miller.Tests.csproj)). Run it
+  once when a coherent task lands.
+- **Scale suite is opt-in:** `scripts/test.sh scale` (or `all`; PowerShell mirrors exist). Run at
+  the branch gate or when touching the indexing/extract or CT-provider path. Scale tests skip (not
+  fail) when `.tools/julie-extract` or a provider toolchain is missing.
+- **Never rerun a green suite on an unchanged tree.** Cite the prior run instead.
 
-Use the wrapper, not raw `dotnet test`, unless you have a reason:
+Rules when adding tests:
 
-```bash
-scripts/test.sh         # fast suite + report-only local wall time
-scripts/test.sh scale   # scale suite only
-scripts/test.sh all     # both
-```
-
-Windows PowerShell mirrors exist for cross-platform scripts:
-
-```powershell
-scripts/test.ps1
-scripts/test.ps1 scale
-scripts/test.ps1 all
-```
-
-### Rules when adding or changing tests
-
-- **A test that spawns `julie-extract` MUST be tagged `[Trait("Category","Scale")]`** at the class level,
-  and MUST obtain the binary via `ScaleTestSupport.RequireJulieServer()` (the single launch signal). Do
-  not re-add a private `LocateJulieServer()`/`RepoRoot()` copy — those were deduplicated into
-  [`ScaleTestSupport`](tests/Miller.Tests/ScaleTestSupport.cs) precisely so the guard has one signal to
-  trust.
-- The convention guard
-  [`ScaleTraitConventionTests`](tests/Miller.Tests/Conventions/ScaleTraitConventionTests.cs) source-scans
-  the tests and FAILS if any file referencing the launch signal is not tagged Scale. If it fails, you
-  added a julie-spawning test without the trait — add the trait, don't weaken the guard.
-- **A test that spawns a real CT provider (`dotnet test`, `cargo test`, node, pytest) MUST be tagged
-  `[Trait("Category","Scale")]`** at the class level, and MUST obtain the toolchain via
-  `CtProviderTestSupport.RequireDotnet()` / `RequireCargo()` / `RequireNode()` / `RequirePython()` (the
-  launch signals). Do not re-add a private `FindOnPath()` copy — those were deduplicated into
-  [`CtProviderTestSupport`](tests/Miller.Tests/Testing/CtProviderTestSupport.cs) so the guard has one
-  signal to trust. The convention guard
-  [`CtScaleTraitConventionTests`](tests/Miller.Tests/Conventions/CtScaleTraitConventionTests.cs)
-  source-scans the tests and FAILS if any file referencing those signals is not tagged Scale.
-- A test may be Scale for other reasons (e.g. a 50k-symbol fixture build with no julie). That's fine; the
-  guard is one-directional (spawns julie / a CT provider ⟹ Scale), not the converse.
-- Keep the fast suite genuinely fast and pure. If a "fast" test starts doing real I/O or heavy work, it
-  belongs in Scale.
+- A test that spawns `julie-extract` MUST be `[Trait("Category","Scale")]` at class level and MUST
+  use `ScaleTestSupport.RequireJulieServer()` — the single launch signal
+  [`ScaleTraitConventionTests`](tests/Miller.Tests/Conventions/ScaleTraitConventionTests.cs) trusts.
+  Do not re-add private locator copies.
+- A test that spawns a real CT provider MUST be Scale-tagged and use the
+  [`CtProviderTestSupport`](tests/Miller.Tests/Testing/CtProviderTestSupport.cs) `Require*` signals;
+  guarded by `CtScaleTraitConventionTests`.
+- Keep the fast suite fast and pure; real I/O or heavy fixtures belong in Scale.
 
 ## Build
 
-- Miller targets `net10.0`; source-checkout use and the checked-in `mcp-config.json` require the .NET 10
-  SDK on `PATH`.
-- `dotnet build Miller.slnx -c Release` — warnings are errors (`Directory.Build.props`,
-  `TreatWarningsAsErrors`). The build must be 0 warnings / 0 errors; analyzer warnings (e.g. CA1416,
-  xUnit1051) are build errors.
-- Project seam: `Miller.Core` is pure logic with ZERO I/O deps. Keep it that way — it's why the core is
-  unit-tested in milliseconds.
-- The build COPIES `.tools/julie-extract` next to the output binary (`<out>/.tools/`, via a `Content`
-  item in [`Miller.Server.csproj`](src/Miller.Server/Miller.Server.csproj)) because production locates it
-  at `AppContext.BaseDirectory/.tools` (`WorkspaceContext.ToolsRoot`), NOT the repo. The copy takes whatever sits
-  in `.tools` with no version check, so the `VerifyPinnedJulieExtractVersion` build guard (in
-  `Miller.Server.csproj`) runs the restored binary's `--version` and FAILS the build offline if it does not
-  match `scripts/julie-pins.json` — this catches a stale binary left over from before a pin bump (missing ⟹
-  build fails; stale ⟹ build fails; current ⟹ silent pass). After a pin bump, re-run restore.
-  `VerifyPinnedSemanticSidecarVersion` guards `.tools/julie-semantic-sidecar-runtime` the same way. A MISSING
-  binary used to build fine and fail at runtime instead; that deferral is what let a no-restore machine look
-  healthy until first use, and with semantic retrieval now default-on it meant the DEFAULT install served
-  lexical-only with no `vectors.db` and a clean build. Escape hatches for a deliberate offline/no-semantic
-  build: `MILLER_ALLOW_MISSING_JULIE_EXTRACT=1` and `MILLER_ALLOW_MISSING_SEMANTIC=1` (`ci.yml` sets both
-  for jobs that intentionally build without restored tool packages; Windows/Scale jobs restore julie-extract,
-  while `release.yml` restores both packages and sets neither override. CI never exercises semantic; the
-  shared-broker gate is `scripts/semantic-broker-soak.*`, run by hand).
-  To build from source, use
-  `MILLER_JULIE_SOURCE=/path/to/julie-extractors scripts/restore-julie-extract.sh --from-source`
-  or, on Windows, `$env:MILLER_JULIE_SOURCE='C:\path\to\julie-extractors';
-  scripts/restore-julie-extract.ps1 -FromSource`.
+- Targets `net10.0`; `dotnet build Miller.slnx -c Release` must be 0 warnings / 0 errors
+  (warnings are errors via `Directory.Build.props`).
+- `Miller.Core` is pure logic with ZERO I/O deps. Keep it that way.
+- The build copies `.tools/` next to the output; `VerifyPinnedJulieExtractVersion` and
+  `VerifyPinnedSemanticSidecarVersion` (in `Miller.Server.csproj`) fail the build if the restored
+  binaries are missing or do not match `scripts/julie-pins.json` / `scripts/semantic-pins.json`.
+  After a pin bump, re-run restore. Deliberate offline escape hatches:
+  `MILLER_ALLOW_MISSING_JULIE_EXTRACT=1`, `MILLER_ALLOW_MISSING_SEMANTIC=1` (CI sets both for
+  no-restore jobs; `release.yml` restores both and sets neither).
+- Source build of the extractor: `MILLER_JULIE_SOURCE=<path> scripts/restore-julie-extract.sh
+  --from-source` (`.ps1` on Windows).
+- Version is single-sourced in `Directory.Build.props` → `MillerVersion.Current`.
 
-## Release packaging
+## Release
 
-- The GitHub release workflow builds one self-contained package for each pinned `julie-extract` target:
-  `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and
-  `x86_64-pc-windows-msvc`. Keep this matrix in step with `scripts/julie-pins.json`.
-- Release archives include `miller`, the matching `.tools/julie-extract` binary, the packaged dashboard
-  executable under `dashboard/`, and the dashboard web assets under `dashboard/wwwroot/` (`dashboard.css`
-  plus the vendored `fonts/*.woff2` — the dashboard is local-first and must not reach a font CDN). The
-  workflow smoke-runs `julie-extract --version` and `miller version`, verifies the dashboard assets, then
-  uploads a `.sha256` sidecar for each archive.
-- Plugin support is first-class for Claude Code (`.claude-plugin/plugin.json`), Cursor
-  (`.cursor-plugin/plugin.json`), and Codex (`.codex-plugin/plugin.json` plus `.mcp.json`). Keep those manifests
-  and `miller-plugin.json` version-aligned on every release.
-- Manual workflow dispatch defaults to package-only validation; set `publish: true` to create or update the
-  GitHub release. Manual publish defaults to a prerelease. Tag pushes infer prerelease status from a
-  hyphenated version such as `v0.2.1-beta.1`. The main `miller` binary is published with Native AOT; the
-  dashboard executable remains self-contained/non-AOT because ASP.NET Razor Components do not currently support
-  Native AOT.
-- Do not publish, retag, delete, or overwrite a release without explicit user approval. README current-release
-  metadata and release-evidence docs must come from live GitHub release facts, not guessed values.
-- **Every release ships release notes** — `docs/release-notes/v<version>.md` (existing format), the
-  `docs/README.md` map pointer, AND the GitHub release body set from that file
-  (`gh release edit v<version> --notes-file …`); the workflow only writes a placeholder body. See
-  [docs/release-process.md](docs/release-process.md). (Why: v1.10.0/v1.11.0 shipped placeholder-only and had to
-  be backfilled 2026-07-17.)
-- **A pushed release-prep commit is a live marketplace release (load-bearing).** The Claude Code/Cursor/Codex
-  marketplaces serve the plugin manifests straight from `origin/main` HEAD, and the plugin launcher downloads
-  `releases/download/v<manifest version>/…`. Pushing a `release: prepare X` commit therefore makes updates
-  advertise version X immediately — publish the vX GitHub release (tag push or dispatch `publish: true`) in the
-  same working session as that push, and verify the assets exist. (Why: the 1.3.2 prep commit was pushed
-  2026-07-01 without publishing the release; marketplace updates 404'd on the missing archive until v1.3.2 was
-  tagged the next day.)
-- **Tag-push publish 403 recovery.** GitHub requires the ungrantable `workflows: write` scope to create a release
-  targeting a commit whose diff against default-branch HEAD touches `.github/workflows` — so never push new
-  workflow-touching commits to main while a tag-push release run is still building (the v1.3.2 publish job 403'd
-  exactly this way on 2026-07-02). `release-promote.sh` now omits `--target` for existing tags; if a publish job
-  still fails after the builds succeed, recover locally: `gh run download <run-id> -D <dir>` then
-  `scripts/release-promote.sh --version <ver> --artifacts-dir <dir> --target <tag-commit> --prerelease false`
-  (the `--run-id` promote path refuses runs whose overall conclusion is failure).
+Process: [docs/release-process.md](docs/release-process.md) (two-step validate-then-promote).
+Rules that gate every release:
 
-## Public docs & onboarding
+- Release archives ship `miller`, the matching `.tools/julie-extract`, the semantic runtime, and
+  the dashboard executable + `wwwroot` assets (local-first — no font CDN). Keep the platform matrix
+  in step with `scripts/julie-pins.json`.
+- Keep `Directory.Build.props`, `miller-plugin.json`, and the Claude/Cursor/Codex plugin manifests
+  version-aligned on every release.
+- **Every release ships release notes**: `docs/release-notes/v<version>.md`, the `docs/README.md`
+  pointer, and the GitHub release body set from that file (`gh release edit --notes-file`). The
+  workflow writes only a placeholder body.
+- **A pushed release-prep commit is a live marketplace release.** Marketplaces serve manifests from
+  `origin/main` HEAD; publish the GitHub release in the same working session or updates 404.
+- Do not publish, retag, delete, or overwrite a release without explicit user approval. README
+  release facts come from live GitHub data, never guessed.
+- Tag-push 403 rule: GitHub refuses release creation targeting a commit whose diff against
+  default-branch HEAD touches `.github/workflows`. Never push workflow-touching commits to main
+  while a tag-push release run is building. Recovery: `scripts/release-promote.sh` (see
+  release-process.md).
 
-- `README.md` is the public first-use entry point, not only a developer architecture note. Keep the quickstart near
-  the top and make the install paths clear for non-developers: Claude Code/Cursor/Codex plugin install, manual
-  release archive install, manual MCP config, then source-checkout development.
-- The public site is `https://anortham.github.io/miller/`; keep README linked to it.
-- `docs/README.md` is the documentation map. Keep active contracts/current operating docs separate from historical
-  design notes and dogfood evidence.
-- Release-facing README facts must come from live GitHub release data. For `v0.5.8`, the live release has four
-  platform archives plus four `.sha256` sidecars (verified in
-  [`docs/findings/2026-06-23-v0.5.8-release-verification.md`](docs/findings/2026-06-23-v0.5.8-release-verification.md)).
-- When updating harness guidance, edit `CLAUDE.md` first, run `scripts/sync-agents.sh` or
-  `scripts/sync-agents.ps1`, then confirm `cmp -s CLAUDE.md AGENTS.md`.
+## Public docs
 
-## Server host & startup
+- `README.md` is the public first-use entry point — keep the quickstart near the top and install
+  paths clear (plugins, release archive, manual MCP config, source checkout). Public site:
+  `https://anortham.github.io/miller/`.
+- When updating harness guidance, edit `CLAUDE.md` first, run `scripts/sync-agents.sh` (or `.ps1`),
+  then confirm `cmp -s CLAUDE.md AGENTS.md`.
 
-- **Host lifecycle gotcha (load-bearing).** The .NET Generic Host CONSTRUCTS every `IHostedService` up
-  front, then calls `StartAsync` on each in registration order. Registration order orders `StartAsync`, NOT
-  construction. So **no hosted-service constructor may read an `IndexBootstrapService` getter**
-  (`Holder`/`Resolver`/`Workspace`/`Ledger`) — they throw until the bootstrap is BOUND, not merely until
-  `StartAsync` has returned. The initial scan runs in the background; tool calls wait only for the
-  `MILLER_BOOTSTRAP_GRACE_SECONDS` window (default `5`, `0` = immediate fail-fast) and then return an
-  actionable not-ready/failed tool result. The `workspace` tool's unbound status is rendered by the binding
-  filter because the real tool cannot construct until bound. The M3 services take only the bootstrap and read
-  its getters lazily inside `ExecuteAsync`. The whole host graph is registered in one testable place,
-  [`MillerServiceRegistration.AddMillerServices`](src/Miller.Server/Hosting/MillerServiceRegistration.cs);
-  `HostStartupRegistrationTests` resolves the hosted-service set before bootstrap to guard this.
-- **Version-aware leadership (load-bearing invariant).** The artifact's `artifact_metadata.binary_version`
-  NEVER goes backwards. An instance whose bundled `julie-extract` is older than the artifact never claims the
-  indexer lock (permanent reader, reason in `workspace status`/`health`); a newer-extractor leader auto-runs a
-  forced full rescan on claim; a newer reader displaces an older live leader via a `yield` request on the
-  converge queue (graceful abdication + 60s/requester-alive cooldown — never kill processes manually). Equal
-  versions never yield, so same-version agent swarms cannot thrash. Escape hatch for intentional downgrades:
-  `MILLER_ALLOW_EXTRACTOR_DOWNGRADE=1`. Decision logic lives in
-  [`LeadershipEligibility`](src/Miller.Indexing/LeadershipEligibility.cs); design in
+## Server & indexing invariants
+
+Each rule below is load-bearing; the linked code/doc carries the full design.
+
+- **Host lifecycle:** the Generic Host constructs every `IHostedService` up front; no hosted-service
+  constructor may read an `IndexBootstrapService` getter (they throw until bound). Tool calls wait
+  only the `MILLER_BOOTSTRAP_GRACE_SECONDS` window then return an actionable not-ready result. The
+  host graph lives in
+  [`MillerServiceRegistration.AddMillerServices`](src/Miller.Server/Hosting/MillerServiceRegistration.cs),
+  guarded by `HostStartupRegistrationTests`.
+- **Version-aware leadership:** `artifact_metadata.binary_version` never goes backwards. Older
+  bundled extractor → permanent reader; newer leader → forced full rescan on claim; newer reader
+  displaces an older live leader via a graceful `yield` (never kill processes). Equal versions never
+  yield. Downgrade escape hatch: `MILLER_ALLOW_EXTRACTOR_DOWNGRADE=1`. Logic:
+  [`LeadershipEligibility`](src/Miller.Indexing/LeadershipEligibility.cs); design:
   [`docs/plans/2026-06-11-version-aware-leadership-design.md`](docs/plans/2026-06-11-version-aware-leadership-design.md).
-- **Full rebuilds promote, never merge (load-bearing).** A force scan (`workspace full`, extractor-upgrade
-  rescan, bootstrap auto-rebuild) extracts into `symbols.db.rebuild` and atomically promotes it over the live
-  artifact ([`FullRebuildPromotion`](src/Miller.Indexing/FullRebuildPromotion.cs), via the single
-  `JulieExtractRunner.Scan` chokepoint). Never point julie-extract's force scan at the live served DB: serve
-  readers keep its WAL from checkpointing and the in-place merge collapses to ~7KB/s on a multi-GB artifact
-  (2026-06-11 Eros field report #2). The promote restarts julie's revision counter, so freshness/refresh
-  convergence detects rebuilds by `artifact_metadata.artifact_id` changing — never by revision comparison alone
-  — and `FreshnessService` must keep opening its reader per poll (a long-lived connection freezes on the
-  replaced file's old inode). Escape hatch for in-place merges: `MILLER_FULL_REBUILD_INPLACE=1`. If Windows
-  antivirus or held handles need longer promote retries, set `MILLER_PROMOTE_RETRY_TIMEOUT` to seconds (for
-  example `30`) or a `TimeSpan` value (for example `00:00:30`).
-- **Extraction parallelism is always capped.** Every scan argv carries `--jobs`
-  ([`ExtractJobsPolicy`](src/Miller.Indexing/ExtractJobsPolicy.cs)); the default is
-  `min(4, max(1, ProcessorCount / 2))`. julie-extract's own default is rayon auto-detect (every core), which
-  is why N concurrent worktree agents ran N all-core pools and the OOM killer took them out with exit 137
-  (2026-08-01 multi-worktree field report). `MILLER_EXTRACT_JOBS` overrides the default and is honored
-  verbatim; `0` opts back in to rayon auto. An explicit `jobs:` argument to `JulieExtractRunner.Scan` BEATS the
-  env var — it carries a caller's safety response (a post-OOM retry passes `1`) that a stale operator override
-  must not undo. This bounds only the extraction/spool phase, not the artifact write; bounding how many scans
-  run at once is a separate concern.
-- **Every scan is supervised (julie-extract ≥ 2.22.0).** Alongside `--jobs`, each scan argv carries three
-  process-lifecycle flags resolved from the ARTIFACT's directory by
-  [`ExtractSupervisionPolicy`](src/Miller.Indexing/ExtractSupervision.cs), so a full rebuild into
-  `symbols.db.rebuild` and a cross-workspace refresh both supervise into the right workspace:
-  `--spool-dir <.miller>/spool` (spools move off shared `$TMPDIR` and julie-extract reaps the ones no live scan
-  holds a lock on — the field report's 130GB of orphans), `--progress-file <.miller>/scan.progress` (a liveness
-  heartbeat for the long pre-artifact phase), and `--parent-pid` (julie-extract self-terminates when Miller
-  dies; Unix-only on its side, accepted and ignored elsewhere). `MILLER_EXTRACT_SUPERVISION=off` restores the
-  pre-2.22.0 argv exactly. The progress file is a SIBLING of the spool directory, never inside it: julie-extract
-  raises `spool_dir_excluded` when the spool dir holds anything that is not a spool, and a progress file living
-  there would fire that warning on every scan forever. `ProgressStamp` SUMS the heartbeat's length with the
-  artifact bytes and output lines rather than replacing them, so a progress file that cannot be written degrades
-  the stall signal to the pre-2.22.0 one instead of to nothing; a length DECREASE is progress (a new scan
-  truncated it), which the inequality comparison already handles.
-- **Scan intent, not `bool force` (load-bearing).** Every whole-repo scan carries a
-  [`ScanIntent`](src/Miller.Core/Freshness/ScanIntent.cs): `IncrementalReconcile`, `UserFullRebuild`, `RootRebind`,
-  `SchemaHeal`, `CorruptionHeal`, `ExtractorUpgrade`. Only `UserFullRebuild` may be downgraded to a delta on retry
-  (and only against an artifact that is readable AND records this root); every other force intent exists because
-  the artifact cannot be trusted, so a delta would produce a wrong index that looks fresh. The rescan latch is a
-  SET of pending intents discharged by `ScanIntentPolicy.Satisfies` and retried at `ScanIntentPolicy.Strongest`, so
-  a repair (`RootRebind`/`SchemaHeal`/`CorruptionHeal`, own-intent-only) is never cleared by someone else's rebuild
-  and a repair folded beside a user rebuild never inherits its downgrade permission. `ExtractorUpgrade` is the one
-  exception: ANY completed force discharges it, because every force re-extracts the repo with the bundled binary
-  and requiring its own intent made a completed `workspace full` run a second byte-equivalent rebuild. A claim
-  whose artifact is older than the bundled extractor therefore skips the startup delta and runs only the
-  upgrade scan — the delta's generation would be replaced immediately. Watcher overflow is NOT a force.
-- **A downgrade is a THIRD scan outcome (load-bearing).** Neither success nor failure: a delta ran, the prior
-  artifact is served with degraded freshness, and the rebuild is STILL OWED. It must not clear the failure record
-  (`IScanFailurePolicy.RecordDowngradedServe` rewrites `next_attempt_at` at the CURRENT streak without
-  incrementing it — without that the undischarged latch plus an elapsed timer re-ran a whole-repo delta on every
-  250ms tick, forever), must not discharge the pending rebuild, and must reach the caller as
-  `ScanOutcome.Kind.Downgraded` + `downgraded: true` in the `refresh`/`full` payload rather than as a completed
-  rebuild. Only the AUTOMATIC path may downgrade: `bypassBackoff` gates the downgrade as well as the timer, so a
-  person who typed `workspace full` gets the force scan or an honest reason.
-- **Scan-failure backoff is persisted, and is the ONLY retry timer.**
-  `<workspace>/.miller/scan-failure.json` ([`ScanFailureJournal`](src/Miller.Indexing/ScanFailureJournal.cs))
-  records the last intent, exit code, consecutive failures, `--jobs`, and `next_attempt_at`; the schedule is
-  30s → 2m → 10m → 30m-max, jittered upward. It is shared by every Miller process on the workspace and survives
-  restarts — a rebuild that cannot succeed must not be re-forced by each fresh process. `IndexerCore`'s former
-  in-memory doubling backoff was REPLACED by it, not layered under it; do not re-add a second timer. Exit 137
-  (SIGKILL/OOM) clamps the next automatic attempt to `--jobs 1`. An explicit user request (`workspace
-  full/refresh/open`, the MCP `workspace` tool, the dashboard, bootstrap) bypasses the timer once but still
-  records — pass `bypassBackoff: true` at those call sites only; the automatic path behind every
-  cross-workspace read (`WorkspaceIndexProvider`) must leave it false or ten cross-workspace searches spawn ten
-  extractors. That path now runs in the BACKGROUND, which makes the posture more load-bearing, not less: no
-  caller waits for it, so nothing else throttles it. The coalescing guard is the SINGLETON
-  `BackgroundRefreshGate` — one in-flight refresh per workspace, plus a short cooldown after it finishes. It must
-  never move onto `WorkspaceIndexProvider`: that provider and all seven of its interfaces are registered
-  `AddTransient`, so one tool call builds several instances (`SearchTool` alone injects two) and an instance field
-  would coalesce nothing while a single-instance test stayed green. The record names the STRONGEST scan still owed (`ScanFailurePolicy.RecordFailure` folds via
-  `Strongest`), because a downgraded retry that also fails runs as a delta and recording that verbatim would let
-  the next routine refresh clear a force throttle in two steps. Clearing uses
-  `ScanIntentPolicy.ClearsFailureRecord`, NOT the latch rule `Satisfies`: a delta clears only a delta-intent
-  record, while ANY completed force clears a force-intent one — including a repair's, which `Satisfies` would
-  strand forever and thereby downgrade every future automatic rebuild. Surfaced as the conditional
-  `scan_failure` object in `workspace status`/`health` (`docs/contracts/cli-eros-v1.md`).
-- **A linked worktree's `.git` is a FILE (load-bearing).** `git worktree add` writes a `.git` FILE holding
-  `gitdir: <path>`, not a directory, so `Directory.Exists(<root>/.git)` is FALSE in every worktree — which meant
-  the dedicated `.git/HEAD` watch never attached there and every branch switch flooded the watcher buffer,
-  overflowed, and forced a rescan storm instead of the ONE reconcile that watch exists to produce. Resolve the
-  admin dir through [`GitWorktreeLayout`](src/Miller.Indexing/GitWorktreeLayout.cs) (no `git` subprocess), and
-  watch `GitDir`, never `CommonDir`: a linked worktree has its own HEAD, and the shared one reports the MAIN
-  checkout's branch switches. Anything else keying off a repo layout has the same trap.
-- **Root disappearance and path reuse.** `workspace_id` is SHA-256 of the canonical ROOT, so
-  `git worktree remove wt && git worktree add wt other-branch` yields the same id, the same registry row, and an
-  artifact whose recorded `root_path` still matches — a different tree served under the old index.
-  [`WorkspaceRootPresenceMonitor`](src/Miller.Indexing/WorkspaceRootPresenceMonitor.cs) polls the root once per
-  debounce tick: a disappearance detaches the watchers, marks the registry row `missing`, and SUSPENDS scanning
-  (a delta against an absent root deletes every file in the artifact); a return with a different
-  `WorkspaceRootIdentity` (git admin dir path + creation time) releases leadership and re-bootstraps at
-  `RootRebind`. Identity is compared ONLY across a disappearance — comparing every tick reads an ordinary branch
-  switch as a new checkout on any filesystem without a birth time. Missing evidence never counts as a
-  replacement, and the re-probe is bounded because a non-git workspace can never become known.
-- **Sensitive-root guard.** [`WorkspaceRootSafety`](src/Miller.Server/Tools/WorkspaceRootSafety.cs) refuses
-  to index the home dir, a filesystem/drive root, or a system dir. It runs at the very top of `Program.cs`
-  (before any filesystem touch) and in `workspace open`. Ported from julie's `root_safety.rs` — keep the
-  forbidden set in step with julie/eros.
-- **CLI vs server (load-bearing branch).** The same `miller` binary is both the MCP stdio server and a one-shot
-  CLI. `Program.cs` branches at the very top (before any filesystem touch / host build) on
-  [`CliDispatch.IsCliInvocation`](src/Miller.Server/Cli/CliDispatch.cs): **no args OR `serve` → MCP host**
-  (the historical default; stdio purity preserved), **any other verb → `CliDispatch.Run`** and exits. Read verbs
-  load the current workspace's `symbols.db` through the same pure tool cores the server exposes (`SearchTool.Run`,
-  `InspectTool.Run`, `WorkspaceRender`, …); lifecycle verbs such as `workspace open/remove` use the registry and
-  refresh paths; `version`/`help` do not load an index. The CLI OWNS stdout — it does NOT start Serilog file
-  logging or any background service. `mcp-config.json` launches the server with the explicit `-- serve`
-  (cross-platform; no shell script). Build version is single-sourced in `Directory.Build.props` (`<Version>` + git
-  short SHA → `MillerVersion.Current`), surfaced in MCP `ServerInfo.Version`, `miller version`, and the `workspace`
-  status header.
-- **Only the one-shot CLI reads reference facts bounded; every resident process loads the generation once.**
-  `RevisionFactCache` has two modes. A resident process keeps the whole pinned generation — the MCP server in
-  the process-wide `RevisionFactCacheStore`, and the CT daemon, the `edit`/`tests` tools and the dashboard
-  through the plain `WorkspaceReadSessionFactory.Open`. The one-shot CLI has nobody to reuse a load, so a cold
-  `miller inspect <symbol> --depth overview|full` paid a flat whole-generation load (~5s on this repo, 1,785
-  files) to return a handful of references. **The bounded mode is REQUESTED BY NAME, never inferred**:
-  `WorkspaceReadSessionFactory.OpenForOneShotCli` is the only caller that asks for it, from the single
-  `TryOpenCliReadScope` every CLI read verb pins. Absence of a fact-cache store is NOT the signal — `EditTool`,
-  `TestsCore` and `ContinuousTestRevisionPoller` all open store-less sessions inside resident processes, and CT
-  impact answers decide which tests execute. `RevisionFactCache.LoadBounded` reads the visible file list up
-  front, then one file's slice or one name's symbols on demand, through the SAME loader queries the full load
-  uses — so every accessor answers identically and the output is byte-identical, guarded by
-  `BoundedRevisionFactCacheTests` and the rendered A/B in `CliDispatchTests`. Three rules keep it honest: a
-  version outside the pinned manifest must report NO slice (not an empty one), a bounded cache never advances
-  onto a newer generation, and it reads through its OWN connection inside one deferred read transaction, so
-  every lazy slice comes from the state the session validated at open. `MILLER_BOUNDED_FACTS=off` (also
-  `0`/`false`/`no`/`disabled`) restores the whole-generation load. The per-file propagation load buckets
-  candidates by name (`PropagationCandidateIndex`) and asks for relationship rows in a shape SQLite can drive
-  from `relationships(version_id)`, refusing itself when a target id resolves to visible symbol rows with
-  different names; the whole-generation load keeps its scan, so the resident path is unchanged.
-- **Eros-facing CLI/export contracts.** Keep Eros on public process/artifact contracts, not Miller private .NET
-  internals. Current documented surfaces live in [`docs/contracts/cli-eros-v1.md`](docs/contracts/cli-eros-v1.md):
-  `capabilities --json`, `refresh --json --wait`, `workspace status --json`, `workspace health --json`,
-  `content export`, `telemetry export --jsonl`, `tests status --json`, and stable read-command JSON such as
-  `impact --json`, `trace --json`, and `patterns --json`. Add or harden new surfaces only when a concrete
-  Eros workflow needs facts the documented contracts do not cover.
-- **A launch may never fail silently (load-bearing).** A plugin launch is TWO processes, and each used to be
-  able to die leaving nothing in `<workspace>/.miller/logs` — the only file a user knows to open. That is what
-  made a 2026-08-25 Windows connect failure undiagnosable from Miller's own logs. Three rules keep it closed.
-  (1) The Node launcher writes `~/.miller/logs/launcher-<YYYYMMDD>.log` (honoring `MILLER_HOME`) AND the same
-  lines to stderr, naming every install stage: cache hit/miss, download progress, hash, list, extract, promote,
-  spawn, child exit. A version bump is a COLD ~100MB download that runs BEFORE `miller` starts, inside the
-  client's MCP startup budget (`MCP_TIMEOUT`, ms, default 30000) — the launcher says so on a cache miss.
-  `launcherLog` never throws; a launcher that dies while reporting a problem is the failure this prevents.
-  The DOWNLOAD ITSELF must be bounded, and this is what actually failed in the field: the old `downloadFile`
-  set no `https.get` timeout, armed no idle watchdog, and drained the body with a bare `response.pipe`, so a
-  body that simply STOPPED left the promise unsettled forever — no error, no exit, no output. The user's
-  attempt stalled at 57.8% of the archive on a 25MB/s link and hung. The idle bound is 15s, deliberately
-  SHORTER than the 30000ms client budget so the launcher reports and retries while the client still waits;
-  `downloadWithRetry` retries three times. A killed attempt strands its `stage-<pid>-<ms>` directory and
-  `*.tmp-<pid>-<ms>` file (cleanup lives in a `finally` and a `.catch`, and neither runs on a kill), so
-  `sweepStaleInstallLeftovers` reclaims those older than 10 minutes — the age comes from the name's own epoch
-  stamp, never from a process probe, so a live sibling install is never touched. **The version cache is
-  bounded.** Each version installs into its own `~/.miller/plugin-cache/<version>/<target>/` and nothing ever
-  removed the old ones, so a machine that followed a few releases carried ~430MB per dead version forever
-  (two abandoned versions measured at 855MB on a dev box). `pruneOldCachedVersions` keeps the version being
-  installed plus the one other most-recently-used, and runs ONLY on a cache miss, so a warm start pays
-  nothing. Recency comes from a `.last-used` marker stamped on every launch, falling back to the directory
-  time: a version a SECOND client still launches keeps its own marker fresh and survives. A locked version
-  (a live `miller.exe` holds its image on Windows) fails to delete and is REPORTED, never retried.
-  (2) `Program.cs` tracks a `startupStage` string and wraps the WHOLE startup in one catch that calls
-  [`StartupFailureLog`](src/Miller.Server/Logging/StartupFailureLog.cs) (exit 70). It always writes to stderr
-  (a client captures a stdio server's stderr even when the handshake never completes), then appends a
-  `role:startup` line to the first writable candidate — the resolved logs dir, then `<home>/.miller/logs`, then
-  temp. It never throws and never RECREATES a candidate whose parent is gone (same rule as `CtDaemonLog`).
-  The stage name is the whole diagnosis above the `build-logger` stage, because no logger exists there.
-  (3) `Serilog.Debugging.SelfLog` is enabled to stderr before `CreateLogger`: the rolling file sink opens its
-  file LAZILY and hands an open failure to `SelfLog`, so without it a locked file or denied directory produced a
-  perfectly healthy Miller that wrote zero bytes. A [`StartupBreadcrumb`](src/Miller.Server/Logging/StartupBreadcrumb.cs)
-  line names the log directory on stderr unconditionally, so `MILLER_LOG_LEVEL=Error` cannot hide it and an empty
-  workspace log is decisive: no breadcrumb ⟹ `miller` never started. Pre-logger throw sources are guarded too —
-  `WorkspaceRootSafety.Normalize` skips a malformed forbidden entry (six come from Windows env vars) instead of
-  killing the process, and `MillerHome.Resolve` refuses an unrooted user profile by name rather than logging into
-  the launch directory. Reader-facing paths: [docs/install.md](docs/install.md) "When the plugin fails to connect".
-- **Logging.** All processes append to ONE shared daily pair (`.miller/logs/miller-<YYYYMMDD>.log` +
-  `.jsonl`, Serilog `shared:true`); `pid`/`role`/`cid` are line properties, not file-name segments. There
-  is no per-pid file and no startup reaper (both removed 2026-05-31; see the superseded D1/D6 notes in
-  [`docs/m8-design.md`](docs/m8-design.md)).
-- **Workspace registry.** Index DBs stay local at `<workspace>/.miller/symbols.db`; the central discovery
-  surface is `~/.miller/workspaces.db`. Read tools accept `workspace_id` selectors: display ID, unique prefix,
-  full ID, registered root path, `current`, or `primary`. An explicit `workspace_id` defaults to
-  **serve-then-refresh**: the pinned view answers immediately and the refresh runs in the BACKGROUND (coalesced,
-  one per workspace), so the next call sees fresher data. Such a read reports `freshness: refresh_pending` plus
-  the served `revision`. `ensure_fresh=true` still blocks; `ensure_fresh=false` still does zero refresh work.
-  A workspace with NO readable index has nothing to serve stale, so that one case still refreshes in the
-  foreground or returns the honest not-ready error.
-  When a user asks from workspace A to inspect workspace B, keep the session in A, run `workspace list`, and pass
-  B's selector to `search`/`inspect`/`context`/`impact`/`trace`/`patterns`/`tests`. If B is not registered, run
-  `workspace open` with its root path first. `workspace_id=all` is only for `content search` text audits, not
-  symbol/code read tools. The dashboard reads the registry, shared telemetry DB, and read-only aggregate facts
-  from workspace artifacts, and may perform registry-lifecycle mutations (workspace remove/prune) through its
-  antiforgery-protected POST endpoints backed by the shared `WorkspaceRemoval`/`WorkspaceRegistryPrune` cores
-  (ADR-0002). It must not hydrate full indexes just to render list/detail views.
-  **A workspace that leaves the family store must take its sidecars with it.** Its per-view
-  `content-`/`search-`/`vector-<sha>.db` files live in the SHARED store (`<store root>/sidecars`), which no
-  `.miller` delete reaches, so `workspace remove`/`prune` reclaim them through `StoreSidecarReclaim` — each dead
-  view otherwise pins ~350MB forever. The set is the WHOLE per-view family: the three active artifacts, their
-  `-wal`/`-shm` siblings, the `.rebuild` shadow, EVERY retained `vector-<sha>.gen-<tag>.db` generation (as large
-  as the active artifact, and GC'd only by a converge service that will never wake for a removed view again), the
-  `.preservation-error` marker, and `freshness-stamp-<viewId>.json` at the store root. The view id MUST come from
-  the `store_members` row and be captured BEFORE the delete cascades it away; never rediscover a sidecar by
-  listing the directory or re-hashing a root, and never touch a view a surviving member still claims. The deletes
-  run under the family sidecar write lease, taken WITHOUT creating the sidecar directory — a caller that is
-  leaving a store never manufactures the directory it is cleaning out. **An unfinished reclaim is OWED, never
-  dropped:** by then no registry row names the view, so a busy lease or a held file writes a
-  `<view key>.reclaim-owed` record beside the sidecars, and the next reclaim — or `workspace prune`, which
-  discharges every registered family — finishes it. A skip is REPORTED (`store_sidecar_reclaim` in the JSON),
-  never a removal failure. julie-extract still owns the `views` row; Miller deletes only files Miller wrote.
-- **Hash split.** Stable `workspace_id` is SHA-256 of the canonical root. File freshness uses
-  `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by
-  `artifact_metadata.hash_algorithm=blake3`.
-- **Search sidecar.** Symbol search is served from a Miller-owned, on-disk FTS5 artifact
-  `<workspace>/.miller/search.db` (a revision-keyed derived index, same pattern as `telemetry.db`) built by the
-  lock-holding writer (`IndexerService` leader / `CrossWorkspaceRefreshService`) and opened read-only by
-  `WorkspaceIndexProvider`. **On by default — opt out with `MILLER_SEARCH_SIDECAR=0`** (`SymbolSearchSidecar.FromEnvironment`).
-  The writer converges it incrementally from `revision_file_changes` after single-file updates; missing, stale, or
-  corrupt sidecars fail visibly in search/status rather than silently allocating an in-memory fallback. The explicit
-  opt-out path uses the in-memory BM25 index.
-  Ranking stays in C# (`Miller.Core.Search.Bm25`, shared by both backends); FTS5 is recall-only (a word arm plus a
-  collapsed-trigram arm for interior substrings). See
+- **Full rebuilds promote, never merge:** force scans extract into `symbols.db.rebuild` and
+  atomically promote ([`FullRebuildPromotion`](src/Miller.Indexing/FullRebuildPromotion.cs)). Never
+  point a force scan at the live served DB. Rebuild detection is by `artifact_id` change, never
+  revision comparison; `FreshnessService` reopens its reader per poll. In-place escape hatch:
+  `MILLER_FULL_REBUILD_INPLACE=1`; promote retry bound: `MILLER_PROMOTE_RETRY_TIMEOUT`.
+- **Extraction parallelism is always capped:** every scan argv carries `--jobs`
+  ([`ExtractJobsPolicy`](src/Miller.Indexing/ExtractJobsPolicy.cs), default
+  `min(4, cores/2)`); `MILLER_EXTRACT_JOBS` overrides; an explicit `jobs:` argument beats the env
+  var (it carries a post-OOM safety response).
+- **Every scan is supervised:** `--spool-dir <.miller>/spool`, `--progress-file
+  <.miller>/scan.progress` (a sibling of the spool dir, never inside it), and `--parent-pid`,
+  resolved from the artifact's directory by
+  [`ExtractSupervisionPolicy`](src/Miller.Indexing/ExtractSupervision.cs).
+  `MILLER_EXTRACT_SUPERVISION=off` restores the bare argv.
+- **Scan intent, not `bool force`:** every whole-repo scan carries a
+  [`ScanIntent`](src/Miller.Core/Freshness/ScanIntent.cs). Only `UserFullRebuild` may downgrade to a
+  delta on retry; repair intents exist because the artifact cannot be trusted. The rescan latch is a
+  set discharged by `ScanIntentPolicy.Satisfies`; `ExtractorUpgrade` is discharged by any completed
+  force. Watcher overflow is not a force.
+- **A downgrade is a third scan outcome** (neither success nor failure): the prior artifact serves
+  with degraded freshness and the rebuild is still owed. It must not clear the failure record,
+  must not discharge the pending rebuild, and reaches callers as `ScanOutcome.Kind.Downgraded`.
+  Only the automatic path may downgrade (`bypassBackoff` gates it).
+- **Scan-failure backoff is persisted and is the only retry timer:**
+  `<workspace>/.miller/scan-failure.json`
+  ([`ScanFailureJournal`](src/Miller.Indexing/ScanFailureJournal.cs)), schedule 30s→2m→10m→30m
+  jittered, shared across processes. Exit 137 clamps the next attempt to `--jobs 1`. Explicit user
+  requests pass `bypassBackoff: true`; the automatic path (`WorkspaceIndexProvider`) must not. The
+  coalescing guard is the singleton `BackgroundRefreshGate` — never move it onto the transient
+  `WorkspaceIndexProvider`. Records fold via `Strongest`; clearing uses
+  `ScanIntentPolicy.ClearsFailureRecord`, not `Satisfies`.
+- **A linked worktree's `.git` is a FILE.** Resolve the admin dir through
+  [`GitWorktreeLayout`](src/Miller.Indexing/GitWorktreeLayout.cs) (no `git` subprocess) and watch
+  `GitDir`, never `CommonDir`.
+- **Root disappearance and path reuse:** `workspace_id` is SHA-256 of the canonical root, so a
+  removed-and-recreated worktree reuses the id.
+  [`WorkspaceRootPresenceMonitor`](src/Miller.Indexing/WorkspaceRootPresenceMonitor.cs) suspends
+  scanning on disappearance and re-bootstraps at `RootRebind` when the root returns with a
+  different identity (compared only across a disappearance).
+- **Sensitive-root guard:** [`WorkspaceRootSafety`](src/Miller.Server/Tools/WorkspaceRootSafety.cs)
+  refuses home dirs, drive roots, and system dirs — at the top of `Program.cs` and in
+  `workspace open`. Keep the forbidden set in step with julie's `root_safety.rs`.
+- **CLI vs server:** the same binary branches at the top of `Program.cs` on
+  [`CliDispatch.IsCliInvocation`](src/Miller.Server/Cli/CliDispatch.cs) — no args or `serve` → MCP
+  host; any other verb → CLI and exit. The CLI owns stdout and starts no logging/background
+  services.
+- **Bounded fact reads are one-shot-CLI-only, requested by name** (`OpenForOneShotCli` →
+  `RevisionFactCache.LoadBounded`): absence of a fact-cache store is NOT the signal — resident
+  store-less sessions (edit/tests tools, CT daemon) keep the full load. A bounded cache never
+  reports a missing version as an empty slice, never advances generations, and reads through its
+  own connection in one deferred transaction. `MILLER_BOUNDED_FACTS=off` restores the full load.
+  Guarded by `BoundedRevisionFactCacheTests` and the rendered A/B in `CliDispatchTests`.
+- **Eros-facing surfaces are public process/artifact contracts**, documented in
+  [`docs/contracts/cli-eros-v1.md`](docs/contracts/cli-eros-v1.md). Add new ones only for concrete
+  workflows the documented contracts do not cover.
+- **A launch may never fail silently:** the Node launcher logs every install stage to
+  `~/.miller/logs/launcher-<date>.log` AND stderr, bounds downloads (15s idle watchdog, 3 retries),
+  sweeps stale install leftovers, and prunes the version cache (keep installing + one
+  most-recently-used). `Program.cs` wraps startup in one catch →
+  [`StartupFailureLog`](src/Miller.Server/Logging/StartupFailureLog.cs) (exit 70, always stderr);
+  Serilog `SelfLog` is enabled to stderr before `CreateLogger`; a
+  [`StartupBreadcrumb`](src/Miller.Server/Logging/StartupBreadcrumb.cs) line names the log dir
+  unconditionally (no breadcrumb ⟹ miller never started). Reader-facing doc:
+  [docs/install.md](docs/install.md) "When the plugin fails to connect".
+- **Logging:** all processes append to one shared daily pair (`.miller/logs/miller-<date>.log` +
+  `.jsonl`, Serilog `shared:true`); `pid`/`role`/`cid` are line properties. No per-pid files, no
+  startup reaper.
+
+## Workspace registry & sidecars
+
+- Index DBs live at `<workspace>/.miller/symbols.db`; discovery is `~/.miller/workspaces.db`. Read
+  tools accept `workspace_id` selectors (display ID, prefix, full ID, root path, `current`,
+  `primary`). An explicit `workspace_id` defaults to serve-then-refresh (background, coalesced);
+  `ensure_fresh=true` blocks; `ensure_fresh=false` does zero refresh work. Cross-workspace asks:
+  stay in the current session, `workspace list`, pass the selector; `workspace_id=all` is only for
+  `content search` text audits.
+- The dashboard reads the registry, telemetry, and read-only aggregate facts; it may perform
+  registry-lifecycle mutations through its antiforgery-protected POST endpoints (ADR-0002). It must
+  not hydrate full indexes for list/detail views.
+- **A workspace leaving the family store takes its sidecars with it:** `workspace remove`/`prune`
+  reclaim the whole per-view family from the shared store via `StoreSidecarReclaim` (view id
+  captured from `store_members` BEFORE the delete; never rediscover by listing or re-hashing; never
+  touch a view a survivor claims; unfinished reclaims write a `.reclaim-owed` record and are owed,
+  never dropped).
+- **Hash split:** `workspace_id` = SHA-256 of the root; file freshness = `files.content_hash`
+  (blake3), guarded by `artifact_metadata.hash_algorithm`.
+- **Search sidecar:** symbol search serves from the Miller-owned FTS5 artifact
+  `<workspace>/.miller/search.db`, written by the lock-holding writer, read-only elsewhere. On by
+  default; `MILLER_SEARCH_SIDECAR=0` opts into the in-memory BM25 fallback. Ranking stays in C#
+  (`Miller.Core.Search.Bm25`); FTS5 is recall-only. `search.db` stays lexical-only — the semantic
+  arm lives in `vectors.db` and is fused after ranking (ADR-0003). Design:
   [`docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md`](docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md).
-  `search.db` stays lexical-only: the default-on semantic arm lives in a separate `<workspace>/.miller/vectors.db`
-  artifact and is fused after ranking, so lexical-only output stays byte-identical (ADR-0003).
-- **Continuous testing sidecar.** CT verdicts live in the Miller-owned `<workspace>/.miller/ct.db` (a
-  revision-keyed sidecar, same pattern as `telemetry.db` / `history.db`). Providers may write only bounded
-  build/result/temp artifacts under supervised CT paths (`BuildOutputRoot` generations and `miller-ct`
-  temps) — never workspace `bin`/`obj`. The default build root is WORKSPACE-LOCAL and FLAT:
-  `<workspace>/.miller/ct-<proj12>`, so tests that walk up from their own binary to find the repo
-  root pass under CT with zero project-side settings (`.miller/**` is invisible to the watcher and the
-  extractor, so building there adds no churn), and the deepest assembly dir
-  (`.miller/ct-<proj12>/g<gen12>/out/<Proj>`) sits exactly FIVE levels below the root — cap-8 walk-up
-  helpers clear it even after burning one ascent on `AppContext.BaseDirectory`'s trailing separator
-  (the pre-flattening `.miller/ct/build/<proj12>` shape was 7 levels and broke them; coordinator
-  maintenance sweeps that legacy tree under the janitor's lease rules). Peer-root scans recognize a
-  workspace-local build root ONLY by its `ct-` prefix — nothing else under `.miller` may read as one.
-  A workspace root longer than the derived Windows MAX_PATH
-  budget falls back to the legacy `<os-temp>/miller-ct/build/<ws12>/<proj12>` root with the reason carried
-  on the work item; enqueue validation accepts exactly those two shapes. `ct.db` is self-contained: no foreign keys into `symbols.db` or
-  `search.db`; rows name files by path+blake3 hash and symbols by name+path. Freshness is the composite
-  `(IndexGenerationIdentity, revision)` from the LIVE `WorkspaceReadSnapshot`
-  (`ctgen1:store:<family>:<view>:<generation>` / `ctgen1:artifact:<id>:<hash-algorithm>`). The identity
-  excludes everything a routine import moves (log sequence, revision counter, manifest hash/generation) and
-  flips on every counter-restart event (generation promotion, view replan, family recreate, extractor
-  upgrade / schema heal); an identity change makes EVERY result stale — the rebuild fail-safe. Within one
-  identity, a revision advance is a watermark keep-set (`ContinuousTestStore.ApplyRevisionAdvance`, one
-  transaction, staleness first): fresh GREEN cases the change cannot reach carry forward; impacted cases go
-  stale and lose their watermark rows; red/skipped never advance; unknown reachability reads stale. A green
-  committed on the SAME identity seeds a watermark regardless of its committed revision — staleness lands
-  first in the transaction, so every surviving green is provably unreachable by the interval; the old
-  `last_run_revision >= from` seed arm never matched live and every bump read all-stale. The matching
-  invariant is the poller's: it never saves its cursor past an interval whose staleness was not applied
-  (zero materialized work items ⟹ cursor stays put). An impacted RED keeps its state string and committed
-  key on EVERY staling path — the RUN path included: run start captures the displaced state in
-  `pre_run_state` (ct.db schema v6) and keeps a red row's committed key, and a case a run SELECTED but the
-  provider never REPORTED (a filter term that silently matched nothing) restores red with one owed stamp at
-  run commit instead of retiring the verdict to `stale`, with a bounded `role:ct` line naming the
-  unreported count (2026-08-26 field report: 3 SkiaSharp reds retired unexecuted). The stamped
-  `stale_since_revision` (plus deleted watermark rows) records the
-  owed rerun, so `failures` totals hold across automatic advances. The persisted `failure_summary` is
-  shaped at WRITE time: first line plus the first later error-shaped line (TRX capture widened from
-  StackTrace/RunInfo), bounded to 400 UTF-8 bytes — a render bound cannot recover text the store dropped. A stamped red is OWED — the selector
-  backlog and the drain trim both execute it — while an unstamped live-key red is still trimmed from
-  automatic selections (a run commit clears the stamp), so no automatic red loop opens. A run
-  executes the stale set (impacted ∪ owed backlog) as an explicit test-ID list. An EXPLICIT run
-  (`tests run`, MCP `operation=run`, the daemon run command) adds every RED case: a red
-  is committed-fresh by the same rule a green is, so the fresh-case trim dropped it and a user-requested
-  run over a red tree selected NOTHING — verdict red, stale 0, `last_run` frozen however many times the
-  user asked (2026-08-21). "Every red" is the whole rule — the trim's red exception short-circuits the
-  freshness test rather than narrowing it, and a red at an older key was never fresh at the live key
-  anyway. SKIPPED is committed-fresh too and is NOT excepted: a skipped test skips again. Reds join what
-  EXECUTES, never what is marked stale; "every red" is explicit-path-only — an auto-run that re-ran every
-  failing test on every debounce is a red loop on every save — while automatic runs execute only the
-  STAMPED (owed) reds above.
-  Truncated/degraded/
-  unavailable impact means Unknown — everything stale, NOTHING executes, never a whole-suite fallback.
-  A TRUNCATED impact read reaches that Unknown THROUGH the selector: `MillerFactImpactSource` delivers the
-  complete delta as Changed with the truncation reason, the selector fails it closed to Unknown, staleness
-  lands via `ApplyRevisionAdvance`, and the cursor legally advances. It must never answer Unavailable — that
-  pinned the cursor, grew the interval every poll, and paused auto-runs into a self-sustaining stall under
-  churn (2026-08-26 round-2 field report). Unavailable is reserved for genuinely unreadable deltas
-  (`moving_cursor`, store errors); a sticky unavailable streak pauses auto-runs, and that pause is a
-  FIRST-CLASS status fact — `daemon.auto_runs_paused` + `daemon.pause_reason` in the record and
-  `tests status` (compact prints `auto-runs paused: <reason>`), with one `role:ct` line on enter and clear.
-  TWO bounded exceptions to "Unknown executes nothing" (both 2026-08-26 field reports): (1) Unknown on a
-  project whose store holds NO test cases
-  (never discovered) enqueues a discovery-owed pending — the drain runs provider discovery, re-selects,
-  and executes the owed backlog as the first baseline; once per project per daemon lifetime
-  (`ContinuousTestDaemonQueue.TryEnqueueInventorySeed`). Without it the first change after enabling
-  selected Unknown forever and the daemon stayed silent. (2) The IDLE DRAIN (`CtIdleDrainPolicy`): once the
-  workspace SETTLES — staleness exists, no pending work or executing run, the last poll healthy with the
-  saved cursor at the live revision, auto-runs not paused, quiet for a debounce window, and a fixed
-  5-minute per-context cooldown (also counted from daemon start) — the daemon schedules ONE drain of the
-  owed stale set, selected exactly as an explicit run selects its stale set (automatic red rule, explicit
-  test-ID list, never whole-suite eligible, no discovery). Without it a churn window that resolved to
-  Unknown stranded the whole case set stale forever (1,504 cases, five idle minutes); the cooldown plus the
-  settled guard bounds a drain whose own build re-stales cases to one slow visible cycle, and a
-  byte-identical rebuild re-stales nothing (julie no-ops unchanged content; the store delta reader's
-  content-hash gate is pinned by test).
-  Auto-runs debounce trailing-edge (`MILLER_CT_DEBOUNCE` seconds, default 2, `0` immediate, invalid/>3600
-  falls back); changes during a run queue a follow-up, never kill a healthy run. The status `selected` key
-  is the LIVE index key, never derived from stored rows; no readable index means `selected: null` and an
-  honest unknown verdict.
-  **Safety (load-bearing).** Opt-in per workspace (`.miller/ct.enabled`), default off. A linked worktree
-  inherits the MAIN checkout's opt-in through the git link (no git subprocess); a local `.miller/ct.disabled`
-  tombstone beats inheritance; `MILLER_CT=off` beats everything. ONE family daemon (one process, one lease
-  on the main root) adopts registered, opted-in worktrees of its repo — each gets its own ct.db and
-  index-bound context, and the daemon writes that worktree's `.miller/ct/daemon.status.json` on transitions
-  (`adopted by <main root>`). Worktree `tests start` anchors the daemon at the main checkout (reason:
-  `family daemon at <root>`); worktree `stop` detaches that worktree only (`detached`, never a daemon kill);
-  routed `run` reaches the worktree's own queue and ct.db. Explicit start only:
-  `miller tests serve`, the dashboard, or MCP `tests operation=start`. Status reads never create `ct.db`,
-  never create `.miller/ct/`, and never start the daemon.
-  `tests disable` retires a project's CASES from every read — verdict, stale/selected counts, `failures`
-  and its groups — for every case source, because a disabled project's standing reds must not pin the
-  workspace verdict; rows are never DELETED, so re-enable restores them exactly as they stood.
-  Daemon stdio (`.miller/ct/daemon.{out,err}.log`) is raw stdio only: startup prints ONE breadcrumb line
-  (version, pid, the shared `.miller/logs` daily pair) so a 0-byte file reads as healthy, real diagnostics
-  are the `role:ct` lines in `miller-<date>.log`, and a zero-selection drain logs `reason=no_selection`
-  instead of silence.
-  **A status read on a workspace that never DECIDED discovers projects (load-bearing).** CT off means
-  nothing ever ran discovery, so the recorded count is 0 on a tree full of test projects and reads as
-  "none exist" rather than "nobody looked" — an agent asking whether the tests passed took that at face
-  value and ran the suite by hand (2026-08-25 field report). Status runs the SAME
-  `ContinuousTestProjectInventory` scan the daemon would, writes nothing (~85ms on a 3,500-file tree), and
-  sets `projects_discovered` so no consumer reads a filesystem scan as coverage. "Never decided" is the
-  whole rule: an opt-out tombstone or ANY recorded row including a DISABLED one is an answer of "no", and
-  re-listing what someone turned off under an invitation to enable it argues with their decision. The
-  compact `next:` line names the direct run FIRST — a one-off question wants a test run, not a background
-  daemon — and it is compact-only, because the JSON carries facts, not advice (ADR-0001).
-  **An enable that can never work is REFUSED, not recorded (load-bearing).** `tests enable` on a repo with
-  no supported toolchain (Go, Ruby, Java, PHP) reported `enable 0 project(s)`, exited 0, and wrote the opt-in
-  marker — leaving the workspace permanently `enabled: true` / `projects: 0`, a state nothing can move, with
-  the status guidance suppressed by the very marker the failed enable wrote. It now exits 3 and writes NOTHING
-  (no marker, no `ct.db`, no `.miller/`), naming the supported set. The refusal turns on the SAME
-  never-decided rule as status: an enable that reverses an opt-out tombstone is always allowed, because a
-  linked worktree of an enabled main checkout has no projects of its own to discover and refusing would
-  strand it opted out. `ContinuousTestProjectInventory.Identify` likewise returns null when
-  `FrameworkFallback` cannot name a framework — it used to build a project with a NULL framework, so
-  `tests enable --project go.mod` enabled a Go module file rendered as `(unknown)`. The `.csproj`-with-no-test-package
-  fallback STAYS: it runs under `dotnet test` regardless. The enabled-but-empty status line is silent while a
-  run is in flight — a run refutes "will never report a verdict" whatever the project count says.
-  **A framework Miller can NAME but never run takes the same refusal.** CT runs the built self-executing test
-  assembly, which only xUnit v3 produces, so discovery classifies the generation from the csproj PACKAGE IDS
-  (`ContinuousTestFrameworkSupport`): an `xunit.v3` id keeps `framework: "xunit"`, a v2-only id
-  (`xunit`, `xunit.core`, `xunit.assert`, `xunit.abstractions`, `xunit.extensibility.*`) yields
-  `framework: "xunit-v2"` plus `unsupported_reason`. The two SHARED ids (`xunit.runner.visualstudio`,
-  `xunit.analyzers`) prove nothing and must never decide — either would refuse a working v3 project — and a
-  project carrying both generations reads as v3. A v2-only enable exits 3 writing nothing; a MIXED repo enables
-  the supported projects and REPORTS the rest (`unsupported_projects`), because a project dropped in silence
-  stops being tested with nobody told; status lists a v2 project with its reason and withholds the enable
-  ladder only when nothing found is runnable. `DotnetTestProvider.RequireSelfExecutingTestAssembly` is the
-  backstop for a project that slips classification: dll present + executable absent names the same cause
-  before the spawn, instead of `Process.Start`'s raw missing-file error, which reads as a broken build and
-  sent a user hunting for one (2026-08-25 field report).
-  **The daemon runs from a PRIVATE per-build copy, never from the install or the build output.**
-  [`CtDaemonShadowCopy`](src/Miller.Testing/Daemon/CtDaemonShadowCopy.cs) materializes the binaries under
-  `~/.miller/ct-daemon/<version>-<build stamp>` and `CtDaemonLauncher.SpawnDetached` launches THAT: a live
-  Windows process locks its own image and every DLL it loaded, so a daemon started from `bin/Release` failed
-  the next `dotnet build` with MSB3027 and blocked a plugin upgrade from overwriting the installed binary
-  (2026-08-21 user report; the only recovery was Task Manager). The key is a digest of the WHOLE copied file
-  set — every file's relative path, length and last-write time — not the version string and not the apphost.
-  The version's git SHA does not move between commits, so a version-only key runs stale code for a whole day
-  of rebuilds; and .NET does NOT re-stamp `miller.exe` when only a referenced project rebuilds, so an
-  apphost-only key stood still on the commonest rebuild there is (the daemon's own logic lives in
-  `Miller.Testing.dll`). The key and the copy read ONE enumeration (`EnumerateCopySet`), so a file that
-  cannot reach the copy cannot move the key. `.tools` is not copied (the daemon
-  carries no tools root and reads the index through `WorkspaceReadSessionFactory`), copies of other builds
-  are removed only when no live daemon runs from them, and a copy that cannot be made falls back to the
-  in-place spawn with the reason plus a `miller tests stop` nudge in the spawn result. An injected process
-  starter takes the in-place path, so no fast test copies an output directory. Cleanup reclaims three
-  things: copies the process probe proves idle, the staging directory of a writer that crashed, and — when
-  that probe cannot answer, which used to delete NOTHING and let copies grow without limit — copies older
-  than three days whose own executable opens for writing, which proves no process has that image mapped.
-  `tests status` still compares the daemon's `miller_version` alone, so a daemon that predates a rebuild
-  inside one commit reports `version_match: true`; restart it by hand after such a rebuild. **A record about a root the process is LEAVING
-  may only REPLACE an existing file — never create it, and never create its directory.** An attach record
-  creates the adopted worktree's control plane; a detach/stop record, a released lease, and a CT log line
-  do not (`CtDaemonWriteMode.ReplaceExistingOnly`). Why: the detach write recreated
-  `<worktree>/.miller/ct/` under a root that had just been removed, which left the worktree
-  untracked-dirty and defeated `git worktree remove` twice (2026-08-21). An attach record that fails to
-  land is RETRIED on later scan passes and the context is marked published only after the write returns:
-  the record names the serving daemon and status probes that identity, so one lost write left a live
-  family daemon reading as `daemon gone` from that worktree, permanently.
-  **Loop-stall detection (report only).** The status record carries `loop_tick_at_utc`, stamped by the MAIN
-  LOOP every time it moves (top of each pass, and when a drain returns) and copied VERBATIM by the pulse —
-  the pulse survives a wedged loop by design. The writer also subtracts that stamp on its own MONOTONIC clock
-  and publishes `loop_age_seconds`; that age is what the reader judges, and the reader's own clock never
-  enters it. The daemon subtracts because the reader is another process: monotonic counts do not compare
-  across processes, an age does. The `updated_at_utc` minus `loop_tick_at_utc` pair stays as the FALLBACK for
-  a record that carries no age, and it is only a fallback — both stamps come from the daemon's WALL clock, so
-  a forward correction between them fabricates a lag and a backward one hides a real one. Lag over 90s
-  (`MILLER_CT_LOOP_STALL_TIMEOUT`, `off` disables the WHOLE detection) is a wedge while idle/queued;
-  `executing` is judged only by the separate hung-supervision rule (child `stalled` plus a silence longer
-  than the DAEMON's own kill bound and a 60s grace — both numbers come from the record, never from the
-  reader's environment, and the drain's elapsed time is never used because one drain runs every ready
-  project). `executing` with no run is an ACCEPTED gap: a drain names no run while it discovers a project's
-  inventory, that discovery spawns a real provider process of legitimate unbounded duration, and the child is
-  already supervised by the silence kill. Absence of the field is unknown, never a stall; a worktree judges
-  the FAMILY daemon's record.
-  Miller REPORTS it (`loop_stalled`, `loop_stall_seconds`, a compact line, a `tests stop` nudge) and never
-  kills or watchdogs. The lease's never-renewed `heartbeat_utc` and the write-only `daemon.heartbeat.json`
-  were REMOVED with it: one honest periodic record beats two dead ones.
-  **Daemon build awareness.** The lease records `miller_version` and `tests status` reports the comparison
-  (`daemon.version_match`, `daemon.version_mismatch`); an explicit start from a different build STOPS the
-  old daemon and replaces it (`status: "replaced"`). Sameness is the whole build string, so one build
-  across an agent swarm never contends; direction is numeric `major.minor.patch`, because `1.9.0` sorts
-  above `1.13.0` as text. A newer daemon is never replaced by an older build; an unorderable pair is left
-  alone. Decision core: [`CtDaemonVersion`](src/Miller.Testing/Daemon/CtDaemonVersion.cs).
-  On start the daemon is status-only: it reports
-  staleness but executes nothing until a new change or an explicit `run`. A test process that goes SILENT
-  for 10 minutes is treated as wedged: Miller kills its process tree and FAILS the run. The bound is on
-  silence, not total duration, so a slow suite survives and a wedged one does not (`MILLER_CT_STALL_TIMEOUT`
-  overrides it; `off` disables it). User-global execution budget: at most one workspace (worktrees included)
-  executes tests at a time. `MILLER_CT=off` (also `0`/`false`/`no`) is a permanent zero-work guarantee: no daemon,
-  no `ct.db` writes, honest status. Green requires complete results at the selected composite key.
-  The tenth MCP tool is `tests` (approved 2026-08-18): `status|failures|start|stop|enable|disable|run`.
-  Status is cheap. Start is the only spawn. JSON contract:
-  [`docs/contracts/tests-cli-v1.md`](docs/contracts/tests-cli-v1.md).
-  **The dashboard's Tests section is a PROJECTION of the status core, and polls only when something can
-  move.** `DashboardTestsPanel.From` renames the fields `TestsCore.Status`/`TestsCore.Failures` returned and
-  adds no CT logic of its own — a second reading of `ct.db` would drift from the contract the CLI and the MCP
-  tool share. `GET /fragments/tests` reads ONE registry row, never a whole snapshot, and never index facts:
-  `ct.db` is self-contained and stays readable when the index is not. The 5s poll attributes are emitted only
-  while `Enabled && !KillSwitchOff` and the read succeeded, because a workspace that never DECIDED runs the
-  filesystem project scan on every status read — polling it re-scans the tree forever to reprint the same
-  standing answer, and nothing on that page can change until the reader enables CT.
-- **Content corpus and text search.** File/content text search is served from the Miller-owned content corpus
-  sidecar `<workspace>/.miller/content.db`, plus explicit external/web imports. Keep symbol search narrow
-  (`name + signature`) unless real dogfood shows the explicit text modes fail an agent task. Route by intent:
-  `mode=content` for docs/config prose, `mode=source` for workspace source-body text,
-  `mode=external|web|all-text` for imported or full corpus text, and
-  `regions=comment|doc_comment|string_literal` for source-region text. Do not add doc comments, literals, or broad
-  source text directly to symbol ranking just because an old TODO predates content corpus FTS. `search auto` may
-  show a bounded source-content rescue in compact output when symbol/file results look weak; explicit `mode=source`
-  remains the deeper source-text path.
-- **Patterns and structural facts.** The `patterns` MCP/CLI surface reads `structural_facts` emitted by
-  `julie-extractors`. Miller may list, group, filter, and render generic `pattern_id` facts, but it must not own
-  parser recognition or raw AST query execution. Runtime `patterns operation=list` output is authoritative for the
-  current catalog, from ASP.NET routes/htmx/Alpine through SQL DDL/DML shapes, async/await, and JSON/YAML/TOML/
-  Markdown document structure — keep Miller's surface generic over `pattern_id` rather than special-casing
-  examples. When a new fact shape needs extractor support, add it across all supported languages in
-  `julie-extractors` first, then consume the stable artifact contract from Miller/Eros.
-- **Web research.** Miller has a mirrored `miller-web-research` skill. Web fetching stays outside Miller in the
-  skill layer via `browser39`; Miller imports fetched markdown as `web` content and supports bounded
-  search/read through the content corpus.
-- **The dashboard is htmx plus ONE plain-JS file (load-bearing).** `DashboardHostPipeline.ConfigureServices` calls
-  only `AddRazorComponents()` — there is no interactive render mode, no Blazor circuit, and no WASM runtime, so
-  Razor Components is a static-SSR template engine here and contributes ZERO interactivity. Every live behaviour is
-  an htmx fragment swap or a delegated `data-*` handler in `wwwroot/js/dashboard-site.js`. Do not add Alpine, a
-  second client framework, or an interactive render mode; a Blazor Server circuit would put a persistent WebSocket
-  behind a local-first, self-contained, non-AOT executable. Alpine was REMOVED on 2026-08-26 after the audit in
-  [`docs/plans/2026-08-26-dashboard-interaction-cleanup.md`](docs/plans/2026-08-26-dashboard-interaction-cleanup.md):
-  htmx carried 8 interactions across 6 panels plus the ETag/304 fragment protocol and the `X-Miller-Dashboard` CSRF
-  header, while Alpine carried 2 (workspace filter, two table sorts) with no reactive template and its state already
-  in plain-JS module stores. `idiomorph-ext.min.js` STAYS and must load before `dashboard-site.js`: it registers the
-  htmx `morph` extension that every polling panel names via `hx-ext="morph"`, and morphing in place is what preserves
-  scroll, focus, and open `<details>` across a poll. State that must outlive a poll lives at module scope
-  (`window.__miller*State`), never on a DOM node — morph rewrites node attributes, so a value parked on the node is
-  clobbered by the very swap it must survive. `data-poll-trigger` is not a second stack: it is the durable copy of
-  `hx-trigger` that `applyVisibilityPolling` restores after a hidden tab drops the attribute. Guards:
-  `Dashboard_ShipsNoAlpineRuntimeOrDirective`, `DashboardSite_OwnsTheSortAndFilterControllers`,
-  `DashboardScripts_LoadsIdiomorphBeforeTheSiteGlue`.
-- **Dashboard launch requests.** If the user asks to start, open, or show the Miller dashboard, use the Miller
-  `workspace` tool with `operation=dashboard`. Do not search plugin cache directories for dashboard files; dashboard
-  launch is a workspace tool operation.
-- **Agent instructions.** The MCP server-level guidance is
-  [`MILLER_AGENT_INSTRUCTIONS.md`](src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md), embedded in the binary
-  and set as `ServerInstructions`. Edit the markdown; `AgentInstructionsTests` guards that every tool stays
-  documented.
-- **Guidance delivery channels (load-bearing).** Guidance rides three channels with distinct jobs: the
-  embedded `MILLER_AGENT_INSTRUCTIONS.md` core is the DISCOVERY contract (≤1,900 chars — Claude Code truncates
-  MCP `ServerInstructions` at ~2KB/server inside a shared ~4KB block, silent and mid-sentence, so the routing
-  table is written most-important-first); the ten tool `[Description]`s are the post-discovery USAGE contracts
-  (≤900 default, `trace` ≤1,500, `search` ≤1,100, total ≤9,000 descriptions-only, params ≤250 each — descriptions are deferred under
-  Tool Search and cannot carry discovery); one-line success-path nudges through `NextStepHint` are the adoption
-  lever (compact-only, JSON untouched). Do NOT grow the core or a description budget, re-add a long embedded
-  tail, or re-invent the deleted 12k budget without first reading
-  [`docs/adr/ADR-0001-guidance-delivery-channels.md`](docs/adr/ADR-0001-guidance-delivery-channels.md); gates
-  live in `AgentInstructionsTests`.
-  **An empty result's cross-tool handoff rides the same nudge channel.** When an empty read's real answer
-  lives in a DIFFERENT tool, the line comes from the one decision table
-  [`CrossToolHandoff`](src/Miller.Server/Tools/CrossToolHandoff.cs) and MUST be
-  `ToolDiagnosticAction.CompactOnly` — the renderer withholds those from JSON so
-  `diagnostic.next_actions` stays byte-identical for Eros and every other machine consumer, which is also
-  why a handoff may be placed FIRST in a tool's action list without reordering anything JSON reads.
-  A handoff must be honest about the INPUT SHAPE, not merely a neighbouring tool: a `file_pattern`/
-  `language` miss with hits outside the scope is a FILTER failure, so naming another mode sends the agent
-  back into the same narrow scope. Exact-line gates live in `CrossToolHandoffTests`.
+- **Content corpus:** file/content text search serves from `<workspace>/.miller/content.db` plus
+  explicit imports. Keep symbol search narrow (`name + signature`); route by intent
+  (`mode=content|source|external|web|all-text`, `regions=` for comments/strings).
+- **Patterns:** the `patterns` surface reads `structural_facts` from julie-extractors. Miller
+  lists/groups/filters generic `pattern_id` facts; it must not own parser recognition. New fact
+  shapes go into julie-extractors across all languages first.
+- **Web research:** fetching stays in the `miller-web-research` skill layer; Miller imports fetched
+  markdown as `web` content.
+
+## Continuous testing (CT)
+
+Authoritative operating doc: [docs/continuous-testing.md](docs/continuous-testing.md). JSON
+contract: [`docs/contracts/tests-cli-v1.md`](docs/contracts/tests-cli-v1.md). Rules that must not
+erode:
+
+- CT verdicts live in the self-contained revision-keyed sidecar `<workspace>/.miller/ct.db` (no
+  foreign keys into other artifacts). Providers write only under supervised CT paths — never
+  workspace `bin`/`obj`. The default build root is workspace-local and flat
+  (`.miller/ct-<proj12>`, deepest assembly dir five levels below the root); peer-root scans
+  recognize a build root only by its `ct-` prefix; over-long roots fall back to the legacy temp
+  shape.
+- Freshness is the composite `(IndexGenerationIdentity, revision)` from the live snapshot; an
+  identity change makes every result stale (the rebuild fail-safe). Within one identity, a revision
+  advance is a watermark keep-set (staleness first, in one transaction): fresh unreachable greens
+  carry forward; impacted cases go stale; red/skipped never advance; unknown reachability reads
+  stale.
+- An impacted RED keeps its state and committed key on every staling path; a case selected but
+  never reported restores red with an owed stamp at run commit. A stamped red is owed (backlog +
+  drain execute it); an unstamped live-key red is trimmed from automatic selections — no automatic
+  red loop.
+- An EXPLICIT run adds every red case (the trim's red exception short-circuits the freshness test);
+  skipped stays skipped. Automatic runs execute only impacted ∪ owed.
+- Truncated/degraded/unavailable impact = Unknown: everything stale, nothing executes, never a
+  whole-suite fallback. A truncated read resolves through the selector to Unknown and the cursor
+  advances; Unavailable is reserved for genuinely unreadable deltas and pauses auto-runs — a
+  first-class status fact (`daemon.auto_runs_paused` + `pause_reason`).
+- Two bounded exceptions to "Unknown executes nothing": the once-per-project inventory seed
+  (discovery-owed pending on a store with no cases) and the idle drain (`CtIdleDrainPolicy`: one
+  drain of the owed stale set once the workspace settles, 5-minute cooldown, explicit-run
+  selection rules).
+- Auto-runs debounce trailing-edge (`MILLER_CT_DEBOUNCE`, default 2s); changes during a run queue a
+  follow-up. `selected` is the live index key; no readable index means `selected: null`.
+- **Safety:** opt-in per workspace (`.miller/ct.enabled`), default off; worktrees inherit the main
+  checkout's opt-in; `.miller/ct.disabled` beats inheritance; `MILLER_CT=off` beats everything
+  (permanent zero-work guarantee). One family daemon adopts registered opted-in worktrees. Explicit
+  start only; status reads never create files or start the daemon. `tests disable` retires a
+  project's cases from every read without deleting rows.
+- A status read on a workspace that never DECIDED runs the project-inventory scan (write-nothing)
+  so `projects: 0` means "none exist", not "nobody looked". An opt-out tombstone or any recorded
+  row is a decision — do not re-list what someone turned off.
+- An enable that can never work is REFUSED (exit 3, writes nothing) — no supported toolchain, or
+  xUnit v2-only (`ContinuousTestFrameworkSupport` classifies from package ids; the two shared ids
+  prove nothing; mixed repos enable the supported projects and report the rest). Reversing an
+  opt-out tombstone is always allowed.
+- The daemon runs from a private per-build shadow copy
+  ([`CtDaemonShadowCopy`](src/Miller.Testing/Daemon/CtDaemonShadowCopy.cs)); the key is a digest of
+  the whole copied file set. A record about a root the process is leaving may only REPLACE an
+  existing file (`CtDaemonWriteMode.ReplaceExistingOnly`) — attach creates, detach/stop/lease/log
+  do not.
+- Loop-stall detection is report-only (`loop_tick_at_utc` + daemon-computed `loop_age_seconds`;
+  lag over `MILLER_CT_LOOP_STALL_TIMEOUT`, default 90s, while idle/queued = wedge). Miller reports
+  and never kills. A silent test process (10 min, `MILLER_CT_STALL_TIMEOUT`) is killed and the run
+  failed — the bound is on silence, not duration. One workspace executes tests at a time
+  (user-global budget).
+- Daemon build awareness: the lease records `miller_version`; explicit start from a different build
+  replaces the old daemon (numeric version ordering, never replace newer). Core:
+  [`CtDaemonVersion`](src/Miller.Testing/Daemon/CtDaemonVersion.cs).
+- The MCP `tests` tool (approved 2026-08-18): `status|failures|start|stop|enable|disable|run`.
+  Status is cheap; start is the only spawn.
+- The dashboard Tests panel is a projection of `TestsCore` results (no second reading of ct.db),
+  reads one registry row, and polls only while enabled and readable.
+
+## Dashboard
+
+- htmx plus ONE plain-JS file (`wwwroot/js/dashboard-site.js`); Razor Components is a static-SSR
+  template engine only. No Alpine, no second framework, no interactive render mode, no Blazor
+  circuit. `idiomorph-ext.min.js` loads before the site glue (the `morph` swap preserves
+  scroll/focus/open state). State that must outlive a poll lives at module scope, never on a DOM
+  node. Guards: `Dashboard_ShipsNoAlpineRuntimeOrDirective`,
+  `DashboardSite_OwnsTheSortAndFilterControllers`, `DashboardScripts_LoadsIdiomorphBeforeTheSiteGlue`.
+  Audit: [`docs/plans/2026-08-26-dashboard-interaction-cleanup.md`](docs/plans/2026-08-26-dashboard-interaction-cleanup.md).
+- Dashboard launch requests: use the Miller `workspace` tool with `operation=dashboard`. Never
+  search plugin cache directories for dashboard files.
+
+## Guidance delivery channels
+
+- Three channels with distinct jobs: the embedded
+  [`MILLER_AGENT_INSTRUCTIONS.md`](src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md) core is the
+  discovery contract (≤1,900 chars — clients truncate `ServerInstructions` silently); tool
+  `[Description]`s are the usage contracts (budgets gated in `AgentInstructionsTests`); one-line
+  `NextStepHint` nudges are compact-only. Do not grow the budgets without reading
+  [ADR-0001](docs/adr/ADR-0001-guidance-delivery-channels.md).
+- Empty-result cross-tool handoffs come from the one decision table
+  [`CrossToolHandoff`](src/Miller.Server/Tools/CrossToolHandoff.cs) and must be
+  `ToolDiagnosticAction.CompactOnly` (JSON `next_actions` stays byte-identical). A handoff must be
+  honest about the input shape — a filter miss names the filter, not another mode. Gates:
+  `CrossToolHandoffTests`.
 
 ## AGENTS.md is generated
 
-`AGENTS.md` is a byte-for-byte mirror of THIS file. Edit `CLAUDE.md` only, then run
-`scripts/sync-agents.sh` or `scripts/sync-agents.ps1` to regenerate `AGENTS.md`. A pre-commit hook
-(installed via `scripts/install-hooks.sh` or `scripts/install-hooks.ps1`, which sets
-`core.hooksPath=.githooks`) fails the commit if they diverge.
+`AGENTS.md` mirrors this file byte-for-byte. Edit `CLAUDE.md` only, then run
+`scripts/sync-agents.sh` or `scripts/sync-agents.ps1`. The pre-commit hook (installed via
+`scripts/install-hooks.sh`, `core.hooksPath=.githooks`) fails the commit if they diverge.
