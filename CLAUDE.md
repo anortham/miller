@@ -209,6 +209,10 @@ Each rule below is load-bearing; the linked code/doc carries the full design.
   never dropped).
 - **Hash split:** `workspace_id` = SHA-256 of the root; file freshness = `files.content_hash`
   (blake3), guarded by `artifact_metadata.hash_algorithm`.
+- **Telemetry:** shared ledger at `~/.miller/telemetry.db` (`tool_telemetry`); export via
+  `miller telemetry export --jsonl --workspace-id all`. The export is type-only (privacy), but the
+  local DB stores full `error_message`/`error_detail` — read those before declaring a field error
+  opaque (the 2026-08-27 audit's 107 "opaque" edit errors were one already-fixed cause).
 - **Search sidecar:** symbol search serves from the Miller-owned FTS5 artifact
   `<workspace>/.miller/search.db`, written by the lock-holding writer, read-only elsewhere. On by
   default; `MILLER_SEARCH_SIDECAR=0` opts into the in-memory BM25 fallback. Ranking stays in C#
