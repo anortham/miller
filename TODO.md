@@ -52,6 +52,19 @@ docs/findings/agent-efficiency/2026-08-25-semantic-noise/.
 
 ## Active
 
+- Telemetry audit 2026-08-27 (`docs/findings/2026-08-27-telemetry-audit.md`), in priority order:
+  1. `edit replace_text` unhandled `InvalidOperationException` — 53% error rate over the last 7 days,
+     every version 1.20.1→1.24.0, four workspaces. Diagnosability half DONE (uncommitted): the
+     `EditTool.Edit` backstop now logs the full exception + stack at WRN to the shared log; telemetry
+     keeps type-only. Root cause still unknown — hunted and refuted: null `old_text` (classified
+     refusal), fuzzy `matches.Min` (guarded), rename `.Value` sites (guarded, wrong op). Blocked on
+     the next field occurrence, which the new log line will name.
+  2. `context` tool latency — p50 ~7 s / p95 20–37 s from 1,300–2,000 per-symbol lookups; the
+     `session_projection` backend does the same work in 54 ms but served 8 of ~270 calls. Route the
+     read lookups through it (or batch the sidecar lookups).
+  3. A source file deleted mid-scan fails the whole store delta (`RequireCommitted`, os error 2,
+     Tycho 8/26 ×3) and starts scan-failure backoff. Treat a vanished file as a delete; fix may
+     belong in julie-extract.
 - On windows memory usage seems high, investigate.
 - Docs will need updating for CT and should list supported langs/frameworks and state that support for more is ongoing
 

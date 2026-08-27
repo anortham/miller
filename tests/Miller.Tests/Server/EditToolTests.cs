@@ -5,6 +5,8 @@ using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Server;
 using Miller.Server.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -148,7 +150,8 @@ public sealed class EditToolTests : IDisposable
     }
 
     private EditTool BuildTool(
-        JulieDbFixture fx, EditApplier? applier = null, IEditWriteThrough? writeThrough = null)
+        JulieDbFixture fx, EditApplier? applier = null, IEditWriteThrough? writeThrough = null,
+        ILogger<EditTool>? logger = null)
     {
         var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
         var holder = new IndexHolder(index, builtRevision: 0);
@@ -162,7 +165,8 @@ public sealed class EditToolTests : IDisposable
             resolver,
             workspace,
             applier ?? new EditApplier(() => new NoopLease()),
-            writeThrough ?? new RecordingWriteThrough());
+            writeThrough ?? new RecordingWriteThrough(),
+            logger ?? NullLogger<EditTool>.Instance);
     }
 
     private static EditRequest Req(string op, string target) => new(op, target);
@@ -3336,6 +3340,63 @@ public sealed class EditToolTests : IDisposable
         Assert.Equal(TelemetryOutcome.Error, telemetry.Outcome);
         Assert.Equal("unhandled_InvalidOperationException", StampedFailureBucket(
             telemetry, ThrowingWriteThrough.Message, "orders/OrderService.cs"));
+    }
+
+    [Fact]
+    public void Edit_UnhandledException_LogsTheExceptionWithStackToTheSharedLog()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var logger = new RecordingLogger<EditTool>();
+        EditTool tool = BuildTool(fx, writeThrough: new ThrowingWriteThrough(), logger: logger);
+
+        tool.Edit("replace_symbol_body", "OrderService.Total", new_text: "{ return 0; }", apply: true);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.IsType<InvalidOperationException>(entry.Exception);
+        Assert.Contains("replace_symbol_body", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Edit_ClassifiedFailure_LogsNothing()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var logger = new RecordingLogger<EditTool>();
+        EditTool tool = BuildTool(fx, logger: logger);
+
+        tool.Edit(
+            "replace_text", "orders/OrderService.cs",
+            old_text: "NoSuchSelectorAnywhere", new_text: "x", apply: true);
+
+        Assert.Empty(logger.Entries);
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        private readonly object _gate = new();
+        private readonly List<(LogLevel Level, string Message, Exception? Exception)> _entries = new();
+
+        public IReadOnlyList<(LogLevel Level, string Message, Exception? Exception)> Entries
+        {
+            get
+            {
+                lock (_gate)
+                    return _entries.ToArray();
+            }
+        }
+
+        IDisposable? ILogger.BeginScope<TState>(TState state) => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_gate)
+                _entries.Add((logLevel, formatter(state, exception), exception));
+        }
     }
 
     [Fact]

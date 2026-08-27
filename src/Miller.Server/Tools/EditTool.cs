@@ -2,6 +2,7 @@ using System.Buffers;
 using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Server.Hosting;
@@ -42,23 +43,26 @@ public sealed class EditTool
     private readonly WorkspaceContext _workspace;
     private readonly EditApplier _applier;
     private readonly IEditWriteThrough _writeThrough;
+    private readonly ILogger<EditTool> _logger;
 
     /// <summary>Construct over the live index holder + the singleton apply/write-through seam.</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     public EditTool(
         IndexHolder holder, SmartTargetResolver resolver, WorkspaceContext workspace,
-        EditApplier applier, IEditWriteThrough writeThrough)
+        EditApplier applier, IEditWriteThrough writeThrough, ILogger<EditTool> logger)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(resolver);
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(applier);
         ArgumentNullException.ThrowIfNull(writeThrough);
+        ArgumentNullException.ThrowIfNull(logger);
         _holder = holder;
         _resolver = resolver;
         _workspace = workspace;
         _applier = applier;
         _writeThrough = writeThrough;
+        _logger = logger;
     }
 
     [McpServerTool(Name = "edit")]
@@ -170,7 +174,16 @@ public sealed class EditTool
                 Message = SearchTool.Truncate(ex.Message, 1_024),
             };
             if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
+            {
                 telemetry?.SetError(ex);
+                // Telemetry keeps only the exception TYPE (privacy rule); the local shared log is the one
+                // place the full stack survives, and without it a recurring escape is undiagnosable
+                // (2026-08-27 telemetry audit: 102 opaque unhandled_InvalidOperationException rows).
+                _logger.LogWarning(
+                    ex,
+                    "edit {Operation} failed with an unhandled exception; reported to the caller as internal_failure",
+                    telemetry?.Op ?? operation);
+            }
             telemetry?.SetMetadata(
                 FailureReasonMetadataKey,
                 UnhandledFailureReasonPrefix + ex.GetType().Name);
