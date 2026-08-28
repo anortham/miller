@@ -174,6 +174,7 @@ public sealed class ForbiddenEnqueueTests : IDisposable
             Current = new CtIndexCursor(EngineTestSupport.Identity, 2),
         };
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:persistence", "Persist", "src/Persistence.cs"));
+        facts.FileFacts.Add(new CtFileFact("src/Persistence.cs", "csharp", "blake3:persistence", "indexed", false, true));
         var queue = new ContinuousTestDaemonQueue(
             store,
             new ContinuousTestImpactSelector(store, facts),

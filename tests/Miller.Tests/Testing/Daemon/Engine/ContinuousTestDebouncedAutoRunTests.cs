@@ -341,6 +341,7 @@ public sealed class ContinuousTestDebouncedAutoRunTests : IDisposable
             Current = new CtIndexCursor(EngineTestSupport.Identity, 3),
         };
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:persistence", "Persist", "src/Persistence.cs"));
+        facts.FileFacts.Add(new CtFileFact("src/Persistence.cs", "csharp", "blake3:persistence", "indexed", false, true));
         var provider = new FakeContinuousTestProvider();
         var queue = new ContinuousTestDaemonQueue(
             store,
@@ -401,7 +402,8 @@ public sealed class ContinuousTestDebouncedAutoRunTests : IDisposable
         var facts = new FakeMillerFactSource { Current = new CtIndexCursor(EngineTestSupport.Identity, 4) };
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:app", "App", "src/App.cs"));
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:persistence", "Persist", "src/Persistence.cs"));
-        facts.Tests.Add(FakeMillerFactSource.Hit("test:app", "AppTests", "tests/AppTests.cs", isTest: true));
+        facts.FileFacts.Add(new CtFileFact("src/App.cs", "csharp", "blake3:app", "indexed", false, true));
+        facts.FileFacts.Add(new CtFileFact("src/Persistence.cs", "csharp", "blake3:persistence", "indexed", false, true));
         var provider = new FakeContinuousTestProvider { RunResult = Passed("test:app", "4") };
         var queue = new ContinuousTestDaemonQueue(
             store,

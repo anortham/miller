@@ -66,7 +66,8 @@ internal static class EngineTestSupport
     {
         var facts = new FakeMillerFactSource { Current = new CtIndexCursor(identity, revision) };
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:app", "App", "src/App.cs"));
-        facts.Tests.Add(FakeMillerFactSource.Hit("test:app", "AppTests", "tests/AppTests.cs", isTest: true));
+        facts.FileFacts.Add(new CtFileFact("src/App.cs", "csharp", "blake3:app", "indexed", false, true));
+        facts.Tests.Add(FakeMillerFactSource.Hit("test:app", "test:app", "tests/AppTests.cs", isTest: true));
         return new ContinuousTestImpactSelector(store, facts);
     }
 }

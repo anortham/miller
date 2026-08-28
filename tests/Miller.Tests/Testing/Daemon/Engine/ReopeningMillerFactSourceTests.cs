@@ -26,10 +26,12 @@ public sealed class ReopeningMillerFactSourceTests : IDisposable
 
         var generationA = new FakeMillerFactSource { Current = new CtIndexCursor("gen-a", 1) };
         generationA.Symbols.Add(FakeMillerFactSource.Symbol("sym:app-a", "AppA", "src/App.cs"));
+        generationA.FileFacts.Add(new CtFileFact("src/App.cs", "csharp", "blake3:app-a", "indexed", false, true));
         generationA.Tests.Add(FakeMillerFactSource.Hit("sym:test-a", "test_a", "tests/ATests.cs", isTest: true));
 
         var generationB = new FakeMillerFactSource { Current = new CtIndexCursor("gen-b", 1) };
         generationB.Symbols.Add(FakeMillerFactSource.Symbol("sym:app-b", "AppB", "src/App.cs"));
+        generationB.FileFacts.Add(new CtFileFact("src/App.cs", "csharp", "blake3:app-b", "indexed", false, true));
         generationB.Tests.Add(FakeMillerFactSource.Hit("sym:test-b", "test_b", "tests/BTests.cs", isTest: true));
 
         FakeMillerFactSource current = generationA;

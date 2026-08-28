@@ -155,6 +155,7 @@ public sealed class RevisionAdvanceWatermarkTests : IDisposable
             Current = new CtIndexCursor(EngineTestSupport.Identity, revision),
         };
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:persistence", "Persist", "src/Persistence.cs"));
+        facts.FileFacts.Add(new CtFileFact("src/Persistence.cs", "csharp", "blake3:persistence", "indexed", false, true));
         return new ContinuousTestDaemonQueue(
             store,
             new ContinuousTestImpactSelector(store, facts),
