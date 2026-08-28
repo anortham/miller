@@ -146,9 +146,8 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
     /// one-invocation run parses exactly as it did before chunking existed.
     ///
     /// The worst status wins: every chunk's case results are aggregated together by
-    /// <see cref="RunStatus"/>, so a green chunk can never mask a red sibling. The exit code is judged
-    /// PER invocation, because each chunk is a separate process with its own report - a chunk that
-    /// produced no verdicts must report its own selection as failed rather than borrow a sibling's.
+    /// <see cref="RunStatus"/>, so a green chunk can never mask a red sibling. A missing report fails
+    /// its selection; a valid empty Node report remains unreported because no file-level verdict was emitted.
     /// </summary>
     private static ProviderRunResult MergeRuns(
         ContinuousTestProviderRunRequest request,
@@ -161,11 +160,15 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         {
             var invocation = invocations[index];
             var result = results[index];
-            IReadOnlyList<ProviderCaseResult> parsed = File.Exists(invocation.ArtifactPath)
+            var artifactExists = File.Exists(invocation.ArtifactPath);
+            IReadOnlyList<ProviderCaseResult> parsed = artifactExists
                 ? ParseResultArtifact(request, invocation.TestCaseIds, invocation.ArtifactPath)
                 : [];
 
-            if (result.ExitCode != 0 && parsed.Count == 0)
+            if (result.ExitCode != 0
+                && parsed.Count == 0
+                && (!artifactExists
+                    || !string.Equals(RequiredFramework(request.Workspace), "node-test", StringComparison.Ordinal)))
             {
                 if (invocation.TestCaseIds.Count == 0)
                     throw new ContinuousTestProviderException(
@@ -236,9 +239,10 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         IReadOnlyList<string> TestCaseIds);
 
     /// <summary>
-    /// Builds the invocations for one run. A selection that fits the command-line cap is a single
-    /// command — same argv and same artifact filename as this provider sent before chunking existed —
-    /// and a wider one is split across several invocations of the same runner.
+    /// Builds the invocations for one run. Jest and Vitest selections that fit the command-line cap stay
+    /// in one invocation, and wider selections split across invocations of the same runner. Node's JUnit
+    /// reporter does not identify source files, so known node-test selections always use one invocation per
+    /// file.
     ///
     /// The cap that matters here is 8,191, not the 32,767 Windows allows: npm, pnpm and yarn ship as
     /// <c>.cmd</c> shims, and cmd.exe applies its own much lower limit. It neither truncates nor
@@ -267,17 +271,37 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        // A whole-suite run, or an empty file selection, is the unfiltered run. It carries no selection
-        // argv, so there is nothing to chunk and it keeps the whole request's ids.
+        if (string.Equals(framework, "node-test", StringComparison.Ordinal) && selectedFiles.Length > 0)
+        {
+            var nodeInvocations = new List<RunInvocation>(selectedFiles.Length);
+            for (var index = 0; index < selectedFiles.Length; index++)
+            {
+                var file = selectedFiles[index];
+                var testCaseIds = request.TestCaseIds
+                    .Where(testCaseId =>
+                        string.Equals(TestFileFromId(testCaseId), file, StringComparison.Ordinal)
+                        || (index == 0 && TestFileFromId(testCaseId) is null))
+                    .ToArray();
+                nodeInvocations.Add(BuildInvocation(
+                    request,
+                    paths,
+                    framework,
+                    packageRoot,
+                    cacheDirectory,
+                    [file],
+                    testCaseIds,
+                    part: selectedFiles.Length == 1 ? null : index));
+            }
+
+            return nodeInvocations;
+        }
+
         if (request.WholeSuite || selectedFiles.Length == 0)
         {
             return [BuildInvocation(
                 request, paths, framework, packageRoot, cacheDirectory, [], request.TestCaseIds, part: null)];
         }
 
-        // Each unit is a single argv element — a bare file path with no flag beside it — so the
-        // primitive's whole-unit rule costs nothing here. What it buys is the byte budget, shared with
-        // every other provider so one bound governs them all.
         IReadOnlyList<IReadOnlyList<string>> chunks = CtArgvChunking.Chunk(
             selectedFiles,
             static file => CtArgvChunking.ArgvCost([file]));
@@ -519,22 +543,13 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
     }
 
     /// <summary>
-    /// Parses one node:test junit report, PER FILE.
+    /// Parses one node:test JUnit report for the selected invocation. Node's built-in reporter does not emit
+    /// source file attributes, so known file selections are isolated to one invocation per file before this
+    /// method is called. A report with file attributes remains supported for alternate reporters.
     ///
-    /// <para>node's runner writes ONE junit document for the whole invocation and gives every case the same
-    /// classname — the directory the file sits in — so the report itself separates files only by the
-    /// <c>file</c> attribute it puts on each case. Folding the document into one status and one failure
-    /// message stamped that verdict on every selected file: a suite with one red file among three green
-    /// ones came back four-red, each carrying the single real assertion message (dogfood finding F9,
-    /// 2026-08-21). Each selected file now gets the verdict of ITS OWN cases, the way the jest/vitest path
-    /// already reads per-file results out of one JSON document.</para>
-    ///
-    /// <para>Two honest edges. A selected file the report never names gets NO result: the store flips a case
-    /// the run did not report back to stale, which is the truth for a file whose outcome nothing states —
-    /// far better than lending it a sibling's verdict. And cases the report leaves unattributed (no
-    /// <c>file</c> attribute, which is every case of a pre-file-attribute reporter) still fold into ONE
-    /// aggregate verdict, given only to the selected files the report could not name — a per-file result is
-    /// never overwritten by it.</para>
+    /// <para>A selected file the report never names gets no result. An unattributed report is aggregated only
+    /// when this invocation owns one selected case; multiple selected cases fail closed instead of sharing one
+    /// verdict across file-level cases.</para>
     /// </summary>
     private static IReadOnlyList<ProviderCaseResult> ParseNodeJunit(
         ContinuousTestProviderRunRequest request,
@@ -561,6 +576,13 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
             if (!casesByTestCaseId.TryGetValue(testCaseId, out var fileCases))
                 casesByTestCaseId[testCaseId] = fileCases = [];
             fileCases.Add(row);
+        }
+
+        if (unattributedCases.Count > 0 && testCaseIds.Count > 1)
+        {
+            throw new ContinuousTestProviderException(
+                "Node JUnit report did not include file attribution for multiple selected test cases; "
+                + "run node-test one file per invocation.");
         }
 
         var results = new List<ProviderCaseResult>(testCaseIds.Count);

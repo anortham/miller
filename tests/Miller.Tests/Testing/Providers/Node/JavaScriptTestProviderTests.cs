@@ -386,6 +386,53 @@ public sealed class JavaScriptTestProviderTests : IDisposable
     }
 
     [Fact]
+    public void BuildRunCommands_splits_selected_node_test_files_into_one_invocation_each()
+    {
+        var workspace = Workspace("node-test");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+        var files = new[] { "test/a.test.js", "test/b.test.js", "test/c.test.js" };
+
+        var commands = provider.BuildRunCommands(Request(workspace, files.Select(TestCaseIdFor).ToArray()));
+
+        Assert.Equal(files, commands.Select(SelectedNodeFile).ToArray());
+        Assert.All(commands, command => Assert.Single(SelectedNodeFiles(command)));
+    }
+
+    [Fact]
+    public void BuildRunCommands_splits_a_whole_suite_node_test_selection_into_one_invocation_each()
+    {
+        var workspace = Workspace("node-test");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+        var files = new[] { "test/a.test.js", "test/b.test.js", "test/c.test.js" };
+
+        var commands = provider.BuildRunCommands(
+            Request(workspace, files.Select(TestCaseIdFor).ToArray()) with { WholeSuite = true });
+
+        Assert.Equal(files, commands.Select(SelectedNodeFile).ToArray());
+        Assert.All(commands, command => Assert.Single(SelectedNodeFiles(command)));
+    }
+
+    [Fact]
+    public async Task Run_refuses_an_unattributed_node_junit_report_for_multiple_ids()
+    {
+        var workspace = Workspace("node-test");
+        var runner = new FakeTestProcessRunner();
+        runner.OnRun = WriteUnattributedNodeJunitArtifact;
+        runner.Enqueue(exitCode: 0);
+        var provider = new JavaScriptTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.RunAsync(
+                Request(workspace, "other:test-a", "other:test-b"),
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("file attribution", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+
+
+
+    [Fact]
     public void Build_run_command_uses_detected_jest_package_script_when_framework_is_unspecified()
     {
         var workspace = Workspace(null);
@@ -693,10 +740,8 @@ public sealed class JavaScriptTestProviderTests : IDisposable
     // -------------------------------------------- per-file node:test attribution (dogfood finding F9)
 
     /// <summary>
-    /// A partially red node:test suite. Node's junit reporter puts every file's cases in ONE report and
-    /// gives them all the same classname, so the whole report used to collapse to a single status and a
-    /// single failure message that were then stamped on every selected file — three green files read as
-    /// red, each carrying the one real assertion message (dogfood finding F9, 2026-08-21).
+    /// A file-aware JUnit report for a partially red node:test suite. The provider must preserve one red
+    /// file among three green files when the report supplies a file attribute for each row.
     /// </summary>
     [Fact]
     public async Task Run_attributes_a_node_junit_failure_to_the_file_that_failed()
@@ -707,7 +752,8 @@ public sealed class JavaScriptTestProviderTests : IDisposable
             WritePackageFile(file, "test('case', () => {})");
         var runner = new FakeTestProcessRunner();
         runner.OnRun = command => WriteNodeJunitArtifact(command, files, failingFile: "test/d.test.js");
-        runner.Enqueue(exitCode: 1);
+        for (var index = 0; index < files.Length; index++)
+            runner.Enqueue(exitCode: 1);
         var provider = new JavaScriptTestProvider(runner);
 
         var result = await provider.RunAsync(
@@ -745,7 +791,8 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         var reported = new[] { "test/a.test.js", "test/b.test.js", "test/d.test.js" };
         var runner = new FakeTestProcessRunner();
         runner.OnRun = command => WriteNodeJunitArtifact(command, reported, failingFile: "test/d.test.js");
-        runner.Enqueue(exitCode: 1);
+        for (var index = 0; index < files.Length; index++)
+            runner.Enqueue(exitCode: 1);
         var provider = new JavaScriptTestProvider(runner);
 
         var result = await provider.RunAsync(
@@ -761,8 +808,8 @@ public sealed class JavaScriptTestProviderTests : IDisposable
     }
 
     /// <summary>
-    /// Node's junit reporter writes the absolute path of each test file. This is the same report shape the
-    /// real runner produces, including the platform's own directory separator.
+    /// Writes a file-aware JUnit fixture for an alternate Node reporter, including the platform's directory
+    /// separator in each absolute source path.
     /// </summary>
     private void WriteNodeJunitArtifact(
         TestProcessCommand command,
@@ -1275,6 +1322,31 @@ public sealed class JavaScriptTestProviderTests : IDisposable
         command.Arguments
             .Where(argument => argument.EndsWith(".spec.ts", StringComparison.Ordinal))
             .ToArray();
+    private static string SelectedNodeFile(TestProcessCommand command) =>
+        Assert.Single(SelectedNodeFiles(command));
+
+    private static IReadOnlyList<string> SelectedNodeFiles(TestProcessCommand command) =>
+        command.Arguments
+            .Where(argument => argument.EndsWith(".test.js", StringComparison.Ordinal))
+            .ToArray();
+
+    private void WriteUnattributedNodeJunitArtifact(TestProcessCommand command)
+    {
+        var outputPath = command.Arguments[command.Arguments.ToList().IndexOf("--test-reporter-destination") + 1];
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        File.WriteAllText(
+            outputPath,
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <testsuites>
+              <testcase name="one" time="0.001" classname="test" />
+              <testcase name="two" time="0.001" classname="test">
+                <failure type="testCodeFailure" message="failure">failure</failure>
+              </testcase>
+            </testsuites>
+            """);
+    }
+
 
     private static string OutputFile(TestProcessCommand command) =>
         command.Arguments[command.Arguments.ToList().IndexOf("--outputFile") + 1];
