@@ -365,4 +365,15 @@ public sealed class MillerRepositoryIndex : ISymbolLookupIndex
                 $"DocId must be in [0, {_byDocId.Length}).");
         return _byDocId[docId];
     }
+
+    public IReadOnlyDictionary<int, IndexedSymbol> ResolveMany(IReadOnlyCollection<int> docIds)
+    {
+        ArgumentNullException.ThrowIfNull(docIds);
+
+        var resolved = new Dictionary<int, IndexedSymbol>(docIds.Count);
+        foreach (int docId in docIds)
+            if (!resolved.ContainsKey(docId))
+                resolved.Add(docId, Resolve(docId));
+        return resolved;
+    }
 }

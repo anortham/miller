@@ -841,6 +841,50 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
             $"No symbol row exists for DocId {docId}.");
     }
 
+    public IReadOnlyDictionary<int, IndexedSymbol> ResolveMany(IReadOnlyCollection<int> docIds)
+    {
+        ArgumentNullException.ThrowIfNull(docIds);
+
+        int[] requested = docIds.Distinct().ToArray();
+        if (requested.Length == 0)
+            return new Dictionary<int, IndexedSymbol>();
+
+        var loaded = new Dictionary<int, IndexedSymbol>(requested.Length);
+        using var connection = OpenConnection();
+        for (int offset = 0; offset < requested.Length; offset += HydrationParameterChunkSize)
+        {
+            int count = Math.Min(HydrationParameterChunkSize, requested.Length - offset);
+            using var cmd = connection.CreateCommand();
+            var placeholders = new string[count];
+            for (int i = 0; i < count; i++)
+            {
+                string parameterName = "$doc" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                placeholders[i] = parameterName;
+                cmd.Parameters.AddWithValue(parameterName, requested[offset + i]);
+            }
+
+            cmd.CommandText = SymbolSelect(
+                $"FROM search_symbols s WHERE s.doc_id IN ({string.Join(',', placeholders)});");
+            long hydrationStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                IndexedSymbol symbol = ReadDiskSymbol(reader).Symbol;
+                loaded[symbol.DocId] = symbol;
+            }
+            _queryObserver?.Invoke(new FtsSearchQueryObservation(
+                FtsSearchQueryFamily.ResolveManyHydration,
+                count,
+                System.Diagnostics.Stopwatch.GetElapsedTime(hydrationStarted)));
+        }
+
+        var ordered = new Dictionary<int, IndexedSymbol>(loaded.Count);
+        foreach (int docId in requested)
+            if (loaded.TryGetValue(docId, out IndexedSymbol? symbol))
+                ordered[docId] = symbol;
+        return ordered;
+    }
+
     private SqliteConnection OpenConnection()
     {
         var connection = new SqliteConnection(_connectionString);
@@ -943,6 +987,7 @@ internal enum FtsSearchQueryFamily
     TrigramCandidates,
     TrigramScoring,
     FinalOrdering,
+    ResolveManyHydration,
 }
 
 internal readonly record struct FtsSearchQueryObservation(

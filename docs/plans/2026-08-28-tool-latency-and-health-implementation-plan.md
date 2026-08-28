@@ -203,14 +203,14 @@ Batch A uses `parallel-lead-commit`. After Task 1 is reviewed and committed, Tas
 **Approach:** The measured wrapper records equivalent resolve counts/timing, the lagging wrapper validates every row against live state, and the context cache forwards policy rather than unwrapping. Guards count batches per escalation window and relaxation pass. No connection-session abstraction is added unless the fixed replay still misses after this task.
 
 **Acceptance criteria:**
-- [ ] Red tests show the current production wrapper chain cannot batch and performs per-hit SQLite resolves.
-- [ ] Default fallback preserves every existing fake/implementation without custom batching.
-- [ ] FTS hydrates at most 500 IDs per statement and preserves requested identity/order mapping.
-- [ ] Measured, lagging, and context-cache wrappers preserve telemetry and live-row validation.
-- [ ] Search/context result ordering, diagnostics, and relaxation output remain byte-compatible.
-- [ ] Focused FTS, context-retrieval, search-tool, and provider tests pass; `Miller.Indexing`, `Miller.Server`, and `Miller.Tests` build cleanly.
-- [ ] Fixed context replay meets p95 <=3,000 ms and max <=5,000 ms, or the worker reports the largest remaining measured phase without weakening behavior.
-- [ ] Worker hands the verified diff to the lead without committing.
+- [x] Red tests show the current production wrapper chain cannot batch and performs per-hit SQLite resolves.
+- [x] Default fallback preserves every existing fake/implementation without custom batching.
+- [x] FTS hydrates at most 500 IDs per statement and preserves requested identity/order mapping.
+- [x] Measured, lagging, and context-cache wrappers preserve telemetry and live-row validation.
+- [x] Search/context result ordering, diagnostics, and relaxation output remain byte-compatible.
+- [x] Focused FTS, context-retrieval, search-tool, and provider tests pass; `Miller.Indexing`, `Miller.Server`, and `Miller.Tests` build cleanly.
+- [x] Fixed context replay meets p95 <=3,000 ms and max <=5,000 ms, or the worker reports the largest remaining measured phase without weakening behavior.
+- [x] Worker hands the verified diff to the lead without committing.
 
 ### Task 5: Measured impact graph reduction
 

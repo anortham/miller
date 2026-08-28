@@ -24,4 +24,15 @@ public interface ISymbolLookupIndex : ISymbolSearchIndex
     bool IsIndexedFilePath(string path);
 
     string? ResolveIndexedFilePath(string target);
+
+    IReadOnlyDictionary<int, IndexedSymbol> ResolveMany(IReadOnlyCollection<int> docIds)
+    {
+        ArgumentNullException.ThrowIfNull(docIds);
+
+        var resolved = new Dictionary<int, IndexedSymbol>(docIds.Count);
+        foreach (int docId in docIds)
+            if (!resolved.ContainsKey(docId))
+                resolved.Add(docId, Resolve(docId));
+        return resolved;
+    }
 }

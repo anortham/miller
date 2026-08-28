@@ -288,6 +288,40 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void ResolveMany_HydratesMoreThanFiveHundredIdsInRequestedOrder()
+    {
+        IndexedSymbol[] syms = Enumerable.Range(0, 1_200)
+            .Select(index => new IndexedSymbol(
+                index,
+                $"sym-{index:d4}",
+                $"SharedItem{index:d4}",
+                $"class SharedItem{index:d4}",
+                "class",
+                "csharp",
+                $"src/S{index:d4}.cs",
+                StartLine: 1,
+                EndLine: 2,
+                ParentId: null,
+                IsTest: false))
+            .ToArray();
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+        var observations = new List<FtsSearchQueryObservation>();
+        var index = FtsSymbolSearchIndex.Open(_dbPath, observations.Add);
+        int[] requested = Enumerable.Range(0, syms.Length).Reverse().ToArray();
+
+        IReadOnlyDictionary<int, IndexedSymbol> resolved = index.ResolveMany(requested);
+
+        FtsSearchQueryObservation[] hydration = observations
+            .Where(static observation => observation.Family == FtsSearchQueryFamily.ResolveManyHydration)
+            .ToArray();
+        Assert.Equal([500, 500, 200], hydration.Select(static observation => observation.Rows));
+        Assert.All(hydration, static observation => Assert.InRange(observation.Rows, 1, 500));
+        Assert.Equal(requested, resolved.Keys);
+        Assert.Equal(requested, resolved.Values.Select(static symbol => symbol.DocId));
+        Assert.Equal(syms.Length, resolved.Count);
+    }
+
+    [Fact]
     public void Search_HighFanoutWordArm_HydratesOnlyRankedResultsWithExactParity()
     {
         IndexedSymbol[] syms = Enumerable.Range(0, 1_200)

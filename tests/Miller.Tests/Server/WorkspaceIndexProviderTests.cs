@@ -809,6 +809,24 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void MeasuredResolveManyCountsEveryRequestedDocumentAndForwardsIt()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        var measured = new MeasuredSymbolLookupIndex(inner);
+        IndexedSymbol symbol = Assert.Single(inner.FindByName("TargetType"));
+
+        IReadOnlyDictionary<int, IndexedSymbol> resolved = measured.ResolveMany(
+            [symbol.DocId, symbol.DocId]);
+
+        Assert.Single(resolved);
+        Assert.Equal("TargetType", resolved[symbol.DocId].Name);
+        Assert.Equal(
+            2,
+            measured.SnapshotByFamily()[(int)SymbolLookupMethodFamily.ResolveDoc].CallCount);
+    }
+
+    [Fact]
     public void MeasuredSearchPreservesNullForgivenInnerBehavior()
     {
         using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
@@ -816,6 +834,22 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         var measured = new MeasuredSymbolLookupIndex(inner);
 
         Assert.Empty(measured.Search(null!));
+    }
+
+    [Fact]
+    public void ContextSearchCacheForwardsResolveManyToInnerIndex()
+    {
+        using var fixture = DbWithSymbol("current-ws", revision: 1, "TargetType");
+        ISymbolLookupIndex inner = SymbolSearchProjectionLoader.Load(fixture.DbPath);
+        SearchHit hit = Assert.Single(inner.Search("TargetType"));
+        var backend = new FixedSearchResultLookupIndex(inner, [hit]);
+        var cache = new ContextSearchCacheLookupIndex(backend);
+
+        IReadOnlyDictionary<int, IndexedSymbol> resolved = cache.ResolveMany([hit.Document.DocId]);
+
+        Assert.Equal(1, backend.ResolveManyCallCount);
+        Assert.Equal(0, backend.ResolveCallCount);
+        Assert.Equal("TargetType", resolved[hit.Document.DocId].Name);
     }
 
     [Fact]
@@ -4251,6 +4285,9 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         ISymbolLookupIndex inner,
         IReadOnlyList<SearchHit> searchResult) : ISymbolLookupIndex
     {
+        public int ResolveCallCount { get; private set; }
+        public int ResolveManyCallCount { get; private set; }
+
         public int SearchCallCount { get; private set; }
 
         public int DocumentCount => inner.DocumentCount;
@@ -4263,7 +4300,17 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             return searchResult;
         }
 
-        public IndexedSymbol Resolve(int docId) => inner.Resolve(docId);
+        public IndexedSymbol Resolve(int docId)
+        {
+            ResolveCallCount++;
+            return inner.Resolve(docId);
+        }
+
+        public IReadOnlyDictionary<int, IndexedSymbol> ResolveMany(IReadOnlyCollection<int> docIds)
+        {
+            ResolveManyCallCount++;
+            return inner.ResolveMany(docIds);
+        }
 
         public IReadOnlyList<IndexedSymbol> FindByName(string name) => inner.FindByName(name);
 

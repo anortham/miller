@@ -1508,8 +1508,17 @@ public sealed class SearchTool
                 }
 
                 IReadOnlyList<SearchHit> hits = index.Search(query, window, searchMode);
+                if (hits.Count == 0)
+                    return (0, 0);
+                IReadOnlyDictionary<int, IndexedSymbol> symbolsByDocId = index.ResolveMany(
+                    hits.Select(static hit => hit.Document.DocId).ToArray());
                 foreach (SearchHit hit in hits)
-                    AddIfVisible(index.Resolve(hit.Document.DocId), hit.Score);
+                {
+                    IndexedSymbol symbol = symbolsByDocId.TryGetValue(hit.Document.DocId, out IndexedSymbol? hydrated)
+                        ? hydrated
+                        : index.Resolve(hit.Document.DocId);
+                    AddIfVisible(symbol, hit.Score);
+                }
                 return (hits.Count, kept.Count);
             });
         }

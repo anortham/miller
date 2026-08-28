@@ -69,5 +69,11 @@ public sealed class LaggingSidecarSymbolLookupTests
         IndexedSymbol resolved = lookup.Resolve(expected[250].DocId);
         Assert.Equal(expected[250].DocId, resolved.DocId);
         Assert.Equal("NeedleLive", resolved.Name);
+
+        IReadOnlyDictionary<int, IndexedSymbol> resolvedMany = lookup.ResolveMany(
+            expected.Select(static row => row.DocId).ToArray());
+        Assert.Equal(expected.Select(static row => row.DocId), resolvedMany.Keys);
+        Assert.Equal(expected.Select(static row => row.DocId), resolvedMany.Values.Select(static row => row.DocId));
+        Assert.All(resolvedMany.Values, row => Assert.Equal("NeedleLive", row.Name));
     }
 }

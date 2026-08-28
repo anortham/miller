@@ -34,6 +34,9 @@ internal sealed class ContextSearchCacheLookupIndex(ISymbolLookupIndex inner) : 
 
     public IndexedSymbol Resolve(int docId) => inner.Resolve(docId);
 
+    public IReadOnlyDictionary<int, IndexedSymbol> ResolveMany(IReadOnlyCollection<int> docIds) =>
+        inner.ResolveMany(docIds);
+
     public IReadOnlyList<IndexedSymbol> FindByName(string name) => inner.FindByName(name);
 
     public IndexedSymbol? FindBySymbolId(string symbolId) => inner.FindBySymbolId(symbolId);

@@ -830,6 +830,23 @@ internal sealed class MeasuredSymbolLookupIndex(
 
     public IndexedSymbol Resolve(int docId) => Measure(SymbolLookupMethodFamily.ResolveDoc, () => inner.Resolve(docId));
 
+    public IReadOnlyDictionary<int, IndexedSymbol> ResolveMany(IReadOnlyCollection<int> docIds)
+    {
+        ArgumentNullException.ThrowIfNull(docIds);
+        long startedAt = Stopwatch.GetTimestamp();
+        long callCount = docIds.Count;
+        try
+        {
+            return inner.ResolveMany(docIds);
+        }
+        finally
+        {
+            int family = (int)SymbolLookupMethodFamily.ResolveDoc;
+            Interlocked.Add(ref _callCounts[family], callCount);
+            Interlocked.Add(ref _elapsedTicks[family], Stopwatch.GetTimestamp() - startedAt);
+        }
+    }
+
     public IReadOnlyList<IndexedSymbol> FindByName(string name) =>
         Measure(SymbolLookupMethodFamily.FindByName, () => inner.FindByName(name));
 

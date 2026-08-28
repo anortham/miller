@@ -1256,6 +1256,27 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Run_HydratesEachFetchWindowWithOneBatch()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-alpha", "Alpha", "method", "src/Alpha.cs", 7), 1.25));
+
+        string output = SearchTool.Run(
+            index,
+            "Alpha",
+            SearchToolMode.Symbol,
+            limit: 1,
+            excludeTests: false,
+            json: false,
+            out int count);
+
+        Assert.Equal(1, index.ResolveManyCalls);
+        Assert.Equal(0, index.ResolveCalls);
+        Assert.Equal(1, count);
+        Assert.Contains("Alpha", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Run_SymbolJson_RendersRawAndRankScores()
     {
         var index = new StubSymbolSearchIndex(
@@ -3854,6 +3875,8 @@ public sealed class SearchToolTests
     private sealed class StubSymbolSearchIndex : ISymbolLookupIndex
     {
         private readonly SearchHit[] _hits;
+        public int ResolveCalls { get; private set; }
+        public int ResolveManyCalls { get; private set; }
         private readonly Dictionary<int, IndexedSymbol> _symbols;
         private readonly Dictionary<string, List<IndexedSymbol>> _byName;
         private readonly Dictionary<string, List<IndexedSymbol>> _byFilePath;
@@ -3933,7 +3956,17 @@ public sealed class SearchToolTests
         public string? ResolveIndexedFilePath(string target) =>
             IsIndexedFilePath(target) ? target : null;
 
-        public IndexedSymbol Resolve(int docId) => _symbols[docId];
+        public IndexedSymbol Resolve(int docId)
+        {
+            ResolveCalls++;
+            return _symbols[docId];
+        }
+
+        public IReadOnlyDictionary<int, IndexedSymbol> ResolveMany(IReadOnlyCollection<int> docIds)
+        {
+            ResolveManyCalls++;
+            return docIds.Distinct().ToDictionary(docId => docId, docId => _symbols[docId]);
+        }
     }
 
     private sealed class StubRegionSearchIndex : IRegionSearchIndex

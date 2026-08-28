@@ -59,4 +59,15 @@ public sealed class SymbolSearchProjection : ISymbolLookupIndex
     public string? ResolveIndexedFilePath(string target) => _tables.ResolveIndexedFilePath(target);
 
     public IndexedSymbol Resolve(int docId) => _tables.Resolve(docId);
+
+    public IReadOnlyDictionary<int, IndexedSymbol> ResolveMany(IReadOnlyCollection<int> docIds)
+    {
+        ArgumentNullException.ThrowIfNull(docIds);
+
+        var resolved = new Dictionary<int, IndexedSymbol>(docIds.Count);
+        foreach (int docId in docIds)
+            if (!resolved.ContainsKey(docId))
+                resolved.Add(docId, _tables.Resolve(docId));
+        return resolved;
+    }
 }

@@ -93,6 +93,20 @@ internal sealed class LaggingSidecarSymbolLookup : ISymbolLookupIndex
         return LiveRow(row) ?? row;
     }
 
+    public IReadOnlyDictionary<int, IndexedSymbol> ResolveMany(IReadOnlyCollection<int> docIds)
+    {
+        IReadOnlyDictionary<int, IndexedSymbol> rows = _sidecar.ResolveMany(docIds);
+        if (rows.Count == 0)
+            return rows;
+
+        EnsureLiveFiles(rows.Values.Select(static row => row.FilePath));
+        var liveRows = new Dictionary<int, IndexedSymbol>(rows.Count);
+        foreach ((int docId, IndexedSymbol row) in rows)
+            if (LiveRow(row) is { } live)
+                liveRows[docId] = live;
+        return liveRows;
+    }
+
     public IReadOnlyList<IndexedSymbol> FindByName(string name) => LiveRows(_sidecar.FindByName(name));
 
     public IndexedSymbol? FindBySymbolId(string symbolId) =>
