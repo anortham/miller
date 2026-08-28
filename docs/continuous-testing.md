@@ -101,7 +101,13 @@ green.
 
 - .NET, Rust, and QML enumerate cases from the runner itself (xunit `-list`, vstest discovery,
   `cargo test --no-run` plus libtest, and CTest discovery).
-- vitest and jest match their own convention: a file whose stem ends in `.test` or `.spec`.
+- vitest and jest match their own documented defaults: a file whose stem ends in `.test` or
+  `.spec` (including `.mjs` / `.cjs` / `.mts` / `.cts` and component files such as `.spec.vue`).
+  Jest also takes every JS/TS file under `__tests__/`, which is jest's own default. A literal
+  `testMatch` (jest, including `package.json` `"jest"`) or `test.include` (`vitest.config` only)
+  array of strings replaces those defaults. Config is read, never executed — a spread or
+  variable falls back to the defaults. `vite.config` `include` is ignored because that is the
+  library source set.
 - `node --test` uses node's own documented default patterns, which also take every runnable file
   under a `test` directory: `**/*.test.{cjs,mjs,js}`, `**/*-test.{cjs,mjs,js}`,
   `**/*_test.{cjs,mjs,js}`, `**/test-*.{cjs,mjs,js}`, `**/test.{cjs,mjs,js}`,

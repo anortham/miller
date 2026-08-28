@@ -42,18 +42,20 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         if (!Directory.Exists(packageRoot))
             return Task.FromResult<IReadOnlyList<ProviderTestCase>>([]);
 
-        // node:test discovers by Node's OWN rules, which are nothing like jest's stem convention. The
-        // rule is resolved ONCE per discovery because it reads the manifest. See NodeTestFileDiscovery.
-        var nodeDiscovery = string.Equals(ResolvedFrameworkOrNull(workspace), "node-test", StringComparison.Ordinal)
+        // Framework-specific file rules, resolved ONCE: node:test reads the script paths, jest and
+        // vitest read their documented defaults (or a literal testMatch/include array). See
+        // NodeTestFileDiscovery and JsFrameworkTestFileDiscovery.
+        var framework = ResolvedFrameworkOrNull(workspace);
+        var discovery = string.Equals(framework, "node-test", StringComparison.Ordinal)
             ? NodeTestFileDiscovery.ForPackage(packageRoot)
-            : null;
+            : JsFrameworkTestFileDiscovery.ForFramework(framework, packageRoot);
 
         var cases = Directory
             .EnumerateFiles(packageRoot, "*", SearchOption.AllDirectories)
             .Select(path => RelativePathOrNull(packageRoot, path))
             .Where(relativePath => relativePath is not null)
             .Select(relativePath => relativePath!)
-            .Where(relativePath => IsDiscoverableTestFile(relativePath, nodeDiscovery))
+            .Where(relativePath => IsDiscoverableTestFile(relativePath, discovery))
             .Order(StringComparer.Ordinal)
             .Select(relativePath => new ProviderTestCase(
                 Id: TestCaseId(relativePath),
@@ -1255,27 +1257,18 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
     /// <summary>
     /// Whether one workspace-relative file is a test case of this project.
     ///
-    /// <para>jest and vitest match the <c>.test.</c>/<c>.spec.</c> stem their own conventions use. A
-    /// node:test project instead matches <paramref name="nodeDiscovery"/>, which is Node's documented rule
-    /// set — a repo whose suite lives in <c>tests/index.js</c> has no stem to match and discovered nothing
-    /// (dogfood finding F8, 2026-08-21). The generated-directory exclusions apply to both.</para>
+    /// <para>The generated-directory exclusions apply first. Everything else is
+    /// <paramref name="discovery"/>: node:test uses Node's documented patterns (dogfood finding F8);
+    /// jest and vitest use theirs, including jest's <c>__tests__/</c> default and a literal config
+    /// array when one is readable.</para>
     /// </summary>
-    private static bool IsDiscoverableTestFile(string relativePath, NodeTestFileDiscovery? nodeDiscovery)
+    private static bool IsDiscoverableTestFile(string relativePath, NodeTestFileDiscovery discovery)
     {
         var segments = relativePath.Split('/');
         if (segments.Any(IsExcludedSegment))
             return false;
 
-        if (nodeDiscovery is not null)
-            return nodeDiscovery.IsMatch(relativePath);
-
-        var extension = Path.GetExtension(relativePath).ToLowerInvariant();
-        if (extension is not (".js" or ".jsx" or ".ts" or ".tsx" or ".mjs" or ".cjs" or ".mts" or ".cts"))
-            return false;
-
-        var stem = Path.GetFileNameWithoutExtension(relativePath);
-        return stem.EndsWith(".test", StringComparison.OrdinalIgnoreCase)
-            || stem.EndsWith(".spec", StringComparison.OrdinalIgnoreCase);
+        return discovery.IsMatch(relativePath);
     }
 
     private static bool IsExcludedSegment(string segment) =>

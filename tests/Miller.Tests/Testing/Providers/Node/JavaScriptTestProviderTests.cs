@@ -987,8 +987,9 @@ public sealed class JavaScriptTestProviderTests : IDisposable
     }
 
     /// <summary>
-    /// jest and vitest keep the stem convention they actually use. Node's directory rule must not leak
-    /// into them: a jest project's <c>tests/index.js</c> helper is not a jest test file.
+    /// jest's extra default is <c>__tests__/</c>, not a bare <c>tests/</c> or <c>test/</c> directory.
+    /// Node's directory rule must not leak: a jest project's <c>tests/index.js</c> helper is not a
+    /// jest test file.
     /// </summary>
     [Fact]
     public async Task Discover_keeps_test_and_spec_naming_for_jest_projects()

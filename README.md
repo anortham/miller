@@ -238,9 +238,10 @@ workspace enabled with zero projects.
 
 `miller tests enable` discovers projects from the files already in the repo: test-signal `.csproj`
 files, `Cargo.toml`, `package.json`, the usual Python config files, and `CMakeLists.txt` with Qt
-Quick Test evidence. JavaScript and Python cases are discovered by test-file naming — `*.test.*` or
-`*.spec.*` for JavaScript and TypeScript, `test_*.py` or `*_test.py` for Python — so a suite named
-some other way reports no cases rather than a false green.
+Quick Test evidence. JavaScript and Python cases are discovered by each runner's own naming —
+`*.test.*` / `*.spec.*` for vitest and jest (plus jest's `__tests__/` default and a literal
+`testMatch` / `include` array when the config is readable), `test_*.py` or `*_test.py` for Python —
+so a suite named some other way reports no cases rather than a false green.
 
 One known sharp edge: CT runs the built self-executing test assembly, which only xUnit v3 and
 Microsoft.Testing.Platform produce. An xUnit v2 project builds no such executable and fails
