@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -192,82 +191,6 @@ internal static class MtpDotnetTestBackend
             artifactPath);
     }
 
-    internal static ProviderRunResult ParseMachineResult(
-        string output,
-        string framework,
-        string selectedRevision,
-        string indexIdentity,
-        IReadOnlyList<string> selectedTestCaseIds,
-        bool truncated = false)
-    {
-        ArgumentNullException.ThrowIfNull(output);
-        if (truncated)
-            throw new ContinuousTestProviderException("MTP machine result output was truncated.");
-        ArgumentException.ThrowIfNullOrWhiteSpace(framework);
-        ArgumentNullException.ThrowIfNull(selectedTestCaseIds);
-
-        var rows = new List<(string Fqn, string DisplayName, string Status, double? Duration)>();
-        foreach (string line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            try
-            {
-                using JsonDocument document = JsonDocument.Parse(line);
-                JsonElement root = document.RootElement;
-                if (root.ValueKind != JsonValueKind.Object)
-                    throw new ContinuousTestProviderException("MTP machine result row was not an object.");
-                string? eventName = OptionalString(root, "event");
-                if (eventName is not ("test_case" or "case_result"))
-                    continue;
-                string fqn = RequiredString(root, "fully_qualified_name", "test_case_id");
-                string display = OptionalString(root, "display_name") ?? fqn;
-                string status = RequiredString(root, "status");
-                double? duration = OptionalDouble(root, "duration_seconds");
-                rows.Add((fqn, display, status.ToLowerInvariant(), duration));
-            }
-            catch (JsonException exception)
-            {
-                throw new ContinuousTestProviderException(
-                    "Malformed MTP machine result output: " + exception.Message,
-                    exception);
-            }
-        }
-
-        var results = new List<ProviderCaseResult>();
-        var reported = new HashSet<string>(StringComparer.Ordinal);
-        foreach ((string fqn, string display, string status, double? duration) in rows)
-        {
-            string? id = ResolveSelectedCase(framework, fqn, display, selectedTestCaseIds);
-            if (selectedTestCaseIds.Count > 0 && id is null)
-                continue;
-            id ??= BuildCaseId(framework, fqn, display);
-            if (!reported.Add(id))
-                continue;
-            results.Add(new ProviderCaseResult(
-                ResultId("machine", id),
-                id,
-                status is "passed" or "failed" or "skipped" or "errored" ? status : "errored",
-                selectedRevision,
-                indexIdentity,
-                duration));
-        }
-
-        string[] missing = selectedTestCaseIds
-            .Where(id => !reported.Contains(id))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        if (missing.Length > 0)
-            throw new ContinuousTestProviderException(
-                "MTP machine result output was incomplete; no result was reported for selected test case(s): "
-                + string.Join(", ", missing));
-        if (results.Count == 0)
-            throw new ContinuousTestProviderException("MTP machine result output contained no test cases.");
-
-        return new ProviderRunResult(
-            "mtp:machine",
-            AggregateStatus(results.Select(result => result.Status)),
-            CaseResults: results);
-    }
-
     private static string? BuildFilter(string framework, IReadOnlyList<string> selectedTestCaseIds)
     {
         if (!framework.Equals("mstest", StringComparison.OrdinalIgnoreCase)
@@ -389,32 +312,6 @@ internal static class MtpDotnetTestBackend
     private static string ResultId(string artifactPath, string testCaseId) =>
         "mtp:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(artifactPath + "\u0000" + testCaseId)))
             .ToLowerInvariant();
-
-    private static string RequiredString(JsonElement element, params string[] names)
-    {
-        foreach (string name in names)
-        {
-            if (element.TryGetProperty(name, out JsonElement value)
-                && value.ValueKind == JsonValueKind.String
-                && !string.IsNullOrWhiteSpace(value.GetString()))
-                return value.GetString()!;
-        }
-
-        throw new ContinuousTestProviderException(
-            "MTP machine result row was incomplete; test identity was missing.");
-    }
-
-    private static string? OptionalString(JsonElement element, string name) =>
-        element.TryGetProperty(name, out JsonElement value)
-            && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
-
-    private static double? OptionalDouble(JsonElement element, string name) =>
-        element.TryGetProperty(name, out JsonElement value)
-            && value.TryGetDouble(out double parsed)
-            ? parsed
-            : null;
 
     private static string AggregateStatus(IEnumerable<string> statuses) =>
         statuses.Any(status => status is "failed" or "errored")

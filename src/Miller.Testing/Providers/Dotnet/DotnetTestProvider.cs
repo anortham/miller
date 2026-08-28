@@ -155,7 +155,11 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         bool decisive = !string.IsNullOrWhiteSpace(evidence.GlobalJsonTestRunner)
             || (framework.Equals("xunit", StringComparison.OrdinalIgnoreCase)
                 && evidence.Backend == DotnetTestBackendKind.XunitV3);
-        if (projectExists && (!decisive || globalMtp))
+        bool globalVSTest = string.Equals(
+            evidence.GlobalJsonTestRunner?.Trim(),
+            "VSTest",
+            StringComparison.OrdinalIgnoreCase);
+        if (projectExists && (!decisive || globalMtp || globalVSTest))
         {
             TestProcessCommand probe = DotnetTestBackend.BuildPropertyProbeCommand(workspace, _dotnetPath);
             TestProcessResult result = await _runner.RunAsync(probe, cancellationToken).ConfigureAwait(false);

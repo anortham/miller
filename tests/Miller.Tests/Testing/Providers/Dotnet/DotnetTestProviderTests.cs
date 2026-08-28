@@ -168,7 +168,26 @@ public sealed class DotnetTestProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task Discover_global_vstest_evidence_skips_backend_property_probe()
+    public async Task Discover_global_vstest_with_evaluated_mtp_evidence_refuses_conflicting_runner_selection()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace("mstest");
+        WriteProviderProject(workspace, "Microsoft.NET.Sdk", "MSTest.TestAdapter", "MSTest.TestFramework");
+        WriteGlobalJson(workspace, "VSTest");
+        runner.Enqueue(PropertyProbeOutput(useMicrosoftTestingPlatformRunner: "true"));
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() => provider.DiscoverAsync(
+            workspace,
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("conflicting", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(runner.Calls);
+        Assert.Equal("msbuild", runner.Calls[0].Arguments[0]);
+    }
+
+    [Fact]
+    public async Task Discover_global_vstest_evidence_probes_backend_properties()
     {
         var runner = new FakeTestProcessRunner();
         var workspace = Workspace("mstest");
@@ -176,6 +195,7 @@ public sealed class DotnetTestProviderTests : IDisposable
         WriteGlobalJson(workspace, "VSTest");
         var generation = FirstGeneration(workspace);
         var targetPath = Path.Combine(generation.OutDir, "Sample.Tests", "Custom.Assembly.dll");
+        runner.Enqueue(PropertyProbeOutput());
         runner.Enqueue();
         runner.Enqueue(targetPath);
         runner.Enqueue(
@@ -191,9 +211,9 @@ public sealed class DotnetTestProviderTests : IDisposable
             TestContext.Current.CancellationToken));
 
         Assert.Equal("VSTest", testCase.Metadata[DotnetTestBackend.MetadataBackend]);
-        Assert.Equal("static", testCase.Metadata[DotnetTestBackend.MetadataEvidenceState]);
-        Assert.Equal(3, runner.Calls.Count);
-        Assert.DoesNotContain(
+        Assert.Equal("evaluated", testCase.Metadata[DotnetTestBackend.MetadataEvidenceState]);
+        Assert.Equal(4, runner.Calls.Count);
+        Assert.Contains(
             runner.Calls,
             call => call.Arguments.Contains("-getProperty:" + string.Join(',', DotnetTestBackend.PropertyNames)));
     }
