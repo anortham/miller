@@ -1111,6 +1111,95 @@ public sealed class WorkspaceToolTests : IDisposable
     // ---- health ----
 
     [Fact]
+    public void Health_UsesSevenDayTelemetryWindowForCurrentAndSelectedWorkspaces()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        harness.Ledger.InsertRawForTest(Guid.NewGuid().ToString(), now.AddDays(-20).UtcDateTime, "aged-current", "error");
+        harness.Ledger.InsertRawForTest(Guid.NewGuid().ToString(), now.UtcDateTime, "current-search", "ok");
+        harness.Ledger.Record(new TelemetryRecord(
+            Tool: "aged-selected",
+            Op: null,
+            WorkspaceId: OtherWs,
+            WorkspaceRoot: otherRoot,
+            DurationMs: 0,
+            Outcome: "error",
+            ErrorKind: "InvalidOperationException",
+            ResultCount: 0,
+            BytesExamined: 0,
+            BytesReturned: 0,
+            SourceBytes: 0,
+            EstTokens: 0,
+            IndexFresh: true,
+            TargetHash: null,
+            MetadataJson: "{}",
+            StartedAtUtc: now.AddDays(-20)));
+        harness.Ledger.Record(new TelemetryRecord(
+            Tool: "selected-search",
+            Op: null,
+            WorkspaceId: OtherWs,
+            WorkspaceRoot: otherRoot,
+            DurationMs: 0,
+            Outcome: "ok",
+            ErrorKind: null,
+            ResultCount: 1,
+            BytesExamined: 0,
+            BytesReturned: 0,
+            SourceBytes: 0,
+            EstTokens: 0,
+            IndexFresh: true,
+            TargetHash: null,
+            MetadataJson: "{}",
+            StartedAtUtc: now));
+
+        using var currentStatus = JsonDocument.Parse(harness.Tool.Workspace(operation: "status", format: "json"));
+        JsonElement currentSummary = currentStatus.RootElement.GetProperty("telemetry");
+        Assert.Equal(7, currentSummary.GetProperty("window_days").GetInt32());
+        Assert.Equal(1, currentSummary.GetProperty("total_calls").GetInt64());
+
+        using var currentHealth = JsonDocument.Parse(harness.Tool.Workspace(operation: "health", format: "json"));
+        JsonElement currentTelemetry = currentHealth.RootElement.GetProperty("telemetry");
+        Assert.Equal(1, currentTelemetry.GetProperty("total_calls").GetInt64());
+        Assert.Equal(0, currentTelemetry.GetProperty("error_count").GetInt64());
+        Assert.DoesNotContain(
+            currentHealth.RootElement.GetProperty("warnings").EnumerateArray(),
+            warning => warning.GetProperty("code").GetString() == "telemetry_errors");
+        Assert.Contains(
+            "telemetry: 1 calls  errors=0  empty=0",
+            harness.Tool.Workspace(operation: "health"),
+            StringComparison.Ordinal);
+
+        using var selectedStatus = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "status",
+            workspace_id: OtherWs,
+            format: "json"));
+        JsonElement selectedSummary = selectedStatus.RootElement.GetProperty("telemetry");
+        Assert.Equal(7, selectedSummary.GetProperty("window_days").GetInt32());
+        Assert.Equal(1, selectedSummary.GetProperty("total_calls").GetInt64());
+
+        using var selectedHealth = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "health",
+            workspace_id: OtherWs,
+            format: "json"));
+        JsonElement selectedTelemetry = selectedHealth.RootElement.GetProperty("telemetry");
+        Assert.Equal(1, selectedTelemetry.GetProperty("total_calls").GetInt64());
+        Assert.Equal(0, selectedTelemetry.GetProperty("error_count").GetInt64());
+        Assert.DoesNotContain(
+            selectedHealth.RootElement.GetProperty("warnings").EnumerateArray(),
+            warning => warning.GetProperty("code").GetString() == "telemetry_errors");
+        Assert.Contains(
+            "telemetry: 1 calls  errors=0  empty=0",
+            harness.Tool.Workspace(operation: "health", workspace_id: OtherWs),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Health_CurrentWorkspace_RendersStatusSidecarsExtractionWarningsAndTelemetry()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);

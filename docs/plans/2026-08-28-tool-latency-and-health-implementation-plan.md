@@ -163,12 +163,12 @@ Batch A uses `parallel-lead-commit`. After Task 1 is reviewed and committed, Tas
 **Approach:** Extend the raw telemetry test helper to accept an outcome. Test a 20-day-old error plus current rows, and assert adjacent health summary/outcome counts agree and old-only errors produce no warning.
 
 **Acceptance criteria:**
-- [ ] Red tests reproduce 1,499-style retained counts appearing as recent health errors.
-- [ ] Current and selected workspace health use the same seven-day boundary for summary and outcomes.
-- [ ] Lifetime outcome APIs and their existing tests remain unchanged.
-- [ ] Compact and JSON health omit telemetry warnings when only old errors remain.
-- [ ] Focused telemetry and workspace-tool tests pass; `Miller.Server` and `Miller.Tests` build cleanly.
-- [ ] Worker hands the verified diff to the lead without committing.
+- [x] Red tests reproduce 1,499-style retained counts appearing as recent health errors.
+- [x] Current and selected workspace health use the same seven-day boundary for summary and outcomes.
+- [x] Lifetime outcome APIs and their existing tests remain unchanged.
+- [x] Compact and JSON health omit telemetry warnings when only old errors remain.
+- [x] Focused telemetry and workspace-tool tests pass; `Miller.Server` and `Miller.Tests` build cleanly.
+- [x] Worker hands the verified diff to the lead without committing.
 
 ### Task 4: Wrapper-safe context batching
 

@@ -382,9 +382,19 @@ public sealed class TelemetryLedger : IDisposable
         return Summarize(workspaceId, windowDays);
     }
 
-    public TelemetryHealthFacts SummarizeOutcomes() => SummarizeOutcomes(WorkspaceId);
+    public TelemetryHealthFacts SummarizeOutcomes() => SummarizeOutcomes(WorkspaceId, windowDays: null);
 
-    public TelemetryHealthFacts SummarizeOutcomesForWorkspace(string? workspaceId) => SummarizeOutcomes(workspaceId);
+    public TelemetryHealthFacts SummarizeOutcomes(int windowDays) =>
+        SummarizeOutcomesForWorkspace(WorkspaceId, windowDays);
+
+    public TelemetryHealthFacts SummarizeOutcomesForWorkspace(string? workspaceId) =>
+        SummarizeOutcomes(workspaceId, windowDays: null);
+
+    public TelemetryHealthFacts SummarizeOutcomesForWorkspace(string? workspaceId, int windowDays)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(windowDays);
+        return SummarizeOutcomes(workspaceId, windowDays);
+    }
 
     private TelemetrySummary Summarize(string? workspaceId, int? windowDays)
     {
@@ -481,12 +491,17 @@ public sealed class TelemetryLedger : IDisposable
         }
     }
 
-    private TelemetryHealthFacts SummarizeOutcomes(string? workspaceId)
+    private TelemetryHealthFacts SummarizeOutcomes(string? workspaceId, int? windowDays)
     {
         lock (_gate)
         {
             if (_disposed)
                 return new TelemetryHealthFacts(0, 0, 0);
+
+            object cutoff = windowDays is { } days
+                ? _clock.GetUtcNow().UtcDateTime.AddDays(-days)
+                    .ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture)
+                : DBNull.Value;
 
             long ok = 0;
             long empty = 0;
@@ -495,10 +510,11 @@ public sealed class TelemetryLedger : IDisposable
             command.CommandText = """
                 SELECT outcome, COUNT(*) AS calls
                 FROM tool_telemetry
-                WHERE workspace_id IS $ws
+                WHERE workspace_id IS $ws AND ($cutoff IS NULL OR ts >= $cutoff)
                 GROUP BY outcome;
                 """;
             command.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+            command.Parameters.AddWithValue("$cutoff", cutoff);
             using SqliteDataReader reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -549,19 +565,20 @@ public sealed class TelemetryLedger : IDisposable
     /// <see cref="TelemetryScope"/> write path does), so the row is visible to the workspace-scoped
     /// <see cref="Summarize"/>. Not part of the production write path.
     /// </summary>
-    internal void InsertRawForTest(string id, DateTime tsUtc, string tool)
+    internal void InsertRawForTest(string id, DateTime tsUtc, string tool, string outcome = "ok")
     {
         lock (_gate)
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText =
                 "INSERT INTO tool_telemetry (id, ts, tool, workspace_id, duration_ms, outcome) " +
-                "VALUES ($id, $ts, $tool, $ws, 0, 'ok');";
+                "VALUES ($id, $ts, $tool, $ws, 0, $outcome);";
             cmd.Parameters.AddWithValue("$id", id);
             cmd.Parameters.AddWithValue("$ts",
                 tsUtc.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture));
             cmd.Parameters.AddWithValue("$tool", tool);
             cmd.Parameters.AddWithValue("$ws", (object?)WorkspaceId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$outcome", outcome);
             cmd.ExecuteNonQuery();
         }
     }

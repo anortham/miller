@@ -258,6 +258,22 @@ public sealed class TelemetrySummaryTests : IDisposable
     }
 
     [Fact]
+    public void SummarizeOutcomesForWorkspace_WithWindow_ExcludesRowsOlderThanTheWindow()
+    {
+        var clock = new FixedClock(new DateTimeOffset(2026, 8, 21, 12, 0, 0, TimeSpan.Zero));
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1", clock: clock);
+        InsertRow("search", 9000, "error", 10, "2026-08-01T00:00:00.000Z");
+        InsertRow("search", 100, "ok", 20, "2026-08-20T00:00:00.000Z");
+
+        TelemetryHealthFacts facts = ledger.SummarizeOutcomesForWorkspace("ws1", 7);
+
+        Assert.Equal(1, facts.OkCount);
+        Assert.Equal(0, facts.EmptyCount);
+        Assert.Equal(0, facts.ErrorCount);
+        Assert.Equal(1, facts.TotalCalls);
+    }
+
+    [Fact]
     public void SummarizeOutcomesForWorkspace_GroupsOkEmptyAndError()
     {
         using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");

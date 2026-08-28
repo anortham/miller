@@ -462,8 +462,8 @@ public sealed class WorkspaceTool
     {
         return WorkspaceHealthFacts.Create(
             AssembleFacts(),
-            _ledger.Summarize(),
-            _ledger.SummarizeOutcomes(),
+            _ledger.SummarizeRecent(TelemetryHighlights.RecentWindowDays),
+            _ledger.SummarizeOutcomes(TelemetryHighlights.RecentWindowDays),
             ReadExtractionHealth(
                 _workspace.ExtractDbPath,
                 _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot,
@@ -671,8 +671,8 @@ public sealed class WorkspaceTool
 
         WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
             statusFacts,
-            _ledger.SummarizeForWorkspace(row.WorkspaceId),
-            _ledger.SummarizeOutcomesForWorkspace(row.WorkspaceId),
+            _ledger.SummarizeRecentForWorkspace(row.WorkspaceId, TelemetryHighlights.RecentWindowDays),
+            _ledger.SummarizeOutcomesForWorkspace(row.WorkspaceId, TelemetryHighlights.RecentWindowDays),
             extraction,
             ReadLeaderFacts(row.IndexDbPath, ownWorkspace: false),
             ReadHistoryStatus(row.IndexDbPath));
