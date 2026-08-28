@@ -1469,6 +1469,20 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
         Assert.Equal(Path.Combine(_root, "go.work"), first.Metadata["go_work"]);
     }
 
+    [Fact]
+    public void Discover_associates_a_go_work_member_with_a_quoted_path_containing_spaces()
+    {
+        WriteProject("go.mod", "module example.com/root\ngo 1.24\n");
+        WriteProject("module space/go.mod", "module example.com/space\ngo 1.24\n");
+        WriteProject("go.work", "go 1.24\n\nuse \"./module space\"\n");
+
+        IReadOnlyList<ContinuousTestProject> projects = ContinuousTestProjectInventory.Discover(_root, "ws:go");
+
+        ContinuousTestProject member = Assert.Single(projects, project => project.Framework == "go"
+            && project.ProjectPath == Path.Combine(_root, "module space", "go.mod"));
+        Assert.Equal(Path.Combine(_root, "go.work"), member.Metadata["go_work"]);
+    }
+
     private static bool IsInside(string root, string path)
     {
         string relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(path));

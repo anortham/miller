@@ -10,15 +10,20 @@ public sealed class GoTestListParserTests
     {
         GoTestListResult result = GoTestListParser.Parse("""
             TestAdd
-            TestEscaped_Name
+            Test
+            Test1
+            Test_Name
+            TestÄ
+            TestΩ
             TestAdd/subtest
+            Testa
             ExampleAdd
             BenchmarkAdd
             FuzzAdd
             ok example.com/math 0.001s
             """);
 
-        Assert.Equal(["TestAdd", "TestEscaped_Name"], result.Names);
+        Assert.Equal(["TestAdd", "Test", "Test1", "Test_Name", "TestÄ", "TestΩ"], result.Names);
         Assert.False(result.HasMalformedLines);
     }
 

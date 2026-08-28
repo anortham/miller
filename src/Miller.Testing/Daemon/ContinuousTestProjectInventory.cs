@@ -1598,17 +1598,47 @@ public static class ContinuousTestProjectInventory
 
     private static bool GoWorkspacePathMatches(string usePath, string workRoot, string moduleDirectory)
     {
-        if (usePath.Length == 0 || usePath.Contains('"', StringComparison.Ordinal))
+        if (!TryUnquoteGoWorkspacePath(usePath, out string path))
             return false;
         try
         {
-            string candidate = Path.GetFullPath(Path.Combine(workRoot, usePath));
+            string candidate = Path.GetFullPath(Path.Combine(workRoot, path));
             return PathComparer.Equals(candidate, Path.GetFullPath(moduleDirectory));
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or NotSupportedException)
         {
             return false;
         }
+    }
+
+    private static bool TryUnquoteGoWorkspacePath(string value, out string path)
+    {
+        path = string.Empty;
+        if (value.Length == 0)
+            return false;
+
+        bool quoted = value[0] == '"' || value[^1] == '"';
+        if (!quoted)
+        {
+            if (value.Contains('"', StringComparison.Ordinal))
+                return false;
+            path = value;
+            return true;
+        }
+
+        if (value.Length < 2 || value[0] != '"' || value[^1] != '"')
+            return false;
+
+        string inner = value[1..^1];
+        if (inner.Length == 0
+            || inner.Contains('"', StringComparison.Ordinal)
+            || inner.Contains('\\', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        path = inner;
+        return true;
     }
 
     /// <summary>

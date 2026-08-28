@@ -48,6 +48,18 @@ public sealed class GoTestToolingTests : IDisposable
         Assert.Equal("off", command.Environment["GOWORK"]);
     }
 
+    [Fact]
+    public void Test_list_command_uses_the_real_go_prefix_rule()
+    {
+        var workspace = Workspace(goWork: null);
+        CtGenerationPaths paths = CtGenerationPaths.For(workspace, "g0123456789ab");
+
+        TestProcessCommand command = GoTestTooling.BuildTestListCommand(workspace, paths, "example.com/math");
+
+        Assert.Contains("^Test", command.Arguments);
+        Assert.DoesNotContain("^Test[A-Z]", command.Arguments);
+    }
+
     [Theory]
     [InlineData("go1.24.0", true)]
     [InlineData("go1.25.2", true)]

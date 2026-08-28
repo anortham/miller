@@ -717,6 +717,115 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     [Fact]
+    public void Select_maps_unique_go_impacted_test_by_package_directory_and_name()
+    {
+        using ContinuousTestStore store = OpenStore();
+        const string projectPath = "/repo/go.mod";
+        SeedGoProviderCase(store, "tc:go", "TestAdd", "/repo/pkg", projectPath);
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:changed", "Changed", "src/compute.go", language: "go"));
+        AddCurrentFileFacts(facts, "src/compute.go");
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ProjectPath: projectPath,
+            ChangedPaths: ["src/compute.go"],
+            ImpactedTests:
+            [
+                new ContinuousTestImpactedTest(
+                    SymbolId: "sym:go-test",
+                    Path: "pkg/math_test.go",
+                    Name: "TestAdd",
+                    TestCase: true,
+                    EvidenceStatus: "current"),
+            ]));
+
+        Assert.Equal(["tc:go"], result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+        Assert.Equal("impacted_test", Assert.Single(result.Evidence).Tier);
+    }
+
+    [Fact]
+    public void Select_fails_closed_when_go_impacted_test_mapping_is_ambiguous()
+    {
+        using ContinuousTestStore store = OpenStore();
+        const string projectPath = "/repo/go.mod";
+        SeedGoProviderCase(store, "tc:go-a", "TestAdd", "/repo/pkg", projectPath);
+        SeedGoProviderCase(store, "tc:go-b", "TestAdd", "/repo/pkg", projectPath);
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:changed", "Changed", "src/compute.go", language: "go"));
+        AddCurrentFileFacts(facts, "src/compute.go");
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ProjectPath: projectPath,
+            ChangedPaths: ["src/compute.go"],
+            ImpactedTests:
+            [
+                new ContinuousTestImpactedTest(
+                    SymbolId: "sym:go-test",
+                    Path: "pkg/math_test.go",
+                    Name: "TestAdd",
+                    TestCase: true,
+                    EvidenceStatus: "current"),
+            ]));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(["tc:go-a", "tc:go-b"], result.StaleTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.False(result.MayExecute);
+    }
+
+    [Fact]
+    public void Select_fails_closed_when_go_impacted_test_lacks_package_directory_evidence()
+    {
+        using ContinuousTestStore store = OpenStore();
+        const string projectPath = "/repo/go.mod";
+        store.PutTestCase(new ContinuousTestCase(
+            Id: "tc:go",
+            WorkspaceId: Workspace,
+            Name: "TestAdd",
+            QualifiedName: "example.com/math/TestAdd",
+            Selector: "TestAdd",
+            FilePath: null,
+            Framework: "go",
+            Role: ContinuousTestRole.TestCase,
+            Source: "ct-provider:go",
+            Confidence: 1.0,
+            Metadata: new Dictionary<string, object?>
+            {
+                ["ct_project_path"] = projectPath,
+            }));
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:changed", "Changed", "src/compute.go", language: "go"));
+        AddCurrentFileFacts(facts, "src/compute.go");
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ProjectPath: projectPath,
+            ChangedPaths: ["src/compute.go"],
+            ImpactedTests:
+            [
+                new ContinuousTestImpactedTest(
+                    SymbolId: "sym:go-test",
+                    Path: "pkg/math_test.go",
+                    Name: "TestAdd",
+                    TestCase: true,
+                    EvidenceStatus: "current"),
+            ]));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.False(result.MayExecute);
+    }
+
+    [Fact]
     public void Select_reconciles_unique_fileless_nunit_case_by_impacted_csharp_test_name()
     {
         using ContinuousTestStore store = OpenStore();
@@ -2236,6 +2345,32 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             Source: "ct-provider:dotnet",
             Confidence: 1.0,
             Metadata: metadata));
+    }
+
+    private static void SeedGoProviderCase(
+        ContinuousTestStore store,
+        string testCaseId,
+        string name,
+        string packageDirectory,
+        string projectPath)
+    {
+        store.PutTestCase(new ContinuousTestCase(
+            Id: testCaseId,
+            WorkspaceId: Workspace,
+            Name: name,
+            QualifiedName: "example.com/math/" + name,
+            Selector: name,
+            FilePath: packageDirectory,
+            Framework: "go",
+            Role: ContinuousTestRole.TestCase,
+            Source: "ct-provider:go",
+            Confidence: 1.0,
+            Metadata: new Dictionary<string, object?>
+            {
+                ["ct_project_path"] = projectPath,
+                ["source_path"] = packageDirectory,
+                ["package_dir"] = packageDirectory,
+            }));
     }
 
     private static void SeedLinkedCase(

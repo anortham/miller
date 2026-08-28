@@ -67,7 +67,7 @@ internal static partial class GoTestTooling
         ArgumentException.ThrowIfNullOrWhiteSpace(importPath);
         return new(
             "go",
-            ["test", "-list", "^Test[A-Z]", "-count=1", importPath],
+            ["test", "-list", "^Test", "-count=1", importPath],
             ProjectRoot(workspace),
             Environment(workspace, paths, ambientGoFlags));
     }

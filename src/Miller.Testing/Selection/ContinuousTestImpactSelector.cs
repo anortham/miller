@@ -887,6 +887,51 @@ public sealed class ContinuousTestImpactSelector
         return unmappable;
     }
 
+    private static TestCaseFact[] ResolveGoCases(
+        string normalizedMillerPath,
+        ContinuousTestImpactedTest impactedTest,
+        IReadOnlyList<TestCaseFact> allTestCases)
+    {
+        TestCaseFact[] matches = allTestCases
+            .Where(testCase => string.Equals(testCase.Framework, "go", StringComparison.OrdinalIgnoreCase)
+                && TestNameMatches(impactedTest.Name, testCase)
+                && GoPackageContainsFile(testCase, normalizedMillerPath))
+            .ToArray();
+        return matches.Length == 1 ? matches : [];
+    }
+
+    private static bool GoPackageContainsFile(TestCaseFact testCase, string impactedPath)
+    {
+        if (string.IsNullOrWhiteSpace(testCase.PackageDirectory)
+            || string.IsNullOrWhiteSpace(testCase.ProjectPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            string projectRoot = Path.GetDirectoryName(Path.GetFullPath(testCase.ProjectPath))!;
+            string packageDirectory = Path.GetFullPath(Path.IsPathRooted(testCase.PackageDirectory)
+                ? testCase.PackageDirectory
+                : Path.Combine(projectRoot, testCase.PackageDirectory));
+            string filePath = Path.GetFullPath(Path.IsPathRooted(impactedPath)
+                ? impactedPath
+                : Path.Combine(projectRoot, impactedPath));
+            if (!filePath.EndsWith(".go", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            string relative = NormalizePath(Path.GetRelativePath(packageDirectory, filePath));
+            return relative != "."
+                && !relative.Equals("..", PathComparison)
+                && !relative.StartsWith("../", PathComparison)
+                && !Path.IsPathRooted(relative);
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
     private static TestCaseFact[] ResolveImpactedTestsWhenSourcePathDiffers(
         string normalizedMillerPath,
         ContinuousTestImpactedTest impactedTest,
@@ -894,6 +939,9 @@ public sealed class ContinuousTestImpactSelector
     {
         if (normalizedMillerPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
             return ResolveFilelessDotnetCases(normalizedMillerPath, impactedTest, allTestCases);
+
+        if (normalizedMillerPath.EndsWith(".go", StringComparison.OrdinalIgnoreCase))
+            return ResolveGoCases(normalizedMillerPath, impactedTest, allTestCases);
 
         if (!normalizedMillerPath.EndsWith(".rs", StringComparison.OrdinalIgnoreCase))
             return [];
@@ -1770,8 +1818,10 @@ public sealed class ContinuousTestImpactSelector
         string? QualifiedName,
         string? ClassName,
         string? Source,
+        string? Framework,
         string? SymbolName,
         string? SymbolPath,
+        string? PackageDirectory,
         bool HasTypedIdentity,
         bool IdentityAmbiguous,
         bool IdentityUnresolved)
@@ -1796,8 +1846,10 @@ public sealed class ContinuousTestImpactSelector
                 QualifiedName: row.QualifiedName,
                 ClassName: MetadataString(row.Metadata, "class"),
                 Source: row.Source,
+                Framework: row.Framework,
                 SymbolName: row.SymbolName,
                 SymbolPath: row.SymbolPath,
+                PackageDirectory: MetadataString(row.Metadata, "package_dir"),
                 HasTypedIdentity: !string.IsNullOrWhiteSpace(row.SymbolName)
                     && !string.IsNullOrWhiteSpace(row.SymbolPath),
                 IdentityAmbiguous: false,

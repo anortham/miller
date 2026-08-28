@@ -33,7 +33,7 @@ public sealed class GoTestProviderScaleTests : IDisposable
         var provider = new GoTestProvider(new TestProcessRunner());
 
         IReadOnlyList<ProviderTestCase> discovered = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
-        ProviderTestCase selected = discovered.Single(test => test.Metadata["test_name"] as string == "TestAdd");
+        ProviderTestCase selected = discovered.Single(test => test.Metadata["test_name"] as string == "Test1");
         ProviderRunResult run = await provider.RunAsync(
             new ContinuousTestProviderRunRequest(
                 workspace,
@@ -43,7 +43,7 @@ public sealed class GoTestProviderScaleTests : IDisposable
                 TestCaseIds: [selected.Id]),
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(2, discovered.Count);
+        Assert.Equal(3, discovered.Count);
         Assert.Equal("passed", run.Status);
         Assert.Equal("passed", Assert.Single(run.CaseResults).Status);
         Assert.Equal(selected.Id, run.CaseResults[0].TestCaseId);
