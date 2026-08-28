@@ -52,12 +52,13 @@ public sealed class MtpDotnetTestBackendTests
     [Fact]
     public void BuildRunCommand_keeps_whole_suite_unfiltered_and_trx_generation_scoped()
     {
+        const string resultArtifactPath = "/tmp/generation/results/run.trx";
         var command = MtpDotnetTestBackend.BuildRunCommand(
             "dotnet",
             "/tmp/generation/out/VbMtpScale/VbMtpScale.dll",
             "/tmp/repo",
             new MtpVersion(2, 3, 0),
-            "/tmp/generation/results/run.trx",
+            resultArtifactPath,
             "mstest",
             [],
             wholeSuite: true,
@@ -65,7 +66,7 @@ public sealed class MtpDotnetTestBackendTests
 
         Assert.DoesNotContain("--filter", command.Arguments);
         Assert.Contains("--report-trx", command.Arguments);
-        Assert.Contains("/tmp/generation/results", command.Arguments);
+        Assert.Contains(Path.GetDirectoryName(resultArtifactPath)!, command.Arguments);
     }
 
     [Fact]

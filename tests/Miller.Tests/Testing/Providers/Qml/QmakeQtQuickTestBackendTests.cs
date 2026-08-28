@@ -84,7 +84,8 @@ public sealed class QmakeQtQuickTestBackendTests : IDisposable
         var test = Assert.Single(first);
         Assert.Equal("tst_smoke", test.Name);
         Assert.Equal(test.Name, Assert.Single(second).Name);
-        Assert.Equal([Path.Combine(paths.OutDir, "tst_smoke")], test.Command);
+        string executableName = "tst_smoke" + (OperatingSystem.IsWindows() ? ".exe" : string.Empty);
+        Assert.Equal([Path.Combine(paths.OutDir, executableName)], test.Command);
         Assert.Equal("qmake", test.Metadata["backend"]);
     }
 

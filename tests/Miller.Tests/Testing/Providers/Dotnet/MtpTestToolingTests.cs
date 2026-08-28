@@ -52,9 +52,10 @@ public sealed class MtpTestToolingTests
     [Fact]
     public void BuildRunArguments_places_framework_filter_in_app_arguments_and_keeps_results_inside_generation()
     {
+        const string resultArtifactPath = "/tmp/generation/results/run.trx";
         var arguments = MtpTestTooling.BuildRunArguments(
             new MtpVersion(2, 3, 0),
-            "/tmp/generation/results/run.trx",
+            resultArtifactPath,
             "FullyQualifiedName=Sample.Tests.UnitTests.Adds",
             wholeSuite: false);
 
@@ -62,10 +63,10 @@ public sealed class MtpTestToolingTests
             [
                 "--no-banner",
                 "--results-directory",
-                "/tmp/generation/results",
+                Path.GetDirectoryName(resultArtifactPath)!,
                 "--report-trx",
                 "--report-trx-filename",
-                "run.trx",
+                Path.GetFileName(resultArtifactPath),
                 "--filter",
                 "FullyQualifiedName=Sample.Tests.UnitTests.Adds",
             ],

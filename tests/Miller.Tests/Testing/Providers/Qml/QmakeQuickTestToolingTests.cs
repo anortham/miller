@@ -41,11 +41,13 @@ public sealed class QmakeQuickTestToolingTests
     [Fact]
     public void BuildConfigureArguments_keep_the_project_and_makefile_in_generation_output()
     {
-        var arguments = QmakeQuickTestTooling.BuildConfigureArguments(
-            "/source dir/quicktest.pro",
-            "/generation/out");
+        const string projectPath = "/source dir/quicktest.pro";
+        const string outputDirectory = "/generation/out";
+        var arguments = QmakeQuickTestTooling.BuildConfigureArguments(projectPath, outputDirectory);
 
-        Assert.Equal(["-o", "/generation/out/Makefile", "/source dir/quicktest.pro"], arguments);
+        Assert.Equal(
+            ["-o", Path.Combine(outputDirectory, "Makefile"), Path.GetFullPath(projectPath)],
+            arguments);
     }
 
     [Fact]
@@ -53,9 +55,10 @@ public sealed class QmakeQuickTestToolingTests
     {
         Assert.Equal(["--version"], QmakeQuickTestTooling.BuildMakeVersionArguments());
         Assert.Equal([], QmakeQuickTestTooling.BuildBuildArguments());
+        const string resultArtifactPath = "/generation/TestResults/run.xml";
         Assert.Equal(
-            ["check", "TESTARGS=-o /generation/TestResults/run.xml,junitxml"],
-            QmakeQuickTestTooling.BuildCheckArguments("/generation/TestResults/run.xml", new QtVersion(6, 5, 0)));
+            ["check", $"TESTARGS=-o {Path.GetFullPath(resultArtifactPath)},junitxml"],
+            QmakeQuickTestTooling.BuildCheckArguments(resultArtifactPath, new QtVersion(6, 5, 0)));
     }
 
     [Fact]
