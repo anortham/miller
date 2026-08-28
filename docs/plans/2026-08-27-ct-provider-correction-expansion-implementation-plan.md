@@ -95,10 +95,10 @@ Parallel Batch A uses `parallel-lead-commit`. Every other task uses `serial-work
 **Approach:** Use trailing optional fields for compatibility. Keep legacy `IsTest`. Prove role precedence and file status/diagnostic combinations with focused tests; add a Scale parity test over a real multi-language extract if no existing guarded test proves the full carrier.
 
 **Acceptance criteria:**
-- [ ] Case, container, lifecycle, current, diagnostic, non-indexed, and unavailable evidence round-trip through `ICtFactSource`.
-- [ ] Old artifacts remain readable and incomplete evidence is typed unknown.
-- [ ] Real extractor role rows remain generic across every observed language and role.
-- [ ] Worker-scope verification passes and the worker creates the owned-file commit.
+- [x] Case, container, lifecycle, current, diagnostic, non-indexed, and unavailable evidence round-trip through `ICtFactSource`.
+- [x] Old artifacts remain readable and incomplete evidence is typed unknown.
+- [x] Real extractor role rows remain generic across every observed language and role.
+- [x] Worker-scope verification passes and the worker creates the owned-file commit.
 
 ### Task 2: Language families and provider identity fail-closed selection
 
