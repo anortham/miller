@@ -234,11 +234,11 @@ Parallel Batch A uses `parallel-lead-commit`. Every other task uses `serial-work
 **Approach:** Use one typed backend discriminator separate from framework identity. Add a bounded no-build property probe for inherited MSBuild settings. Test VB qualified/parameterized names through public provider and selector interfaces.
 
 **Acceptance criteria:**
-- [ ] MSTest, NUnit, xUnit v3/v2, Test SDK, MSTest.Sdk, and generic `.vbproj` inventory is honest.
-- [ ] `.vb` changes select exact `vbnet` cases and exclude same-stem C# cases without project-language guessing.
-- [ ] Existing VSTest/xUnit commands and parsing remain stable.
-- [ ] A guarded real VB fixture proves discovery, selected run, result parsing, and Julie-backed selection.
-- [ ] Worker-scope verification passes and the worker creates the owned-file commit.
+- [x] MSTest, NUnit, xUnit v3/v2, Test SDK, MSTest.Sdk, and generic `.vbproj` inventory is honest.
+- [x] `.vb` changes select exact `vbnet` cases and exclude same-stem C# cases without project-language guessing.
+- [x] Existing VSTest/xUnit commands and parsing remain stable.
+- [x] A guarded real VB fixture proves discovery, selected run, result parsing, and Julie-backed selection.
+- [x] Worker-scope verification passes and the worker creates the owned-file commit.
 
 ### Task 7: Add Microsoft.Testing.Platform backend
 
