@@ -28,7 +28,7 @@ internal sealed record JsTestConfigResult(
 
         // Vitest keeps its default excludes when a config overrides only `include`;
         // an explicit `exclude` replaces them.
-        var exclude = HasExcludeProperty || !HasDiscoveryProperty
+        var exclude = HasExcludeProperty
             ? ExcludePatterns
             : JsFrameworkTestFileDiscovery.VitestDefaultExcludes;
         return JsTestPatternSet.ForVitest(include, exclude);

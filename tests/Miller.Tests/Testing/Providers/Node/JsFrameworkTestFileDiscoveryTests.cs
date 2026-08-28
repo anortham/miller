@@ -114,6 +114,21 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
     }
 
     [Fact]
+    public async Task Discover_no_config_vitest_excludes_runner_default_paths()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile("src/math.test.js", "");
+        WritePackageFile("node_modules/dependency/math.test.js", "");
+        WritePackageFile(".cache/math.test.js", "");
+
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["src/math.test.js"], cases.Select(row => row.Selector).ToArray());
+    }
+
+    [Fact]
     public async Task Discover_explicit_vitest_include_keeps_the_runner_default_excludes()
     {
         var workspace = Workspace("vitest");
