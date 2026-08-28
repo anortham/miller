@@ -1,9 +1,9 @@
 ---
 id: complete-ct-provider-correction-and-expansion
 title: Complete CT provider correction and expansion
-status: active
+status: completed
 created: 2026-08-28T01:10:53.661Z
-updated: 2026-08-28T01:10:53.661Z
+updated: 2026-08-28T15:43:10.639Z
 tags:
   - continuous-testing
   - javascript
