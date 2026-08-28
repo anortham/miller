@@ -913,10 +913,9 @@ public sealed class CtDaemonLauncherServeScaleTests : IDisposable
     }
 
     /// <summary>
-    /// Runs one miller verb to completion in an isolated home. Output is read through the ASYNC handlers and
-    /// waited on with the TIMEOUT overload, never the parameterless <c>WaitForExit()</c>: the detached daemon
-    /// inherits the launcher's inheritable pipe handles, so waiting for end-of-stream would wait for the
-    /// DAEMON, which is exactly the process this test needs to keep alive.
+    /// Runs one miller verb to completion in an isolated home. Output is read through the ASYNC handlers;
+    /// after exit, the helper waits under the sink lock only for the first line, with a bounded timeout.
+    /// It never waits for end-of-stream because the detached daemon inherits the launcher's pipe handles.
     /// </summary>
     private (int ExitCode, string Output) RunMiller(string miller, string[] args)
     {
@@ -948,7 +947,19 @@ public sealed class CtDaemonLauncherServeScaleTests : IDisposable
         Assert.True(
             process.WaitForExit(120_000),
             $"miller {string.Join(' ', args)} did not exit within 120s");
-        return (process.ExitCode, output.ToString());
+
+        string capturedOutput;
+        lock (output)
+        {
+            if (output.Length == 0)
+                Monitor.Wait(output, TimeSpan.FromSeconds(5));
+            capturedOutput = output.ToString();
+        }
+
+        Assert.False(
+            string.IsNullOrWhiteSpace(capturedOutput),
+            $"miller {string.Join(' ', args)} exited without producing output within 5s");
+        return (process.ExitCode, capturedOutput);
     }
 
     private (Process Process, StringBuilder Output) StartLauncher(string miller, string groupPath)
@@ -1058,7 +1069,10 @@ public sealed class CtDaemonLauncherServeScaleTests : IDisposable
         if (line is null)
             return;
         lock (sink)
+        {
             sink.AppendLine(line);
+            Monitor.PulseAll(sink);
+        }
     }
 
     // The CLI resolves .tools relative to its own AppContext.BaseDirectory, so the binary must be the built
