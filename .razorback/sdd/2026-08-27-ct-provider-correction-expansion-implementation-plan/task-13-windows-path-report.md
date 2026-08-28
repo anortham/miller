@@ -32,5 +32,5 @@ Updated the five synthetic test expectations reported by the Windows fast-suite 
 - Branch: `feature/ct-provider-correction-expansion`
 - Starting HEAD: `b4c888bb`
 - Implementation commit SHA: `ac4ae3ec`
-- Report update commit SHA: pending
+- Report provenance commit SHA: `583f93ac`
 - Production files changed: none
