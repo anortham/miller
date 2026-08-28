@@ -102,7 +102,8 @@ Role precedence is explicit:
 | Current detailed `test_case` or `parameterized_test` | Schedulable case. |
 | Current detailed `test_container` | Reachability evidence only; never a runnable case. |
 | Current detailed lifecycle role | Reachability evidence only; never a runnable case. |
-| Detailed evidence with unknown currency | Selection is `Unknown`; never schedule or carry green. |
+| Detailed evidence with unknown currency (graph path) | Selection is `Unknown`; never prove `KnownEmpty` or carry green. |
+| Impacted-test hint with unknown currency | Still selects its existing provider case; the run produces a fresh verdict, so no green is ever carried. The evidence row preserves the currency status. |
 | Legacy artifact with `IsTest=true` and no detailed fields | Preserve the old case behavior for compatibility. |
 | No detailed role and `IsTest=false` | Not a runnable case. |
 
@@ -116,6 +117,12 @@ Add a typed file fact to `ICtFactSource` with current status, language, content 
 and evidence availability. Selection may return `KnownEmpty` only for a current, accounted file that proves
 no applicable tests, or an explicitly harmless document. Missing, stale, diagnostic, unindexed, or
 unavailable file evidence returns `Unknown`.
+
+Build manifests the extractor never indexes — qmake `.pro`/`.pri` and Go `go.mod`/`go.sum`/`go.work`/
+`go.work.sum` — take project scope instead of file accounting, matching the `.csproj`/`CMakeLists.txt`
+treatment: a changed manifest selects its own project's cases (`project_scope` evidence, scoped to the
+project or module directory the manifest governs). A manifest that selects no family cases still reads
+`Unknown`, never `KnownEmpty`.
 
 ### Provider identity
 

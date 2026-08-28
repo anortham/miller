@@ -348,6 +348,53 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     [Theory]
+    [InlineData("unknown")]
+    [InlineData("stale")]
+    public void Select_reads_unknown_when_a_graph_impacted_test_has_unknown_evidence_currency(
+        string evidenceStatus)
+    {
+        using ContinuousTestStore store = OpenStore();
+        store.PutTestCase(new ContinuousTestCase(
+            Id: "tc:case",
+            WorkspaceId: Workspace,
+            Name: "Case",
+            QualifiedName: "Suite.Case",
+            Selector: "Suite.Case",
+            FilePath: "tests/Suite.cs",
+            SymbolName: "Case",
+            SymbolPath: "tests/Suite.cs",
+            Framework: "xunit",
+            Source: "ct-provider:dotnet"));
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:changed", "Changed", "src/Changed.cs"));
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:case", "Case", "tests/Suite.cs", isTest: true));
+        facts.FileFacts.Add(new CtFileFact("src/Changed.cs", "csharp", "blake3:changed", "indexed", false, true));
+        facts.FileFacts.Add(new CtFileFact("tests/Suite.cs", "csharp", "blake3:suite", "indexed", false, true));
+        facts.Tests.Add(new CtImpactedSymbol(
+            "sym:case",
+            "Case",
+            "method",
+            "tests/Suite.cs",
+            IsTest: true,
+            Hop: 1,
+            EdgeKind: "calls",
+            EdgeSource: "relationship",
+            TestCase: true,
+            TestContainer: false,
+            TestLifecycle: false,
+            TestEvidenceStatus: evidenceStatus));
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["src/Changed.cs"]));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.Equal(["tc:case"], result.StaleTestCaseIds);
+    }
+
+    [Theory]
     [InlineData(true, true)]
     [InlineData(false, false)]
     public void Select_fails_closed_when_provider_identity_file_evidence_is_not_current(
@@ -1619,6 +1666,86 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.Empty(result.SelectedTestCaseIds);
         Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
         Assert.Equal(["tc:qml"], result.StaleTestCaseIds);
+    }
+
+    [Theory]
+    [InlineData("app.pro")]
+    [InlineData("common.pri")]
+    public void Select_qmake_project_change_selects_the_qt_quick_test_project_without_file_evidence(
+        string changedPath)
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.Combine(_dir, "qml", "app.pro");
+        string evidenceRoot = Path.Combine(_dir, "qml", "tests");
+        SeedQmlCase(store, "tc:qml", "Smoke/smoke", projectPath, evidenceRoot);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: [Path.Combine(_dir, "qml", changedPath)],
+            ProjectPath: projectPath));
+
+        Assert.Equal(["tc:qml"], result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+        ContinuousTestSelectionEvidence evidence = Assert.Single(result.Evidence);
+        Assert.Equal("project_scope", evidence.Tier);
+    }
+
+    [Theory]
+    [InlineData("go.mod")]
+    [InlineData("go.sum")]
+    public void Select_go_module_manifest_change_selects_the_module_tests_without_file_evidence(
+        string changedManifest)
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.Combine(_dir, "go", "go.mod");
+        SeedGoProviderCase(store, "tc:go", "TestAdd", Path.Combine(_dir, "go", "pkg"), projectPath);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: [Path.Combine(_dir, "go", changedManifest)],
+            ProjectPath: projectPath));
+
+        Assert.Equal(["tc:go"], result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+        ContinuousTestSelectionEvidence evidence = Assert.Single(result.Evidence);
+        Assert.Equal("project_scope", evidence.Tier);
+    }
+
+    [Fact]
+    public void Select_go_workspace_manifest_change_selects_member_module_tests()
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.Combine(_dir, "go", "go.mod");
+        SeedGoProviderCase(store, "tc:go", "TestAdd", Path.Combine(_dir, "go", "pkg"), projectPath);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: [Path.Combine(_dir, "go.work")],
+            ProjectPath: projectPath));
+
+        Assert.Equal(["tc:go"], result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+    }
+
+    [Fact]
+    public void Select_go_manifest_change_outside_the_module_reads_unknown()
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.Combine(_dir, "go", "go.mod");
+        SeedGoProviderCase(store, "tc:go", "TestAdd", Path.Combine(_dir, "go", "pkg"), projectPath);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: [Path.Combine(_dir, "other", "go.mod")],
+            ProjectPath: projectPath));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.Equal(["tc:go"], result.StaleTestCaseIds);
     }
 
     [Theory]

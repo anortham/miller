@@ -122,7 +122,9 @@ green.
   `.spec` (including `.mjs` / `.cjs` / `.mts` / `.cts`). Jest also takes every JS/TS file under
   `__tests__/`, which is jest's own default. A literal `testMatch` (jest, including `package.json`
   `"jest"`) or `test.include` (`vitest.config` only) array of strings replaces those defaults.
-  Config is read, never executed — unsupported, truncated, malformed, interpolated, or
+  A vitest `include` on its own keeps vitest's default excludes (`node_modules`, `dist`, `cypress`,
+  dot-directories, tool config files), exactly as the runner does; an explicit `test.exclude`
+  replaces them. Config is read, never executed — unsupported, truncated, malformed, interpolated, or
   `testRegex`-based discovery is refused rather than silently changing the suite. Component
   extensions and runner-owned directories require an explicit supported config. `vite.config`
   `include` is ignored because that is the library source set.

@@ -14,6 +14,18 @@ internal static class JsFrameworkTestFileDiscovery
         "!**/playwright/**",
     ];
 
+    // Vitest's own defaultExclude, applied by the runner whenever the config does not set
+    // `exclude` — including when it sets only `include`. Discovery must match, or Miller
+    // records cases the runner never executes.
+    internal static readonly string[] VitestDefaultExcludes =
+    [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/cypress/**",
+        "**/.{idea,git,cache,output,temp}/**",
+        "**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*",
+    ];
+
     private static readonly string[] DefaultVitestPatterns =
     [
         "**/*.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts,cjsx,mjsx,mtsx,ctsx}",

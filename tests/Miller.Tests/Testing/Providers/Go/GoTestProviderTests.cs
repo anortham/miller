@@ -149,6 +149,29 @@ public sealed class GoTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_refuses_nonzero_exit_with_only_passed_and_skipped_results()
+    {
+        WriteModule("example.com/math");
+        var workspace = Workspace();
+        string first = GoTestTooling.EncodeCaseId("ws:go", workspace.ProjectPath, "example.com/math", "example.com/math", "TestAdd");
+        string second = GoTestTooling.EncodeCaseId("ws:go", workspace.ProjectPath, "example.com/math", "example.com/math", "TestSkip");
+        var runner = new RecordingRunner(command =>
+            new TestProcessResult(1,
+                """
+                {"Action":"start","Package":"example.com/math"}
+                {"Action":"run","Package":"example.com/math","Test":"TestAdd"}
+                {"Action":"pass","Package":"example.com/math","Test":"TestAdd","Elapsed":0.01}
+                {"Action":"run","Package":"example.com/math","Test":"TestSkip"}
+                {"Action":"skip","Package":"example.com/math","Test":"TestSkip","Elapsed":0.0}
+                {"Action":"fail","Package":"example.com/math","Elapsed":0.02}
+                """,
+                ""));
+
+        await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            new GoTestProvider(runner).RunAsync(Request(workspace, first, second), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Run_refuses_malformed_or_incomplete_json_instead_of_returning_green()
     {
         WriteModule("example.com/math");

@@ -27,6 +27,7 @@ public interface ICtCoverageFactSource
 public sealed class ContinuousTestImpactSelector
 {
     private const string QmlProviderSource = "ct-provider:qml";
+    private const string GoProviderSource = "ct-provider:go";
 
     private static readonly HashSet<string> GenericPathStems = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -159,6 +160,7 @@ public sealed class ContinuousTestImpactSelector
         AddChangedTestFileEvidence(request, testCases, changedFileByPath, evidence);
         AddProjectScopeEvidence(request, testCases, evidence);
         AddQmlProjectScopeEvidence(request, testCases, evidence);
+        AddGoProjectScopeEvidence(request, testCases, evidence);
         bool unmappableHint = AddImpactedTestEvidence(request, casesBySourcePath, testCases, evidence);
         AddImpactedTestSymbolEvidence(impactedSymbols, testCaseBySymbolId, testCases, evidence);
         bool unmappableEvidence = AddCoverageEvidence(request, impactedSymbols, changedFiles, testCaseById, evidence);
@@ -323,6 +325,13 @@ public sealed class ContinuousTestImpactSelector
                 && testCases.Any(testCase =>
                     IsQmlProviderCase(testCase)
                     && IsQmlCaseRelevantToChange(request, testCase, path)))
+            {
+                continue;
+            }
+            if (IsGoManifestPath(path)
+                && testCases.Any(testCase =>
+                    IsGoProviderCase(testCase)
+                    && IsGoManifestRelevantToCase(testCase, path)))
             {
                 continue;
             }
@@ -516,11 +525,38 @@ public sealed class ContinuousTestImpactSelector
         && !fact.HasParseDiagnostics
         && string.Equals(fact.Status, "indexed", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Qmake and Go module manifests are build metadata the extractor never indexes, so
+    /// they can never carry file evidence. They are exempt here but NOT from path accounting:
+    /// a manifest that selects no family cases still reads Unknown, never KnownEmpty.</summary>
     private static bool HasInvalidFileEvidence(IReadOnlyList<FileFact> changedFiles) =>
         changedFiles.Any(file =>
             !IsHarmlessChangedPath(file.Path)
             && !IsProjectOrConfigPath(file.Path)
+            && !IsUnindexedProjectManifest(file.Path)
             && (!file.EvidenceAvailable || !file.IsCurrent));
+
+    private static readonly HashSet<string> GoManifestFileNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "go.mod",
+        "go.sum",
+        "go.work",
+        "go.work.sum",
+    };
+
+    private static bool IsGoManifestPath(string? path) =>
+        !string.IsNullOrWhiteSpace(path) && GoManifestFileNames.Contains(Path.GetFileName(path));
+
+    private static bool IsQmakeProjectPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+        string extension = Path.GetExtension(path);
+        return extension.Equals(".pro", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".pri", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsUnindexedProjectManifest(string? path) =>
+        IsQmakeProjectPath(path) || IsGoManifestPath(path);
 
     private static bool CanProveKnownEmpty(
         ContinuousTestImpactSelectionRequest request,
@@ -696,6 +732,58 @@ public sealed class ContinuousTestImpactSelector
         }
     }
 
+    private static void AddGoProjectScopeEvidence(
+        ContinuousTestImpactSelectionRequest request,
+        IReadOnlyList<TestCaseFact> testCases,
+        List<ContinuousTestSelectionEvidence> evidence)
+    {
+        TestCaseFact[] goCases = testCases
+            .Where(IsGoProviderCase)
+            .ToArray();
+        if (goCases.Length == 0)
+            return;
+
+        string[] changedManifests = request.ChangedPaths
+            .Where(IsGoManifestPath)
+            .Select(NormalizePath)
+            .Distinct(PathComparer)
+            .ToArray();
+        if (changedManifests.Length == 0)
+            return;
+
+        string manifestList = string.Join(", ", changedManifests.Select(Path.GetFileName));
+        foreach (TestCaseFact testCase in goCases.Where(testCase =>
+                     changedManifests.Any(path => IsGoManifestRelevantToCase(testCase, path))))
+        {
+            if (evidence.Any(row => row.TestCaseId == testCase.Id && row.Tier == "changed_test_file"))
+                continue;
+
+            evidence.Add(new ContinuousTestSelectionEvidence(
+                TestCaseId: testCase.Id,
+                Selector: testCase.Selector,
+                Tier: "project_scope",
+                Confidence: TierConfidence["project_scope"],
+                Explanation: $"Go module manifest change {manifestList} governs module tests",
+                SourceFactIds: [testCase.FileId ?? testCase.Id]));
+        }
+    }
+
+    private static bool IsGoProviderCase(TestCaseFact testCase) =>
+        string.Equals(testCase.Source, GoProviderSource, StringComparison.Ordinal);
+
+    private static bool IsGoManifestRelevantToCase(TestCaseFact testCase, string manifestPath)
+    {
+        string? manifestRoot = Path.GetDirectoryName(manifestPath);
+        if (string.IsNullOrEmpty(manifestRoot))
+            return true;
+        string? projectRoot = string.IsNullOrWhiteSpace(testCase.ProjectPath)
+            ? null
+            : Path.GetDirectoryName(testCase.ProjectPath);
+        if (string.IsNullOrEmpty(projectRoot))
+            return true;
+        return IsPathUnderRoot(projectRoot, manifestRoot);
+    }
+
     private static bool IsQmlProviderCase(TestCaseFact testCase) =>
         string.Equals(testCase.Source, QmlProviderSource, StringComparison.Ordinal);
 
@@ -750,6 +838,8 @@ public sealed class ContinuousTestImpactSelector
         string extension = Path.GetExtension(fileName);
         if (extension.Equals(".qml", StringComparison.OrdinalIgnoreCase)
             || extension.Equals(".cmake", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".pro", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".pri", StringComparison.OrdinalIgnoreCase)
             || fileName.Equals("CMakeLists.txt", StringComparison.OrdinalIgnoreCase)
             || fileName.Equals("CMakePresets.json", StringComparison.OrdinalIgnoreCase))
         {

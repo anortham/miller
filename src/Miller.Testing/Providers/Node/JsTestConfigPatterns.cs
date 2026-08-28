@@ -13,6 +13,7 @@ internal sealed record JsTestConfigResult(
     bool HasDiscoveryProperty,
     IReadOnlyList<string>? IncludePatterns,
     IReadOnlyList<string> ExcludePatterns,
+    bool HasExcludeProperty,
     string? RootDir,
     string? Diagnostic)
 {
@@ -22,9 +23,15 @@ internal sealed record JsTestConfigResult(
             throw new ContinuousTestProviderException(Diagnostic);
 
         var include = HasDiscoveryProperty ? IncludePatterns ?? [] : defaults;
-        return string.Equals(framework, "jest", StringComparison.OrdinalIgnoreCase)
-            ? JsTestPatternSet.ForJest(include)
-            : JsTestPatternSet.ForVitest(include, ExcludePatterns);
+        if (string.Equals(framework, "jest", StringComparison.OrdinalIgnoreCase))
+            return JsTestPatternSet.ForJest(include);
+
+        // Vitest keeps its default excludes when a config overrides only `include`;
+        // an explicit `exclude` replaces them.
+        var exclude = HasExcludeProperty || !HasDiscoveryProperty
+            ? ExcludePatterns
+            : JsFrameworkTestFileDiscovery.VitestDefaultExcludes;
+        return JsTestPatternSet.ForVitest(include, exclude);
     }
 }
 
@@ -260,14 +267,14 @@ internal static class JsTestConfigPatterns
         if (string.Equals(framework, "jest", StringComparison.OrdinalIgnoreCase))
         {
             if (!root.TryGetProperty("testMatch", out var testMatch))
-                return new(false, null, [], rootDir, null);
+                return new(false, null, [], false, rootDir, null);
             if (!TryReadJsonStringList(testMatch, out var patterns))
                 return Failure(framework, path, "Jest 'testMatch' must be a literal array of strings");
-            return new(true, patterns, [], rootDir, null);
+            return new(true, patterns, [], false, rootDir, null);
         }
 
         if (!root.TryGetProperty("test", out var test))
-            return new(false, null, [], rootDir, null);
+            return new(false, null, [], false, rootDir, null);
         if (test.ValueKind != JsonValueKind.Object)
             return Failure(framework, path, "Vitest 'test' must be a literal object");
 
@@ -284,6 +291,7 @@ internal static class JsTestConfigPatterns
             hasInclude,
             hasInclude ? includePatterns : null,
             hasExclude ? excludePatterns : [],
+            hasExclude,
             rootDir,
             null);
     }
@@ -322,14 +330,14 @@ internal static class JsTestConfigPatterns
         if (string.Equals(framework, "jest", StringComparison.OrdinalIgnoreCase))
         {
             if (!root.Object.Values.TryGetValue("testMatch", out var testMatch))
-                return new(false, null, [], rootDir, null);
+                return new(false, null, [], false, rootDir, null);
             if (!TryReadJavaScriptStringList(testMatch, out var patterns))
                 return Failure(framework, path, "Jest 'testMatch' must be a literal array of strings");
-            return new(true, patterns, [], rootDir, null);
+            return new(true, patterns, [], false, rootDir, null);
         }
 
         if (!root.Object.Values.TryGetValue("test", out var test))
-            return new(false, null, [], rootDir, null);
+            return new(false, null, [], false, rootDir, null);
         if (test.Object is null || test.HasUnsupported || test.Object.HasSpread || test.Object.HasComputedProperty)
             return Failure(framework, path, "Vitest 'test' must be a literal object");
 
@@ -346,6 +354,7 @@ internal static class JsTestConfigPatterns
             hasInclude,
             hasInclude ? includePatterns : null,
             hasExclude ? excludePatterns : [],
+            hasExclude,
             rootDir,
             null);
     }
@@ -503,10 +512,11 @@ internal static class JsTestConfigPatterns
             false,
             null,
             [],
+            false,
             null,
             $"JavaScript {framework} discovery config '{path}' is unsupported: {reason}.");
 
-    private static JsTestConfigResult NoProperty => new(false, null, [], null, null);
+    private static JsTestConfigResult NoProperty => new(false, null, [], false, null, null);
 
     private static string? FirstExisting(string packageRoot, IReadOnlyList<string> names) =>
         names.Select(name => Path.Combine(packageRoot, name)).FirstOrDefault(File.Exists);

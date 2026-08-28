@@ -284,9 +284,9 @@ public sealed class GoTestProvider : IContinuousTestProvider
                     : null));
         }
 
-        if (processResult.ExitCode != 0 && results.All(result => result.Status == "passed"))
+        if (processResult.ExitCode != 0 && results.All(result => result.Status != "failed"))
             throw new ContinuousTestProviderException(
-                $"go test -json for package '{group.ImportPath}' exited with code {processResult.ExitCode} without a failure event.")
+                $"go test -json for package '{group.ImportPath}' exited with code {processResult.ExitCode} without a failed test result.")
             {
                 ResultArtifactPath = artifactPath,
             };

@@ -114,7 +114,7 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
     }
 
     [Fact]
-    public async Task Discover_explicit_vitest_include_can_select_component_and_runner_directories()
+    public async Task Discover_explicit_vitest_include_keeps_the_runner_default_excludes()
     {
         var workspace = Workspace("vitest");
         WritePackageFile(
@@ -136,11 +136,39 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
 
         Assert.Equal(
             [
-                "cypress/login.spec.js",
-                "dist/generated.test.js",
                 "e2e/login.spec.js",
                 "playwright/login.spec.js",
                 "src/Button.spec.vue",
+            ],
+            cases.Select(row => row.Selector).ToArray());
+    }
+
+    [Fact]
+    public async Task Discover_explicit_vitest_exclude_replaces_the_runner_default_excludes()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile(
+            "vite.config.ts",
+            """
+            export default defineConfig({
+              test: {
+                include: ['{src,dist}/**/*.test.js'],
+                exclude: ['src/legacy/**'],
+              },
+            })
+            """);
+        WritePackageFile("src/math.test.js", "");
+        WritePackageFile("src/legacy/old.test.js", "");
+        WritePackageFile("dist/generated.test.js", "");
+
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [
+                "dist/generated.test.js",
+                "src/math.test.js",
             ],
             cases.Select(row => row.Selector).ToArray());
     }
