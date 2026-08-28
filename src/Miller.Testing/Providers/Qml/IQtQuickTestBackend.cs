@@ -3,6 +3,8 @@ namespace Miller.Testing.Providers.Qml;
 internal static class QtQuickTestBackendIds
 {
     public const string CMake = "cmake";
+
+    public const string Qmake = "qmake";
 }
 
 internal sealed record QtQuickTestCase(

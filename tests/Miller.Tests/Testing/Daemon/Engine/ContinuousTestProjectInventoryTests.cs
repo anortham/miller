@@ -571,6 +571,114 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
         Assert.Equal(Path.Combine(_root, "tests", "qml"), project.Metadata["evidence_root"]);
     }
 
+    [Fact]
+    public void Discover_accepts_a_qmake_quick_testcase_project_and_marks_the_qmake_backend()
+    {
+        WriteProject("quicktest.pro", """
+            TEMPLATE = app
+            TARGET = tst_smoke
+            CONFIG += qmltestcase
+            SOURCES += runner.cpp
+            """);
+        WriteProject("runner.cpp", "#include <QtQuickTest>\nQUICK_TEST_MAIN(smoke)");
+        WriteProject("tst_smoke.qml", "TestCase { name: \"Smoke\" }");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+
+        Assert.Equal("qt-quick-test", project.Framework);
+        Assert.Equal("qmake", project.Metadata["backend"]);
+        Assert.Equal(Path.Combine(_root, "quicktest.pro"), project.ProjectPath);
+        Assert.Equal(_root, project.Metadata["configure_root"]);
+        Assert.Equal(_root, project.Metadata["evidence_root"]);
+    }
+
+    [Fact]
+    public void Discover_accepts_qmake_qmltest_only_when_testcase_proves_the_check_target()
+    {
+        WriteProject("quicktest.pro", """
+            TEMPLATE = app
+            TARGET = tst_smoke
+            QT += qmltest
+            CONFIG += testcase
+            SOURCES += runner.cpp
+            """);
+        WriteProject("runner.cpp", "#include <QtQuickTest>\nQUICK_TEST_MAIN(smoke)");
+        WriteProject("tst_smoke.qml", "TestCase { name: \"Smoke\" }");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+
+        Assert.Equal("qmake", project.Metadata["backend"]);
+    }
+
+    [Fact]
+    public void Discover_rejects_qmake_quick_test_library_without_a_check_target()
+    {
+        WriteProject("quicktest.pro", """
+            TEMPLATE = app
+            TARGET = tst_smoke
+            QT += qmltest
+            SOURCES += runner.cpp
+            """);
+        WriteProject("runner.cpp", "#include <QtQuickTest>\nQUICK_TEST_MAIN(smoke)");
+        WriteProject("tst_smoke.qml", "TestCase { name: \"Smoke\" }");
+
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+    }
+
+    [Fact]
+    public void Discover_rejects_native_qt_test_even_when_testcase_is_present()
+    {
+        WriteProject("quicktest.pro", """
+            TEMPLATE = app
+            TARGET = tst_native
+            QT += testlib
+            CONFIG += testcase
+            SOURCES += runner.cpp
+            """);
+        WriteProject("runner.cpp", "#include <QtTest>\nQTEST_MAIN(tst_native)");
+        WriteProject("tst_smoke.qml", "TestCase { name: \"Smoke\" }");
+
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+    }
+
+    [Fact]
+    public void Discover_reads_qmake_quick_test_evidence_from_a_literal_pri_include()
+    {
+        WriteProject("quicktest.pro", """
+            TEMPLATE = app
+            TARGET = tst_smoke
+            include(test-settings.pri)
+            SOURCES += runner.cpp
+            """);
+        WriteProject("test-settings.pri", "CONFIG += qmltestcase");
+        WriteProject("runner.cpp", "#include <QtQuickTest>\nQUICK_TEST_MAIN(smoke)");
+        WriteProject("tst_smoke.qml", "TestCase { name: \"Smoke\" }");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+
+        Assert.Equal("qmake", project.Metadata["backend"]);
+    }
+
+    [Fact]
+    public void Discover_does_not_follow_a_variable_qmake_include()
+    {
+        WriteProject("quicktest.pro", """
+            TEMPLATE = app
+            TARGET = tst_smoke
+            SETTINGS = test-settings.pri
+            include($$SETTINGS)
+            SOURCES += runner.cpp
+            """);
+        WriteProject("test-settings.pri", "CONFIG += qmltestcase");
+        WriteProject("runner.cpp", "#include <QtQuickTest>\nQUICK_TEST_MAIN(smoke)");
+        WriteProject("tst_smoke.qml", "TestCase { name: \"Smoke\" }");
+
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+    }
+
     [Theory]
     [InlineData("QUICK_TEST_MAIN_WITH_SETUP(app_tests, Setup)")]
     [InlineData("QUICK_TEST_OPENGL_MAIN(app_tests)")]

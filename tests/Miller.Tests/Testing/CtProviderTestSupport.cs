@@ -58,6 +58,40 @@ public static class CtProviderTestSupport
         return binary!;
     }
 
+    public static string? LocateQmake() =>
+        LocateOnPath(OperatingSystem.IsWindows() ? "qmake6.exe" : "qmake6")
+        ?? LocateOnPath(OperatingSystem.IsWindows() ? "qmake.exe" : "qmake");
+
+    public static string RequireQmakeQuickTest()
+    {
+        string? qmake = LocateQmake();
+        Assert.SkipWhen(qmake is null,
+            "qmake is required for Qmake QtQuickTestProvider Scale smoke");
+        string? make = LocateQmakeMake();
+        Assert.SkipWhen(make is null,
+            "make is required for Qmake QtQuickTestProvider Scale smoke");
+        string? libraries = RunQmakeQuery(qmake!, "QT_INSTALL_LIBS");
+        Assert.SkipWhen(!HasQuickTestLibrary(libraries),
+            "Qt Quick Test library is required for Qmake QtQuickTestProvider Scale smoke");
+        return qmake!;
+    }
+
+    public static string? LocateQmakeMake()
+    {
+        string[] names = OperatingSystem.IsWindows()
+            ? ["nmake.exe", "jom.exe", "mingw32-make.exe", "make.exe"]
+            : ["make", "gmake"];
+        return names.Select(LocateOnPath).FirstOrDefault(path => path is not null);
+    }
+
+    public static string RequireQmakeMake()
+    {
+        string? make = LocateQmakeMake();
+        Assert.SkipWhen(make is null,
+            "make is required for Qmake QtQuickTestProvider Scale smoke");
+        return make!;
+    }
+
     public static string? LocateQtPaths() =>
         LocateOnPath(OperatingSystem.IsWindows() ? "qtpaths6.exe" : "qtpaths6")
         ?? LocateOnPath(OperatingSystem.IsWindows() ? "qtpaths.exe" : "qtpaths");
@@ -157,6 +191,53 @@ public static class CtProviderTestSupport
         catch (System.ComponentModel.Win32Exception)
         {
             return null;
+        }
+    }
+
+    private static string? RunQmakeQuery(string qmake, string variable)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = qmake,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                ArgumentList = { "-query", variable },
+            });
+            if (process is null)
+                return null;
+            string output = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit();
+            return process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output) ? output : null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    private static bool HasQuickTestLibrary(string? libraryDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(libraryDirectory) || !Directory.Exists(libraryDirectory))
+            return false;
+        try
+        {
+            return Directory.EnumerateFiles(libraryDirectory, "*QuickTest*", SearchOption.TopDirectoryOnly).Any();
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 

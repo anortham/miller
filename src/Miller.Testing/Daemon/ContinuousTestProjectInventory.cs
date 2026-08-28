@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Miller.Indexing;
 using Miller.Testing.Providers.Qml;
 
@@ -121,6 +122,11 @@ public static class ContinuousTestProjectInventory
         string ConfigureRoot,
         string EvidenceRoot);
 
+    private sealed record QmakeProjectEvidence(
+        string ProjectPath,
+        string ConfigureRoot,
+        string EvidenceRoot);
+
     /// <summary>
     /// Every python config file that enables a pytest project, in the order pytest ITSELF reads them
     /// when it picks a rootdir: <c>pytest.ini</c> wins over everything (even when empty), then
@@ -189,6 +195,21 @@ public static class ContinuousTestProjectInventory
                 }));
         }
 
+        foreach (QmakeProjectEvidence evidence in DiscoverQmakeProjects(candidateFiles))
+        {
+            projects.Add(new ContinuousTestProject(
+                Id: ProjectId(workspaceId, root, evidence.ProjectPath),
+                WorkspaceId: workspaceId,
+                ProjectPath: evidence.ProjectPath,
+                Framework: "qt-quick-test",
+                Metadata: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["backend"] = QtQuickTestBackendIds.Qmake,
+                    ["configure_root"] = evidence.ConfigureRoot,
+                    ["evidence_root"] = evidence.EvidenceRoot,
+                }));
+        }
+
         return CollapsePytestConfigRoots(SuppressCargoWorkspaceMembers(projects))
             .OrderBy(project => project.ProjectPath, StringComparer.Ordinal)
             .ToArray();
@@ -221,6 +242,26 @@ public static class ContinuousTestProjectInventory
                         ["backend"] = QtQuickTestBackendIds.CMake,
                         ["configure_root"] = qmlEvidence.ConfigureRoot,
                         ["evidence_root"] = qmlEvidence.EvidenceRoot,
+                    });
+            }
+        }
+        if (string.Equals(Path.GetExtension(full), ".pro", StringComparison.OrdinalIgnoreCase))
+        {
+            string[] candidateFiles = EnumerateCandidateFiles(Path.GetFullPath(workspaceRoot)).ToArray();
+            QmakeProjectEvidence? qmakeEvidence = DiscoverQmakeProjects(candidateFiles)
+                .FirstOrDefault(evidence => PathComparer.Equals(evidence.ProjectPath, full));
+            if (qmakeEvidence is not null)
+            {
+                return new ContinuousTestProject(
+                    Id: ProjectId(workspaceId, workspaceRoot, qmakeEvidence.ProjectPath),
+                    WorkspaceId: workspaceId,
+                    ProjectPath: qmakeEvidence.ProjectPath,
+                    Framework: "qt-quick-test",
+                    Metadata: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["backend"] = QtQuickTestBackendIds.Qmake,
+                        ["configure_root"] = qmakeEvidence.ConfigureRoot,
+                        ["evidence_root"] = qmakeEvidence.EvidenceRoot,
                     });
             }
         }
@@ -932,6 +973,128 @@ public static class ContinuousTestProjectInventory
         return projects;
     }
 
+    private static IReadOnlyList<QmakeProjectEvidence> DiscoverQmakeProjects(
+        IReadOnlyList<string> candidateFiles)
+    {
+        var projects = new List<QmakeProjectEvidence>();
+        foreach (string path in candidateFiles
+                     .Where(path => string.Equals(Path.GetExtension(path), ".pro", StringComparison.OrdinalIgnoreCase))
+                     .OrderBy(path => path, PathComparer))
+        {
+            if (TryDiscoverQmakeProject(path, candidateFiles, out QmakeProjectEvidence? evidence)
+                && evidence is not null)
+                projects.Add(evidence);
+        }
+
+        return projects;
+    }
+
+    private static bool TryDiscoverQmakeProject(
+        string projectPath,
+        IReadOnlyList<string> candidateFiles,
+        out QmakeProjectEvidence? evidence)
+    {
+        evidence = null;
+        string configureRoot = DirectoryOf(projectPath);
+        if (!TryReadBounded(projectPath, out string projectText))
+            return false;
+
+        var qmakeTexts = new List<string> { projectText };
+        var pending = new Queue<(string Path, string Text)>();
+        pending.Enqueue((projectPath, projectText));
+        var visited = new HashSet<string>(PathComparer) { Path.GetFullPath(projectPath) };
+        while (pending.Count > 0)
+        {
+            (string includingPath, string includingText) = pending.Dequeue();
+            foreach (string includePath in QmakeLiteralIncludes(includingText))
+            {
+                string fullInclude = Path.GetFullPath(Path.Combine(DirectoryOf(includingPath), includePath));
+                if (!IsInside(configureRoot, fullInclude)
+                    || !string.Equals(Path.GetExtension(fullInclude), ".pri", StringComparison.OrdinalIgnoreCase)
+                    || !visited.Add(fullInclude)
+                    || !candidateFiles.Contains(fullInclude, PathComparer)
+                    || !TryReadBounded(fullInclude, out string includedText))
+                    continue;
+                qmakeTexts.Add(includedText);
+                pending.Enqueue((fullInclude, includedText));
+            }
+        }
+
+        string combined = string.Join('\n', qmakeTexts);
+        HashSet<string> configValues = QmakeVariableValues(combined, "CONFIG");
+        HashSet<string> qtValues = QmakeVariableValues(combined, "QT");
+        if (!configValues.Contains("qmltestcase")
+            && !(qtValues.Contains("qmltest") && configValues.Contains("testcase")))
+            return false;
+
+        string[] qmlTestPaths = candidateFiles
+            .Where(path => IsInside(configureRoot, path) && IsQmlTestEvidence(path))
+            .ToArray();
+        bool runner = candidateFiles
+            .Where(path => IsInside(configureRoot, path) && QuickTestRunnerExtensions.Contains(Path.GetExtension(path)))
+            .Any(IsQmakeQuickTestRunner);
+        if (!runner || qmlTestPaths.Length == 0)
+            return false;
+
+        evidence = new QmakeProjectEvidence(
+            Path.GetFullPath(projectPath),
+            configureRoot,
+            CommonDirectory(qmlTestPaths));
+        return true;
+    }
+
+    private static IEnumerable<string> QmakeLiteralIncludes(string text)
+    {
+        foreach (Match match in Regex.Matches(
+                     text,
+                     @"(?im)^\s*include\s*\(\s*(?<path>[^)\r\n]+?)\s*\)\s*(?:#.*)?$"))
+        {
+            string value = match.Groups["path"].Value.Trim().Trim('"', '\'');
+            if (value.Length > 0 && !value.Contains('$', StringComparison.Ordinal))
+                yield return value;
+        }
+    }
+
+    private static HashSet<string> QmakeVariableValues(string text, string variable)
+    {
+        var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in Regex.Matches(
+                     text,
+                     $@"(?im)^\s*{Regex.Escape(variable)}\s*(?<operator>\+=|-=|=)\s*(?<values>[^#\r\n]+)"))
+        {
+            string operation = match.Groups["operator"].Value;
+            var words = match.Groups["values"].Value
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                .Select(word => word.Trim().Trim('"', '\''))
+                .Where(word => word.Length > 0)
+                .ToArray();
+            if (operation == "=")
+                values.Clear();
+            if (operation == "-=")
+            {
+                foreach (string word in words)
+                    values.Remove(word);
+            }
+            else
+            {
+                foreach (string word in words)
+                    values.Add(word);
+            }
+        }
+
+        return values;
+    }
+
+    private static bool IsQmakeQuickTestRunner(string path)
+    {
+        if (!TryReadBounded(path, out string text))
+            return false;
+        string code = CodeWithoutCommentsOrStrings(text);
+        return ContainsCodeToken(code, "QUICK_TEST_MAIN")
+            || ContainsCodeToken(code, "QUICK_TEST_MAIN_WITH_SETUP")
+            || ContainsCodeToken(code, "QUICK_TEST_OPENGL_MAIN");
+    }
+
     private static bool TryDiscoverQmlProject(
         string cmakePath,
         IReadOnlyList<string> candidateFiles,
@@ -1336,6 +1499,8 @@ public static class ContinuousTestProjectInventory
             || string.Equals(name, "package.json", StringComparison.OrdinalIgnoreCase)
             || PythonProjectNames.Contains(name)
             || IsCMakeLists(path)
+            || string.Equals(Path.GetExtension(path), ".pro", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(Path.GetExtension(path), ".pri", StringComparison.OrdinalIgnoreCase)
             || QmlSourceExtensions.Contains(Path.GetExtension(path))
             || QuickTestRunnerExtensions.Contains(Path.GetExtension(path));
     }
@@ -1641,6 +1806,32 @@ public static class ContinuousTestProjectInventory
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return string.Empty;
+        }
+    }
+
+    private static bool TryReadBounded(string path, out string text)
+    {
+        text = string.Empty;
+        try
+        {
+            using var stream = File.OpenRead(path);
+            if (stream.Length > 64 * 1024)
+                return false;
+            var buffer = new byte[(int)stream.Length];
+            int read = 0;
+            while (read < buffer.Length)
+            {
+                int chunk = stream.Read(buffer, read, buffer.Length - read);
+                if (chunk == 0)
+                    break;
+                read += chunk;
+            }
+            text = Encoding.UTF8.GetString(buffer, 0, read);
+            return read == buffer.Length;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 

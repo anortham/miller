@@ -93,6 +93,63 @@ public sealed class QtQuickTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Provider_keeps_the_public_framework_identity_when_qmake_backend_is_selected()
+    {
+        string project = Path.Combine(_root, "quicktest.pro");
+        Directory.CreateDirectory(_root);
+        File.WriteAllText(project, "TEMPLATE = app\nTARGET = tst_smoke\nCONFIG += qmltestcase\n");
+        var runner = new ScriptedTestProcessRunner(command =>
+        {
+            if (command.FileName == "qmake" && command.Arguments.SequenceEqual(["-v"]))
+                return new TestProcessResult(0, "QMake version 3.1\nUsing Qt version 6.7.2 in /opt/Qt\n", "");
+            if (command.FileName == "qmake" && command.Arguments.SequenceEqual(["-query", "QT_VERSION"]))
+                return new TestProcessResult(0, "6.7.2\n", "");
+            if (command.FileName == "make" && command.Arguments.SequenceEqual(["--version"]))
+                return new TestProcessResult(0, "GNU Make 4.4\n", "");
+            if (command.FileName == "qmake")
+            {
+                File.WriteAllText(Path.Combine(command.WorkingDirectory, "Makefile"), "check:\nall:\n");
+                return new TestProcessResult(0, "", "");
+            }
+            if (command.FileName == "make" && command.Arguments.Count == 0)
+                return new TestProcessResult(0, "", "");
+            if (command.FileName == "make" && command.Arguments.Contains("check"))
+            {
+                string value = command.Arguments.Single(argument => argument.StartsWith("TESTARGS=", StringComparison.Ordinal))["TESTARGS=".Length..];
+                string artifact = value[3..value.IndexOf(',', 3)];
+                Directory.CreateDirectory(Path.GetDirectoryName(artifact)!);
+                File.WriteAllText(artifact, "<testsuite name=\"qml\"><testcase classname=\"Smoke\" name=\"test_pass\" /></testsuite>");
+                return new TestProcessResult(0, "", "");
+            }
+            throw new Xunit.Sdk.XunitException($"unexpected command: {command.ToDisplayString()}");
+        });
+        var provider = new QtQuickTestProvider(runner, qmakePath: "qmake", makePath: "make");
+        var workspace = new ContinuousTestWorkspace(
+            "ws:qmake",
+            _root,
+            project,
+            Path.Combine(_root, "build"),
+            Framework: "qt-quick-test",
+            Metadata: new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["backend"] = "qmake",
+                ["configure_root"] = _root,
+                ["evidence_root"] = _root,
+                ["project_id"] = "qmake",
+            });
+
+        var discovered = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        var test = Assert.Single(discovered);
+        var result = await provider.RunAsync(
+            Request(workspace, [test.Id]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("qt-quick-test", test.Framework);
+        Assert.Equal("qmake", test.Metadata["backend"]);
+        Assert.Equal("passed", Assert.Single(result.CaseResults).Status);
+    }
+
+    [Fact]
     public async Task Selected_run_reuses_discovery_generation_and_maps_junit_to_exact_cases()
     {
         var runner = new ScriptedTestProcessRunner(command =>

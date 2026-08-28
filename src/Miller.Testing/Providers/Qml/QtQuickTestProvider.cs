@@ -16,8 +16,16 @@ public sealed class QtQuickTestProvider : IContinuousTestProvider
     public QtQuickTestProvider(
         ITestProcessRunner runner,
         string cmakePath = "cmake",
-        string ctestPath = "ctest")
-        : this(new CMakeQtQuickTestBackend(runner, cmakePath, ctestPath))
+        string ctestPath = "ctest",
+        string? qmakePath = null,
+        string? makePath = null)
+        : this([
+            new CMakeQtQuickTestBackend(runner, cmakePath, ctestPath),
+            new QmakeQtQuickTestBackend(
+                runner,
+                qmakePath ?? QmakeQuickTestTooling.ResolveQmakePath(),
+                makePath ?? QmakeQuickTestTooling.ResolveMakePath()),
+        ])
     {
     }
 

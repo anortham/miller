@@ -29,6 +29,8 @@ public sealed class CtScaleTraitConventionTests
     private static readonly string[] PythonLaunchSignals = ["RequirePython", "LocatePython"];
     private static readonly string[] CMakeLaunchSignals = ["RequireCMake", "LocateCMake"];
     private static readonly string[] CTestLaunchSignals = ["RequireCTest", "LocateCTest"];
+    private static readonly string[] QmakeLaunchSignals =
+        ["RequireQmakeQuickTest", "LocateQmake", "RequireQmakeMake", "LocateQmakeMake"];
     private static readonly string[] QtQuickTestLaunchSignals =
         ["RequireQtQuickTestCMakePrefix", "LocateQtPaths"];
 
@@ -59,6 +61,7 @@ public sealed class CtScaleTraitConventionTests
         int pythonFilesSeen = 0;
         int cmakeFilesSeen = 0;
         int ctestFilesSeen = 0;
+        int qmakeFilesSeen = 0;
         int qtQuickTestFilesSeen = 0;
 
         foreach (var path in sources)
@@ -73,9 +76,10 @@ public sealed class CtScaleTraitConventionTests
             bool spawnsPython = PythonLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsCMake = CMakeLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsCTest = CTestLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
+            bool spawnsQmake = QmakeLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsQtQuickTest = QtQuickTestLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             if (!spawnsDotnet && !spawnsCargo && !spawnsNode && !spawnsPython
-                && !spawnsCMake && !spawnsCTest && !spawnsQtQuickTest)
+                && !spawnsCMake && !spawnsCTest && !spawnsQmake && !spawnsQtQuickTest)
                 continue;
 
             if (spawnsDotnet)
@@ -90,6 +94,8 @@ public sealed class CtScaleTraitConventionTests
                 cmakeFilesSeen++;
             if (spawnsCTest)
                 ctestFilesSeen++;
+            if (spawnsQmake)
+                qmakeFilesSeen++;
             if (spawnsQtQuickTest)
                 qtQuickTestFilesSeen++;
 
@@ -103,6 +109,7 @@ public sealed class CtScaleTraitConventionTests
         AssertSignalFamilyIsCovered(pythonFilesSeen, "python", PythonLaunchSignals);
         AssertSignalFamilyIsCovered(cmakeFilesSeen, "cmake", CMakeLaunchSignals);
         AssertSignalFamilyIsCovered(ctestFilesSeen, "ctest", CTestLaunchSignals);
+        AssertSignalFamilyIsCovered(qmakeFilesSeen, "qmake", QmakeLaunchSignals);
         AssertSignalFamilyIsCovered(qtQuickTestFilesSeen, "Qt Quick Test", QtQuickTestLaunchSignals);
 
         Assert.True(violations.Count == 0,
