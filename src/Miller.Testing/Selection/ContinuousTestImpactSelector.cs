@@ -122,6 +122,8 @@ public sealed class ContinuousTestImpactSelector
         if (testCases.Length == 0)
             return new ContinuousTestSelectionResult([], [], [], ContinuousTestSelectionOutcome.Unknown);
 
+        testCases = ResolveProviderIdentities(testCases);
+
         Dictionary<string, TestCaseFact> testCaseBySymbolId = testCases
             .Where(row => !string.IsNullOrEmpty(row.SymbolId))
             .GroupBy(row => row.SymbolId!, StringComparer.Ordinal)
@@ -131,13 +133,15 @@ public sealed class ContinuousTestImpactSelector
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
 
         IReadOnlyList<CtSymbolFact> changedFileSymbols = _facts.SymbolsForChangedFiles(request.ChangedPaths);
-        FileFact[] changedFiles = ResolveChangedFiles(request.ChangedPaths, changedFileSymbols);
+        IReadOnlyList<CtFileFact> fileFacts = _facts.FileFactsForPaths(request.ChangedPaths);
+        FileFact[] changedFiles = ResolveChangedFiles(request.ChangedPaths, changedFileSymbols, fileFacts);
         Dictionary<string, FileFact> changedFileByPath =
             changedFiles.ToDictionary(row => NormalizePath(row.Path), PathComparer);
         SymbolFact[] impactedSymbols = ResolveImpactedSymbols(
             request,
             changedFileSymbols.Select(SymbolFact.FromMiller).ToArray(),
-            testCaseBySymbolId);
+            testCaseBySymbolId,
+            testCases);
         string[] impactedSymbolIds = impactedSymbols
             .Select(row => row.Id)
             .Where(static value => !string.IsNullOrEmpty(value))
@@ -156,11 +160,22 @@ public sealed class ContinuousTestImpactSelector
         AddProjectScopeEvidence(request, testCases, evidence);
         AddQmlProjectScopeEvidence(request, testCases, evidence);
         bool unmappableHint = AddImpactedTestEvidence(request, casesBySourcePath, testCases, evidence);
-        AddImpactedTestSymbolEvidence(impactedSymbols, testCaseBySymbolId, evidence);
+        AddImpactedTestSymbolEvidence(impactedSymbols, testCaseBySymbolId, testCases, evidence);
         bool unmappableEvidence = AddCoverageEvidence(request, impactedSymbols, changedFiles, testCaseById, evidence);
         CtImpactResult? graphImpact = impactedSymbolIds.Length == 0 ? null : _facts.Impact(impactedSymbolIds);
-        unmappableEvidence |= AddGraphReferenceEvidence(graphImpact, impactedSymbolIds, symbolById, testCaseBySymbolId, evidence);
-        unmappableEvidence |= AddIdentifierReferenceEvidence(impactedSymbolIds, symbolById, testCaseBySymbolId, evidence);
+        unmappableEvidence |= AddGraphReferenceEvidence(
+            graphImpact,
+            impactedSymbolIds,
+            symbolById,
+            testCaseBySymbolId,
+            testCases,
+            evidence);
+        unmappableEvidence |= AddIdentifierReferenceEvidence(
+            impactedSymbolIds,
+            symbolById,
+            testCaseBySymbolId,
+            testCases,
+            evidence);
         AddPathStemEvidence(request, changedFiles, testCases, evidence);
 
         List<ContinuousTestSelectionEvidence> ranked = RankEvidence(evidence);
@@ -177,6 +192,7 @@ public sealed class ContinuousTestImpactSelector
         bool unknown = truncated
             || unmappableHint
             || unmappableEvidence
+            || HasInvalidFileEvidence(changedFiles)
             || HasUnaccountedChangedPath(request, changedFileSymbols, changedFiles, testCases);
         if (unknown)
         {
@@ -197,7 +213,18 @@ public sealed class ContinuousTestImpactSelector
             testCases,
             snapshot?.Statuses(request.ProjectPath));
         if (ranked.Count == 0)
+        {
+            if (!CanProveKnownEmpty(request, changedFiles))
+            {
+                string[] allIds = testCases
+                    .Select(row => row.Id)
+                    .Order(StringComparer.Ordinal)
+                    .ToArray();
+                return new ContinuousTestSelectionResult([], allIds, ranked, ContinuousTestSelectionOutcome.Unknown);
+            }
+
             return new ContinuousTestSelectionResult([], alreadyOwed, [], ContinuousTestSelectionOutcome.KnownEmpty);
+        }
 
         string[] selected = ranked.Select(row => row.TestCaseId).ToArray();
         string[] stale = selected
@@ -280,6 +307,8 @@ public sealed class ContinuousTestImpactSelector
             string path = NormalizePath(raw);
             if (resolvedPaths.Contains(path))
                 continue;
+            if (fileByPath.TryGetValue(path, out FileFact? file) && file.IsCurrent)
+                continue;
             if (IsProjectOrConfigPath(path))
                 continue;
             if (IsQmlProjectChange(path)
@@ -341,11 +370,15 @@ public sealed class ContinuousTestImpactSelector
 
     private static FileFact[] ResolveChangedFiles(
         IReadOnlyList<string> changedPaths,
-        IReadOnlyList<CtSymbolFact> symbols)
+        IReadOnlyList<CtSymbolFact> symbols,
+        IReadOnlyList<CtFileFact> fileFacts)
     {
         var byPath = symbols
             .GroupBy(row => NormalizePath(row.FilePath), PathComparer)
             .ToDictionary(group => group.Key, group => group.ToArray(), PathComparer);
+        var factsByPath = fileFacts
+            .GroupBy(row => NormalizePath(row.Path), PathComparer)
+            .ToDictionary(group => group.Key, group => group.First(), PathComparer);
 
         var files = new List<FileFact>();
         foreach (string raw in changedPaths)
@@ -355,7 +388,9 @@ public sealed class ContinuousTestImpactSelector
 
             string normalized = NormalizePath(raw);
             byPath.TryGetValue(normalized, out CtSymbolFact[]? inFile);
-            string? language = inFile is { Length: > 0 } ? inFile[0].Language : LanguageFromPath(normalized);
+            factsByPath.TryGetValue(normalized, out CtFileFact? fileFact);
+            string? language = fileFact?.Language
+                ?? (inFile is { Length: > 0 } ? inFile[0].Language : LanguageFromPath(normalized));
             bool isTest = inFile is { Length: > 0 }
                 ? inFile.Any(static row => row.IsTest) || IsTestPath(normalized)
                 : IsTestPath(normalized);
@@ -363,16 +398,85 @@ public sealed class ContinuousTestImpactSelector
                 Id: normalized,
                 Path: normalized,
                 Language: language,
-                Role: isTest ? "test" : null));
+                Role: isTest ? "test" : null,
+                Status: fileFact?.Status,
+                HasParseDiagnostics: fileFact?.HasParseDiagnostics ?? false,
+                EvidenceAvailable: fileFact?.EvidenceAvailable ?? false));
         }
 
         return files.ToArray();
     }
 
+    private TestCaseFact[] ResolveProviderIdentities(IReadOnlyList<TestCaseFact> testCases)
+    {
+        string[] paths = testCases
+            .Where(row => row.HasTypedIdentity && !string.IsNullOrWhiteSpace(row.SymbolPath))
+            .Select(row => NormalizePath(row.SymbolPath!))
+            .Distinct(PathComparer)
+            .ToArray();
+        if (paths.Length == 0)
+            return testCases.ToArray();
+
+        IReadOnlyList<CtSymbolFact> symbols = _facts.SymbolsForChangedFiles(paths);
+        return testCases
+            .Select(testCase => ResolveProviderIdentity(testCase, symbols))
+            .ToArray();
+    }
+
+    private static TestCaseFact ResolveProviderIdentity(
+        TestCaseFact testCase,
+        IReadOnlyList<CtSymbolFact> symbols)
+    {
+        if (!testCase.HasTypedIdentity
+            || string.IsNullOrWhiteSpace(testCase.SymbolName)
+            || string.IsNullOrWhiteSpace(testCase.SymbolPath))
+        {
+            return testCase;
+        }
+
+        CtSymbolFact[] matches = symbols
+            .Where(symbol => PathsEqual(symbol.FilePath, testCase.SymbolPath)
+                && string.Equals(symbol.Name, testCase.SymbolName, StringComparison.Ordinal)
+                && ContinuousTestLanguageFamily.AreCompatible(
+                    symbol.Language,
+                    testCase.FileLanguage ?? LanguageFromPath(testCase.SymbolPath)))
+            .ToArray();
+        return matches.Length switch
+        {
+            1 => testCase with { SymbolId = matches[0].SymbolId },
+            > 1 => testCase with { IdentityAmbiguous = true },
+            _ => testCase,
+        };
+    }
+
+    private static bool HasInvalidFileEvidence(IReadOnlyList<FileFact> changedFiles) =>
+        changedFiles.Any(static file => file.EvidenceAvailable && !file.IsCurrent);
+
+    private static bool CanProveKnownEmpty(
+        ContinuousTestImpactSelectionRequest request,
+        IReadOnlyList<FileFact> changedFiles)
+    {
+        Dictionary<string, FileFact> files = changedFiles
+            .ToDictionary(row => NormalizePath(row.Path), PathComparer);
+        foreach (string rawPath in request.ChangedPaths)
+        {
+            if (string.IsNullOrWhiteSpace(rawPath))
+                continue;
+            string path = NormalizePath(rawPath);
+            if (IsHarmlessChangedPath(path) || IsProjectOrConfigPath(path))
+                continue;
+            if (!files.TryGetValue(path, out FileFact? file) || !file.IsCurrent)
+                return false;
+        }
+
+        return true;
+    }
+
     private static SymbolFact[] ResolveImpactedSymbols(
         ContinuousTestImpactSelectionRequest request,
         IReadOnlyList<SymbolFact> changedFileSymbols,
-        IReadOnlyDictionary<string, TestCaseFact> testCaseBySymbolId)
+        IReadOnlyDictionary<string, TestCaseFact> testCaseBySymbolId,
+        IReadOnlyList<TestCaseFact> allTestCases)
     {
         var result = new Dictionary<string, SymbolFact>(StringComparer.Ordinal);
         foreach (SymbolFact symbol in changedFileSymbols)
@@ -391,6 +495,11 @@ public sealed class ContinuousTestImpactSelector
 
             if (testCaseBySymbolId.TryGetValue(hint.SymbolId, out TestCaseFact? testCase))
                 result.TryAdd(hint.SymbolId, SymbolFact.FromHint(hint, testCase, isTest: true));
+            else if (allTestCases.Any(row => string.Equals(row.SymbolName, hint.SymbolId, StringComparison.Ordinal)))
+                result.TryAdd(hint.SymbolId, SymbolFact.FromHint(
+                    hint,
+                    allTestCases.First(row => string.Equals(row.SymbolName, hint.SymbolId, StringComparison.Ordinal)),
+                    isTest: true));
             else
                 result.TryAdd(hint.SymbolId, SymbolFact.FromHint(hint, testCase: null, isTest: false));
         }
@@ -611,12 +720,27 @@ public sealed class ContinuousTestImpactSelector
     private static void AddImpactedTestSymbolEvidence(
         IReadOnlyList<SymbolFact> impactedSymbols,
         IReadOnlyDictionary<string, TestCaseFact> testCaseBySymbolId,
+        IReadOnlyList<TestCaseFact> allTestCases,
         List<ContinuousTestSelectionEvidence> evidence)
     {
         foreach (SymbolFact symbol in impactedSymbols)
         {
-            if (!IsTestSymbol(symbol) || !testCaseBySymbolId.TryGetValue(symbol.Id, out TestCaseFact? testCase))
+            if (!IsTestSymbol(symbol))
                 continue;
+            if (!testCaseBySymbolId.TryGetValue(symbol.Id, out TestCaseFact? testCase))
+            {
+                TestCaseFact[] candidates = allTestCases
+                    .Where(row => CanUseProviderCase(row, symbol.Id)
+                        && (string.Equals(row.SymbolName, symbol.Id, StringComparison.Ordinal)
+                            || (PathsEqual(row.SymbolPath ?? row.SourcePath ?? row.FilePath, symbol.FilePath)
+                                && TestNameMatches(symbol.Name, row))))
+                    .ToArray();
+                if (candidates.Length != 1)
+                    continue;
+                testCase = candidates[0];
+                if (!CanUseProviderCase(testCase, symbol.Id))
+                    continue;
+            }
 
             evidence.Add(new ContinuousTestSelectionEvidence(
                 TestCaseId: testCase.Id,
@@ -659,6 +783,12 @@ public sealed class ContinuousTestImpactSelector
             {
                 if (!TestNameMatches(impactedTest.Name, testCase))
                     continue;
+
+                if (!CanUseProviderCase(testCase, impactedTest.SymbolId))
+                {
+                    unmappable = true;
+                    continue;
+                }
 
                 mapped = true;
                 evidence.Add(new ContinuousTestSelectionEvidence(
@@ -727,17 +857,24 @@ public sealed class ContinuousTestImpactSelector
     /// </summary>
     private static IEnumerable<string> CaseResidencePaths(TestCaseFact testCase)
     {
+        string? symbolPath = string.IsNullOrEmpty(testCase.SymbolPath)
+            ? null
+            : NormalizePath(testCase.SymbolPath);
+        if (symbolPath is not null)
+            yield return symbolPath;
+
         string? sourcePath = string.IsNullOrEmpty(testCase.SourcePath)
             ? null
             : NormalizePath(testCase.SourcePath);
-        if (sourcePath is not null)
+        if (sourcePath is not null && (symbolPath is null || !PathComparer.Equals(sourcePath, symbolPath)))
             yield return sourcePath;
 
         if (string.IsNullOrEmpty(testCase.FileId))
             yield break;
 
         string filePath = NormalizePath(testCase.FileId);
-        if (sourcePath is null || !PathComparer.Equals(sourcePath, filePath))
+        if ((sourcePath is null || !PathComparer.Equals(sourcePath, filePath))
+            && (symbolPath is null || !PathComparer.Equals(symbolPath, filePath)))
             yield return filePath;
     }
 
@@ -835,6 +972,22 @@ public sealed class ContinuousTestImpactSelector
 
         return TrailingSegmentEquals(testCase.QualifiedName, millerName)
             || TrailingSegmentEquals(testCase.Selector, millerName);
+    }
+
+    private static bool CanUseProviderCase(TestCaseFact testCase, string? impactedSymbolId)
+    {
+        if (testCase.IdentityAmbiguous)
+            return false;
+        if (string.IsNullOrEmpty(testCase.SymbolId))
+        {
+            if (!testCase.HasTypedIdentity)
+                return true;
+            return !string.IsNullOrEmpty(impactedSymbolId)
+                && string.Equals(testCase.SymbolName, impactedSymbolId, StringComparison.Ordinal);
+        }
+
+        return string.IsNullOrEmpty(impactedSymbolId)
+            || string.Equals(testCase.SymbolId, impactedSymbolId, StringComparison.Ordinal);
     }
 
     private static bool TrailingSegmentEquals(string? dotted, string expected)
@@ -939,6 +1092,7 @@ public sealed class ContinuousTestImpactSelector
         IReadOnlyList<string> impactedSymbolIds,
         IReadOnlyDictionary<string, SymbolFact> symbolById,
         IReadOnlyDictionary<string, TestCaseFact> testCaseBySymbolId,
+        IReadOnlyList<TestCaseFact> allTestCases,
         List<ContinuousTestSelectionEvidence> evidence)
     {
         if (impact is null)
@@ -947,8 +1101,43 @@ public sealed class ContinuousTestImpactSelector
         bool unmappable = false;
         foreach (CtImpactedSymbol test in impact.Tests)
         {
-            if (!testCaseBySymbolId.TryGetValue(test.SymbolId, out TestCaseFact? testCase))
+            SymbolFact testSymbol = SymbolFact.FromImpact(test);
+            if (HasUnknownTestEvidence(testSymbol))
+            {
+                unmappable = true;
                 continue;
+            }
+            if (!IsTestSymbol(testSymbol))
+                continue;
+            if (!testCaseBySymbolId.TryGetValue(test.SymbolId, out TestCaseFact? testCase))
+            {
+                TestCaseFact[] candidates = allTestCases
+                    .Where(row => PathsEqual(row.SymbolPath ?? row.SourcePath ?? row.FilePath, test.FilePath)
+                        && TestNameMatches(test.Name, row))
+                    .ToArray();
+                if (candidates.Length == 0)
+                {
+                    candidates = allTestCases
+                        .Where(row => string.Equals(row.SymbolName, test.SymbolId, StringComparison.Ordinal))
+                        .ToArray();
+                }
+                if (candidates.Length != 1)
+                {
+                    if (candidates.Length > 1
+                        || allTestCases.Any(row => PathsEqual(
+                            row.SymbolPath ?? row.SourcePath ?? row.FilePath,
+                            test.FilePath)))
+                        unmappable = true;
+                    continue;
+                }
+
+                testCase = candidates[0];
+                if (!CanUseProviderCase(testCase, test.SymbolId))
+                {
+                    unmappable = true;
+                    continue;
+                }
+            }
             if (!HasTestBackingFile(testCase))
             {
                 unmappable = true;
@@ -980,6 +1169,7 @@ public sealed class ContinuousTestImpactSelector
         IReadOnlyList<string> impactedSymbolIds,
         IReadOnlyDictionary<string, SymbolFact> symbolById,
         IReadOnlyDictionary<string, TestCaseFact> testCaseBySymbolId,
+        IReadOnlyList<TestCaseFact> allTestCases,
         List<ContinuousTestSelectionEvidence> evidence)
     {
         if (impactedSymbolIds.Count == 0)
@@ -988,10 +1178,25 @@ public sealed class ContinuousTestImpactSelector
         bool unmappable = false;
         foreach (CtReferenceFact reference in _facts.IdentifierEvidenceTo(impactedSymbolIds))
         {
-            if (string.IsNullOrEmpty(reference.SourceSymbolId)
-                || !testCaseBySymbolId.TryGetValue(reference.SourceSymbolId, out TestCaseFact? testCase))
+            if (string.IsNullOrEmpty(reference.SourceSymbolId))
             {
                 continue;
+            }
+
+            if (!testCaseBySymbolId.TryGetValue(reference.SourceSymbolId, out TestCaseFact? testCase))
+            {
+                TestCaseFact[] candidates = allTestCases
+                    .Where(row => PathsEqual(row.SymbolPath ?? row.SourcePath ?? row.FilePath, reference.FilePath)
+                        && string.Equals(row.SymbolName, reference.SourceSymbolId, StringComparison.Ordinal))
+                    .ToArray();
+                if (candidates.Length != 1)
+                    continue;
+                testCase = candidates[0];
+                if (!CanUseProviderCase(testCase, reference.SourceSymbolId))
+                {
+                    unmappable = true;
+                    continue;
+                }
             }
 
             if (!HasTestBackingFile(testCase))
@@ -1091,18 +1296,11 @@ public sealed class ContinuousTestImpactSelector
     {
         if (string.IsNullOrEmpty(changedLanguage) || string.IsNullOrEmpty(testLanguage))
             return false;
-        if (changedLanguage.Equals(testLanguage, StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        return IsCsharpOrRazor(changedLanguage) && IsCsharpOrRazor(testLanguage);
+        return ContinuousTestLanguageFamily.AreCompatible(changedLanguage, testLanguage);
     }
 
-    private static bool IsCsharpOrRazor(string language) =>
-        language.Equals("csharp", StringComparison.OrdinalIgnoreCase)
-        || language.Equals("razor", StringComparison.OrdinalIgnoreCase);
-
     private static bool HasPathStemCandidate(TestCaseFact testCase) =>
-        HasTestBackingFile(testCase) || IsFilelessDotnetCase(testCase);
+        HasTestBackingFile(testCase);
 
     private static bool IsFilelessDotnetCase(TestCaseFact testCase) =>
         string.Equals(testCase.Source, "ct-provider:dotnet", StringComparison.Ordinal)
@@ -1178,9 +1376,16 @@ public sealed class ContinuousTestImpactSelector
 
     private static bool IsTestSymbol(SymbolFact symbol) =>
         IsTestFile(symbol.FileRole, symbol.FilePath)
-        && (symbol.TestRole is "testcase" or "test_case" or "parameterizedtest" or "parameterized_test"
-            || symbol.IsTest
-            || IsConventionalTestFunction(symbol.Kind, symbol.Name));
+        && !HasUnknownTestEvidence(symbol)
+        && (symbol.TestCase == true
+            || (symbol.TestCase is null && symbol.TestContainer is null && symbol.TestLifecycle is null
+                && (symbol.IsTest || IsConventionalTestFunction(symbol.Kind, symbol.Name))));
+
+    private static bool HasUnknownTestEvidence(SymbolFact symbol) =>
+        (symbol.TestCase is not null || symbol.TestContainer is not null || symbol.TestLifecycle is not null)
+            && !string.Equals(symbol.TestEvidenceStatus, "current", StringComparison.OrdinalIgnoreCase)
+        || (symbol.TestEvidenceStatus is not null
+            && !string.Equals(symbol.TestEvidenceStatus, "current", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsConventionalTestFunction(string? kind, string name) =>
         (string.Equals(kind, "function", StringComparison.OrdinalIgnoreCase)
@@ -1259,12 +1464,17 @@ public sealed class ContinuousTestImpactSelector
             ".go" => "go",
             ".js" => "javascript",
             ".jsx" => "javascript",
+            ".mjs" => "javascript",
+            ".cjs" => "javascript",
             ".qml" => "qml",
             ".py" => "python",
             ".razor" => "razor",
             ".rs" => "rust",
             ".ts" => "typescript",
             ".tsx" => "typescript",
+            ".mts" => "typescript",
+            ".cts" => "typescript",
+            ".vb" => "vbnet",
             _ => null,
         };
     }
@@ -1401,7 +1611,19 @@ public sealed class ContinuousTestImpactSelector
             || path.EndsWith(".razor.js", StringComparison.OrdinalIgnoreCase);
     }
 
-    private sealed record FileFact(string Id, string Path, string? Language, string? Role);
+    private sealed record FileFact(
+        string Id,
+        string Path,
+        string? Language,
+        string? Role,
+        string? Status,
+        bool HasParseDiagnostics,
+        bool EvidenceAvailable)
+    {
+        public bool IsCurrent => EvidenceAvailable
+            && !HasParseDiagnostics
+            && string.Equals(Status, "indexed", StringComparison.OrdinalIgnoreCase);
+    }
 
     private sealed record SymbolFact(
         string Id,
@@ -1414,7 +1636,12 @@ public sealed class ContinuousTestImpactSelector
         string? TestRole,
         string? FilePath,
         string? FileLanguage,
-        string? FileRole)
+        string? FileRole,
+        bool? TestCase = null,
+        bool? TestContainer = null,
+        bool? TestLifecycle = null,
+        string? TestEvidenceStatus = null,
+        string? TestEvidenceReason = null)
     {
         public static SymbolFact FromMiller(CtSymbolFact symbol) =>
             new(
@@ -1425,10 +1652,34 @@ public sealed class ContinuousTestImpactSelector
                 QualifiedName: symbol.Name,
                 Kind: symbol.Kind,
                 IsTest: symbol.IsTest,
-                TestRole: symbol.IsTest ? "testcase" : null,
+                TestRole: TestRoleFor(symbol.TestCase, symbol.TestContainer, symbol.TestLifecycle, symbol.IsTest),
                 FilePath: symbol.FilePath,
                 FileLanguage: symbol.Language,
-                FileRole: symbol.IsTest ? "test" : null);
+                FileRole: symbol.IsTest ? "test" : null,
+                TestCase: symbol.TestCase,
+                TestContainer: symbol.TestContainer,
+                TestLifecycle: symbol.TestLifecycle,
+                TestEvidenceStatus: symbol.TestEvidenceStatus,
+                TestEvidenceReason: symbol.TestEvidenceReason);
+
+        public static SymbolFact FromImpact(CtImpactedSymbol symbol) =>
+            new(
+                Id: symbol.SymbolId,
+                NodeId: symbol.SymbolId,
+                FileId: symbol.FilePath,
+                Name: symbol.Name,
+                QualifiedName: symbol.Name,
+                Kind: symbol.Kind,
+                IsTest: symbol.IsTest,
+                TestRole: TestRoleFor(symbol.TestCase, symbol.TestContainer, symbol.TestLifecycle, symbol.IsTest),
+                FilePath: symbol.FilePath,
+                FileLanguage: LanguageFromPath(symbol.FilePath),
+                FileRole: symbol.IsTest ? "test" : null,
+                TestCase: symbol.TestCase,
+                TestContainer: symbol.TestContainer,
+                TestLifecycle: symbol.TestLifecycle,
+                TestEvidenceStatus: symbol.TestEvidenceStatus,
+                TestEvidenceReason: symbol.TestEvidenceReason);
 
         public static SymbolFact FromHint(
             ContinuousTestImpactedSymbol hint,
@@ -1446,6 +1697,19 @@ public sealed class ContinuousTestImpactSelector
                 FilePath: hint.Path ?? testCase?.FilePath,
                 FileLanguage: testCase?.FileLanguage,
                 FileRole: testCase?.FileRole ?? (isTest ? "test" : null));
+
+        private static string? TestRoleFor(bool? testCase, bool? testContainer, bool? testLifecycle, bool isTest)
+        {
+            if (testLifecycle == true)
+                return "lifecycle";
+            if (testCase == true)
+                return "testcase";
+            if (testContainer == true)
+                return "container";
+            return testCase is null && testContainer is null && testLifecycle is null && isTest
+                ? "legacy"
+                : null;
+        }
     }
 
     private sealed record TestCaseFact(
@@ -1461,16 +1725,22 @@ public sealed class ContinuousTestImpactSelector
         string? Name,
         string? QualifiedName,
         string? ClassName,
-        string? Source)
+        string? Source,
+        string? SymbolName,
+        string? SymbolPath,
+        bool HasTypedIdentity,
+        bool IdentityAmbiguous)
     {
         public static TestCaseFact FromCase(ContinuousTestCase row)
         {
-            string filePath = row.FilePath ?? SelectorPath(row.Selector);
+            string filePath = row.FilePath
+                ?? MetadataString(row.Metadata, "source_path")
+                ?? SelectorPath(row.Selector);
             return new(
                 Id: row.Id,
                 Selector: row.Selector,
                 FileId: LooksLikePath(row.FilePath ?? filePath) ? (row.FilePath ?? filePath) : null,
-                SymbolId: row.SymbolName,
+                SymbolId: null,
                 FilePath: filePath,
                 FileLanguage: MetadataString(row.Metadata, "file_language") ?? LanguageFromPath(filePath),
                 FileRole: MetadataString(row.Metadata, "file_role"),
@@ -1479,7 +1749,12 @@ public sealed class ContinuousTestImpactSelector
                 Name: row.Name,
                 QualifiedName: row.QualifiedName,
                 ClassName: MetadataString(row.Metadata, "class"),
-                Source: row.Source);
+                Source: row.Source,
+                SymbolName: row.SymbolName,
+                SymbolPath: row.SymbolPath,
+                HasTypedIdentity: !string.IsNullOrWhiteSpace(row.SymbolName)
+                    && !string.IsNullOrWhiteSpace(row.SymbolPath),
+                IdentityAmbiguous: false);
         }
 
         private static string SelectorPath(string? selector)

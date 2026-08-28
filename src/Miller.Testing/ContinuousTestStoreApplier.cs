@@ -60,6 +60,8 @@ public sealed class ContinuousTestStoreApplier
                     QualifiedName: testCase.FullyQualifiedName,
                     Selector: testCase.Selector,
                     FilePath: testCase.SourcePath,
+                    SymbolName: testCase.SymbolName,
+                    SymbolPath: testCase.SymbolPath,
                     Framework: testCase.Framework,
                     Role: ContinuousTestRole.TestCase,
                     Source: providerSource,

@@ -387,6 +387,8 @@ public sealed record ProviderTestCase
     public string? Framework { get; init; }
     public string? SourcePath { get; init; }
     public IReadOnlyDictionary<string, object?> Metadata { get; init; }
+    public string? SymbolName { get; init; }
+    public string? SymbolPath { get; init; }
 
     public ProviderTestCase(
         string Id,
@@ -395,7 +397,9 @@ public sealed record ProviderTestCase
         string Selector,
         string? Framework = null,
         string? SourcePath = null,
-        IReadOnlyDictionary<string, object?>? Metadata = null)
+        IReadOnlyDictionary<string, object?>? Metadata = null,
+        string? SymbolName = null,
+        string? SymbolPath = null)
     {
         if (string.IsNullOrWhiteSpace(Id)) throw new ArgumentException("must not be empty", nameof(Id));
         if (string.IsNullOrWhiteSpace(DisplayName))
@@ -412,6 +416,8 @@ public sealed record ProviderTestCase
         this.SourcePath = SourcePath;
         this.Metadata = Metadata ?? new ReadOnlyDictionary<string, object?>(
             new Dictionary<string, object?>(StringComparer.Ordinal));
+        this.SymbolName = SymbolName;
+        this.SymbolPath = SymbolPath;
     }
 }
 

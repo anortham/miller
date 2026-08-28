@@ -132,6 +132,34 @@ public sealed class ContinuousTestStoreApplierTests : IDisposable
     }
 
     [Fact]
+    public void Store_applier_round_trips_provider_symbol_identity()
+    {
+        using var store = new ContinuousTestStore(_dbPath);
+        var applier = new ContinuousTestStoreApplier(store);
+        const string sourcePath = "tests/SampleTests.cs";
+
+        applier.ApplyDiscovery(
+            Workspace,
+            [
+                new ProviderTestCase(
+                    Id: "test:1",
+                    DisplayName: "Passes",
+                    FullyQualifiedName: "Sample.Tests.Passes",
+                    Selector: "Sample.Tests.Passes",
+                    Framework: "xunit",
+                    SourcePath: sourcePath,
+                    Metadata: new Dictionary<string, object?>(),
+                    SymbolName: "Passes",
+                    SymbolPath: sourcePath),
+            ]);
+
+        ContinuousTestCase row = store.GetTestCase(Workspace, "test:1")!;
+        Assert.Equal("Passes", row.SymbolName);
+        Assert.Equal(sourcePath, row.SymbolPath);
+        Assert.Equal(sourcePath, row.FilePath);
+    }
+
+    [Fact]
     public void Store_applier_prunes_old_provider_cases_for_project_on_discovery_refresh()
     {
         using var store = new ContinuousTestStore(_dbPath);
