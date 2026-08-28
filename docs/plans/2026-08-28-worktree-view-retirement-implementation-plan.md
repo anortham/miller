@@ -184,13 +184,13 @@ Batch A uses `parallel-lead-commit`. Task 2 owns the compact missing-root hint w
 **Approach:** Stop immediately on any family/view mismatch, unexpected live root, preview failure, apply failure, or current-view selection. Never run broad `workspace prune` for the one-time cleanup. Verify the three excluded present roots before and after each destructive phase.
 
 **Acceptance criteria:**
-- [ ] The finding records 12 producer views, 2 active Git worktrees, 9 missing-root views, and the excluded present-root inventory before mutation.
-- [ ] Every retirement preview matches the captured family/view and reports exactly one planned retirement.
-- [ ] All nine missing-root producer views are absent afterward; no excluded view is changed.
-- [ ] Matching stale registry members and per-view sidecars are removed; producer-only legacy views are documented separately.
-- [ ] Producer GC completes or reports an actionable retained-work reason.
-- [ ] Final inventory and an impact replay quantify the cleanup effect.
-- [ ] Branch and external-state verification evidence is committed with the finding.
+- [x] The finding records 12 producer views, 2 active Git worktrees, 9 missing-root views, and the excluded present-root inventory before mutation.
+- [x] Every retirement preview matches the captured family/view and reports exactly one planned retirement.
+- [x] All nine missing-root producer views are absent afterward; no excluded view is changed.
+- [x] Matching stale registry members and per-view sidecars are removed; producer-only legacy views are documented separately.
+- [x] Producer GC completes or reports an actionable retained-work reason.
+- [x] Final inventory and an impact replay quantify the cleanup effect.
+- [x] Branch and external-state verification evidence is committed with the finding.
 
 ## Lead Integration and Completion
 
@@ -203,9 +203,9 @@ Batch A uses `parallel-lead-commit`. Task 2 owns the compact missing-root hint w
 
 ## Plan Acceptance Criteria
 
-- [ ] Tasks 1-3 are TDD-complete, reviewed, and committed.
-- [ ] Workspace remove/prune retires producer views before registry deletion and preserves failures for retry.
-- [ ] Hook and compact-list guidance prevents and exposes missed cleanup without startup mutation.
-- [ ] Nine audited missing-root views and their reclaimable per-view state are removed; excluded present views survive.
+- [x] Tasks 1-3 are TDD-complete, reviewed, and committed.
+- [x] Workspace remove/prune retires producer views before registry deletion and preserves failures for retry.
+- [x] Hook and compact-list guidance prevents and exposes missed cleanup without startup mutation.
+- [x] Nine audited missing-root views and their reclaimable per-view state are removed; excluded present views survive.
 - [ ] Fast, Scale, Release, secrets, dependency, and worktree gates pass.
 - [ ] Design, plan, and cleanup finding carry completed evidence.

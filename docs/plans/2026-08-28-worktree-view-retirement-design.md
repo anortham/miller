@@ -112,14 +112,14 @@ one-time cleanup, view-id rediscovery after registry deletion, and direct writes
 
 ## Acceptance criteria
 
-- [ ] SessionStart and SubagentStart guidance names targeted workspace removal after worktree deletion.
-- [ ] Compact workspace list points missing roots to a dry-run prune; JSON output is unchanged.
-- [ ] Applied remove/prune retires the exact producer view before deleting its registry member.
-- [ ] Dry-run prune performs no producer, registry, or sidecar writes.
-- [ ] Producer failure leaves the registry member intact and returns an actionable error.
-- [ ] Repeating retirement for an already-absent exact view succeeds safely.
-- [ ] Existing sidecar reclaim and store-maintenance behavior remains intact.
-- [ ] Focused hook, workspace removal/prune, adapter, and rendering tests pass.
+- [x] SessionStart and SubagentStart guidance names targeted workspace removal after worktree deletion.
+- [x] Compact workspace list points missing roots to a dry-run prune; JSON output is unchanged.
+- [x] Applied remove/prune retires the exact producer view before deleting its registry member.
+- [x] Dry-run prune performs no producer, registry, or sidecar writes.
+- [x] Producer failure leaves the registry member intact and returns an actionable error.
+- [x] Repeating retirement for an already-absent exact view succeeds safely.
+- [x] Existing sidecar reclaim and store-maintenance behavior remains intact.
+- [x] Focused hook, workspace removal/prune, adapter, and rendering tests pass.
 - [ ] Fast suite, Scale suite, Release build, secrets scan, and dependency audit pass.
-- [ ] The nine missing Miller views are previewed, retired, reclaimed, and absent from the final inventory.
-- [ ] The main checkout, task worktree, and `ct-dogfood-round2` root remain untouched.
+- [x] The nine missing Miller views are previewed, retired, reclaimed, and absent from the final inventory.
+- [x] The main checkout, task worktree, and `ct-dogfood-round2` root remain untouched.
