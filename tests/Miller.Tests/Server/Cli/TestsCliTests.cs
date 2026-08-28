@@ -152,8 +152,6 @@ public sealed class TestsCliTests : IDisposable
     [Fact]
     public void Enable_WithNoSupportedTestProjects_RefusesAndWritesNothing()
     {
-        File.WriteAllText(Path.Combine(_root, "go.mod"), "module example.com/thing\ngo 1.23\n");
-
         var (code, _, errText) = Run("tests", "enable");
 
         Assert.Equal(3, code);
@@ -166,10 +164,10 @@ public sealed class TestsCliTests : IDisposable
     [Fact]
     public void Enable_ByProject_RefusesAFileWithNoKnownFramework()
     {
-        string goMod = Path.Combine(_root, "go.mod");
-        File.WriteAllText(goMod, "module example.com/thing\ngo 1.23\n");
+        string unsupportedFile = Path.Combine(_root, "notes.txt");
+        File.WriteAllText(unsupportedFile, "not a test project\n");
 
-        var (code, _, errText) = Run("tests", "enable", "--project", goMod);
+        var (code, _, errText) = Run("tests", "enable", "--project", unsupportedFile);
 
         Assert.Equal(3, code);
         Assert.Contains("not a supported test project", errText, StringComparison.Ordinal);

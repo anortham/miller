@@ -4,8 +4,9 @@
 
 The documentation packet is implemented in the Miller worktree. The copied Julie finding is
 byte-for-byte identical to its source. No Julie file was modified and no worktree was removed.
-The owned-file commit is `e2a3d5fde42df9aba4ff294a85006001b207adb8`
-(`docs(ct): publish provider expansion and Julie handoff`).
+The documentation commit is `e2a3d5fde42df9aba4ff294a85006001b207adb8`
+(`docs(ct): publish provider expansion and Julie handoff`). This correction packet updates the
+two stale CLI fixtures and closes Task 9 verification.
 
 ## Changed files
 
@@ -19,6 +20,8 @@ The owned-file commit is `e2a3d5fde42df9aba4ff294a85006001b207adb8`
   backlog note.
 - `docs/plans/2026-08-27-ct-provider-correction-expansion-implementation-plan.md` — MTP delimiter
   correction and Task 7/8 evidence checkboxes.
+- `tests/Miller.Tests/Server/Cli/TestsCliTests.cs` — genuine empty and unclassified-file refusal
+  fixtures after Go became a supported provider.
 - `.razorback/sdd/2026-08-27-ct-provider-correction-expansion-implementation-plan/task-9-report.md`
   — this report.
 
@@ -113,8 +116,8 @@ The plan wording at
 native MTP filters are passed as direct application arguments to `dotnet exec <TargetPath>`;
 the `--` delimiter belongs only to the `dotnet test` driver. Task 7 and Task 8 acceptance
 checkboxes are marked at `:264-299` from their reports. Task 9's first four acceptance items are
-marked at `:322-326`; its worker-verification checkbox stays open until the lead reconciles the
-two stale CLI tests described below.
+marked at `:322-326`; its worker-verification checkbox is complete after the stale CLI fixtures
+were corrected at `tests/Miller.Tests/Server/Cli/TestsCliTests.cs:152-176`.
 
 ## Judgments
 
@@ -143,24 +146,24 @@ two stale CLI tests described below.
 - `git diff --check` — passed.
 - `sha256sum` and `cmp -s` — both hashes equal
   `9681e8a196b4a835534fb285846eedf6bc49f33ee3eb0f297ecba01ca02a6588`; compare exit 0.
+- Red evidence before this correction: the combined documentation/contract command returned
+  108 passed and 2 failed because both refusal tests used a Go 1.23 `go.mod`.
+- `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~Miller.Tests.Server.Cli.TestsCliTests.Enable_WithNoSupportedTestProjects_RefusesAndWritesNothing|FullyQualifiedName~Miller.Tests.Server.Cli.TestsCliTests.Enable_ByProject_RefusesAFileWithNoKnownFramework" --no-restore`
+  — 2 passed, 0 failed, 0 skipped after replacing the fixtures with an empty workspace and an
+  unsupported `notes.txt` file.
 - `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~AgentInstructionsTests" --no-restore`
   — 60 passed, 0 failed, 0 skipped. This is the documentation/guidance contract scope selected
   after Miller impact found no documentation dependents.
-- The broader exploratory command
-  `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~AgentInstructionsTests|FullyQualifiedName~TestsCliTests" --no-restore`
-  — 108 passed, 2 failed, 0 skipped. Both failures are stale expectations in
-  `tests/Miller.Tests/Server/Cli/TestsCliTests.cs:152-176`: the tests create a Go 1.23 `go.mod`
-  and still expect refusal, while the implemented Go provider correctly refuses only below Go
-  1.24 and the test's fixture now returns the observed non-refusal path. The test files are
-  outside this packet's ownership; the lead should dispatch a bounded correction before the
-  final branch gate.
+- `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~AgentInstructionsTests|FullyQualifiedName~TestsCliTests" --no-restore`
+  — 110 passed, 0 failed, 0 skipped. The stale Go 1.23 assumptions are removed without weakening
+  the exit-3, diagnostic, marker, or ct.db refusal assertions.
 
 ## Worktree state
 
 - Miller path: `/home/murphy/source/miller`
 - Branch: `feature/ct-provider-correction-expansion`
 - HEAD for the owned-file commit: `e2a3d5fde42df9aba4ff294a85006001b207adb8`
-- The report finalization is a follow-up commit because the report records the owned-file commit
-  SHA after Git created it.
-- Worktree list before report finalization: `/home/murphy/source/miller e2a3d5fd [feature/ct-provider-correction-expansion]`.
-- Finalization commit SHA: recorded in the handoff message after this report update.
+- Dirty state before correction commit: the two corrected CLI fixtures, this report, and the Task 9
+  checkbox update; no unrelated files are present.
+- Worktree list before correction commit: `/home/murphy/source/miller 3ab24883 [feature/ct-provider-correction-expansion]`.
+- Correction commit SHA: recorded in the handoff message after this report update.

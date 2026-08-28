@@ -324,4 +324,4 @@ Parallel Batch A uses `parallel-lead-commit`. Every other task uses `serial-work
 - [x] Miller owns the preserved readiness audit and bounded follow-up backlog.
 - [x] The Julie plan is clearly marked non-executable as originally written and retains only verified backlog items.
 - [x] Julie-main Goldfish files remain untouched and are reported in final state.
-- [ ] Worker-scope verification passes and the worker creates the owned-file commit.
+- [x] Worker-scope verification passes and the worker creates the owned-file commit.
