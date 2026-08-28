@@ -235,13 +235,13 @@ Batch A uses `parallel-lead-commit`. After Task 1 is reviewed and committed, Tas
 **Approach:** Prefer batching supplemental endpoint existence checks when confirmed. Derive expected statement counts by hand from batch size and fixture cardinality. Do not add a cache whose hit set is already covered by the existing 4,000-entry evidence cache.
 
 **Acceptance criteria:**
-- [ ] Baseline fixture records statements by phase and names the dominant repeated family.
-- [ ] Red test fails on the current repeated count for that family.
-- [ ] Minimal implementation bounds the family without changing reached nodes, evidence, truncation, ordering, or phase attribution.
-- [ ] Existing cancellation, fixed-query-family, high-frontier, and evidence parity tests remain green.
-- [ ] Focused `SqliteSymbolGraphIndexTests` pass; `Miller.Indexing` and `Miller.Tests` build cleanly.
+- [x] Baseline fixture records statements by phase and names the dominant repeated family.
+- [x] Red test fails on the current repeated count for that family.
+- [x] Minimal implementation bounds the family without changing reached nodes, evidence, truncation, ordering, or phase attribution.
+- [x] Existing cancellation, fixed-query-family, high-frontier, and evidence parity tests remain green.
+- [x] Focused `SqliteSymbolGraphIndexTests` pass; `Miller.Indexing` and `Miller.Tests` build cleanly.
 - [ ] Fixed changed-path and git-diff replays meet p95 <=5,000 ms, or the worker reports the next largest measured phase without speculative code.
-- [ ] Worker hands the verified diff to the lead without committing.
+- [x] Worker hands the verified diff to the lead without committing.
 
 ## Lead Integration and Completion
 

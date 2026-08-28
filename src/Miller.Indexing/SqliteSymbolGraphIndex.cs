@@ -15,7 +15,7 @@ namespace Miller.Indexing;
 public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposable
 {
     private const int MaximumBatchIds = 500;
-    private const int FrontierProofBatchIds = 100;
+    private const int FrontierProofBatchIds = 500;
     private const int MaximumEvidenceCacheEntries = 4000;
     private static readonly IReadOnlyList<string> Empty = Array.Empty<string>();
 

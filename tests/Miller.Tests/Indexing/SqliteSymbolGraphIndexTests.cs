@@ -491,12 +491,17 @@ public sealed class SqliteSymbolGraphIndexTests
             ],
             relationships: relationships);
         using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+        var observations = new List<GraphStatementObservation>();
+        sqlite.StatementObserver = observation => observations.Add(observation);
 
         GraphReachResult result =
             sqlite.ReachWithEvidence([seedId], 1, 2000, Direction.Reverse);
 
         Assert.Equal(1201, result.ReachedCount);
         Assert.Equal(1201, result.Nodes.Count);
+        Assert.Equal(
+            20,
+            observations.Count(static observation => observation.Phase == GraphStatementPhase.FamilyResolution));
     }
 
     [Fact]
