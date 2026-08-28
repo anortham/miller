@@ -67,6 +67,121 @@ public sealed class DotnetTestProviderTests : IDisposable
     }
 
     [Fact]
+    public void BuildPropertyProbeCommand_is_evaluation_only_and_bounded_to_runner_properties()
+    {
+        var workspace = Workspace("mstest");
+
+        TestProcessCommand command = DotnetTestBackend.BuildPropertyProbeCommand(workspace);
+
+        Assert.Equal("dotnet", command.FileName);
+        Assert.Equal(workspace.WorkspaceRoot, command.WorkingDirectory);
+        Assert.Equal("msbuild", command.Arguments[0]);
+        Assert.Contains(workspace.ProjectPath, command.Arguments);
+        Assert.Contains("-nologo", command.Arguments);
+        Assert.Contains(
+            "-getProperty:UseVSTest,EnableMSTestRunner,EnableNUnitRunner,UseMicrosoftTestingPlatformRunner,TestingPlatformDotnetTestSupport",
+            command.Arguments);
+        Assert.DoesNotContain("-t:Build", command.Arguments);
+        Assert.DoesNotContain("--no-restore", command.Arguments);
+        Assert.DoesNotContain("dotnet.config", string.Join('\0', command.Arguments));
+    }
+
+    [Fact]
+    public void ParsePropertyProbe_requires_every_property_and_rejects_truncated_or_malformed_output()
+    {
+        string output = """
+            {
+              "UseVSTest": "true",
+              "EnableMSTestRunner": "false",
+              "EnableNUnitRunner": "",
+              "UseMicrosoftTestingPlatformRunner": "",
+              "TestingPlatformDotnetTestSupport": "true"
+            }
+            """;
+
+        Assert.True(DotnetTestBackend.TryParsePropertyProbe(output, false, out var properties, out _));
+        Assert.Equal("true", properties["UseVSTest"]);
+        Assert.Equal("true", properties["TestingPlatformDotnetTestSupport"]);
+
+        Assert.True(DotnetTestBackend.TryParsePropertyProbe(
+            "{\"Properties\":{\"UseVSTest\":\"true\",\"EnableMSTestRunner\":\"false\",\"EnableNUnitRunner\":\"\",\"UseMicrosoftTestingPlatformRunner\":\"\",\"TestingPlatformDotnetTestSupport\":\"true\"}}",
+            false,
+            out var nestedProperties,
+            out _));
+        Assert.Equal("false", nestedProperties["EnableMSTestRunner"]);
+
+        Assert.False(DotnetTestBackend.TryParsePropertyProbe(output, true, out _, out string? truncatedError));
+        Assert.Contains("truncated", truncatedError, StringComparison.OrdinalIgnoreCase);
+
+        Assert.False(DotnetTestBackend.TryParsePropertyProbe("{\"UseVSTest\":\"true\"}", false, out _, out string? incompleteError));
+        Assert.Contains("incomplete", incompleteError, StringComparison.OrdinalIgnoreCase);
+
+        Assert.False(DotnetTestBackend.TryParsePropertyProbe("not json", false, out _, out string? malformedError));
+        Assert.Contains("JSON", malformedError, StringComparison.OrdinalIgnoreCase);
+
+        Assert.False(DotnetTestBackend.TryParsePropertyProbe(
+            output.Replace("\"true\"", "\"maybe\"", StringComparison.Ordinal),
+            false,
+            out _,
+            out string? invalidValueError));
+        Assert.Contains("boolean", invalidValueError, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("mstest", "MSTest.Sdk", "Microsoft.Testing.Platform", "MicrosoftTestingPlatform")]
+    [InlineData("mstest", "MSTest.Sdk", "VSTest", "VSTest")]
+    [InlineData("mstest", "Microsoft.NET.Sdk", "", "VSTest")]
+    [InlineData("nunit", "Microsoft.NET.Sdk", "", "VSTest")]
+    [InlineData("xunit", "Microsoft.NET.Sdk", "", "XunitV3")]
+    public void Resolve_backend_keeps_framework_identity_separate_from_execution_backend(
+        string framework,
+        string projectSdk,
+        string globalRunner,
+        string expectedBackend)
+    {
+        DotnetTestBackendEvidence evidence = new(
+            Backend: DotnetTestBackendKind.Unknown,
+            Framework: null,
+            GlobalJsonTestRunner: string.IsNullOrEmpty(globalRunner) ? null : globalRunner,
+            ProjectSdk: projectSdk,
+            PackageIds: framework == "xunit" ? ["xunit.v3"] : [],
+            StaticProperties: new Dictionary<string, string?>(StringComparer.Ordinal),
+            EvaluatedProperties: new Dictionary<string, string?>(StringComparer.Ordinal),
+            IsEvaluated: false,
+            IsComplete: true,
+            Diagnostic: null);
+
+        DotnetTestBackendEvidence resolved = DotnetTestBackend.Resolve(framework, evidence);
+
+        Assert.Equal(Enum.Parse<DotnetTestBackendKind>(expectedBackend), resolved.Backend);
+        Assert.Equal(framework, resolved.Framework);
+    }
+
+    [Fact]
+    public void Resolve_mstest_sdk_uses_its_mtp_default_only_after_complete_property_evaluation()
+    {
+        var evidence = DotnetTestBackend.ReadStatic(WriteBackendProject("MSTest.Sdk", ""));
+        Assert.Equal(DotnetTestBackendKind.Unknown, DotnetTestBackend.Resolve("mstest", evidence).Backend);
+
+        DotnetTestBackendEvidence evaluated = DotnetTestBackend.WithEvaluatedProperties(
+            evidence,
+            """
+            {
+              "UseVSTest": "",
+              "EnableMSTestRunner": "",
+              "EnableNUnitRunner": "",
+              "UseMicrosoftTestingPlatformRunner": "",
+              "TestingPlatformDotnetTestSupport": ""
+            }
+            """,
+            truncated: false);
+
+        Assert.Equal(
+            DotnetTestBackendKind.MicrosoftTestingPlatform,
+            DotnetTestBackend.Resolve("mstest", evaluated).Backend);
+    }
+
+    [Fact]
     public async Task Discover_xunit_ids_are_stable_across_generations_and_theory_selectors_drop_arguments()
     {
         var runner = new FakeTestProcessRunner();
@@ -84,6 +199,26 @@ public sealed class DotnetTestProviderTests : IDisposable
             ["xunit:Sample.Tests.Cases(value: 1)", "xunit:Sample.Tests.Cases(value: 2)"],
             cases.Select(row => row.Id).ToArray());
         Assert.All(cases, row => Assert.Equal("-method Sample.Tests.Cases", row.Selector));
+    }
+
+    [Fact]
+    public async Task Discover_preserves_exact_provider_source_identity_when_the_runner_supplies_it()
+    {
+        var runner = new FakeTestProcessRunner();
+        runner.Enqueue();
+        runner.Enqueue(
+            """
+            [{"Assembly":"/tmp/Sample.Tests.dll","DisplayName":"Sample.Tests.CalculatorTests.Adds","ID":"id-1","Class":"Sample.Tests.CalculatorTests","Method":"Adds","SourcePath":"tests/UnitTests.vb","SymbolName":"Adds","SymbolPath":"tests/UnitTests.vb"}]
+            """);
+        var provider = new DotnetTestProvider(runner);
+
+        ProviderTestCase testCase = Assert.Single(await provider.DiscoverAsync(
+            Workspace(),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("Adds", testCase.SymbolName);
+        Assert.Equal("tests/UnitTests.vb", testCase.SymbolPath);
+        Assert.Equal("tests/UnitTests.vb", testCase.SourcePath);
     }
 
     [Fact]
@@ -2280,6 +2415,22 @@ public sealed class DotnetTestProviderTests : IDisposable
             ExcludeTraits: excludeTraits);
         _ctTemps.Add(CtTempPaths.ForWorkspace(workspace));
         return workspace;
+    }
+
+    private string WriteBackendProject(string sdk, string properties)
+    {
+        string projectDirectory = Path.Combine(_dir, "backend-evidence");
+        Directory.CreateDirectory(projectDirectory);
+        string projectPath = Path.Combine(projectDirectory, "Sample.Tests.vbproj");
+        File.WriteAllText(projectPath, $"""
+            <Project Sdk="{sdk}">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                {properties}
+              </PropertyGroup>
+            </Project>
+            """);
+        return projectPath;
     }
 
     private static ContinuousTestProviderRunRequest Request(ContinuousTestWorkspace workspace) =>

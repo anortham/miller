@@ -77,27 +77,6 @@ public static class ContinuousTestProjectInventory
         ".vbproj",
     };
 
-    /// <summary>
-    /// The v3 package id. Every v3 package is this id or a child of it (<c>xunit.v3.core</c>,
-    /// <c>xunit.v3.assert</c>, <c>xunit.v3.extensibility.core</c>), so one prefix covers the generation.
-    /// </summary>
-    private const string XunitV3Package = "xunit.v3";
-
-    /// <summary>
-    /// Package ids that exist ONLY in xunit v2. The two shared ones — <c>xunit.runner.visualstudio</c> and
-    /// <c>xunit.analyzers</c> — are deliberately absent: both ship for v3 as well, so either would classify a
-    /// working v3 project as unsupported and refuse its enable.
-    /// </summary>
-    private static readonly HashSet<string> XunitV2Packages = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "xunit",
-        "xunit.core",
-        "xunit.assert",
-        "xunit.abstractions",
-        "xunit.extensibility.core",
-        "xunit.extensibility.execution",
-    };
-
     private static readonly HashSet<string> QmlSourceExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".qml",
@@ -177,7 +156,10 @@ public static class ContinuousTestProjectInventory
                 WorkspaceId: workspaceId,
                 ProjectPath: path,
                 Framework: framework,
-                ExcludeTraits: excludeTraits));
+                ExcludeTraits: excludeTraits,
+                Metadata: DotnetProjectExtensions.Contains(Path.GetExtension(path))
+                    ? DotnetTestBackend.ToMetadata(DotnetTestBackend.ReadStatic(path))
+                    : null));
         }
 
         foreach (QmlProjectEvidence evidence in DiscoverQmlProjects(candidateFiles))
@@ -285,7 +267,10 @@ public static class ContinuousTestProjectInventory
             WorkspaceId: workspaceId,
             ProjectPath: full,
             Framework: framework,
-            ExcludeTraits: excludeTraits);
+            ExcludeTraits: excludeTraits,
+            Metadata: DotnetProjectExtensions.Contains(Path.GetExtension(full))
+                ? DotnetTestBackend.ToMetadata(DotnetTestBackend.ReadStatic(full))
+                : null);
     }
 
     public static string ProjectId(string workspaceId, string workspaceRoot, string projectPath)
@@ -1511,29 +1496,27 @@ public static class ContinuousTestProjectInventory
         if (DotnetProjectExtensions.Contains(Path.GetExtension(path)))
         {
             string text = ReadHead(path);
-            bool sdkTest = ContainsToken(text, "Microsoft.NET.Sdk.Test")
-                || ContainsToken(text, "Microsoft.NET.Test.Sdk")
-                || ContainsToken(text, "Microsoft.Testing.Platform");
             excludeTraits = ParseDefaultFilterExclusions(text);
-            if (ContainsToken(text, "xunit"))
+            string? projectSdk = DotnetTestBackend.ReadStatic(path).ProjectSdk;
+            if (DotnetTestBackend.IsXunitProject(text))
             {
-                framework = XunitFramework(text);
+                framework = DotnetTestBackend.XunitFramework(text);
                 return true;
             }
 
-            if (ContainsToken(text, "NUnit") || ContainsToken(text, "nunit"))
+            if (DotnetTestBackend.IsNUnitProject(text))
             {
                 framework = "nunit";
                 return true;
             }
 
-            if (ContainsToken(text, "MSTest") || ContainsToken(text, "mstest"))
+            if (DotnetTestBackend.IsMstestProject(text, projectSdk))
             {
                 framework = "mstest";
                 return true;
             }
 
-            if (sdkTest)
+            if (DotnetTestBackend.IsGenericTestProject(text))
             {
                 framework = "dotnet";
                 return true;
@@ -1568,83 +1551,7 @@ public static class ContinuousTestProjectInventory
     /// cause at the same moment the old raw error appeared.</para>
     /// </summary>
     internal static string XunitFramework(string projectText)
-    {
-        var sawVersionTwo = false;
-        foreach (string package in PackageReferenceIds(projectText))
-        {
-            if (string.Equals(package, XunitV3Package, StringComparison.OrdinalIgnoreCase)
-                || package.StartsWith(XunitV3Package + ".", StringComparison.OrdinalIgnoreCase))
-            {
-                return "xunit";
-            }
-
-            sawVersionTwo |= XunitV2Packages.Contains(package);
-        }
-
-        return sawVersionTwo ? ContinuousTestFrameworkSupport.XunitV2 : "xunit";
-    }
-
-    /// <summary>
-    /// The <c>Include</c> / <c>Update</c> package ids of every <c>PackageReference</c> in a project file.
-    ///
-    /// <para>Scanned rather than parsed as XML: <see cref="ReadHead"/> returns the first 64 KB, which can end
-    /// mid-element, and a truncated document fails to parse entirely. Under central package management the
-    /// version lives elsewhere but the id still sits on this element, so the ids alone are the right read.</para>
-    /// </summary>
-    private static IEnumerable<string> PackageReferenceIds(string projectText)
-    {
-        const string element = "<PackageReference";
-        var cursor = 0;
-        while ((cursor = projectText.IndexOf(element, cursor, StringComparison.OrdinalIgnoreCase)) >= 0)
-        {
-            cursor += element.Length;
-            int close = projectText.IndexOf('>', cursor);
-            string tag = close < 0 ? projectText[cursor..] : projectText[cursor..close];
-            if (AttributeValue(tag, "Include") is { } include)
-                yield return include;
-            if (AttributeValue(tag, "Update") is { } update)
-                yield return update;
-            if (close < 0)
-                yield break;
-            cursor = close + 1;
-        }
-    }
-
-    /// <summary>
-    /// One double- or single-quoted XML attribute value out of an element's attribute text, or null when the
-    /// element does not carry it.
-    /// </summary>
-    private static string? AttributeValue(string tag, string name)
-    {
-        int at = tag.IndexOf(name, StringComparison.OrdinalIgnoreCase);
-        while (at >= 0)
-        {
-            int cursor = at + name.Length;
-            while (cursor < tag.Length && char.IsWhiteSpace(tag[cursor]))
-                cursor++;
-            if (cursor < tag.Length
-                && tag[cursor] == '='
-                && (at == 0 || char.IsWhiteSpace(tag[at - 1])))
-            {
-                cursor++;
-                while (cursor < tag.Length && char.IsWhiteSpace(tag[cursor]))
-                    cursor++;
-                if (cursor < tag.Length && tag[cursor] is '"' or '\'')
-                {
-                    char quote = tag[cursor];
-                    int end = tag.IndexOf(quote, cursor + 1);
-                    if (end > 0)
-                        return tag[(cursor + 1)..end].Trim();
-                }
-
-                return null;
-            }
-
-            at = tag.IndexOf(name, at + 1, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return null;
-    }
+    => DotnetTestBackend.XunitFramework(projectText);
 
     /// <summary>
     /// True when a package manifest declares a script that runs node's OWN test runner — the framework

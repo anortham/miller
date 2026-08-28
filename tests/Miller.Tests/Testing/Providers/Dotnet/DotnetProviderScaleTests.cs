@@ -1,8 +1,11 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
+using Miller.Indexing;
+using Miller.Indexing.Testing;
 using Miller.Testing;
 using Miller.Testing.Parsing;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace Miller.Tests.Testing.Providers.Dotnet;
@@ -349,6 +352,132 @@ public sealed class DotnetProviderScaleTests : IDisposable
         if (OperatingSystem.IsWindows())
             Assert.True(result.GenerationId!.Length <= 16);
     }
+
+    [Fact]
+    public async Task Real_vb_fixture_discovers_runs_and_selects_with_julie_identity()
+    {
+        string dotnet = CtProviderTestSupport.RequireDotnet();
+        string julie = ScaleTestSupport.RequireJulieServer();
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        string repositoryFixture = Path.Combine(
+            ScaleTestSupport.RepoRoot(),
+            "tests",
+            "Miller.Tests",
+            "Fixtures",
+            "VbDotnetScale");
+        string workspaceRoot = Path.Combine(_dir, "vb-repo");
+        CopyFixture(repositoryFixture, workspaceRoot);
+        string projectPath = Path.Combine(workspaceRoot, "VbDotnetScale.vbproj");
+        string symbolsPath = Path.Combine(_dir, "vb-symbols.db");
+        string ctDbPath = Path.Combine(_dir, "vb-ct.db");
+        ExtractReport report = new JulieExtractRunner(julie).Scan(
+            workspaceRoot,
+            symbolsPath,
+            force: true,
+            jobs: 1);
+        Assert.NotEqual("failed", report.Status);
+
+        IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.Read(symbolsPath);
+        IndexedSymbol julieCase = Assert.Single(
+            symbols,
+            symbol => symbol.FilePath == "UnitTests.vb" && symbol.Name == "Adds");
+        Assert.Equal("vbnet", julieCase.Language);
+        Assert.True(julieCase.TestEvidence.IsCase);
+
+        ContinuousTestProject project = Assert.IsType<ContinuousTestProject>(
+            ContinuousTestProjectInventory.Identify(workspaceRoot, "ws:vb", projectPath));
+        Assert.Equal("mstest", project.Framework);
+        var workspace = new ContinuousTestWorkspace(
+            "ws:vb",
+            workspaceRoot,
+            projectPath,
+            Path.Combine(_dir, "vb-state", "ct-build"),
+            Framework: project.Framework,
+            Metadata: project.Metadata);
+        _ctTemps.Add(CtTempPaths.ForWorkspace(workspace));
+        var provider = new DotnetTestProvider(new TestProcessRunner(), dotnet);
+
+        IReadOnlyList<ProviderTestCase> discovered = await provider.DiscoverAsync(workspace, ct);
+        ProviderTestCase adds = Assert.Single(
+            discovered,
+            testCase => testCase.FullyQualifiedName == "VbDotnetScale.UnitTests.Adds");
+        ProviderTestCase[] positiveCases = discovered
+            .Where(testCase => testCase.FullyQualifiedName == "VbDotnetScale.UnitTests.Positive")
+            .OrderBy(testCase => testCase.DisplayName, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(["Positive (1)", "Positive (2)"], positiveCases.Select(testCase => testCase.DisplayName));
+        Assert.Equal(positiveCases.Length, positiveCases.Select(testCase => testCase.Id).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal("UnitTests.vb", adds.SymbolPath);
+        Assert.Equal("Adds", adds.SymbolName);
+        Assert.Equal("UnitTests.vb", adds.SourcePath);
+
+        ProviderRunResult run = await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                workspace,
+                SelectedRevision: "vb-revision",
+                IndexIdentity: "vb-index",
+                RunId: "vb-run",
+                TestCaseIds: [adds.Id, .. positiveCases.Select(testCase => testCase.Id)]),
+            ct);
+        Assert.Equal("passed", run.Status);
+        Assert.Equal(
+            [adds.Id, .. positiveCases.Select(testCase => testCase.Id)],
+            run.CaseResults.Select(result => result.TestCaseId).Order(StringComparer.Ordinal));
+        Assert.All(run.CaseResults, result => Assert.Equal("passed", result.Status));
+
+        using var store = new ContinuousTestStore(ctDbPath);
+        store.PutTestCase(new ContinuousTestCase(
+            Id: adds.Id,
+            WorkspaceId: "ws:vb",
+            Name: adds.SymbolName!,
+            QualifiedName: adds.FullyQualifiedName,
+            Selector: adds.Selector,
+            FilePath: adds.SymbolPath,
+            SymbolName: adds.SymbolName,
+            SymbolPath: adds.SymbolPath,
+            Framework: adds.Framework,
+            Role: ContinuousTestRole.TestCase,
+            Source: "ct-provider:dotnet",
+            Metadata: new Dictionary<string, object?>
+            {
+                ["source_path"] = adds.SourcePath,
+                ["file_language"] = "vbnet",
+                ["ct_project_path"] = projectPath,
+            }));
+        using var facts = CtFactAdapter.OpenArtifact(symbolsPath);
+        var selector = new ContinuousTestImpactSelector(store, new MillerFactSource(facts));
+        ContinuousTestSelectionResult selection = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: "ws:vb",
+            ProjectPath: projectPath,
+            ChangedPaths: ["UnitTests.vb"]));
+        Assert.Equal([adds.Id], selection.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, selection.Outcome);
+
+        Assert.Equal(
+            Snapshot(repositoryFixture),
+            Snapshot(workspaceRoot));
+    }
+
+    private static void CopyFixture(string source, string destination)
+    {
+        foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(source, file);
+            string target = Path.Combine(destination, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> Snapshot(string root) =>
+        Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Where(path => !Path.GetRelativePath(root, path)
+                .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
+                .Any(segment => segment is "obj" or "bin" or ".miller"))
+            .ToDictionary(
+                file => Path.GetRelativePath(root, file),
+                file => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file))),
+                StringComparer.Ordinal);
 
     [Fact]
     public async Task Diagnostic_real_provider_inventory_records_generation_layout_and_results()

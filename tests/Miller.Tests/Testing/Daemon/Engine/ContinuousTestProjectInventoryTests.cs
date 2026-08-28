@@ -218,6 +218,130 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
         Assert.Equal("dotnet", project.Framework);
     }
 
+    [Theory]
+    [InlineData("<PackageReference Include=\"MSTest.TestAdapter\" Version=\"4.0.0\" />", "mstest")]
+    [InlineData("<PackageReference Include=\"MSTest.TestFramework\" Version=\"4.0.0\" />", "mstest")]
+    [InlineData("<PackageReference Include=\"NUnit.Framework\" Version=\"4.0.0\" />", "nunit")]
+    [InlineData("<PackageReference Include=\"xunit.v3\" Version=\"3.0.0\" />", "xunit")]
+    [InlineData("<PackageReference Include=\"xunit\" Version=\"2.9.2\" />", "xunit-v2")]
+    [InlineData("<PackageReference Include=\"Microsoft.NET.Test.Sdk\" Version=\"18.0.0\" />", "dotnet")]
+    [InlineData("<PackageReference Include=\"Microsoft.Testing.Platform\" Version=\"2.0.0\" />", "dotnet")]
+    public void Discover_classifies_vb_projects_from_framework_specific_package_ids(
+        string packageReference,
+        string expectedFramework)
+    {
+        WriteProject("tests/App.Tests/App.Tests.vbproj", $"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+              <ItemGroup>
+                {packageReference}
+              </ItemGroup>
+            </Project>
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal(expectedFramework, project.Framework);
+    }
+
+    [Fact]
+    public void Discover_does_not_treat_a_shared_xunit_runner_package_as_a_framework()
+    {
+        WriteProject("tests/App.Tests/App.Tests.vbproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="xunit.runner.visualstudio" Version="3.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+    }
+
+    [Fact]
+    public void Discover_records_static_dotnet_runner_evidence_without_claiming_an_effective_backend()
+    {
+        WriteProject("global.json", """
+            {
+              "test": {
+                "runner": "Microsoft.Testing.Platform"
+              }
+            }
+            """);
+        WriteProject("tests/App.Tests/App.Tests.vbproj", """
+            <Project Sdk="MSTest.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <UseVSTest>true</UseVSTest>
+                <EnableMSTestRunner>false</EnableMSTestRunner>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        ContinuousTestProject project = Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+        Assert.Equal("mstest", project.Framework);
+        Assert.Equal("Microsoft.Testing.Platform", project.Metadata[DotnetTestBackend.MetadataGlobalJsonRunner]);
+        Assert.Equal("MSTest.Sdk", project.Metadata[DotnetTestBackend.MetadataProjectSdk]);
+        Assert.Equal("true", project.Metadata[DotnetTestBackend.MetadataStaticPropertyPrefix + "UseVSTest"]);
+        Assert.Equal("false", project.Metadata[DotnetTestBackend.MetadataStaticPropertyPrefix + "EnableMSTestRunner"]);
+        Assert.Equal("static", project.Metadata[DotnetTestBackend.MetadataEvidenceState]);
+    }
+
+    [Fact]
+    public void Static_dotnet_backend_evidence_uses_the_nearest_global_json()
+    {
+        WriteProject("global.json", """
+            {
+              "test": {
+                "runner": "VSTest"
+              }
+            }
+            """);
+        WriteProject("tests/global.json", """
+            {
+              "test": {
+                "runner": "Microsoft.Testing.Platform"
+              }
+            }
+            """);
+        WriteProject("tests/App.Tests/App.Tests.vbproj", """
+            <Project Sdk="MSTest.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        DotnetTestBackendEvidence evidence = DotnetTestBackend.ReadStatic(
+            Path.Combine(_root, "tests", "App.Tests", "App.Tests.vbproj"));
+
+        Assert.Equal("Microsoft.Testing.Platform", evidence.GlobalJsonTestRunner);
+        Assert.True(evidence.IsComplete);
+    }
+
+    [Fact]
+    public void Static_dotnet_backend_evidence_fails_closed_on_malformed_global_json()
+    {
+        WriteProject("global.json", "{ \"test\": { \"runner\": ");
+        WriteProject("tests/App.Tests/App.Tests.vbproj", """
+            <Project Sdk="MSTest.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        DotnetTestBackendEvidence evidence = DotnetTestBackend.ReadStatic(
+            Path.Combine(_root, "tests", "App.Tests", "App.Tests.vbproj"));
+
+        Assert.False(evidence.IsComplete);
+        Assert.Contains("global.json", evidence.Diagnostic, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Discover_classifies_an_xunit_v2_project_as_the_generation_continuous_testing_cannot_run()
     {
@@ -310,13 +434,8 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
         Assert.Equal("xunit", Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1")).Framework);
     }
 
-    /// <summary>
-    /// Both generations ship <c>xunit.runner.visualstudio</c> and <c>xunit.analyzers</c>, so neither proves
-    /// anything. Guessing v2 here would refuse the enable of a project that runs perfectly well; the
-    /// provider's missing-executable message names the same cause if the guess would have been right.
-    /// </summary>
     [Fact]
-    public void Discover_keeps_xunit_for_a_project_whose_only_xunit_packages_are_shared_by_both_generations()
+    public void Discover_does_not_classify_a_project_whose_only_xunit_packages_are_shared_by_both_generations()
     {
         WriteProject("tests/App.Tests/App.Tests.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
@@ -327,7 +446,7 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
             </Project>
             """);
 
-        Assert.Equal("xunit", Assert.Single(ContinuousTestProjectInventory.Discover(_root, "ws:1")).Framework);
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
     }
 
     /// <summary>

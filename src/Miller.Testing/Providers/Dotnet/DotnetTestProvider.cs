@@ -156,7 +156,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
                 $"Test discovery failed with exit code {result.ExitCode}: {FailureSummary(result)}");
 
         if (GenericFramework(workspace.Framework) is { } framework)
-            return ParseGenericDiscoveryDiagnostic(diagnosticPath!, framework) is { Count: > 0 } cases
+            return ParseGenericDiscoveryDiagnostic(diagnosticPath!, framework, workspace.WorkspaceRoot) is { Count: > 0 } cases
                 ? cases
                 : ParseGenericDiscovery(
                     result.RequireCompleteStandardOutput("Test discovery"), framework);
@@ -1545,7 +1545,8 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
 
     private static IReadOnlyList<ProviderTestCase> ParseGenericDiscoveryDiagnostic(
         string diagnosticPath,
-        string framework)
+        string framework,
+        string workspaceRoot)
     {
         if (!File.Exists(diagnosticPath))
             return [];
@@ -1582,28 +1583,48 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
                 {
                     var fullyQualifiedName = OptionalString(row, "FullyQualifiedName");
                     if (string.IsNullOrWhiteSpace(fullyQualifiedName)
-                        || !identities.Add(fullyQualifiedName))
+                        || !identities.Add(
+                            fullyQualifiedName + "\u0000" + (OptionalString(row, "DisplayName") ?? fullyQualifiedName)))
                         continue;
                     var displayName = OptionalString(row, "DisplayName") ?? fullyQualifiedName;
                     var (className, methodName) = SplitDiagnosticQualifiedName(
                         fullyQualifiedName,
                         displayName);
+                    var sourcePath = NormalizeSourcePath(
+                        OptionalString(row, "SourcePath") ?? OptionalString(row, "SourceFile")
+                        ?? OptionalString(row, "CodeFilePath"),
+                        workspaceRoot);
+                    var symbolName = sourcePath is null ? null : OptionalString(row, "SymbolName") ?? methodName;
+                    var symbolPath = sourcePath is null
+                        ? OptionalString(row, "SymbolPath")
+                        : OptionalString(row, "SymbolPath") ?? sourcePath;
                     cases.Add(new ProviderTestCase(
                         Id: GenericTestCaseId(framework, fullyQualifiedName),
                         DisplayName: displayName,
                         FullyQualifiedName: fullyQualifiedName,
                         Selector: fullyQualifiedName,
                         Framework: framework,
+                        SourcePath: sourcePath,
                         Metadata: new Dictionary<string, object?>
                         {
                             ["class"] = className,
                             ["method"] = methodName,
                             ["selector_kind"] = "FullyQualifiedName",
-                        }));
+                        },
+                        SymbolName: symbolName,
+                        SymbolPath: symbolPath));
                 }
             }
 
-            return cases;
+            return cases
+                .GroupBy(testCase => testCase.FullyQualifiedName, StringComparer.Ordinal)
+                .SelectMany(group => group.Count() == 1
+                    ? group
+                    : group.Select(testCase => testCase with
+                    {
+                        Id = GenericTestCaseId(framework, testCase.FullyQualifiedName, testCase.DisplayName),
+                    }))
+                .ToArray();
         }
         catch (IOException)
         {
@@ -1632,6 +1653,33 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         }
 
         return SplitQualifiedName(fullyQualifiedName);
+    }
+
+    private static string? NormalizeSourcePath(string? path, string workspaceRoot)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(path, workspaceRoot);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+
+        string relative = Path.GetRelativePath(Path.GetFullPath(workspaceRoot), fullPath);
+        if (relative == ".."
+            || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            || relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)
+            || Path.IsPathRooted(relative))
+        {
+            return null;
+        }
+
+        return relative.Replace(Path.DirectorySeparatorChar, '/');
     }
 
     /// <summary>
@@ -1675,13 +1723,20 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             .Where(row => !string.IsNullOrWhiteSpace(row.Id) && !string.IsNullOrWhiteSpace(row.Name))
             .ToDictionary(row => row.Id!, row => row.Name!, StringComparer.Ordinal);
         var selectedIdsBySelector = request.TestCaseIds
-            .ToDictionary(GenericSelectorFromTestCaseId, id => id, StringComparer.Ordinal);
+            .GroupBy(GenericSelectorFromTestCaseId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+        var selectedIdsByDisplayName = request.TestCaseIds
+            .Select(id => (Id: id, DisplayName: GenericDisplayNameFromTestCaseId(id)))
+            .Where(row => row.DisplayName is not null)
+            .GroupBy(row => row.DisplayName!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Select(row => row.Id).ToArray(), StringComparer.Ordinal);
         var framework = GenericFramework(request.Framework ?? request.Workspace.Framework) ?? "dotnet";
         var caseResults = new List<ProviderCaseResult>();
 
         foreach (var row in root.Descendants(ns + "UnitTestResult"))
         {
-            var testName = row.Attribute("testName")?.Value;
+            var displayName = row.Attribute("testName")?.Value;
+            var testName = displayName;
             var testDefinitionId = row.Attribute("testId")?.Value;
             if (testDefinitionId is not null
                 && testNamesByDefinitionId.TryGetValue(testDefinitionId, out var definitionName))
@@ -1690,8 +1745,13 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
                 continue;
 
             var selector = testName;
-            var testCaseId = selectedIdsBySelector.GetValueOrDefault(selector)
-                ?? (request.TestCaseIds.Count == 1 ? request.TestCaseIds[0] : GenericTestCaseId(framework, selector));
+            string[]? candidates = selectedIdsBySelector.GetValueOrDefault(selector);
+            candidates ??= selectedIdsByDisplayName.GetValueOrDefault(displayName ?? string.Empty);
+            var testCaseId = candidates?.FirstOrDefault(id =>
+                    string.Equals(GenericDisplayNameFromTestCaseId(id), displayName, StringComparison.Ordinal)
+                    || string.Equals(GenericDisplayNameFromTestCaseId(id), testName, StringComparison.Ordinal))
+                ?? (candidates is { Length: 1 } ? candidates[0]
+                    : request.TestCaseIds.Count == 1 ? request.TestCaseIds[0] : GenericTestCaseId(framework, selector));
             var status = TrxStatus(row.Attribute("outcome")?.Value);
             var duration = TrxDurationSeconds(row.Attribute("duration")?.Value);
             caseResults.Add(new ProviderCaseResult(
@@ -1915,6 +1975,11 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             AddOptionalMetadata(metadata, "assembly", row, "Assembly");
             AddOptionalMetadata(metadata, "class", row, "Class");
             AddOptionalMetadata(metadata, "method", row, "Method");
+            var sourcePath = OptionalString(row, "SourcePath") ?? OptionalString(row, "SourceFile");
+            var symbolName = sourcePath is null ? null : OptionalString(row, "SymbolName") ?? OptionalString(row, "Method");
+            var symbolPath = sourcePath is null
+                ? OptionalString(row, "SymbolPath")
+                : OptionalString(row, "SymbolPath") ?? sourcePath;
 
             cases.Add(new ProviderTestCase(
                 Id: XunitTestCaseId(displayName),
@@ -1922,7 +1987,10 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
                 FullyQualifiedName: displayName,
                 Selector: $"-method {XunitMethodName(displayName)}",
                 Framework: "xunit",
-                Metadata: metadata));
+                SourcePath: sourcePath,
+                Metadata: metadata,
+                SymbolName: symbolName,
+                SymbolPath: symbolPath));
         }
 
         return cases;
@@ -2099,16 +2167,29 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         return normalized is "mstest" or "nunit" ? normalized : null;
     }
 
-    private static string GenericTestCaseId(string framework, string fullyQualifiedName) =>
-        $"{framework}:{fullyQualifiedName}";
+    private static string GenericTestCaseId(
+        string framework,
+        string fullyQualifiedName,
+        string? displayName = null) =>
+        displayName is null || string.Equals(displayName, fullyQualifiedName, StringComparison.Ordinal)
+            ? $"{framework}:{fullyQualifiedName}"
+            : $"{framework}:{fullyQualifiedName}::display={displayName}";
 
     private static string GenericSelectorFromTestCaseId(string testCaseId)
     {
-        if (testCaseId.StartsWith("mstest:", StringComparison.Ordinal))
-            return testCaseId["mstest:".Length..];
-        if (testCaseId.StartsWith("nunit:", StringComparison.Ordinal))
-            return testCaseId["nunit:".Length..];
-        return testCaseId;
+        string selector = testCaseId.StartsWith("mstest:", StringComparison.Ordinal)
+            ? testCaseId["mstest:".Length..]
+            : testCaseId.StartsWith("nunit:", StringComparison.Ordinal)
+                ? testCaseId["nunit:".Length..]
+                : testCaseId;
+        int displayMarker = selector.IndexOf("::display=", StringComparison.Ordinal);
+        return displayMarker >= 0 ? selector[..displayMarker] : selector;
+    }
+
+    private static string? GenericDisplayNameFromTestCaseId(string testCaseId)
+    {
+        int displayMarker = testCaseId.IndexOf("::display=", StringComparison.Ordinal);
+        return displayMarker >= 0 ? testCaseId[(displayMarker + "::display=".Length)..] : null;
     }
 
     private static (string? ClassName, string MethodName) SplitQualifiedName(string qualifiedName)

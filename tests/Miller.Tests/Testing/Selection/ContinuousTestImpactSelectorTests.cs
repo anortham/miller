@@ -69,6 +69,74 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     [Fact]
+    public void Select_uses_vbnet_path_identity_without_borrowing_a_same_stem_csharp_case()
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.GetFullPath("/repo/tests/App.Tests/App.Tests.vbproj");
+        SeedProviderCase(
+            store,
+            "tc:vb",
+            "tests/Calculator.vb::Adds",
+            "CalculatorTests.Adds",
+            "Adds",
+            "tests/Calculator.vb",
+            projectPath: projectPath,
+            framework: "mstest");
+        SeedProviderCase(
+            store,
+            "tc:cs",
+            "tests/Calculator.cs::Adds",
+            "CalculatorTests.Adds",
+            "Adds",
+            "tests/Calculator.cs",
+            projectPath: projectPath,
+            framework: "mstest");
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, "src/Calculator.vb");
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["src/Calculator.vb"],
+            ProjectPath: projectPath));
+
+        Assert.True(
+            result.SelectedTestCaseIds.SequenceEqual(["tc:vb"]),
+            $"selected={string.Join(',', result.SelectedTestCaseIds)} evidence="
+            + string.Join(";", result.Evidence.Select(row => $"{row.TestCaseId}:{row.Explanation}")));
+        Assert.DoesNotContain("tc:cs", result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+    }
+
+    [Fact]
+    public void Select_does_not_guess_csharp_for_a_fileless_dotnet_case()
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.GetFullPath("/repo/tests/App.Tests/App.Tests.vbproj");
+        SeedProviderCase(
+            store,
+            "tc:fileless",
+            "CalculatorTests.Adds",
+            "CalculatorTests.Adds",
+            "Adds",
+            sourcePath: null,
+            projectPath: projectPath,
+            className: "CalculatorTests",
+            framework: "mstest");
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, "src/Calculator.vb");
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["src/Calculator.vb"],
+            ProjectPath: projectPath));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+    }
+
+    [Fact]
     public void Select_requires_current_file_evidence_before_known_empty()
     {
         using ContinuousTestStore store = OpenStore();

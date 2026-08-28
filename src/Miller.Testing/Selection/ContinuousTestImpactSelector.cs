@@ -308,7 +308,18 @@ public sealed class ContinuousTestImpactSelector
             if (resolvedPaths.Contains(path))
                 continue;
             if (fileByPath.TryGetValue(path, out FileFact? file) && file.IsCurrent)
+            {
+                ChangedPathStem? currentStem = ChangedPathStem.FromPath(path, fileByPath);
+                if (currentStem is not null
+                    && testCases.Any(testCase =>
+                        IsFilelessDotnetCase(testCase)
+                        && !string.Equals(currentStem.Language, "csharp", StringComparison.OrdinalIgnoreCase)
+                        && TestCaseStem(testCase).Equals(currentStem.Stem, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return true;
+                }
                 continue;
+            }
             if (IsProjectOrConfigPath(path))
                 continue;
             if (IsQmlProjectChange(path)
@@ -327,6 +338,13 @@ public sealed class ContinuousTestImpactSelector
                 && testCases.Any(testCase => HasPathStemCandidate(testCase) && MatchesChangedStem(testCase, stem)))
             {
                 continue;
+            }
+            if (stem is not null
+                && testCases.Any(testCase =>
+                    IsFilelessDotnetCase(testCase)
+                    && TestCaseStem(testCase).Equals(stem.Stem, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
             }
 
             return true;
@@ -1294,10 +1312,21 @@ public sealed class ContinuousTestImpactSelector
         if (!testStem.Equals(changedStem.Stem, StringComparison.OrdinalIgnoreCase))
             return false;
 
-        string? testLanguage = IsFilelessDotnetCase(testCase)
-            ? "csharp"
-            : testCase.FileLanguage ?? ContinuousTestLanguageFamily.LabelFromPath(testCase.FilePath);
-        return LanguagesAreCompatible(changedStem.Language, testLanguage);
+        string? testLanguage = testCase.FileLanguage ?? ContinuousTestLanguageFamily.LabelFromPath(testCase.FilePath);
+        if (testLanguage is null && IsFilelessDotnetCase(testCase))
+            testLanguage = "csharp";
+        return PathLanguagesAreCompatible(changedStem.Language, testLanguage);
+    }
+
+    private static bool PathLanguagesAreCompatible(string? changedLanguage, string? testLanguage)
+    {
+        if (string.Equals(changedLanguage, "vbnet", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(testLanguage, "vbnet", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Equals(changedLanguage, testLanguage, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return LanguagesAreCompatible(changedLanguage, testLanguage);
     }
 
     private static bool LanguagesAreCompatible(string? changedLanguage, string? testLanguage)
