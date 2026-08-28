@@ -61,6 +61,17 @@ public sealed class CtFactAdapter : ICtFactSource, IDisposable
             .ToArray();
     }
 
+    public IReadOnlyList<CtFileFact> FileFactsForPaths(IReadOnlyList<string> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        IReadOnlyList<string> normalizedPaths = NormalizeChangedPaths(paths);
+        if (normalizedPaths.Count == 0)
+            return [];
+
+        return ReadFileFacts(normalizedPaths);
+    }
+
     public IReadOnlyList<CtReferenceFact> ReferencesTo(IReadOnlyList<string> symbolIds)
     {
         ArgumentNullException.ThrowIfNull(symbolIds);
@@ -225,6 +236,56 @@ public sealed class CtFactAdapter : ICtFactSource, IDisposable
         });
     }
 
+    private IReadOnlyList<CtFileFact> ReadFileFacts(IReadOnlyList<string> paths)
+    {
+        return _session.Read(connection =>
+        {
+            var facts = paths.ToDictionary(
+                path => path,
+                static path => new CtFileFact(path, null, null, null, false, false),
+                StringComparer.Ordinal);
+            if (!SqliteSchemaObjects.Exists(connection, "files"))
+                return paths.Select(path => facts[path]).ToArray();
+
+            bool hasDiagnostics = SqliteSchemaObjects.Exists(connection, "parse_diagnostics");
+            using SqliteCommand command = connection.CreateCommand();
+            var placeholders = new string[paths.Count];
+            for (int i = 0; i < paths.Count; i++)
+            {
+                string name = "$p" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                placeholders[i] = name;
+                command.Parameters.AddWithValue(name, paths[i]);
+            }
+
+            string diagnostics = hasDiagnostics
+                ? "LEFT JOIN (SELECT path FROM parse_diagnostics GROUP BY path) AS d ON d.path = f.path"
+                : string.Empty;
+            string hasParseDiagnostics = hasDiagnostics
+                ? "CASE WHEN d.path IS NULL THEN 0 ELSE 1 END"
+                : "0";
+            command.CommandText = $"""
+                SELECT f.path, f.language, f.content_hash, f.status, {hasParseDiagnostics}
+                FROM files AS f
+                {diagnostics}
+                WHERE f.path IN ({string.Join(", ", placeholders)})
+                """;
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                string path = reader.GetString(0);
+                facts[path] = new CtFileFact(
+                    path,
+                    reader.IsDBNull(1) ? null : reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.GetInt64(4) != 0,
+                    true);
+            }
+
+            return paths.Select(path => facts[path]).ToArray();
+        });
+    }
+
     private static string? Relativize(string? workspaceRoot, string path)
     {
         if (string.IsNullOrEmpty(workspaceRoot) || !Path.IsPathRooted(path))
@@ -254,7 +315,12 @@ public sealed class CtFactAdapter : ICtFactSource, IDisposable
             symbol.EndLine,
             symbol.ParentId,
             symbol.IsTest,
-            symbol.Signature);
+            symbol.Signature,
+            TestCase: symbol.TestEvidence.IsCase,
+            TestContainer: symbol.TestEvidence.IsContainer,
+            TestLifecycle: symbol.TestEvidence.IsLifecycle,
+            TestEvidenceStatus: symbol.TestEvidence.Status,
+            TestEvidenceReason: symbol.TestEvidence.Reason);
 
     private static CtReferenceFact ToReferenceFact(ReferenceEvidence row) =>
         new(
@@ -276,7 +342,12 @@ public sealed class CtFactAdapter : ICtFactSource, IDisposable
             hit.Symbol.IsTest,
             hit.Evidence.Hop,
             hit.Evidence.EdgeKind,
-            hit.Evidence.EdgeSource);
+            hit.Evidence.EdgeSource,
+            TestCase: hit.Symbol.TestEvidence.IsCase,
+            TestContainer: hit.Symbol.TestEvidence.IsContainer,
+            TestLifecycle: hit.Symbol.TestEvidence.IsLifecycle,
+            TestEvidenceStatus: hit.Symbol.TestEvidence.Status,
+            TestEvidenceReason: hit.Symbol.TestEvidence.Reason);
 
     private static bool IsIdentifierSource(ReferenceEvidenceSource source) =>
         source is ReferenceEvidenceSource.IdentifierResolution

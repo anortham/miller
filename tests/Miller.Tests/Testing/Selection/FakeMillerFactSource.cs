@@ -10,6 +10,8 @@ internal sealed class FakeMillerFactSource : IMillerFactSource
 
     public List<CtSymbolFact> Symbols { get; } = [];
 
+    public List<CtFileFact> FileFacts { get; } = [];
+
     public List<CtReferenceFact> References { get; } = [];
 
     public List<CtReferenceFact> Identifiers { get; } = [];
@@ -28,6 +30,19 @@ internal sealed class FakeMillerFactSource : IMillerFactSource
             .Select(Normalize)
             .ToHashSet(PathComparer);
         return Symbols.Where(symbol => paths.Contains(Normalize(symbol.FilePath))).ToArray();
+    }
+
+    public IReadOnlyList<CtFileFact> FileFactsForPaths(IReadOnlyList<string> paths)
+    {
+        HashSet<string> normalized = paths
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .Select(Normalize)
+            .ToHashSet(PathComparer);
+        return normalized
+            .OrderBy(static path => path, PathComparer)
+            .Select(path => FileFacts.FirstOrDefault(fact => PathComparer.Equals(Normalize(fact.Path), path))
+                ?? new CtFileFact(path, null, null, null, false, false))
+            .ToArray();
     }
 
     public IReadOnlyList<CtReferenceFact> ReferencesTo(IReadOnlyList<string> symbolIds)
@@ -98,6 +113,8 @@ internal sealed class FakeCtFactSource : ICtFactSource
 
     public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths) =>
         _inner.SymbolsForChangedFiles(changedPaths);
+
+    public IReadOnlyList<CtFileFact> FileFactsForPaths(IReadOnlyList<string> paths) => _inner.FileFactsForPaths(paths);
 
     public IReadOnlyList<CtReferenceFact> ReferencesTo(IReadOnlyList<string> symbolIds) =>
         _inner.ReferencesTo(symbolIds);

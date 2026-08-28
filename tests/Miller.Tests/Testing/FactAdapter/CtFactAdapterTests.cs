@@ -123,6 +123,77 @@ public sealed class CtFactAdapterTests
     }
 
     [Fact]
+    public void Facts_PreserveDetailedRoleAndFileEvidence()
+    {
+        using var fixture = JulieDbFixture.CreateTestRoleEvidenceScenario("ct-facts");
+        using var adapter = CtFactAdapter.OpenArtifact(fixture.DbPath);
+
+        IReadOnlyList<CtSymbolFact> symbols = adapter.SymbolsForChangedFiles([
+            "a-current.cs",
+            "b-file-status.cs",
+            "c-diagnostic.cs",
+            "d-combined.cs",
+            "e-unavailable.cs"]);
+
+        CtSymbolFact current = Assert.Single(symbols, row => row.Name == "Current");
+        Assert.Equal(true, current.TestCase);
+        Assert.Equal(true, current.TestContainer);
+        Assert.Equal(false, current.TestLifecycle);
+        Assert.Equal(TestRoleEvidence.CurrentStatus, current.TestEvidenceStatus);
+        Assert.Null(current.TestEvidenceReason);
+
+        CtSymbolFact fileStatus = Assert.Single(symbols, row => row.Name == "FileStatus");
+        Assert.Equal(false, fileStatus.TestCase);
+        Assert.Equal(false, fileStatus.TestContainer);
+        Assert.Equal(true, fileStatus.TestLifecycle);
+        Assert.Equal(TestRoleEvidence.UnknownStatus, fileStatus.TestEvidenceStatus);
+        Assert.Equal(TestRoleEvidence.FileStatusReason, fileStatus.TestEvidenceReason);
+
+        CtSymbolFact diagnostic = Assert.Single(symbols, row => row.Name == "Diagnostic");
+        Assert.Equal(false, diagnostic.TestCase);
+        Assert.Equal(true, diagnostic.TestContainer);
+        Assert.Equal(false, diagnostic.TestLifecycle);
+        Assert.Equal(TestRoleEvidence.UnknownStatus, diagnostic.TestEvidenceStatus);
+        Assert.Equal(TestRoleEvidence.ParseDiagnosticsReason, diagnostic.TestEvidenceReason);
+
+        CtSymbolFact combined = Assert.Single(symbols, row => row.Name == "Combined");
+        Assert.Equal(false, combined.TestCase);
+        Assert.Equal(true, combined.TestContainer);
+        Assert.Equal(true, combined.TestLifecycle);
+        Assert.Equal(TestRoleEvidence.UnknownStatus, combined.TestEvidenceStatus);
+        Assert.Equal(TestRoleEvidence.FileStatusAndParseDiagnosticsReason, combined.TestEvidenceReason);
+
+        CtSymbolFact unavailable = Assert.Single(symbols, row => row.Name == "Unavailable");
+        Assert.Equal(true, unavailable.TestCase);
+        Assert.Equal(false, unavailable.TestContainer);
+        Assert.Equal(false, unavailable.TestLifecycle);
+        Assert.Equal(TestRoleEvidence.UnknownStatus, unavailable.TestEvidenceStatus);
+        Assert.Equal(TestRoleEvidence.FileEvidenceUnavailableReason, unavailable.TestEvidenceReason);
+
+        IReadOnlyList<CtFileFact> files = adapter.FileFactsForPaths([
+            "a-current.cs",
+            "b-file-status.cs",
+            "c-diagnostic.cs",
+            "d-combined.cs",
+            "e-unavailable.cs"]);
+        Assert.Equal(5, files.Count);
+        CtFileFact currentFile = Assert.Single(files, row => row.Path == "a-current.cs");
+        Assert.Equal("csharp", currentFile.Language);
+        Assert.Equal("blake3:" + ContentHasher.Blake3Hex([]), currentFile.ContentHash);
+        Assert.Equal("indexed", currentFile.Status);
+        Assert.False(currentFile.HasParseDiagnostics);
+        Assert.True(currentFile.EvidenceAvailable);
+        CtFileFact diagnosticFile = Assert.Single(files, row => row.Path == "c-diagnostic.cs");
+        Assert.True(diagnosticFile.HasParseDiagnostics);
+        Assert.True(diagnosticFile.EvidenceAvailable);
+        CtFileFact unavailableFile = Assert.Single(files, row => row.Path == "e-unavailable.cs");
+        Assert.False(unavailableFile.EvidenceAvailable);
+        Assert.Null(unavailableFile.Language);
+        Assert.Null(unavailableFile.ContentHash);
+        Assert.Null(unavailableFile.Status);
+    }
+
+    [Fact]
     public void IdentifierEvidenceTo_ReturnsResolvedInboundIdentifiers()
     {
         using ResolutionArtifactFixture fixture = CreateFixture();
@@ -166,8 +237,55 @@ public sealed class CtFactAdapterTests
 
         Assert.Contains(impact.Impacted, row => row.SymbolId == ProcessId && !row.IsTest);
         Assert.Contains(impact.Tests, row => row.SymbolId == ProcessWorksId && row.IsTest);
+        CtImpactedSymbol test = Assert.Single(impact.Tests, row => row.SymbolId == ProcessWorksId);
+        Assert.Equal(false, test.TestCase);
+        Assert.Equal(false, test.TestContainer);
+        Assert.Equal(true, test.TestLifecycle);
+        Assert.Equal(TestRoleEvidence.CurrentStatus, test.TestEvidenceStatus);
+        Assert.Null(test.TestEvidenceReason);
         Assert.DoesNotContain(impact.Impacted, row => row.SymbolId == ValidateId);
         Assert.True(impact.NodesVisited >= 2);
+    }
+
+    [Fact]
+    public void FileFactsForPaths_ReturnsUnknownWhenFilesEvidenceIsAbsent()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        fixture.ExecuteWrite("DROP TABLE files;");
+        using var adapter = CtFactAdapter.OpenArtifact(fixture.DbPath);
+
+        CtFileFact fact = Assert.Single(adapter.FileFactsForPaths(["src/missing.cs"]));
+
+        Assert.Equal("src/missing.cs", fact.Path);
+        Assert.Null(fact.Language);
+        Assert.Null(fact.ContentHash);
+        Assert.Null(fact.Status);
+        Assert.False(fact.HasParseDiagnostics);
+        Assert.False(fact.EvidenceAvailable);
+    }
+
+    [Fact]
+    public void SymbolsForChangedFiles_ReadsOldArtifactsWithoutRoleOrFileEvidence()
+    {
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        fixture.AddFile("legacy-file", "src/Legacy.cs");
+        fixture.AddSymbol("legacy-file", "legacy-symbol", "Legacy", "class", "src/Legacy.cs");
+        fixture.ExecuteWrite("""
+            UPDATE symbols SET is_test = 1 WHERE symbol_id = 'legacy-symbol';
+            ALTER TABLE symbols DROP COLUMN test_container;
+            ALTER TABLE symbols DROP COLUMN test_lifecycle;
+            DROP TABLE files;
+            """);
+        using var adapter = CtFactAdapter.OpenArtifact(fixture.DbPath);
+
+        CtSymbolFact fact = Assert.Single(adapter.SymbolsForChangedFiles(["src/Legacy.cs"]));
+
+        Assert.True(fact.IsTest);
+        Assert.Equal(true, fact.TestCase);
+        Assert.Equal(false, fact.TestContainer);
+        Assert.Equal(false, fact.TestLifecycle);
+        Assert.Equal(TestRoleEvidence.UnknownStatus, fact.TestEvidenceStatus);
+        Assert.Equal(TestRoleEvidence.FileEvidenceUnavailableReason, fact.TestEvidenceReason);
     }
 
     [Fact]
@@ -179,6 +297,7 @@ public sealed class CtFactAdapterTests
 
         Assert.Equal(new CtFreshnessKey(adapter.Current.IndexIdentity, adapter.Current.Revision), facts.Freshness);
         Assert.Equal(adapter.SymbolsForChangedFiles(["src/Service.cs"]).Count, facts.SymbolsForChangedFiles(["src/Service.cs"]).Count);
+        Assert.Equal(adapter.FileFactsForPaths(["src/Service.cs"]), facts.FileFactsForPaths(["src/Service.cs"]));
         Assert.False(typeof(IMillerFactSource).IsAssignableFrom(typeof(CtFactAdapter)));
         Assert.True(typeof(IMillerFactSource).IsAssignableFrom(typeof(MillerFactSource)));
     }

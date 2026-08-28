@@ -2471,6 +2471,9 @@ public static class TestsCore
         public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths) =>
             _adapter.SymbolsForChangedFiles(changedPaths);
 
+        public IReadOnlyList<CtFileFact> FileFactsForPaths(IReadOnlyList<string> paths) =>
+            _adapter.FileFactsForPaths(paths);
+
         public IReadOnlyList<CtReferenceFact> ReferencesTo(IReadOnlyList<string> symbolIds) =>
             _adapter.ReferencesTo(symbolIds);
 

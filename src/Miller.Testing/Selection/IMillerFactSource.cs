@@ -29,6 +29,9 @@ public sealed class MillerFactSource : IMillerFactSource
     public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths) =>
         _inner.SymbolsForChangedFiles(changedPaths);
 
+    public IReadOnlyList<CtFileFact> FileFactsForPaths(IReadOnlyList<string> paths) =>
+        _inner.FileFactsForPaths(paths);
+
     public IReadOnlyList<CtReferenceFact> ReferencesTo(IReadOnlyList<string> symbolIds) =>
         _inner.ReferencesTo(symbolIds);
 
@@ -59,6 +62,9 @@ public sealed class ReopeningMillerFactSource : IMillerFactSource
 
     public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths) =>
         With(facts => facts.SymbolsForChangedFiles(changedPaths));
+
+    public IReadOnlyList<CtFileFact> FileFactsForPaths(IReadOnlyList<string> paths) =>
+        With(facts => facts.FileFactsForPaths(paths));
 
     public IReadOnlyList<CtReferenceFact> ReferencesTo(IReadOnlyList<string> symbolIds) =>
         With(facts => facts.ReferencesTo(symbolIds));

@@ -393,6 +393,12 @@ public sealed class TestsRunExecutionBudgetTests : IDisposable
 
             public IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths) => [];
 
+            public IReadOnlyList<CtFileFact> FileFactsForPaths(IReadOnlyList<string> paths) =>
+                paths
+                    .Where(static path => !string.IsNullOrWhiteSpace(path))
+                    .Select(static path => new CtFileFact(path, null, null, null, false, false))
+                    .ToArray();
+
             public IReadOnlyList<CtReferenceFact> ReferencesTo(IReadOnlyList<string> symbolIds) => [];
 
             public IReadOnlyList<CtReferenceFact> IdentifierEvidenceTo(IReadOnlyList<string> symbolIds) => [];

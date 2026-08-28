@@ -601,5 +601,12 @@ public sealed class MillerFactImpactSource : IContinuousTestImpactSource
         new(SymbolId: row.SymbolId, Path: row.FilePath, Name: row.Name);
 
     private static ContinuousTestImpactedTest ToTest(CtImpactedSymbol row) =>
-        new(SymbolId: row.SymbolId, Path: row.FilePath, Name: row.Name, Hop: row.Hop, TestCase: row.IsTest);
+        new(
+            SymbolId: row.SymbolId,
+            Path: row.FilePath,
+            Name: row.Name,
+            Hop: row.Hop,
+            TestCase: row.TestCase ?? row.IsTest,
+            EvidenceStatus: row.TestEvidenceStatus,
+            EvidenceReason: row.TestEvidenceReason);
 }

@@ -48,7 +48,12 @@ public sealed record CtSymbolFact(
     int EndLine,
     string? ParentId,
     bool IsTest,
-    string? Signature);
+    string? Signature,
+    bool? TestCase = null,
+    bool? TestContainer = null,
+    bool? TestLifecycle = null,
+    string? TestEvidenceStatus = null,
+    string? TestEvidenceReason = null);
 
 /// <summary>One inbound reference or identifier site targeting a symbol.</summary>
 public sealed record CtReferenceFact(
@@ -70,7 +75,21 @@ public sealed record CtImpactedSymbol(
     bool IsTest,
     int Hop,
     string? EdgeKind,
-    string? EdgeSource);
+    string? EdgeSource,
+    bool? TestCase = null,
+    bool? TestContainer = null,
+    bool? TestLifecycle = null,
+    string? TestEvidenceStatus = null,
+    string? TestEvidenceReason = null);
+
+/// <summary>Current file metadata and the completeness of its indexed evidence.</summary>
+public sealed record CtFileFact(
+    string Path,
+    string? Language,
+    string? ContentHash,
+    string? Status,
+    bool HasParseDiagnostics,
+    bool EvidenceAvailable);
 
 /// <summary>Typed blast-radius partition: non-test dependents versus likely tests.</summary>
 public sealed record CtImpactResult(
@@ -89,6 +108,8 @@ public interface ICtFactSource
     CtIndexCursor Current { get; }
 
     IReadOnlyList<CtSymbolFact> SymbolsForChangedFiles(IReadOnlyList<string> changedPaths);
+
+    IReadOnlyList<CtFileFact> FileFactsForPaths(IReadOnlyList<string> paths);
 
     IReadOnlyList<CtReferenceFact> ReferencesTo(IReadOnlyList<string> symbolIds);
 
