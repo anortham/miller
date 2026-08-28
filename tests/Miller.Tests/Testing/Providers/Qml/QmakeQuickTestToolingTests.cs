@@ -93,9 +93,72 @@ public sealed class QmakeQuickTestToolingTests
 
         string testArgs = Assert.Single(arguments, argument =>
             argument.StartsWith("TESTARGS=", StringComparison.Ordinal));
-        Assert.Contains("\\$$", testArgs, StringComparison.Ordinal);
-        Assert.Contains("\\`", testArgs, StringComparison.Ordinal);
-        Assert.DoesNotContain("gen$1", testArgs, StringComparison.Ordinal);
+        Assert.Contains("gen$$1", testArgs, StringComparison.Ordinal);
+        Assert.Contains("`echo", testArgs, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\$$", testArgs, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\`", testArgs, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildCheckArguments_uses_runtime_shell_safe_encoding_for_path_metacharacters()
+    {
+        string resultArtifactPath = OperatingSystem.IsWindows()
+            ? Path.Combine(Path.GetTempPath(), "gen $`it's", "TestResults", "run.xml")
+            : Path.Combine(Path.GetTempPath(), "gen\\\"\\`$(", "it's", "TestResults", "run.xml");
+        string fullResultPath = Path.GetFullPath(resultArtifactPath);
+        var arguments = QmakeQuickTestTooling.BuildCheckArguments(fullResultPath, new QtVersion(6, 5, 0));
+
+        string testArgs = Assert.Single(arguments, argument =>
+            argument.StartsWith("TESTARGS=", StringComparison.Ordinal));
+        string makeSafePath = fullResultPath.Replace("$", "$$", StringComparison.Ordinal);
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains($"-o \"{makeSafePath},junitxml\"", testArgs, StringComparison.Ordinal);
+            Assert.Contains("`", testArgs, StringComparison.Ordinal);
+            Assert.DoesNotContain("\\$$", testArgs, StringComparison.Ordinal);
+        }
+        else
+        {
+            string shellSafeValue = $"{makeSafePath},junitxml";
+            string shellSafeValueWithQuotes =
+                $"'{shellSafeValue.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
+            Assert.Contains($"-o {shellSafeValueWithQuotes}", testArgs, StringComparison.Ordinal);
+            Assert.Contains("gen\\\"\\`$$", testArgs, StringComparison.Ordinal);
+            Assert.Contains("'\"'\"'", testArgs, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("\r")]
+    [InlineData("\n")]
+    public void BuildCheckArguments_rejects_line_breaks_in_paths(string lineBreak)
+    {
+        string resultArtifactPath = Path.Combine(
+            Path.GetTempPath(), $"gen{lineBreak}", "TestResults", "run.xml");
+
+        Assert.Throws<ArgumentException>(() =>
+            QmakeQuickTestTooling.BuildCheckArguments(resultArtifactPath, new QtVersion(6, 5, 0)));
+    }
+
+    [Fact]
+    public void BuildCheckArguments_quotes_windows_paths_with_spaces_and_parentheses()
+    {
+        string resultArtifactPath = Path.Combine(
+            Path.GetTempPath(), "Program Files (x86)", "TestResults", "run.xml");
+        string fullResultPath = Path.GetFullPath(resultArtifactPath);
+        var arguments = QmakeQuickTestTooling.BuildCheckArguments(fullResultPath, new QtVersion(6, 5, 0));
+        string testArgs = Assert.Single(arguments, argument =>
+            argument.StartsWith("TESTARGS=", StringComparison.Ordinal));
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains($"-o \"{fullResultPath},junitxml\"", testArgs, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains($"-o '{fullResultPath},junitxml'", testArgs, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

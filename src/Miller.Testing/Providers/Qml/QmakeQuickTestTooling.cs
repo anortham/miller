@@ -304,18 +304,53 @@ public static class QmakeQuickTestTooling
         return paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    // TESTARGS crosses two expansion layers: make expands $ (doubled to survive), then the
-    // recipe shell honors quotes, backslash escapes, and backticks inside double quotes.
     private static string QuoteMakeValue(string value)
     {
-        string escaped = value
-            .Replace("\"", "\\\"", StringComparison.Ordinal)
-            .Replace("`", "\\`", StringComparison.Ordinal)
-            .Replace("$", "\\$$", StringComparison.Ordinal);
-        return escaped == value && !value.Any(char.IsWhiteSpace)
-            ? value
-            : $"\"{escaped}\"";
+        if (value.IndexOfAny(['\r', '\n']) >= 0)
+        {
+            throw new ArgumentException(
+                "qmake TESTARGS values cannot contain carriage returns or line feeds.",
+                nameof(value));
+        }
+
+        return OperatingSystem.IsWindows()
+            ? QuoteNmakeValue(value)
+            : QuotePosixValue(value);
     }
+
+    private static string QuotePosixValue(string value)
+    {
+        string escaped = value.Replace("$", "$$", StringComparison.Ordinal);
+        if (value.All(IsPosixUnquotedCharacter))
+            return escaped;
+
+        return $"'{escaped.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
+    }
+
+    private static string QuoteNmakeValue(string value)
+    {
+        if (value.Any(IsNmakeUnsafeCharacter))
+        {
+            throw new ArgumentException(
+                "qmake TESTARGS contains a character that cannot be represented safely for NMAKE.",
+                nameof(value));
+        }
+
+        string escaped = value.Replace("$", "$$", StringComparison.Ordinal);
+        return escaped.Any(IsNmakeQuotedCharacter)
+            ? $"\"{escaped}\""
+            : escaped;
+    }
+
+    private static bool IsPosixUnquotedCharacter(char value) =>
+        char.IsLetterOrDigit(value)
+        || value is '/' or '.' or '_' or '-' or ':' or ',' or '=' or '+';
+
+    private static bool IsNmakeUnsafeCharacter(char value) =>
+        value is '\0' or '"' or '%' or '!';
+
+    private static bool IsNmakeQuotedCharacter(char value) =>
+        char.IsWhiteSpace(value) || value is '^' or '&' or '|' or '<' or '>' or '(' or ')';
 
     private static QtVersion ParseQtVersion(
         string majorText,
