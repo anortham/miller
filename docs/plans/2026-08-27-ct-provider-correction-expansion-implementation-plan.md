@@ -257,17 +257,17 @@ Parallel Batch A uses `parallel-lead-commit`. Every other task uses `serial-work
 
 **Dependency reason:** Depends on Task 6 backend discriminator and stable VSTest/xUnit lanes.
 
-**What to build:** Resolve effective MTP/VSTest selection, list tests with version-correct MTP contracts, run framework-appropriate filters after `--`, and produce generation-scoped TRX only when the extension exists.
+**What to build:** Resolve effective MTP/VSTest selection, list tests with version-correct MTP contracts, run framework-appropriate filters through direct `dotnet exec <TargetPath>` application arguments, and produce generation-scoped TRX only when the extension exists. The `--` delimiter belongs only to the `dotnet test` driver.
 
 **Approach:** Refuse ambiguous runner selection, unsupported filter providers, unknown versions, and missing report extensions with actionable diagnostics. Preserve current framework keys and factory behavior.
 
 **Acceptance criteria:**
-- [ ] .NET 10 global runner and inherited project properties resolve with documented precedence.
-- [ ] MTP text/JSON listing, filters, result directories, report extension detection, and malformed/incomplete output are fail-closed.
-- [ ] MSTest.Sdk defaults to MTP unless `UseVSTest=true`.
-- [ ] Existing VSTest and xUnit-v3 focused tests remain byte-stable outside backend routing.
-- [ ] Guarded real MTP VB/.NET fixture passes when supported tooling/packages exist.
-- [ ] Worker-scope verification passes and the worker creates the owned-file commit.
+- [x] .NET 10 global runner and inherited project properties resolve with documented precedence.
+- [x] MTP text/JSON listing, filters, result directories, report extension detection, and malformed/incomplete output are fail-closed.
+- [x] MSTest.Sdk defaults to MTP unless `UseVSTest=true`.
+- [x] Existing VSTest and xUnit-v3 focused tests remain byte-stable outside backend routing.
+- [x] Guarded real MTP VB/.NET fixture passes when supported tooling/packages exist.
+- [x] Worker-scope verification passes and the worker creates the owned-file commit.
 
 ### Task 8: Add Go provider
 
@@ -291,12 +291,12 @@ Parallel Batch A uses `parallel-lead-commit`. Every other task uses `serial-work
 **Approach:** Require Go 1.24. Use stable project cache plus generation temp/results. Set explicit `GOWORK`, sanitize selection-affecting `GOFLAGS`, use anchored escaped `-run` plus `-count=1`, roll subtests to parents, and exclude examples/benchmarks/fuzzing.
 
 **Acceptance criteria:**
-- [ ] Nested modules remain separate; `go.work` is context only and external `GOWORK` is not inherited.
-- [ ] Stable IDs include module/package/kind/name and exact Julie name/path identity when available.
-- [ ] Pass/fail/skip, interleaved packages, package build failures, unknown actions, malformed lines, truncation, missing terminal events, and nonzero exits are honest.
-- [ ] Cache/temp/result paths stay Miller-owned and source remains unchanged.
-- [ ] Guarded real single-module and multi-module workspace Scale fixtures pass.
-- [ ] Worker-scope verification passes and the worker creates the owned-file commit.
+- [x] Nested modules remain separate; `go.work` is context only and external `GOWORK` is not inherited.
+- [x] Stable IDs include module/package/kind/name and exact Julie name/path identity when available.
+- [x] Pass/fail/skip, interleaved packages, package build failures, unknown actions, malformed lines, truncation, missing terminal events, and nonzero exits are honest.
+- [x] Cache/temp/result paths stay Miller-owned and source remains unchanged.
+- [x] Guarded real single-module and multi-module workspace Scale fixtures pass.
+- [x] Worker-scope verification passes and the worker creates the owned-file commit.
 
 ### Task 9: Documentation and Julie audit handoff
 
@@ -320,8 +320,8 @@ Parallel Batch A uses `parallel-lead-commit`. Every other task uses `serial-work
 **Approach:** Verify copied documents by checksum and bounded Miller reads. Update `docs/README.md` pointers. Do not remove any worktree. Run `git diff --check` and focused documentation contract tests returned by Miller impact.
 
 **Acceptance criteria:**
-- [ ] README and CT docs match implemented behavior without runner/language overclaims.
-- [ ] Miller owns the preserved readiness audit and bounded follow-up backlog.
-- [ ] The Julie plan is clearly marked non-executable as originally written and retains only verified backlog items.
-- [ ] Julie-main Goldfish files remain untouched and are reported in final state.
+- [x] README and CT docs match implemented behavior without runner/language overclaims.
+- [x] Miller owns the preserved readiness audit and bounded follow-up backlog.
+- [x] The Julie plan is clearly marked non-executable as originally written and retains only verified backlog items.
+- [x] Julie-main Goldfish files remain untouched and are reported in final state.
 - [ ] Worker-scope verification passes and the worker creates the owned-file commit.

@@ -223,30 +223,40 @@ optimistic green. An index rebuild changes the generation identity, which stales
 
 ### Providers
 
-| Ecosystem | Frameworks | Run on a real repo |
+| Ecosystem | Frameworks | Verification evidence |
 |---|---|---|
 | .NET | `dotnet`, `xunit`, `nunit`, `mstest` | yes — Miller's own suite |
 | Rust | `cargo` | yes — `julie-extractors`, 4,173 cases |
 | Python | `pytest` | yes — `more-itertools`, 736 tests |
 | JavaScript and TypeScript | `vitest`, `jest`, `node-test` | yes — `jest` proven on `vercel/ms` (runs the suite once, under jest's default environment) |
-| QML and Qt | `qt-quick-test` (CMake/CTest) | not yet — shipped in v1.22.0, proven by fixtures; no host with the Qt Quick Test development package |
+| QML and Qt | `qt-quick-test` (CMake/CTest and qmake/QTest) | fixture and focused-test proof; no host with the Qt Quick Test development package |
+| Go | `go` | yes — guarded single-module and multi-module fixtures on Go 1.24+ |
 
-That is the whole supported set today. Support for more languages and frameworks is ongoing: Go,
-Ruby, Java, PHP, and every other toolchain are not supported yet. `miller tests enable` on a repo
-with no supported test project refuses with exit `3` and writes nothing, rather than leaving the
-workspace enabled with zero projects.
+That is the whole supported set today. Support for more languages and frameworks is ongoing:
+F#, Ruby, Java, PHP, and every other toolchain are not supported yet. `miller tests enable` on a
+repo with no supported test project refuses with exit `3` and writes nothing, rather than leaving
+the workspace enabled with zero projects.
 
 `miller tests enable` discovers projects from the files already in the repo: test-signal `.csproj`
-files, `Cargo.toml`, `package.json`, the usual Python config files, and `CMakeLists.txt` with Qt
-Quick Test evidence. JavaScript and Python cases are discovered by each runner's own naming —
+files, `.vbproj` and `.fsproj`, `Cargo.toml`, `go.mod`, `package.json`, the usual Python config
+files, and Qt Quick Test `CMakeLists.txt` or `.pro` projects with runner evidence. JavaScript and
+Python cases are discovered by each runner's own naming —
 `*.test.*` / `*.spec.*` for vitest and jest (plus jest's `__tests__/` default and a literal
 `testMatch` / `include` array when the config is readable), `test_*.py` or `*_test.py` for Python —
-so a suite named some other way reports no cases rather than a false green.
+so a suite named some other way reports no cases rather than a false green. Go projects are one
+project per `go.mod`; an in-root `go.work` supplies context but does not merge modules.
 
-One known sharp edge: CT runs the built self-executing test assembly, which only xUnit v3 and
-Microsoft.Testing.Platform produce. An xUnit v2 project builds no such executable and fails
-discovery with a raw "error occurred trying to start process" message; migrate the project to xUnit
-v3. `dotnet new xunit` still scaffolds v2 on SDK 10.0.400.
+For .NET, CT runs either a built self-executing xUnit v3/Microsoft.Testing.Platform assembly or
+the VSTest-compatible `dotnet test` path. MTP requires the built test application to prove MTP 1.7+
+and a TRX report extension; unsupported or conflicting runner evidence fails closed. An xUnit v2
+project builds no self-executing assembly and is refused with a migration diagnostic; migrate the
+project to xUnit v3. `dotnet new xunit` still scaffolds v2 on SDK 10.0.400.
+
+Go CT requires Go 1.24 or newer, uses `go list -json` and `go test -list` for discovery, and runs
+package groups with anchored top-level `TestXxx` selectors. Child `t.Run` cases, benchmarks, fuzz
+targets, examples, and function-level source identity are outside the current contract. QML
+supports CMake/CTest and qmake Qt Quick Test projects; qmake selection is target-level and
+requires a generated `check` target. CMake requires static Qt Quick Test and CTest registration.
 
 The authoritative supported matrix, the full discovery rules, and the known limits live in
 [docs/continuous-testing.md](docs/continuous-testing.md). Cross-repo evidence and the open provider

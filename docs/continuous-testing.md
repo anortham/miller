@@ -21,13 +21,14 @@ The `framework` value is what `tests status --json` and `tests enable --json` re
 | Ecosystem | Framework value | Discovered from | How CT runs it | Selection |
 |---|---|---|---|---|
 | .NET | `xunit` | `.csproj`, `.fsproj`, `.vbproj` naming an xunit package | builds the project, then runs the built self-executing test executable | per test method (`-method`), plus trait exclusions (`-trait-`) |
-| .NET | `nunit`, `mstest`, `dotnet` | project file naming NUnit or MSTest, or `Microsoft.NET.Test.Sdk` / `Microsoft.NET.Sdk.Test` / `Microsoft.Testing.Platform` | `dotnet test <TargetPath> --filter ...`, reading a TRX report | one conjunctive vstest filter per invocation |
+| .NET | `nunit`, `mstest`, `dotnet` | project file naming NUnit or MSTest, or `Microsoft.NET.Test.Sdk` / `Microsoft.NET.Sdk.Test` / `Microsoft.Testing.Platform` / `MSTest.Sdk` | VSTest uses `dotnet test <TargetPath> --filter ...`; MTP uses direct `dotnet exec <TargetPath>` with a proven TRX extension | one conjunctive filter per invocation when the runner proves filter support |
 | Rust | `cargo` | `Cargo.toml` | `cargo test -p <package>` with `--exact` name filters | per libtest test name |
 | Python | `pytest` | `pytest.ini`, `pyproject.toml`, `tox.ini`, `setup.cfg`, `setup.py` | `python -m pytest --junitxml=...` | per pytest node id |
 | JavaScript and TypeScript | `vitest` | `package.json` naming vitest | local `node_modules/.bin/vitest run --reporter=json` | per file, from the JSON report |
 | JavaScript and TypeScript | `jest` | `package.json` naming jest | local `node_modules/.bin/jest --json` | per file, from the JSON report |
 | JavaScript and TypeScript | `node-test` | `package.json` with a script that runs node's own test runner | `node --test` with the JUnit reporter | per file |
-| QML and Qt | `qt-quick-test` | `CMakeLists.txt` with Qt Quick Test evidence | `cmake` configure, `cmake --build`, then `ctest` with a JUnit report | per CTest test name |
+| QML and Qt | `qt-quick-test` | `CMakeLists.txt` or `.pro` with Qt Quick Test evidence | CMake/CTest configure/build/run, or qmake configure/build/`make check`, with a generation-scoped XML report | per CTest name or qmake target |
+| Go | `go` | one `go.mod` module | `go list -json` / `go test -list` discovery, then package-grouped `go test -json` | top-level `TestXxx` names, grouped by package |
 
 Sources: [`ContinuousTestProviderFactory.CreateDefault`](../src/Miller.Testing/Daemon/ContinuousTestProviderFactory.cs),
 [`ContinuousTestProjectInventory`](../src/Miller.Testing/Daemon/ContinuousTestProjectInventory.cs), and the
@@ -45,16 +46,22 @@ Field evidence, by ecosystem:
   fixture is NOT VERIFIED on a machine with the Qt Quick Test development package, because neither
   available host had it. See
   [`findings/2026-08-24-qml-continuous-testing-verification.md`](findings/2026-08-24-qml-continuous-testing-verification.md).
-  The provider is limited to CMake/CTest Qt Quick Test projects and needs CMake 3.21 or newer.
-  qmake projects are not supported.
+  CMake/CTest and qmake/QTest backends are proven by focused fixtures; qmake Scale is guarded by
+  qmake availability. CMake requires 3.21 or newer.
+- VB.NET MSTest and Microsoft.Testing.Platform are covered by guarded real fixtures, including
+  selected parameterized execution and TRX parsing. xUnit v3, NUnit, and VSTest continue to use
+  their existing .NET lanes.
+- Go single-module and in-root multi-module fixtures pass with Go 1.26.6; the provider gate is
+  Go 1.24 or newer.
 
 ### Support for more languages is ongoing
 
-The table above is the whole supported set today. Go, Ruby, Java, PHP, and every other toolchain are
-not supported yet, and more are planned. `miller tests enable` on a repository with no supported
-test project refuses with exit `3` and writes nothing: no opt-in marker, no `ct.db`, no `.miller/`.
-The refusal names the supported toolchains, so an unsupported repository cannot end up permanently
-enabled with zero projects. See the enablement section of
+The table above is the whole supported set today. F#, Ruby, Java, PHP, and every other toolchain are
+not supported yet, and more are planned. A `.fsproj` can be discovered as a .NET project, but Miller
+does not claim F# source coverage without Julie extractor rows. `miller tests enable` on a repository
+with no supported test project refuses with exit `3` and writes nothing: no opt-in marker, no `ct.db`,
+no `.miller/`. The refusal names the supported toolchains, so an unsupported repository cannot end
+up permanently enabled with zero projects. See the enablement section of
 [`contracts/tests-cli-v1.md`](contracts/tests-cli-v1.md).
 
 ## How Miller finds test projects
@@ -77,15 +84,24 @@ build output.
   (`pytest.ini`, then `pyproject.toml`, then `tox.ini`, then `setup.cfg`, then `setup.py`).
 - Cargo workspace members are dropped when the workspace root proves membership, because one
   `cargo test` at the root already runs them. Any doubt keeps the crate.
-- A QML project needs three things in one CMake subtree: a `CMakeLists.txt` with a `project()` call,
-  Qt Quick Test evidence (`Qt6::QuickTest`, `Qt5::QuickTest`, `Qt::QuickTest`, `QUICK_TEST_MAIN`, or
-  `QUICK_TEST_OPENGL_MAIN` in a CMake file or a C, C++, or Objective-C source), and at least one
-  `.qml` file named `tst_*` or containing `TestCase`. Nested configure roots collapse to the
-  outermost one.
+- A CMake QML project needs a `CMakeLists.txt` with a `project()` call, Qt Quick Test evidence
+  (`Qt6::QuickTest`, `Qt5::QuickTest`, `Qt::QuickTest`, `QUICK_TEST_MAIN`,
+  `QUICK_TEST_MAIN_WITH_SETUP`, or `QUICK_TEST_OPENGL_MAIN` in the CMake graph or a C, C++, or
+  Objective-C source), at least one `.qml` file named `tst_*` or containing `TestCase`, and
+  resolvable static `add_test(...)` registration. Nested roots collapse only when the outer graph
+  statically includes the child; independent nested projects remain separate.
+- A qmake QML project needs a bounded literal `.pro`/`.pri` graph with `CONFIG += qmltestcase`, or
+  both `QT += qmltest` and `CONFIG += testcase`, QML test evidence, and a generated `check` target.
+  qmake and make/Qt capabilities are probed before generation; dynamic, malformed, or incomplete
+  project evidence is refused.
 - A .NET project needs a real test signal: an xunit, NUnit, or MSTest reference, or
-  `Microsoft.NET.Test.Sdk`, `Microsoft.NET.Sdk.Test`, or `Microsoft.Testing.Platform`. A test-like
-  file name alone does not qualify. `tests enable --project <file>.csproj` accepts a project whose
-  contents name no test package, because it still runs under `dotnet test`.
+  `Microsoft.NET.Test.Sdk`, `Microsoft.NET.Sdk.Test`, `Microsoft.Testing.Platform`, or
+  `MSTest.Sdk`. A test-like file name alone does not qualify. Effective MTP/VSTest properties are
+  evaluated when static evidence does not decide the runner. `tests enable --project <file>.csproj`
+  accepts a project whose contents name no test package, because it still runs under `dotnet test`.
+- A Go project is one `go.mod`; an in-root `go.work` supplies context only, and nested modules stay
+  separate. External `GOWORK` is not inherited. Go 1.24+ and complete module/package metadata are
+  required before enablement.
 - When a .NET project sets `VSTestTestCaseFilter` to a pure conjunction of `Name!=Value` terms (for
   example `Category!=Scale`), enable seeds the project's trait exclusions from it, so a continuous
   run honors the same default suite as a bare `dotnet test`. Any other filter shape seeds nothing.
@@ -99,15 +115,17 @@ writes nothing: it never creates `ct.db`, never creates `.miller/ct/`, and never
 Case discovery is per ecosystem. A suite named some other way reports no cases rather than a false
 green.
 
-- .NET, Rust, and QML enumerate cases from the runner itself (xunit `-list`, vstest discovery,
-  `cargo test --no-run` plus libtest, and CTest discovery).
+- .NET, Rust, QML, and Go enumerate cases from the runner itself (xUnit `-list`, VSTest/MTP
+  discovery, `cargo test --no-run` plus libtest, CTest/qmake target discovery, and Go
+  `go test -list`).
 - vitest and jest match their own documented defaults: a file whose stem ends in `.test` or
-  `.spec` (including `.mjs` / `.cjs` / `.mts` / `.cts` and component files such as `.spec.vue`).
-  Jest also takes every JS/TS file under `__tests__/`, which is jest's own default. A literal
-  `testMatch` (jest, including `package.json` `"jest"`) or `test.include` (`vitest.config` only)
-  array of strings replaces those defaults. Config is read, never executed — a spread or
-  variable falls back to the defaults. `vite.config` `include` is ignored because that is the
-  library source set.
+  `.spec` (including `.mjs` / `.cjs` / `.mts` / `.cts`). Jest also takes every JS/TS file under
+  `__tests__/`, which is jest's own default. A literal `testMatch` (jest, including `package.json`
+  `"jest"`) or `test.include` (`vitest.config` only) array of strings replaces those defaults.
+  Config is read, never executed — unsupported, truncated, malformed, interpolated, or
+  `testRegex`-based discovery is refused rather than silently changing the suite. Component
+  extensions and runner-owned directories require an explicit supported config. `vite.config`
+  `include` is ignored because that is the library source set.
 - `node --test` uses node's own documented default patterns, which also take every runnable file
   under a `test` directory: `**/*.test.{cjs,mjs,js}`, `**/*-test.{cjs,mjs,js}`,
   `**/*_test.{cjs,mjs,js}`, `**/test-*.{cjs,mjs,js}`, `**/test.{cjs,mjs,js}`,
@@ -115,6 +133,10 @@ green.
   test script names paths or globs, those replace the defaults, exactly as they do on node's command
   line.
 - pytest takes `test_*.py` and `*_test.py`.
+- Go lists only top-level `TestXxx` functions. Examples, benchmarks, fuzz targets, and child
+  `t.Run` cases are excluded in V1. A selected run groups cases by package, anchors escaped test
+  names in `-run`, and uses `-count=1`; incomplete `go list` or `go test -json` output refuses
+  rather than becoming an empty or green result.
 
 ## Where CT builds
 
@@ -214,8 +236,20 @@ hooks under CT with one property condition:
 Tests that serve or read the built SPA assets should not opt in to CT this way; tests that never
 touch them (the normal case for unit suites) lose nothing.
 
-**QML is CMake/CTest only.** qmake projects, function-level QML coverage, and native QML coverage
-are out of scope for the v1.22.0 provider.
+**QML supports CMake/CTest and qmake/QTest.** CMake requires static Qt Quick Test evidence and
+CTest registration; qmake requires a generated `check` target and runs at target level. Function-
+level QML coverage, native Qt Test, Qbs, PySide6, and device runners remain out of scope.
+
+**MTP is evidence-gated.** Microsoft.Testing.Platform requires version evidence at or above 1.7,
+and selected runs require a runner-proven framework filter plus the TRX report extension. MTP
+listing and run output that is missing, malformed, truncated, or incomplete is refused. Direct
+MTP application execution uses `dotnet exec <TargetPath>` with native MTP options; the `--`
+delimiter belongs to the `dotnet test` driver and is not inserted into the direct command.
+
+**Go V1 is deliberately bounded.** The provider requires Go 1.24+, one project per `go.mod`, and
+top-level `TestXxx` cases. Child `t.Run` identity, benchmarks, fuzz targets, examples, and
+function-level source paths are not claimed. Nested modules remain separate even when an in-root
+`go.work` supplies context.
 
 ## Safety posture
 
