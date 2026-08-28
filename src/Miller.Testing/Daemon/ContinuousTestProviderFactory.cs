@@ -45,6 +45,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
     private static readonly string[] JavaScriptFrameworks = ["vitest", "jest", "node-test"];
     private static readonly string[] PythonFrameworks = ["pytest", "python"];
     private static readonly string[] RustFrameworks = ["cargo", "rust"];
+    private static readonly string[] GoFrameworks = ["go"];
 
     private readonly IContinuousTestProvider _dotnetProvider;
     private readonly IReadOnlyDictionary<string, ContinuousTestProviderRegistration> _frameworkProviders;
@@ -58,7 +59,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
     }
 
     /// <summary>
-    /// The five providers over one shared process runner.
+    /// The providers over one shared process runner.
     /// <paramref name="onDiagnostic"/> receives the degradations a run survives rather than fails on: a
     /// containment job the kernel refused, a priority that would not apply, a child that outlived its exit
     /// grace period. Left unwired they are silent, and an UNCONTAINED provider reads exactly like a contained
@@ -87,6 +88,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
         var javascript = new JavaScriptTestProvider(process);
         var python = new PythonTestProvider(process);
         var qml = new QtQuickTestProvider(process);
+        var go = new GoTestProvider(process);
         return new ContinuousTestProviderFactory(
             new DotnetTestProvider(process),
             new Dictionary<string, ContinuousTestProviderRegistration>(StringComparer.Ordinal)
@@ -99,6 +101,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
                 ["pytest"] = new(python, "ct-provider:python"),
                 ["python"] = new(python, "ct-provider:python"),
                 ["qt-quick-test"] = new(qml, "ct-provider:qml"),
+                ["go"] = new(go, "ct-provider:go"),
             })
         {
             DefaultProcessRunner = process,
@@ -107,7 +110,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
     }
 
     /// <summary>
-    /// Test seam: the runner <see cref="CreateDefault"/> built and shared across the five providers. Null for a
+    /// Test seam: the runner <see cref="CreateDefault"/> built and shared across the providers. Null for a
     /// factory built through the public constructor, which is handed providers rather than a runner.
     /// </summary>
     internal ITestProcessRunner? DefaultProcessRunner { get; private init; }
@@ -152,6 +155,13 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
             && TryResolve(RustFrameworks, out ContinuousTestProviderRegistration rust))
         {
             return new ContinuousTestProviderResolution(rust.Provider, rust.ProviderSource);
+        }
+
+        if (framework is null
+            && GoTestProvider.IsGoProjectFile(workspace.ProjectPath)
+            && TryResolve(GoFrameworks, out ContinuousTestProviderRegistration go))
+        {
+            return new ContinuousTestProviderResolution(go.Provider, go.ProviderSource);
         }
 
         if (framework is not null && _frameworkProviders.TryGetValue(framework, out ContinuousTestProviderRegistration? registration))

@@ -154,6 +154,17 @@ public static class CtProviderTestSupport
         return binary!;
     }
 
+    public static string? LocateGo() =>
+        LocateOnPath(OperatingSystem.IsWindows() ? "go.exe" : "go");
+
+    public static string RequireGo()
+    {
+        string? binary = LocateGo();
+        Assert.SkipWhen(binary is null,
+            "Go 1.24+ toolchain is required for GoTestProvider Scale smoke");
+        return binary!;
+    }
+
     public static string? LocatePowerShell() =>
         LocateOnPath("pwsh.exe") ?? LocateOnPath("powershell.exe");
 

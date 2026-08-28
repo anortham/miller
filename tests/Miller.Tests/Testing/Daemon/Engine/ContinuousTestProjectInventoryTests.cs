@@ -1450,6 +1450,25 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
         Assert.Empty(items);
     }
 
+    [Fact]
+    public void Discover_keeps_nested_go_modules_separate_and_associates_only_in_root_go_work()
+    {
+        WriteProject("go.mod", "module example.com/root\ngo 1.24\n");
+        WriteProject("first/go.mod", "module example.com/first\ngo 1.24\n");
+        WriteProject("second/go.mod", "module example.com/second\ngo 1.24\n");
+        WriteProject("go.work", "go 1.24\n\nuse (\n    ./first\n    ./second\n)\n");
+
+        IReadOnlyList<ContinuousTestProject> projects = ContinuousTestProjectInventory.Discover(_root, "ws:go");
+
+        Assert.Equal(3, projects.Count(project => project.Framework == "go"));
+        ContinuousTestProject root = projects.Single(project => project.ProjectPath == Path.Combine(_root, "go.mod"));
+        ContinuousTestProject first = projects.Single(project => project.ProjectPath == Path.Combine(_root, "first", "go.mod"));
+        Assert.Equal("example.com/root", root.Metadata["module"]);
+        Assert.False(root.Metadata.ContainsKey("go_work"));
+        Assert.Equal("example.com/first", first.Metadata["module"]);
+        Assert.Equal(Path.Combine(_root, "go.work"), first.Metadata["go_work"]);
+    }
+
     private static bool IsInside(string root, string path)
     {
         string relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(path));

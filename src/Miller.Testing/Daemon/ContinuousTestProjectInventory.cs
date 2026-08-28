@@ -157,9 +157,7 @@ public static class ContinuousTestProjectInventory
                 ProjectPath: path,
                 Framework: framework,
                 ExcludeTraits: excludeTraits,
-                Metadata: DotnetProjectExtensions.Contains(Path.GetExtension(path))
-                    ? DotnetTestBackend.ToMetadata(DotnetTestBackend.ReadStatic(path))
-                    : null));
+                Metadata: ProjectMetadata(path, root)));
         }
 
         foreach (QmlProjectEvidence evidence in DiscoverQmlProjects(candidateFiles))
@@ -268,9 +266,7 @@ public static class ContinuousTestProjectInventory
             ProjectPath: full,
             Framework: framework,
             ExcludeTraits: excludeTraits,
-            Metadata: DotnetProjectExtensions.Contains(Path.GetExtension(full))
-                ? DotnetTestBackend.ToMetadata(DotnetTestBackend.ReadStatic(full))
-                : null);
+            Metadata: ProjectMetadata(full, Path.GetFullPath(workspaceRoot)));
     }
 
     public static string ProjectId(string workspaceId, string workspaceRoot, string projectPath)
@@ -1443,6 +1439,7 @@ public static class ContinuousTestProjectInventory
         string name = Path.GetFileName(path);
         return DotnetProjectExtensions.Contains(Path.GetExtension(path))
             || string.Equals(name, "Cargo.toml", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "go.mod", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "package.json", StringComparison.OrdinalIgnoreCase)
             || PythonProjectNames.Contains(name)
             || IsCMakeLists(path)
@@ -1459,6 +1456,12 @@ public static class ContinuousTestProjectInventory
         if (string.Equals(name, "Cargo.toml", StringComparison.OrdinalIgnoreCase))
         {
             framework = "cargo";
+            return true;
+        }
+
+        if (string.Equals(name, "go.mod", StringComparison.OrdinalIgnoreCase))
+        {
+            framework = "go";
             return true;
         }
 
@@ -1529,6 +1532,83 @@ public static class ContinuousTestProjectInventory
 
         framework = null;
         return false;
+    }
+
+    private static IReadOnlyDictionary<string, object?>? ProjectMetadata(string projectPath, string workspaceRoot)
+    {
+        if (DotnetProjectExtensions.Contains(Path.GetExtension(projectPath)))
+            return DotnetTestBackend.ToMetadata(DotnetTestBackend.ReadStatic(projectPath));
+
+        if (!string.Equals(Path.GetFileName(projectPath), "go.mod", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var metadata = new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (GoTestTooling.ReadModulePath(projectPath) is { } modulePath)
+            metadata["module"] = modulePath;
+
+        string root = Path.GetFullPath(workspaceRoot);
+        string goWork = Path.Combine(root, "go.work");
+        if (File.Exists(goWork) && GoWorkspaceIncludes(goWork, Path.GetDirectoryName(projectPath)!))
+            metadata["go_work"] = goWork;
+
+        return metadata;
+    }
+
+    private static bool GoWorkspaceIncludes(string goWorkPath, string moduleDirectory)
+    {
+        bool inUseBlock = false;
+        string workRoot = Path.GetDirectoryName(goWorkPath)!;
+        try
+        {
+            foreach (string rawLine in File.ReadLines(goWorkPath))
+            {
+                string line = StripComment(rawLine).Trim();
+                if (line.Length == 0)
+                    continue;
+                if (inUseBlock)
+                {
+                    if (line == ")")
+                    {
+                        inUseBlock = false;
+                        continue;
+                    }
+
+                    if (GoWorkspacePathMatches(line, workRoot, moduleDirectory))
+                        return true;
+                    continue;
+                }
+
+                if (line.Equals("use (", StringComparison.Ordinal))
+                {
+                    inUseBlock = true;
+                    continue;
+                }
+
+                if (line.StartsWith("use ", StringComparison.Ordinal)
+                    && GoWorkspacePathMatches(line["use ".Length..].Trim(), workRoot, moduleDirectory))
+                    return true;
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+
+        return false;
+    }
+
+    private static bool GoWorkspacePathMatches(string usePath, string workRoot, string moduleDirectory)
+    {
+        if (usePath.Length == 0 || usePath.Contains('"', StringComparison.Ordinal))
+            return false;
+        try
+        {
+            string candidate = Path.GetFullPath(Path.Combine(workRoot, usePath));
+            return PathComparer.Equals(candidate, Path.GetFullPath(moduleDirectory));
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

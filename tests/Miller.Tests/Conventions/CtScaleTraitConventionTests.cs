@@ -27,6 +27,7 @@ public sealed class CtScaleTraitConventionTests
     private static readonly string[] CargoLaunchSignals = ["RequireCargo", "LocateCargo"];
     private static readonly string[] NodeLaunchSignals = ["RequireNode", "LocateNode"];
     private static readonly string[] PythonLaunchSignals = ["RequirePython", "LocatePython"];
+    private static readonly string[] GoLaunchSignals = ["RequireGo", "LocateGo"];
     private static readonly string[] CMakeLaunchSignals = ["RequireCMake", "LocateCMake"];
     private static readonly string[] CTestLaunchSignals = ["RequireCTest", "LocateCTest"];
     private static readonly string[] QmakeLaunchSignals =
@@ -59,6 +60,7 @@ public sealed class CtScaleTraitConventionTests
         int cargoFilesSeen = 0;
         int nodeFilesSeen = 0;
         int pythonFilesSeen = 0;
+        int goFilesSeen = 0;
         int cmakeFilesSeen = 0;
         int ctestFilesSeen = 0;
         int qmakeFilesSeen = 0;
@@ -74,11 +76,12 @@ public sealed class CtScaleTraitConventionTests
             bool spawnsCargo = CargoLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsNode = NodeLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsPython = PythonLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
+            bool spawnsGo = GoLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsCMake = CMakeLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsCTest = CTestLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsQmake = QmakeLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsQtQuickTest = QtQuickTestLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
-            if (!spawnsDotnet && !spawnsCargo && !spawnsNode && !spawnsPython
+            if (!spawnsDotnet && !spawnsCargo && !spawnsNode && !spawnsPython && !spawnsGo
                 && !spawnsCMake && !spawnsCTest && !spawnsQmake && !spawnsQtQuickTest)
                 continue;
 
@@ -90,6 +93,8 @@ public sealed class CtScaleTraitConventionTests
                 nodeFilesSeen++;
             if (spawnsPython)
                 pythonFilesSeen++;
+            if (spawnsGo)
+                goFilesSeen++;
             if (spawnsCMake)
                 cmakeFilesSeen++;
             if (spawnsCTest)
@@ -107,6 +112,7 @@ public sealed class CtScaleTraitConventionTests
         AssertSignalFamilyIsCovered(cargoFilesSeen, "cargo", CargoLaunchSignals);
         AssertSignalFamilyIsCovered(nodeFilesSeen, "node", NodeLaunchSignals);
         AssertSignalFamilyIsCovered(pythonFilesSeen, "python", PythonLaunchSignals);
+        AssertSignalFamilyIsCovered(goFilesSeen, "Go", GoLaunchSignals);
         AssertSignalFamilyIsCovered(cmakeFilesSeen, "cmake", CMakeLaunchSignals);
         AssertSignalFamilyIsCovered(ctestFilesSeen, "ctest", CTestLaunchSignals);
         AssertSignalFamilyIsCovered(qmakeFilesSeen, "qmake", QmakeLaunchSignals);

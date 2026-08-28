@@ -60,6 +60,8 @@ public sealed class ContinuousTestProviderFactoryTests : IDisposable
         Assert.IsType<PythonTestProvider>(factory.Resolve(Workspace("pyproject.toml", null)).Provider);
         Assert.IsType<QtQuickTestProvider>(factory.Resolve(Workspace("CMakeLists.txt", "qt-quick-test")).Provider);
         Assert.Equal("ct-provider:qml", factory.Resolve(Workspace("CMakeLists.txt", "qt-quick-test")).ProviderSource);
+        Assert.IsType<GoTestProvider>(factory.Resolve(Workspace("go.mod", null)).Provider);
+        Assert.Equal("ct-provider:go", factory.Resolve(Workspace("go.mod", "go")).ProviderSource);
     }
 
     [Fact]
