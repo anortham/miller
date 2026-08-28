@@ -193,6 +193,14 @@ internal static partial class GoTestTooling
             .ToArray();
     }
 
+    /// <summary>Execution-time counterpart to <see cref="Environment"/>: command construction must
+    /// stay write-free so render-only paths create nothing on disk.</summary>
+    internal static void EnsureEnvironmentDirectories(ContinuousTestWorkspace workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        Directory.CreateDirectory(CtGenerationPaths.CacheDirectory(workspace, "go"));
+    }
+
     internal static IReadOnlyDictionary<string, string?> Environment(
         ContinuousTestWorkspace workspace,
         CtGenerationPaths paths,
@@ -200,9 +208,6 @@ internal static partial class GoTestTooling
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(paths);
-
-        Directory.CreateDirectory(CtGenerationPaths.CacheDirectory(workspace, "go"));
-        Directory.CreateDirectory(paths.TempDirectory);
 
         string? goWork = workspace.Metadata.TryGetValue("go_work", out object? value)
             && value is string configured

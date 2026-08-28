@@ -111,46 +111,69 @@ public static class QmakeQuickTestTooling
             return false;
 
         var files = new List<string> { rootPath };
-        var texts = new List<string> { rootText };
-        var pending = new Queue<(string Path, string Text)>();
-        pending.Enqueue((rootPath, rootText));
         var visited = new HashSet<string>(PathComparer) { rootPath };
         string rootDirectory = Path.GetDirectoryName(rootPath) ?? rootPath;
-        while (pending.Count > 0)
+        if (!TryExpandIncludes(rootPath, rootText, rootDirectory, visited, files, out string effectiveText))
+            return false;
+
+        model = new QmakeProjectModel(rootPath, files, effectiveText);
+        return true;
+    }
+
+    /// <summary>Splices each literal include() at its call site so variable evaluation sees
+    /// qmake's inline order — appending whole files after the includer would let a later
+    /// <c>=</c> reset erase or resurrect values the inline order decides differently.</summary>
+    private static bool TryExpandIncludes(
+        string includingPath,
+        string includingText,
+        string rootDirectory,
+        HashSet<string> visited,
+        List<string> files,
+        out string effectiveText)
+    {
+        effectiveText = string.Empty;
+        if (!TryReadLiteralIncludes(includingText, out _))
+            return false;
+
+        var pieces = new List<string>();
+        foreach (string rawLine in StripQmakeComments(includingText).Split('\n'))
         {
-            (string includingPath, string includingText) = pending.Dequeue();
-            if (!TryReadLiteralIncludes(includingText, out IReadOnlyList<string> includes))
-                return false;
-
-            foreach (string include in includes)
+            string line = rawLine.TrimEnd('\r');
+            Match match = Regex.Match(line, IncludeLinePattern);
+            if (!match.Success)
             {
-                string fullInclude;
-                try
-                {
-                    fullInclude = Path.GetFullPath(Path.Combine(
-                        Path.GetDirectoryName(includingPath) ?? rootDirectory,
-                        include));
-                }
-                catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
-                {
-                    return false;
-                }
-
-                if (!IsInside(rootDirectory, fullInclude)
-                    || !string.Equals(Path.GetExtension(fullInclude), ".pri", StringComparison.OrdinalIgnoreCase))
-                    return false;
-                if (!visited.Add(fullInclude))
-                    continue;
-                if (files.Count >= MaxIncludedFiles
-                    || !TryReadBoundedText(fullInclude, out string includedText))
-                    return false;
-                files.Add(fullInclude);
-                texts.Add(includedText);
-                pending.Enqueue((fullInclude, includedText));
+                pieces.Add(line);
+                continue;
             }
+
+            string include = match.Groups["path"].Value.Trim().Trim('"', '\'');
+            string fullInclude;
+            try
+            {
+                fullInclude = Path.GetFullPath(Path.Combine(
+                    Path.GetDirectoryName(includingPath) ?? rootDirectory,
+                    include));
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+            {
+                return false;
+            }
+
+            if (!IsInside(rootDirectory, fullInclude)
+                || !string.Equals(Path.GetExtension(fullInclude), ".pri", StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (!visited.Add(fullInclude))
+                continue;
+            if (files.Count >= MaxIncludedFiles
+                || !TryReadBoundedText(fullInclude, out string includedText))
+                return false;
+            files.Add(fullInclude);
+            if (!TryExpandIncludes(fullInclude, includedText, rootDirectory, visited, files, out string expandedInclude))
+                return false;
+            pieces.Add(expandedInclude);
         }
 
-        model = new QmakeProjectModel(rootPath, files, string.Join('\n', texts));
+        effectiveText = string.Join('\n', pieces);
         return true;
     }
 
@@ -281,8 +304,18 @@ public static class QmakeQuickTestTooling
         return paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    private static string QuoteMakeValue(string value) =>
-        value.Any(char.IsWhiteSpace) ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"" : value;
+    // TESTARGS crosses two expansion layers: make expands $ (doubled to survive), then the
+    // recipe shell honors quotes, backslash escapes, and backticks inside double quotes.
+    private static string QuoteMakeValue(string value)
+    {
+        string escaped = value
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("`", "\\`", StringComparison.Ordinal)
+            .Replace("$", "\\$$", StringComparison.Ordinal);
+        return escaped == value && !value.Any(char.IsWhiteSpace)
+            ? value
+            : $"\"{escaped}\"";
+    }
 
     private static QtVersion ParseQtVersion(
         string majorText,
@@ -317,7 +350,7 @@ public static class QmakeQuickTestTooling
         var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (Match match in Regex.Matches(
                      StripQmakeComments(text),
-                     $@"(?im)^\s*{Regex.Escape(variable)}\s*(?<operator>\+=|-=|=)\s*(?<values>[^\r\n]+)"))
+                     $@"(?im)^\s*{Regex.Escape(variable)}\s*(?<operator>\+=|\*=|-=|=)\s*(?<values>[^\r\n]+)"))
         {
             string operation = match.Groups["operator"].Value;
             var words = match.Groups["values"].Value
@@ -341,13 +374,13 @@ public static class QmakeQuickTestTooling
         return values;
     }
 
+    private const string IncludeLinePattern = @"(?im)^\s*include\s*\(\s*(?<path>[^)\r\n]+?)\s*\)\s*$";
+
     private static bool TryReadLiteralIncludes(string text, out IReadOnlyList<string> includes)
     {
         string code = StripQmakeComments(text);
         var values = new List<string>();
-        MatchCollection matches = Regex.Matches(
-            code,
-            @"(?im)^\s*include\s*\(\s*(?<path>[^)\r\n]+?)\s*\)\s*$");
+        MatchCollection matches = Regex.Matches(code, IncludeLinePattern);
         foreach (Match match in matches)
         {
             string value = match.Groups["path"].Value.Trim().Trim('"', '\'');

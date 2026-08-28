@@ -378,7 +378,7 @@ public sealed class ContinuousTestImpactSelector
                     return false;
 
                 string normalizedPath = NormalizePath(impactedTest.Path);
-                if (!PathLanguagesAreCompatible(
+                if (!LanguagesAreCompatible(
                         changedStem.Language,
                         ContinuousTestLanguageFamily.LabelFromPath(normalizedPath)))
                 {
@@ -1497,18 +1497,7 @@ public sealed class ContinuousTestImpactSelector
             return false;
 
         string? testLanguage = testCase.FileLanguage ?? ContinuousTestLanguageFamily.LabelFromPath(testCase.FilePath);
-        return PathLanguagesAreCompatible(changedStem.Language, testLanguage);
-    }
-
-    private static bool PathLanguagesAreCompatible(string? changedLanguage, string? testLanguage)
-    {
-        if (string.Equals(changedLanguage, "vbnet", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(testLanguage, "vbnet", StringComparison.OrdinalIgnoreCase))
-        {
-            return string.Equals(changedLanguage, testLanguage, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return LanguagesAreCompatible(changedLanguage, testLanguage);
+        return LanguagesAreCompatible(changedStem.Language, testLanguage);
     }
 
     private static bool LanguagesAreCompatible(string? changedLanguage, string? testLanguage)

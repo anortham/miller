@@ -30,6 +30,18 @@ public sealed class GoTestToolingTests : IDisposable
     }
 
     [Fact]
+    public void Building_commands_writes_nothing_to_disk()
+    {
+        var workspace = Workspace(goWork: null);
+        CtGenerationPaths paths = CtGenerationPaths.For(workspace, "g0123456789ab");
+
+        GoTestTooling.BuildRunCommand(workspace, paths, "example.com/math", ["TestAdd"]);
+
+        Assert.False(Directory.Exists(CtGenerationPaths.CacheDirectory(workspace, "go")));
+        Assert.False(Directory.Exists(paths.TempDirectory));
+    }
+
+    [Fact]
     public void Run_command_anchors_and_escapes_top_level_names_and_disables_cache()
     {
         var workspace = Workspace(goWork: null);

@@ -83,4 +83,62 @@ public sealed class QmakeQuickTestToolingTests
 
         Assert.Contains("result", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void BuildCheckArguments_neutralizes_make_and_shell_expansion_in_result_paths()
+    {
+        string resultArtifactPath = Path.Combine(
+            Path.GetTempPath(), "gen$1", "`echo", "TestResults", "run.xml");
+        var arguments = QmakeQuickTestTooling.BuildCheckArguments(resultArtifactPath, new QtVersion(6, 5, 0));
+
+        string testArgs = Assert.Single(arguments, argument =>
+            argument.StartsWith("TESTARGS=", StringComparison.Ordinal));
+        Assert.Contains("\\$$", testArgs, StringComparison.Ordinal);
+        Assert.Contains("\\`", testArgs, StringComparison.Ordinal);
+        Assert.DoesNotContain("gen$1", testArgs, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HasVariableValue_honors_the_append_unique_operator()
+    {
+        Assert.True(QmakeQuickTestTooling.HasVariableValue("CONFIG *= qmltestcase\n", "CONFIG", "qmltestcase"));
+    }
+
+    [Fact]
+    public void TryReadProjectModel_splices_includes_in_qmake_inline_order()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-qmake-order-").FullName;
+        try
+        {
+            string projectPath = Path.Combine(root, "app.pro");
+            File.WriteAllText(Path.Combine(root, "vars.pri"), "CONFIG = release\n");
+            File.WriteAllText(projectPath, "include(vars.pri)\nCONFIG += qmltestcase\n");
+
+            Assert.True(QmakeQuickTestTooling.TryReadProjectModel(projectPath, out QmakeProjectModel? model));
+            Assert.True(QmakeQuickTestTooling.HasVariableValue(model!.EffectiveText, "CONFIG", "qmltestcase"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void TryReadProjectModel_lets_a_reset_after_the_include_clear_earlier_values()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-qmake-reset-").FullName;
+        try
+        {
+            string projectPath = Path.Combine(root, "app.pro");
+            File.WriteAllText(Path.Combine(root, "vars.pri"), "CONFIG += qmltestcase\n");
+            File.WriteAllText(projectPath, "include(vars.pri)\nCONFIG = release\n");
+
+            Assert.True(QmakeQuickTestTooling.TryReadProjectModel(projectPath, out QmakeProjectModel? model));
+            Assert.False(QmakeQuickTestTooling.HasVariableValue(model!.EffectiveText, "CONFIG", "qmltestcase"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

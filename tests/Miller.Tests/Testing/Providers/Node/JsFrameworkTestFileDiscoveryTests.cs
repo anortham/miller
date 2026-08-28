@@ -144,6 +144,43 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
     }
 
     [Fact]
+    public async Task Discover_decodes_string_escapes_in_vitest_include_patterns()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile(
+            "vitest.config.ts",
+            """
+            export default { test: { include: ['src\/**\/*.test.js'] } }
+            """);
+        WritePackageFile("src/math.test.js", "");
+
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["src/math.test.js"], cases.Select(row => row.Selector).ToArray());
+    }
+
+    [Fact]
+    public async Task Discover_refuses_unsupported_string_escapes_in_config_patterns()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile(
+            "vitest.config.ts",
+            """
+            export default { test: { include: ['src\t/**/*.test.js'] } }
+            """);
+        WritePackageFile("src/math.test.js", "");
+
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
+
+        Assert.Contains("unsupported", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Discover_explicit_vitest_exclude_replaces_the_runner_default_excludes()
     {
         var workspace = Workspace("vitest");

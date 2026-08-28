@@ -138,7 +138,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         DotnetTestBackendEvidence evidence = DotnetTestBackend.ReadStatic(workspace.ProjectPath);
         if (!projectExists)
         {
-            evidence = MissingProjectEvidence(framework);
+            evidence = LegacyMissingProjectEvidence(framework);
         }
         else if (!evidence.IsComplete)
         {
@@ -200,7 +200,12 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         };
     }
 
-    private static DotnetTestBackendEvidence MissingProjectEvidence(string framework) =>
+    /// <summary>Legacy lane for a project path with no file on disk (unit fixtures, already-built
+    /// assemblies): the xunit framework keeps its historical v3 self-executing contract via the
+    /// explicit backend kind; every other framework stays Unknown and is refused by the caller.
+    /// <c>IsComplete</c> must stay true — <see cref="DotnetTestBackend.Resolve"/> refuses
+    /// incomplete evidence, which would break the legacy lane. No package evidence is invented.</summary>
+    private static DotnetTestBackendEvidence LegacyMissingProjectEvidence(string framework) =>
         new(
             Backend: framework.Equals("xunit", StringComparison.OrdinalIgnoreCase)
                 ? DotnetTestBackendKind.XunitV3
@@ -208,9 +213,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             Framework: null,
             GlobalJsonTestRunner: null,
             ProjectSdk: null,
-            PackageIds: framework.Equals("xunit", StringComparison.OrdinalIgnoreCase)
-                ? ["xunit.v3"]
-                : [],
+            PackageIds: [],
             StaticProperties: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
             EvaluatedProperties: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
             IsEvaluated: false,

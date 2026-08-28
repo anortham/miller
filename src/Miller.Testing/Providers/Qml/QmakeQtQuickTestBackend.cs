@@ -390,6 +390,9 @@ internal sealed class QmakeQtQuickTestBackend : IQtQuickTestBackend
     private static string AggregateStatus(IEnumerable<string> statuses)
     {
         var statusSet = statuses.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (statusSet.Count == 0)
+            throw new ContinuousTestProviderException(
+                "Qt Quick Test qmake run produced no case results; an empty run cannot be reported green.");
         if (statusSet.Contains("failed") || statusSet.Contains("errored"))
             return "failed";
         if (statusSet.Count > 0 && statusSet.All(status => status is "skipped" or "skip"))

@@ -691,6 +691,30 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
     }
 
     [Fact]
+    public void Discover_accepts_wrapper_ctest_registration_calls()
+    {
+        WriteProject("CMakeLists.txt", """
+            cmake_minimum_required(VERSION 3.21)
+            project(app LANGUAGES CXX)
+            find_package(Qt6 REQUIRED COMPONENTS QuickTest)
+            enable_testing()
+            qt_add_executable(app_tests runner.cpp)
+            target_link_libraries(app_tests PRIVATE Qt6::QuickTest)
+            qt_add_test(app_tests)
+            """);
+        WriteProject("runner.cpp", "QUICK_TEST_MAIN(app_tests)");
+        WriteProject("qml/tst_smoke.qml", """
+            import QtQuickTest 1.3
+            TestCase { name: "Smoke" }
+            """);
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:1"));
+
+        Assert.Equal("qt-quick-test", project.Framework);
+    }
+
+    [Fact]
     public void Discover_accepts_a_qmake_quick_testcase_project_and_marks_the_qmake_backend()
     {
         WriteProject("quicktest.pro", """

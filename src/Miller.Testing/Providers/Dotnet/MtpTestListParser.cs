@@ -72,7 +72,9 @@ internal static class MtpTestListParser
 
         if (cases.Count == 0)
             throw new ContinuousTestProviderException(
-                "MTP text test listing contained the header but no test cases.");
+                header >= 0
+                    ? "MTP text test listing contained the header but no test cases."
+                    : "MTP text test listing contained only the discovery summary and no test cases.");
         return cases;
     }
 
@@ -253,7 +255,15 @@ internal static class MtpTestListParser
     {
         if (string.IsNullOrWhiteSpace(path))
             return null;
-        string fullPath = Path.GetFullPath(path, workspaceRoot);
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(path, workspaceRoot);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
         string relativePath = Path.GetRelativePath(Path.GetFullPath(workspaceRoot), fullPath);
         if (Path.IsPathRooted(relativePath)
             || relativePath == ".."

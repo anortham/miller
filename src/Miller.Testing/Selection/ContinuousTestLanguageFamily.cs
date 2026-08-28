@@ -61,10 +61,29 @@ public static class ContinuousTestLanguageFamily
 
     public static bool AreCompatible(string? left, string? right)
     {
-        string? leftFamily = FromLabel(left) ?? FromPath(left);
-        string? rightFamily = FromLabel(right) ?? FromPath(right);
-        return leftFamily is not null
-            && rightFamily is not null
-            && string.Equals(leftFamily, rightFamily, StringComparison.Ordinal);
+        string? leftLabel = CanonicalLabel(left);
+        string? rightLabel = CanonicalLabel(right);
+        if (leftLabel is null || rightLabel is null)
+            return false;
+
+        // VB.NET compiles in its own project lane: a vbnet path never proves impact on a
+        // csharp/razor test or the reverse, so vbnet matches only vbnet even inside the
+        // shared dotnet family.
+        if (string.Equals(leftLabel, "vbnet", StringComparison.Ordinal)
+            || string.Equals(rightLabel, "vbnet", StringComparison.Ordinal))
+        {
+            return string.Equals(leftLabel, rightLabel, StringComparison.Ordinal);
+        }
+
+        return string.Equals(FromLabel(leftLabel), FromLabel(rightLabel), StringComparison.Ordinal);
+    }
+
+    private static string? CanonicalLabel(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        string trimmed = value.Trim().ToLowerInvariant();
+        return FromLabel(trimmed) is not null ? trimmed : LabelFromPath(value);
     }
 }

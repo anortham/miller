@@ -24,6 +24,7 @@ public sealed class GoTestProvider : IContinuousTestProvider
         try
         {
             paths.EnsureDirectories();
+            GoTestTooling.EnsureEnvironmentDirectories(workspace);
             TestProcessResult versionResult = await _runner
                 .RunAsync(GoTestTooling.BuildVersionCommand(workspace, paths), cancellationToken)
                 .ConfigureAwait(false);
@@ -101,6 +102,7 @@ public sealed class GoTestProvider : IContinuousTestProvider
         try
         {
             paths.EnsureDirectories();
+            GoTestTooling.EnsureEnvironmentDirectories(request.Workspace);
             IReadOnlyList<GoRunGroup> groups = Groups(request);
             if (groups.Count == 0)
                 throw new ContinuousTestProviderException(

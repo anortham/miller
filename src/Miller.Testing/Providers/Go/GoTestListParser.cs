@@ -31,8 +31,6 @@ internal static class GoTestListParser
 
             if (line.StartsWith("Test", StringComparison.Ordinal))
             {
-                if (line.Contains('/', StringComparison.Ordinal))
-                    continue;
                 if (IsGoIdentifier(line))
                     continue;
                 malformed = true;

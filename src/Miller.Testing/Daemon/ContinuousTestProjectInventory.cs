@@ -1080,10 +1080,16 @@ public static class ContinuousTestProjectInventory
             || ContainsCodeToken(code, "QUICK_TEST_OPENGL_MAIN");
     }
 
+    // add_test plus the wrapper generation: qt_add_test, ecm_add_test, gtest/catch/doctest
+    // *_discover_tests — all register CTest entries the literal token check cannot see.
+    private static readonly Regex CMakeTestRegistrationCall = new(
+        @"(?<![A-Za-z0-9_])[A-Za-z0-9_]*(?:add_test|_discover_tests)\s*\(",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static bool HasCMakeTestRegistration(IEnumerable<string> subtreeFiles) =>
         subtreeFiles
             .Where(IsCMakeLists)
-            .Any(path => ContainsCodeCall(CodeWithoutCommentsOrStrings(ReadHead(path)), "add_test"));
+            .Any(path => CMakeTestRegistrationCall.IsMatch(CodeWithoutCommentsOrStrings(ReadHead(path))));
 
     private static bool IsIncludedProject(
         QmlProjectEvidence parent,

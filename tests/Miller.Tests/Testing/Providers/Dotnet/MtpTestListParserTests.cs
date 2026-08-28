@@ -76,6 +76,7 @@ public sealed class MtpTestListParserTests
     [Theory]
     [InlineData("", false, "header")]
     [InlineData("The following Tests are available:\n", false, "test case")]
+    [InlineData("Test discovery summary: Zero tests ran\n", false, "only the discovery summary")]
     [InlineData("not a list", false, "header")]
     [InlineData("{\"tests\":[}", false, "JSON")]
     public void Parse_rejects_incomplete_or_malformed_output(string output, bool truncated, string expected)

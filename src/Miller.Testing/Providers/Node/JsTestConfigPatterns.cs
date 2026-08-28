@@ -882,7 +882,7 @@ internal static class JsTestConfigPatterns
                         throw new JsConfigParseException("configuration contains an unterminated string literal");
                     if (interpolation)
                         throw new JsConfigParseException("template interpolation is unsupported in discovery patterns");
-                    tokens.Add(new(JsTokenKind.String, text[start..index], quote == '`'));
+                    tokens.Add(new(JsTokenKind.String, DecodeStringEscapes(text[start..index]), quote == '`'));
                     index++;
                     continue;
                 }
@@ -906,6 +906,34 @@ internal static class JsTestConfigPatterns
             }
             tokens.Add(new(JsTokenKind.End, string.Empty, false));
             return tokens;
+        }
+
+        private static string DecodeStringEscapes(string raw)
+        {
+            if (!raw.Contains('\\', StringComparison.Ordinal))
+                return raw;
+
+            var builder = new StringBuilder(raw.Length);
+            for (var index = 0; index < raw.Length; index++)
+            {
+                var current = raw[index];
+                if (current != '\\')
+                {
+                    builder.Append(current);
+                    continue;
+                }
+                if (++index >= raw.Length)
+                    throw new JsConfigParseException("configuration contains an unterminated string escape");
+                var escaped = raw[index];
+                builder.Append(escaped switch
+                {
+                    '\'' or '"' or '`' or '\\' or '/' => escaped,
+                    _ => throw new JsConfigParseException(
+                        $"string escape '\\{escaped}' is unsupported in discovery patterns"),
+                });
+            }
+
+            return builder.ToString();
         }
     }
 }

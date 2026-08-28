@@ -3,7 +3,7 @@ namespace Miller.Testing;
 /// <summary>
 /// Expands the jest and vitest extglob shorthands their documented defaults use, so the existing
 /// glob matcher (braces, <c>*</c>, <c>**</c>) can apply them. Unknown extglob syntax returns null
-/// so a config read can fall back to defaults instead of matching nothing.
+/// so the caller can refuse the pattern instead of silently matching nothing.
 /// </summary>
 internal static class JsTestGlob
 {
