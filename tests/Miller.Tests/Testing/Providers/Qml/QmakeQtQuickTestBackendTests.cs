@@ -49,6 +49,26 @@ public sealed class QmakeQtQuickTestBackendTests : IDisposable
     }
 
     [Fact]
+    public async Task EnsureBuild_retries_a_failed_build_instead_of_reusing_a_partial_generation()
+    {
+        string project = Write("quicktest.pro", "TEMPLATE = app\nTARGET = tst_smoke\nCONFIG += qmltestcase\n");
+        int builds = 0;
+        var runner = BuildRunner(onBuild: () => builds++ == 0 ? 9 : 0);
+        var backend = new QmakeQtQuickTestBackend(runner, "qmake", "make");
+        var paths = Paths();
+        var workspace = Workspace(project);
+
+        await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            backend.EnsureBuildAsync(workspace, paths, TestContext.Current.CancellationToken));
+
+        Assert.False(File.Exists(Path.Combine(paths.GenerationRoot, ".qt-version")));
+        await backend.EnsureBuildAsync(workspace, paths, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, builds);
+        Assert.True(File.Exists(Path.Combine(paths.GenerationRoot, ".qt-version")));
+    }
+
+    [Fact]
     public async Task Discover_returns_one_stable_qmake_target_case()
     {
         string project = Write("quicktest.pro", "TEMPLATE = app\nTARGET = tst_smoke\nCONFIG += qmltestcase\n");
@@ -66,6 +86,57 @@ public sealed class QmakeQtQuickTestBackendTests : IDisposable
         Assert.Equal(test.Name, Assert.Single(second).Name);
         Assert.Equal([Path.Combine(paths.OutDir, "tst_smoke")], test.Command);
         Assert.Equal("qmake", test.Metadata["backend"]);
+    }
+
+    [Fact]
+    public async Task Discover_uses_target_and_import_paths_from_a_literal_pri_include()
+    {
+        string project = Write("quicktest.pro", "TEMPLATE = app\ninclude(settings.pri)\n");
+        string imports = Path.Combine(_root, "imports");
+        Directory.CreateDirectory(imports);
+        Write("settings.pri", "TARGET = tst_from_pri\nIMPORTPATH += imports\nCONFIG += qmltestcase\n");
+        var backend = new QmakeQtQuickTestBackend(BuildRunner(), "qmake", "make");
+        var paths = Paths();
+        var workspace = Workspace(project);
+
+        await backend.EnsureBuildAsync(workspace, paths, TestContext.Current.CancellationToken);
+        var test = Assert.Single(await backend.DiscoverAsync(workspace, paths, TestContext.Current.CancellationToken));
+
+        Assert.Equal("tst_from_pri", test.Name);
+        Assert.Equal([imports], Assert.IsAssignableFrom<IReadOnlyList<string>>(test.Metadata["imports"]));
+    }
+
+    [Theory]
+    [InlineData("include($$PWD/settings.pri)")]
+    [InlineData("include(../settings.pri)")]
+    public async Task EnsureBuild_refuses_nonliteral_or_out_of_root_includes(string include)
+    {
+        string project = Write("quicktest.pro", $"TEMPLATE = app\nCONFIG += qmltestcase\n{include}\n");
+        var runner = new ScriptedTestProcessRunner(_ =>
+            throw new Xunit.Sdk.XunitException("qmake must not run for an unavailable project model"));
+        var backend = new QmakeQtQuickTestBackend(runner, "qmake", "make");
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            backend.EnsureBuildAsync(Workspace(project), Paths(), TestContext.Current.CancellationToken));
+
+        Assert.Contains("literal in-root .pri", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public async Task EnsureBuild_refuses_an_oversized_included_pri_file()
+    {
+        string project = Write("quicktest.pro", "TEMPLATE = app\nCONFIG += qmltestcase\ninclude(settings.pri)\n");
+        Write("settings.pri", new string('x', 64 * 1024 + 1));
+        var runner = new ScriptedTestProcessRunner(_ =>
+            throw new Xunit.Sdk.XunitException("qmake must not run for an oversized project model"));
+        var backend = new QmakeQtQuickTestBackend(runner, "qmake", "make");
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            backend.EnsureBuildAsync(Workspace(project), Paths(), TestContext.Current.CancellationToken));
+
+        Assert.Contains("literal in-root .pri", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(runner.Calls);
     }
 
     [Theory]
@@ -165,7 +236,8 @@ public sealed class QmakeQtQuickTestBackendTests : IDisposable
     private ScriptedTestProcessRunner BuildRunner(
         int major = 6,
         Action<TestProcessCommand>? onCheck = null,
-        int exitCode = 0)
+        int exitCode = 0,
+        Func<int>? onBuild = null)
     {
         return new ScriptedTestProcessRunner(command =>
         {
@@ -186,7 +258,7 @@ public sealed class QmakeQtQuickTestBackendTests : IDisposable
                 return new TestProcessResult(exitCode, "", exitCode == 0 ? "" : "check failed");
             }
             if (command.FileName == "make")
-                return new TestProcessResult(0, "built\n", "");
+                return new TestProcessResult(onBuild?.Invoke() ?? 0, "built\n", "");
             throw new Xunit.Sdk.XunitException($"unexpected command: {command.ToDisplayString()}");
         });
     }

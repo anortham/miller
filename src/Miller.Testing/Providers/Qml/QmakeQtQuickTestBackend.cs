@@ -35,6 +35,7 @@ internal sealed class QmakeQtQuickTestBackend : IQtQuickTestBackend
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(paths);
         ValidateProject(workspace.ProjectPath);
+        _ = RequireProjectModel(workspace.ProjectPath);
         paths.EnsureDirectories();
         if (HasValidBuildTree(paths))
             return;
@@ -94,7 +95,6 @@ internal sealed class QmakeQtQuickTestBackend : IQtQuickTestBackend
                 $"qmake project '{workspace.ProjectPath}' did not generate a usable check target. "
                 + "Add CONFIG += testcase (or CONFIG += qmltestcase) and use a supported qmake project.");
 
-        WriteVersion(paths, queriedVersion);
         TestProcessResult build = await RunProcessAsync(
             new TestProcessCommand(
                 _makePath,
@@ -105,6 +105,7 @@ internal sealed class QmakeQtQuickTestBackend : IQtQuickTestBackend
         RequireComplete(build, "qmake build");
         if (build.ExitCode != 0)
             throw Failure($"qmake build failed with exit code {build.ExitCode}: {FailureSummary(build)}");
+        WriteVersion(paths, queriedVersion);
     }
 
     public Task<IReadOnlyList<QtQuickTestCase>> DiscoverAsync(
@@ -122,8 +123,8 @@ internal sealed class QmakeQtQuickTestBackend : IQtQuickTestBackend
             throw Failure(
                 $"qmake project '{workspace.ProjectPath}' has no usable generated check target; build capability was not proven.");
 
-        string projectText = ReadBounded(workspace.ProjectPath, "qmake project");
-        string target = QmakeQuickTestTooling.ParseTarget(projectText, workspace.ProjectPath);
+        QmakeProjectModel project = RequireProjectModel(workspace.ProjectPath);
+        string target = QmakeQuickTestTooling.ParseTarget(project.EffectiveText, project.RootPath);
         string executable = Path.Combine(
             paths.OutDir,
             OperatingSystem.IsWindows() ? target + ".exe" : target);
@@ -132,9 +133,7 @@ internal sealed class QmakeQtQuickTestBackend : IQtQuickTestBackend
             ["backend"] = Discriminator,
             ["qmake_target"] = target,
             ["qmake_project"] = workspace.ProjectPath,
-            ["imports"] = QmakeQuickTestTooling.ParseImportPaths(
-                projectText,
-                Path.GetDirectoryName(workspace.ProjectPath) ?? workspace.WorkspaceRoot),
+            ["imports"] = QmakeQuickTestTooling.ParseImportPaths(project.EffectiveText, project.RootDirectory),
         };
         return Task.FromResult<IReadOnlyList<QtQuickTestCase>>(
         [
@@ -166,8 +165,8 @@ internal sealed class QmakeQtQuickTestBackend : IQtQuickTestBackend
         if (!wholeSuite && selectedNames.Count == 0)
             throw Failure("qmake Quick Test run selected no target and did not request the whole suite.", artifactPath);
 
-        string projectText = ReadBounded(request.Workspace.ProjectPath, "qmake project");
-        string target = QmakeQuickTestTooling.ParseTarget(projectText, request.Workspace.ProjectPath);
+        QmakeProjectModel project = RequireProjectModel(request.Workspace.ProjectPath);
+        string target = QmakeQuickTestTooling.ParseTarget(project.EffectiveText, project.RootPath);
         if (!wholeSuite && selectedNames.Any(name => !string.Equals(name, target, StringComparison.Ordinal)))
             throw Failure(
                 $"qmake Quick Test cannot select a target that is not the generated check target '{target}'.",
@@ -180,9 +179,7 @@ internal sealed class QmakeQtQuickTestBackend : IQtQuickTestBackend
                 QmakeQuickTestTooling.BuildCheckArguments(
                     artifactPath,
                     version,
-                    QmakeQuickTestTooling.ParseImportPaths(
-                        projectText,
-                        Path.GetDirectoryName(request.Workspace.ProjectPath) ?? request.Workspace.WorkspaceRoot)),
+                    QmakeQuickTestTooling.ParseImportPaths(project.EffectiveText, project.RootDirectory)),
                 paths.OutDir,
                 EnvironmentFor(request.Workspace, paths)),
             cancellationToken).ConfigureAwait(false);
@@ -314,6 +311,16 @@ internal sealed class QmakeQtQuickTestBackend : IQtQuickTestBackend
         {
             throw Failure($"Could not read {context} '{path}': {exception.Message}", innerException: exception);
         }
+    }
+
+    private static QmakeProjectModel RequireProjectModel(string path)
+    {
+        if (QmakeQuickTestTooling.TryReadProjectModel(path, out QmakeProjectModel? model)
+            && model is not null)
+            return model;
+        throw Failure(
+            $"qmake project '{path}' could not be read as a bounded effective project model. "
+            + "Only literal in-root .pri includes are supported; dynamic, out-of-root, missing, or oversized includes are unavailable.");
     }
 
     private static bool HasValidBuildTree(CtGenerationPaths paths) =>

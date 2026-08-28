@@ -679,6 +679,29 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
         Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:1"));
     }
 
+    [Fact]
+    public void Discover_does_not_borrow_qmake_evidence_from_an_independent_nested_project()
+    {
+        WriteProject("outer.pro", """
+            TEMPLATE = app
+            CONFIG += qmltestcase
+            """);
+        WriteProject("nested/quicktest.pro", """
+            TEMPLATE = app
+            TARGET = tst_nested
+            CONFIG += qmltestcase
+            SOURCES += runner.cpp
+            """);
+        WriteProject("nested/runner.cpp", "#include <QtQuickTest>\nQUICK_TEST_MAIN(nested)");
+        WriteProject("nested/tst_nested.qml", "TestCase { name: \"Nested\" }");
+
+        var projects = ContinuousTestProjectInventory.Discover(_root, "ws:1");
+
+        ContinuousTestProject project = Assert.Single(projects);
+        Assert.Equal(Path.Combine(_root, "nested", "quicktest.pro"), project.ProjectPath);
+        Assert.Equal("qmake", project.Metadata["backend"]);
+    }
+
     [Theory]
     [InlineData("QUICK_TEST_MAIN_WITH_SETUP(app_tests, Setup)")]
     [InlineData("QUICK_TEST_OPENGL_MAIN(app_tests)")]

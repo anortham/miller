@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Miller.Testing.Providers.Qml;
@@ -11,8 +12,19 @@ public sealed record QtVersion(int Major, int Minor, int Patch)
     public override string ToString() => $"{Major}.{Minor}.{Patch}";
 }
 
+internal sealed record QmakeProjectModel(
+    string RootPath,
+    IReadOnlyList<string> IncludedFiles,
+    string EffectiveText)
+{
+    public string RootDirectory => Path.GetDirectoryName(RootPath) ?? RootPath;
+}
+
 public static class QmakeQuickTestTooling
 {
+    private const int MaxProjectCharacters = 64 * 1024;
+    private const int MaxIncludedFiles = 128;
+
     public static string ResolveQmakePath() =>
         LocateOnPath(OperatingSystem.IsWindows() ? "qmake6.exe" : "qmake6")
         ?? LocateOnPath(OperatingSystem.IsWindows() ? "qmake.exe" : "qmake")
@@ -77,6 +89,73 @@ public static class QmakeQuickTestTooling
 
         return ["check", $"TESTARGS={string.Join(' ', testArguments.Select(QuoteMakeValue))}"];
     }
+
+    internal static bool TryReadProjectModel(string projectPath, out QmakeProjectModel? model)
+    {
+        model = null;
+        if (string.IsNullOrWhiteSpace(projectPath)
+            || !string.Equals(Path.GetExtension(projectPath), ".pro", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        string rootPath;
+        try
+        {
+            rootPath = Path.GetFullPath(projectPath);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+
+        if (!TryReadBoundedText(rootPath, out string rootText))
+            return false;
+
+        var files = new List<string> { rootPath };
+        var texts = new List<string> { rootText };
+        var pending = new Queue<(string Path, string Text)>();
+        pending.Enqueue((rootPath, rootText));
+        var visited = new HashSet<string>(PathComparer) { rootPath };
+        string rootDirectory = Path.GetDirectoryName(rootPath) ?? rootPath;
+        while (pending.Count > 0)
+        {
+            (string includingPath, string includingText) = pending.Dequeue();
+            if (!TryReadLiteralIncludes(includingText, out IReadOnlyList<string> includes))
+                return false;
+
+            foreach (string include in includes)
+            {
+                string fullInclude;
+                try
+                {
+                    fullInclude = Path.GetFullPath(Path.Combine(
+                        Path.GetDirectoryName(includingPath) ?? rootDirectory,
+                        include));
+                }
+                catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+                {
+                    return false;
+                }
+
+                if (!IsInside(rootDirectory, fullInclude)
+                    || !string.Equals(Path.GetExtension(fullInclude), ".pri", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                if (!visited.Add(fullInclude))
+                    continue;
+                if (files.Count >= MaxIncludedFiles
+                    || !TryReadBoundedText(fullInclude, out string includedText))
+                    return false;
+                files.Add(fullInclude);
+                texts.Add(includedText);
+                pending.Enqueue((fullInclude, includedText));
+            }
+        }
+
+        model = new QmakeProjectModel(rootPath, files, string.Join('\n', texts));
+        return true;
+    }
+
+    internal static bool HasVariableValue(string text, string variable, string expected) =>
+        QmakeVariableValues(text, variable).Contains(expected, StringComparer.OrdinalIgnoreCase);
 
     public static string LoggerFormat(QtVersion version)
     {
@@ -231,6 +310,128 @@ public static class QmakeQuickTestTooling
             ? result.StandardError
             : result.StandardOutput;
         return string.IsNullOrWhiteSpace(text) ? "no diagnostic output" : text.Trim();
+    }
+
+    private static HashSet<string> QmakeVariableValues(string text, string variable)
+    {
+        var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in Regex.Matches(
+                     StripQmakeComments(text),
+                     $@"(?im)^\s*{Regex.Escape(variable)}\s*(?<operator>\+=|-=|=)\s*(?<values>[^\r\n]+)"))
+        {
+            string operation = match.Groups["operator"].Value;
+            var words = match.Groups["values"].Value
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                .Select(word => word.Trim().Trim('"', '\''))
+                .Where(word => word.Length > 0)
+                .ToArray();
+            if (operation == "=")
+                values.Clear();
+            if (operation == "-=")
+            {
+                foreach (string word in words)
+                    values.Remove(word);
+            }
+            else
+            {
+                foreach (string word in words)
+                    values.Add(word);
+            }
+        }
+        return values;
+    }
+
+    private static bool TryReadLiteralIncludes(string text, out IReadOnlyList<string> includes)
+    {
+        string code = StripQmakeComments(text);
+        var values = new List<string>();
+        MatchCollection matches = Regex.Matches(
+            code,
+            @"(?im)^\s*include\s*\(\s*(?<path>[^)\r\n]+?)\s*\)\s*$");
+        foreach (Match match in matches)
+        {
+            string value = match.Groups["path"].Value.Trim().Trim('"', '\'');
+            if (value.Length == 0
+                || value.Contains('$', StringComparison.Ordinal)
+                || !string.Equals(Path.GetExtension(value), ".pri", StringComparison.OrdinalIgnoreCase)
+                || Path.IsPathRooted(value))
+            {
+                includes = [];
+                return false;
+            }
+            values.Add(value);
+        }
+
+        int includeCalls = Regex.Matches(code, @"(?im)\binclude\s*\(").Count;
+        if (includeCalls != matches.Count)
+        {
+            includes = [];
+            return false;
+        }
+
+        includes = values;
+        return true;
+    }
+
+    private static bool TryReadBoundedText(string path, out string text)
+    {
+        text = string.Empty;
+        try
+        {
+            using var stream = File.OpenRead(path);
+            if (stream.Length > MaxProjectCharacters)
+                return false;
+            var buffer = new byte[(int)stream.Length];
+            int read = 0;
+            while (read < buffer.Length)
+            {
+                int chunk = stream.Read(buffer, read, buffer.Length - read);
+                if (chunk == 0)
+                    return false;
+                read += chunk;
+            }
+            text = Encoding.UTF8.GetString(buffer);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static string StripQmakeComments(string text)
+    {
+        var builder = new StringBuilder(text.Length);
+        foreach (string line in text.Split('\n'))
+        {
+            bool quoted = false;
+            int end = line.Length;
+            for (int index = 0; index < line.Length; index++)
+            {
+                if (line[index] == '"')
+                    quoted = !quoted;
+                else if (line[index] == '#' && !quoted)
+                {
+                    end = index;
+                    break;
+                }
+            }
+            builder.Append(line.AsSpan(0, end)).Append('\n');
+        }
+        return builder.ToString();
+    }
+
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static StringComparer PathComparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private static bool IsInside(string root, string path)
+    {
+        string relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(path));
+        return relative == "."
+            || (!relative.StartsWith("..", PathComparison) && !Path.IsPathRooted(relative));
     }
 
     private static string? LocateOnPath(string fileName)

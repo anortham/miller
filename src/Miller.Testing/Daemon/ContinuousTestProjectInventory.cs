@@ -996,42 +996,24 @@ public static class ContinuousTestProjectInventory
     {
         evidence = null;
         string configureRoot = DirectoryOf(projectPath);
-        if (!TryReadBounded(projectPath, out string projectText))
+        if (!QmakeQuickTestTooling.TryReadProjectModel(projectPath, out QmakeProjectModel? projectModel)
+            || projectModel is null)
             return false;
 
-        var qmakeTexts = new List<string> { projectText };
-        var pending = new Queue<(string Path, string Text)>();
-        pending.Enqueue((projectPath, projectText));
-        var visited = new HashSet<string>(PathComparer) { Path.GetFullPath(projectPath) };
-        while (pending.Count > 0)
-        {
-            (string includingPath, string includingText) = pending.Dequeue();
-            foreach (string includePath in QmakeLiteralIncludes(includingText))
-            {
-                string fullInclude = Path.GetFullPath(Path.Combine(DirectoryOf(includingPath), includePath));
-                if (!IsInside(configureRoot, fullInclude)
-                    || !string.Equals(Path.GetExtension(fullInclude), ".pri", StringComparison.OrdinalIgnoreCase)
-                    || !visited.Add(fullInclude)
-                    || !candidateFiles.Contains(fullInclude, PathComparer)
-                    || !TryReadBounded(fullInclude, out string includedText))
-                    continue;
-                qmakeTexts.Add(includedText);
-                pending.Enqueue((fullInclude, includedText));
-            }
-        }
-
-        string combined = string.Join('\n', qmakeTexts);
-        HashSet<string> configValues = QmakeVariableValues(combined, "CONFIG");
-        HashSet<string> qtValues = QmakeVariableValues(combined, "QT");
-        if (!configValues.Contains("qmltestcase")
-            && !(qtValues.Contains("qmltest") && configValues.Contains("testcase")))
+        if (!QmakeQuickTestTooling.HasVariableValue(projectModel.EffectiveText, "CONFIG", "qmltestcase")
+            && !(QmakeQuickTestTooling.HasVariableValue(projectModel.EffectiveText, "QT", "qmltest")
+                && QmakeQuickTestTooling.HasVariableValue(projectModel.EffectiveText, "CONFIG", "testcase")))
             return false;
 
         string[] qmlTestPaths = candidateFiles
-            .Where(path => IsInside(configureRoot, path) && IsQmlTestEvidence(path))
+            .Where(path => IsInside(configureRoot, path)
+                && !IsOwnedByIndependentQmakeProject(projectPath, path, candidateFiles, projectModel)
+                && IsQmlTestEvidence(path))
             .ToArray();
         bool runner = candidateFiles
-            .Where(path => IsInside(configureRoot, path) && QuickTestRunnerExtensions.Contains(Path.GetExtension(path)))
+            .Where(path => IsInside(configureRoot, path)
+                && !IsOwnedByIndependentQmakeProject(projectPath, path, candidateFiles, projectModel)
+                && QuickTestRunnerExtensions.Contains(Path.GetExtension(path)))
             .Any(IsQmakeQuickTestRunner);
         if (!runner || qmlTestPaths.Length == 0)
             return false;
@@ -1043,48 +1025,6 @@ public static class ContinuousTestProjectInventory
         return true;
     }
 
-    private static IEnumerable<string> QmakeLiteralIncludes(string text)
-    {
-        foreach (Match match in Regex.Matches(
-                     text,
-                     @"(?im)^\s*include\s*\(\s*(?<path>[^)\r\n]+?)\s*\)\s*(?:#.*)?$"))
-        {
-            string value = match.Groups["path"].Value.Trim().Trim('"', '\'');
-            if (value.Length > 0 && !value.Contains('$', StringComparison.Ordinal))
-                yield return value;
-        }
-    }
-
-    private static HashSet<string> QmakeVariableValues(string text, string variable)
-    {
-        var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match match in Regex.Matches(
-                     text,
-                     $@"(?im)^\s*{Regex.Escape(variable)}\s*(?<operator>\+=|-=|=)\s*(?<values>[^#\r\n]+)"))
-        {
-            string operation = match.Groups["operator"].Value;
-            var words = match.Groups["values"].Value
-                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-                .Select(word => word.Trim().Trim('"', '\''))
-                .Where(word => word.Length > 0)
-                .ToArray();
-            if (operation == "=")
-                values.Clear();
-            if (operation == "-=")
-            {
-                foreach (string word in words)
-                    values.Remove(word);
-            }
-            else
-            {
-                foreach (string word in words)
-                    values.Add(word);
-            }
-        }
-
-        return values;
-    }
-
     private static bool IsQmakeQuickTestRunner(string path)
     {
         if (!TryReadBounded(path, out string text))
@@ -1093,6 +1033,28 @@ public static class ContinuousTestProjectInventory
         return ContainsCodeToken(code, "QUICK_TEST_MAIN")
             || ContainsCodeToken(code, "QUICK_TEST_MAIN_WITH_SETUP")
             || ContainsCodeToken(code, "QUICK_TEST_OPENGL_MAIN");
+    }
+
+    private static bool IsOwnedByIndependentQmakeProject(
+        string projectPath,
+        string candidatePath,
+        IReadOnlyList<string> candidateFiles,
+        QmakeProjectModel projectModel)
+    {
+        string configureRoot = DirectoryOf(projectPath);
+        foreach (string nestedProject in candidateFiles.Where(path =>
+                     string.Equals(Path.GetExtension(path), ".pro", StringComparison.OrdinalIgnoreCase)
+                     && !PathComparer.Equals(path, projectPath)))
+        {
+            string nestedRoot = DirectoryOf(nestedProject);
+            if (IsInside(configureRoot, nestedRoot)
+                && !PathComparer.Equals(nestedRoot, configureRoot)
+                && IsInside(nestedRoot, candidatePath)
+                && !projectModel.IncludedFiles.Contains(candidatePath, PathComparer))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool TryDiscoverQmlProject(
