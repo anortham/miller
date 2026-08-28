@@ -120,6 +120,6 @@ one-time cleanup, view-id rediscovery after registry deletion, and direct writes
 - [x] Repeating retirement for an already-absent exact view succeeds safely.
 - [x] Existing sidecar reclaim and store-maintenance behavior remains intact.
 - [x] Focused hook, workspace removal/prune, adapter, and rendering tests pass.
-- [ ] Fast suite, Scale suite, Release build, secrets scan, and dependency audit pass.
+- [x] Fast suite, Scale suite, Release build, secrets scan, and dependency audit pass.
 - [x] The nine missing Miller views are previewed, retired, reclaimed, and absent from the final inventory.
 - [x] The main checkout, task worktree, and `ct-dogfood-round2` root remain untouched.

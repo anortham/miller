@@ -5,6 +5,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [`findings/2026-08-28-miller-stale-view-cleanup.md`](findings/2026-08-28-miller-stale-view-cleanup.md) - exact cleanup of nine missing-root Miller family-store views: 12 views reduced to 3, 2.73 GB of per-view sidecars reclaimed, and the same impact graph workload improved about 30% while the 5-second gate remains open.
 - [`findings/2026-08-28-tool-latency-and-health-recovery.md`](findings/2026-08-28-tool-latency-and-health-recovery.md) - recovery evidence for edit, context, lagging-sidecar, graph, and health-window fixes; the impact latency gate remains open.
 - [`plans/2026-08-27-context-latency-diagnosis.md`](plans/2026-08-27-context-latency-diagnosis.md) - measured cost model for the context tool's p50 ~7 s: the whole-generation fact-cache load blocking anchor_resolution via term-rescue promotion, the per-revision graph rebuild, and the fix options (skip-when-cold + background load recommended).
 - [`findings/2026-08-27-telemetry-audit.md`](findings/2026-08-27-telemetry-audit.md) - full local telemetry read (36,130 calls, 8/02–8/27): the live `edit replace_text` unhandled-exception bug (53% error rate, invisible in logs/telemetry), the context tool's per-lookup latency (session_projection 54 ms vs sidecar 3.5 s for the same work), mid-scan file-deletion delta failures, and the lesser empty-rate/import signals.

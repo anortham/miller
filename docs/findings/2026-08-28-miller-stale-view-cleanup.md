@@ -58,3 +58,11 @@ total, with graph phases of 8,284–8,418 ms. Removing stale views reduced this 
 by about 30%, but the 5,000 ms impact gate remains open. A clean-process branch CLI replay took
 11.77 seconds including startup.
 
+## Branch verification
+
+- Fast suite: 9,220 passed, 9 skipped, 0 failed.
+- Scale suite: 203 passed, 18 skipped, 0 failed.
+- Release solution build: 0 warnings, 0 errors.
+- Gitleaks: 2,080 commits and 892.59 MB scanned; no leaks found.
+- Dependency audit: no vulnerable direct or transitive packages.
+- Main and task worktrees were clean at `058199ca` and `03d7dec0` before this final documentation update.

@@ -207,5 +207,5 @@ Batch A uses `parallel-lead-commit`. Task 2 owns the compact missing-root hint w
 - [x] Workspace remove/prune retires producer views before registry deletion and preserves failures for retry.
 - [x] Hook and compact-list guidance prevents and exposes missed cleanup without startup mutation.
 - [x] Nine audited missing-root views and their reclaimable per-view state are removed; excluded present views survive.
-- [ ] Fast, Scale, Release, secrets, dependency, and worktree gates pass.
-- [ ] Design, plan, and cleanup finding carry completed evidence.
+- [x] Fast, Scale, Release, secrets, dependency, and worktree gates pass.
+- [x] Design, plan, and cleanup finding carry completed evidence.

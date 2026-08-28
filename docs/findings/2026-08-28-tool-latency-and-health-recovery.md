@@ -41,6 +41,8 @@ The remaining real-workload hotspot is `UnresolvedNameForward`: 7 executions, 2,
 
 The next impact fix likely needs a new indexed/reference read structure or another architecture outside the approved no-new-sidecar/no-global-cache plan. That choice requires product direction; this branch does not weaken evidence, add a timeout, or reduce results to hide the miss.
 
+The subsequent [stale-view cleanup](2026-08-28-miller-stale-view-cleanup.md) retired nine missing-root family views. On the same committed Task 2 git diff, the resident graph phase fell from 12,061 ms to 8,284–8,418 ms, about a 30% improvement. This confirms stale views were real overhead, but the 5,000 ms gate remains open.
+
 ## Health window
 
 Commit `df00953d` makes both workspace-health `summary` and `outcomes` use `TelemetryHighlights.RecentWindowDays` (seven days). Lifetime outcome APIs remain available. The old 1,499-vs-94 mismatch is no longer presented as current health, and compact/JSON shapes remain unchanged.
