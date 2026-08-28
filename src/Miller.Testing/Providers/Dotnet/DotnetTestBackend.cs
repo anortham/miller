@@ -285,6 +285,16 @@ internal static class DotnetTestBackend
             };
         }
 
+        if (HasRunnerConflict(evidence))
+        {
+            return evidence with
+            {
+                Backend = DotnetTestBackendKind.Unknown,
+                Framework = framework,
+                Diagnostic = "The .NET runner evidence contains conflicting global.json and evaluated runner selections.",
+            };
+        }
+
         DotnetTestBackendKind backend;
         if (IsMtpRunner(evidence.GlobalJsonTestRunner))
         {
@@ -326,7 +336,7 @@ internal static class DotnetTestBackend
         {
             backend = DotnetTestBackendKind.Unknown;
         }
-        else if (string.Equals(evidence.ProjectSdk, "MSTest.Sdk", StringComparison.OrdinalIgnoreCase))
+        else if (IsMstestSdk(evidence.ProjectSdk))
         {
             backend = DotnetTestBackendKind.Unknown;
         }
@@ -383,7 +393,7 @@ internal static class DotnetTestBackend
 
     internal static bool IsMstestProject(string projectText, string? projectSdk = null) =>
         MstestPackages.Overlaps(PackageReferenceIds(projectText))
-        || string.Equals(projectSdk, "MSTest.Sdk", StringComparison.OrdinalIgnoreCase);
+        || IsMstestSdk(projectSdk);
 
     internal static bool IsNUnitProject(string projectText) =>
         NUnitPackages.Overlaps(PackageReferenceIds(projectText));
@@ -424,7 +434,7 @@ internal static class DotnetTestBackend
         if (mtpEnabled)
             return DotnetTestBackendKind.MicrosoftTestingPlatform;
 
-        if (string.Equals(evidence.ProjectSdk, "MSTest.Sdk", StringComparison.OrdinalIgnoreCase)
+        if (IsMstestSdk(evidence.ProjectSdk)
             && BoolProperty(properties, "UseVSTest") != true)
         {
             return DotnetTestBackendKind.MicrosoftTestingPlatform;
@@ -434,6 +444,25 @@ internal static class DotnetTestBackend
             ? DotnetTestBackendKind.XunitV3
             : DotnetTestBackendKind.VSTest;
     }
+
+    private static bool HasRunnerConflict(DotnetTestBackendEvidence evidence)
+    {
+        IReadOnlyDictionary<string, string?> properties = evidence.IsEvaluated
+            ? evidence.EvaluatedProperties
+            : evidence.StaticProperties;
+        bool mtpProperty = BoolProperty(properties, "EnableMSTestRunner") == true
+            || BoolProperty(properties, "EnableNUnitRunner") == true
+            || BoolProperty(properties, "UseMicrosoftTestingPlatformRunner") == true
+            || BoolProperty(properties, "TestingPlatformDotnetTestSupport") == true;
+        bool vstestProperty = BoolProperty(properties, "UseVSTest") == true;
+        return (mtpProperty && vstestProperty)
+            || (IsMtpRunner(evidence.GlobalJsonTestRunner) && vstestProperty)
+            || (IsVSTestRunner(evidence.GlobalJsonTestRunner) && mtpProperty);
+    }
+
+    private static bool IsMstestSdk(string? projectSdk) =>
+        string.Equals(projectSdk?.Trim(), "MSTest.Sdk", StringComparison.OrdinalIgnoreCase)
+        || projectSdk?.StartsWith("MSTest.Sdk/", StringComparison.OrdinalIgnoreCase) == true;
 
     private static DotnetTestBackendKind StaticBackend(
         string? projectSdk,

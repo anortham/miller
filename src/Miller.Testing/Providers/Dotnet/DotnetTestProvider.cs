@@ -147,10 +147,15 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
                 + (evidence.Diagnostic ?? "static project evidence was incomplete."));
         }
 
+        bool globalMtp = string.Equals(
+            evidence.GlobalJsonTestRunner?.Trim(),
+            "Microsoft.Testing.Platform",
+            StringComparison.OrdinalIgnoreCase)
+            || string.Equals(evidence.GlobalJsonTestRunner?.Trim(), "MTP", StringComparison.OrdinalIgnoreCase);
         bool decisive = !string.IsNullOrWhiteSpace(evidence.GlobalJsonTestRunner)
             || (framework.Equals("xunit", StringComparison.OrdinalIgnoreCase)
                 && evidence.Backend == DotnetTestBackendKind.XunitV3);
-        if (projectExists && !decisive)
+        if (projectExists && (!decisive || globalMtp))
         {
             TestProcessCommand probe = DotnetTestBackend.BuildPropertyProbeCommand(workspace, _dotnetPath);
             TestProcessResult result = await _runner.RunAsync(probe, cancellationToken).ConfigureAwait(false);
@@ -169,13 +174,6 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         }
 
         DotnetTestBackendEvidence resolved = DotnetTestBackend.Resolve(framework, evidence);
-        if (resolved.Backend == DotnetTestBackendKind.MicrosoftTestingPlatform)
-        {
-            throw new ContinuousTestProviderException(
-                "MTP backend not yet available: .NET test runner evidence resolved to "
-                + "Microsoft Testing Platform; VSTest execution was not attempted.");
-        }
-
         if (resolved.Backend == DotnetTestBackendKind.Unknown)
         {
             if (string.Equals(resolved.Diagnostic, ContinuousTestFrameworkSupport.XunitV2Reason, StringComparison.Ordinal))
@@ -242,6 +240,9 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             .ConfigureAwait(false);
         await BuildProjectAsync(workspace, paths, cancellationToken).ConfigureAwait(false);
 
+        if (IsMtpWorkspace(workspace))
+            return await DiscoverMtpAsync(workspace, paths, cancellationToken).ConfigureAwait(false);
+
         string? diagnosticPath = null;
         TestProcessCommand command;
         if (GenericFramework(workspace.Framework) is not null)
@@ -283,6 +284,183 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             workspace.Metadata);
     }
 
+    private async Task<IReadOnlyList<ProviderTestCase>> DiscoverMtpAsync(
+        ContinuousTestWorkspace workspace,
+        CtGenerationPaths paths,
+        CancellationToken cancellationToken)
+    {
+        string framework = MtpFramework(workspace.Framework)
+            ?? throw new ContinuousTestProviderException(
+                $"Microsoft Testing Platform does not have a proven discovery adapter for framework '{workspace.Framework}'.");
+        string targetPath = await ResolveMtpTargetPathAsync(workspace, paths, cancellationToken)
+            .ConfigureAwait(false);
+        MtpTestToolingInfo tooling = await ResolveMtpToolingAsync(
+                workspace,
+                paths,
+                targetPath,
+                cancellationToken)
+            .ConfigureAwait(false);
+        TestProcessCommand command = MtpDotnetTestBackend.BuildDiscoverCommand(
+            _dotnetPath,
+            targetPath,
+            workspace.WorkspaceRoot,
+            tooling.Version,
+            WorkspaceEnvironment(workspace, paths));
+        TestProcessResult result = await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
+        if (result.ExitCode != 0)
+            throw new ContinuousTestProviderException(
+                $"MTP test discovery failed with exit code {result.ExitCode}: {FailureSummary(result)}");
+
+        IReadOnlyList<ProviderTestCase> cases = MtpTestListParser.Parse(
+            result.RequireCompleteStandardOutput("MTP test discovery"),
+            tooling.Version,
+            framework,
+            result.StandardOutputTruncated,
+            workspace.WorkspaceRoot);
+        return AttachBackendMetadata(cases, MtpMetadata(workspace.Metadata, tooling));
+    }
+
+    private async Task<ProviderRunResult> RunMtpAsync(
+        ContinuousTestProviderRunRequest request,
+        CtGenerationPaths paths,
+        CancellationToken cancellationToken)
+    {
+        string framework = MtpFramework(request.Framework ?? request.Workspace.Framework)
+            ?? throw new ContinuousTestProviderException(
+                $"Microsoft Testing Platform does not have a proven execution adapter for framework '{request.Framework ?? request.Workspace.Framework}'.");
+        string targetPath = await ResolveMtpTargetPathAsync(request.Workspace, paths, cancellationToken)
+            .ConfigureAwait(false);
+        MtpTestToolingInfo tooling = await ResolveMtpToolingAsync(
+                request.Workspace,
+                paths,
+                targetPath,
+                cancellationToken)
+            .ConfigureAwait(false);
+        bool wholeSuite = request.WholeSuite || request.TestCaseIds.Count == 0;
+        if (!wholeSuite && !MtpTestTooling.HasFrameworkFilter(tooling.RawInfo, framework))
+            throw new ContinuousTestProviderException(
+                $"MTP framework '{framework}' did not advertise a selection filter; refusing to run a partial selection.");
+
+        string artifactPath = TrxResultArtifactPath(paths, TrxRunHash(request), part: null);
+        DeleteWithRetry(artifactPath);
+        TestProcessCommand command;
+        try
+        {
+            command = MtpDotnetTestBackend.BuildRunCommand(
+                _dotnetPath,
+                targetPath,
+                request.Workspace.WorkspaceRoot,
+                tooling.Version,
+                artifactPath,
+                framework,
+                request.TestCaseIds,
+                wholeSuite,
+                filterCapabilityProven: wholeSuite || MtpTestTooling.HasFrameworkFilter(tooling.RawInfo, framework),
+                hasTrxReportExtension: tooling.HasTrxReportExtension,
+                WorkspaceEnvironment(request.Workspace, paths));
+        }
+        catch (ArgumentException exception)
+        {
+            throw new ContinuousTestProviderException(
+                "MTP test execution could not be configured: " + exception.Message,
+                exception);
+        }
+
+        TestProcessResult result = await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
+        if (!File.Exists(artifactPath))
+            throw new ContinuousTestProviderException(
+                $"MTP test run did not produce the required TRX report '{artifactPath}': "
+                + FailureSummary(result));
+
+        string xml;
+        try
+        {
+            xml = File.ReadAllText(artifactPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new ContinuousTestProviderException(
+                $"MTP test run produced an unreadable TRX report '{artifactPath}': {exception.Message}",
+                exception);
+        }
+
+        ProviderRunResult parsed = MtpDotnetTestBackend.ParseTrxResult(
+            xml,
+            framework,
+            request.SelectedRevision,
+            request.IndexIdentity,
+            request.TestCaseIds,
+            artifactPath);
+        if (result.ExitCode != 0 && parsed.Status != "failed")
+            throw new ContinuousTestProviderException(
+                $"MTP test run exited with code {result.ExitCode} without an honest failed result: "
+                + FailureSummary(result));
+
+        return parsed with
+        {
+            RunId = request.RunId ?? parsed.RunId,
+            ResultArtifactPath = artifactPath,
+            CoverageArtifacts = DiscoverCoverageArtifacts(paths),
+            GenerationId = paths.GenerationId,
+        };
+    }
+
+    private async Task<MtpTestToolingInfo> ResolveMtpToolingAsync(
+        ContinuousTestWorkspace workspace,
+        CtGenerationPaths paths,
+        string targetPath,
+        CancellationToken cancellationToken)
+    {
+        TestProcessCommand command = MtpDotnetTestBackend.BuildInfoCommand(
+            _dotnetPath,
+            targetPath,
+            workspace.WorkspaceRoot,
+            WorkspaceEnvironment(workspace, paths));
+        TestProcessResult result = await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
+        if (result.ExitCode != 0)
+            throw new ContinuousTestProviderException(
+                $"MTP --info failed with exit code {result.ExitCode}: {FailureSummary(result)}");
+        string output = result.RequireCompleteStandardOutput("MTP --info");
+        if (!MtpTestTooling.TryParseInfo(output, result.StandardOutputTruncated, out MtpTestToolingInfo? info, out string? diagnostic))
+            throw new ContinuousTestProviderException(diagnostic ?? "MTP --info output was incomplete.");
+        return info!;
+    }
+
+    private async Task<string> ResolveMtpTargetPathAsync(
+        ContinuousTestWorkspace workspace,
+        CtGenerationPaths paths,
+        CancellationToken cancellationToken)
+    {
+        string targetPath = await ResolveGenericTargetPathAsync(workspace, paths, cancellationToken)
+            .ConfigureAwait(false);
+        if (Path.GetExtension(targetPath).Equals(".dll", StringComparison.OrdinalIgnoreCase))
+            return targetPath;
+
+        string assemblyPath = Path.Combine(
+            Path.GetDirectoryName(targetPath)!,
+            Path.GetFileNameWithoutExtension(targetPath) + ".dll");
+        if (File.Exists(assemblyPath))
+            return assemblyPath;
+        throw new ContinuousTestProviderException(
+            $"MTP test target '{targetPath}' was not a runnable managed assembly; expected '{assemblyPath}'.");
+    }
+
+    private static IReadOnlyDictionary<string, object?> MtpMetadata(
+        IReadOnlyDictionary<string, object?> metadata,
+        MtpTestToolingInfo tooling)
+    {
+        var additions = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["dotnet_mtp_version"] = tooling.Version.ToString(),
+            ["dotnet_mtp_trx_report_extension"] = tooling.HasTrxReportExtension,
+        };
+        return MergeMetadata(metadata, additions);
+    }
+
+    private static bool IsMtpWorkspace(ContinuousTestWorkspace workspace) =>
+        workspace.Metadata.TryGetValue(DotnetTestBackend.MetadataBackend, out object? backend)
+        && string.Equals(backend?.ToString(), DotnetTestBackendKind.MicrosoftTestingPlatform.ToString(), StringComparison.Ordinal);
+
     private async Task<ProviderRunResult> RunInGenerationAsync(
         ContinuousTestProviderRunRequest request,
         CtGenerationPaths paths,
@@ -305,6 +483,9 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             Metadata = MergeMetadata(request.Metadata, effectiveWorkspace.Metadata),
         };
         await BuildProjectAsync(request.Workspace, paths, cancellationToken).ConfigureAwait(false);
+
+        if (IsMtpWorkspace(request.Workspace))
+            return await RunMtpAsync(request, paths, cancellationToken).ConfigureAwait(false);
 
         if (genericFramework is not null)
         {
@@ -1579,7 +1760,7 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
             throw new ContinuousTestProviderException(
                 $"Test target-path evaluation failed with exit code {result.ExitCode}: {FailureSummary(result)}");
 
-        var evaluatedPath = result.StandardOutput
+        var evaluatedPath = result.RequireCompleteStandardOutput("Test target-path evaluation")
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .LastOrDefault();
         if (string.IsNullOrWhiteSpace(evaluatedPath))
@@ -2294,6 +2475,12 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
     {
         var normalized = framework?.Trim().ToLowerInvariant();
         return normalized is "mstest" or "nunit" ? normalized : null;
+    }
+
+    private static string? MtpFramework(string? framework)
+    {
+        var normalized = framework?.Trim().ToLowerInvariant();
+        return normalized is "mstest" or "nunit" or "xunit" ? normalized : null;
     }
 
     private static string GenericTestCaseId(

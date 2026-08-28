@@ -199,22 +199,97 @@ public sealed class DotnetTestProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task Discover_refuses_mtp_backend_before_vstest_discovery()
+    public async Task Discover_routes_mtp_after_info_and_list_contracts()
     {
         var runner = new FakeTestProcessRunner();
         var workspace = Workspace("mstest");
         WriteProviderProject(workspace, "MSTest.Sdk");
+        var generation = FirstGeneration(workspace);
+        var targetPath = Path.Combine(generation.OutDir, "Sample.Tests", "Custom.Assembly.dll");
         runner.Enqueue(PropertyProbeOutput(enableMstestRunner: "true"));
+        runner.Enqueue();
+        runner.Enqueue(targetPath);
+        runner.Enqueue("Microsoft.Testing.Platform 2.3.0\n--filter\n--report-trx");
+        runner.Enqueue("{\"schemaVersion\":1,\"tests\":[{\"fullyQualifiedName\":\"Sample.Tests.CalculatorTests.Adds\"}]}");
+        runner.OnRun = command => WriteGenericBuildTarget(command, targetPath);
         var provider = new DotnetTestProvider(runner);
 
-        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() => provider.DiscoverAsync(
+        ProviderTestCase testCase = Assert.Single(await provider.DiscoverAsync(
             workspace,
             TestContext.Current.CancellationToken));
 
-        Assert.Contains("MTP backend not yet available", exception.Message, StringComparison.Ordinal);
-        Assert.Single(runner.Calls);
+        Assert.Equal("mstest:Sample.Tests.CalculatorTests.Adds", testCase.Id);
+        Assert.Equal("MicrosoftTestingPlatform", testCase.Metadata[DotnetTestBackend.MetadataBackend]);
+        Assert.Equal("2.3.0", testCase.Metadata["dotnet_mtp_version"]);
+        Assert.Equal(5, runner.Calls.Count);
         Assert.Equal("msbuild", runner.Calls[0].Arguments[0]);
-        Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("build"));
+        Assert.Contains(runner.Calls, call => call.Arguments.Contains("--info"));
+        Assert.Contains(runner.Calls, call => call.Arguments.Contains("--list-tests"));
+    }
+
+    [Fact]
+    public async Task Run_routes_mtp_filters_and_parses_generation_scoped_trx()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace("mstest");
+        WriteProviderProject(workspace, "MSTest.Sdk");
+        var generation = FirstGeneration(workspace);
+        var targetPath = Path.Combine(generation.OutDir, "Sample.Tests", "Custom.Assembly.dll");
+        runner.Enqueue(PropertyProbeOutput(enableMstestRunner: "true"));
+        runner.Enqueue();
+        runner.Enqueue(targetPath);
+        runner.Enqueue("Microsoft.Testing.Platform 2.3.0\n--filter\n--report-trx");
+        runner.Enqueue();
+        runner.OnRun = command =>
+        {
+            WriteGenericBuildTarget(command, targetPath);
+            if (!command.Arguments.Contains("--report-trx", StringComparer.Ordinal))
+                return;
+            string resultsDirectory = command.Arguments[command.Arguments.ToList().IndexOf("--results-directory") + 1];
+            string fileName = command.Arguments[command.Arguments.ToList().IndexOf("--report-trx-filename") + 1];
+            string artifactPath = Path.Combine(resultsDirectory, fileName);
+            Directory.CreateDirectory(resultsDirectory);
+            File.WriteAllText(artifactPath, TrxDocument(["Sample.Tests.CalculatorTests.Adds"], "mtp-run", string.Empty));
+        };
+        var provider = new DotnetTestProvider(runner);
+
+        ProviderRunResult result = await provider.RunAsync(
+            Request(workspace, ["mstest:Sample.Tests.CalculatorTests.Adds"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("passed", result.Status);
+        Assert.Equal("run:generation", result.RunId);
+        Assert.Single(result.CaseResults);
+        Assert.Equal("mstest:Sample.Tests.CalculatorTests.Adds", result.CaseResults[0].TestCaseId);
+        Assert.Equal("passed", result.CaseResults[0].Status);
+        Assert.Contains("--filter", runner.Calls[^1].Arguments);
+        Assert.Equal("FullyQualifiedName=Sample.Tests.CalculatorTests.Adds", runner.Calls[^1].Arguments[^1]);
+        Assert.Equal(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(generation.ResultsDirectory)),
+            Path.GetDirectoryName(result.ResultArtifactPath));
+    }
+
+    [Fact]
+    public async Task Run_refuses_mtp_without_a_proven_report_extension()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace("mstest");
+        WriteProviderProject(workspace, "MSTest.Sdk");
+        var generation = FirstGeneration(workspace);
+        var targetPath = Path.Combine(generation.OutDir, "Sample.Tests", "Custom.Assembly.dll");
+        runner.Enqueue(PropertyProbeOutput(enableMstestRunner: "true"));
+        runner.Enqueue();
+        runner.Enqueue(targetPath);
+        runner.Enqueue("Microsoft.Testing.Platform 1.7.0\n--filter");
+        runner.OnRun = command => WriteGenericBuildTarget(command, targetPath);
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() => provider.RunAsync(
+            Request(workspace, ["mstest:Sample.Tests.CalculatorTests.Adds"]),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("TRX report extension", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(4, runner.Calls.Count);
     }
 
     [Fact]
@@ -365,6 +440,34 @@ public sealed class DotnetTestProviderTests : IDisposable
         Assert.Equal(
             DotnetTestBackendKind.MicrosoftTestingPlatform,
             DotnetTestBackend.Resolve("mstest", evaluated).Backend);
+    }
+
+    [Fact]
+    public void Resolve_refuses_conflicting_global_runner_and_evaluated_properties()
+    {
+        var evidence = new DotnetTestBackendEvidence(
+            Backend: DotnetTestBackendKind.Unknown,
+            Framework: null,
+            GlobalJsonTestRunner: "Microsoft.Testing.Platform",
+            ProjectSdk: "MSTest.Sdk",
+            PackageIds: [],
+            StaticProperties: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+            EvaluatedProperties: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UseVSTest"] = "true",
+                ["EnableMSTestRunner"] = "",
+                ["EnableNUnitRunner"] = "",
+                ["UseMicrosoftTestingPlatformRunner"] = "",
+                ["TestingPlatformDotnetTestSupport"] = "",
+            },
+            IsEvaluated: true,
+            IsComplete: true,
+            Diagnostic: null);
+
+        var resolved = DotnetTestBackend.Resolve("mstest", evidence);
+
+        Assert.Equal(DotnetTestBackendKind.Unknown, resolved.Backend);
+        Assert.Contains("conflict", resolved.Diagnostic, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

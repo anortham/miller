@@ -458,6 +458,65 @@ public sealed class DotnetProviderScaleTests : IDisposable
             Snapshot(workspaceRoot));
     }
 
+    [Fact]
+    public async Task Real_vb_mtp_fixture_discovers_runs_and_preserves_sources()
+    {
+        string dotnet = CtProviderTestSupport.RequireDotnet();
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        string repositoryFixture = Path.Combine(
+            ScaleTestSupport.RepoRoot(),
+            "tests",
+            "Miller.Tests",
+            "Fixtures",
+            "VbMtpScale");
+        string workspaceRoot = Path.Combine(_dir, "vb-mtp-repo");
+        CopyFixture(repositoryFixture, workspaceRoot);
+        IReadOnlyDictionary<string, string> sourceSnapshot = Snapshot(workspaceRoot);
+        string projectPath = Path.Combine(workspaceRoot, "VbMtpScale.vbproj");
+        var workspace = new ContinuousTestWorkspace(
+            "ws:vb-mtp",
+            workspaceRoot,
+            projectPath,
+            Path.Combine(_dir, "vb-mtp-state", "ct-build"),
+            Framework: "mstest");
+        _ctTemps.Add(CtTempPaths.ForWorkspace(workspace));
+        var provider = new DotnetTestProvider(new TestProcessRunner(), dotnet);
+
+        IReadOnlyList<ProviderTestCase> discovered = await provider.DiscoverAsync(workspace, ct);
+        Assert.Equal(
+            [
+                "mstest:VbMtpScale.UnitTests.Adds",
+                "mstest:VbMtpScale.UnitTests.Positive::display=Positive (1)",
+                "mstest:VbMtpScale.UnitTests.Positive::display=Positive (2)",
+            ],
+            discovered.Select(testCase => testCase.Id).Order(StringComparer.Ordinal));
+        ProviderTestCase adds = Assert.Single(
+            discovered,
+            testCase => testCase.Id == "mstest:VbMtpScale.UnitTests.Adds");
+        ProviderTestCase[] positiveCases = discovered
+            .Where(testCase => testCase.FullyQualifiedName == "VbMtpScale.UnitTests.Positive")
+            .OrderBy(testCase => testCase.DisplayName, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, positiveCases.Length);
+        Assert.Equal("2.3.3", adds.Metadata["dotnet_mtp_version"]);
+        Assert.Equal("UnitTests.vb", adds.SourcePath);
+
+        ProviderRunResult run = await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                workspace,
+                SelectedRevision: "vb-mtp-revision",
+                IndexIdentity: "vb-mtp-index",
+                RunId: "vb-mtp-run",
+                TestCaseIds: [adds.Id, .. positiveCases.Select(testCase => testCase.Id)]),
+            ct);
+
+        Assert.Equal("passed", run.Status);
+        Assert.Equal(3, run.CaseResults.Count);
+        Assert.All(run.CaseResults, result => Assert.Equal("passed", result.Status));
+        Assert.EndsWith(".trx", run.ResultArtifactPath, StringComparison.Ordinal);
+        Assert.Equal(sourceSnapshot, Snapshot(workspaceRoot));
+    }
+
     private static void CopyFixture(string source, string destination)
     {
         foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
