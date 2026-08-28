@@ -903,34 +903,44 @@ public sealed class ContinuousTestImpactSelector
     private static bool GoPackageContainsFile(TestCaseFact testCase, string impactedPath)
     {
         if (string.IsNullOrWhiteSpace(testCase.PackageDirectory)
-            || string.IsNullOrWhiteSpace(testCase.ProjectPath))
+            || string.IsNullOrWhiteSpace(impactedPath))
+        {
+            return false;
+        }
+
+        bool packageRooted = Path.IsPathRooted(testCase.PackageDirectory);
+        bool impactedRooted = Path.IsPathRooted(impactedPath);
+        if (packageRooted != impactedRooted
+            || HasGoPathParentTraversal(testCase.PackageDirectory)
+            || HasGoPathParentTraversal(impactedPath))
         {
             return false;
         }
 
         try
         {
-            string projectRoot = Path.GetDirectoryName(Path.GetFullPath(testCase.ProjectPath))!;
-            string packageDirectory = Path.GetFullPath(Path.IsPathRooted(testCase.PackageDirectory)
-                ? testCase.PackageDirectory
-                : Path.Combine(projectRoot, testCase.PackageDirectory));
-            string filePath = Path.GetFullPath(Path.IsPathRooted(impactedPath)
-                ? impactedPath
-                : Path.Combine(projectRoot, impactedPath));
-            if (!filePath.EndsWith(".go", StringComparison.OrdinalIgnoreCase))
+            if (!impactedPath.EndsWith(".go", StringComparison.OrdinalIgnoreCase))
                 return false;
 
-            string relative = NormalizePath(Path.GetRelativePath(packageDirectory, filePath));
+            string relativePath = Path.GetRelativePath(testCase.PackageDirectory, impactedPath);
+            if (Path.IsPathRooted(relativePath))
+                return false;
+
+            string relative = NormalizePath(relativePath);
             return relative != "."
                 && !relative.Equals("..", PathComparison)
-                && !relative.StartsWith("../", PathComparison)
-                && !Path.IsPathRooted(relative);
+                && !relative.StartsWith("../", PathComparison);
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or NotSupportedException)
         {
             return false;
         }
     }
+
+    private static bool HasGoPathParentTraversal(string path) =>
+        path.Replace('\\', '/')
+            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment => segment == "..");
 
     private static TestCaseFact[] ResolveImpactedTestsWhenSourcePathDiffers(
         string normalizedMillerPath,

@@ -721,7 +721,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     {
         using ContinuousTestStore store = OpenStore();
         const string projectPath = "/repo/go.mod";
-        SeedGoProviderCase(store, "tc:go", "TestAdd", "/repo/pkg", projectPath);
+        SeedGoProviderCase(store, "tc:go", "TestAdd", "pkg", projectPath);
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol(
             "sym:changed", "Changed", "src/compute.go", language: "go"));
@@ -748,12 +748,42 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     [Fact]
+    public void Select_maps_nested_go_impacted_test_from_a_workspace_relative_path()
+    {
+        using ContinuousTestStore store = OpenStore();
+        const string projectPath = "/repo/services/foo/go.mod";
+        SeedGoProviderCase(store, "tc:go-nested", "TestAdd", "services/foo/pkg", projectPath);
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:changed", "Changed", "services/foo/src/compute.go", language: "go"));
+        AddCurrentFileFacts(facts, "services/foo/src/compute.go");
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ProjectPath: projectPath,
+            ChangedPaths: ["services/foo/src/compute.go"],
+            ImpactedTests:
+            [
+                new ContinuousTestImpactedTest(
+                    SymbolId: "sym:go-nested-test",
+                    Path: "services/foo/pkg/math_test.go",
+                    Name: "TestAdd",
+                    TestCase: true,
+                    EvidenceStatus: "current"),
+            ]));
+
+        Assert.Equal(["tc:go-nested"], result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+    }
+
+    [Fact]
     public void Select_fails_closed_when_go_impacted_test_mapping_is_ambiguous()
     {
         using ContinuousTestStore store = OpenStore();
         const string projectPath = "/repo/go.mod";
-        SeedGoProviderCase(store, "tc:go-a", "TestAdd", "/repo/pkg", projectPath);
-        SeedGoProviderCase(store, "tc:go-b", "TestAdd", "/repo/pkg", projectPath);
+        SeedGoProviderCase(store, "tc:go-a", "TestAdd", "pkg", projectPath);
+        SeedGoProviderCase(store, "tc:go-b", "TestAdd", "pkg", projectPath);
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol(
             "sym:changed", "Changed", "src/compute.go", language: "go"));

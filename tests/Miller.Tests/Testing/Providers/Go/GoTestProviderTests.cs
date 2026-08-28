@@ -48,6 +48,35 @@ public sealed class GoTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Discover_persists_workspace_relative_package_directory_evidence()
+    {
+        WriteModule("example.com/math");
+        string packageDirectory = Path.Combine(_root, "services", "foo");
+        string packagePath = packageDirectory.Replace('\\', '/');
+        var runner = new RecordingRunner(command =>
+        {
+            if (command.Arguments.SequenceEqual(["version"]))
+                return new TestProcessResult(0, "go1.24.0 linux/amd64\n", string.Empty);
+            if (command.Arguments.Contains("env", StringComparer.Ordinal))
+                return new TestProcessResult(0, EnvironmentJson(), string.Empty);
+            if (command.Arguments.Contains("list", StringComparer.Ordinal))
+                return new TestProcessResult(0, $$"""
+                    {"Dir":"{{packagePath}}","ImportPath":"example.com/math","Name":"math","Module":{"Path":"example.com/math","Dir":"{{packagePath}}"},"TestGoFiles":["math_test.go"],"XTestGoFiles":[]}
+                    """, string.Empty);
+            if (command.Arguments.Contains("-list", StringComparer.Ordinal))
+                return new TestProcessResult(0, "TestAdd\nok example.com/math 0.001s\n", string.Empty);
+            throw new InvalidOperationException(command.ToDisplayString());
+        });
+
+        IReadOnlyList<ProviderTestCase> cases = await new GoTestProvider(runner)
+            .DiscoverAsync(Workspace(), TestContext.Current.CancellationToken);
+
+        ProviderTestCase testCase = Assert.Single(cases);
+        Assert.Equal("services/foo", testCase.SourcePath);
+        Assert.Equal(testCase.SourcePath, testCase.Metadata["package_dir"]);
+    }
+
+    [Fact]
     public async Task Run_groups_cases_by_package_and_parses_parent_verdicts()
     {
         WriteModule("example.com/math");

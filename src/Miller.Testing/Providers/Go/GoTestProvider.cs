@@ -205,7 +205,7 @@ public sealed class GoTestProvider : IContinuousTestProvider
             ["kind"] = "test",
             ["module"] = package.ModulePath,
             ["import_path"] = package.ImportPath,
-            ["package_dir"] = package.Directory,
+            ["package_dir"] = sourcePath,
             ["test_name"] = testName,
             ["go_version"] = goVersion,
             ["toolchain"] = goVersion,
@@ -378,8 +378,9 @@ public sealed class GoTestProvider : IContinuousTestProvider
         string root = Path.GetFullPath(workspace.WorkspaceRoot);
         string full = Path.GetFullPath(directory);
         string relative = Path.GetRelativePath(root, full);
-        return relative == "."
-            || relative.StartsWith("..", StringComparison.Ordinal)
+        return relative == ".."
+            || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            || relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)
             || Path.IsPathRooted(relative)
             ? full
             : relative.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
