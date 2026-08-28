@@ -4,7 +4,8 @@
 
 The documentation packet is implemented in the Miller worktree. The copied Julie finding is
 byte-for-byte identical to its source. No Julie file was modified and no worktree was removed.
-The owned-file commit SHA is recorded after the commit in the follow-up report update.
+The owned-file commit is `e2a3d5fde42df9aba4ff294a85006001b207adb8`
+(`docs(ct): publish provider expansion and Julie handoff`).
 
 ## Changed files
 
@@ -158,7 +159,8 @@ two stale CLI tests described below.
 
 - Miller path: `/home/murphy/source/miller`
 - Branch: `feature/ct-provider-correction-expansion`
-- HEAD at report creation: `126bfe421d9ccd212f7f5cc2c51c98a3ff614cd6`
-- Dirty state: owned documentation edits plus this report; no unrelated files staged.
-- Worktree list at report creation: `/home/murphy/source/miller 126bfe42 [feature/ct-provider-correction-expansion]`.
-- Commit SHA: pending until the owned-file commit is created.
+- HEAD for the owned-file commit: `e2a3d5fde42df9aba4ff294a85006001b207adb8`
+- The report finalization is a follow-up commit because the report records the owned-file commit
+  SHA after Git created it.
+- Worktree list before report finalization: `/home/murphy/source/miller e2a3d5fd [feature/ct-provider-correction-expansion]`.
+- Finalization commit SHA: recorded in the handoff message after this report update.
