@@ -83,12 +83,12 @@ Batch A uses `parallel-lead-commit`. Task 2 owns the compact missing-root hint w
 **Approach:** Follow `StoreMaintenanceRunner` process construction and test seams. Keep preview and apply explicit. Treat exact-target `view_not_found` as `AlreadyAbsent`; reject family/view mismatches, malformed reports, other failure classes, and missing binaries.
 
 **Acceptance criteria:**
-- [ ] RED tests prove no retirement adapter exists and malformed/wrong-identity reports cannot be accepted.
-- [ ] Preview omits `--apply`; apply includes it; every argv includes exact store, family, view, and `--json`.
-- [ ] Planned, retired, already-absent, mismatch, nonzero-exit, malformed-report, and timeout outcomes are deterministic.
-- [ ] The adapter never writes producer SQLite directly and never derives a view id from a root.
-- [ ] Focused adapter tests pass and `Miller.Indexing`/`Miller.Tests` build cleanly.
-- [ ] Worker hands the verified diff to the lead without committing.
+- [x] RED tests prove no retirement adapter exists and malformed/wrong-identity reports cannot be accepted.
+- [x] Preview omits `--apply`; apply includes it; every argv includes exact store, family, view, and `--json`.
+- [x] Planned, retired, already-absent, mismatch, nonzero-exit, malformed-report, and timeout outcomes are deterministic.
+- [x] The adapter never writes producer SQLite directly and never derives a view id from a root.
+- [x] Focused adapter tests pass and `Miller.Indexing`/`Miller.Tests` build cleanly.
+- [x] Worker hands the verified diff to the lead without committing.
 
 ### Task 2: Workspace removal and prune orchestration
 
