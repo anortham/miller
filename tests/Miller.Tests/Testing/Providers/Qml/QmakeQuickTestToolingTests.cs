@@ -95,8 +95,17 @@ public sealed class QmakeQuickTestToolingTests
             argument.StartsWith("TESTARGS=", StringComparison.Ordinal));
         Assert.Contains("gen$$1", testArgs, StringComparison.Ordinal);
         Assert.Contains("`echo", testArgs, StringComparison.Ordinal);
-        Assert.DoesNotContain("\\$$", testArgs, StringComparison.Ordinal);
-        Assert.DoesNotContain("\\`", testArgs, StringComparison.Ordinal);
+        if (OperatingSystem.IsWindows())
+        {
+            string makeSafePath = Path.GetFullPath(resultArtifactPath)
+                .Replace("$", "$$", StringComparison.Ordinal);
+            Assert.Contains($"-o {makeSafePath},junitxml", testArgs, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.DoesNotContain("\\$$", testArgs, StringComparison.Ordinal);
+            Assert.DoesNotContain("\\`", testArgs, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
