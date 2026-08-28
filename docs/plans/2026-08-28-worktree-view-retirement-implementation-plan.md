@@ -156,10 +156,10 @@ Batch A uses `parallel-lead-commit`. Task 2 owns the compact missing-root hint w
 **Approach:** Keep the rule one line and actionable. Do not run registry discovery from the hook. Assert both hook events include it and opt-out omits it.
 
 **Acceptance criteria:**
-- [ ] RED tests prove neither hook event currently carries worktree cleanup guidance.
-- [ ] SessionStart and SubagentStart deliver the targeted remove/prune rule within the existing budget.
-- [ ] Hook tests pass and the routing block remains within its enforced budget.
-- [ ] Worker hands the verified diff to the lead without committing.
+- [x] RED tests prove neither hook event currently carries worktree cleanup guidance.
+- [x] SessionStart and SubagentStart deliver the targeted remove/prune rule within the existing budget.
+- [x] Hook tests pass and the routing block remains within its enforced budget.
+- [x] Worker hands the verified diff to the lead without committing.
 
 ### Task 4: Targeted stale-view cleanup and evidence
 

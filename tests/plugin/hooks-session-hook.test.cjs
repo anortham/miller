@@ -13,6 +13,7 @@ const HOOK_SCRIPT_PATH = path.join(repoRoot, 'hooks', 'miller-session-hook.cjs')
 const ROUTING_BLOCK_PATH = path.join(repoRoot, 'hooks', 'miller-routing-block.md');
 const HOOKS_MANIFEST_PATH = path.join(repoRoot, 'hooks', 'claude-codex-hooks.json');
 const ROUTING_BLOCK_FRAGMENT = 'One Miller call beats shell greps and full-file reads';
+const WORKTREE_CLEANUP_GUIDANCE = 'After `git worktree remove <path>` succeeds, call Miller `workspace remove` for that exact old path. If cleanup was missed, inspect `workspace list`, run `workspace prune` as a dry run, then apply it.';
 const HOOK_TIMEOUT_MS = 10000;
 
 const EMITTING_EVENTS = [
@@ -50,6 +51,15 @@ for (const { argument, hookEventName } of EMITTING_EVENTS) {
 
     assert.equal(payload.hookSpecificOutput.hookEventName, hookEventName);
     assert.equal(payload.hookSpecificOutput.additionalContext, block);
+  });
+
+  test(`${argument} includes worktree cleanup guidance`, () => {
+    const result = runHook([argument]);
+
+    assert.ok(
+      result.stdout.includes(WORKTREE_CLEANUP_GUIDANCE),
+      `${argument} hook output should include the worktree cleanup rule`,
+    );
   });
 
   test(`${argument} honours MILLER_SESSION_HOOKS=0`, () => {

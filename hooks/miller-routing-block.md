@@ -10,6 +10,7 @@ Miller serves a fresh, structured index of this workspace's code. One Miller cal
 4. Trace a thread with `trace refs|path|bridge`; use `inspect` for callers/callees.
 5. Edit with a preview: `edit` dry-runs a diff and writes nothing until you set apply=true, so a rename or body rewrite is proved before it lands.
 6. Trust the index: results are current for the indexed revision; if one looks stale, run `workspace refresh` and retry — beats re-checking by hand.
+7. After `git worktree remove <path>` succeeds, call Miller `workspace remove` for that exact old path. If cleanup was missed, inspect `workspace list`, run `workspace prune` as a dry run, then apply it.
 
 ## When to reach for each tool
 
