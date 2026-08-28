@@ -123,11 +123,11 @@ Parallel Batch A uses `parallel-lead-commit`. Every other task uses `serial-work
 **Approach:** Preserve raw labels. Treat legacy stored symbol IDs as opaque until rediscovery. Add exact/ambiguous/stale joins, mixed-language exclusions, extension dialects, and watermark regressions through `Select` and `ApplyDiscovery`.
 
 **Acceptance criteria:**
-- [ ] All exact labels/extensions in Global Constraints map to the approved family and unknown labels stay incompatible.
-- [ ] Detailed containers/lifecycle symbols never become runnable cases; legacy `IsTest` behavior remains compatible.
-- [ ] Missing/diagnostic/stale file facts and unresolved reachable provider cases return `Unknown`, not green or `KnownEmpty`.
-- [ ] Provider name/path identity round-trips without a durable unversioned Julie ID.
-- [ ] Worker-scope verification passes and the worker creates the owned-file commit.
+- [x] All exact labels/extensions in Global Constraints map to the approved family and unknown labels stay incompatible.
+- [x] Detailed containers/lifecycle symbols never become runnable cases; legacy `IsTest` behavior remains compatible.
+- [x] Missing/diagnostic/stale file facts and unresolved reachable provider cases return `Unknown`, not green or `KnownEmpty`.
+- [x] Provider name/path identity round-trips without a durable unversioned Julie ID.
+- [x] Worker-scope verification passes and the worker creates the owned-file commit.
 
 ### Task 3: JavaScript discovery correction
 
