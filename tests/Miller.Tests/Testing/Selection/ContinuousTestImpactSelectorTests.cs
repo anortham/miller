@@ -35,19 +35,28 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     [Theory]
-    [InlineData("csharp", "dotnet", ".cs")]
-    [InlineData("razor", "dotnet", ".razor")]
-    [InlineData("vbnet", "dotnet", ".vb")]
-    [InlineData("javascript", "node", ".js")]
-    [InlineData("jsx", "node", ".jsx")]
-    [InlineData("typescript", "node", ".ts")]
-    [InlineData("tsx", "node", ".tsx")]
-    [InlineData("qml", "qml", ".qml")]
-    [InlineData("go", "go", ".go")]
-    public void Language_family_maps_exact_labels_and_paths(string label, string expected, string extension)
+    [InlineData("csharp", "dotnet", ".cs", "csharp")]
+    [InlineData("razor", "dotnet", ".razor", "razor")]
+    [InlineData("vbnet", "dotnet", ".vb", "vbnet")]
+    [InlineData("javascript", "node", ".js", "javascript")]
+    [InlineData("jsx", "node", ".jsx", "jsx")]
+    [InlineData("javascript", "node", ".mjs", "javascript")]
+    [InlineData("javascript", "node", ".cjs", "javascript")]
+    [InlineData("typescript", "node", ".ts", "typescript")]
+    [InlineData("tsx", "node", ".tsx", "tsx")]
+    [InlineData("typescript", "node", ".mts", "typescript")]
+    [InlineData("typescript", "node", ".cts", "typescript")]
+    [InlineData("qml", "qml", ".qml", "qml")]
+    [InlineData("go", "go", ".go", "go")]
+    public void Language_family_maps_exact_labels_and_paths(
+        string label,
+        string expected,
+        string extension,
+        string expectedPathLabel)
     {
         Assert.Equal(expected, ContinuousTestLanguageFamily.FromLabel(label));
         Assert.Equal(expected, ContinuousTestLanguageFamily.FromPath("src/Thing" + extension));
+        Assert.Equal(expectedPathLabel, ContinuousTestLanguageFamily.LabelFromPath("src/Thing" + extension));
     }
 
     [Fact]
@@ -77,6 +86,37 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.Equal(["tc:fresh"], result.StaleTestCaseIds);
         Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
         Assert.False(result.MayExecute);
+    }
+
+    [Fact]
+    public void Select_fails_closed_on_missing_changed_file_evidence_even_with_exact_impact()
+    {
+        using ContinuousTestStore store = OpenStore();
+        SeedProviderCase(
+            store,
+            "tc:case",
+            selector: "tests/Suite.cs::Case",
+            qualifiedName: "Suite.Case",
+            name: "Case",
+            sourcePath: "tests/Suite.cs");
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:changed", "Changed", "src/Changed.cs"));
+        facts.Tests.Add(FakeMillerFactSource.Hit(
+            "sym:case",
+            "Case",
+            "tests/Suite.cs",
+            isTest: true,
+            edgeKind: "calls",
+            edgeSource: "relationship"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["src/Changed.cs"]));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(["tc:case"], result.StaleTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
     }
 
     [Fact]
@@ -149,6 +189,8 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:changed", "Changed", "src/Changed.cs"));
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:case", "Case", "tests/Suite.cs", isTest: true));
+        facts.FileFacts.Add(new CtFileFact("src/Changed.cs", "csharp", "blake3:changed", "indexed", false, true));
+        facts.FileFacts.Add(new CtFileFact("tests/Suite.cs", "csharp", "blake3:suite", "indexed", false, true));
         facts.Tests.Add(new CtImpactedSymbol(
             "sym:case",
             "Case",
@@ -170,6 +212,60 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
 
         Assert.Equal(["tc:case"], result.SelectedTestCaseIds);
         Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void Select_fails_closed_when_provider_identity_file_evidence_is_not_current(
+        bool evidenceAvailable,
+        bool hasParseDiagnostics)
+    {
+        using ContinuousTestStore store = OpenStore();
+        store.PutTestCase(new ContinuousTestCase(
+            Id: "tc:case",
+            WorkspaceId: Workspace,
+            Name: "Case",
+            QualifiedName: "Suite.Case",
+            Selector: "Suite.Case",
+            FilePath: "tests/Suite.cs",
+            SymbolName: "Case",
+            SymbolPath: "tests/Suite.cs",
+            Framework: "xunit",
+            Source: "ct-provider:dotnet"));
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:changed", "Changed", "src/Changed.cs"));
+        facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:case", "Case", "tests/Suite.cs", isTest: true));
+        facts.FileFacts.Add(new CtFileFact("src/Changed.cs", "csharp", "blake3:changed", "indexed", false, true));
+        facts.FileFacts.Add(new CtFileFact(
+            "tests/Suite.cs",
+            "csharp",
+            evidenceAvailable ? "blake3:suite" : null,
+            evidenceAvailable ? "indexed" : null,
+            hasParseDiagnostics,
+            evidenceAvailable));
+        facts.Tests.Add(new CtImpactedSymbol(
+            "sym:case",
+            "Case",
+            "method",
+            "tests/Suite.cs",
+            IsTest: true,
+            Hop: 1,
+            EdgeKind: "calls",
+            EdgeSource: "relationship",
+            TestCase: true,
+            TestContainer: false,
+            TestLifecycle: false,
+            TestEvidenceStatus: "current"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["src/Changed.cs"]));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(["tc:case"], result.StaleTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
     }
 
     [Fact]
@@ -290,6 +386,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             sourcePath: "tests/web/app.test.ts");
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:safepath", "SafePath", "src/Eros.Core/SafePath.cs"));
+        AddCurrentFileFacts(facts, "src/Eros.Core/SafePath.cs");
         var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
@@ -334,7 +431,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         SeedProviderCase(store, "tc:a", "ATests.test", "ATests.test", "test", "tests/A.cs", projectPath: project);
         SeedProviderCase(store, "tc:b", "BTests.test", "BTests.test", "test", "tests/B.cs", projectPath: otherProject);
         SeedProviderCase(store, "tc:unknown", "UnknownTests.test", "UnknownTests.test", "test", "tests/U.cs");
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, "src/Sample/Calculator.cs");
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.SelectAtRevision(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -411,6 +510,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             sourcePath: "tests/AppTests.cs");
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:app", "App", "src/App.cs"));
+        AddCurrentFileFacts(facts, "src/App.cs");
         var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
@@ -461,6 +561,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             "extract_axum_route",
             "crates/julie-extractors/src/base/framework_structural_facts/axum.rs",
             language: "rust"));
+        AddCurrentFileFacts(facts, "crates/julie-extractors/src/base/framework_structural_facts/axum.rs");
         var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
@@ -508,6 +609,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol(
             "sym:upload", "EdrFileUpload", "src/Client/Features/Edr/EdrFileUpload.razor"));
+        AddCurrentFileFacts(facts, "src/Client/Features/Edr/EdrFileUpload.razor");
         var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
@@ -558,6 +660,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol(
             "sym:upload", "EdrFileUpload", "src/Client/Features/Edr/EdrFileUpload.razor"));
+        AddCurrentFileFacts(facts, "src/Client/Features/Edr/EdrFileUpload.razor");
         var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
@@ -762,7 +865,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             projectPath: projectPath,
             className: "Sample.Tests.OtherTests",
             filePath: "tests/Sample.Tests/OtherTests.cs");
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, "src/Sample/Calculator.cs");
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -801,6 +906,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         store.MarkContinuousTestsStale(Workspace, ["tc:owed"], new CtFreshnessKey("gen-1", 1));
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:charge", "charge", "src/payments/service.cs"));
+        AddCurrentFileFacts(facts, "src/payments/service.cs");
         facts.Tests.Add(FakeMillerFactSource.Hit(
             "sym:test-hit",
             "test_hit",
@@ -833,6 +939,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         store.MarkContinuousTestsStale(Workspace, ["tc:red-owed"], new CtFreshnessKey("gen-1", 2));
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:charge", "charge", "src/payments/service.cs"));
+        AddCurrentFileFacts(facts, "src/payments/service.cs");
         facts.Tests.Add(FakeMillerFactSource.Hit(
             "sym:test-hit",
             "test_hit",
@@ -1101,6 +1208,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         SeedLinkedCase(store, "tc:graph", "sym:test-graph", "tests/payments/GraphTests.cs", "test_graph");
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:charge", "charge", "src/payments/service.cs"));
+        AddCurrentFileFacts(facts, "src/payments/service.cs");
         facts.Tests.Add(FakeMillerFactSource.Hit(
             "sym:test-explicit",
             "test_explicit",
@@ -1176,7 +1284,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         string evidenceRoot = Path.Combine(_dir, "qml", "tests");
         SeedQmlCase(store, "tc:qml-a", "A/basic", projectPath, evidenceRoot);
         SeedQmlCase(store, "tc:qml-b", "B/slow", projectPath, evidenceRoot);
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, Path.Combine(_dir, "qml", "ui", "Card.qml"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -1208,7 +1318,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             Path.Combine(_dir, "qml", "tests", "AppTests.cs"),
             projectPath: projectPath,
             framework: "xunit");
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, Path.Combine(_dir, "qml", changedPath));
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -1271,7 +1383,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         string projectPath = Path.Combine(_dir, "qml", "CMakeLists.txt");
         string evidenceRoot = Path.Combine(_dir, "qml", "tests");
         SeedQmlCase(store, "tc:qml", "Smoke/smoke", projectPath, evidenceRoot);
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, Path.Combine(_dir, "qml", changedPath));
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -1291,7 +1405,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         string projectB = Path.Combine(_dir, "qml-b", "CMakeLists.txt");
         SeedQmlCase(store, "tc:qml-a", "A/basic", projectA, Path.Combine(_dir, "qml-a", "tests"));
         SeedQmlCase(store, "tc:qml-b", "B/slow", projectB, Path.Combine(_dir, "qml-b", "tests"));
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, Path.Combine(_dir, "qml-a", "ui", "Card.qml"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -1309,7 +1425,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         string projectPath = Path.GetFullPath("/repo/tests/App.Tests/App.Tests.csproj");
         SeedLinkedCase(store, "tc:app-a", "sym:test-a", "tests/app_a.cs", "test_a", projectPath);
         SeedLinkedCase(store, "tc:app-b", "sym:test-b", "tests/app_b.cs", "test_b", projectPath);
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, "tests/app_a.cs");
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -1338,6 +1456,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             fileRole: "source");
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:charge", "charge", "src/payments/service.cs"));
+        AddCurrentFileFacts(facts, "src/payments/service.cs");
         facts.Tests.Add(FakeMillerFactSource.Hit(
             "sym:false-source",
             "test_result_histories",
@@ -1408,10 +1527,22 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     {
         using ContinuousTestStore store = OpenStore();
         SeedLinkedCase(store, "tc:graph", "sym:test-graph", "tests/payments/test_service.cs", "test_graph");
-        SeedLinkedCase(store, "tc:identifier", "sym:test-identifier", "tests/payments/test_service.cs", "test_identifier");
+        SeedLinkedCase(
+            store,
+            "tc:identifier",
+            "sym:test-identifier",
+            "tests/payments/test_service.cs",
+            "test_identifier",
+            typedIdentity: true);
         SeedLinkedCase(store, "tc:path", "sym:test-path", "tests/payments/test_service.cs", "test_path");
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:charge", "charge", "src/payments/service.cs"));
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:test-identifier",
+            "test_identifier",
+            "tests/payments/test_service.cs",
+            isTest: true));
+        AddCurrentFileFacts(facts, "src/payments/service.cs", "tests/payments/test_service.cs");
         facts.Tests.Add(FakeMillerFactSource.Hit(
             "sym:test-graph",
             "test_graph",
@@ -1450,7 +1581,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         using ContinuousTestStore store = OpenStore();
         SeedLinkedCase(store, "tc:changed", "sym:test-changed", "tests/payments/test_service.cs", "test_changed");
         SeedLinkedCase(store, "tc:other", "sym:test-other", "tests/payments/test_other.cs", "test_other");
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, "tests/payments/test_service.cs");
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -1480,7 +1613,13 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
-            ImpactedSymbols: [new ContinuousTestImpactedSymbol(SymbolId: "sym:test-changed")]));
+            ImpactedSymbols:
+            [
+                new ContinuousTestImpactedSymbol(
+                    SymbolId: "sym:test-changed",
+                    Path: "tests/payments/test_service.cs",
+                    Name: "test_changed"),
+            ]));
 
         Assert.Equal(["tc:changed"], result.SelectedTestCaseIds);
         Assert.Equal(["tc:changed", "tc:other"], result.StaleTestCaseIds);
@@ -1508,6 +1647,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:service", "charge", "src/payments/service.cs", language: "csharp"));
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:lib", "add", "src/lib.cs", language: "csharp"));
+        AddCurrentFileFacts(facts, "src/payments/service.cs", "src/lib.cs");
         var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
@@ -1538,6 +1678,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         SeedLinkedCase(store, "tc:match", "sym:test", testPath, "case", language: testLanguage);
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:source", "source", changedPath, language: changedLanguage));
+        AddCurrentFileFacts(facts, changedPath);
         var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
@@ -1569,6 +1710,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             framework: "nunit");
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:component", "EdrFileUpload", changedPath, language: indexedLanguage));
+        AddCurrentFileFacts(facts, changedPath);
         var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
@@ -1587,7 +1729,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         using ContinuousTestStore store = OpenStore();
         SeedLinkedCase(store, "tc:csharp", "sym:test-csharp", "tests/edrfileuploadTests.cs", "Case", language: "csharp");
         SeedLinkedCase(store, "tc:go", "sym:test-go", "tests/edrfileupload_test.go", "Case", language: "go");
-        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, changedPath);
+        var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
             WorkspaceId: Workspace,
@@ -1613,6 +1757,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             framework: "nunit");
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:python", "EdrFileUpload", "src/EdrFileUpload.py", language: "python"));
+        AddCurrentFileFacts(facts, "src/EdrFileUpload.py");
         var selector = new ContinuousTestImpactSelector(store, facts);
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
@@ -1662,6 +1807,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         SeedLinkedCase(store, "tc:file-link", "sym:test-file-link", "tests/payments/test_service.cs", "test_service");
         var facts = new FakeMillerFactSource();
         facts.Symbols.Add(FakeMillerFactSource.Symbol("sym:service", "charge", "src/payments/service.cs"));
+        AddCurrentFileFacts(facts, "src/payments/service.cs");
         facts.Tests.Add(FakeMillerFactSource.Hit(
             "sym:test-file-link",
             "test_service",
@@ -1844,6 +1990,20 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
 
     private ContinuousTestStore OpenStore() => new(DbPath);
 
+    private static void AddCurrentFileFacts(FakeMillerFactSource facts, params string[] paths)
+    {
+        foreach (string path in paths.Distinct(StringComparer.Ordinal))
+        {
+            facts.FileFacts.Add(new CtFileFact(
+                path,
+                ContinuousTestLanguageFamily.LabelFromPath(path),
+                "blake3:test",
+                "indexed",
+                false,
+                true));
+        }
+    }
+
     /// <summary>Commits one green result through the real run-completion path, so the case is
     /// committed-fresh at <c>(identity, revision)</c> the way production rows are.</summary>
     private static void SeedCommittedResult(
@@ -1953,7 +2113,8 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         string name,
         string? projectPath = null,
         string language = "csharp",
-        string? fileRole = null)
+        string? fileRole = null,
+        bool typedIdentity = false)
     {
         var metadata = new Dictionary<string, object?>
         {
@@ -1972,8 +2133,8 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             Selector: $"{path}::{name}",
             FilePath: path,
             ContentHash: "blake3:" + symbolId,
-            SymbolName: symbolId,
-            SymbolPath: path,
+            SymbolName: typedIdentity ? name : null,
+            SymbolPath: typedIdentity ? path : null,
             Framework: "xunit",
             Role: ContinuousTestRole.TestCase,
             Source: "ct-provider:dotnet",

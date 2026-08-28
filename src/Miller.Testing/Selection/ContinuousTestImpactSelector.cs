@@ -390,7 +390,9 @@ public sealed class ContinuousTestImpactSelector
             byPath.TryGetValue(normalized, out CtSymbolFact[]? inFile);
             factsByPath.TryGetValue(normalized, out CtFileFact? fileFact);
             string? language = fileFact?.Language
-                ?? (inFile is { Length: > 0 } ? inFile[0].Language : LanguageFromPath(normalized));
+                ?? (inFile is { Length: > 0 }
+                    ? inFile[0].Language
+                    : ContinuousTestLanguageFamily.LabelFromPath(normalized));
             bool isTest = inFile is { Length: > 0 }
                 ? inFile.Any(static row => row.IsTest) || IsTestPath(normalized)
                 : IsTestPath(normalized);
@@ -417,15 +419,17 @@ public sealed class ContinuousTestImpactSelector
         if (paths.Length == 0)
             return testCases.ToArray();
 
+        IReadOnlyList<CtFileFact> fileFacts = _facts.FileFactsForPaths(paths);
         IReadOnlyList<CtSymbolFact> symbols = _facts.SymbolsForChangedFiles(paths);
         return testCases
-            .Select(testCase => ResolveProviderIdentity(testCase, symbols))
+            .Select(testCase => ResolveProviderIdentity(testCase, symbols, fileFacts))
             .ToArray();
     }
 
     private static TestCaseFact ResolveProviderIdentity(
         TestCaseFact testCase,
-        IReadOnlyList<CtSymbolFact> symbols)
+        IReadOnlyList<CtSymbolFact> symbols,
+        IReadOnlyList<CtFileFact> fileFacts)
     {
         if (!testCase.HasTypedIdentity
             || string.IsNullOrWhiteSpace(testCase.SymbolName)
@@ -434,23 +438,35 @@ public sealed class ContinuousTestImpactSelector
             return testCase;
         }
 
+        CtFileFact? fileFact = fileFacts.FirstOrDefault(file => PathsEqual(file.Path, testCase.SymbolPath));
+        if (fileFact is null || !IsCurrentFileFact(fileFact))
+            return testCase with { IdentityUnresolved = true };
+
         CtSymbolFact[] matches = symbols
             .Where(symbol => PathsEqual(symbol.FilePath, testCase.SymbolPath)
                 && string.Equals(symbol.Name, testCase.SymbolName, StringComparison.Ordinal)
                 && ContinuousTestLanguageFamily.AreCompatible(
                     symbol.Language,
-                    testCase.FileLanguage ?? LanguageFromPath(testCase.SymbolPath)))
+                    testCase.FileLanguage ?? ContinuousTestLanguageFamily.LabelFromPath(testCase.SymbolPath)))
             .ToArray();
         return matches.Length switch
         {
             1 => testCase with { SymbolId = matches[0].SymbolId },
             > 1 => testCase with { IdentityAmbiguous = true },
-            _ => testCase,
+            _ => testCase with { IdentityUnresolved = true },
         };
     }
 
+    private static bool IsCurrentFileFact(CtFileFact fact) =>
+        fact.EvidenceAvailable
+        && !fact.HasParseDiagnostics
+        && string.Equals(fact.Status, "indexed", StringComparison.OrdinalIgnoreCase);
+
     private static bool HasInvalidFileEvidence(IReadOnlyList<FileFact> changedFiles) =>
-        changedFiles.Any(static file => file.EvidenceAvailable && !file.IsCurrent);
+        changedFiles.Any(file =>
+            !IsHarmlessChangedPath(file.Path)
+            && !IsProjectOrConfigPath(file.Path)
+            && (!file.EvidenceAvailable || !file.IsCurrent));
 
     private static bool CanProveKnownEmpty(
         ContinuousTestImpactSelectionRequest request,
@@ -495,13 +511,18 @@ public sealed class ContinuousTestImpactSelector
 
             if (testCaseBySymbolId.TryGetValue(hint.SymbolId, out TestCaseFact? testCase))
                 result.TryAdd(hint.SymbolId, SymbolFact.FromHint(hint, testCase, isTest: true));
-            else if (allTestCases.Any(row => string.Equals(row.SymbolName, hint.SymbolId, StringComparison.Ordinal)))
-                result.TryAdd(hint.SymbolId, SymbolFact.FromHint(
-                    hint,
-                    allTestCases.First(row => string.Equals(row.SymbolName, hint.SymbolId, StringComparison.Ordinal)),
-                    isTest: true));
             else
-                result.TryAdd(hint.SymbolId, SymbolFact.FromHint(hint, testCase: null, isTest: false));
+            {
+                TestCaseFact[] candidates = allTestCases
+                    .Where(row => PathsEqual(
+                        row.SymbolPath ?? row.SourcePath ?? row.FilePath,
+                        hint.Path)
+                        && TestNameMatches(hint.Name, row))
+                    .ToArray();
+                result.TryAdd(hint.SymbolId, candidates.Length == 1
+                    ? SymbolFact.FromHint(hint, candidates[0], isTest: true)
+                    : SymbolFact.FromHint(hint, testCase: null, isTest: false));
+            }
         }
 
         return result.Values.ToArray();
@@ -731,9 +752,8 @@ public sealed class ContinuousTestImpactSelector
             {
                 TestCaseFact[] candidates = allTestCases
                     .Where(row => CanUseProviderCase(row, symbol.Id)
-                        && (string.Equals(row.SymbolName, symbol.Id, StringComparison.Ordinal)
-                            || (PathsEqual(row.SymbolPath ?? row.SourcePath ?? row.FilePath, symbol.FilePath)
-                                && TestNameMatches(symbol.Name, row))))
+                        && PathsEqual(row.SymbolPath ?? row.SourcePath ?? row.FilePath, symbol.FilePath)
+                        && TestNameMatches(symbol.Name, row))
                     .ToArray();
                 if (candidates.Length != 1)
                     continue;
@@ -976,18 +996,13 @@ public sealed class ContinuousTestImpactSelector
 
     private static bool CanUseProviderCase(TestCaseFact testCase, string? impactedSymbolId)
     {
-        if (testCase.IdentityAmbiguous)
+        if (testCase.IdentityAmbiguous || testCase.IdentityUnresolved)
             return false;
-        if (string.IsNullOrEmpty(testCase.SymbolId))
-        {
-            if (!testCase.HasTypedIdentity)
-                return true;
-            return !string.IsNullOrEmpty(impactedSymbolId)
-                && string.Equals(testCase.SymbolName, impactedSymbolId, StringComparison.Ordinal);
-        }
-
-        return string.IsNullOrEmpty(impactedSymbolId)
-            || string.Equals(testCase.SymbolId, impactedSymbolId, StringComparison.Ordinal);
+        if (!testCase.HasTypedIdentity)
+            return true;
+        return !string.IsNullOrEmpty(testCase.SymbolId)
+            && (string.IsNullOrEmpty(impactedSymbolId)
+                || string.Equals(testCase.SymbolId, impactedSymbolId, StringComparison.Ordinal));
     }
 
     private static bool TrailingSegmentEquals(string? dotted, string expected)
@@ -1115,12 +1130,6 @@ public sealed class ContinuousTestImpactSelector
                     .Where(row => PathsEqual(row.SymbolPath ?? row.SourcePath ?? row.FilePath, test.FilePath)
                         && TestNameMatches(test.Name, row))
                     .ToArray();
-                if (candidates.Length == 0)
-                {
-                    candidates = allTestCases
-                        .Where(row => string.Equals(row.SymbolName, test.SymbolId, StringComparison.Ordinal))
-                        .ToArray();
-                }
                 if (candidates.Length != 1)
                 {
                     if (candidates.Length > 1
@@ -1186,8 +1195,7 @@ public sealed class ContinuousTestImpactSelector
             if (!testCaseBySymbolId.TryGetValue(reference.SourceSymbolId, out TestCaseFact? testCase))
             {
                 TestCaseFact[] candidates = allTestCases
-                    .Where(row => PathsEqual(row.SymbolPath ?? row.SourcePath ?? row.FilePath, reference.FilePath)
-                        && string.Equals(row.SymbolName, reference.SourceSymbolId, StringComparison.Ordinal))
+                    .Where(row => PathsEqual(row.SymbolPath ?? row.SourcePath ?? row.FilePath, reference.FilePath))
                     .ToArray();
                 if (candidates.Length != 1)
                     continue;
@@ -1288,7 +1296,7 @@ public sealed class ContinuousTestImpactSelector
 
         string? testLanguage = IsFilelessDotnetCase(testCase)
             ? "csharp"
-            : testCase.FileLanguage ?? LanguageFromPath(testCase.FilePath);
+            : testCase.FileLanguage ?? ContinuousTestLanguageFamily.LabelFromPath(testCase.FilePath);
         return LanguagesAreCompatible(changedStem.Language, testLanguage);
     }
 
@@ -1452,33 +1460,6 @@ public sealed class ContinuousTestImpactSelector
         return dot > 0 ? basename[..dot] : basename;
     }
 
-    private static string? LanguageFromPath(string? path)
-    {
-        if (string.IsNullOrEmpty(path))
-            return null;
-        string extension = Path.GetExtension(path).ToLowerInvariant();
-        return extension switch
-        {
-            ".cs" => "csharp",
-            ".cshtml" => "razor",
-            ".go" => "go",
-            ".js" => "javascript",
-            ".jsx" => "javascript",
-            ".mjs" => "javascript",
-            ".cjs" => "javascript",
-            ".qml" => "qml",
-            ".py" => "python",
-            ".razor" => "razor",
-            ".rs" => "rust",
-            ".ts" => "typescript",
-            ".tsx" => "typescript",
-            ".mts" => "typescript",
-            ".cts" => "typescript",
-            ".vb" => "vbnet",
-            _ => null,
-        };
-    }
-
     private static bool ProjectMatches(string? testCaseProjectPath, string? requestProjectPath)
     {
         if (string.IsNullOrWhiteSpace(requestProjectPath))
@@ -1602,7 +1583,7 @@ public sealed class ContinuousTestImpactSelector
                 ? "razor"
                 : fileByPath.TryGetValue(normalizedPath, out FileFact? file)
                     ? file.Language
-                    : LanguageFromPath(normalizedPath);
+                    : ContinuousTestLanguageFamily.LabelFromPath(normalizedPath);
             return new ChangedPathStem(stem, language);
         }
 
@@ -1673,7 +1654,7 @@ public sealed class ContinuousTestImpactSelector
                 IsTest: symbol.IsTest,
                 TestRole: TestRoleFor(symbol.TestCase, symbol.TestContainer, symbol.TestLifecycle, symbol.IsTest),
                 FilePath: symbol.FilePath,
-                FileLanguage: LanguageFromPath(symbol.FilePath),
+                FileLanguage: ContinuousTestLanguageFamily.LabelFromPath(symbol.FilePath),
                 FileRole: symbol.IsTest ? "test" : null,
                 TestCase: symbol.TestCase,
                 TestContainer: symbol.TestContainer,
@@ -1729,7 +1710,8 @@ public sealed class ContinuousTestImpactSelector
         string? SymbolName,
         string? SymbolPath,
         bool HasTypedIdentity,
-        bool IdentityAmbiguous)
+        bool IdentityAmbiguous,
+        bool IdentityUnresolved)
     {
         public static TestCaseFact FromCase(ContinuousTestCase row)
         {
@@ -1742,7 +1724,8 @@ public sealed class ContinuousTestImpactSelector
                 FileId: LooksLikePath(row.FilePath ?? filePath) ? (row.FilePath ?? filePath) : null,
                 SymbolId: null,
                 FilePath: filePath,
-                FileLanguage: MetadataString(row.Metadata, "file_language") ?? LanguageFromPath(filePath),
+                FileLanguage: MetadataString(row.Metadata, "file_language")
+                    ?? ContinuousTestLanguageFamily.LabelFromPath(filePath),
                 FileRole: MetadataString(row.Metadata, "file_role"),
                 ProjectPath: MetadataString(row.Metadata, "ct_project_path"),
                 SourcePath: MetadataString(row.Metadata, "source_path"),
@@ -1754,7 +1737,8 @@ public sealed class ContinuousTestImpactSelector
                 SymbolPath: row.SymbolPath,
                 HasTypedIdentity: !string.IsNullOrWhiteSpace(row.SymbolName)
                     && !string.IsNullOrWhiteSpace(row.SymbolPath),
-                IdentityAmbiguous: false);
+                IdentityAmbiguous: false,
+                IdentityUnresolved: false);
         }
 
         private static string SelectorPath(string? selector)
