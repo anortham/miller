@@ -1,6 +1,6 @@
 # Tool latency and health-window design
 
-**Status:** approved direction, pending written-spec review
+**Status:** approved direction; recovery evidence recorded, impact latency gate remains open
 
 ## Goal
 
@@ -139,6 +139,23 @@ Use fixed workloads on the same workspace and revision, discard the first run, t
 If batching passes deterministic count guards but misses a target, the task remains incomplete. The next change
 must remove the largest measured phase; it may not hide the miss with a larger limit, a timeout, or a weaker result.
 
+## Recovery evidence — 2026-08-28
+
+The [recovery finding](../findings/2026-08-28-tool-latency-and-health-recovery.md) records the exact focused
+test results, commit SHAs, and replay commands. The proven contracts are:
+
+- Store-mode edit reads avoid full `MillerRepositoryIndex` materialization, stale retries reopen a fresh symbol-read context, and legacy reads reuse the eager index.
+- Lagging-sidecar path reads filter before ordering, retain sidecar `DocId`, and use two batches for 501 unique paths without duplicate-path expansion.
+- Context FTS hydration resolves 1,200 IDs as `[500, 500, 200]`; the resident MCP replay on the recovered worktree measured cold 2,927 ms and warm nearest-rank p95/max 2,817/2,817 ms. The live resident stayed on `1.25.0+058199ca50f1`; rebuilt-branch MCP isolation was not performed in-session.
+- The deterministic graph fixture reduced `FamilyResolution` statements from 40 to 20 without changing reachability or evidence behavior.
+- Workspace health summary and outcomes now share the seven-day telemetry window; lifetime outcome APIs remain available.
+
+The remaining measured impact phase is `UnresolvedNameForward` (7 executions, 2,188 rows, 8,754 ms). The
+current stable resident changed-path call is approximately 6.1 s, and the rebuilt branch one-shot warm p95 is
+9.35 s including startup. The impact p95 gate is therefore still open. A deeper fix likely requires a new
+indexed/reference read structure or another architecture outside this design's no-new-sidecar/no-global-cache
+boundary and needs product direction.
+
 ## Test strategy
 
 ### Edit
@@ -191,14 +208,14 @@ must remove the largest measured phase; it may not hide the miss with a larger l
 
 ## Acceptance criteria
 
-- [ ] Every store-mode edit operation avoids full `MillerRepositoryIndex` materialization; legacy mode reuses its
+- [x] Every store-mode edit operation avoids full `MillerRepositoryIndex` materialization; legacy mode reuses its
       eager index without a duplicate projection.
-- [ ] Store stale-span recovery reopens its pinned symbol read after convergence.
-- [ ] Lagging-sidecar path validation filters before ordering, retains sidecar `DocId`, and respects batch limits.
-- [ ] Context FTS hits hydrate in bounded batches with byte-identical candidate ordering and diagnostics.
-- [ ] Production lookup wrappers preserve live-row validation and resolve telemetry during batch hydration.
-- [ ] Standard context workload meets the 3-second p95 and 5-second maximum warm targets.
+- [x] Store stale-span recovery reopens its pinned symbol read after convergence.
+- [x] Lagging-sidecar path validation filters before ordering, retains sidecar `DocId`, and respects batch limits.
+- [x] Context FTS hits hydrate in bounded batches with byte-identical candidate ordering and diagnostics.
+- [x] Production lookup wrappers preserve live-row validation and resolve telemetry during batch hydration.
+- [x] Standard context workload meets the 3-second p95 and 5-second maximum warm targets.
 - [ ] Impact removes the largest measured repeated graph statement family without changing phase attribution.
 - [ ] Fixed changed-path and git-diff impact workloads meet the 5-second p95 target.
-- [ ] Workspace health summary and outcomes use the same seven-day error window as status.
-- [ ] Focused tests, fast suite, and release build pass with zero warnings and errors.
+- [x] Workspace health summary and outcomes use the same seven-day error window as status.
+- [x] Focused tests, fast suite, and release build pass with zero warnings and errors.

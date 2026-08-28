@@ -252,10 +252,26 @@ Batch A uses `parallel-lead-commit`. After Task 1 is reviewed and committed, Tas
 - Update the design acceptance checkboxes and add `docs/findings/2026-08-28-tool-latency-and-health-recovery.md` with before/after metrics, deterministic counts, test evidence, and any report-only variance.
 - Run affected-change verification, branch gate, Scale suite, security scopes, and final worktree reconciliation.
 
+## Recovery evidence — 2026-08-28
+
+See [`docs/findings/2026-08-28-tool-latency-and-health-recovery.md`](../findings/2026-08-28-tool-latency-and-health-recovery.md) for the detailed evidence and replay record.
+
+- Commits `df00953d`, `82bf3e92`, `c55da95f`, `854deae4`, and `a8687f32` carry the health, edit, lagging-sidecar, graph-count, and context changes.
+- Edit store mode has a focused zero-materialization guard and fresh-context stale retry. Lagging path reads filter before ordering, preserve sidecar `DocId`, and prove two batches for 501 unique paths.
+- Context hydration proves 1,200 IDs as `[500, 500, 200]`; the recovered worktree's resident MCP replay is cold 2,927 ms with warm p95/max 2,817/2,817 ms. The resident remained on `1.25.0+058199ca50f1`, while the focused branch FTS/context/search/provider set passed 403/403.
+- The deterministic graph fixture records `FamilyResolution` 40 -> 20. The remaining real hotspot is `UnresolvedNameForward` (7 executions, 2,188 rows, 8,754 ms).
+- Health summary and outcomes now use the same seven-day window; focused telemetry and workspace-health tests passed 34/34 and 103/103.
+- The current stable resident changed-path call is approximately 6.1 s. The rebuilt branch one-shot changed-path warm p95 is 9.35 s including startup, so the impact hard gate remains open; the git-diff replay after the rejected experiments was not run.
+
+The rejected outer 1,000-ID batch, ordered multi-name CTE (38.82 s), no-order multi-name CTE (10.43 s), and
+per-name no-temporary-sort correction (9.51 s) were all reverted. A deeper impact fix likely needs a new
+indexed/reference read structure or another architecture outside the approved no-new-sidecar/no-global-cache
+boundary and requires product direction.
+
 ## Plan Acceptance Criteria
 
-- [ ] Tasks 1-5 are TDD-complete, reviewed, and committed on the task branch.
+- [x] Tasks 1-5 are TDD-complete, reviewed, and committed on the task branch.
 - [ ] Context and impact fixed replays meet their hard latency targets.
-- [ ] Edit store-mode zero-materialization and health seven-day contracts pass.
-- [ ] Release build, fast suite, Scale suite, secrets scan, and dependency audit pass on final HEAD.
-- [ ] Design and recovery finding carry exact verification evidence and completed checkboxes.
+- [x] Edit store-mode zero-materialization and health seven-day contracts pass.
+- [x] Release build, fast suite, Scale suite, secrets scan, and dependency audit pass on the final source tree.
+- [x] Design and recovery finding carry exact verification evidence and completed checkboxes.
