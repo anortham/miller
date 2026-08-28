@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -307,6 +308,117 @@ public sealed class SqliteSymbolReaderTests
         // A typed, named error beats a cryptic SQLITE_CANTOPEN — the dir doesn't even exist.
         var ex = Assert.Throws<FileNotFoundException>(() => SqliteSymbolReader.Read(missing));
         Assert.Contains(missing, ex.Message);
+    }
+
+    [Fact]
+    public void ReadForPaths_FiltersBeforeOrdering_AndReturnsRequestedRowsWithContiguousDocIds()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        IReadOnlyList<IndexedSymbol> all = SqliteSymbolReader.Read(fx.DbPath);
+        IReadOnlyList<IndexedSymbol> selected = SqliteSymbolReader.ReadForPaths(
+            fx.DbPath,
+            ["auth/token.ts", "core/math.rs", "missing.cs"]);
+
+        IndexedSymbol[] expected = all
+            .Where(symbol => symbol.FilePath is "auth/token.ts" or "core/math.rs")
+            .Select((symbol, index) => symbol with { DocId = index })
+            .ToArray();
+
+        Assert.Equal(expected, selected);
+        Assert.Equal(Enumerable.Range(0, selected.Count), selected.Select(symbol => symbol.DocId));
+    }
+
+    [Fact]
+    public void ReadForPaths_UsesTwoBatchesFor501UniquePaths_DeduplicatesDuplicates_AndRenumbersResults()
+    {
+        var selectedRows = Enumerable.Range(0, 501)
+            .Select(index => new JulieDbFixture.SymbolRow(
+                index.ToString("x32"),
+                "Needle" + index,
+                "method",
+                "csharp",
+                $"selected/{index:D3}.cs",
+                "void Needle()",
+                index + 1,
+                null))
+            .ToArray();
+        var rows = selectedRows
+            .Prepend(new JulieDbFixture.SymbolRow(
+                "ffffffffffffffffffffffffffffffff",
+                "Outside",
+                "method",
+                "csharp",
+                "aaa.cs",
+                "void Outside()",
+                1,
+                null))
+            .ToArray();
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, rows);
+        using var snapshotSession = LegacyArtifactReadSession.Open(fx.DbPath, fx.WorkspaceRoot);
+
+        string[] paths = selectedRows
+            .Select(row => row.FilePath)
+            .Reverse()
+            .Concat(selectedRows.Take(7).Select(row => row.FilePath))
+            .ToArray();
+
+        using var onePathSession = new CountingReadSession(fx.DbPath, snapshotSession.Snapshot);
+        Assert.Single(SqliteSymbolReader.ReadForPaths(onePathSession, [paths[0]]));
+        int onePathCommandCount = onePathSession.Connection.CommandCount;
+
+        using var selectedPathSession = new CountingReadSession(fx.DbPath, snapshotSession.Snapshot);
+        IReadOnlyList<IndexedSymbol> selected = SqliteSymbolReader.ReadForPaths(selectedPathSession, paths);
+
+        Assert.Equal(501, selected.Count);
+        Assert.Equal(
+            selectedRows.OrderBy(row => row.FilePath, StringComparer.Ordinal).Select(row => row.Id),
+            selected.Select(symbol => symbol.SymbolId));
+        Assert.Equal(Enumerable.Range(0, selected.Count), selected.Select(symbol => symbol.DocId));
+        Assert.Equal(onePathCommandCount + 1, selectedPathSession.Connection.CommandCount);
+    }
+
+    private sealed class CountingReadSession : IWorkspaceReadSession
+    {
+        public CountingReadSession(string dbPath, WorkspaceReadSnapshot snapshot)
+        {
+            var connectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.GetFullPath(dbPath),
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString();
+            Connection = new CountingSqliteConnection(connectionString);
+            Connection.Open();
+            Connection.ResetCommandCount();
+            Snapshot = snapshot;
+        }
+
+        public CountingSqliteConnection Connection { get; }
+
+        public WorkspaceReadSnapshot Snapshot { get; }
+
+        public TResult Read<TResult>(Func<SqliteConnection, TResult> query) => query(Connection);
+
+        public void Dispose() => Connection.Dispose();
+    }
+
+    private sealed class CountingSqliteConnection : SqliteConnection
+    {
+        public CountingSqliteConnection(string connectionString)
+            : base(connectionString)
+        {
+        }
+
+        public int CommandCount { get; private set; }
+
+        public override SqliteCommand CreateCommand()
+        {
+            CommandCount++;
+            return base.CreateCommand();
+        }
+
+        public void ResetCommandCount() => CommandCount = 0;
     }
 
     private static void AssertRole(

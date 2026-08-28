@@ -95,12 +95,12 @@ Batch A uses `parallel-lead-commit`. After Task 1 is reviewed and committed, Tas
 **Approach:** Preserve result ordering and evidence joins. Cover selected/missing paths, 501-path batching, duplicate paths, cross-batch identity, and relaxed-merge survival through real lookup behavior.
 
 **Acceptance criteria:**
-- [ ] The red tests fail because the query ranks the whole table and live rows lose sidecar identity.
-- [ ] `ReadForPaths` filters before `ROW_NUMBER` ordering and preserves existing evidence/result parity.
-- [ ] 501 unique paths use two batches; duplicates do not increase batch count.
-- [ ] Live rows retain sidecar `DocId` across batches and cannot collide during relaxed merge.
-- [ ] Focused `SqliteSymbolReaderTests` and `LaggingSidecarSymbolLookupTests` pass; direct projects build cleanly.
-- [ ] Worker hands the verified diff to the lead without committing.
+- [x] The red tests fail because the query ranks the whole table and live rows lose sidecar identity.
+- [x] `ReadForPaths` filters before `ROW_NUMBER` ordering and preserves existing evidence/result parity.
+- [x] 501 unique paths use two batches; duplicates do not increase batch count.
+- [x] Live rows retain sidecar `DocId` across batches and cannot collide during relaxed merge.
+- [x] Focused `SqliteSymbolReaderTests` and `LaggingSidecarSymbolLookupTests` pass; direct projects build cleanly.
+- [x] Worker hands the verified diff to the lead without committing.
 
 ### Task 2: Lightweight edit reads
 

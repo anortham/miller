@@ -88,9 +88,9 @@ public static class SqliteSymbolReader
     }
 
     /// <summary>
-    /// Read only named symbols in the supplied workspace-relative <paramref name="paths"/>. DocId is still the
-    /// global deterministic row ordinal from the full reader's order, but callers that maintain their own stable
-    /// sidecar identities may rewrite it before indexing.
+    /// Read only named symbols in the supplied workspace-relative <paramref name="paths"/>. Results keep the
+    /// deterministic path/start-line/symbol-id order and receive contiguous DocId ordinals over the selected rows.
+    /// Callers that maintain their own stable sidecar identities may rewrite them before indexing.
     /// </summary>
     public static IReadOnlyList<IndexedSymbol> ReadForPaths(
         IWorkspaceReadSession session,
@@ -159,20 +159,22 @@ public static class SqliteSymbolReader
                     {evidence.FilesJoin}
                     {evidence.DiagnosticsJoin}
                     WHERE s.name IS NOT NULL
+                      AND s.path IN ({placeholders})
                 )
                 SELECT doc_id, symbol_id, name, signature, kind, language, path,
                        start_line, end_line, parent_symbol_id, is_test, visibility,
                        test_container, test_lifecycle, file_status,
                        has_file_evidence, has_parse_diagnostics
                 FROM ordered
-                WHERE path IN ({placeholders})
                 ORDER BY path, start_line, symbol_id;
                 """;
             using var reader = command.ExecuteReader();
             ReadRows(reader, results);
         }
 
-        results.Sort(static (a, b) => a.DocId.CompareTo(b.DocId));
+        results.Sort(CompareDeterministically);
+        for (int i = 0; i < results.Count; i++)
+            results[i] = results[i] with { DocId = i };
         return results;
     }
 

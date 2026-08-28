@@ -135,7 +135,9 @@ internal sealed class LaggingSidecarSymbolLookup : ISymbolLookupIndex
         IReadOnlyDictionary<string, IndexedSymbol> file;
         lock (_gate)
             file = _liveFiles[row.FilePath];
-        return file.TryGetValue(row.SymbolId, out IndexedSymbol? live) ? live : null;
+        return file.TryGetValue(row.SymbolId, out IndexedSymbol? live)
+            ? live with { DocId = row.DocId }
+            : null;
     }
 
     private void EnsureLiveFiles(IEnumerable<string> paths)
