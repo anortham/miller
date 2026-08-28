@@ -70,6 +70,30 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_CurrentLegacySymbolReadReusesTheHolderSnapshotIndex()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        MillerRepositoryIndex holderIndex = RepositoryIndexLoader.Load(current.DbPath);
+        var holder = new IndexHolder(holderIndex, builtRevision: 1);
+        int projectionLoads = 0;
+        var provider = NewProvider(
+            holder,
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadSessionSymbolSearch: _ =>
+            {
+                projectionLoads++;
+                throw new InvalidOperationException("legacy reads must reuse the holder index");
+            });
+
+        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead(null, WorkspaceRefreshMode.None);
+
+        Assert.Same(holderIndex, context.Index);
+        Assert.Equal(0, projectionLoads);
+    }
+
+    [Fact]
     public void Resolve_CurrentFamilyStoreDoesNotMaterializeTheHolderRepository()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");

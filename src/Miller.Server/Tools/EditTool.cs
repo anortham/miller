@@ -4,10 +4,10 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
-using Miller.Indexing.Reads;
 using Miller.Server.Hosting;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
+using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
@@ -38,27 +38,24 @@ public sealed class EditTool
     /// <summary>Prefix for the exception backstop bucket; the suffix is the exception TYPE NAME, never its message.</summary>
     private const string UnhandledFailureReasonPrefix = "unhandled_";
 
-    private readonly IndexHolder _holder;
-    private readonly SmartTargetResolver _resolver;
+    private readonly IWorkspaceSymbolReadProvider _workspaceSymbolReadProvider;
     private readonly WorkspaceContext _workspace;
     private readonly EditApplier _applier;
     private readonly IEditWriteThrough _writeThrough;
     private readonly ILogger<EditTool> _logger;
 
-    /// <summary>Construct over the live index holder + the singleton apply/write-through seam.</summary>
+    /// <summary>Construct over the singleton symbol-read and apply/write-through seams.</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     public EditTool(
-        IndexHolder holder, SmartTargetResolver resolver, WorkspaceContext workspace,
+        IWorkspaceSymbolReadProvider workspaceSymbolReadProvider, WorkspaceContext workspace,
         EditApplier applier, IEditWriteThrough writeThrough, ILogger<EditTool> logger)
     {
-        ArgumentNullException.ThrowIfNull(holder);
-        ArgumentNullException.ThrowIfNull(resolver);
+        ArgumentNullException.ThrowIfNull(workspaceSymbolReadProvider);
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(applier);
         ArgumentNullException.ThrowIfNull(writeThrough);
         ArgumentNullException.ThrowIfNull(logger);
-        _holder = holder;
-        _resolver = resolver;
+        _workspaceSymbolReadProvider = workspaceSymbolReadProvider;
         _workspace = workspace;
         _applier = applier;
         _writeThrough = writeThrough;
@@ -129,13 +126,18 @@ public sealed class EditTool
                 telemetry.SetMetadata("has_line", line is not null);
             }
 
-            using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(
+            using WorkspaceSymbolReadContext readContext =
+                _workspaceSymbolReadProvider.ResolveSymbolRead(null, WorkspaceRefreshMode.None);
+            var service = new EditService(
+                readContext.Index,
+                new SmartTargetResolver(readContext.Index),
                 _workspace.ExtractDbPath,
                 _workspace.WorkspaceRoot,
-                _workspace.WorkspaceId);
-            var service = new EditService(
-                _holder.Current, _resolver, _workspace.ExtractDbPath, _workspace.WorkspaceRoot,
-                _applier, _writeThrough, readSession: readSession);
+                _applier,
+                _writeThrough,
+                readSession: readContext.ReadSession,
+                resolveFreshContext: () =>
+                    _workspaceSymbolReadProvider.ResolveSymbolRead(null, WorkspaceRefreshMode.None));
 
             EditService.EditResult result = service.Execute(request);
 

@@ -4,6 +4,7 @@ using Miller.Core.Editing;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Server;
+using Miller.Server.Workspaces;
 using Miller.Server.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -130,6 +131,43 @@ public sealed class EditToolTests : IDisposable
 
     private sealed class NoopLease : IDisposable { public void Dispose() { } }
 
+    private sealed class FixedSymbolReadProvider(Func<WorkspaceSymbolReadContext> factory) : IWorkspaceSymbolReadProvider
+    {
+        private readonly Func<WorkspaceSymbolReadContext> _factory = factory;
+
+        public int Calls { get; private set; }
+
+        public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, WorkspaceRefreshMode refresh)
+        {
+            Calls++;
+            return _factory();
+        }
+    }
+
+    private sealed class StoreReadSession(
+        WorkspaceReadSnapshot snapshot,
+        string dbPath) : IWorkspaceReadSession
+    {
+        public WorkspaceReadSnapshot Snapshot { get; } = snapshot;
+
+        public TResult Read<TResult>(Func<Microsoft.Data.Sqlite.SqliteConnection, TResult> query)
+        {
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+                {
+                    DataSource = dbPath,
+                    Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
+                    Pooling = false,
+                }.ToString());
+            connection.Open();
+            return query(connection);
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
     private (EditService service, RecordingWriteThrough wt) Build(JulieDbFixture fx)
     {
         var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
@@ -154,19 +192,86 @@ public sealed class EditToolTests : IDisposable
         ILogger<EditTool>? logger = null)
     {
         var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
-        var holder = new IndexHolder(index, builtRevision: 0);
-        var resolver = new SmartTargetResolver(holder);
+        var provider = new FixedSymbolReadProvider(() => LegacySymbolContext(index, _root, fx.DbPath));
         var workspace = WorkspaceContext.Create(_root, AppContext.BaseDirectory, _root) with
         {
             ExtractDbPath = fx.DbPath,
         };
         return new EditTool(
-            holder,
-            resolver,
+            provider,
             workspace,
             applier ?? new EditApplier(() => new NoopLease()),
             writeThrough ?? new RecordingWriteThrough(),
             logger ?? NullLogger<EditTool>.Instance);
+    }
+
+    private static WorkspaceSymbolReadContext LegacySymbolContext(
+        ISymbolLookupIndex index,
+        string root,
+        string dbPath)
+    {
+        WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(
+            dbPath,
+            root,
+            workspaceId: null,
+            storeEnabled: false);
+        return new WorkspaceSymbolReadContext(
+            index,
+            readSession,
+            null,
+            root,
+            0,
+            true,
+            "current",
+            null,
+            null,
+            true,
+            readSession.Snapshot.IndexLevel);
+    }
+
+    private static WorkspaceSymbolReadContext StoreSymbolContext(
+        ISymbolLookupIndex index,
+        string root,
+        string dbPath,
+        string manifestHash = "manifest-a")
+    {
+        var snapshot = new WorkspaceReadSnapshot(
+            root,
+            "edit-store",
+            "family-a",
+            "view-a",
+            new WorkspaceFreshnessToken(
+                "family-a",
+                1,
+                manifestHash,
+                1,
+                "resolution-a",
+                SearchStamp: "search-a",
+                ContentStamp: "content-a",
+                StoreInstanceId: "family-a:gen-001",
+                ViewId: "view-a",
+                GenerationName: "gen-001",
+                ManifestGeneration: 1,
+                IndexLevel: IndexLevels.FullMetadataValue,
+                LevelStampL1: "l1-a",
+                LevelStampL2: "l2-a",
+                LevelStampL3: "l3-a"),
+            IndexLevels.FullMetadataValue,
+            WorkspaceReadMode.FamilyStore,
+            "gen-001",
+            1);
+        return new WorkspaceSymbolReadContext(
+            index,
+            new WorkspaceReadHandle(new StoreReadSession(snapshot, dbPath)),
+            "edit-store",
+            root,
+            1,
+            null,
+            "current",
+            null,
+            "edit-store",
+            true,
+            IndexLevels.FullMetadataValue);
     }
 
     private static EditRequest Req(string op, string target) => new(op, target);
@@ -257,6 +362,91 @@ public sealed class EditToolTests : IDisposable
         Assert.True(result.Applied, result.Output);
         Assert.Contains("return 42", File.ReadAllText(AbsPath("orders/OrderService.cs")), StringComparison.Ordinal);
         Assert.Contains(AbsPath("orders/OrderService.cs"), writeThrough.Converged);
+    }
+
+    [Theory]
+    [InlineData("replace_text", "orders/OrderService.cs", "return _items.Sum(i => i.Total);", "return 42;")]
+    [InlineData("replace_symbol_body", "OrderService.Total", null, "{ return 42; }")]
+    [InlineData("replace_symbol_signature", "OrderService.Total", null, "public long Total() ")]
+    [InlineData("insert_before", "OrderService.Total", null, "[Obsolete]\\n  ")]
+    [InlineData("insert_after", "OrderService.Total", null, "\\n  public int Two() { return 2; }")]
+    [InlineData("add_doc", "OrderService.Total", null, "  /// <summary>Totals the order.</summary>")]
+    [InlineData("rename_symbol", "OrderService.Total", null, "GrandTotal")]
+    public void Edit_StoreMode_PreviewsAllOperationsFromPinnedLookup(
+        string operation,
+        string target,
+        string? oldText,
+        string newText)
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        LayFiles(EditFixtureFiles);
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var provider = new FixedSymbolReadProvider(() => StoreSymbolContext(index, _root, fx.DbPath));
+        var workspace = WorkspaceContext.Create(_root, AppContext.BaseDirectory, _root) with
+        {
+            ExtractDbPath = fx.DbPath,
+            WorkspaceId = "edit-store",
+        };
+        var tool = new EditTool(
+            provider,
+            workspace,
+            new EditApplier(() => new NoopLease()),
+            new RecordingWriteThrough(),
+            NullLogger<EditTool>.Instance);
+
+        string output = tool.Edit(
+            operation,
+            target,
+            old_text: oldText,
+            new_text: newText,
+            format: "json");
+
+        using JsonDocument document = JsonDocument.Parse(output);
+        Assert.False(document.RootElement.GetProperty("applied").GetBoolean());
+        Assert.Equal("preview", document.RootElement.GetProperty("mode").GetString());
+        Assert.Equal(1, provider.Calls);
+    }
+
+    [Fact]
+    public void Edit_StoreMode_StaleRecovery_ReopensFreshContextBeforeRetry()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        File.WriteAllText(AbsPath("orders/OrderService.cs"), JulieDbFixture.OrderServiceContent + "// drifted\n");
+        FixedSymbolReadProvider? provider = null;
+        provider = new FixedSymbolReadProvider(() =>
+        {
+            var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+            string manifest = provider!.Calls == 1 ? "manifest-a" : "manifest-b";
+            return StoreSymbolContext(index, _root, fx.DbPath, manifest);
+        });
+        var writeThrough = new RecoveringWriteThrough(_ =>
+        {
+            ConvergeIndexedHash(fx, "orders/OrderService.cs");
+            ShiftIndexedSpans(fx, "orders/OrderService.cs", byteDelta: 11, lineDelta: 1);
+            return StaleRecoveryAttempt.Converged;
+        });
+        var workspace = WorkspaceContext.Create(_root, AppContext.BaseDirectory, _root) with
+        {
+            ExtractDbPath = fx.DbPath,
+            WorkspaceId = "edit-store",
+        };
+        var tool = new EditTool(
+            provider,
+            workspace,
+            new EditApplier(() => new NoopLease()),
+            writeThrough,
+            NullLogger<EditTool>.Instance);
+
+        string output = tool.Edit(
+            "replace_symbol_body",
+            "OrderService.Total",
+            new_text: "{ return 7; }",
+            apply: true);
+
+        Assert.Contains("{ return 7; }", File.ReadAllText(AbsPath("orders/OrderService.cs")));
+        Assert.Equal(2, provider.Calls);
+        Assert.Contains("applied", output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

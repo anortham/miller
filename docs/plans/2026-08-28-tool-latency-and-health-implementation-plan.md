@@ -130,13 +130,13 @@ Batch A uses `parallel-lead-commit`. After Task 1 is reviewed and committed, Tas
 **Approach:** Test every public edit operation through `EditTool` with a store holder factory that throws if materialized. Add a real store-session recovery fixture whose manifest changes after convergence, proving the retry sees new spans. Preserve provider telemetry and write-through behavior.
 
 **Acceptance criteria:**
-- [ ] Red tool tests prove current store edits materialize the holder and stale retry cannot observe a converged store session.
-- [ ] Every store-mode edit operation succeeds without materializing `MillerRepositoryIndex`.
-- [ ] Legacy mode reuses `legacySnapshot.Index` and builds no duplicate symbol projection.
-- [ ] Store stale recovery resolves a fresh `WorkspaceSymbolReadContext` before retrying.
-- [ ] Existing preview/apply, rename coverage, QML span, partial-apply, and convergence behaviors remain green.
-- [ ] Focused edit, provider, live-edit, and QML tests pass; `Miller.Server` and `Miller.Tests` build cleanly.
-- [ ] Worker hands the verified diff to the lead without committing.
+- [x] Red tool tests prove current store edits materialize the holder and stale retry cannot observe a converged store session.
+- [x] Every store-mode edit operation succeeds without materializing `MillerRepositoryIndex`.
+- [x] Legacy mode reuses `legacySnapshot.Index` and builds no duplicate symbol projection.
+- [x] Store stale recovery resolves a fresh `WorkspaceSymbolReadContext` before retrying.
+- [x] Existing preview/apply, rename coverage, QML span, partial-apply, and convergence behaviors remain green.
+- [x] Focused edit, provider, live-edit, and QML tests pass; `Miller.Server` and `Miller.Tests` build cleanly.
+- [x] Worker hands the verified diff to the lead without committing.
 
 ### Task 3: Seven-day workspace health
 

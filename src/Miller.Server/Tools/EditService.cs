@@ -11,6 +11,7 @@ using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Server.Hosting;
 using Miller.Server.Resolution;
+using Miller.Server.Workspaces;
 
 namespace Miller.Server.Tools;
 
@@ -77,7 +78,7 @@ public sealed class EditService
     /// <summary>Wait-reason enum stamped when an edit spends budget waiting for a single-file converge.</summary>
     internal const string StaleConvergeWaitReason = "edit_stale_converge";
 
-    private readonly MillerRepositoryIndex _index;
+    private readonly ISymbolLookupIndex _index;
     private readonly SmartTargetResolver _resolver;
     private readonly string _dbPath;
     private readonly string _workspaceRoot;
@@ -88,6 +89,7 @@ public sealed class EditService
     private readonly IndexedEditCandidateReader _indexedEditCandidateReader;
     private readonly RecoveryOptions _recovery;
     private readonly IWorkspaceReadSession? _readSession;
+    private readonly Func<WorkspaceSymbolReadContext>? _resolveFreshContext;
 
     /// <summary>
     /// Bounded-wait tuning for gate-time stale recovery: when the freshness gate finds a touched file stale and
@@ -106,20 +108,22 @@ public sealed class EditService
     /// <summary>
     /// Construct over the resolved workspace dependencies.
     /// </summary>
-    /// <param name="index">The live in-memory index (for qualified <c>Parent.Member</c> symbol resolution).</param>
-    /// <param name="resolver">Smart-string target resolution over the live index.</param>
+    /// <param name="index">The pinned symbol lookup index (for qualified <c>Parent.Member</c> symbol resolution).</param>
+    /// <param name="resolver">Smart-string target resolution over the pinned lookup index.</param>
     /// <param name="dbPath">The julie extract DB (Mode=ReadOnly) for span/site reads + the freshness baseline.</param>
     /// <param name="workspaceRoot">The absolute workspace root; relative indexed paths compose under it for disk I/O.</param>
     /// <param name="applier">The atomic apply transaction (writer-lock + TOCTOU + rollback).</param>
     /// <param name="writeThrough">Post-apply index convergence (leader reindex, else watcher backstop).</param>
     /// <param name="indexedSourceTextReader">Advisory source-corpus reader for stale-index diagnostics.</param>
+    /// <param name="resolveFreshContext">Reopens a pinned lookup/session after stale-span convergence.</param>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     public EditService(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string dbPath, string workspaceRoot,
+        ISymbolLookupIndex index, SmartTargetResolver resolver, string dbPath, string workspaceRoot,
         EditApplier applier, IEditWriteThrough writeThrough, IndexedSourceTextReader? indexedSourceTextReader = null,
         IndexedEditCandidateReader? indexedEditCandidateReader = null,
         RecoveryOptions? recoveryOptions = null,
-        IWorkspaceReadSession? readSession = null)
+        IWorkspaceReadSession? readSession = null,
+        Func<WorkspaceSymbolReadContext>? resolveFreshContext = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(resolver);
@@ -138,6 +142,7 @@ public sealed class EditService
         _indexedEditCandidateReader = indexedEditCandidateReader ?? new IndexedEditCandidateReader();
         _recovery = recoveryOptions ?? RecoveryOptions.Default;
         _readSession = readSession;
+        _resolveFreshContext = resolveFreshContext;
     }
 
     /// <summary>The outcome of an <c>edit</c> call: the rendered output plus the structured flags the tool/telemetry need.</summary>
@@ -436,7 +441,8 @@ public sealed class EditService
             // resolves it returns the existing clean not-found/no-span error rather than applying a stale plan.
             if (op != EditOperation.ReplaceText)
             {
-                EditResult retry = ExecuteSingleFile(request, op, occurrence, json, allowRecovery: false);
+                EditResult retry = ExecuteWithFreshContext(
+                    service => service.ExecuteSingleFile(request, op, occurrence, json, allowRecovery: false));
                 return retry with
                 {
                     StaleWaitPerformed = staleWaitPerformed || retry.StaleWaitPerformed,
@@ -1109,7 +1115,7 @@ public sealed class EditService
         // from "this symbol has no references": every counter reads zero, "exact coverage" verifies vacuously,
         // and the rename would rewrite the definition while silently missing every usage site. Refuse instead —
         // an unproven rename is worse than a delayed one.
-        if (IndexLevelGuard.ReferenceLayerConverging(_index))
+        if (IndexLevelGuard.ReferenceLayerConverging(_readSession?.Snapshot.IndexLevel))
         {
             return Error(
                 "rename is refused while this workspace serves a symbols-level index: identifier extraction " +
@@ -1232,7 +1238,8 @@ public sealed class EditService
                     ref invalidRecoveryBudget,
                     out invalidRecoveryWait))
             {
-                EditResult replanned = ExecuteRename(request, json, allowRecovery: false);
+                EditResult replanned = ExecuteWithFreshContext(
+                    service => service.ExecuteRename(request, json, allowRecovery: false));
                 return replanned with { StaleWaitPerformed = replanned.StaleWaitPerformed || invalidRecoveryWait };
             }
 
@@ -1319,7 +1326,8 @@ public sealed class EditService
         // longer resolves the retry returns the existing clean not-found error rather than applying stale sites.
         if (anyRecovered)
         {
-            EditResult retry = ExecuteRename(request, json, allowRecovery: false);
+            EditResult retry = ExecuteWithFreshContext(
+                service => service.ExecuteRename(request, json, allowRecovery: false));
             return retry with
             {
                 StaleWaitPerformed = staleWaitPerformed || retry.StaleWaitPerformed,
@@ -1904,6 +1912,28 @@ public sealed class EditService
                 w.WriteString("error", reason);
             }), false, false, false, "error", 0, FailureStaleTarget);
         return new EditResult(reason, false, false, IndexFresh: false, "error", 0, FailureStaleTarget);
+    }
+
+    private EditResult ExecuteWithFreshContext(Func<EditService, EditResult> execute)
+    {
+        ArgumentNullException.ThrowIfNull(execute);
+        if (_resolveFreshContext is not { } resolveFreshContext)
+            return execute(this);
+
+        using WorkspaceSymbolReadContext context = resolveFreshContext();
+        var service = new EditService(
+            context.Index,
+            new SmartTargetResolver(context.Index),
+            _dbPath,
+            _workspaceRoot,
+            _applier,
+            _writeThrough,
+            _indexedSourceTextReader,
+            _indexedEditCandidateReader,
+            _recovery,
+            context.ReadSession,
+            _resolveFreshContext);
+        return execute(service);
     }
 
     /// <summary>
