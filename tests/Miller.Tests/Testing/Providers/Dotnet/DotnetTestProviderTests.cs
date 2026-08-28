@@ -67,6 +67,192 @@ public sealed class DotnetTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Discover_runs_backend_property_probe_and_merges_evaluated_metadata()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace("mstest");
+        WriteProviderProject(workspace, "Microsoft.NET.Sdk", "MSTest.TestAdapter", "MSTest.TestFramework");
+        var generation = FirstGeneration(workspace);
+        var targetPath = Path.Combine(generation.OutDir, "Sample.Tests", "Custom.Assembly.dll");
+        runner.Enqueue(PropertyProbeOutput());
+        runner.Enqueue();
+        runner.Enqueue(targetPath);
+        runner.Enqueue(
+            """
+            The following Tests are available:
+                Sample.Tests.CalculatorTests.Adds
+            """);
+        runner.OnRun = command => WriteGenericBuildTarget(command, targetPath);
+        var provider = new DotnetTestProvider(runner);
+
+        ProviderTestCase testCase = Assert.Single(await provider.DiscoverAsync(
+            workspace,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("VSTest", testCase.Metadata[DotnetTestBackend.MetadataBackend]);
+        Assert.Equal("evaluated", testCase.Metadata[DotnetTestBackend.MetadataEvidenceState]);
+        Assert.Equal("", testCase.Metadata["dotnet_evaluated_property_UseVSTest"]);
+        Assert.Contains(
+            "MSTest.TestAdapter",
+            Assert.IsType<string[]>(testCase.Metadata["dotnet_package_ids"]));
+        Assert.Equal("msbuild", runner.Calls[0].Arguments[0]);
+        Assert.Contains(
+            "-getProperty:UseVSTest,EnableMSTestRunner,EnableNUnitRunner,UseMicrosoftTestingPlatformRunner,TestingPlatformDotnetTestSupport",
+            runner.Calls[0].Arguments);
+    }
+
+    [Fact]
+    public async Task Discover_refuses_malformed_backend_property_probe_output()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace("mstest");
+        WriteProviderProject(workspace, "Microsoft.NET.Sdk", "MSTest.TestAdapter", "MSTest.TestFramework");
+        runner.Enqueue("not json");
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() => provider.DiscoverAsync(
+            workspace,
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("MSBuild runner property output", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("JSON", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(runner.Calls);
+    }
+
+    [Fact]
+    public async Task Discover_refuses_overbound_backend_property_probe_output()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace("mstest");
+        WriteProviderProject(workspace, "Microsoft.NET.Sdk", "MSTest.TestAdapter", "MSTest.TestFramework");
+        runner.Enqueue(new string('x', DotnetTestBackend.MaxPropertyProbeOutputCharacters + 1));
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() => provider.DiscoverAsync(
+            workspace,
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("truncated", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(runner.Calls);
+    }
+
+    [Fact]
+    public async Task Discover_xunit_v3_static_evidence_skips_backend_property_probe()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace("xunit");
+        WriteProviderProject(workspace, "Microsoft.NET.Sdk", "xunit.v3");
+        var generation = FirstGeneration(workspace);
+        runner.Enqueue();
+        runner.Enqueue(
+            """
+            [{"Assembly":"/tmp/Sample.Tests.dll","DisplayName":"Sample.Tests.Passes","ID":"xunit-id-1","Class":"Sample.Tests","Method":"Passes"}]
+            """);
+        runner.OnRun = command =>
+        {
+            if (command.Arguments.FirstOrDefault() == "build")
+                WriteBuiltXunitOutput(generation);
+        };
+        var provider = new DotnetTestProvider(runner);
+
+        ProviderTestCase testCase = Assert.Single(await provider.DiscoverAsync(
+            workspace,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("XunitV3", testCase.Metadata[DotnetTestBackend.MetadataBackend]);
+        Assert.Equal("static", testCase.Metadata[DotnetTestBackend.MetadataEvidenceState]);
+        Assert.Equal(2, runner.Calls.Count);
+        Assert.DoesNotContain(
+            runner.Calls,
+            call => call.Arguments.Contains("-getProperty:" + string.Join(',', DotnetTestBackend.PropertyNames)));
+    }
+
+    [Fact]
+    public async Task Discover_global_vstest_evidence_skips_backend_property_probe()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace("mstest");
+        WriteProviderProject(workspace, "Microsoft.NET.Sdk", "MSTest.TestAdapter", "MSTest.TestFramework");
+        WriteGlobalJson(workspace, "VSTest");
+        var generation = FirstGeneration(workspace);
+        var targetPath = Path.Combine(generation.OutDir, "Sample.Tests", "Custom.Assembly.dll");
+        runner.Enqueue();
+        runner.Enqueue(targetPath);
+        runner.Enqueue(
+            """
+            The following Tests are available:
+                Sample.Tests.CalculatorTests.Adds
+            """);
+        runner.OnRun = command => WriteGenericBuildTarget(command, targetPath);
+        var provider = new DotnetTestProvider(runner);
+
+        ProviderTestCase testCase = Assert.Single(await provider.DiscoverAsync(
+            workspace,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("VSTest", testCase.Metadata[DotnetTestBackend.MetadataBackend]);
+        Assert.Equal("static", testCase.Metadata[DotnetTestBackend.MetadataEvidenceState]);
+        Assert.Equal(3, runner.Calls.Count);
+        Assert.DoesNotContain(
+            runner.Calls,
+            call => call.Arguments.Contains("-getProperty:" + string.Join(',', DotnetTestBackend.PropertyNames)));
+    }
+
+    [Fact]
+    public async Task Discover_refuses_mtp_backend_before_vstest_discovery()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace("mstest");
+        WriteProviderProject(workspace, "MSTest.Sdk");
+        runner.Enqueue(PropertyProbeOutput(enableMstestRunner: "true"));
+        var provider = new DotnetTestProvider(runner);
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() => provider.DiscoverAsync(
+            workspace,
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("MTP backend not yet available", exception.Message, StringComparison.Ordinal);
+        Assert.Single(runner.Calls);
+        Assert.Equal("msbuild", runner.Calls[0].Arguments[0]);
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("build"));
+    }
+
+    [Fact]
+    public async Task Run_runs_backend_property_probe_before_vstest_execution()
+    {
+        var runner = new FakeTestProcessRunner();
+        var workspace = Workspace("mstest");
+        WriteProviderProject(workspace, "Microsoft.NET.Sdk", "MSTest.TestAdapter", "MSTest.TestFramework");
+        var generation = FirstGeneration(workspace);
+        var targetPath = Path.Combine(generation.OutDir, "Sample.Tests", "Custom.Assembly.dll");
+        runner.Enqueue(PropertyProbeOutput());
+        runner.Enqueue();
+        runner.Enqueue(targetPath);
+        runner.Enqueue();
+        runner.OnRun = command =>
+        {
+            WriteGenericBuildTarget(command, targetPath);
+            if (TrxArtifactPath(command) is { } artifactPath)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+                File.WriteAllText(
+                    artifactPath,
+                    TrxDocument(["Sample.Tests.CalculatorTests.Adds"], "run", failingTestName: string.Empty));
+            }
+        };
+        var provider = new DotnetTestProvider(runner);
+
+        ProviderRunResult result = await provider.RunAsync(
+            Request(workspace, ["mstest:Sample.Tests.CalculatorTests.Adds"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("passed", result.Status);
+        Assert.Single(result.CaseResults);
+        Assert.Equal("msbuild", runner.Calls[0].Arguments[0]);
+        Assert.Equal(4, runner.Calls.Count);
+    }
+
+    [Fact]
     public void BuildPropertyProbeCommand_is_evaluation_only_and_bounded_to_runner_properties()
     {
         var workspace = Workspace("mstest");
@@ -179,6 +365,27 @@ public sealed class DotnetTestProviderTests : IDisposable
         Assert.Equal(
             DotnetTestBackendKind.MicrosoftTestingPlatform,
             DotnetTestBackend.Resolve("mstest", evaluated).Backend);
+    }
+
+    [Fact]
+    public void Resolve_evaluated_xunit_v2_evidence_stays_refused()
+    {
+        DotnetTestBackendEvidence evidence = new(
+            Backend: DotnetTestBackendKind.Unknown,
+            Framework: null,
+            GlobalJsonTestRunner: null,
+            ProjectSdk: "Microsoft.NET.Sdk",
+            PackageIds: ["xunit.core"],
+            StaticProperties: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+            EvaluatedProperties: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+            IsEvaluated: true,
+            IsComplete: true,
+            Diagnostic: null);
+
+        DotnetTestBackendEvidence resolved = DotnetTestBackend.Resolve("xunit", evidence);
+
+        Assert.Equal(DotnetTestBackendKind.Unknown, resolved.Backend);
+        Assert.Contains(ContinuousTestFrameworkSupport.XunitV2Reason, resolved.Diagnostic, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2432,6 +2639,55 @@ public sealed class DotnetTestProviderTests : IDisposable
             """);
         return projectPath;
     }
+
+    private static void WriteProviderProject(
+        ContinuousTestWorkspace workspace,
+        string sdk,
+        params string[] packageIds)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.ProjectPath)!);
+        string packageReferences = string.Concat(packageIds.Select(packageId =>
+            $"<PackageReference Include=\"{packageId}\" Version=\"1.0.0\" />"));
+        File.WriteAllText(workspace.ProjectPath, $"""
+            <Project Sdk="{sdk}">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+              <ItemGroup>
+                {packageReferences}
+              </ItemGroup>
+            </Project>
+            """);
+    }
+
+    private static void WriteGlobalJson(ContinuousTestWorkspace workspace, string runner)
+    {
+        Directory.CreateDirectory(workspace.WorkspaceRoot);
+        File.WriteAllText(Path.Combine(workspace.WorkspaceRoot, "global.json"), $$"""
+            {
+              "test": {
+                "runner": "{{runner}}"
+              }
+            }
+            """);
+    }
+
+    private static string PropertyProbeOutput(
+        string useVstest = "",
+        string enableMstestRunner = "",
+        string enableNunitRunner = "",
+        string useMicrosoftTestingPlatformRunner = "",
+        string testingPlatformDotnetTestSupport = "") => $$"""
+        {
+          "Properties": {
+            "UseVSTest": "{{useVstest}}",
+            "EnableMSTestRunner": "{{enableMstestRunner}}",
+            "EnableNUnitRunner": "{{enableNunitRunner}}",
+            "UseMicrosoftTestingPlatformRunner": "{{useMicrosoftTestingPlatformRunner}}",
+            "TestingPlatformDotnetTestSupport": "{{testingPlatformDotnetTestSupport}}"
+          }
+        }
+        """;
 
     private static ContinuousTestProviderRunRequest Request(ContinuousTestWorkspace workspace) =>
         Request(workspace, ["xunit:Sample.Tests.Passes"]);

@@ -311,10 +311,7 @@ public sealed class ContinuousTestImpactSelector
             {
                 ChangedPathStem? currentStem = ChangedPathStem.FromPath(path, fileByPath);
                 if (currentStem is not null
-                    && testCases.Any(testCase =>
-                        IsFilelessDotnetCase(testCase)
-                        && !string.Equals(currentStem.Language, "csharp", StringComparison.OrdinalIgnoreCase)
-                        && TestCaseStem(testCase).Equals(currentStem.Stem, StringComparison.OrdinalIgnoreCase)))
+                    && HasUnresolvedFilelessDotnetCaseForStem(request, currentStem, testCases))
                 {
                     return true;
                 }
@@ -348,6 +345,45 @@ public sealed class ContinuousTestImpactSelector
             }
 
             return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasUnresolvedFilelessDotnetCaseForStem(
+        ContinuousTestImpactSelectionRequest request,
+        ChangedPathStem changedStem,
+        IReadOnlyList<TestCaseFact> testCases)
+    {
+        foreach (TestCaseFact testCase in testCases)
+        {
+            if (!IsFilelessDotnetCase(testCase)
+                || !TestCaseStem(testCase).Equals(changedStem.Stem, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            bool mappedByImpactedEvidence = request.ImpactedTests.Any(impactedTest =>
+            {
+                if (string.IsNullOrEmpty(impactedTest.Path))
+                    return false;
+
+                string normalizedPath = NormalizePath(impactedTest.Path);
+                if (!PathLanguagesAreCompatible(
+                        changedStem.Language,
+                        ContinuousTestLanguageFamily.LabelFromPath(normalizedPath)))
+                {
+                    return false;
+                }
+
+                return ResolveImpactedTestsWhenSourcePathDiffers(normalizedPath, impactedTest, testCases)
+                    .Any(candidate =>
+                        string.Equals(candidate.Id, testCase.Id, StringComparison.Ordinal)
+                        && TestNameMatches(impactedTest.Name, candidate)
+                        && CanUseProviderCase(candidate, impactedTest.SymbolId));
+            });
+            if (!mappedByImpactedEvidence)
+                return true;
         }
 
         return false;
@@ -1313,8 +1349,6 @@ public sealed class ContinuousTestImpactSelector
             return false;
 
         string? testLanguage = testCase.FileLanguage ?? ContinuousTestLanguageFamily.LabelFromPath(testCase.FilePath);
-        if (testLanguage is null && IsFilelessDotnetCase(testCase))
-            testLanguage = "csharp";
         return PathLanguagesAreCompatible(changedStem.Language, testLanguage);
     }
 

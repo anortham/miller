@@ -32,6 +32,7 @@ internal static class DotnetTestBackend
     internal const string MetadataGlobalJsonRunner = "dotnet_global_json_test_runner";
     internal const string MetadataProjectSdk = "dotnet_project_sdk";
     internal const string MetadataStaticPropertyPrefix = "dotnet_static_property_";
+    internal const string MetadataEvaluatedPropertyPrefix = "dotnet_evaluated_property_";
 
     internal static readonly IReadOnlyList<string> PropertyNames =
     [
@@ -274,6 +275,16 @@ internal static class DotnetTestBackend
             };
         }
 
+        if (normalizedFramework == "xunit" && evidence.PackageIds.Any(XunitV2Packages.Contains))
+        {
+            return evidence with
+            {
+                Backend = DotnetTestBackendKind.Unknown,
+                Framework = framework,
+                Diagnostic = ContinuousTestFrameworkSupport.XunitV2Reason,
+            };
+        }
+
         DotnetTestBackendKind backend;
         if (IsMtpRunner(evidence.GlobalJsonTestRunner))
         {
@@ -296,9 +307,20 @@ internal static class DotnetTestBackend
         {
             backend = ResolveEvaluated(normalizedFramework, evidence);
         }
-        else if (normalizedFramework == "xunit")
+        else if (normalizedFramework == "xunit"
+            && (evidence.Backend == DotnetTestBackendKind.XunitV3
+                || evidence.PackageIds.Any(IsXunitV3Package)))
         {
             backend = DotnetTestBackendKind.XunitV3;
+        }
+        else if (normalizedFramework == "xunit")
+        {
+            return evidence with
+            {
+                Backend = DotnetTestBackendKind.Unknown,
+                Framework = framework,
+                Diagnostic = "xUnit v3 package evidence was not available.",
+            };
         }
         else if (normalizedFramework == ContinuousTestFrameworkSupport.XunitV2)
         {
@@ -329,6 +351,8 @@ internal static class DotnetTestBackend
         };
         foreach ((string name, string? value) in evidence.StaticProperties)
             metadata[MetadataStaticPropertyPrefix + name] = value;
+        foreach ((string name, string? value) in evidence.EvaluatedProperties)
+            metadata[MetadataEvaluatedPropertyPrefix + name] = value;
         if (!string.IsNullOrWhiteSpace(evidence.Diagnostic))
             metadata["dotnet_backend_diagnostic"] = evidence.Diagnostic;
         return metadata;
@@ -352,6 +376,10 @@ internal static class DotnetTestBackend
             cursor = close + 1;
         }
     }
+
+    private static bool IsXunitV3Package(string package) =>
+        string.Equals(package, "xunit.v3", StringComparison.OrdinalIgnoreCase)
+        || package.StartsWith("xunit.v3.", StringComparison.OrdinalIgnoreCase);
 
     internal static bool IsMstestProject(string projectText, string? projectSdk = null) =>
         MstestPackages.Overlaps(PackageReferenceIds(projectText))

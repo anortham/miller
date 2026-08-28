@@ -128,11 +128,118 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
         }
     }
 
+    private async Task<ContinuousTestWorkspace> ResolveBackendAsync(
+        ContinuousTestWorkspace workspace,
+        string? frameworkOverride,
+        CancellationToken cancellationToken)
+    {
+        string framework = frameworkOverride ?? workspace.Framework ?? "xunit";
+        bool projectExists = File.Exists(workspace.ProjectPath);
+        DotnetTestBackendEvidence evidence = DotnetTestBackend.ReadStatic(workspace.ProjectPath);
+        if (!projectExists)
+        {
+            evidence = MissingProjectEvidence(framework);
+        }
+        else if (!evidence.IsComplete)
+        {
+            throw new ContinuousTestProviderException(
+                $"Unable to resolve .NET test backend for framework '{framework}': "
+                + (evidence.Diagnostic ?? "static project evidence was incomplete."));
+        }
+
+        bool decisive = !string.IsNullOrWhiteSpace(evidence.GlobalJsonTestRunner)
+            || (framework.Equals("xunit", StringComparison.OrdinalIgnoreCase)
+                && evidence.Backend == DotnetTestBackendKind.XunitV3);
+        if (projectExists && !decisive)
+        {
+            TestProcessCommand probe = DotnetTestBackend.BuildPropertyProbeCommand(workspace, _dotnetPath);
+            TestProcessResult result = await _runner.RunAsync(probe, cancellationToken).ConfigureAwait(false);
+            if (result.ExitCode != 0)
+            {
+                throw new ContinuousTestProviderException(
+                    $"MSBuild runner property evaluation failed with exit code {result.ExitCode}: "
+                    + FailureSummary(result));
+            }
+
+            string output = result.RequireCompleteStandardOutput("MSBuild runner property evaluation");
+            evidence = DotnetTestBackend.WithEvaluatedProperties(
+                evidence,
+                output,
+                result.StandardOutputTruncated);
+        }
+
+        DotnetTestBackendEvidence resolved = DotnetTestBackend.Resolve(framework, evidence);
+        if (resolved.Backend == DotnetTestBackendKind.MicrosoftTestingPlatform)
+        {
+            throw new ContinuousTestProviderException(
+                "MTP backend not yet available: .NET test runner evidence resolved to "
+                + "Microsoft Testing Platform; VSTest execution was not attempted.");
+        }
+
+        if (resolved.Backend == DotnetTestBackendKind.Unknown)
+        {
+            if (string.Equals(resolved.Diagnostic, ContinuousTestFrameworkSupport.XunitV2Reason, StringComparison.Ordinal))
+            {
+                string assemblyName = Path.GetFileNameWithoutExtension(workspace.ProjectPath) + ".dll";
+                throw new ContinuousTestProviderException(
+                    $"{ContinuousTestFrameworkSupport.XunitV2Reason}: '{workspace.ProjectPath}' does not "
+                    + $"produce the xUnit v3 self-executing assembly {assemblyName}. "
+                    + ContinuousTestFrameworkSupport.XunitV2Remedy);
+            }
+
+            throw new ContinuousTestProviderException(
+                $"Unable to resolve .NET test backend for framework '{framework}': "
+                + (resolved.Diagnostic ?? "runner evidence was incomplete."));
+        }
+
+        return workspace with
+        {
+            Metadata = MergeMetadata(workspace.Metadata, DotnetTestBackend.ToMetadata(resolved)),
+        };
+    }
+
+    private static DotnetTestBackendEvidence MissingProjectEvidence(string framework) =>
+        new(
+            Backend: framework.Equals("xunit", StringComparison.OrdinalIgnoreCase)
+                ? DotnetTestBackendKind.XunitV3
+                : DotnetTestBackendKind.Unknown,
+            Framework: null,
+            GlobalJsonTestRunner: null,
+            ProjectSdk: null,
+            PackageIds: framework.Equals("xunit", StringComparison.OrdinalIgnoreCase)
+                ? ["xunit.v3"]
+                : [],
+            StaticProperties: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+            EvaluatedProperties: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+            IsEvaluated: false,
+            IsComplete: true,
+            Diagnostic: null);
+
+    private static IReadOnlyDictionary<string, object?> MergeMetadata(
+        IReadOnlyDictionary<string, object?> original,
+        IReadOnlyDictionary<string, object?> additions)
+    {
+        var merged = new Dictionary<string, object?>(original, StringComparer.Ordinal);
+        foreach ((string key, object? value) in additions)
+            merged[key] = value;
+        return new ReadOnlyDictionary<string, object?>(merged);
+    }
+
+    private static IReadOnlyList<ProviderTestCase> AttachBackendMetadata(
+        IReadOnlyList<ProviderTestCase> cases,
+        IReadOnlyDictionary<string, object?> metadata) =>
+        cases.Select(testCase => testCase with
+        {
+            Metadata = MergeMetadata(testCase.Metadata, metadata),
+        }).ToArray();
+
     private async Task<IReadOnlyList<ProviderTestCase>> DiscoverInGenerationAsync(
         ContinuousTestWorkspace workspace,
         CtGenerationPaths paths,
         CancellationToken cancellationToken)
     {
+        workspace = await ResolveBackendAsync(workspace, frameworkOverride: null, cancellationToken)
+            .ConfigureAwait(false);
         await BuildProjectAsync(workspace, paths, cancellationToken).ConfigureAwait(false);
 
         string? diagnosticPath = null;
@@ -156,12 +263,24 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
                 $"Test discovery failed with exit code {result.ExitCode}: {FailureSummary(result)}");
 
         if (GenericFramework(workspace.Framework) is { } framework)
-            return ParseGenericDiscoveryDiagnostic(diagnosticPath!, framework, workspace.WorkspaceRoot) is { Count: > 0 } cases
-                ? cases
-                : ParseGenericDiscovery(
-                    result.RequireCompleteStandardOutput("Test discovery"), framework);
+        {
+            IReadOnlyList<ProviderTestCase> cases = ParseGenericDiscoveryDiagnostic(
+                diagnosticPath!,
+                framework,
+                workspace.WorkspaceRoot);
+            if (cases.Count == 0)
+            {
+                cases = ParseGenericDiscovery(
+                    result.RequireCompleteStandardOutput("Test discovery"),
+                    framework);
+            }
 
-        return ParseDiscovery(result.RequireCompleteStandardOutput("Test discovery"));
+            return AttachBackendMetadata(cases, workspace.Metadata);
+        }
+
+        return AttachBackendMetadata(
+            ParseDiscovery(result.RequireCompleteStandardOutput("Test discovery")),
+            workspace.Metadata);
     }
 
     private async Task<ProviderRunResult> RunInGenerationAsync(
@@ -175,6 +294,16 @@ public sealed class DotnetTestProvider : IContinuousTestProvider
                 $"Per-test coverage instrumentation is not supported for framework '{genericFramework}': the " +
                 "per-test snapshot hook is an xunit v3 BeforeAfterTestAttribute and has no mstest/nunit equivalent.");
 
+        ContinuousTestWorkspace effectiveWorkspace = await ResolveBackendAsync(
+                request.Workspace,
+                request.Framework,
+                cancellationToken)
+            .ConfigureAwait(false);
+        request = request with
+        {
+            Workspace = effectiveWorkspace,
+            Metadata = MergeMetadata(request.Metadata, effectiveWorkspace.Metadata),
+        };
         await BuildProjectAsync(request.Workspace, paths, cancellationToken).ConfigureAwait(false);
 
         if (genericFramework is not null)

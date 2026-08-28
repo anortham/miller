@@ -109,7 +109,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     [Fact]
-    public void Select_does_not_guess_csharp_for_a_fileless_dotnet_case()
+    public void Select_does_not_guess_fileless_dotnet_case_for_a_vbnet_change()
     {
         using ContinuousTestStore store = OpenStore();
         string projectPath = Path.GetFullPath("/repo/tests/App.Tests/App.Tests.vbproj");
@@ -131,6 +131,71 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             WorkspaceId: Workspace,
             ChangedPaths: ["src/Calculator.vb"],
             ProjectPath: projectPath));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+    }
+
+    [Fact]
+    public void Select_does_not_guess_csharp_for_a_fileless_dotnet_case()
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.GetFullPath("/repo/tests/App.Tests/App.Tests.csproj");
+        SeedProviderCase(
+            store,
+            "tc:fileless",
+            "CalculatorTests.Adds",
+            "CalculatorTests.Adds",
+            "Adds",
+            sourcePath: null,
+            projectPath: projectPath,
+            className: "CalculatorTests",
+            framework: "mstest");
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, "src/Calculator.cs");
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["src/Calculator.cs"],
+            ProjectPath: projectPath));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+    }
+
+    [Fact]
+    public void Select_does_not_reconcile_a_fileless_case_across_vbnet_and_csharp_paths()
+    {
+        using ContinuousTestStore store = OpenStore();
+        const string projectPath = "/repo/tests/App.Tests/App.Tests.vbproj";
+        SeedProviderCase(
+            store,
+            "tc:fileless",
+            "CalculatorTests.Adds",
+            "CalculatorTests.Adds",
+            "Adds",
+            sourcePath: null,
+            projectPath: projectPath,
+            className: "CalculatorTests",
+            framework: "mstest");
+        var facts = new FakeMillerFactSource();
+        AddCurrentFileFacts(facts, "src/Calculator.vb");
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["src/Calculator.vb"],
+            ProjectPath: projectPath,
+            ImpactedTests:
+            [
+                new ContinuousTestImpactedTest(
+                    SymbolId: "sym:adds",
+                    Path: "tests/App.Tests/CalculatorTests.cs",
+                    Name: "Adds",
+                    TestCase: true,
+                    EvidenceStatus: "current"),
+            ]));
 
         Assert.Empty(result.SelectedTestCaseIds);
         Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
