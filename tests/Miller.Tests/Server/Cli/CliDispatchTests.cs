@@ -4450,6 +4450,57 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void WorkspaceRemove_StoreMemberWithoutExtractorRefusesExitThree()
+    {
+        string sub = Path.Combine(_dir, "ws-store-member");
+        string millerDir = Path.Combine(sub, ".miller");
+        Directory.CreateDirectory(millerDir);
+        const string workspaceId = "ws-store-member-000000";
+        SeedRegisteredWorkspace(
+            workspaceId,
+            "store-member-disp",
+            sub,
+            Path.Combine(millerDir, "symbols.db"));
+        string storeRoot = Path.Combine(_dir, "store");
+        Directory.CreateDirectory(storeRoot);
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            StoreFamilyRegistryRow family = registry.GetOrCreateStoreFamily(
+                "cli-retirement-failure",
+                canonicalCommonDir: null,
+                commonDirCreatedAtUtc: null,
+                storesRoot: storeRoot);
+            registry.UpsertStoreMember(
+                workspaceId,
+                family.FamilyId,
+                "view-cli-retirement-failure",
+                sub,
+                WorkspaceRootIdentity.Unknown);
+        }
+        SqliteConnection.ClearAllPools();
+
+        WorkspaceContext context = Context(Path.Combine(_dir, "symbols.db")) with
+        {
+            ToolsRoot = Path.Combine(_dir, "missing-tools"),
+        };
+        var (code, outText, errText) = Run(
+            new[] { "workspace", "remove", "--id", "store-member-disp", "--json" },
+            context);
+
+        Assert.Equal(3, code);
+        Assert.Empty(errText);
+        using JsonDocument document = JsonDocument.Parse(outText);
+        Assert.Equal("refused_retirement", document.RootElement.GetProperty("result").GetString());
+        Assert.Equal(
+            "store view retirement producer is unavailable",
+            document.RootElement.GetProperty("view_retirement").GetProperty("error").GetString());
+        Assert.True(Directory.Exists(millerDir));
+        using WorkspaceRegistry check = WorkspaceRegistry.Open(_registryDb);
+        Assert.NotNull(check.Get(workspaceId));
+        Assert.NotNull(check.GetStoreMember(workspaceId));
+    }
+
+    [Fact]
     public void WorkspaceList_FilterFlag_NarrowsByDisplayIdOrRoot()
     {
         using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))

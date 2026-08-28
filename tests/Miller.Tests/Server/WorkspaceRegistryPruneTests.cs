@@ -14,13 +14,15 @@ namespace Miller.Tests.Server;
 public sealed class WorkspaceRegistryPruneTests : IDisposable
 {
     private readonly string _dir;
+    private readonly string _registryDb;
     private readonly WorkspaceRegistry _registry;
 
     public WorkspaceRegistryPruneTests()
     {
         _dir = Path.Combine(Path.GetTempPath(), "miller-prune-reclaim-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
-        _registry = WorkspaceRegistry.Open(Path.Combine(_dir, "workspaces.db"));
+        _registryDb = Path.Combine(_dir, "workspaces.db");
+        _registry = WorkspaceRegistry.Open(_registryDb);
     }
 
     public void Dispose()
@@ -68,6 +70,16 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         return paths;
     }
 
+    private static StoreViewRetirementOutcome RetireView(StoreSidecarReclaimTarget target, bool apply) =>
+        new(
+            apply ? StoreViewRetirementDisposition.Retired : StoreViewRetirementDisposition.Planned,
+            target.FamilyId,
+            target.ViewId,
+            apply ? 1 : 0,
+            0,
+            0,
+            null);
+
     [Fact]
     public void Run_RecordsTheOwedReclaimBeforeTheRegistryRowIsDeleted()
     {
@@ -96,7 +108,8 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
                 }
 
                 return null;
-            });
+            },
+            retireView: RetireView);
 
         Assert.True(rowGoneAtLeaseTime, "the registry row must already be gone when the reclaim runs");
         Assert.True(recordedAtLeaseTime, "the owed record must be written before the registry row is deleted");
@@ -114,8 +127,11 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         IReadOnlyList<string> reclaimed = WriteSidecars(family.StoreRoot, "view-gone");
         IReadOnlyList<string> keep = WriteSidecars(family.StoreRoot, "view-live");
 
-        WorkspaceRegistryPrune.Result result =
-            WorkspaceRegistryPrune.Run(_registry, protectedWorkspaceId: null, dryRun: false);
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            retireView: RetireView);
 
         Assert.Single(result.Pruned);
         Assert.Equal(1, result.Kept);
@@ -133,13 +149,131 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         JoinFamily(family, "ws-prune-dry-00001", goneRoot, "view-dry");
         IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-dry");
 
-        WorkspaceRegistryPrune.Result result =
-            WorkspaceRegistryPrune.Run(_registry, protectedWorkspaceId: null, dryRun: true);
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: true,
+            retireView: RetireView);
 
         Assert.Single(result.Pruned);
         Assert.False(result.SidecarReclaim.HasReport);
         Assert.All(paths, p => Assert.True(File.Exists(p)));
         Assert.NotNull(_registry.GetStoreMember("ws-prune-dry-00001"));
+    }
+
+    [Fact]
+    public void Run_RetiresCapturedViewBeforeDeletingRegistryMember()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-prune-retire-order");
+        string goneRoot = Register("ws-prune-retire-order-1", "retire-order-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-retire-order-1", goneRoot, "view-prune-retire-order");
+        var calls = new List<(bool Apply, bool MemberPresent, StoreSidecarReclaimTarget Target)>();
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            retireView: (target, apply) =>
+            {
+                calls.Add((apply, _registry.Get("ws-prune-retire-order-1") is not null, target));
+                return new StoreViewRetirementOutcome(
+                    apply ? StoreViewRetirementDisposition.Retired : StoreViewRetirementDisposition.Planned,
+                    target.FamilyId,
+                    target.ViewId,
+                    apply ? 1 : 0,
+                    0,
+                    0,
+                    null);
+            });
+
+        Assert.Single(result.Pruned);
+        Assert.Equal(2, calls.Count);
+        Assert.Equal(
+            new StoreSidecarReclaimTarget(family.FamilyId, "view-prune-retire-order", family.StoreRoot),
+            calls[0].Target);
+        Assert.False(calls[0].Apply);
+        Assert.True(calls[0].MemberPresent);
+        Assert.True(calls[1].Apply);
+        Assert.True(calls[1].MemberPresent);
+        Assert.Null(_registry.Get("ws-prune-retire-order-1"));
+    }
+
+    [Fact]
+    public void Run_RetirementFailure_KeepsMemberAndSkipsReclaimAndMaintenance()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-prune-retire-fails");
+        string goneRoot = Register("ws-prune-retire-fails-1", "retire-fails-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-retire-fails-1", goneRoot, "view-prune-retire-fails");
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-prune-retire-fails");
+        int leaseRequests = 0;
+        int maintenanceRequests = 0;
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            acquireSidecarLease: _ =>
+            {
+                leaseRequests++;
+                return null;
+            },
+            maintainStore: _ =>
+            {
+                maintenanceRequests++;
+                return StoreMaintenanceOutcome.None;
+            },
+            retireView: (target, apply) => new StoreViewRetirementOutcome(
+                StoreViewRetirementDisposition.Failed,
+                target.FamilyId,
+                target.ViewId,
+                0,
+                0,
+                0,
+                "producer unavailable"));
+
+        Assert.Empty(result.Pruned);
+        Assert.Single(result.RetirementFailures);
+        Assert.Equal("ws-prune-retire-fails-1", result.RetirementFailures[0].WorkspaceId);
+        Assert.Equal("producer unavailable", result.RetirementFailures[0].Outcome.Error);
+        Assert.NotNull(_registry.Get("ws-prune-retire-fails-1"));
+        Assert.NotNull(_registry.GetStoreMember("ws-prune-retire-fails-1"));
+        Assert.Equal(0, leaseRequests);
+        Assert.Equal(0, maintenanceRequests);
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+    }
+
+    [Fact]
+    public void Run_MalformedStoreMemberKeepsRegistryRowAndSkipsProducer()
+    {
+        string goneRoot = Register("ws-prune-malformed-1", "malformed-repo", rootExists: false);
+        StoreFamilyRegistryRow family = SeedFamily("lineage-prune-malformed");
+        _registry.UpsertStoreMember(
+            "ws-prune-malformed-1", family.FamilyId, "view-prune-malformed", goneRoot, WorkspaceRootIdentity.Unknown);
+        using (var connection = new SqliteConnection($"Data Source={_registryDb};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE store_families SET store_root = '' WHERE family_id = $family_id";
+            command.Parameters.AddWithValue("$family_id", family.FamilyId.ToString("D"));
+            command.ExecuteNonQuery();
+        }
+        int producerCalls = 0;
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            retireView: (_, _) =>
+            {
+                producerCalls++;
+                return default;
+            });
+
+        Assert.Empty(result.Pruned);
+        Assert.Single(result.RetirementFailures);
+        Assert.Equal(0, producerCalls);
+        Assert.NotNull(_registry.Get("ws-prune-malformed-1"));
+        Assert.NotNull(_registry.GetStoreMember("ws-prune-malformed-1"));
     }
 
     [Fact]
@@ -149,8 +283,11 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         string goneRoot = Register("ws-prune-nom-00001", "no-maintain-repo", rootExists: false);
         JoinFamily(family, "ws-prune-nom-00001", goneRoot, "view-no-maintain");
 
-        WorkspaceRegistryPrune.Result result =
-            WorkspaceRegistryPrune.Run(_registry, protectedWorkspaceId: null, dryRun: false);
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            retireView: RetireView);
 
         Assert.Single(result.Pruned);
         Assert.False(result.StoreMaintenance.HasReport);
@@ -173,7 +310,8 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
             {
                 visited.Add(storeRoot);
                 return new StoreMaintenanceOutcome(7, null);
-            });
+            },
+            retireView: RetireView);
 
         Assert.Equal(
             new[] { first.StoreRoot, second.StoreRoot }.Order(StringComparer.Ordinal),
@@ -193,7 +331,8 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
             _registry,
             protectedWorkspaceId: null,
             dryRun: false,
-            maintainStore: _ => new StoreMaintenanceOutcome(0, "store maintenance timed out"));
+            maintainStore: _ => new StoreMaintenanceOutcome(0, "store maintenance timed out"),
+            retireView: RetireView);
 
         Assert.Single(result.Pruned);
         Assert.Null(_registry.GetStoreMember("ws-prune-mff-00001"));
@@ -211,7 +350,8 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
             _registry,
             protectedWorkspaceId: null,
             dryRun: true,
-            maintainStore: _ => throw new InvalidOperationException("a dry run must never maintain"));
+            maintainStore: _ => throw new InvalidOperationException("a dry run must never maintain"),
+            retireView: RetireView);
 
         Assert.Single(result.Pruned);
         Assert.False(result.StoreMaintenance.HasReport);
@@ -224,8 +364,11 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         string goneRoot = Register("ws-prune-abs-00001", "absent-repo", rootExists: false);
         JoinFamily(family, "ws-prune-abs-00001", goneRoot, "view-absent");
 
-        WorkspaceRegistryPrune.Result result =
-            WorkspaceRegistryPrune.Run(_registry, protectedWorkspaceId: null, dryRun: false);
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            retireView: RetireView);
 
         Assert.Single(result.Pruned);
         Assert.False(result.SidecarReclaim.HasReport);
@@ -242,7 +385,11 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-busy");
 
         WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
-            _registry, protectedWorkspaceId: null, dryRun: false, acquireSidecarLease: _ => null);
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            acquireSidecarLease: _ => null,
+            retireView: RetireView);
 
         Assert.Single(result.Pruned);
         Assert.Null(_registry.Get("ws-prune-busy-0001"));
@@ -286,7 +433,11 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         JoinFamily(family, "ws-prune-owed-0001", goneRoot, "view-prune-owed");
         IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-prune-owed");
         WorkspaceRegistryPrune.Run(
-            _registry, protectedWorkspaceId: null, dryRun: false, acquireSidecarLease: _ => null);
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            acquireSidecarLease: _ => null,
+            retireView: RetireView);
         Assert.All(paths, p => Assert.True(File.Exists(p)));
 
         WorkspaceRegistryPrune.Result result =
@@ -305,7 +456,11 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         JoinFamily(family, "ws-prune-owdry-01", goneRoot, "view-prune-owed-dry");
         IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-prune-owed-dry");
         WorkspaceRegistryPrune.Run(
-            _registry, protectedWorkspaceId: null, dryRun: false, acquireSidecarLease: _ => null);
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            acquireSidecarLease: _ => null,
+            retireView: RetireView);
 
         WorkspaceRegistryPrune.Result result =
             WorkspaceRegistryPrune.Run(_registry, protectedWorkspaceId: null, dryRun: true);

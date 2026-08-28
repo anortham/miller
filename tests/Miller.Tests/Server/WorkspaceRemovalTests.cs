@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Testing;
@@ -748,6 +749,16 @@ public sealed class WorkspaceRemovalTests : IDisposable
         return paths;
     }
 
+    private static StoreViewRetirementOutcome RetireView(StoreSidecarReclaimTarget target, bool apply) =>
+        new(
+            apply ? StoreViewRetirementDisposition.Retired : StoreViewRetirementDisposition.Planned,
+            target.FamilyId,
+            target.ViewId,
+            apply ? 1 : 0,
+            0,
+            0,
+            null);
+
     [Fact]
     public void RemoveById_RecordsTheOwedReclaimBeforeTheRegistryRowIsDeleted()
     {
@@ -775,7 +786,8 @@ public sealed class WorkspaceRemovalTests : IDisposable
                     .GetFiles(sidecarDir, "*" + StoreSidecarReclaim.OwedRecordSuffix).Length == 1;
                 rowGoneAtLeaseTime = registry.Get("ws-store-intent-01") is null;
                 return null;
-            });
+            },
+            retireView: RetireView);
 
         Assert.True(rowGoneAtLeaseTime, "the registry row must already be gone when the reclaim runs");
         Assert.True(recordedAtLeaseTime, "the owed record must be written before the registry row is deleted");
@@ -794,13 +806,198 @@ public sealed class WorkspaceRemovalTests : IDisposable
             "ws-store-mem-000001", family.FamilyId, "view-remove", root, WorkspaceRootIdentity.Unknown);
         IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-remove");
 
-        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "store-mem-disp", liveRoot: null);
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "store-mem-disp",
+            liveRoot: null,
+            retireView: RetireView);
 
         Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
         Assert.Equal(3, result.SidecarReclaim.FilesDeleted);
         Assert.Equal(3 * 128, result.SidecarReclaim.BytesReclaimed);
         Assert.Null(result.SidecarReclaim.SkipReason);
         Assert.All(paths, p => Assert.False(File.Exists(p)));
+    }
+
+    [Fact]
+    public void RemoveById_RetiresCapturedViewBeforeDeletingRegistryMember()
+    {
+        var (root, _) = MakeWorkspace("ws-store-retire-order");
+        using WorkspaceRegistry registry = OpenRegistry();
+        const string workspaceId = "ws-store-retire-order-01";
+        Register(registry, workspaceId, "store-retire-order-disp", root);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-retire-order");
+        registry.UpsertStoreMember(
+            workspaceId, family.FamilyId, "view-retire-order", root, WorkspaceRootIdentity.Unknown);
+        var calls = new List<(bool Apply, bool MemberPresent, StoreSidecarReclaimTarget Target)>();
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "store-retire-order-disp",
+            liveRoot: null,
+            retireView: (target, apply) =>
+            {
+                calls.Add((apply, registry.Get(workspaceId) is not null, target));
+                return new StoreViewRetirementOutcome(
+                    apply ? StoreViewRetirementDisposition.Retired : StoreViewRetirementDisposition.Planned,
+                    target.FamilyId,
+                    target.ViewId,
+                    apply ? 1 : 0,
+                    0,
+                    0,
+                    null);
+            });
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.Equal(
+            new StoreSidecarReclaimTarget(family.FamilyId, "view-retire-order", family.StoreRoot),
+            calls[0].Target);
+        Assert.Equal(2, calls.Count);
+        Assert.False(calls[0].Apply);
+        Assert.True(calls[0].MemberPresent);
+        Assert.True(calls[1].Apply);
+        Assert.True(calls[1].MemberPresent);
+        Assert.Null(registry.Get(workspaceId));
+    }
+
+    [Fact]
+    public void RemoveById_RetirementFailure_KeepsMemberAndSkipsReclaim()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-store-retire-fails");
+        using WorkspaceRegistry registry = OpenRegistry();
+        const string workspaceId = "ws-store-retire-fails-01";
+        Register(registry, workspaceId, "store-retire-fails-disp", root);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-retire-fails");
+        registry.UpsertStoreMember(
+            workspaceId, family.FamilyId, "view-retire-fails", root, WorkspaceRootIdentity.Unknown);
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-retire-fails");
+        int leaseRequests = 0;
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "store-retire-fails-disp",
+            liveRoot: null,
+            acquireSidecarLease: _ =>
+            {
+                leaseRequests++;
+                return null;
+            },
+            retireView: (target, apply) => new StoreViewRetirementOutcome(
+                StoreViewRetirementDisposition.Failed,
+                target.FamilyId,
+                target.ViewId,
+                0,
+                0,
+                0,
+                "producer unavailable"));
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedRetirement, result.Result);
+        Assert.Equal(StoreViewRetirementDisposition.Failed, result.ViewRetirement?.Disposition);
+        Assert.Equal("producer unavailable", result.ViewRetirement?.Error);
+        Assert.NotNull(registry.Get(workspaceId));
+        Assert.NotNull(registry.GetStoreMember(workspaceId));
+        Assert.True(Directory.Exists(millerDir));
+        Assert.Equal(0, leaseRequests);
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+    }
+
+    [Fact]
+    public void RemoveById_AlreadyAbsentPreviewSkipsApplyAndRemovesMembership()
+    {
+        var (root, _) = MakeWorkspace("ws-store-retire-absent");
+        using WorkspaceRegistry registry = OpenRegistry();
+        const string workspaceId = "ws-store-retire-absent-01";
+        Register(registry, workspaceId, "store-retire-absent-disp", root);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-retire-absent");
+        registry.UpsertStoreMember(
+            workspaceId, family.FamilyId, "view-retire-absent", root, WorkspaceRootIdentity.Unknown);
+        var calls = new List<bool>();
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "store-retire-absent-disp",
+            liveRoot: null,
+            retireView: (target, apply) =>
+            {
+                calls.Add(apply);
+                return new StoreViewRetirementOutcome(
+                    StoreViewRetirementDisposition.AlreadyAbsent,
+                    target.FamilyId,
+                    target.ViewId,
+                    0,
+                    0,
+                    0,
+                    null);
+            });
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.Equal([false], calls);
+        Assert.Null(registry.Get(workspaceId));
+    }
+
+    [Fact]
+    public void RemoveById_MalformedStoreMemberRefusesBeforeProducerWork()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-store-malformed");
+        using WorkspaceRegistry registry = OpenRegistry();
+        const string workspaceId = "ws-store-malformed-01";
+        Register(registry, workspaceId, "store-malformed-disp", root);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-malformed");
+        registry.UpsertStoreMember(
+            workspaceId, family.FamilyId, "view-malformed", root, WorkspaceRootIdentity.Unknown);
+        using (var connection = new SqliteConnection($"Data Source={_registryDb};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE store_families SET store_root = '' WHERE family_id = $family_id";
+            command.Parameters.AddWithValue("$family_id", family.FamilyId.ToString("D"));
+            command.ExecuteNonQuery();
+        }
+        int producerCalls = 0;
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "store-malformed-disp",
+            liveRoot: null,
+            retireView: (_, _) =>
+            {
+                producerCalls++;
+                return default;
+            });
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedRetirement, result.Result);
+        Assert.Equal(0, producerCalls);
+        Assert.NotNull(registry.Get(workspaceId));
+        Assert.NotNull(registry.GetStoreMember(workspaceId));
+        Assert.True(Directory.Exists(millerDir));
+    }
+
+    [Fact]
+    public void RemoveByPath_GoneRoot_LiveWorkspaceRefusesBeforeProducerWork()
+    {
+        string goneRoot = Path.Combine(_dir, "ws-store-gone-live");
+        using WorkspaceRegistry registry = OpenRegistry();
+        const string workspaceId = "ws-store-gone-live-01";
+        Register(registry, workspaceId, "store-gone-live-disp", goneRoot);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-gone-live");
+        registry.UpsertStoreMember(
+            workspaceId, family.FamilyId, "view-gone-live", goneRoot, WorkspaceRootIdentity.Unknown);
+        int producerCalls = 0;
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveByPath(
+            registry,
+            goneRoot,
+            liveRoot: goneRoot,
+            retireView: (_, _) =>
+            {
+                producerCalls++;
+                return default;
+            });
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedLive, result.Result);
+        Assert.Equal(0, producerCalls);
+        Assert.NotNull(registry.Get(workspaceId));
+        Assert.NotNull(registry.GetStoreMember(workspaceId));
     }
 
     [Fact]
@@ -819,7 +1016,11 @@ public sealed class WorkspaceRemovalTests : IDisposable
         WriteSidecars(family.StoreRoot, "view-going");
         IReadOnlyList<string> keep = WriteSidecars(family.StoreRoot, "view-staying");
 
-        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "store-going-disp", liveRoot: null);
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "store-going-disp",
+            liveRoot: null,
+            retireView: RetireView);
 
         Assert.Equal(3, result.SidecarReclaim.FilesDeleted);
         Assert.All(keep, p => Assert.True(File.Exists(p)));
@@ -836,7 +1037,11 @@ public sealed class WorkspaceRemovalTests : IDisposable
         registry.UpsertStoreMember(
             "ws-store-noroot-01", family.FamilyId, "view-absent", root, WorkspaceRootIdentity.Unknown);
 
-        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, "store-noroot-disp", liveRoot: null);
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "store-noroot-disp",
+            liveRoot: null,
+            retireView: RetireView);
 
         Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
         Assert.False(Directory.Exists(millerDir));
@@ -857,7 +1062,11 @@ public sealed class WorkspaceRemovalTests : IDisposable
         IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-busy");
 
         WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
-            registry, "store-busy-disp", liveRoot: null, acquireSidecarLease: _ => null);
+            registry,
+            "store-busy-disp",
+            liveRoot: null,
+            acquireSidecarLease: _ => null,
+            retireView: RetireView);
 
         Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
         Assert.False(Directory.Exists(millerDir));
@@ -885,7 +1094,11 @@ public sealed class WorkspaceRemovalTests : IDisposable
             "ws-store-gone-0001", family.FamilyId, "view-gone", goneRoot, WorkspaceRootIdentity.Unknown);
         IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-gone");
 
-        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveByPath(registry, goneRoot, liveRoot: null);
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveByPath(
+            registry,
+            goneRoot,
+            liveRoot: null,
+            retireView: RetireView);
 
         Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
         Assert.Equal(3, result.SidecarReclaim.FilesDeleted);

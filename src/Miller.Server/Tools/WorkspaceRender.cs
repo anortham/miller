@@ -336,7 +336,8 @@ public readonly record struct WorkspaceRemoveResult(
     string? Root = null,
     bool IndexDirDeleted = false,
     StoreSidecarReclaimResult SidecarReclaim = default,
-    string? IgnorePolicyCleanupError = null)
+    string? IgnorePolicyCleanupError = null,
+    StoreViewRetirementOutcome? ViewRetirement = null)
 {
     /// <summary>Removal outcome.</summary>
     public enum Outcome
@@ -355,6 +356,9 @@ public readonly record struct WorkspaceRemoveResult(
 
         /// <summary>Refused: the registry row does not map to its canonical workspace index path.</summary>
         RefusedInvalidRegistration,
+
+        /// <summary>Refused: the producer could not retire the captured family-store view.</summary>
+        RefusedRetirement,
 
         /// <summary>No registered workspace matched the requested target.</summary>
         NotFound,
@@ -397,6 +401,13 @@ public readonly record struct WorkspaceRemoveResult(
         string? root = null) =>
         new(Outcome.RefusedInvalidRegistration, millerDir, workspaceId, root);
 
+    public static WorkspaceRemoveResult RefusedRetirement(
+        string millerDir,
+        string? workspaceId,
+        string? root,
+        StoreViewRetirementOutcome viewRetirement) =>
+        new(Outcome.RefusedRetirement, millerDir, workspaceId, root, false, default, null, viewRetirement);
+
     /// <summary>No registered workspace matched the target.</summary>
     public static WorkspaceRemoveResult NotFound(string millerDir, string? workspaceId = null, string? root = null) =>
         new(Outcome.NotFound, millerDir, workspaceId, root);
@@ -411,10 +422,18 @@ public readonly record struct WorkspacePruneResult(
     IReadOnlyList<WorkspacePruneEntry> Pruned,
     int Kept,
     StoreSidecarReclaimResult SidecarReclaim = default,
-    StoreMaintenanceOutcome StoreMaintenance = default);
+    StoreMaintenanceOutcome StoreMaintenance = default,
+    IReadOnlyList<WorkspacePruneRetirementFailure>? RetirementFailures = null);
 
 /// <summary>One registry row removed (or that would be removed in dry-run) by <c>prune</c>.</summary>
 public readonly record struct WorkspacePruneEntry(string WorkspaceId, string DisplayId, string Root);
+
+/// <summary>One store-member row that prune kept because producer retirement failed.</summary>
+public readonly record struct WorkspacePruneRetirementFailure(
+    string WorkspaceId,
+    string DisplayId,
+    string Root,
+    StoreViewRetirementOutcome Outcome);
 
 /// <summary>
 /// The PURE renderers for the <c>workspace</c> tool (M7 decision-2/6). Deterministic, no I/O: each takes an
@@ -2799,6 +2818,9 @@ public static class WorkspaceRender
             "refused: the requested removal target is a sensitive or machine-global Miller directory.",
         WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration =>
             "refused: the registry entry does not map to its canonical workspace index directory.",
+        WorkspaceRemoveResult.Outcome.RefusedRetirement =>
+            $"refused: producer view retirement failed for {result.Root ?? result.WorkspaceId ?? result.MillerDir}: " +
+            $"{BoundedError(result.ViewRetirement?.Error)}. The registry entry was kept; retry after resolving the producer error.",
         WorkspaceRemoveResult.Outcome.NotFound =>
             $"not found: no registered workspace matches {result.Root ?? result.MillerDir} — nothing removed.",
         _ => $"remove: unrecognised outcome for {result.MillerDir}.",
@@ -2817,6 +2839,7 @@ public static class WorkspaceRender
                 WorkspaceRemoveResult.Outcome.RefusedInUse => "refused_in_use",
                 WorkspaceRemoveResult.Outcome.RefusedSensitive => "refused_sensitive",
                 WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration => "refused_invalid_registration",
+                WorkspaceRemoveResult.Outcome.RefusedRetirement => "refused_retirement",
                 WorkspaceRemoveResult.Outcome.NotFound => "not_found",
                 _ => "unknown",
             });
@@ -2831,6 +2854,8 @@ public static class WorkspaceRender
                 w.WriteNull("ignore_policy_cleanup_error");
             else
                 w.WriteString("ignore_policy_cleanup_error", result.IgnorePolicyCleanupError);
+            if (result.ViewRetirement is { } retirement)
+                WriteViewRetirement(w, retirement);
             w.WriteString("message", RemoveCompact(result));
             w.WriteEndObject();
         }
@@ -2863,6 +2888,22 @@ public static class WorkspaceRender
         w.WriteNumber("files_retained", reclaim.FilesRetained);
         if (reclaim.SkipReason is null) w.WriteNull("skip_reason");
         else w.WriteString("skip_reason", reclaim.SkipReason);
+        w.WriteEndObject();
+    }
+
+    private static void WriteViewRetirement(Utf8JsonWriter w, StoreViewRetirementOutcome retirement)
+    {
+        w.WriteStartObject("view_retirement");
+        w.WriteString("disposition", RetirementDispositionText(retirement.Disposition));
+        w.WriteString("family_id", retirement.FamilyId.ToString("D"));
+        w.WriteString("view_id", retirement.ViewId);
+        w.WriteNumber("retired_views", retirement.RetiredViews);
+        w.WriteNumber("retired_manifests", retirement.RetiredManifests);
+        w.WriteNumber("retired_manifest_entries", retirement.RetiredManifestEntries);
+        if (retirement.Error is null)
+            w.WriteNull("error");
+        else
+            w.WriteString("error", BoundedError(retirement.Error));
         w.WriteEndObject();
     }
 
@@ -2956,6 +2997,20 @@ public static class WorkspaceRender
             lines.Add(SidecarReclaimText(result.SidecarReclaim));
         if (StoreMaintenanceText(result.StoreMaintenance) is { } maintenance)
             lines.Add(maintenance);
+        if (result.RetirementFailures is { Count: > 0 })
+        {
+            lines.Add($"retirement failures: {result.RetirementFailures.Count}");
+            foreach (WorkspacePruneRetirementFailure failure in result.RetirementFailures.Take(PruneCompactExampleCap))
+            {
+                lines.Add(
+                    $"  {failure.DisplayId} {failure.Root}: {BoundedError(failure.Outcome.Error)}");
+            }
+
+            if (result.RetirementFailures.Count > PruneCompactExampleCap)
+            {
+                lines.Add($"  ... {result.RetirementFailures.Count - PruneCompactExampleCap} more retirement failures");
+            }
+        }
         return string.Join('\n', lines);
     }
 
@@ -3015,10 +3070,52 @@ public static class WorkspaceRender
             w.WriteNumber("kept", result.Kept);
             WriteSidecarReclaim(w, result.SidecarReclaim);
             WriteStoreMaintenance(w, result.StoreMaintenance);
+            WriteRetirementFailures(w, result.RetirementFailures);
             w.WriteEndObject();
         }
         return Utf8(buffer);
     }
+
+    private static void WriteRetirementFailures(
+        Utf8JsonWriter w,
+        IReadOnlyList<WorkspacePruneRetirementFailure>? failures)
+    {
+        if (failures is not { Count: > 0 })
+            return;
+
+        int returned = Math.Min(failures.Count, PruneCompactExampleCap);
+        w.WriteStartArray("retirement_failures");
+        foreach (WorkspacePruneRetirementFailure failure in failures.Take(returned))
+        {
+            w.WriteStartObject();
+            w.WriteString("workspace_id", failure.WorkspaceId);
+            w.WriteString("display_id", failure.DisplayId);
+            w.WriteString("root", failure.Root);
+            w.WriteString("disposition", RetirementDispositionText(failure.Outcome.Disposition));
+            if (failure.Outcome.Error is null)
+                w.WriteNull("error");
+            else
+                w.WriteString("error", BoundedError(failure.Outcome.Error));
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteNumber("retirement_failures_total", failures.Count);
+        w.WriteNumber("retirement_failures_omitted", failures.Count - returned);
+    }
+
+    private static string RetirementDispositionText(StoreViewRetirementDisposition disposition) =>
+        disposition switch
+        {
+            StoreViewRetirementDisposition.Planned => "planned",
+            StoreViewRetirementDisposition.Retired => "retired",
+            StoreViewRetirementDisposition.AlreadyAbsent => "already_absent",
+            StoreViewRetirementDisposition.Failed => "failed",
+            _ => "unknown",
+        };
+
+    private static string BoundedError(string? error) =>
+        string.IsNullOrWhiteSpace(error) ? "unknown producer retirement failure" :
+        error.Length <= 240 ? error : error[..240] + "...";
 
     // ---------- shared helpers ----------
 

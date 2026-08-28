@@ -1359,27 +1359,36 @@ public sealed class WorkspaceTool
     // Remove registry rows whose canonical_root no longer exists. Never prunes the current workspace row (guarded
     // by workspace_id). Does not open symbols.db. A real prune also runs julie-extract's family-store
     // maintenance, which is the only thing that reclaims the coordinator's terminal request rows.
-    private (string output, int resultCount, TelemetryOutcome outcome) Prune(bool json, bool dryRun)
+    private WorkspaceOperationResult Prune(bool json, bool dryRun)
     {
         WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
             _registry,
             _workspace.WorkspaceId,
             dryRun,
-            maintainStore: StoreMaintenanceRunner.ForToolsRoot(_workspace.ToolsRoot));
+            maintainStore: StoreMaintenanceRunner.ForToolsRoot(_workspace.ToolsRoot),
+            retireView: StoreViewRetirementRunner.ForToolsRoot(_workspace.ToolsRoot));
         var rendered = new WorkspacePruneResult(
             result.DryRun,
             result.Pruned.Select(e => new WorkspacePruneEntry(e.WorkspaceId, e.DisplayId, e.Root)).ToArray(),
             result.Kept,
             result.SidecarReclaim,
-            result.StoreMaintenance);
+            result.StoreMaintenance,
+            result.RetirementFailures
+                .Select(e => new WorkspacePruneRetirementFailure(e.WorkspaceId, e.DisplayId, e.Root, e.Outcome))
+                .ToArray());
         int count = result.Pruned.Count;
-        return (
+        return new WorkspaceOperationResult(
             WorkspaceRender.PruneWithinBudget(
                 rendered,
                 json,
                 ToolOutputBudget.WorkspaceMcpMaxBytes),
             count,
-            count > 0 ? TelemetryOutcome.Ok : TelemetryOutcome.Empty);
+            count > 0 ? TelemetryOutcome.Ok : TelemetryOutcome.Empty,
+            result.RetirementFailures.Count == 0
+                ? null
+                : ToolDiagnostic.Refusal(
+                    "workspace_prune_retirement_failed",
+                    "Producer view retirement failed for one or more stale workspaces. Their registry entries were kept; retry after resolving the producer error."));
     }
 
     // ---------- remove ----------
@@ -1416,18 +1425,20 @@ public sealed class WorkspaceTool
                 : WorkspaceRemoval.RemoveById(
                     _registry,
                     target.WorkspaceId,
-                    _workspace.WorkspaceRoot,
-                    Path.GetDirectoryName(_workspace.RegistryDbPath),
-                    _acquireWriterLock);
+                    liveRoot: _workspace.WorkspaceRoot,
+                    protectedMillerDir: Path.GetDirectoryName(_workspace.RegistryDbPath),
+                    acquireWriterLock: _acquireWriterLock,
+                    retireView: StoreViewRetirementRunner.ForToolsRoot(_workspace.ToolsRoot));
         }
         else
         {
             result = WorkspaceRemoval.RemoveByPath(
                 _registry,
                 path!,
-                _workspace.WorkspaceRoot,
-                Path.GetDirectoryName(_workspace.RegistryDbPath),
-                _acquireWriterLock);
+                liveRoot: _workspace.WorkspaceRoot,
+                protectedMillerDir: Path.GetDirectoryName(_workspace.RegistryDbPath),
+                acquireWriterLock: _acquireWriterLock,
+                retireView: StoreViewRetirementRunner.ForToolsRoot(_workspace.ToolsRoot));
         }
 
         return RemoveResult(result, json);
@@ -1475,6 +1486,13 @@ public sealed class WorkspaceTool
                 ToolDiagnostic.Refusal(
                     "workspace_remove_invalid_registration",
                     "The workspace registry entry does not map to its canonical index directory.")),
+            WorkspaceRemoveResult.Outcome.RefusedRetirement => new WorkspaceOperationResult(
+                WorkspaceRender.Remove(result, json),
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.Refusal(
+                    "workspace_remove_retirement_failed",
+                    "The producer family-store view could not be retired. The registry entry was kept for retry.")),
             _ => throw new InvalidOperationException(
                 $"Unknown workspace removal outcome '{result.Result}'."),
         };

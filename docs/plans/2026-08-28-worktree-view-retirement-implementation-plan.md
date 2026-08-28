@@ -122,16 +122,16 @@ Batch A uses `parallel-lead-commit`. Task 2 owns the compact missing-root hint w
 **Approach:** Add an explicit refused retirement outcome for targeted removal and per-entry retirement failures for prune. Dry-run collects preview facts only. Compact/JSON rendering remains bounded and honest; existing JSON fields remain and new retirement facts are additive only where removal/prune already returns lifecycle results.
 
 **Acceptance criteria:**
-- [ ] RED tests prove current remove/prune deletes registry membership without producer retirement.
-- [ ] Exact captured family/view retirement precedes every family-member registry deletion.
-- [ ] Preview/apply failure keeps the member and producer view retriable; no sidecar reclaim or maintenance runs for that target.
-- [ ] `AlreadyAbsent` proceeds safely; non-store workspaces preserve current behavior.
-- [ ] Dry-run performs preview only and reports no mutation.
-- [ ] Current, sensitive, invalid, and in-use targets still refuse before producer work.
-- [ ] MCP, CLI, and dashboard call sites pass the pinned adapter and render actionable failure output within budgets.
-- [ ] Missing-root compact list output gives a dry-run prune next step; zero-missing output does not; list JSON remains byte-identical.
-- [ ] Focused removal, prune, workspace-tool, and CLI tests pass; `Miller.Server`, `Miller.Dashboard`, and `Miller.Tests` build cleanly. Miller impact reports no dashboard endpoint test candidate, so the dashboard build is its direct gate.
-- [ ] Worker hands the verified diff to the lead without committing.
+- [x] RED tests prove current remove/prune deletes registry membership without producer retirement.
+- [x] Exact captured family/view retirement precedes every family-member registry deletion.
+- [x] Preview/apply failure keeps the member and producer view retriable; no sidecar reclaim or maintenance runs for that target.
+- [x] `AlreadyAbsent` proceeds safely; non-store workspaces preserve current behavior.
+- [x] Dry-run performs preview only and reports no mutation.
+- [x] Current, sensitive, invalid, and in-use targets still refuse before producer work.
+- [x] MCP, CLI, and dashboard call sites pass the pinned adapter and render actionable failure output within budgets.
+- [x] Missing-root compact list output gives a dry-run prune next step; zero-missing output does not; list JSON remains byte-identical.
+- [x] Focused removal, prune, workspace-tool, and CLI tests pass; `Miller.Server`, `Miller.Dashboard`, and `Miller.Tests` build cleanly. Miller impact reports no dashboard endpoint test candidate, so the dashboard build is its direct gate.
+- [x] Worker hands the verified diff to the lead without committing.
 
 ### Task 3: Hook lifecycle guidance
 

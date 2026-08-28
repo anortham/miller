@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Cli;
 using Miller.Server.Hosting;
@@ -48,7 +49,8 @@ public sealed class WorkspaceToolPruneTests : IDisposable
     }
 
     private (WorkspaceTool tool, WorkspaceRegistry registry, string currentRoot) BuildTool(
-        Action<WorkspaceRegistry, string, string, string>? seed = null)
+        Action<WorkspaceRegistry, string, string, string>? seed = null,
+        string? appBaseDirectory = null)
     {
         string currentRoot = NewTempDir("current");
         string existingRoot = NewTempDir("existing");
@@ -56,7 +58,7 @@ public sealed class WorkspaceToolPruneTests : IDisposable
         // missingRoot is never created on disk
 
         string home = NewTempDir("home");
-        var workspace = WorkspaceContext.Create(currentRoot, AppContext.BaseDirectory, home) with
+        var workspace = WorkspaceContext.Create(currentRoot, appBaseDirectory ?? AppContext.BaseDirectory, home) with
         {
             WorkspaceId = CurrentWs,
             CanonicalRoot = Path.GetFullPath(currentRoot),
@@ -218,6 +220,34 @@ public sealed class WorkspaceToolPruneTests : IDisposable
         Assert.True(doc.RootElement.GetProperty("dry_run").GetBoolean());
         Assert.Equal(1, doc.RootElement.GetProperty("pruned").GetArrayLength());
         Assert.NotNull(registry.Get(MissingWs));
+    }
+
+    [Fact]
+    public void Prune_ProducerRetirementFailure_IsReportedAndKeepsRegistryEntry()
+    {
+        (WorkspaceTool tool, WorkspaceRegistry registry, _) = BuildTool(
+            (reg, _, _, missingRoot) =>
+            {
+                StoreFamilyRegistryRow family = reg.GetOrCreateStoreFamily(
+                    "prune-retirement-failure",
+                    canonicalCommonDir: null,
+                    commonDirCreatedAtUtc: null,
+                    storesRoot: NewTempDir("retirement-failure-store"));
+                reg.UpsertStoreMember(
+                    MissingWs,
+                    family.FamilyId,
+                    "view-prune-retirement-failure",
+                    missingRoot,
+                    WorkspaceRootIdentity.Unknown);
+            },
+            appBaseDirectory: NewTempDir("retirement-failure-tools"));
+
+        string output = tool.Workspace(operation: "prune");
+
+        Assert.Contains("retirement failures: 1", output);
+        Assert.Contains("store view retirement producer is unavailable", output);
+        Assert.NotNull(registry.Get(MissingWs));
+        Assert.NotNull(registry.GetStoreMember(MissingWs));
     }
 
     [Fact]

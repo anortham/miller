@@ -3696,15 +3696,19 @@ public static class CliDispatch
             registry,
             currentRow?.WorkspaceId,
             dryRun,
-            maintainStore: StoreMaintenanceRunner.ForToolsRoot(ctx.ToolsRoot));
+            maintainStore: StoreMaintenanceRunner.ForToolsRoot(ctx.ToolsRoot),
+            retireView: StoreViewRetirementRunner.ForToolsRoot(ctx.ToolsRoot));
         var rendered = new WorkspacePruneResult(
             result.DryRun,
             result.Pruned.Select(e => new WorkspacePruneEntry(e.WorkspaceId, e.DisplayId, e.Root)).ToArray(),
             result.Kept,
             result.SidecarReclaim,
-            result.StoreMaintenance);
+            result.StoreMaintenance,
+            result.RetirementFailures
+                .Select(e => new WorkspacePruneRetirementFailure(e.WorkspaceId, e.DisplayId, e.Root, e.Outcome))
+                .ToArray());
         outw.WriteLine(WorkspaceRender.Prune(rendered, json));
-        return 0;
+        return result.RetirementFailures.Count == 0 ? 0 : 3;
     }
 
     // ---------- remove (delete a workspace's .miller index dir) ----------
@@ -3735,7 +3739,8 @@ public static class CliDispatch
                     registry,
                     id!,
                     liveRoot: null,
-                    protectedMillerDir: Path.GetDirectoryName(ctx.RegistryDbPath));
+                    protectedMillerDir: Path.GetDirectoryName(ctx.RegistryDbPath),
+                    retireView: StoreViewRetirementRunner.ForToolsRoot(ctx.ToolsRoot));
             }
             catch (KeyNotFoundException ex)
             {
@@ -3749,7 +3754,8 @@ public static class CliDispatch
                 registry,
                 path!,
                 liveRoot: null,
-                protectedMillerDir: Path.GetDirectoryName(ctx.RegistryDbPath));
+                protectedMillerDir: Path.GetDirectoryName(ctx.RegistryDbPath),
+                retireView: StoreViewRetirementRunner.ForToolsRoot(ctx.ToolsRoot));
         }
 
         outw.WriteLine(WorkspaceRender.Remove(result, json));
@@ -3785,7 +3791,8 @@ public static class CliDispatch
         WorkspaceRemoveResult.Outcome.RefusedInUse
             or WorkspaceRemoveResult.Outcome.RefusedLive
             or WorkspaceRemoveResult.Outcome.RefusedSensitive
-            or WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration => 3,
+            or WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration
+            or WorkspaceRemoveResult.Outcome.RefusedRetirement => 3,
         _ => 1,
     };
 

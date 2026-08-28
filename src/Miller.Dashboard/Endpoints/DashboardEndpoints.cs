@@ -7,6 +7,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Primitives;
 using Miller.Dashboard.Components;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 
@@ -59,10 +60,10 @@ internal static class DashboardEndpoints
         // the endpoint into validation once UseAntiforgery runs) and follow post-redirect-get back to the
         // all-workspaces view with an outcome notice — never a 500, same degrade discipline as the panel readers.
         endpoints.MapPost("/workspace/remove", ([FromForm] string? workspace_id) =>
-            Results.Redirect(RemoveWorkspaceRedirect(paths.RegistryDbPath, workspace_id)));
+            Results.Redirect(RemoveWorkspaceRedirect(paths.RegistryDbPath, paths.ToolsRoot, workspace_id)));
 
         endpoints.MapPost("/workspaces/prune", (IFormCollection form) =>
-            Results.Redirect(PruneRedirect(paths.RegistryDbPath)));
+            Results.Redirect(PruneRedirect(paths.RegistryDbPath, paths.ToolsRoot)));
 
         endpoints.MapGet("/workspace", (string? workspace_id) =>
         {
@@ -337,7 +338,7 @@ internal static class DashboardEndpoints
     // the full id). liveRoot is null: the dashboard process serves no workspace in-process. Active WRITERS are
     // refused by WorkspaceRemoval's in-use lease check; pure READERS hold no lease and are not blocked — same
     // as CLI remove — they fail loudly on their next reopen and the index is rebuildable via workspace open.
-    private static string RemoveWorkspaceRedirect(string registryDbPath, string? workspaceId)
+    private static string RemoveWorkspaceRedirect(string registryDbPath, string toolsRoot, string? workspaceId)
     {
         string code;
         string? detail;
@@ -354,7 +355,8 @@ internal static class DashboardEndpoints
                     registry,
                     workspaceId,
                     liveRoot: null,
-                    protectedMillerDir: Path.GetDirectoryName(registryDbPath));
+                    protectedMillerDir: Path.GetDirectoryName(registryDbPath),
+                    retireView: StoreViewRetirementRunner.ForToolsRoot(toolsRoot));
                 code = result.Result switch
                 {
                     WorkspaceRemoveResult.Outcome.Removed when result.IndexDirDeleted => "removed",
@@ -363,9 +365,12 @@ internal static class DashboardEndpoints
                     WorkspaceRemoveResult.Outcome.RefusedInUse => "remove-refused-in-use",
                     WorkspaceRemoveResult.Outcome.RefusedSensitive => "remove-refused-sensitive",
                     WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration => "remove-refused-invalid-registration",
+                    WorkspaceRemoveResult.Outcome.RefusedRetirement => "remove-error",
                     _ => "remove-not-found",
                 };
-                detail = result.Root ?? workspaceId;
+                detail = result.Result == WorkspaceRemoveResult.Outcome.RefusedRetirement
+                    ? $"Producer view retirement failed for {result.Root ?? workspaceId}. {result.ViewRetirement?.Error ?? "Unknown producer retirement failure"} The registry entry was kept for retry."
+                    : result.Root ?? workspaceId;
             }
             catch (KeyNotFoundException)
             {
@@ -388,13 +393,25 @@ internal static class DashboardEndpoints
         return NoticeRedirect(code, detail);
     }
 
-    private static string PruneRedirect(string registryDbPath)
+    private static string PruneRedirect(string registryDbPath, string toolsRoot)
     {
         try
         {
             using WorkspaceRegistry registry = WorkspaceRegistry.Open(registryDbPath);
             WorkspaceRegistryPrune.Result result =
-                WorkspaceRegistryPrune.Run(registry, protectedWorkspaceId: null, dryRun: false);
+                WorkspaceRegistryPrune.Run(
+                    registry,
+                    protectedWorkspaceId: null,
+                    dryRun: false,
+                    retireView: StoreViewRetirementRunner.ForToolsRoot(toolsRoot));
+            if (result.RetirementFailures.Count > 0)
+            {
+                WorkspaceRegistryPrune.RetirementFailure failure = result.RetirementFailures[0];
+                string detail = result.RetirementFailures.Count == 1
+                    ? $"Producer view retirement failed for {failure.DisplayId}. {failure.Outcome.Error ?? "Unknown producer retirement failure"} The registry entry was kept for retry."
+                    : $"Producer view retirement failed for {result.RetirementFailures.Count} workspaces. The registry entries were kept for retry. First failure: {failure.Outcome.Error ?? "Unknown producer retirement failure"}";
+                return NoticeRedirect("remove-error", detail);
+            }
             return NoticeRedirect("pruned", result.Pruned.Count.ToString(CultureInfo.InvariantCulture));
         }
         catch (Exception ex) when (

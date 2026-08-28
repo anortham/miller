@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
+using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Cli;
 using Miller.Server.Hosting;
@@ -82,13 +83,14 @@ public sealed class WorkspaceToolTests : IDisposable
         SemanticEmbeddingSessionBroker? semanticBroker = null,
         ScanGovernor? scanGovernor = null,
         Func<string, WorkspaceOpenPrimeEnqueueResult>? enqueueOpenPrime = null,
-        IndexHolder? holderOverride = null)
+        IndexHolder? holderOverride = null,
+        string? appBaseDirectory = null)
     {
         // The served workspace root is the fixture dir's parent of .miller; point ExtractDbPath at the fixture DB.
         string root = Path.GetDirectoryName(fx.DbPath)!;
         string home = NewTempDir("home");
         string canonicalRoot = Path.GetFullPath(root);
-        var workspace = WorkspaceContext.Create(root, AppContext.BaseDirectory, home) with
+        var workspace = WorkspaceContext.Create(root, appBaseDirectory ?? AppContext.BaseDirectory, home) with
         {
             ExtractDbPath = fx.DbPath,
             CanonicalRoot = canonicalRoot,
@@ -1972,6 +1974,69 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Contains("removed", output, StringComparison.OrdinalIgnoreCase);
         Assert.False(Directory.Exists(otherMiller));
         Assert.Null(harness.Registry.Get(OtherWs));
+    }
+
+    [Fact]
+    public void Remove_StoreMemberWithoutExtractorRefusesAndKeepsTheRegistryEntry()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        string appBaseDirectory = NewTempDir("remove-no-extractor");
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            acquireLock: _ => new NoopLease(),
+            appBaseDirectory: appBaseDirectory);
+        string other = NewTempDir("remove-store-member");
+        string otherMiller = Path.Combine(other, ".miller");
+        string otherDb = Path.Combine(otherMiller, "symbols.db");
+        Directory.CreateDirectory(otherMiller);
+        File.WriteAllText(otherDb, "stub");
+        harness.Registry.UpsertSeen(OtherWs, "other-store-member", other, otherDb, WorkspaceRegistryState.Ready);
+        StoreFamilyRegistryRow family = harness.Registry.GetOrCreateStoreFamily(
+            "remove-store-member-lineage",
+            canonicalCommonDir: null,
+            commonDirCreatedAtUtc: null,
+            storesRoot: NewTempDir("remove-store-family"));
+        harness.Registry.UpsertStoreMember(
+            OtherWs,
+            family.FamilyId,
+            "view-remove-store-member",
+            other,
+            WorkspaceRootIdentity.Unknown);
+
+        using JsonDocument document = JsonDocument.Parse(
+            harness.Tool.Workspace(operation: "remove", workspace_id: OtherWs, format: "json"));
+
+        Assert.Equal("refused_retirement", document.RootElement.GetProperty("result").GetString());
+        Assert.Equal(
+            "workspace_remove_retirement_failed",
+            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+        Assert.Contains("producer view retirement", document.RootElement.GetProperty("message").GetString()!);
+        Assert.True(Directory.Exists(otherMiller));
+        Assert.NotNull(harness.Registry.Get(OtherWs));
+        Assert.NotNull(harness.Registry.GetStoreMember(OtherWs));
+    }
+
+    [Fact]
+    public void List_Compact_MissingRootHintsDryRunPrune_JsonHasNoHint()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        string missingRoot = Path.Combine(NewTempDir("list-missing-parent"), "gone");
+        harness.Registry.UpsertSeen(
+            OtherWs,
+            "missing-list-repo",
+            missingRoot,
+            Path.Combine(missingRoot, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Stale);
+
+        string compact = harness.Tool.Workspace(operation: "list");
+        string json = harness.Tool.Workspace(operation: "list", format: "json");
+
+        Assert.Contains("preview registry cleanup with a prune dry run", compact);
+        Assert.DoesNotContain("preview registry cleanup with a prune dry run", json);
+        Assert.DoesNotContain("prune dry run", json);
     }
 
     [Fact]

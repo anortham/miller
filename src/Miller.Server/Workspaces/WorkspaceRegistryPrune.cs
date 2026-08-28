@@ -28,23 +28,33 @@ public static class WorkspaceRegistryPrune
         string DisplayId,
         string Root);
 
+    public sealed record RetirementFailure(
+        string WorkspaceId,
+        string DisplayId,
+        string Root,
+        StoreViewRetirementOutcome Outcome);
+
     public sealed record Result(
         bool DryRun,
         IReadOnlyList<Entry> Pruned,
         int Kept,
         StoreSidecarReclaimResult SidecarReclaim = default,
-        StoreMaintenanceOutcome StoreMaintenance = default);
+        StoreMaintenanceOutcome StoreMaintenance = default,
+        IReadOnlyList<RetirementFailure> RetirementFailures = null!);
 
     public static Result Run(
         WorkspaceRegistry registry,
         string? protectedWorkspaceId,
         bool dryRun,
         Func<string, IDisposable?>? acquireSidecarLease = null,
-        Func<string, StoreMaintenanceOutcome>? maintainStore = null)
+        Func<string, StoreMaintenanceOutcome>? maintainStore = null,
+        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
 
         var pruned = new List<Entry>();
+        var retirementFailures = new List<RetirementFailure>();
+        var blockedFamilies = new HashSet<Guid>();
         var reclaimed = StoreSidecarReclaimResult.None;
         int kept = 0;
         foreach (WorkspaceRegistryRow row in registry.List())
@@ -64,15 +74,73 @@ public static class WorkspaceRegistryPrune
 
             if (dryRun)
             {
+                WorkspaceRemoval.StoreViewCapture dryCapture =
+                    WorkspaceRemoval.CaptureStoreView(registry, row.WorkspaceId);
+                if (dryCapture.Failure is { } dryFailure)
+                {
+                    retirementFailures.Add(new RetirementFailure(
+                        row.WorkspaceId,
+                        row.DisplayId,
+                        row.CanonicalRoot,
+                        dryFailure));
+                    blockedFamilies.Add(dryFailure.FamilyId);
+                    kept++;
+                    continue;
+                }
+
+                if (dryCapture.Target is { } dryTarget &&
+                    !WorkspaceRemoval.TryRetireView(
+                        dryTarget,
+                        retireView,
+                        apply: false,
+                        out StoreViewRetirementOutcome dryOutcome))
+                {
+                    retirementFailures.Add(new RetirementFailure(
+                        row.WorkspaceId,
+                        row.DisplayId,
+                        row.CanonicalRoot,
+                        dryOutcome));
+                    blockedFamilies.Add(dryTarget.FamilyId);
+                    kept++;
+                    continue;
+                }
+
                 pruned.Add(new Entry(row.WorkspaceId, row.DisplayId, row.CanonicalRoot));
                 continue;
             }
 
-            // The view id lives in the store_members row, which the workspace delete cascades away. Capture it
-            // FIRST, write the owed-reclaim record to disk, then delete, then reclaim — the reclaim re-reads the
-            // members table and spares any view a surviving workspace still claims. The record is what survives
-            // a crash in the window between the delete and the reclaim; the in-memory capture does not.
-            StoreSidecarReclaimTarget? target = StoreSidecarReclaimTarget.Capture(registry, row.WorkspaceId);
+            WorkspaceRemoval.StoreViewCapture capture =
+                WorkspaceRemoval.CaptureStoreView(registry, row.WorkspaceId);
+            if (capture.Failure is { } captureFailure)
+            {
+                retirementFailures.Add(new RetirementFailure(
+                    row.WorkspaceId,
+                    row.DisplayId,
+                    row.CanonicalRoot,
+                    captureFailure));
+                blockedFamilies.Add(captureFailure.FamilyId);
+                kept++;
+                continue;
+            }
+
+            StoreSidecarReclaimTarget? target = capture.Target;
+            if (target is not null &&
+                !WorkspaceRemoval.TryRetireView(
+                    target,
+                    retireView,
+                    apply: true,
+                    out StoreViewRetirementOutcome outcome))
+            {
+                retirementFailures.Add(new RetirementFailure(
+                    row.WorkspaceId,
+                    row.DisplayId,
+                    row.CanonicalRoot,
+                    outcome));
+                blockedFamilies.Add(target.FamilyId);
+                kept++;
+                continue;
+            }
+
             _ = StoreSidecarReclaim.RecordIntent(target);
             registry.Remove(row.WorkspaceId);
             reclaimed = StoreSidecarReclaimResult.Combine(
@@ -85,11 +153,11 @@ public static class WorkspaceRegistryPrune
         if (!dryRun)
         {
             (StoreSidecarReclaimResult discharged, maintained) =
-                SweepFamilies(registry, acquireSidecarLease, maintainStore);
+                SweepFamilies(registry, acquireSidecarLease, maintainStore, blockedFamilies);
             reclaimed = StoreSidecarReclaimResult.Combine(reclaimed, discharged);
         }
 
-        return new Result(dryRun, pruned, kept, reclaimed, maintained);
+        return new Result(dryRun, pruned, kept, reclaimed, maintained, retirementFailures);
     }
 
     /// <summary>
@@ -103,12 +171,16 @@ public static class WorkspaceRegistryPrune
     private static (StoreSidecarReclaimResult Reclaimed, StoreMaintenanceOutcome Maintained) SweepFamilies(
         WorkspaceRegistry registry,
         Func<string, IDisposable?>? acquireSidecarLease,
-        Func<string, StoreMaintenanceOutcome>? maintainStore)
+        Func<string, StoreMaintenanceOutcome>? maintainStore,
+        IReadOnlySet<Guid> blockedFamilies)
     {
         var discharged = StoreSidecarReclaimResult.None;
         var maintained = StoreMaintenanceOutcome.None;
         foreach (StoreFamilyRegistryRow family in registry.ListStoreFamilies())
         {
+            if (blockedFamilies.Contains(family.FamilyId))
+                continue;
+
             discharged = StoreSidecarReclaimResult.Combine(
                 discharged,
                 StoreSidecarReclaim.DischargeOwed(registry, family.StoreRoot, acquireSidecarLease));
