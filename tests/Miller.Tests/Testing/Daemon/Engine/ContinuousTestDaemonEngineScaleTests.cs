@@ -84,6 +84,13 @@ public sealed class ContinuousTestDaemonEngineScaleTests : IDisposable
         {
             Current = new Miller.Indexing.Testing.CtIndexCursor("gen-scale", 3),
         };
+        facts.FileFacts.Add(new Miller.Indexing.Testing.CtFileFact(
+            "tests/Sample.Tests/CalculatorTests.cs",
+            "csharp",
+            "blake3:calculator",
+            "indexed",
+            false,
+            true));
         facts.Symbols.Add(Miller.Tests.Testing.Selection.FakeMillerFactSource.Symbol(
             "sym:calc", "Adds", "tests/Sample.Tests/CalculatorTests.cs", isTest: true));
         facts.Tests.Add(Miller.Tests.Testing.Selection.FakeMillerFactSource.Hit(
