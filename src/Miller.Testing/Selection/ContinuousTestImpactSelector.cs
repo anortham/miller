@@ -773,15 +773,28 @@ public sealed class ContinuousTestImpactSelector
 
     private static bool IsGoManifestRelevantToCase(TestCaseFact testCase, string manifestPath)
     {
+        string fileName = Path.GetFileName(manifestPath);
+        if (fileName.Equals("go.work", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("go.work.sum", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(testCase.GoWorkPath))
+                return false;
+
+            string workspacePath = fileName.Equals("go.work.sum", StringComparison.OrdinalIgnoreCase)
+                ? manifestPath[..^4]
+                : manifestPath;
+            return PathsEqual(testCase.GoWorkPath, workspacePath);
+        }
+
         string? manifestRoot = Path.GetDirectoryName(manifestPath);
         if (string.IsNullOrEmpty(manifestRoot))
-            return true;
+            return false;
         string? projectRoot = string.IsNullOrWhiteSpace(testCase.ProjectPath)
             ? null
             : Path.GetDirectoryName(testCase.ProjectPath);
         if (string.IsNullOrEmpty(projectRoot))
-            return true;
-        return IsPathUnderRoot(projectRoot, manifestRoot);
+            return false;
+        return PathsEqual(projectRoot, manifestRoot);
     }
 
     private static bool IsQmlProviderCase(TestCaseFact testCase) =>
@@ -1902,6 +1915,7 @@ public sealed class ContinuousTestImpactSelector
         string? FileLanguage,
         string? FileRole,
         string? ProjectPath,
+        string? GoWorkPath,
         string? SourcePath,
         string? Name,
         string? QualifiedName,
@@ -1930,6 +1944,7 @@ public sealed class ContinuousTestImpactSelector
                     ?? ContinuousTestLanguageFamily.LabelFromPath(filePath),
                 FileRole: MetadataString(row.Metadata, "file_role"),
                 ProjectPath: MetadataString(row.Metadata, "ct_project_path"),
+                GoWorkPath: MetadataString(row.Metadata, "gowork"),
                 SourcePath: MetadataString(row.Metadata, "source_path"),
                 Name: row.Name,
                 QualifiedName: row.QualifiedName,

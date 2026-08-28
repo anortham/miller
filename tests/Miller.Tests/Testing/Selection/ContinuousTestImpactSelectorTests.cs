@@ -1713,12 +1713,53 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.Equal("project_scope", evidence.Tier);
     }
 
-    [Fact]
-    public void Select_go_workspace_manifest_change_selects_member_module_tests()
+    [Theory]
+    [InlineData("go.work")]
+    [InlineData("go.work.sum")]
+    public void Select_go_workspace_manifest_change_selects_member_module_tests(string changedManifest)
     {
         using ContinuousTestStore store = OpenStore();
         string projectPath = Path.Combine(_dir, "go", "go.mod");
-        SeedGoProviderCase(store, "tc:go", "TestAdd", Path.Combine(_dir, "go", "pkg"), projectPath);
+        string workspacePath = Path.Combine(_dir, "go.work");
+        SeedGoProviderCase(store, "tc:go", "TestAdd", Path.Combine(_dir, "go", "pkg"), projectPath, workspacePath);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: [Path.Combine(_dir, changedManifest)],
+            ProjectPath: projectPath));
+
+        Assert.Equal(["tc:go"], result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+    }
+
+    [Theory]
+    [InlineData("go.mod")]
+    [InlineData("go.sum")]
+    public void Select_go_parent_manifest_change_does_not_select_nested_module_tests(string changedManifest)
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.Combine(_dir, "nested", "go.mod");
+        SeedGoProviderCase(store, "tc:go", "TestAdd", Path.Combine(_dir, "nested", "pkg"), projectPath);
+        var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: [Path.Combine(_dir, changedManifest)],
+            ProjectPath: projectPath));
+
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.Equal(["tc:go"], result.StaleTestCaseIds);
+    }
+
+    [Fact]
+    public void Select_go_workspace_manifest_change_does_not_select_non_member_module_tests()
+    {
+        using ContinuousTestStore store = OpenStore();
+        string projectPath = Path.Combine(_dir, "go", "go.mod");
+        string workspacePath = Path.Combine(_dir, "other", "go.work");
+        SeedGoProviderCase(store, "tc:go", "TestAdd", Path.Combine(_dir, "go", "pkg"), projectPath, workspacePath);
         var selector = new ContinuousTestImpactSelector(store, new FakeMillerFactSource());
 
         ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
@@ -1726,8 +1767,9 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
             ChangedPaths: [Path.Combine(_dir, "go.work")],
             ProjectPath: projectPath));
 
-        Assert.Equal(["tc:go"], result.SelectedTestCaseIds);
-        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+        Assert.Empty(result.SelectedTestCaseIds);
+        Assert.Equal(ContinuousTestSelectionOutcome.Unknown, result.Outcome);
+        Assert.Equal(["tc:go"], result.StaleTestCaseIds);
     }
 
     [Fact]
@@ -2509,7 +2551,8 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         string testCaseId,
         string name,
         string packageDirectory,
-        string projectPath)
+        string projectPath,
+        string? workspacePath = null)
     {
         store.PutTestCase(new ContinuousTestCase(
             Id: testCaseId,
@@ -2527,6 +2570,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
                 ["ct_project_path"] = projectPath,
                 ["source_path"] = packageDirectory,
                 ["package_dir"] = packageDirectory,
+                ["gowork"] = workspacePath,
             }));
     }
 
