@@ -207,10 +207,10 @@ Parallel Batch A uses `parallel-lead-commit`. Every other task uses `serial-work
 **Approach:** Probe qmake/Qt/make tooling explicitly. Keep qmake command, import-path, result, cancellation, and diagnostic rules inside the adapter. Add new shared `RequireQmakeQuickTest*` Scale signals and convention coverage.
 
 **Acceptance criteria:**
-- [ ] `CONFIG += qmltestcase` and proven `qmltest + testcase` projects enable; `QT += qmltest` alone refuses.
-- [ ] Qt 5/6 logger names, offscreen environment, result paths, nonzero exits, missing reports, and malformed XML are correct.
-- [ ] Real qmake fixture passes when guarded tooling exists and writes nothing to source.
-- [ ] Worker-scope verification passes and the worker creates the owned-file commit.
+- [x] `CONFIG += qmltestcase` and proven `qmltest + testcase` projects enable; `QT += qmltest` alone refuses.
+- [x] Qt 5/6 logger names, offscreen environment, result paths, nonzero exits, missing reports, and malformed XML are correct.
+- [x] Real qmake fixture passes when guarded tooling exists and writes nothing to source.
+- [x] Worker-scope verification passes and the worker creates the owned-file commit.
 
 ### Task 6: First-class VB.NET selection and .NET backend evidence
 
