@@ -48,5 +48,6 @@ internal static class JsTestGlob
         || pattern.Contains("+(", StringComparison.Ordinal)
         || pattern.Contains("@(", StringComparison.Ordinal)
         || pattern.Contains("!(", StringComparison.Ordinal)
-        || pattern.Contains('[', StringComparison.Ordinal);
+        || pattern.Contains('[', StringComparison.Ordinal)
+        || pattern.Contains(']', StringComparison.Ordinal);
 }

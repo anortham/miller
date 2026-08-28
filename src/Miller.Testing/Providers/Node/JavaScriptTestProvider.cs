@@ -42,20 +42,18 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         if (!Directory.Exists(packageRoot))
             return Task.FromResult<IReadOnlyList<ProviderTestCase>>([]);
 
-        // Framework-specific file rules, resolved ONCE: node:test reads the script paths, jest and
-        // vitest read their documented defaults (or a literal testMatch/include array). See
-        // NodeTestFileDiscovery and JsFrameworkTestFileDiscovery.
         var framework = ResolvedFrameworkOrNull(workspace);
-        var discovery = string.Equals(framework, "node-test", StringComparison.Ordinal)
-            ? NodeTestFileDiscovery.ForPackage(packageRoot)
-            : JsFrameworkTestFileDiscovery.ForFramework(framework, packageRoot);
+        ValidateSupportedDiscoveryVersion(framework, packageRoot);
+        Func<string, bool> matches = string.Equals(framework, "node-test", StringComparison.Ordinal)
+            ? NodeTestFileDiscovery.ForPackage(packageRoot).IsMatch
+            : JsFrameworkTestFileDiscovery.ForFramework(framework, packageRoot).IsMatch;
 
         var cases = Directory
             .EnumerateFiles(packageRoot, "*", SearchOption.AllDirectories)
             .Select(path => RelativePathOrNull(packageRoot, path))
             .Where(relativePath => relativePath is not null)
             .Select(relativePath => relativePath!)
-            .Where(relativePath => IsDiscoverableTestFile(relativePath, discovery))
+            .Where(relativePath => IsDiscoverableTestFile(relativePath, matches))
             .Order(StringComparer.Ordinal)
             .Select(relativePath => new ProviderTestCase(
                 Id: TestCaseId(relativePath),
@@ -830,6 +828,112 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
         }
     }
 
+    private static void ValidateSupportedDiscoveryVersion(string? framework, string packageRoot)
+    {
+        var packageName = framework switch
+        {
+            "jest" => "jest",
+            "vitest" => "vitest",
+            _ => null,
+        };
+        if (packageName is null)
+            return;
+
+        var evidence = JsTestConfigPatterns.ReadRunnerVersionEvidence(packageRoot, packageName);
+        if (evidence.InstalledManifestFound && IsSupportedDiscoveryVersion(framework!, evidence.InstalledVersion))
+            return;
+        if (!evidence.InstalledManifestFound
+            && evidence.Diagnostic is null
+            && evidence.DependencyRanges.Count > 0
+            && evidence.DependencyRanges.All(range => IsSupportedDependencyRange(framework!, range)))
+            return;
+
+        var detected = evidence.InstalledManifestFound
+            ? string.IsNullOrWhiteSpace(evidence.InstalledVersion) ? "unknown" : evidence.InstalledVersion
+            : evidence.DependencyRanges.Count == 0 ? "unknown" : string.Join(", ", evidence.DependencyRanges);
+        var reason = evidence.Diagnostic is null
+            ? "the installed version or dependency range cannot be proven safe"
+            : evidence.Diagnostic;
+        if (!evidence.InstalledManifestFound && evidence.DependencyRanges.Count > 0)
+            reason = "the dependency range is not wholly inside the supported version interval";
+        if (evidence.InstalledManifestFound && evidence.InstalledVersion is not null)
+            reason = "the installed version is outside the supported version interval";
+        var supported = framework == "jest" ? "29.x or 30.x" : "0.34.x through 4.x";
+        throw new ContinuousTestProviderException(
+            $"JavaScript {framework} runner version evidence '{detected}' is unsupported for CT discovery: {reason}."
+            + $" Supported versions are {supported}; install a supported {framework} version under '{packageRoot}'.");
+    }
+
+    private static bool IsSupportedDiscoveryVersion(string framework, string? version)
+    {
+        if (!TryParseVersion(version, out var major, out var minor, out _))
+            return false;
+
+        return IsSupportedVersion(framework, major, minor);
+    }
+
+    private static bool IsSupportedDependencyRange(string framework, string range)
+    {
+        var value = range.Trim();
+        var operatorLength = value.StartsWith('^') || value.StartsWith('~') ? 1 : 0;
+        var hasRangeOperator = operatorLength > 0;
+        if (!hasRangeOperator && value.Any(character => character is '*' or 'x' or 'X' or '|' or '>' or '<' or '='))
+            return false;
+        if (!TryParseVersion(value[operatorLength..], out var major, out var minor, out var patch))
+            return false;
+
+        if (!hasRangeOperator)
+            return IsSupportedVersion(framework, major, minor);
+        if (!IsSupportedVersion(framework, major, minor))
+            return false;
+
+        var upperMajor = major;
+        var upperMinor = minor;
+        if (value[0] == '^')
+        {
+            if (major == 0)
+                upperMinor++;
+            else
+                upperMajor++;
+        }
+        else
+        {
+            upperMinor++;
+        }
+
+        return framework switch
+        {
+            "jest" => upperMajor <= 31,
+            "vitest" => major == 0
+                ? minor >= 34 && upperMajor == 0
+                : upperMajor <= 5,
+            _ => false,
+        };
+    }
+
+    private static bool IsSupportedVersion(string framework, int major, int minor) =>
+        framework switch
+        {
+            "jest" => major is 29 or 30,
+            "vitest" => major is >= 1 and <= 4 || major == 0 && minor >= 34,
+            _ => false,
+        };
+
+    private static bool TryParseVersion(string? text, out int major, out int minor, out int patch)
+    {
+        major = 0;
+        minor = 0;
+        patch = 0;
+        if (string.IsNullOrWhiteSpace(text) || text.Contains('-') || text.Contains('+'))
+            return false;
+        var core = text;
+        var parts = core.Split('.');
+        return parts.Length == 3
+            && int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out major)
+            && int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out minor)
+            && int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out patch);
+    }
+
     /// <summary>One package script: the name a package manager runs, and what it runs.</summary>
     private sealed record PackageScript(string Name, string Command);
 
@@ -1258,30 +1362,24 @@ public sealed class JavaScriptTestProvider : IContinuousTestProvider
     /// Whether one workspace-relative file is a test case of this project.
     ///
     /// <para>The generated-directory exclusions apply first. Everything else is
-    /// <paramref name="discovery"/>: node:test uses Node's documented patterns (dogfood finding F8);
+    /// <paramref name="matches"/>: node:test uses Node's documented patterns (dogfood finding F8);
     /// jest and vitest use theirs, including jest's <c>__tests__/</c> default and a literal config
     /// array when one is readable.</para>
     /// </summary>
-    private static bool IsDiscoverableTestFile(string relativePath, NodeTestFileDiscovery discovery)
+    private static bool IsDiscoverableTestFile(string relativePath, Func<string, bool> matches)
     {
         var segments = relativePath.Split('/');
         if (segments.Any(IsExcludedSegment))
             return false;
 
-        return discovery.IsMatch(relativePath);
+        return matches(relativePath);
     }
 
     private static bool IsExcludedSegment(string segment) =>
-        segment is "node_modules"
-            or ".git"
-            or ".claude"
-            or "dist"
-            or "build"
-            or ".next"
-            or "coverage"
-            or "e2e"
-            or "cypress"
-            or "playwright";
+        segment.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals(".git", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals(".miller", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals(".claude", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<ProviderCaseResult> FailedSelectedCaseResults(
         ContinuousTestProviderRunRequest request,

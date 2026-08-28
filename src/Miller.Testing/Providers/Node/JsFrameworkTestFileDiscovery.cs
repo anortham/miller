@@ -1,51 +1,108 @@
 namespace Miller.Testing;
 
-/// <summary>
-/// Which files make up a jest or vitest project's suite.
-///
-/// <para>Defaults follow each runner's own documented patterns, expanded to the ESM/CJS/TS
-/// extensions CT already ships and to component files named as tests (<c>.spec.vue</c> and
-/// the like). A readable literal <c>testMatch</c> / <c>include</c> array replaces those
-/// defaults, the same way the runner itself treats a configured set.</para>
-///
-/// <para>node:test stays on <see cref="NodeTestFileDiscovery"/> — its rules are not this
-/// convention.</para>
-/// </summary>
 internal static class JsFrameworkTestFileDiscovery
 {
-    /// <summary>
-    /// Jest documented <c>testMatch</c>, expanded:
-    /// <c>**/__tests__/**/*.[jt]s?(x)</c> plus <c>**/?(*.)+(spec|test).[jt]s?(x)</c>.
-    /// The stem set also keeps <c>mjs</c>/<c>cjs</c>/<c>mts</c>/<c>cts</c> (already shipped)
-    /// and component test files. Bare files under <c>__tests__/</c> stay JS/TS only — a
-    /// <c>Button.vue</c> sitting there is not a jest default.
-    /// </summary>
     private static readonly string[] DefaultJestPatterns =
     [
-        "**/__tests__/**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}",
-        "**/*.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts,vue,svelte,astro}",
-        "**/{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}",
+        "**/__tests__/**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts,cjsx,mjsx,mtsx,ctsx}",
+        "**/*.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts,cjsx,mjsx,mtsx,ctsx}",
+        "**/{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts,cjsx,mjsx,mtsx,ctsx}",
+        "!**/build/**",
+        "!**/dist/**",
+        "!**/e2e/**",
+        "!**/cypress/**",
+        "!**/playwright/**",
     ];
 
-    /// <summary>
-    /// Vitest documented default <c>include</c>:
-    /// <c>**/*.{test,spec}.?(c|m)[jt]s?(x)</c>, plus the same component test files.
-    /// No bare <c>__tests__/</c> — vitest does not use that convention.
-    /// </summary>
     private static readonly string[] DefaultVitestPatterns =
     [
-        "**/*.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts,vue,svelte,astro}",
+        "**/*.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts,cjsx,mjsx,mtsx,ctsx}",
+        "!**/build/**",
+        "!**/dist/**",
+        "!**/e2e/**",
+        "!**/cypress/**",
+        "!**/playwright/**",
     ];
 
-    internal static NodeTestFileDiscovery ForFramework(string? framework, string packageRoot)
+    internal static JsTestPatternSet ForFramework(string? framework, string packageRoot)
     {
         if (string.Equals(framework, "jest", StringComparison.OrdinalIgnoreCase))
         {
-            return NodeTestFileDiscovery.FromPatterns(
-                JsTestConfigPatterns.ReadJestTestMatch(packageRoot) ?? DefaultJestPatterns);
+            var config = JsTestConfigPatterns.ReadJest(packageRoot);
+            return config.ToPatternSet("jest", DefaultJestPatterns);
         }
 
-        return NodeTestFileDiscovery.FromPatterns(
-            JsTestConfigPatterns.ReadVitestInclude(packageRoot) ?? DefaultVitestPatterns);
+        if (string.Equals(framework, "vitest", StringComparison.OrdinalIgnoreCase))
+        {
+            var config = JsTestConfigPatterns.ReadVitest(packageRoot);
+            return config.ToPatternSet("vitest", DefaultVitestPatterns);
+        }
+
+        throw new ContinuousTestProviderException(
+            $"Continuous test framework '{framework ?? "<unspecified>"}' is unsupported for JavaScript discovery.");
+    }
+}
+
+internal sealed class JsTestPatternSet
+{
+    private readonly PatternEntry[] _patterns;
+    private readonly bool _ordered;
+
+    private JsTestPatternSet(IEnumerable<PatternEntry> patterns, bool ordered)
+    {
+        _patterns = patterns.ToArray();
+        _ordered = ordered;
+    }
+
+    internal static JsTestPatternSet ForJest(IReadOnlyList<string> patterns) =>
+        Create(patterns, ordered: true);
+
+    internal static JsTestPatternSet ForVitest(
+        IReadOnlyList<string> include,
+        IReadOnlyList<string> exclude) =>
+        new(
+            include.Select(pattern => new PatternEntry(pattern, pattern.StartsWith('!')))
+                .Concat(exclude.Select(pattern => new PatternEntry(pattern, true))),
+            ordered: false);
+
+    internal bool IsMatch(string relativePath)
+    {
+        if (_ordered)
+        {
+            var matched = false;
+            foreach (var pattern in _patterns)
+            {
+                if (pattern.Matcher.IsMatch(relativePath))
+                    matched = !pattern.Negative;
+            }
+
+            return matched;
+        }
+
+        var included = _patterns.Any(pattern => !pattern.Negative && pattern.Matcher.IsMatch(relativePath));
+        return included && _patterns.All(pattern => !pattern.Negative || !pattern.Matcher.IsMatch(relativePath));
+    }
+
+    private static JsTestPatternSet Create(IReadOnlyList<string> patterns, bool ordered) =>
+        new(
+            patterns.Select(pattern => new PatternEntry(pattern, pattern.StartsWith('!'))),
+            ordered);
+
+    private sealed class PatternEntry
+    {
+        internal PatternEntry(string pattern, bool negative)
+        {
+            var hasPrefix = pattern.StartsWith('!');
+            Negative = negative || hasPrefix;
+            var normalized = hasPrefix ? pattern[1..] : pattern;
+            var expanded = JsTestGlob.ExpandExtglobs(normalized)
+                ?? throw new ContinuousTestProviderException(
+                    $"JavaScript test discovery pattern '{pattern}' uses unsupported glob syntax.");
+            Matcher = NodeTestFileDiscovery.FromPatterns([expanded]);
+        }
+
+        internal bool Negative { get; }
+
+        internal NodeTestFileDiscovery Matcher { get; }
     }
 }

@@ -45,6 +45,7 @@ public sealed class QtQuickTestProviderTests : IDisposable
         Assert.Equal(["A/basic", "Z/π (smoke)"], cases.Select(testCase => testCase.DisplayName));
         Assert.All(cases, testCase => Assert.Equal("qt-quick-test", testCase.Framework));
         Assert.All(cases, testCase => Assert.Equal("qml", testCase.Metadata["language"]));
+        Assert.All(cases, testCase => Assert.Equal("cmake", testCase.Metadata["backend"]));
         Assert.Equal(4, runner.Calls.Count);
         var configure = runner.Calls.Single(command => command.Arguments.Contains("-S"));
         Assert.Equal("cmake", configure.FileName);
@@ -55,6 +56,40 @@ public sealed class QtQuickTestProviderTests : IDisposable
 
         var second = await provider.DiscoverAsync(Workspace(), TestContext.Current.CancellationToken);
         Assert.Equal(cases.Select(testCase => testCase.Id), second.Select(testCase => testCase.Id));
+    }
+
+    [Fact]
+    public async Task Provider_uses_the_backend_selected_by_workspace_metadata()
+    {
+        var backend = new RecordingBackend();
+        var provider = new QtQuickTestProvider(backend);
+        var workspace = Workspace() with
+        {
+            Metadata = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["backend"] = backend.Discriminator,
+                ["configure_root"] = ConfigureRoot,
+                ["evidence_root"] = Path.Combine(ConfigureRoot, "tests"),
+            },
+        };
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.True(backend.EnsureBuildCalled);
+        Assert.True(backend.DiscoverCalled);
+        Assert.Equal("fake/basic", Assert.Single(cases).DisplayName);
+        Assert.Equal("fake", cases[0].Metadata["backend"]);
+
+        var run = await provider.RunAsync(
+            Request(workspace, [Assert.Single(cases).Id]),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(backend.RunCalled);
+        var result = Assert.Single(run.CaseResults);
+        Assert.Equal("failed", result.Status);
+        Assert.Equal("normalized failure", result.FailureSummary);
+        Assert.Equal("fake_value", result.Metadata["fake_key"]);
+        Assert.Equal("normalized-report.xml", run.ResultArtifactPath);
     }
 
     [Fact]
@@ -550,4 +585,66 @@ public sealed class QtQuickTestProviderTests : IDisposable
 
     private static string EscapeJson(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
+
+    private sealed class RecordingBackend : IQtQuickTestBackend
+    {
+        public string Discriminator => "fake";
+
+        public bool EnsureBuildCalled { get; private set; }
+
+        public bool DiscoverCalled { get; private set; }
+
+        public bool RunCalled { get; private set; }
+
+        public Task EnsureBuildAsync(
+            ContinuousTestWorkspace workspace,
+            CtGenerationPaths paths,
+            CancellationToken cancellationToken)
+        {
+            EnsureBuildCalled = true;
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<QtQuickTestCase>> DiscoverAsync(
+            ContinuousTestWorkspace workspace,
+            CtGenerationPaths paths,
+            CancellationToken cancellationToken)
+        {
+            DiscoverCalled = true;
+            return Task.FromResult<IReadOnlyList<QtQuickTestCase>>(
+            [
+                new QtQuickTestCase(
+                    "fake/basic",
+                    ["fake-runner"],
+                    [],
+                    null,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["backend"] = Discriminator,
+                    }),
+            ]);
+        }
+
+        public Task<QtQuickTestBackendRunResult> RunAsync(
+            ContinuousTestProviderRunRequest request,
+            CtGenerationPaths paths,
+            string artifactPath,
+            IReadOnlyList<string> selectedNames,
+            bool wholeSuite,
+            CancellationToken cancellationToken)
+        {
+            RunCalled = true;
+            return Task.FromResult(new QtQuickTestBackendRunResult(
+                "normalized-report.xml",
+                [new QtQuickTestBackendCaseResult(
+                    "fake/basic",
+                    "failed",
+                    0.5,
+                    "normalized failure",
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["fake_key"] = "fake_value",
+                    })]));
+        }
+    }
 }

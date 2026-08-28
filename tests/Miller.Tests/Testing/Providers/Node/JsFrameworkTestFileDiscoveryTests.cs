@@ -62,6 +62,15 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
     public async Task Discover_finds_component_files_named_as_tests()
     {
         var workspace = Workspace("vitest");
+        WritePackageFile(
+            "vitest.config.ts",
+            """
+            import { defineConfig } from 'vitest/config';
+
+            export default defineConfig({
+              test: { include: ['src/**/*.{spec,test}.{vue,svelte,astro}'] },
+            })
+            """);
         WritePackageFile("src/Button.spec.vue", "");
         WritePackageFile("src/Widget.test.svelte", "");
         WritePackageFile("src/Page.spec.astro", "");
@@ -72,6 +81,67 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
 
         Assert.Equal(
             ["src/Button.spec.vue", "src/Page.spec.astro", "src/Widget.test.svelte"],
+            cases.Select(row => row.Selector).ToArray());
+    }
+
+    [Fact]
+    public async Task Discover_defaults_to_javascript_and_typescript_cases_only()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile("src/math.test.js", "");
+        WritePackageFile("src/math.test.cjs", "");
+        WritePackageFile("src/math.test.cts", "");
+        WritePackageFile("src/math.test.mts", "");
+        WritePackageFile("src/math.test.cjsx", "");
+        WritePackageFile("src/math.test.vue", "");
+        WritePackageFile("dist/math.test.js", "");
+        WritePackageFile("e2e/math.test.js", "");
+        WritePackageFile("playwright/math.test.js", "");
+
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [
+                "src/math.test.cjs",
+                "src/math.test.cjsx",
+                "src/math.test.cts",
+                "src/math.test.js",
+                "src/math.test.mts",
+            ],
+            cases.Select(row => row.Selector).ToArray());
+    }
+
+    [Fact]
+    public async Task Discover_explicit_vitest_include_can_select_component_and_runner_directories()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile(
+            "vite.config.ts",
+            """
+            export default defineConfig({
+              test: { include: ['{src,dist,e2e,cypress,playwright}/**/*.{test,spec}.{js,vue}'] },
+            })
+            """);
+        WritePackageFile("src/Button.spec.vue", "");
+        WritePackageFile("dist/generated.test.js", "");
+        WritePackageFile("e2e/login.spec.js", "");
+        WritePackageFile("cypress/login.spec.js", "");
+        WritePackageFile("playwright/login.spec.js", "");
+
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [
+                "cypress/login.spec.js",
+                "dist/generated.test.js",
+                "e2e/login.spec.js",
+                "playwright/login.spec.js",
+                "src/Button.spec.vue",
+            ],
             cases.Select(row => row.Selector).ToArray());
     }
 
@@ -96,7 +166,8 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
             "package.json",
             """
             {
-              "jest": { "testMatch": ["**/suite/**/*.mjs"] }
+              "jest": { "testMatch": ["**/suite/**/*.mjs"] },
+              "devDependencies": { "jest": "^29.0.0" }
             }
             """);
         WritePackageFile("suite/math.mjs", "");
@@ -124,6 +195,26 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
     }
 
     [Fact]
+    public async Task Discover_reads_jest_test_match_from_cts_config()
+    {
+        var workspace = Workspace("jest");
+        WritePackageFile(
+            "jest.config.cts",
+            """
+            module.exports = {
+              testMatch: [`checks/**/*.cts`],
+            };
+            """);
+        WritePackageFile("checks/math.cts", "");
+        WritePackageFile("src/math.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["checks/math.cts"], cases.Select(row => row.Selector).ToArray());
+    }
+
+    [Fact]
     public async Task Discover_reads_vitest_include_from_vitest_config()
     {
         var workspace = Workspace("vitest");
@@ -147,7 +238,139 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
     }
 
     [Fact]
-    public async Task Discover_falls_back_when_vitest_include_is_not_a_literal_array()
+    public async Task Discover_reads_vitest_include_from_vite_config_when_dedicated_config_is_missing()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile(
+            "vite.config.ts",
+            """
+            export default defineConfig({
+              test: {
+                include: ['checks/**/*.cts'],
+              },
+            })
+            """);
+        WritePackageFile("checks/math.cts", "");
+        WritePackageFile("src/math.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["checks/math.cts"], cases.Select(row => row.Selector).ToArray());
+    }
+
+    [Fact]
+    public async Task Discover_applies_jest_root_dir_and_referenced_json_config()
+    {
+        var workspace = Workspace("jest");
+        WritePackageFile(
+            "package.json",
+            """
+            {
+              "jest": "./config/jest.json",
+              "devDependencies": { "jest": "^29.0.0" }
+            }
+            """);
+        WritePackageFile(
+            "config/jest.json",
+            """
+            {
+              "rootDir": "./packages/app",
+              "testMatch": ["<rootDir>/**/*.cts"]
+            }
+            """);
+        WritePackageFile("packages/app/checks/math.cts", "");
+        WritePackageFile("packages/other/math.cts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["packages/app/checks/math.cts"], cases.Select(row => row.Selector).ToArray());
+    }
+
+    [Fact]
+    public async Task Discover_applies_jest_last_matching_negative_pattern()
+    {
+        var workspace = Workspace("jest");
+        WritePackageFile(
+            "jest.config.ts",
+            """
+            export default {
+              testMatch: ['**/*.test.ts', '!**/*.generated.test.ts', '**/keep.generated.test.ts'],
+            }
+            """);
+        WritePackageFile("src/math.test.ts", "");
+        WritePackageFile("src/drop.generated.test.ts", "");
+        WritePackageFile("src/keep.generated.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ["src/keep.generated.test.ts", "src/math.test.ts"],
+            cases.Select(row => row.Selector).ToArray());
+    }
+
+    [Fact]
+    public async Task Discover_applies_vitest_exclude_patterns_without_jest_ordering()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile(
+            "vitest.config.ts",
+            """
+            export default {
+              test: {
+                include: ['**/*.test.ts'],
+                exclude: ['**/*.generated.test.ts'],
+              },
+            }
+            """);
+        WritePackageFile("src/math.test.ts", "");
+        WritePackageFile("src/drop.generated.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["src/math.test.ts"], cases.Select(row => row.Selector).ToArray());
+    }
+
+    [Fact]
+    public async Task Discover_treats_an_explicit_empty_vitest_include_as_an_empty_suite()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile("vitest.config.ts", "export default { test: { include: [] } }");
+        WritePackageFile("src/math.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Empty(cases);
+    }
+
+    [Fact]
+    public async Task Discover_keeps_vitest_defaults_when_only_exclude_is_declared()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile(
+            "vitest.config.ts",
+            """
+            export default {
+              test: {
+                exclude: ['**/generated/**'],
+              },
+            }
+            """);
+        WritePackageFile("src/math.test.ts", "");
+        WritePackageFile("src/generated/fixture.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["src/math.test.ts"], cases.Select(row => row.Selector).ToArray());
+    }
+
+    [Fact]
+    public async Task Discover_rejects_when_vitest_include_is_not_a_literal_array()
     {
         var workspace = Workspace("vitest");
         WritePackageFile(
@@ -163,9 +386,10 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
         WritePackageFile("src/math.test.ts", "");
         var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
 
-        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
 
-        Assert.Equal(["src/math.test.ts"], cases.Select(row => row.Selector).ToArray());
+        Assert.Contains("include", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -188,8 +412,93 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
         Assert.Equal(["src/math.test.ts"], cases.Select(row => row.Selector).ToArray());
     }
 
+    [Theory]
+    [InlineData("interpolated", "include: [`checks/${name}.test.ts`]")]
+    [InlineData("spread", "include: [...extra, 'checks/math.test.ts']")]
+    [InlineData("computed", "['include']: ['checks/math.test.ts']")]
+    public async Task Discover_rejects_unsupported_vitest_config_shapes(string _, string property)
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile(
+            "vitest.config.ts",
+            $$"""
+            export default defineConfig({ test: { {{property}} } })
+            """);
+        WritePackageFile("checks/math.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
+
+        Assert.Contains("unsupported", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
-    public async Task Discover_keeps_generated_and_e2e_exclusions_when_config_is_broad()
+    public async Task Discover_rejects_jest_test_regex_instead_of_using_defaults()
+    {
+        var workspace = Workspace("jest");
+        WritePackageFile("jest.config.ts", "export default { testRegex: '.*\\\\.test\\\\.ts$' }");
+        WritePackageFile("src/math.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
+
+        Assert.Contains("testRegex", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Discover_rejects_truncated_config_instead_of_using_defaults()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile(
+            "vitest.config.ts",
+            "export default { test: { include: ['src/**/*.test.ts'] } }" + new string(' ', 64 * 1024));
+        WritePackageFile("src/math.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
+
+        Assert.Contains("truncated", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Discover_rejects_an_unsupported_character_class_in_a_config_pattern()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile(
+            "vitest.config.ts",
+            "export default { test: { include: ['**/*.[ab]s'] } }");
+        WritePackageFile("src/math.as", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
+
+        Assert.Contains("unsupported", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("glob", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Discover_rejects_a_root_dir_that_escapes_the_package()
+    {
+        var workspace = Workspace("jest");
+        WritePackageFile(
+            "jest.config.ts",
+            "export default { rootDir: '../outside', testMatch: ['<rootDir>/**/*.test.ts'] }");
+        WritePackageFile("src/math.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
+
+        Assert.Contains("rootDir", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("inside", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Discover_explicit_config_controls_runner_owned_exclusions()
     {
         var workspace = Workspace("jest");
         WritePackageFile("jest.config.json", """{"testMatch":["**/*.js"]}""");
@@ -201,7 +510,9 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
 
         var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
 
-        Assert.Equal(["src/math.js"], cases.Select(row => row.Selector).ToArray());
+        Assert.Equal(
+            ["dist/bundle.js", "e2e/login.js", "src/math.js"],
+            cases.Select(row => row.Selector).ToArray());
     }
 
     [Theory]
@@ -232,12 +543,22 @@ public sealed class JsFrameworkTestFileDiscoveryTests : IDisposable
     private string PackageRoot => Path.Combine(_dir, "package");
 
     private ContinuousTestWorkspace Workspace(string framework) =>
-        new(
+        CreateWorkspace(framework);
+
+    private ContinuousTestWorkspace CreateWorkspace(string framework)
+    {
+        var workspace = new ContinuousTestWorkspace(
             WorkspaceId: "ws:1",
             WorkspaceRoot: PackageRoot,
             ProjectPath: Path.Combine(PackageRoot, "package.json"),
             BuildOutputRoot: Path.Combine(_dir, "state", "workspaces", "ws-safe", "ct-build", framework),
             Framework: framework);
+        var version = framework == "jest" ? "29.0.0" : "4.0.0";
+        WritePackageFile(
+            "package.json",
+            "{\"devDependencies\":{\"" + framework + "\":\"^" + version + "\"}}");
+        return workspace;
+    }
 
     private void WritePackageFile(string relativePath, string contents)
     {

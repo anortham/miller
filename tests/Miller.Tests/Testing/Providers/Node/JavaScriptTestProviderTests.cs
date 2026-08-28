@@ -74,6 +74,93 @@ public sealed class JavaScriptTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Discover_rejects_an_installed_vitest_version_outside_the_supported_range()
+    {
+        var workspace = Workspace("vitest");
+        WriteInstalledPackage("vitest", "5.0.0");
+        WritePackageFile("src/math.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
+
+        Assert.Contains("vitest", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("5.0.0", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("0.34", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Discover_rejects_an_installed_jest_version_outside_the_supported_range()
+    {
+        var workspace = Workspace("jest");
+        WriteInstalledPackage("jest", "28.1.3");
+        WritePackageFile("src/math.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
+
+        Assert.Contains("jest", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("28.1.3", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("29.x", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("^0.34.0")]
+    [InlineData("^0.35.0")]
+    [InlineData("~0.99.0")]
+    public async Task Discover_accepts_a_supported_dependency_range_without_an_installed_manifest(string range)
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile(
+            "package.json",
+            "{\"devDependencies\":{\"vitest\":\"" + range + "\"}}");
+        WritePackageFile("src/math.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var cases = await provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["src/math.test.ts"], cases.Select(row => row.Selector).ToArray());
+    }
+
+    [Fact]
+    public async Task Discover_rejects_an_installed_manifest_without_a_version()
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile("node_modules/vitest/package.json", "{\"name\":\"vitest\"}");
+        WritePackageFile("src/math.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
+
+        Assert.Contains("unknown", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("version", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("^0.33.0")]
+    [InlineData("^4.0.0 || ^5.0.0")]
+    [InlineData("workspace:*")]
+    public async Task Discover_rejects_an_unprovable_or_cross_boundary_dependency_range(string range)
+    {
+        var workspace = Workspace("vitest");
+        WritePackageFile(
+            "package.json",
+            $$"""
+            { "devDependencies": { "vitest": "{{range}}" } }
+            """);
+        WritePackageFile("src/math.test.ts", "");
+        var provider = new JavaScriptTestProvider(new FakeTestProcessRunner());
+
+        var exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
+
+        Assert.Contains(range, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("supported", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Run_without_result_artifact_returns_failed_results_for_selected_files()
     {
         var workspace = Workspace("jest");
@@ -1218,6 +1305,13 @@ public sealed class JavaScriptTestProviderTests : IDisposable
             ProjectPath: Path.Combine(PackageRoot, "package.json"),
             BuildOutputRoot: Path.Combine(_dir, "state", "workspaces", "ws-safe", "ct-build", framework ?? "auto"),
             Framework: framework);
+        if (framework is "jest" or "vitest")
+        {
+            var version = framework == "jest" ? "29.0.0" : "4.0.0";
+            WritePackageFile(
+                "package.json",
+                "{\"devDependencies\":{\"" + framework + "\":\"^" + version + "\"}}");
+        }
         _ctTemps.Add(CtTempPaths.ForWorkspace(workspace));
         return workspace;
     }

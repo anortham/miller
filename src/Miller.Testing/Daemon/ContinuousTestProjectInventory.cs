@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Testing.Providers.Qml;
 
 namespace Miller.Testing;
 
@@ -182,6 +183,7 @@ public static class ContinuousTestProjectInventory
                 Framework: "qt-quick-test",
                 Metadata: new Dictionary<string, object?>(StringComparer.Ordinal)
                 {
+                    ["backend"] = QtQuickTestBackendIds.CMake,
                     ["configure_root"] = evidence.ConfigureRoot,
                     ["evidence_root"] = evidence.EvidenceRoot,
                 }));
@@ -216,6 +218,7 @@ public static class ContinuousTestProjectInventory
                     Framework: "qt-quick-test",
                     Metadata: new Dictionary<string, object?>(StringComparer.Ordinal)
                     {
+                        ["backend"] = QtQuickTestBackendIds.CMake,
                         ["configure_root"] = qmlEvidence.ConfigureRoot,
                         ["evidence_root"] = qmlEvidence.EvidenceRoot,
                     });
@@ -921,7 +924,7 @@ public static class ContinuousTestProjectInventory
                      .OrderBy(evidence => PathDepth(evidence.ConfigureRoot))
                      .ThenBy(evidence => evidence.ProjectPath, PathComparer))
         {
-            if (projects.Any(project => IsInside(project.ConfigureRoot, candidate.ConfigureRoot)))
+            if (projects.Any(project => IsIncludedProject(project, candidate, candidateFiles)))
                 continue;
             projects.Add(candidate);
         }
@@ -939,13 +942,14 @@ public static class ContinuousTestProjectInventory
         if (!ContainsCMakeProjectDeclaration(ReadHead(cmakePath)))
             return false;
 
-        string[] subtreeFiles = candidateFiles
-            .Where(path => IsInside(configureRoot, path))
+        string[] projectFiles = CMakeProjectFiles(cmakePath, candidateFiles)
             .OrderBy(path => path, PathComparer)
             .ToArray();
-        string? quickTestPath = subtreeFiles.FirstOrDefault(IsQuickTestEvidence);
-        string[] qmlTestPaths = subtreeFiles.Where(IsQmlTestEvidence).ToArray();
-        if (quickTestPath is null || qmlTestPaths.Length == 0)
+        string? quickTestPath = projectFiles.FirstOrDefault(IsQuickTestEvidence);
+        string[] qmlTestPaths = projectFiles.Where(IsQmlTestEvidence).ToArray();
+        if (quickTestPath is null
+            || qmlTestPaths.Length == 0
+            || !HasCMakeTestRegistration(projectFiles))
             return false;
 
         evidence = new QmlProjectEvidence(
@@ -966,7 +970,191 @@ public static class ContinuousTestProjectInventory
             || ContainsCodeToken(code, "Qt5::QuickTest")
             || ContainsCodeToken(code, "Qt::QuickTest")
             || ContainsCodeToken(code, "QUICK_TEST_MAIN")
+            || ContainsCodeToken(code, "QUICK_TEST_MAIN_WITH_SETUP")
             || ContainsCodeToken(code, "QUICK_TEST_OPENGL_MAIN");
+    }
+
+    private static bool HasCMakeTestRegistration(IEnumerable<string> subtreeFiles) =>
+        subtreeFiles
+            .Where(IsCMakeLists)
+            .Any(path => ContainsCodeCall(CodeWithoutCommentsOrStrings(ReadHead(path)), "add_test"));
+
+    private static bool IsIncludedProject(
+        QmlProjectEvidence parent,
+        QmlProjectEvidence candidate,
+        IReadOnlyList<string> candidateFiles)
+    {
+        if (!IsInside(parent.ConfigureRoot, candidate.ConfigureRoot)
+            || PathComparer.Equals(parent.ConfigureRoot, candidate.ConfigureRoot))
+            return false;
+
+        return IncludedCMakeRoots(parent.ProjectPath, candidateFiles)
+            .Contains(candidate.ConfigureRoot);
+    }
+
+    private static IReadOnlyList<string> CMakeProjectFiles(
+        string cmakePath,
+        IReadOnlyList<string> candidateFiles)
+    {
+        string configureRoot = DirectoryOf(cmakePath);
+        IReadOnlySet<string> includedRoots = IncludedCMakeRoots(cmakePath, candidateFiles);
+        string[] cmakeRoots = candidateFiles
+            .Where(IsCMakeLists)
+            .Select(DirectoryOf)
+            .Distinct(PathComparer)
+            .ToArray();
+
+        return candidateFiles
+            .Where(path =>
+            {
+                if (!IsInside(configureRoot, path))
+                    return false;
+                string? owningRoot = cmakeRoots
+                    .Where(root => IsInside(root, path))
+                    .OrderByDescending(PathDepth)
+                    .FirstOrDefault();
+                return owningRoot is not null && includedRoots.Contains(owningRoot);
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlySet<string> IncludedCMakeRoots(
+        string cmakePath,
+        IReadOnlyList<string> candidateFiles)
+    {
+        var cmakeByRoot = candidateFiles
+            .Where(IsCMakeLists)
+            .ToDictionary(DirectoryOf, PathComparer);
+        var roots = new HashSet<string>(PathComparer);
+        var pending = new Stack<string>();
+        string configureRoot = DirectoryOf(cmakePath);
+        roots.Add(configureRoot);
+        pending.Push(configureRoot);
+        while (pending.Count > 0)
+        {
+            string root = pending.Pop();
+            if (!cmakeByRoot.TryGetValue(root, out string? currentCMakePath))
+                continue;
+
+            foreach (string argument in CMakeCallFirstArguments(ReadHead(currentCMakePath), "add_subdirectory"))
+            {
+                if (!TryResolveSubdirectory(root, argument, out string? childRoot)
+                    || childRoot is null
+                    || !cmakeByRoot.ContainsKey(childRoot)
+                    || !roots.Add(childRoot))
+                    continue;
+                pending.Push(childRoot);
+            }
+        }
+
+        return roots;
+    }
+
+    private static IEnumerable<string> CMakeCallFirstArguments(string text, string call)
+    {
+        string code = CodeWithoutCommentsOrStrings(text);
+        int index = 0;
+        while ((index = IndexOfCodeToken(code, call, index)) >= 0)
+        {
+            int open = index + call.Length;
+            while (open < code.Length && char.IsWhiteSpace(code[open]))
+                open++;
+            if (open >= code.Length || code[open] != '(')
+            {
+                index = open;
+                continue;
+            }
+
+            int close = FindClosingParenthesis(code, open);
+            if (close < 0)
+                yield break;
+            string arguments = text[(open + 1)..close];
+            if (TryFirstCMakeArgument(arguments, out string? argument) && argument is not null)
+                yield return argument;
+            index = close + 1;
+        }
+    }
+
+    private static int FindClosingParenthesis(string code, int open)
+    {
+        int depth = 0;
+        for (int index = open; index < code.Length; index++)
+        {
+            if (code[index] == '(')
+                depth++;
+            else if (code[index] == ')' && --depth == 0)
+                return index;
+        }
+
+        return -1;
+    }
+
+    private static bool TryFirstCMakeArgument(string arguments, out string? argument)
+    {
+        string text = arguments.Trim();
+        if (text.Length == 0)
+        {
+            argument = null;
+            return false;
+        }
+
+        if (text[0] == '"')
+        {
+            int close = text.IndexOf('"', 1);
+            if (close <= 1)
+            {
+                argument = null;
+                return false;
+            }
+
+            argument = text[1..close];
+            return true;
+        }
+
+        if (text[0] == '[' || text.Contains('$', StringComparison.Ordinal))
+        {
+            argument = null;
+            return false;
+        }
+
+        int end = 0;
+        while (end < text.Length && !char.IsWhiteSpace(text[end]) && text[end] != ';')
+            end++;
+        if (end == 0)
+        {
+            argument = null;
+            return false;
+        }
+
+        argument = text[..end];
+        return true;
+    }
+
+    private static bool TryResolveSubdirectory(
+        string parentRoot,
+        string argument,
+        out string? childRoot)
+    {
+        childRoot = null;
+        if (string.IsNullOrWhiteSpace(argument))
+            return false;
+
+        try
+        {
+            string path = Path.IsPathRooted(argument)
+                ? argument
+                : Path.Combine(parentRoot, argument);
+            childRoot = Path.GetFullPath(path);
+            return Directory.Exists(childRoot);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private static bool IsQmlTestEvidence(string path)
@@ -1440,7 +1628,14 @@ public static class ContinuousTestProjectInventory
             using var stream = File.OpenRead(path);
             int length = (int)Math.Min(stream.Length, 64 * 1024);
             var buffer = new byte[length];
-            int read = stream.Read(buffer, 0, buffer.Length);
+            int read = 0;
+            while (read < buffer.Length)
+            {
+                int chunk = stream.Read(buffer, read, buffer.Length - read);
+                if (chunk == 0)
+                    break;
+                read += chunk;
+            }
             return System.Text.Encoding.UTF8.GetString(buffer, 0, read);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

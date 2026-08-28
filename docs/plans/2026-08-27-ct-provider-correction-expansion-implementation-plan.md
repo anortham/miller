@@ -151,11 +151,11 @@ Parallel Batch A uses `parallel-lead-commit`. Every other task uses `serial-work
 **Approach:** Config is read, never executed. Defaults apply only when no discovery property is declared. Declared unsupported config throws an actionable provider diagnostic. Test all behavior through `DiscoverAsync`; remove comments from changed tests.
 
 **Acceptance criteria:**
-- [ ] Jest/Vitest defaults contain only documented JS/TS cases and explicit config may include runner-owned directories/component extensions.
-- [ ] Supported config shapes match exactly; unsupported/truncated/testRegex/unknown-version shapes refuse instead of silently changing suites.
-- [ ] Positive/negative semantics differ correctly between Jest and Vitest.
-- [ ] Existing command/run behavior remains green.
-- [ ] Worker-scope verification passes; worker does not commit in Batch A and reports the verified diff.
+- [x] Jest/Vitest defaults contain only documented JS/TS cases and explicit config may include runner-owned directories/component extensions.
+- [x] Supported config shapes match exactly; unsupported/truncated/testRegex/unknown-version shapes refuse instead of silently changing suites.
+- [x] Positive/negative semantics differ correctly between Jest and Vitest.
+- [x] Existing command/run behavior remains green.
+- [x] Worker-scope verification passes; worker does not commit in Batch A and reports the verified diff.
 
 ### Task 4: Correct QML CMake/CTest and establish backend seam
 
@@ -179,11 +179,11 @@ Parallel Batch A uses `parallel-lead-commit`. Every other task uses `serial-work
 **Approach:** Keep framework/status contracts unchanged. Use static evidence when conclusive and a zero-write capability probe when required. Preserve exact selection, offscreen defaulting, source immutability, JUnit parsing, and coverage refusal.
 
 **Acceptance criteria:**
-- [ ] `QUICK_TEST_MAIN`, `QUICK_TEST_MAIN_WITH_SETUP`, and `QUICK_TEST_OPENGL_MAIN` inventory paths work.
-- [ ] No-CTest projects are refused before CT state writes.
-- [ ] Independent nested CMake projects remain separate.
-- [ ] Existing QML provider behavior passes through the CMake adapter unchanged.
-- [ ] Worker-scope verification passes; worker does not commit in Batch A and reports the verified diff.
+- [x] `QUICK_TEST_MAIN`, `QUICK_TEST_MAIN_WITH_SETUP`, and `QUICK_TEST_OPENGL_MAIN` inventory paths work.
+- [x] No-CTest projects are refused before CT state writes.
+- [x] Independent nested CMake projects remain separate.
+- [x] Existing QML provider behavior passes through the CMake adapter unchanged.
+- [x] Worker-scope verification passes; worker does not commit in Batch A and reports the verified diff.
 
 ### Task 5: Add qmake Qt Quick Test backend
 
