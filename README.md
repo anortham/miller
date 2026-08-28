@@ -79,7 +79,7 @@ The minimal MCP config for clients you configure by hand:
   "mcpServers": {
     "miller": {
       "type": "stdio",
-      "command": "/absolute/path/to/miller-1.19.1-aarch64-apple-darwin/miller",
+      "command": "/absolute/path/to/miller-1.25.0-aarch64-apple-darwin/miller",
       "args": ["serve"]
     }
   }
