@@ -31,5 +31,6 @@ Updated the five synthetic test expectations reported by the Windows fast-suite 
 - Path: `/home/murphy/source/miller`
 - Branch: `feature/ct-provider-correction-expansion`
 - Starting HEAD: `b4c888bb`
-- Commit SHA: pending
+- Implementation commit SHA: `ac4ae3ec`
+- Report update commit SHA: pending
 - Production files changed: none
