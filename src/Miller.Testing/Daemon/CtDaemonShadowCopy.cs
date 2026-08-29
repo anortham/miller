@@ -396,9 +396,10 @@ public static class CtDaemonShadowCopy
     }
 
     /// <summary>
-    /// Whether a copy has no process running from it. A live process keeps its own image open, so an
-    /// executable that opens for WRITING is one nobody is running. A copy whose executable is gone is
-    /// unusable anyway and counts as idle.
+    /// Whether a copy has no process running from it. Windows and Linux prevent an executable in use
+    /// from opening for writing. macOS does not, so an inconclusive process scan must keep every copy
+    /// whose executable still exists. A copy whose executable is gone is unusable anyway and counts as
+    /// idle.
     ///
     /// <para>This probe never modifies the file: the mode is Open, so nothing is created and nothing
     /// is truncated.</para>
@@ -414,6 +415,8 @@ public static class CtDaemonShadowCopy
         {
             if (!File.Exists(image))
                 return true;
+            if (OperatingSystem.IsMacOS())
+                return false;
 
             using (new FileStream(image, FileMode.Open, FileAccess.Write, FileShare.None))
             {

@@ -225,14 +225,29 @@ public sealed class CtDaemonShadowCopyTests : IDisposable
         Assert.Equal(["old"], stale);
     }
 
-    /// <summary>
-    /// The age alone never authorizes a delete: gutting a copy a daemon still runs from would break
-    /// that daemon on its next lazy assembly load. A live process holds its own image open, so an
-    /// executable that opens for WRITING is the proof that nobody runs from that copy.
-    /// </summary>
     [Fact]
-    public void An_old_copy_is_removed_only_while_nothing_runs_from_it()
+    public void The_fallback_probe_never_claims_a_macOS_copy_is_idle()
     {
+        if (!OperatingSystem.IsMacOS())
+            return;
+
+        string copy = Path.Combine(CopyRoot, "old");
+        Directory.CreateDirectory(copy);
+        string image = Path.Combine(copy, "miller");
+        File.WriteAllText(image, "an old build");
+
+        Assert.False(CtDaemonShadowCopy.IsIdleCopy(copy, "miller"));
+
+        File.Delete(image);
+        Assert.True(CtDaemonShadowCopy.IsIdleCopy(copy, "miller"));
+    }
+
+    [Fact]
+    public void A_running_copy_is_not_idle_until_its_process_exits()
+    {
+        if (OperatingSystem.IsMacOS())
+            return;
+
         string copy = Path.Combine(CopyRoot, "old");
         Directory.CreateDirectory(copy);
         string image = Path.Combine(copy, "miller.exe");
@@ -281,10 +296,7 @@ public sealed class CtDaemonShadowCopyTests : IDisposable
             finally
             {
                 if (!process.HasExited)
-                {
                     process.Kill(entireProcessTree: true);
-                }
-
                 Assert.True(process.WaitForExit(5_000), "the copied executable did not exit after cleanup.");
             }
         }

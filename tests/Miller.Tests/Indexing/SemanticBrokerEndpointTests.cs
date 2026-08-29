@@ -10,7 +10,9 @@ public sealed class SemanticBrokerEndpointTests
     [Fact]
     public void Create_DerivesTheFrozenIdentityLayoutAndBrokerArguments()
     {
-        string millerHome = Path.Combine(Path.GetTempPath(), "miller-broker-endpoint", "home");
+        string millerHome = OperatingSystem.IsWindows()
+            ? Path.Combine(Path.GetTempPath(), "miller-broker-endpoint", "home")
+            : "/tmp/miller-broker-endpoint/home";
         SemanticEncoderPin pin = SemanticEncoderSelection.Active;
         string input =
             $"julie.semantic.broker|1|julie.embedding.sidecar|1|{pin.ModelId}|{pin.ModelSha256}";
