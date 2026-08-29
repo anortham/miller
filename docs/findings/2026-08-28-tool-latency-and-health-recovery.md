@@ -39,7 +39,13 @@ Commit `854deae4` increases the existing proof-frontier batch from 100 to 500 ID
 
 The remaining real-workload hotspot is `UnresolvedNameForward`: 7 executions, 2,188 rows, and 8,754 ms in the phase measurement. The current stable resident MCP changed-path call is approximately 6.1 s. The rebuilt branch one-shot changed-path calls were 9.30, 9.35, 9.02, 9.31, 9.25, and 8.94 s; discarding the first gives a warm nearest-rank p95/max of 9.35/9.35 s, including startup. The 5,000 ms impact gate remains open. The post-rejection git-diff replay was not run.
 
-The next impact fix likely needs a new indexed/reference read structure or another architecture outside the approved no-new-sidecar/no-global-cache plan. That choice requires product direction; this branch does not weaken evidence, add a timeout, or reduce results to hide the miss.
+The follow-up [impact read-path spike](2026-08-28-impact-read-path-spike.md) split the remaining work. Warm
+query-time resolution spends a median 1,893 ms in identifier-within reads, 1,710 ms in pending-within reads,
+and 2,858 ms in identifier-detail plus identifier/pending resolver loops. The named visibility arms total only
+498 ms. The live `idx_read_manifest_entries_version(version_id,view_id,generation)` index is present and selected
+by SQLite; an equivalent connection-local visibility projection is faster in isolation but cannot explain the
+miss. The spike therefore rejects a reference sidecar as the next change and recommends a separate,
+direction/consumer-aware read plan with lazy detail hydration. The 5,000 ms impact gate remains open.
 
 The subsequent [stale-view cleanup](2026-08-28-miller-stale-view-cleanup.md) retired nine missing-root family views. On the same committed Task 2 git diff, the resident graph phase fell from 12,061 ms to 8,284–8,418 ms, about a 30% improvement. This confirms stale views were real overhead, but the 5,000 ms gate remains open.
 
