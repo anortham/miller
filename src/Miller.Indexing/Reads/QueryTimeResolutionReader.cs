@@ -683,17 +683,19 @@ internal sealed class QueryTimeResolutionReader
             OperationCount(candidateIds.Count));
 
         long pendingNamedStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        int pendingNamedRows = 0;
         foreach (string name in names)
         {
             foreach (PendingSite site in ReadPendingsByName(connection, name))
             {
+                pendingNamedRows++;
                 if (seenPendings.Add((site.VersionId, site.PendingId)))
                     pendingSites.Add(site);
             }
         }
         GraphResolutionMeasurement pendingNamed = new(
             System.Diagnostics.Stopwatch.GetElapsedTime(pendingNamedStarted),
-            names.Count,
+            pendingNamedRows,
             names.Count);
 
         long identifierDetailsStarted = System.Diagnostics.Stopwatch.GetTimestamp();

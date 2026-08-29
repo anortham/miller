@@ -379,7 +379,7 @@ public sealed class QueryTimeResolutionReaderTests
         Assert.Equal(4, breakdown.IdentifierNamed.Operations);
         Assert.Equal(1, breakdown.PendingWithin.Rows);
         Assert.Equal(1, breakdown.PendingWithin.Operations);
-        Assert.Equal(4, breakdown.PendingNamed.Rows);
+        Assert.Equal(1, breakdown.PendingNamed.Rows);
         Assert.Equal(4, breakdown.PendingNamed.Operations);
         Assert.Equal(5, breakdown.IdentifierDetails.Rows);
         Assert.Equal(1, breakdown.IdentifierDetails.Operations);
