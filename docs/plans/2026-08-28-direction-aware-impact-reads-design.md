@@ -99,6 +99,16 @@ Tests exercise the caller-facing `ReadResolutionEdges` and `ReadUnresolvedNameEd
 Timing thresholds do not belong in unit tests. Deterministic operation counts guard the performance
 behavior; the fixed replay supplies the wall-time evidence.
 
+## Replay result
+
+The 2026-08-29 fixed replay is recorded in
+[`findings/2026-08-29-direction-aware-impact-reads.md`](../findings/2026-08-29-direction-aware-impact-reads.md).
+The one-shot impact output retained the baseline hash, 53 impacted symbols, and 147 likely tests.
+The resident warm samples were 4,513, 4,505, 4,510, 4,621, and 4,600 ms; p95/max was 4,621/4,621
+ms. This is a 44.3% improvement from the 8,296 ms baseline, passing the 6,222 ms keep gate and the
+5,000 ms product gate. Every resolution pass emitted a complete breakdown, with the direction-
+opposite site arms reporting zero work.
+
 ## Measurement and acceptance
 
 Use the exact spike workload: the same six changed paths, task worktree, depth 2, limit 200, and
@@ -133,9 +143,9 @@ change is necessary before seeing the result.
 
 ## Acceptance criteria
 
-- [ ] `ResolveQuery` reads only direction-required identifier and pending arms.
+- [x] `ResolveQuery` reads only direction-required identifier and pending arms.
 - [ ] Scratch reuse remains complete and independent of paired-consumer call order.
 - [ ] Graph outputs remain byte-identical for forward, reverse, and both directions.
 - [ ] Existing resolver policy, detail loading, edge ordering, and public contracts remain unchanged.
-- [ ] The exact replay meets the 25 percent improvement gate and records the 5-second product result.
+- [x] The exact replay meets the 25 percent improvement gate and records the 5-second product result.
 - [ ] All repository branch gates pass on the final source tree.

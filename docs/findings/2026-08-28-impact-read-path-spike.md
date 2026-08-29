@@ -4,6 +4,10 @@ Date: 2026-08-28. Branch: `fix/tool-latency-health` at `8824d519`. This diagnost
 resolution breakdown instrumentation from `08e0e38a`/`f8cb9a29` and does not change graph semantics,
 the producer store, or any read query.
 
+Follow-up: the direction-aware graph-read implementation described here was measured and accepted
+in [`2026-08-29-direction-aware-impact-reads.md`](2026-08-29-direction-aware-impact-reads.md).
+That replay closes the impact latency gate while preserving this finding's sidecar rejection.
+
 ## Result
 
 The 5-second impact gate remains open, but a reference sidecar is not justified by this evidence.
@@ -214,7 +218,8 @@ implementation plan and evidence; do not land them as one bundled optimization.
 - `git diff --check` passed after the documentation update.
 - No production or test code was changed by this task. Broader branch gates remain lead-owned.
 
-## Open gate
+## Historical open gate
 
 Impact still exceeds the 5,000 ms product target. This finding supplies the next implementation
-direction; it does not claim the latency problem is fixed.
+direction as of 2026-08-28; the subsequent result is recorded in
+[`2026-08-29-direction-aware-impact-reads.md`](2026-08-29-direction-aware-impact-reads.md).
