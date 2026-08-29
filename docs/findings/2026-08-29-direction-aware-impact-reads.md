@@ -75,11 +75,11 @@ value of those five samples.
 | pending resolution | 422 / 22,763 / 22,763 | 265, 274, 271, 275, 277 | 22,763 / 22,763 |
 | relationships | 381 / 6,129 / 23 | 371, 381, 388, 382, 381 | 6,129 / 23 |
 
-The summed warm-median breakdown is `4,144 ms`; the warm median wall time is `4,513 ms`. The
+The summed warm-median breakdown is `4,139 ms`; the warm median wall time is `4,513 ms`. The
 largest single measured residual is identifier resolution at `682 ms` warm median. Identifier
-details plus identifier and pending resolution total `1,508 ms` warm median. The remaining wall
-time is outside these nine measured subphases and is not assigned to a new optimization by this
-finding.
+details plus identifier and pending resolution total `1,508 ms` warm median. The `374 ms`
+difference between the median wall time and the summed breakdown is outside these nine measured
+subphases and is not assigned to a new optimization by this finding.
 
 ## Gates and verification
 

@@ -86,10 +86,10 @@ call order; rows and operations are constant across all six calls.
 | pending resolution | 422 / 22,763 / 22,763 | 265, 274, 271, 275, 277 | 22,763 / 22,763 |
 | relationships | 381 / 6,129 / 23 | 371, 381, 388, 382, 381 | 6,129 / 23 |
 
-Warm median summed breakdown is `4,144 ms`; warm median wall time is `4,513 ms`. The largest
+Warm median summed breakdown is `4,139 ms`; warm median wall time is `4,513 ms`. The largest
 single measured residual is identifier resolution at `682 ms` warm median. Identifier details plus
 identifier and pending resolution total `1,508 ms` warm median. The difference between the median
-wall time and the summed breakdown is `369 ms`; it is not assigned to a new change.
+wall time and the summed breakdown is `374 ms`; it is not assigned to a new change.
 
 ## Gate verdicts
 
