@@ -113,17 +113,17 @@ Commit mode is `serial-worker-commit` for both tasks.
 **Approach:** Keep the machine quiet, preserve exact workload and view identity, discard the cold run for p95, and never combine experiments. The SQL comparison creates only connection-local temporary state. Do not implement the winning fix in this task.
 
 **Acceptance criteria:**
-- [ ] One cold plus five warm samples use the exact baseline workload and data.
-- [ ] Every warm call has complete subphase times, row counts, and operation counts.
-- [ ] Current and alternative visibility plans are measured on the same connection with equal result counts.
-- [ ] The finding names the dominant measured cause and rejects unsupported hypotheses.
-- [ ] The instrumentation overhead gate passes or the instrumentation is revised before evidence is accepted.
-- [ ] The sidecar is either rejected with evidence or remains a measured last-resort candidate.
-- [ ] Documentation links and final worktree state are clean; worker commits only owned files and reports exact commands.
+- [x] One cold plus five warm samples use the exact baseline workload and data.
+- [x] Every warm call has complete subphase times, row counts, and operation counts.
+- [x] Current and alternative visibility plans are measured on the same connection with equal result counts.
+- [x] The finding names the dominant measured cause and rejects unsupported hypotheses.
+- [x] The instrumentation overhead gate passes or the instrumentation is revised before evidence is accepted.
+- [x] The sidecar is either rejected with evidence or remains a measured last-resort candidate.
+- [x] Documentation links and final worktree state are clean; worker commits only owned files and reports exact commands.
 
 ## Plan acceptance criteria
 
 - [x] Task 1 instrumentation is TDD-complete, reviewed, and committed without semantic changes.
-- [ ] Task 2 reproduces the fixed workload and records a complete phase split and SQL comparison.
-- [ ] The result identifies one evidence-backed next implementation or proves that more measurement is required.
+- [x] Task 2 reproduces the fixed workload and records a complete phase split and SQL comparison.
+- [x] The result identifies one evidence-backed next implementation or proves that more measurement is required.
 - [ ] Fast, Scale, Release, secrets, dependency, and worktree gates pass on the final branch.
