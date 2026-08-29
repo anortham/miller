@@ -616,14 +616,20 @@ internal sealed class QueryTimeResolutionReader
             }
         }
 
-        QueryScratch scratch = ResolveQuery(connection, candidateIds);
+        QueryScratch scratch = ResolveQuery(connection, candidateIds, direction);
         lock (_scratchGate)
             _pendingScratch = new PendingScratch(connection, candidateIds.ToArray(), direction, kind, scratch);
 
         return scratch;
     }
 
-    private QueryScratch ResolveQuery(SqliteConnection connection, IReadOnlyList<string> candidateIds)
+    private QueryScratch ResolveQuery(SqliteConnection connection, IReadOnlyList<string> candidateIds) =>
+        ResolveQuery(connection, candidateIds, Direction.Both);
+
+    private QueryScratch ResolveQuery(
+        SqliteConnection connection,
+        IReadOnlyList<string> candidateIds,
+        Direction direction)
     {
         Counters.RecordResolvePass();
         long candidateLookupStarted = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -638,65 +644,81 @@ internal sealed class QueryTimeResolutionReader
 
         var identifierSites = new List<ResolutionIdentifierSite>();
         var seenIdentifiers = new HashSet<(long VersionId, long RowId)>();
-        long identifierWithinStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        int identifierWithinRows = 0;
-        foreach (ResolutionIdentifierSite site in ReadIdentifierSitesWithin(connection, candidateIds))
+        GraphResolutionMeasurement identifierWithin = new(TimeSpan.Zero, 0, 0);
+        if (direction is Direction.Forward or Direction.Both)
         {
-            identifierWithinRows++;
-            if (seenIdentifiers.Add((site.VersionId, site.RowId)))
-                identifierSites.Add(site);
-        }
-        GraphResolutionMeasurement identifierWithin = new(
-            System.Diagnostics.Stopwatch.GetElapsedTime(identifierWithinStarted),
-            identifierWithinRows,
-            OperationCount(candidateIds.Count));
-
-        long identifierNamedStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        int identifierNamedRows = 0;
-        foreach (string name in names)
-        {
-            foreach (ResolutionIdentifierSite site in ReadIdentifierSitesNamed(connection, name))
+            long identifierWithinStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            int identifierWithinRows = 0;
+            foreach (ResolutionIdentifierSite site in ReadIdentifierSitesWithin(connection, candidateIds))
             {
-                identifierNamedRows++;
+                identifierWithinRows++;
                 if (seenIdentifiers.Add((site.VersionId, site.RowId)))
                     identifierSites.Add(site);
             }
+            identifierWithin = new(
+                System.Diagnostics.Stopwatch.GetElapsedTime(identifierWithinStarted),
+                identifierWithinRows,
+                OperationCount(candidateIds.Count));
         }
-        GraphResolutionMeasurement identifierNamed = new(
-            System.Diagnostics.Stopwatch.GetElapsedTime(identifierNamedStarted),
-            identifierNamedRows,
-            names.Count);
+
+        GraphResolutionMeasurement identifierNamed = new(TimeSpan.Zero, 0, 0);
+        if (direction is Direction.Reverse or Direction.Both)
+        {
+            long identifierNamedStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            int identifierNamedRows = 0;
+            foreach (string name in names)
+            {
+                foreach (ResolutionIdentifierSite site in ReadIdentifierSitesNamed(connection, name))
+                {
+                    identifierNamedRows++;
+                    if (seenIdentifiers.Add((site.VersionId, site.RowId)))
+                        identifierSites.Add(site);
+                }
+            }
+            identifierNamed = new(
+                System.Diagnostics.Stopwatch.GetElapsedTime(identifierNamedStarted),
+                identifierNamedRows,
+                names.Count);
+        }
 
         var pendingSites = new List<PendingSite>();
         var seenPendings = new HashSet<(long VersionId, string PendingId)>(PendingKeyComparer.Instance);
-        long pendingWithinStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        int pendingWithinRows = 0;
-        foreach (PendingSite site in ReadPendingsByFrom(connection, candidateIds))
+        GraphResolutionMeasurement pendingWithin = new(TimeSpan.Zero, 0, 0);
+        if (direction is Direction.Forward or Direction.Both)
         {
-            pendingWithinRows++;
-            if (seenPendings.Add((site.VersionId, site.PendingId)))
-                pendingSites.Add(site);
-        }
-        GraphResolutionMeasurement pendingWithin = new(
-            System.Diagnostics.Stopwatch.GetElapsedTime(pendingWithinStarted),
-            pendingWithinRows,
-            OperationCount(candidateIds.Count));
-
-        long pendingNamedStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        int pendingNamedRows = 0;
-        foreach (string name in names)
-        {
-            foreach (PendingSite site in ReadPendingsByName(connection, name))
+            long pendingWithinStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            int pendingWithinRows = 0;
+            foreach (PendingSite site in ReadPendingsByFrom(connection, candidateIds))
             {
-                pendingNamedRows++;
+                pendingWithinRows++;
                 if (seenPendings.Add((site.VersionId, site.PendingId)))
                     pendingSites.Add(site);
             }
+            pendingWithin = new(
+                System.Diagnostics.Stopwatch.GetElapsedTime(pendingWithinStarted),
+                pendingWithinRows,
+                OperationCount(candidateIds.Count));
         }
-        GraphResolutionMeasurement pendingNamed = new(
-            System.Diagnostics.Stopwatch.GetElapsedTime(pendingNamedStarted),
-            pendingNamedRows,
-            names.Count);
+
+        GraphResolutionMeasurement pendingNamed = new(TimeSpan.Zero, 0, 0);
+        if (direction is Direction.Reverse or Direction.Both)
+        {
+            long pendingNamedStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            int pendingNamedRows = 0;
+            foreach (string name in names)
+            {
+                foreach (PendingSite site in ReadPendingsByName(connection, name))
+                {
+                    pendingNamedRows++;
+                    if (seenPendings.Add((site.VersionId, site.PendingId)))
+                        pendingSites.Add(site);
+                }
+            }
+            pendingNamed = new(
+                System.Diagnostics.Stopwatch.GetElapsedTime(pendingNamedStarted),
+                pendingNamedRows,
+                names.Count);
+        }
 
         long identifierDetailsStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         Dictionary<(long VersionId, long RowId), SiteDetails> details =
