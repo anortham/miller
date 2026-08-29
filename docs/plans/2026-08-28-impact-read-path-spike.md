@@ -126,4 +126,4 @@ Commit mode is `serial-worker-commit` for both tasks.
 - [x] Task 1 instrumentation is TDD-complete, reviewed, and committed without semantic changes.
 - [x] Task 2 reproduces the fixed workload and records a complete phase split and SQL comparison.
 - [x] The result identifies one evidence-backed next implementation or proves that more measurement is required.
-- [ ] Fast, Scale, Release, secrets, dependency, and worktree gates pass on the final branch.
+- [x] Fast, Scale, Release, secrets, dependency, and worktree gates pass on the final branch.
