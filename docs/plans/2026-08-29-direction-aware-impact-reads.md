@@ -82,12 +82,12 @@ Commit mode is `serial-worker-commit` for both tasks.
 **Approach:** First add caller-facing tests that fail because forward observations still report named work and reverse observations still report within work. Add an either-order scratch-reuse test that compares literal serialized edges and proves one resolve pass. Implement the smallest branching inside `ResolveQuery`, using zero measurements for skipped arms. Keep the full-read entry used by exact/fallback consumers. Run the controlled mutation check: forcing reverse to execute a within arm or omitting a named arm must fail at least one test.
 
 **Acceptance criteria:**
-- [ ] RED proves forward currently runs named arms and reverse currently runs within arms.
-- [ ] Forward reports zero named rows and operations; reverse reports zero within rows and operations; `Both` retains existing counts.
-- [ ] Paired consumers reuse one scratch in either call order without losing resolution, pending, or unresolved-name edges.
-- [ ] Non-graph inbound/outgoing exact and fallback behavior stays on the full-read path.
-- [ ] Existing graph parity, homonym, pending override, QML, bounded-cache, and ordering tests pass.
-- [ ] Worker focused union and assigned Release builds pass; the worker commits only owned files and reports RED/GREEN, Miller, API-shape, gate, worktree, branch, and dirty-state evidence.
+- [x] RED proves forward currently runs named arms and reverse currently runs within arms.
+- [x] Forward reports zero named rows and operations; reverse reports zero within rows and operations; `Both` retains existing counts.
+- [x] Paired consumers reuse one scratch in either call order without losing resolution, pending, or unresolved-name edges.
+- [x] Non-graph inbound/outgoing exact and fallback behavior stays on the full-read path.
+- [x] Existing graph parity, homonym, pending override, QML, bounded-cache, and ordering tests pass.
+- [x] Worker focused union and assigned Release builds pass; the worker commits only owned files and reports RED/GREEN, Miller, API-shape, gate, worktree, branch, and dirty-state evidence.
 
 ### Task 2: Fixed replay and decision record
 
@@ -123,7 +123,7 @@ Commit mode is `serial-worker-commit` for both tasks.
 
 ## Plan acceptance criteria
 
-- [ ] Task 1 is TDD-complete, lead-reviewed, and committed without public or non-graph behavior changes.
+- [x] Task 1 is TDD-complete, lead-reviewed, and committed without public or non-graph behavior changes.
 - [ ] Task 2 proves byte-identical results and either accepts or rejects the change from the fixed performance gates.
 - [ ] Accepted code meets the 25 percent warm p95 improvement gate; product completion requires warm p95 at most 5.000 seconds.
 - [ ] Fast, Scale, Release, secrets, dependency, and worktree gates pass on the final accepted source tree.
