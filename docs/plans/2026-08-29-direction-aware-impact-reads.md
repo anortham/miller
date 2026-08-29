@@ -114,16 +114,16 @@ Commit mode is `serial-worker-commit` for both tasks.
 **Approach:** Keep the machine quiet. Compare the one-shot result to the recorded hash and counts. Discard only the resident cold call for p95 and keep the five resident warm samples as the performance series. If parity fails or warm p95 exceeds 6.222 seconds, stop acceptance and report the exact rejection evidence so the lead can route a Task 1 revert. If the keep gate passes but the product gate remains open, name the largest measured residual without proposing bundled work. Update the design acceptance checklist only for criteria proved by the replay.
 
 **Acceptance criteria:**
-- [ ] One one-shot parity call and one cold plus five warm resident calls use the exact workload and view.
-- [ ] Output hash, 53 impacted symbols, and 147 likely tests remain unchanged.
-- [ ] Forward-opposite arms report zero work on the reverse impact workload and every resolution pass has a complete breakdown.
-- [ ] Warm p95 is at most 6.222 seconds and no warm sample exceeds 8.296 seconds, or the task reports rejection evidence without claiming acceptance.
-- [ ] The finding states whether the 5.000-second product gate closed and names the largest measured residual if it did not.
-- [ ] Documentation links, design checklist, and worker worktree state are clean; the worker commits only owned files and reports exact replay evidence.
+- [x] One one-shot parity call and one cold plus five warm resident calls use the exact workload and view.
+- [x] Output hash, 53 impacted symbols, and 147 likely tests remain unchanged.
+- [x] Forward-opposite arms report zero work on the reverse impact workload and every resolution pass has a complete breakdown.
+- [x] Warm p95 is at most 6.222 seconds and no warm sample exceeds 8.296 seconds, or the task reports rejection evidence without claiming acceptance.
+- [x] The finding states whether the 5.000-second product gate closed and names the largest measured residual if it did not.
+- [x] Documentation links, design checklist, and worker worktree state are clean; the worker commits only owned files and reports exact replay evidence.
 
 ## Plan acceptance criteria
 
 - [x] Task 1 is TDD-complete, lead-reviewed, and committed without public or non-graph behavior changes.
-- [ ] Task 2 proves byte-identical results and either accepts or rejects the change from the fixed performance gates.
-- [ ] Accepted code meets the 25 percent warm p95 improvement gate; product completion requires warm p95 at most 5.000 seconds.
+- [x] Task 2 proves byte-identical results and either accepts or rejects the change from the fixed performance gates.
+- [x] Accepted code meets the 25 percent warm p95 improvement gate; product completion requires warm p95 at most 5.000 seconds.
 - [ ] Fast, Scale, Release, secrets, dependency, and worktree gates pass on the final accepted source tree.

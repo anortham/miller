@@ -144,8 +144,8 @@ change is necessary before seeing the result.
 ## Acceptance criteria
 
 - [x] `ResolveQuery` reads only direction-required identifier and pending arms.
-- [ ] Scratch reuse remains complete and independent of paired-consumer call order.
-- [ ] Graph outputs remain byte-identical for forward, reverse, and both directions.
-- [ ] Existing resolver policy, detail loading, edge ordering, and public contracts remain unchanged.
+- [x] Scratch reuse remains complete and independent of paired-consumer call order.
+- [x] Graph outputs remain byte-identical for forward, reverse, and both directions.
+- [x] Existing resolver policy, detail loading, edge ordering, and public contracts remain unchanged.
 - [x] The exact replay meets the 25 percent improvement gate and records the 5-second product result.
 - [ ] All repository branch gates pass on the final source tree.
