@@ -189,7 +189,7 @@ public sealed class CTestDiscoveryParserTests
         Assert.Equal(
             [
                 "--test-dir", "/build dir", "--output-junit", "/results/one report.xml",
-                "--no-tests=error", "--output-on-failure", "-R", "^(?:A\\[1]|B\\ \\(π\\))$"
+                "--no-tests=error", "--output-on-failure", "-R", "^(A\\[1]|B\\ \\(π\\))$"
             ],
             arguments);
         Assert.DoesNotContain(arguments, argument => argument.Contains(' ')

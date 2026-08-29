@@ -59,6 +59,49 @@ public sealed class QtQuickTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task CMake_backend_rebuilds_configured_tree_after_failed_build()
+    {
+        int configureRuns = 0;
+        int buildRuns = 0;
+        var runner = new ScriptedTestProcessRunner(command =>
+        {
+            if (command.FileName == "cmake" && command.Arguments.SequenceEqual(["--version"]))
+                return new TestProcessResult(0, "cmake version 3.27.9\n", string.Empty);
+            if (command.FileName == "cmake" && command.Arguments.Contains("-S"))
+            {
+                configureRuns++;
+                string buildDirectory = ArgumentAfter(command, "-B");
+                Directory.CreateDirectory(buildDirectory);
+                File.WriteAllText(Path.Combine(buildDirectory, "CMakeCache.txt"), "cache");
+                File.WriteAllText(Path.Combine(buildDirectory, "CTestTestfile.cmake"), "tests");
+                return new TestProcessResult(0, string.Empty, string.Empty);
+            }
+            if (command.FileName == "cmake" && command.Arguments.Contains("--build"))
+            {
+                buildRuns++;
+                return buildRuns == 1
+                    ? new TestProcessResult(1, string.Empty, "build failed")
+                    : new TestProcessResult(0, string.Empty, string.Empty);
+            }
+            throw new Xunit.Sdk.XunitException($"unexpected command: {command.ToDisplayString()}");
+        });
+        var backend = new CMakeQtQuickTestBackend(runner);
+        ContinuousTestWorkspace workspace = Workspace();
+        CtGenerationPaths paths = CtGenerationPaths.Allocate(workspace);
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var failure = await Assert.ThrowsAsync<ContinuousTestProviderException>(
+            () => backend.EnsureBuildAsync(workspace, paths, cancellationToken));
+        Assert.Contains("CMake build failed", failure.Message, StringComparison.Ordinal);
+
+        await backend.EnsureBuildAsync(workspace, paths, cancellationToken);
+        await backend.EnsureBuildAsync(workspace, paths, cancellationToken);
+
+        Assert.Equal(2, configureRuns);
+        Assert.Equal(2, buildRuns);
+    }
+
+    [Fact]
     public async Task Provider_uses_the_backend_selected_by_workspace_metadata()
     {
         var backend = new RecordingBackend();
@@ -190,7 +233,7 @@ public sealed class QtQuickTestProviderTests : IDisposable
         Assert.Contains("--no-tests=error", run.Arguments);
         Assert.Contains("--output-junit", run.Arguments);
         Assert.Contains("-R", run.Arguments);
-        Assert.Equal("^(?:A/basic)$", ArgumentAfter(run, "-R"));
+        Assert.Equal("^(A/basic)$", ArgumentAfter(run, "-R"));
         Assert.Equal("offscreen", run.Environment["QT_QPA_PLATFORM"]);
         Assert.Single(result.CaseResults);
         Assert.Equal(selected.Id, result.CaseResults[0].TestCaseId);

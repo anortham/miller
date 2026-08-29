@@ -4,6 +4,7 @@ namespace Miller.Testing.Providers.Qml;
 
 internal sealed class CMakeQtQuickTestBackend : IQtQuickTestBackend
 {
+    private const string BuildCompletionMarkerFileName = ".cmake-build-complete";
     private readonly ITestProcessRunner _runner;
     private readonly string _cmakePath;
     private readonly string _ctestPath;
@@ -71,8 +72,9 @@ internal sealed class CMakeQtQuickTestBackend : IQtQuickTestBackend
         if (build.ExitCode != 0)
             throw Failure($"CMake build failed with exit code {build.ExitCode}: {FailureSummary(build)}");
 
-        if (!HasValidBuildTree(paths))
+        if (!HasConfiguredBuildTree(paths))
             throw Failure($"CMake build did not produce a valid CTest build tree under '{paths.OutDir}'.");
+        File.WriteAllText(Path.Combine(paths.GenerationRoot, BuildCompletionMarkerFileName), string.Empty);
     }
 
     public async Task<IReadOnlyList<QtQuickTestCase>> DiscoverAsync(
@@ -249,6 +251,10 @@ internal sealed class CMakeQtQuickTestBackend : IQtQuickTestBackend
     }
 
     private static bool HasValidBuildTree(CtGenerationPaths paths) =>
+        HasConfiguredBuildTree(paths)
+        && File.Exists(Path.Combine(paths.GenerationRoot, BuildCompletionMarkerFileName));
+
+    private static bool HasConfiguredBuildTree(CtGenerationPaths paths) =>
         File.Exists(Path.Combine(paths.OutDir, "CMakeCache.txt"))
         && File.Exists(Path.Combine(paths.OutDir, "CTestTestfile.cmake"));
 

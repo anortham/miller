@@ -133,7 +133,7 @@ public static class QtQuickTestTooling
     public static string ExactTestNameRegex(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        return $"^(?:{Regex.Escape(name)})$";
+        return $"^({Regex.Escape(name)})$";
     }
 
     public static string ExactTestNameRegex(IEnumerable<string> names)
@@ -150,7 +150,7 @@ public static class QtQuickTestTooling
         if (ordered.Length == 0)
             throw new ArgumentException("test names must contain at least one name", nameof(names));
 
-        return $"^(?:{string.Join('|', ordered.Select(Regex.Escape))})$";
+        return $"^({string.Join('|', ordered.Select(Regex.Escape))})$";
     }
 
     private static void AppendConfiguration(List<string> arguments, string? configuration)

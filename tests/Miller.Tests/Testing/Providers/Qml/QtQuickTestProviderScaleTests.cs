@@ -28,6 +28,50 @@ public sealed class QtQuickTestProviderScaleTests : IDisposable
     }
 
     [Fact]
+    public async Task Exact_test_name_regex_runs_selected_plain_ctest_targets()
+    {
+        string cmake = CtProviderTestSupport.RequireCMake();
+        string ctest = CtProviderTestSupport.RequireCTest();
+        string fixture = Path.Combine(_dir, "ctest regex fixture");
+        string build = Path.Combine(_dir, "ctest regex build");
+        string report = Path.Combine(_dir, "ctest regex results.xml");
+        Directory.CreateDirectory(fixture);
+        File.WriteAllText(
+            Path.Combine(fixture, "CMakeLists.txt"),
+            """
+            cmake_minimum_required(VERSION 3.21)
+            project(CtestRegex NONE)
+            enable_testing()
+            add_test(NAME "a" COMMAND "${CMAKE_COMMAND}" -E true)
+            add_test(NAME ":a" COMMAND "${CMAKE_COMMAND}" -E true)
+            add_test(NAME "xa" COMMAND "${CMAKE_COMMAND}" -E true)
+            """);
+        var runner = new TestProcessRunner();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        TestProcessResult configure = await runner.RunAsync(
+            new TestProcessCommand(cmake, ["-S", fixture, "-B", build], fixture),
+            cancellationToken);
+        Assert.Equal(0, configure.ExitCode);
+
+        string regex = QtQuickTestTooling.ExactTestNameRegex(["a", ":a"]);
+        TestProcessResult run = await runner.RunAsync(
+            new TestProcessCommand(
+                ctest,
+                ["--test-dir", build, "-R", regex, "--no-tests=error", "--output-junit", report],
+                build),
+            cancellationToken);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal(
+            [":a", "a"],
+            System.Xml.Linq.XDocument.Load(report)
+                .Descendants("testcase")
+                .Select(element => (string?)element.Attribute("name"))
+                .Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public async Task Qt_quick_test_fixture_discovers_selects_runs_whole_suite_and_keeps_source_unchanged()
     {
         string cmake = CtProviderTestSupport.RequireCMake();
