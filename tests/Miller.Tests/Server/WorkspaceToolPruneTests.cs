@@ -245,7 +245,7 @@ public sealed class WorkspaceToolPruneTests : IDisposable
         string output = tool.Workspace(operation: "prune");
 
         Assert.Contains("retirement failures: 1", output);
-        Assert.Contains("store view retirement producer is unavailable", output);
+        Assert.Contains("linked-worktree removal is not confirmed", output);
         Assert.NotNull(registry.Get(MissingWs));
         Assert.NotNull(registry.GetStoreMember(MissingWs));
     }

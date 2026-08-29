@@ -23,6 +23,8 @@ namespace Miller.Server.Workspaces;
 /// </summary>
 public static class WorkspaceRegistryPrune
 {
+    private const int MaxProducerRetirementsPerRun = 1;
+
     public sealed record Entry(
         string WorkspaceId,
         string DisplayId,
@@ -57,6 +59,7 @@ public static class WorkspaceRegistryPrune
         var blockedFamilies = new HashSet<Guid>();
         var reclaimed = StoreSidecarReclaimResult.None;
         int kept = 0;
+        int producerRetirements = 0;
         foreach (WorkspaceRegistryRow row in registry.List())
         {
             if (!string.IsNullOrWhiteSpace(protectedWorkspaceId) &&
@@ -69,43 +72,6 @@ public static class WorkspaceRegistryPrune
             if (Directory.Exists(row.CanonicalRoot))
             {
                 kept++;
-                continue;
-            }
-
-            if (dryRun)
-            {
-                WorkspaceRemoval.StoreViewCapture dryCapture =
-                    WorkspaceRemoval.CaptureStoreView(registry, row.WorkspaceId);
-                if (dryCapture.Failure is { } dryFailure)
-                {
-                    retirementFailures.Add(new RetirementFailure(
-                        row.WorkspaceId,
-                        row.DisplayId,
-                        row.CanonicalRoot,
-                        dryFailure));
-                    blockedFamilies.Add(dryFailure.FamilyId);
-                    kept++;
-                    continue;
-                }
-
-                if (dryCapture.Target is { } dryTarget &&
-                    !WorkspaceRemoval.TryRetireView(
-                        dryTarget,
-                        retireView,
-                        apply: false,
-                        out StoreViewRetirementOutcome dryOutcome))
-                {
-                    retirementFailures.Add(new RetirementFailure(
-                        row.WorkspaceId,
-                        row.DisplayId,
-                        row.CanonicalRoot,
-                        dryOutcome));
-                    blockedFamilies.Add(dryTarget.FamilyId);
-                    kept++;
-                    continue;
-                }
-
-                pruned.Add(new Entry(row.WorkspaceId, row.DisplayId, row.CanonicalRoot));
                 continue;
             }
 
@@ -124,20 +90,53 @@ public static class WorkspaceRegistryPrune
             }
 
             StoreSidecarReclaimTarget? target = capture.Target;
-            if (target is not null &&
-                !WorkspaceRemoval.TryRetireView(
-                    target,
-                    retireView,
-                    apply: true,
-                    out StoreViewRetirementOutcome outcome))
+            if (target is not null)
             {
-                retirementFailures.Add(new RetirementFailure(
-                    row.WorkspaceId,
-                    row.DisplayId,
-                    row.CanonicalRoot,
-                    outcome));
-                blockedFamilies.Add(target.FamilyId);
-                kept++;
+                if (!HasConfirmedLinkedWorktreeRemoval(row))
+                {
+                    retirementFailures.Add(new RetirementFailure(
+                        row.WorkspaceId,
+                        row.DisplayId,
+                        row.CanonicalRoot,
+                        UnconfirmedLinkedWorktreeRemoval(target)));
+                    blockedFamilies.Add(target.FamilyId);
+                    kept++;
+                    continue;
+                }
+
+                if (producerRetirements >= MaxProducerRetirementsPerRun)
+                {
+                    retirementFailures.Add(new RetirementFailure(
+                        row.WorkspaceId,
+                        row.DisplayId,
+                        row.CanonicalRoot,
+                        DeferredProducerRetirement(target)));
+                    blockedFamilies.Add(target.FamilyId);
+                    kept++;
+                    continue;
+                }
+
+                producerRetirements++;
+                if (!WorkspaceRemoval.TryRetireView(
+                        target,
+                        retireView,
+                        apply: !dryRun,
+                        out StoreViewRetirementOutcome outcome))
+                {
+                    retirementFailures.Add(new RetirementFailure(
+                        row.WorkspaceId,
+                        row.DisplayId,
+                        row.CanonicalRoot,
+                        outcome));
+                    blockedFamilies.Add(target.FamilyId);
+                    kept++;
+                    continue;
+                }
+            }
+
+            if (dryRun)
+            {
+                pruned.Add(new Entry(row.WorkspaceId, row.DisplayId, row.CanonicalRoot));
                 continue;
             }
 
@@ -159,6 +158,49 @@ public static class WorkspaceRegistryPrune
 
         return new Result(dryRun, pruned, kept, reclaimed, maintained, retirementFailures);
     }
+
+    private static bool HasConfirmedLinkedWorktreeRemoval(WorkspaceRegistryRow row)
+    {
+        if (row.GitIsLinked != true || string.IsNullOrWhiteSpace(row.GitDir))
+            return false;
+
+        string? adminParent;
+        try
+        {
+            adminParent = Path.GetDirectoryName(row.GitDir);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+
+        return adminParent is not null &&
+            Directory.Exists(adminParent) &&
+            !Directory.Exists(row.GitDir) &&
+            !File.Exists(row.GitDir);
+    }
+
+    private static StoreViewRetirementOutcome UnconfirmedLinkedWorktreeRemoval(
+        StoreSidecarReclaimTarget target) =>
+        new(
+            StoreViewRetirementDisposition.Failed,
+            target.FamilyId,
+            target.ViewId,
+            0,
+            0,
+            0,
+            "linked-worktree removal is not confirmed for the missing workspace root; use exact workspace remove after confirming removal");
+
+    private static StoreViewRetirementOutcome DeferredProducerRetirement(
+        StoreSidecarReclaimTarget target) =>
+        new(
+            StoreViewRetirementDisposition.Failed,
+            target.FamilyId,
+            target.ViewId,
+            0,
+            0,
+            0,
+            "producer retirement deferred by the one-target prune limit; rerun prune to advance");
 
     /// <summary>
     /// One pass over EVERY registered family, not only the families this prune touched.

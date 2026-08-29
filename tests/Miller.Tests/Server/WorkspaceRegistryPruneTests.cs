@@ -21,6 +21,7 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
     {
         _dir = Path.Combine(Path.GetTempPath(), "miller-prune-reclaim-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
+        Directory.CreateDirectory(Path.Combine(_dir, "common"));
         _registryDb = Path.Combine(_dir, "workspaces.db");
         _registry = WorkspaceRegistry.Open(_registryDb);
     }
@@ -53,8 +54,36 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         return root;
     }
 
-    private void JoinFamily(StoreFamilyRegistryRow family, string workspaceId, string root, string viewId) =>
+    private void MarkLinkedLineage(string workspaceId, bool adminParentExists)
+    {
+        WorkspaceRegistryRow row = _registry.Get(workspaceId) ?? throw new InvalidOperationException();
+        string adminParent = Path.Combine(_dir, "git-admin", workspaceId);
+        if (adminParentExists)
+            Directory.CreateDirectory(adminParent);
+        _registry.UpsertSeen(
+            row.WorkspaceId,
+            row.DisplayId,
+            row.CanonicalRoot,
+            row.IndexDbPath,
+            row.State,
+            lineage: new WorkspaceLineage(
+                Path.Combine(_dir, "common"),
+                IsLinkedWorktree: true,
+                GitDir: Path.Combine(adminParent, "worktree"),
+                GitDirCreatedAtUtc: DateTimeOffset.UtcNow));
+    }
+
+    private void JoinFamily(
+        StoreFamilyRegistryRow family,
+        string workspaceId,
+        string root,
+        string viewId,
+        bool markConfirmedRemovedLinked = true)
+    {
+        if (markConfirmedRemovedLinked)
+            MarkLinkedLineage(workspaceId, adminParentExists: true);
         _registry.UpsertStoreMember(workspaceId, family.FamilyId, viewId, root, WorkspaceRootIdentity.Unknown);
+    }
 
     private static IReadOnlyList<string> WriteSidecars(string storeRoot, string viewId)
     {
@@ -159,6 +188,147 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         Assert.False(result.SidecarReclaim.HasReport);
         Assert.All(paths, p => Assert.True(File.Exists(p)));
         Assert.NotNull(_registry.GetStoreMember("ws-prune-dry-00001"));
+    }
+
+    [Fact]
+    public void Run_ConfirmedRemovedLinkedWorktree_AllowsProducerRetirement()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-confirmed-removal");
+        string goneRoot = Register("ws-prune-confirmed-0001", "confirmed-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-confirmed-0001", goneRoot, "view-confirmed");
+        var calls = new List<bool>();
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            retireView: (target, apply) =>
+            {
+                calls.Add(apply);
+                return RetireView(target, apply);
+            });
+
+        Assert.Single(result.Pruned);
+        Assert.Empty(result.RetirementFailures);
+        Assert.Equal(new[] { false, true }, calls);
+        Assert.Null(_registry.Get("ws-prune-confirmed-0001"));
+    }
+
+    [Fact]
+    public void Run_UnavailableLinkedLineage_KeepsMemberAndReportsExactRemovalAction()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-unavailable");
+        string goneRoot = Register("ws-prune-unavailable-1", "unavailable-repo", rootExists: false);
+        JoinFamily(
+            family,
+            "ws-prune-unavailable-1",
+            goneRoot,
+            "view-unavailable",
+            markConfirmedRemovedLinked: false);
+        MarkLinkedLineage("ws-prune-unavailable-1", adminParentExists: false);
+        int producerCalls = 0;
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            retireView: (_, _) =>
+            {
+                producerCalls++;
+                return default;
+            });
+
+        Assert.Empty(result.Pruned);
+        Assert.Equal(1, result.Kept);
+        Assert.Single(result.RetirementFailures);
+        string error = result.RetirementFailures[0].Outcome.Error!;
+        Assert.Contains("linked-worktree removal is not confirmed", error, StringComparison.OrdinalIgnoreCase);
+        Assert.False(error.Contains("producer is unavailable", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("workspace remove", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, producerCalls);
+        Assert.NotNull(_registry.Get("ws-prune-unavailable-1"));
+        Assert.NotNull(_registry.GetStoreMember("ws-prune-unavailable-1"));
+    }
+
+    [Fact]
+    public void Run_DryRun_ConsumesOneConfirmedProducerBudget()
+    {
+        StoreFamilyRegistryRow first = SeedFamily("lineage-budget-dry-first");
+        StoreFamilyRegistryRow second = SeedFamily("lineage-budget-dry-second");
+        string firstRoot = Register("ws-prune-budget-dry-1", "budget-dry-first", rootExists: false);
+        string secondRoot = Register("ws-prune-budget-dry-2", "budget-dry-second", rootExists: false);
+        JoinFamily(first, "ws-prune-budget-dry-1", firstRoot, "view-budget-dry-first");
+        JoinFamily(second, "ws-prune-budget-dry-2", secondRoot, "view-budget-dry-second");
+        var calls = new List<bool>();
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: true,
+            retireView: (target, apply) =>
+            {
+                calls.Add(apply);
+                return RetireView(target, apply);
+            });
+
+        Assert.Single(result.Pruned);
+        Assert.Equal(1, result.Kept);
+        Assert.Equal(new[] { false }, calls);
+        Assert.Single(result.RetirementFailures);
+        Assert.Contains("rerun prune", result.RetirementFailures[0].Outcome.Error!, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(_registry.Get("ws-prune-budget-dry-2"));
+    }
+
+    [Fact]
+    public void Run_Apply_ConsumesOneConfirmedProducerBudget()
+    {
+        StoreFamilyRegistryRow first = SeedFamily("lineage-budget-apply-first");
+        StoreFamilyRegistryRow second = SeedFamily("lineage-budget-apply-second");
+        string firstRoot = Register("ws-prune-budget-apply-1", "budget-apply-first", rootExists: false);
+        string secondRoot = Register("ws-prune-budget-apply-2", "budget-apply-second", rootExists: false);
+        JoinFamily(first, "ws-prune-budget-apply-1", firstRoot, "view-budget-apply-first");
+        JoinFamily(second, "ws-prune-budget-apply-2", secondRoot, "view-budget-apply-second");
+        var calls = new List<bool>();
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            retireView: (target, apply) =>
+            {
+                calls.Add(apply);
+                return RetireView(target, apply);
+            });
+
+        Assert.Single(result.Pruned);
+        Assert.Equal(1, result.Kept);
+        Assert.Equal(new[] { false, true }, calls);
+        Assert.Single(result.RetirementFailures);
+        Assert.Contains("rerun prune", result.RetirementFailures[0].Outcome.Error!, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(_registry.Get("ws-prune-budget-apply-1"));
+        Assert.NotNull(_registry.Get("ws-prune-budget-apply-2"));
+    }
+
+    [Fact]
+    public void Run_MissingNonStoreWorkspace_PreservesLegacyPrune()
+    {
+        Register("ws-prune-plain-0002", "plain-repo-2", rootExists: false);
+        int producerCalls = 0;
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            retireView: (_, _) =>
+            {
+                producerCalls++;
+                return default;
+            });
+
+        Assert.Single(result.Pruned);
+        Assert.Empty(result.RetirementFailures);
+        Assert.Equal(0, producerCalls);
+        Assert.Null(_registry.Get("ws-prune-plain-0002"));
     }
 
     [Fact]
