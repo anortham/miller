@@ -1835,7 +1835,54 @@ public sealed class WorkspaceIndexProvider
             observation.CandidateCount,
             ServerJson.Strings(observation.CandidateSample),
             TelemetryContext.Current?.CorrelationId ?? "unmeasured");
+
+        if (observation.ResolutionBreakdown is not { } breakdown)
+            return;
+
+        Serilog.Log.Information(
+            "Graph resolution breakdown for {GraphStatementPhase}: " +
+            "candidate lookup {CandidateLookupRows} rows/{CandidateLookupOperations} ops/{CandidateLookupElapsedMs} ms, " +
+            "identifier within {IdentifierWithinRows} rows/{IdentifierWithinOperations} ops/{IdentifierWithinElapsedMs} ms, " +
+            "identifier named {IdentifierNamedRows} rows/{IdentifierNamedOperations} ops/{IdentifierNamedElapsedMs} ms, " +
+            "pending within {PendingWithinRows} rows/{PendingWithinOperations} ops/{PendingWithinElapsedMs} ms, " +
+            "pending named {PendingNamedRows} rows/{PendingNamedOperations} ops/{PendingNamedElapsedMs} ms, " +
+            "identifier details {IdentifierDetailsRows} rows/{IdentifierDetailsOperations} ops/{IdentifierDetailsElapsedMs} ms, " +
+            "identifier resolution {IdentifierResolutionRows} rows/{IdentifierResolutionOperations} ops/{IdentifierResolutionElapsedMs} ms, " +
+            "pending resolution {PendingResolutionRows} rows/{PendingResolutionOperations} ops/{PendingResolutionElapsedMs} ms, " +
+            "relationships {RelationshipsRows} rows/{RelationshipsOperations} ops/{RelationshipsElapsedMs} ms for cid {CorrelationId}",
+            phase,
+            breakdown.CandidateLookup.Rows,
+            breakdown.CandidateLookup.Operations,
+            ElapsedMilliseconds(breakdown.CandidateLookup.Elapsed),
+            breakdown.IdentifierWithin.Rows,
+            breakdown.IdentifierWithin.Operations,
+            ElapsedMilliseconds(breakdown.IdentifierWithin.Elapsed),
+            breakdown.IdentifierNamed.Rows,
+            breakdown.IdentifierNamed.Operations,
+            ElapsedMilliseconds(breakdown.IdentifierNamed.Elapsed),
+            breakdown.PendingWithin.Rows,
+            breakdown.PendingWithin.Operations,
+            ElapsedMilliseconds(breakdown.PendingWithin.Elapsed),
+            breakdown.PendingNamed.Rows,
+            breakdown.PendingNamed.Operations,
+            ElapsedMilliseconds(breakdown.PendingNamed.Elapsed),
+            breakdown.IdentifierDetails.Rows,
+            breakdown.IdentifierDetails.Operations,
+            ElapsedMilliseconds(breakdown.IdentifierDetails.Elapsed),
+            breakdown.IdentifierResolution.Rows,
+            breakdown.IdentifierResolution.Operations,
+            ElapsedMilliseconds(breakdown.IdentifierResolution.Elapsed),
+            breakdown.PendingResolution.Rows,
+            breakdown.PendingResolution.Operations,
+            ElapsedMilliseconds(breakdown.PendingResolution.Elapsed),
+            breakdown.Relationships.Rows,
+            breakdown.Relationships.Operations,
+            ElapsedMilliseconds(breakdown.Relationships.Elapsed),
+            TelemetryContext.Current?.CorrelationId ?? "unmeasured");
     }
+
+    private static long ElapsedMilliseconds(TimeSpan elapsed) =>
+        Math.Max(0, (long)elapsed.TotalMilliseconds);
 
     /// <param name="RefreshPending">
     /// True when this read served the PINNED view and left a refresh running behind it. It is not an error and not

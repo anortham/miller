@@ -359,6 +359,71 @@ public sealed class QueryTimeResolutionReaderTests
     }
 
     [Fact]
+    public void GraphResolutionObservationReportsEachResolutionSubphaseOnce()
+    {
+        using ResolutionStoreFixture fixture = PopulateStore();
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+        var observations = new List<GraphStatementObservation>();
+
+        reader.ReadResolutionEdges(connection, [Run, Helper, Count, DupA], Direction.Both, observations.Add);
+
+        GraphStatementObservation observation = Assert.Single(observations);
+        GraphResolutionBreakdown breakdown = Assert.IsType<GraphResolutionBreakdown>(observation.ResolutionBreakdown);
+
+        Assert.Equal(4, breakdown.CandidateLookup.Rows);
+        Assert.Equal(1, breakdown.CandidateLookup.Operations);
+        Assert.Equal(5, breakdown.IdentifierWithin.Rows);
+        Assert.Equal(1, breakdown.IdentifierWithin.Operations);
+        Assert.Equal(4, breakdown.IdentifierNamed.Rows);
+        Assert.Equal(4, breakdown.IdentifierNamed.Operations);
+        Assert.Equal(1, breakdown.PendingWithin.Rows);
+        Assert.Equal(1, breakdown.PendingWithin.Operations);
+        Assert.Equal(4, breakdown.PendingNamed.Rows);
+        Assert.Equal(4, breakdown.PendingNamed.Operations);
+        Assert.Equal(5, breakdown.IdentifierDetails.Rows);
+        Assert.Equal(1, breakdown.IdentifierDetails.Operations);
+        Assert.Equal(5, breakdown.IdentifierResolution.Rows);
+        Assert.Equal(5, breakdown.IdentifierResolution.Operations);
+        Assert.Equal(1, breakdown.PendingResolution.Rows);
+        Assert.Equal(1, breakdown.PendingResolution.Operations);
+        Assert.Equal(1, breakdown.Relationships.Rows);
+        Assert.Equal(1, breakdown.Relationships.Operations);
+        Assert.All(
+            new[]
+            {
+                breakdown.CandidateLookup,
+                breakdown.IdentifierWithin,
+                breakdown.IdentifierNamed,
+                breakdown.PendingWithin,
+                breakdown.PendingNamed,
+                breakdown.IdentifierDetails,
+                breakdown.IdentifierResolution,
+                breakdown.PendingResolution,
+                breakdown.Relationships,
+            },
+            static phase => Assert.True(phase.Elapsed >= TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void GraphResolutionObservationIsEmittedOnlyForThePassThatBuiltScratch()
+    {
+        using ResolutionStoreFixture fixture = PopulateStore();
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+        var observations = new List<GraphStatementObservation>();
+
+        reader.ReadUnresolvedNameEdges(connection, [Run, Helper], Direction.Both, observations.Add);
+        reader.ReadResolutionEdges(connection, [Run, Helper], Direction.Both, observations.Add);
+
+        Assert.Equal(
+            [GraphStatementPhase.UnresolvedNameForward, GraphStatementPhase.FamilyResolution],
+            observations.Select(static observation => observation.Phase));
+        Assert.NotNull(observations[0].ResolutionBreakdown);
+        Assert.Null(observations[1].ResolutionBreakdown);
+    }
+
+    [Fact]
     public void GraphFrontierPreservesCandidateOrderAndDuplicates()
     {
         using ResolutionStoreFixture fixture = PopulateStore();

@@ -177,6 +177,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 GraphStatementPhase.Completion,
             ],
             graphStatements.Select(static observation => observation.Phase));
+        Assert.NotNull(graphStatements.Single(observation => observation.ResolutionBreakdown is not null).ResolutionBreakdown);
+        Assert.All(
+            graphStatements.Where(static observation => observation.Phase != GraphStatementPhase.FamilyResolution),
+            static observation => Assert.Null(observation.ResolutionBreakdown));
     }
 
     [Fact]

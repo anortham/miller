@@ -101,6 +101,10 @@ public sealed class SqliteSymbolGraphIndexTests
             ],
             observations.Select(static observation => observation.Phase));
         Assert.All(observations, static observation => Assert.True(observation.Elapsed >= TimeSpan.Zero));
+        Assert.Null(observations.Single(observation => observation.Phase == GraphStatementPhase.RelationshipForward).ResolutionBreakdown);
+        Assert.Null(observations.Single(observation => observation.Phase == GraphStatementPhase.RelationshipReverse).ResolutionBreakdown);
+        Assert.NotNull(observations.Single(observation => observation.Phase == GraphStatementPhase.FamilyResolution).ResolutionBreakdown);
+        Assert.Null(observations.Single(observation => observation.Phase == GraphStatementPhase.UnresolvedNameForward).ResolutionBreakdown);
         Assert.DoesNotContain(
             observations,
             static observation => observation.Phase is GraphStatementPhase.Supplemental

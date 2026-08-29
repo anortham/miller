@@ -1032,7 +1032,8 @@ internal sealed record GraphStatementObservation(
     int Rows,
     TimeSpan Elapsed,
     int CandidateCount,
-    ImmutableArray<string> CandidateSample)
+    ImmutableArray<string> CandidateSample,
+    GraphResolutionBreakdown? ResolutionBreakdown = null)
 {
     private const int CandidateSampleLimit = 8;
 
@@ -1040,14 +1041,32 @@ internal sealed record GraphStatementObservation(
         GraphStatementPhase phase,
         int rows,
         TimeSpan elapsed,
-        IReadOnlyList<string> candidateIds) =>
+        IReadOnlyList<string> candidateIds,
+        GraphResolutionBreakdown? resolutionBreakdown = null) =>
         new(
             phase,
             rows,
             elapsed,
             candidateIds.Count,
-            [.. candidateIds.Take(CandidateSampleLimit)]);
+            [.. candidateIds.Take(CandidateSampleLimit)],
+            resolutionBreakdown);
 }
+
+internal sealed record GraphResolutionMeasurement(
+    TimeSpan Elapsed,
+    int Rows,
+    int Operations);
+
+internal sealed record GraphResolutionBreakdown(
+    GraphResolutionMeasurement CandidateLookup,
+    GraphResolutionMeasurement IdentifierWithin,
+    GraphResolutionMeasurement IdentifierNamed,
+    GraphResolutionMeasurement PendingWithin,
+    GraphResolutionMeasurement PendingNamed,
+    GraphResolutionMeasurement IdentifierDetails,
+    GraphResolutionMeasurement IdentifierResolution,
+    GraphResolutionMeasurement PendingResolution,
+    GraphResolutionMeasurement Relationships);
 
 internal sealed record FrontierQueryPlan(
     IReadOnlyList<IReadOnlyList<string>> RelationshipStatements,

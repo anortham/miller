@@ -97,6 +97,7 @@ internal sealed class QueryTimeResolutionReader
             candidateIds,
             direction,
             GraphReadKind.Resolution);
+        GraphResolutionBreakdown? resolutionBreakdown = scratch.TakeResolutionBreakdown();
         var edges = new List<FamilyGraphResolutionEdge>();
         foreach (string candidateId in candidateIds)
         {
@@ -184,7 +185,8 @@ internal sealed class QueryTimeResolutionReader
             GraphStatementPhase.FamilyResolution,
             edges.Count,
             System.Diagnostics.Stopwatch.GetElapsedTime(started),
-            candidateIds));
+            candidateIds,
+            resolutionBreakdown));
         return edges;
     }
 
@@ -205,6 +207,7 @@ internal sealed class QueryTimeResolutionReader
             candidateIds,
             direction,
             GraphReadKind.Unresolved);
+        GraphResolutionBreakdown? resolutionBreakdown = scratch.TakeResolutionBreakdown();
         var edges = new List<FamilyGraphUnresolvedNameEdge>();
         foreach (string candidateId in candidateIds)
         {
@@ -252,7 +255,8 @@ internal sealed class QueryTimeResolutionReader
             GraphStatementPhase.UnresolvedNameForward,
             edges.Count,
             System.Diagnostics.Stopwatch.GetElapsedTime(started),
-            candidateIds));
+            candidateIds,
+            resolutionBreakdown));
         return edges;
     }
 
@@ -622,44 +626,133 @@ internal sealed class QueryTimeResolutionReader
     private QueryScratch ResolveQuery(SqliteConnection connection, IReadOnlyList<string> candidateIds)
     {
         Counters.RecordResolvePass();
+        long candidateLookupStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         Dictionary<string, CandidateRecord> candidates = ReadCandidates(connection, candidateIds);
+        GraphResolutionMeasurement candidateLookup = new(
+            System.Diagnostics.Stopwatch.GetElapsedTime(candidateLookupStarted),
+            candidates.Count,
+            OperationCount(candidateIds.Count));
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (CandidateRecord candidate in candidates.Values)
             names.Add(candidate.Name);
 
         var identifierSites = new List<ResolutionIdentifierSite>();
         var seenIdentifiers = new HashSet<(long VersionId, long RowId)>();
-        foreach (ResolutionIdentifierSite site in ReadIdentifierSites(connection, candidateIds, names))
+        long identifierWithinStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        int identifierWithinRows = 0;
+        foreach (ResolutionIdentifierSite site in ReadIdentifierSitesWithin(connection, candidateIds))
         {
+            identifierWithinRows++;
             if (seenIdentifiers.Add((site.VersionId, site.RowId)))
                 identifierSites.Add(site);
         }
+        GraphResolutionMeasurement identifierWithin = new(
+            System.Diagnostics.Stopwatch.GetElapsedTime(identifierWithinStarted),
+            identifierWithinRows,
+            OperationCount(candidateIds.Count));
+
+        long identifierNamedStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        int identifierNamedRows = 0;
+        foreach (string name in names)
+        {
+            foreach (ResolutionIdentifierSite site in ReadIdentifierSitesNamed(connection, name))
+            {
+                identifierNamedRows++;
+                if (seenIdentifiers.Add((site.VersionId, site.RowId)))
+                    identifierSites.Add(site);
+            }
+        }
+        GraphResolutionMeasurement identifierNamed = new(
+            System.Diagnostics.Stopwatch.GetElapsedTime(identifierNamedStarted),
+            identifierNamedRows,
+            names.Count);
 
         var pendingSites = new List<PendingSite>();
         var seenPendings = new HashSet<(long VersionId, string PendingId)>(PendingKeyComparer.Instance);
-        foreach (PendingSite site in ReadPendingSites(connection, candidateIds, names))
+        long pendingWithinStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        int pendingWithinRows = 0;
+        foreach (PendingSite site in ReadPendingsByFrom(connection, candidateIds))
         {
+            pendingWithinRows++;
             if (seenPendings.Add((site.VersionId, site.PendingId)))
                 pendingSites.Add(site);
         }
+        GraphResolutionMeasurement pendingWithin = new(
+            System.Diagnostics.Stopwatch.GetElapsedTime(pendingWithinStarted),
+            pendingWithinRows,
+            OperationCount(candidateIds.Count));
 
+        long pendingNamedStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        foreach (string name in names)
+        {
+            foreach (PendingSite site in ReadPendingsByName(connection, name))
+            {
+                if (seenPendings.Add((site.VersionId, site.PendingId)))
+                    pendingSites.Add(site);
+            }
+        }
+        GraphResolutionMeasurement pendingNamed = new(
+            System.Diagnostics.Stopwatch.GetElapsedTime(pendingNamedStarted),
+            names.Count,
+            names.Count);
+
+        long identifierDetailsStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         Dictionary<(long VersionId, long RowId), SiteDetails> details =
             ReadIdentifierDetailsBatch(connection, identifierSites);
+        GraphResolutionMeasurement identifierDetails = new(
+            System.Diagnostics.Stopwatch.GetElapsedTime(identifierDetailsStarted),
+            details.Count,
+            OperationCount(identifierSites.Count));
+
         var identifiers = new List<ResolvedIdentifier>(identifierSites.Count);
+        long identifierResolutionStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         foreach (ResolutionIdentifierSite site in identifierSites)
         {
             if (!details.TryGetValue((site.VersionId, site.RowId), out SiteDetails siteDetails))
                 siteDetails = MissingIdentifierDetails(site);
             identifiers.Add(ResolveIdentifier(site, siteDetails));
         }
+        GraphResolutionMeasurement identifierResolution = new(
+            System.Diagnostics.Stopwatch.GetElapsedTime(identifierResolutionStarted),
+            identifiers.Count,
+            identifiers.Count);
 
         var pendings = new List<ResolvedPending>(pendingSites.Count);
+        long pendingResolutionStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         foreach (PendingSite site in pendingSites)
             pendings.Add(ResolvePending(site));
+        GraphResolutionMeasurement pendingResolution = new(
+            System.Diagnostics.Stopwatch.GetElapsedTime(pendingResolutionStarted),
+            pendings.Count,
+            pendings.Count);
 
+        long relationshipsStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         IReadOnlyList<RelationshipSite> relationships = ReadRelationships(connection, candidateIds);
-        return new QueryScratch(_cache, candidates, identifiers, pendings, relationships);
+        GraphResolutionMeasurement relationshipsMeasurement = new(
+            System.Diagnostics.Stopwatch.GetElapsedTime(relationshipsStarted),
+            relationships.Count,
+            OperationCount(candidateIds.Count));
+
+        return new QueryScratch(
+            _cache,
+            candidates,
+            identifiers,
+            pendings,
+            relationships,
+            new GraphResolutionBreakdown(
+                candidateLookup,
+                identifierWithin,
+                identifierNamed,
+                pendingWithin,
+                pendingNamed,
+                identifierDetails,
+                identifierResolution,
+                pendingResolution,
+                relationshipsMeasurement));
     }
+
+    private static int OperationCount(int count) =>
+        count == 0 ? 0 : ((count - 1) / IdChunkSize) + 1;
 
     private static bool SameIds(IReadOnlyList<string> left, IReadOnlyList<string> right)
     {
@@ -721,45 +814,22 @@ internal sealed class QueryTimeResolutionReader
         return new ResolvedPending(site, outcome);
     }
 
-    private IEnumerable<ResolutionIdentifierSite> ReadIdentifierSites(
+    private IEnumerable<ResolutionIdentifierSite> ReadIdentifierSitesWithin(
         SqliteConnection connection,
-        IReadOnlyList<string> candidateIds,
-        IReadOnlyCollection<string> names)
+        IReadOnlyList<string> candidateIds)
     {
         if (_visibility is { } visibility)
-        {
-            foreach (ResolutionIdentifierSite site in IdentifierSiteReader.SitesWithinSymbols(connection, visibility, candidateIds))
-                yield return site;
-            foreach (string name in names)
-            {
-                foreach (ResolutionIdentifierSite site in IdentifierSiteReader.SitesNamed(connection, visibility, name))
-                    yield return site;
-            }
-
-            yield break;
-        }
-
-        foreach (ResolutionIdentifierSite site in IdentifierSiteReader.SitesWithinSymbols(connection, candidateIds))
-            yield return site;
-        foreach (string name in names)
-        {
-            foreach (ResolutionIdentifierSite site in IdentifierSiteReader.SitesNamed(connection, name))
-                yield return site;
-        }
+            return IdentifierSiteReader.SitesWithinSymbols(connection, visibility, candidateIds);
+        return IdentifierSiteReader.SitesWithinSymbols(connection, candidateIds);
     }
 
-    private IEnumerable<PendingSite> ReadPendingSites(
+    private IEnumerable<ResolutionIdentifierSite> ReadIdentifierSitesNamed(
         SqliteConnection connection,
-        IReadOnlyList<string> candidateIds,
-        IReadOnlyCollection<string> names)
+        string name)
     {
-        foreach (PendingSite site in ReadPendingsByFrom(connection, candidateIds))
-            yield return site;
-        foreach (string name in names)
-        {
-            foreach (PendingSite site in ReadPendingsByName(connection, name))
-                yield return site;
-        }
+        if (_visibility is { } visibility)
+            return IdentifierSiteReader.SitesNamed(connection, visibility, name);
+        return IdentifierSiteReader.SitesNamed(connection, name);
     }
 
     private IEnumerable<PendingSite> ReadPendingsByFrom(SqliteConnection connection, IReadOnlyList<string> fromIds)
@@ -1844,19 +1914,22 @@ internal sealed class QueryTimeResolutionReader
         private readonly Dictionary<string, List<ResolvedPending>> _pendingsByName;
         private readonly Dictionary<string, List<RelationshipSite>> _relationshipsFrom;
         private readonly Dictionary<string, List<RelationshipSite>> _relationshipsTo;
+        private GraphResolutionBreakdown? _resolutionBreakdown;
 
         internal QueryScratch(
             RevisionFactCache cache,
             Dictionary<string, CandidateRecord> candidates,
             List<ResolvedIdentifier> identifiers,
             List<ResolvedPending> pendings,
-            IReadOnlyList<RelationshipSite> relationships)
+            IReadOnlyList<RelationshipSite> relationships,
+            GraphResolutionBreakdown? resolutionBreakdown = null)
         {
             _cache = cache;
             Candidates = candidates;
             AllIdentifiers = identifiers;
             AllPendings = pendings;
             AllRelationships = relationships;
+            _resolutionBreakdown = resolutionBreakdown;
             _identifiersByContainer = Group(identifiers, static row => row.ContainingSymbolId);
             _identifiersByName = Group(identifiers, static row => row.Name);
             _pendingsByFrom = Group(pendings, static row => row.FromSymbolId);
@@ -1885,6 +1958,9 @@ internal sealed class QueryTimeResolutionReader
         internal IReadOnlyList<ResolvedPending> AllPendings { get; }
 
         internal IReadOnlyList<RelationshipSite> AllRelationships { get; }
+
+        internal GraphResolutionBreakdown? TakeResolutionBreakdown() =>
+            Interlocked.Exchange(ref _resolutionBreakdown, null);
 
         internal IEnumerable<ResolvedIdentifier> IdentifiersByContainer(string id) =>
             _identifiersByContainer.TryGetValue(id, out List<ResolvedIdentifier>? rows) ? rows : [];
