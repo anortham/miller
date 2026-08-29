@@ -202,6 +202,9 @@ public sealed class WorkspaceIndexProvider
         return ResolveRegisteredSymbolRead(workspaceId, refresh);
     }
 
+    public WorkspaceSymbolReadContext ResolveCompleteCurrentSymbolRead() =>
+        ResolveCurrentSymbolRead(completeRecall: true);
+
     public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         if (workspaceId is null)
@@ -379,7 +382,7 @@ public sealed class WorkspaceIndexProvider
     /// Path-derived level, for the reason on <see cref="ResolveCurrent"/> — the inspect guard this level arms
     /// reads its refs/callers evidence from <c>IndexDbPath</c>, never from the index served here.
     /// </summary>
-    private WorkspaceSymbolReadContext ResolveCurrentSymbolRead()
+    private WorkspaceSymbolReadContext ResolveCurrentSymbolRead(bool completeRecall = false)
     {
         long resolveStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         WorkspaceReadHandle readSession = OpenCurrentReadSession();
@@ -391,7 +394,7 @@ public sealed class WorkspaceIndexProvider
             long holderRevision = holderMetadata?.Revision ?? legacySnapshot!.Value.Revision;
             long revision = ContextRevision(readSession.Snapshot, holderRevision);
             ISymbolLookupIndex index = familyStore
-                ? ResolveFamilyStoreLookup(_currentWorkspace.WorkspaceId, readSession)
+                ? ResolveFamilyStoreLookup(_currentWorkspace.WorkspaceId, readSession, completeRecall)
                 : legacySnapshot!.Value.Index;
             ReadPhaseTelemetry? readTelemetry = familyStore
                 ? ReadTelemetry((MeasuredSymbolLookupIndex)index, graph: null)
@@ -562,8 +565,20 @@ public sealed class WorkspaceIndexProvider
     /// </summary>
     private ISymbolLookupIndex ResolveFamilyStoreLookup(
         string? workspaceId,
-        WorkspaceReadHandle readSession)
+        WorkspaceReadHandle readSession,
+        bool completeRecall = false)
     {
+        if (completeRecall)
+        {
+            CacheKey completeKey = KeyFor(workspaceId, readSession.Snapshot);
+            return GetOrAddSymbolReadCache(
+                completeKey,
+                () => new CachedSymbolRead(
+                    MeasureFamilyLookup(
+                        _loadSessionSymbolSearch(readSession),
+                        SymbolLookupBackend.SessionProjection))).Index;
+        }
+
         // The opt-out must do ZERO sidecar I/O, so the enabled test comes before the stamp read.
         if (_sidecar.Enabled && TryServedSearchStamp(readSession) is { } served)
         {

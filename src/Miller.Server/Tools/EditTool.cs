@@ -127,7 +127,7 @@ public sealed class EditTool
             }
 
             using WorkspaceSymbolReadContext readContext =
-                _workspaceSymbolReadProvider.ResolveSymbolRead(null, WorkspaceRefreshMode.None);
+                _workspaceSymbolReadProvider.ResolveCompleteCurrentSymbolRead();
             var service = new EditService(
                 readContext.Index,
                 new SmartTargetResolver(readContext.Index),
@@ -137,7 +137,7 @@ public sealed class EditTool
                 _writeThrough,
                 readSession: readContext.ReadSession,
                 resolveFreshContext: () =>
-                    _workspaceSymbolReadProvider.ResolveSymbolRead(null, WorkspaceRefreshMode.None));
+                    _workspaceSymbolReadProvider.ResolveCompleteCurrentSymbolRead());
 
             EditService.EditResult result = service.Execute(request);
 

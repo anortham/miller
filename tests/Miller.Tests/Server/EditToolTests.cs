@@ -137,9 +137,17 @@ public sealed class EditToolTests : IDisposable
 
         public int Calls { get; private set; }
 
+        public int CompleteCalls { get; private set; }
+
         public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, WorkspaceRefreshMode refresh)
         {
             Calls++;
+            return _factory();
+        }
+
+        public WorkspaceSymbolReadContext ResolveCompleteCurrentSymbolRead()
+        {
+            CompleteCalls++;
             return _factory();
         }
     }
@@ -404,7 +412,8 @@ public sealed class EditToolTests : IDisposable
         using JsonDocument document = JsonDocument.Parse(output);
         Assert.False(document.RootElement.GetProperty("applied").GetBoolean());
         Assert.Equal("preview", document.RootElement.GetProperty("mode").GetString());
-        Assert.Equal(1, provider.Calls);
+        Assert.Equal(0, provider.Calls);
+        Assert.Equal(1, provider.CompleteCalls);
     }
 
     [Fact]
@@ -417,7 +426,7 @@ public sealed class EditToolTests : IDisposable
         provider = new FixedSymbolReadProvider(() =>
         {
             var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
-            string manifest = provider!.Calls == 1 ? "manifest-a" : "manifest-b";
+            string manifest = provider!.CompleteCalls == 1 ? "manifest-a" : "manifest-b";
             return StoreSymbolContext(index, _root, fx.DbPath, manifest);
         });
         var writeThrough = new RecoveringWriteThrough(_ =>
@@ -445,7 +454,8 @@ public sealed class EditToolTests : IDisposable
             apply: true);
 
         Assert.Contains("{ return 7; }", File.ReadAllText(AbsPath("orders/OrderService.cs")));
-        Assert.Equal(2, provider.Calls);
+        Assert.Equal(0, provider.Calls);
+        Assert.Equal(2, provider.CompleteCalls);
         Assert.Contains("applied", output, StringComparison.OrdinalIgnoreCase);
     }
 

@@ -131,6 +131,42 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void ResolveCompleteCurrentSymbolRead_CurrentFamilyStoreUsesTheSessionProjectionWhenTheSidecarLags()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var stale = DbWithSymbol("current-ws", revision: 1, "StaleType");
+        using var live = DbWithSymbol("current-ws", revision: 1, "LiveOnlyType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("current-edit-recall");
+        WorkspaceReadSnapshot lastGood = StoreSnapshot(root, "manifest-a", storeLogSequence: 17);
+        WorkspaceReadSnapshot currentSnapshot = StoreSnapshot(root, "manifest-b", storeLogSequence: 21);
+        WriteLastGoodSearchSidecar(root, stale, lastGood);
+        int projectionLoads = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspaceAt(root, current.DbPath, "current-ws"),
+            registry,
+            sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled),
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(
+                new FixtureReadSession(currentSnapshot, live.DbPath)),
+            loadSessionSymbolSearch: session =>
+            {
+                projectionLoads++;
+                return SymbolSearchProjectionLoader.LoadSession(session);
+            },
+            openStoreSymbolSearch: session =>
+                new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled)
+                    .OpenStoreRequired(root, session.Snapshot));
+
+        using WorkspaceSymbolReadContext standard = provider.ResolveSymbolRead(null, WorkspaceRefreshMode.None);
+        Assert.Empty(standard.Index.FindByName("LiveOnlyType"));
+
+        using WorkspaceSymbolReadContext complete = provider.ResolveCompleteCurrentSymbolRead();
+        Assert.Single(complete.Index.FindByName("LiveOnlyType"));
+        Assert.Equal(1, projectionLoads);
+    }
+
+    [Fact]
     public void Resolve_CurrentFamilyStoreEmitsFixedReadPhaseTelemetry()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
