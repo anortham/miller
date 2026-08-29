@@ -82,12 +82,12 @@ Commit mode is `serial-worker-commit` for both tasks.
 **Approach:** Follow strict TDD. First prove controlled fixture counts and single-emission behavior fail. Then add the smallest internal records and stopwatch plumbing. Do not change SQL, direction selection, caching, proof traversal, graph edges, or public telemetry shapes.
 
 **Acceptance criteria:**
-- [ ] RED proves the existing observer cannot report a complete resolution breakdown.
-- [ ] One real resolve pass reports all required subphases with deterministic row and operation counts.
-- [ ] Scratch reuse does not report the same work twice; cancellation reports no incomplete subphase.
-- [ ] Existing fixed phase order and graph outputs remain unchanged.
-- [ ] Server logs a bounded structured breakdown without exposing raw names or symbol ids.
-- [ ] Focused tests and worker Release builds pass; worker commits only owned files and reports Miller/API-shape evidence.
+- [x] RED proves the existing observer cannot report a complete resolution breakdown.
+- [x] One real resolve pass reports all required subphases with deterministic row and operation counts.
+- [x] Scratch reuse does not report the same work twice; cancellation reports no incomplete subphase.
+- [x] Existing fixed phase order and graph outputs remain unchanged.
+- [x] Server logs a bounded structured breakdown without exposing raw names or symbol ids.
+- [x] Focused tests and worker Release builds pass; worker commits only owned files and reports Miller/API-shape evidence.
 
 ### Task 2: Fixed replay and SQL falsification
 
@@ -123,7 +123,7 @@ Commit mode is `serial-worker-commit` for both tasks.
 
 ## Plan acceptance criteria
 
-- [ ] Task 1 instrumentation is TDD-complete, reviewed, and committed without semantic changes.
+- [x] Task 1 instrumentation is TDD-complete, reviewed, and committed without semantic changes.
 - [ ] Task 2 reproduces the fixed workload and records a complete phase split and SQL comparison.
 - [ ] The result identifies one evidence-backed next implementation or proves that more measurement is required.
 - [ ] Fast, Scale, Release, secrets, dependency, and worktree gates pass on the final branch.
