@@ -98,3 +98,20 @@ Tests were added before production changes.
 - Starting HEAD: `9b971aa4`
 - Current state before commit: owned source/test/report changes plus the pending Goldfish checkpoint;
   no unrelated edits were observed.
+
+## Round 1 coverage correction
+
+The lead review identified two gaps in the first packet. Both are closed without changing
+production behavior:
+
+- `DirectionAwareGraphFrontierReusesScratchInEitherConsumerOrder` now runs both `Direction.Forward`
+  and `Direction.Reverse`, with unresolved-name-first and resolution-first order for each direction.
+  Each case asserts one resolve pass and compares hand-derived literal serialized edges. The reverse
+  literals cover the named identifier, named pending, unresolved member-access, and variable-reference
+  edges, so loss of a reverse arm or call-order dependence fails the test.
+- Forward and reverse observation tests now assert exact `TimeSpan.Zero` in addition to zero rows and
+  operations for every skipped identifier/pending arm.
+
+This was a coverage expansion, not a defect repair: the new reverse parity cases passed against the
+existing implementation, so no RED run was invented. The narrow reader class remained 24/24 and the
+focused four-class union remained 137/137. `git diff --check` passed.

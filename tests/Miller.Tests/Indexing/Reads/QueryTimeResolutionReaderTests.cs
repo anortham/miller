@@ -421,10 +421,12 @@ public sealed class QueryTimeResolutionReaderTests
         Assert.Equal(1, breakdown.IdentifierWithin.Operations);
         Assert.Equal(0, breakdown.IdentifierNamed.Rows);
         Assert.Equal(0, breakdown.IdentifierNamed.Operations);
+        Assert.Equal(TimeSpan.Zero, breakdown.IdentifierNamed.Elapsed);
         Assert.Equal(1, breakdown.PendingWithin.Rows);
         Assert.Equal(1, breakdown.PendingWithin.Operations);
         Assert.Equal(0, breakdown.PendingNamed.Rows);
         Assert.Equal(0, breakdown.PendingNamed.Operations);
+        Assert.Equal(TimeSpan.Zero, breakdown.PendingNamed.Elapsed);
     }
 
     [Fact]
@@ -441,10 +443,12 @@ public sealed class QueryTimeResolutionReaderTests
             Assert.Single(observations).ResolutionBreakdown);
         Assert.Equal(0, breakdown.IdentifierWithin.Rows);
         Assert.Equal(0, breakdown.IdentifierWithin.Operations);
+        Assert.Equal(TimeSpan.Zero, breakdown.IdentifierWithin.Elapsed);
         Assert.Equal(4, breakdown.IdentifierNamed.Rows);
         Assert.Equal(4, breakdown.IdentifierNamed.Operations);
         Assert.Equal(0, breakdown.PendingWithin.Rows);
         Assert.Equal(0, breakdown.PendingWithin.Operations);
+        Assert.Equal(TimeSpan.Zero, breakdown.PendingWithin.Elapsed);
         Assert.Equal(1, breakdown.PendingNamed.Rows);
         Assert.Equal(4, breakdown.PendingNamed.Operations);
     }
@@ -452,38 +456,48 @@ public sealed class QueryTimeResolutionReaderTests
     [Fact]
     public void DirectionAwareGraphFrontierReusesScratchInEitherConsumerOrder()
     {
-        foreach (bool unresolvedFirst in new[] { true, false })
+        foreach (Direction direction in new[] { Direction.Forward, Direction.Reverse })
         {
-            using ResolutionStoreFixture fixture = PopulateStore();
-            using SqliteConnection connection = fixture.OpenRead();
-            QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
-
-            IReadOnlyList<FamilyGraphResolutionEdge> resolution;
-            IReadOnlyList<FamilyGraphUnresolvedNameEdge> unresolved;
-            if (unresolvedFirst)
+            foreach (bool unresolvedFirst in new[] { true, false })
             {
-                unresolved = reader.ReadUnresolvedNameEdges(
-                    connection, [Run, Helper, Count, DupA], Direction.Forward, statementObserver: null);
-                resolution = reader.ReadResolutionEdges(
-                    connection, [Run, Helper, Count, DupA], Direction.Forward, statementObserver: null);
-            }
-            else
-            {
-                resolution = reader.ReadResolutionEdges(
-                    connection, [Run, Helper, Count, DupA], Direction.Forward, statementObserver: null);
-                unresolved = reader.ReadUnresolvedNameEdges(
-                    connection, [Run, Helper, Count, DupA], Direction.Forward, statementObserver: null);
-            }
+                using ResolutionStoreFixture fixture = PopulateStore();
+                using SqliteConnection connection = fixture.OpenRead();
+                QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
 
-            Assert.Equal(1, reader.Counters.ResolvePasses);
-            Assert.Equal(
-                [
-                    "fn-run|fn-run|fn-help|calls|0.55|pending_resolution",
-                    "fn-run|fn-run|fn-help|call|0.55|identifier_target",
-                    "fn-run|fn-run|fn-help|member_access|0.50|identifier_name",
-                    "fn-run|fn-run|var-count|variable_ref|0.95|identifier_target",
-                ],
-                SerializeGraphEdges(resolution, unresolved));
+                IReadOnlyList<FamilyGraphResolutionEdge> resolution;
+                IReadOnlyList<FamilyGraphUnresolvedNameEdge> unresolved;
+                if (unresolvedFirst)
+                {
+                    unresolved = reader.ReadUnresolvedNameEdges(
+                        connection, [Run, Helper, Count, DupA], direction, statementObserver: null);
+                    resolution = reader.ReadResolutionEdges(
+                        connection, [Run, Helper, Count, DupA], direction, statementObserver: null);
+                }
+                else
+                {
+                    resolution = reader.ReadResolutionEdges(
+                        connection, [Run, Helper, Count, DupA], direction, statementObserver: null);
+                    unresolved = reader.ReadUnresolvedNameEdges(
+                        connection, [Run, Helper, Count, DupA], direction, statementObserver: null);
+                }
+
+                Assert.Equal(1, reader.Counters.ResolvePasses);
+                Assert.Equal(
+                    direction == Direction.Forward
+                        ? [
+                            "fn-run|fn-run|fn-help|calls|0.55|pending_resolution",
+                            "fn-run|fn-run|fn-help|call|0.55|identifier_target",
+                            "fn-run|fn-run|fn-help|member_access|0.50|identifier_name",
+                            "fn-run|fn-run|var-count|variable_ref|0.95|identifier_target",
+                        ]
+                        : [
+                            "fn-help|fn-run|fn-help|calls|0.55|pending_resolution",
+                            "fn-help|fn-run|fn-help|call|0.55|identifier_target",
+                            "fn-help|fn-run|fn-help|member_access|0.50|identifier_name",
+                            "var-count|fn-run|var-count|variable_ref|0.95|identifier_target",
+                        ],
+                    SerializeGraphEdges(resolution, unresolved));
+            }
         }
     }
 
