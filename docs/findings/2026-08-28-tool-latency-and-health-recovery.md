@@ -44,8 +44,10 @@ query-time resolution spends a median 1,893 ms in identifier-within reads, 1,710
 and 2,858 ms in identifier-detail plus identifier/pending resolver loops. The named visibility arms total only
 498 ms. The live `idx_read_manifest_entries_version(version_id,view_id,generation)` index is present and selected
 by SQLite; an equivalent connection-local visibility projection is faster in isolation but cannot explain the
-miss. The spike therefore rejects a reference sidecar as the next change and recommends a separate,
-direction/consumer-aware read plan with lazy detail hydration. The 5,000 ms impact gate remains open.
+miss. The spike therefore rejects a reference sidecar as the next change and recommends an ordered ladder:
+first a direction/consumer-aware graph-read change with all resolver/detail behavior preserved, then—only if
+the gate remains open—a separately measured lazy-detail change with its own parity tests. The 5,000 ms impact
+gate remains open.
 
 The subsequent [stale-view cleanup](2026-08-28-miller-stale-view-cleanup.md) retired nine missing-root family views. On the same committed Task 2 git diff, the resident graph phase fell from 12,061 ms to 8,284–8,418 ms, about a 30% improvement. This confirms stale views were real overhead, but the 5,000 ms gate remains open.
 

@@ -3,8 +3,9 @@
 ## Status
 
 Complete as a measurement-only packet. No production or test code changed. The required three docs
-were updated; the finding rejects a reference sidecar as the next change and recommends a separate
-direction/consumer-aware read plan with lazy detail hydration.
+were updated; the finding rejects a reference sidecar as the next change and recommends an ordered
+ladder: direction/consumer-aware graph reads first, followed by separately measured lazy detail
+hydration only if the first change still misses the gate.
 
 ## Replay evidence
 
@@ -49,10 +50,12 @@ direction/consumer-aware read plan with lazy detail hydration.
 
 The existing visibility index is real and the visibility join is not the dominant cause. Named
 arms total only 498 ms of the 7,853 ms warm median breakdown; detail and resolver loops plus the
-within-symbol arms account for the rest. The sidecar is rejected as the next implementation. The
-evidence-backed next implementation is a direction/consumer-aware `ResolveQuery` plan that defers
-identifier-detail hydration until exact-reference consumers need it, with parity and latency replay
-required in its own approved plan.
+within-symbol arms account for the rest. Proof traversal can amplify cost by triggering repeated
+full resolution passes, while relationship/supplemental SQL itself is small. The sidecar is rejected
+as the next implementation. The evidence-backed ladder is: (1) implement direction/consumer-aware
+graph reads only, preserving scratch reuse, resolver behavior, details, and outputs, then rerun;
+(2) only if still above 5,000 ms, separately defer identifier-detail hydration with its own parity
+tests and replay.
 
 ## Miller evidence
 
@@ -75,5 +78,5 @@ required in its own approved plan.
 ## Risks and blockers
 
 - The product impact gate is still open at roughly 8.3 s warm on the resident branch MCP path.
-- The recommended lazy read plan needs explicit implementation design and exact-reference parity
-  tests; it is not implemented here.
+- The two ordered read changes need separate implementation designs, exact-reference parity tests,
+  and replays; neither is implemented here.

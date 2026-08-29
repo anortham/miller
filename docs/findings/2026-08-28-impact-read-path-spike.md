@@ -18,16 +18,17 @@ name-visibility join:
 - The named-name consumer does not read `ResolvedIdentifier.Details` in `TryUniqueNameTarget`; the
   shared `ResolveQuery` currently hydrates details before both graph consumers use the scratch. This
   is a measured candidate for lazy consumer-specific work, but this spike does not implement it.
-- The next implementation should split `ResolveQuery` into direction/consumer-specific arms and
-  defer identifier-detail hydration until an exact-reference consumer needs it. Preserve the
-  existing query-time resolver, policy v6, scratch reuse, edge ordering, and output contracts, then
-  re-run this exact replay. This targets the 3.6 s within arms and the 2.36 s identifier detail/
-  resolution work before adding storage or lifecycle complexity.
+- The next implementation must be measured as an ordered ladder, one change at a time. First split
+  `ResolveQuery` into direction/consumer-specific graph-read arms only, preserving scratch reuse,
+  resolver behavior, detail loading, edge ordering, and output contracts; then re-run this exact
+  replay. Only if that result still misses 5,000 ms should a separate second change defer identifier-
+  detail hydration, with its own exact-reference parity tests and replay. This keeps the 3.6 s within
+  arms and the 2.36 s identifier detail/resolution work attributable instead of bundling two fixes.
 
 The sidecar is therefore rejected as the next change. It would address the wrong subphase: even a
 perfect removal of the named visibility work could not explain the 7.8 s warm breakdown. A sidecar
-remains a last-resort option only if the direction-aware/lazy read plan and a follow-up measurement
-leave the within/detail/resolver costs above the product gate.
+remains a last-resort option only if both ordered read changes, measured separately, leave the
+within/detail/resolver costs above the product gate.
 
 ## Fixed replay
 
@@ -180,18 +181,28 @@ Rejected or not proven:
   selected by SQLite.
 - A reference sidecar is rejected as the next implementation because the tested visibility cost is
   not the dominant phase and a sidecar would add a new artifact/lifecycle contract.
-- Proof traversal is not the owner of this miss: the existing relationship/supplemental observations
-  are tens of milliseconds, while the resolution breakdown is seconds. The completion observation
-  wraps the graph pass and is not additive evidence.
+- Proof traversal can amplify the cost by triggering repeated full resolution passes: the fixed call
+  emitted seven complete breakdowns across the frontier batches. The relationship component was
+  337 ms for 6,129 rows and supplemental observations were 0 ms for 175 rows in the warm median
+  aggregate, so this does not make proof traversal irrelevant; it makes repeated resolution the
+  measured amplification point. The completion observation wraps the graph pass and is not additive
+  evidence.
 - A pure resolver-CPU fix is not yet proven: resolver loops are substantial, but they share work with
-  details and direction-blind collection. The next replay must isolate them after lazy loading.
+  details and direction-blind collection. The first replay must isolate direction-aware graph reads;
+  detail hydration is a separate second experiment if the gate remains open.
 
-Recommended next implementation: make `ResolveQuery` direction/consumer-aware. Skip named arms on a
-forward-only read and within arms on a reverse-only read where the caller does not consume them, and
-defer `ReadIdentifierDetailsBatch` until an exact-reference consumer needs `Details`. Keep scratch
-reuse and load the deferred data before any existing exact evidence path observes it. This is the
-smallest evidence-backed change that removes confirmed unused work without changing the producer
-schema or creating a sidecar. It needs a separate approved implementation plan and a parity replay.
+Recommended implementation ladder:
+
+1. Make `ResolveQuery` direction/consumer-aware for graph reads only. Skip named arms on a
+   forward-only read and within arms on a reverse-only read where the caller does not consume them.
+   Preserve scratch reuse, resolver behavior, detail loading, and all existing exact evidence and
+   output contracts. Re-run this exact replay and measure the new phase split.
+2. If, and only if, step 1 still misses 5,000 ms, separately defer `ReadIdentifierDetailsBatch`
+   until an exact-reference consumer needs `Details`. Add exact-reference parity tests and run a
+   separate replay before drawing a resolver/detail conclusion.
+
+No step changes the producer schema or creates a sidecar. Each step needs its own approved
+implementation plan and evidence; do not land them as one bundled optimization.
 
 ## Evidence anchors and verification
 
