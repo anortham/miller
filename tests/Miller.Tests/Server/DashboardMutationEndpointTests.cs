@@ -310,6 +310,20 @@ public sealed class DashboardMutationEndpointTests : IDisposable
             $"hx-get=\"/fragments/detail-stack?workspace_id={workspaceId}\"", body, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task WorkspaceDetailStack_RefreshAndRefetchRequestsHaveOrderedSyncStrategies()
+    {
+        string workspaceId = NewWorkspaceId();
+        SeedWorkspace(workspaceId, "alpha-abcd1234");
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        string body = await GetBodyAsync(client, $"/workspace?workspace_id={workspaceId}");
+
+        Assert.Contains("hx-sync=\"#workspace-detail-stack:drop\"", body, StringComparison.Ordinal);
+        Assert.Contains("hx-sync=\"#workspace-detail-stack:replace\"", body, StringComparison.Ordinal);
+    }
+
     // An empty selector would render "workspace_id=", which the detail-stack route cannot resolve.
     [Fact]
     public async Task WorkspaceDetailStack_WithNoWorkspaceSelected_RendersNoRefetchTrigger()
@@ -343,6 +357,26 @@ public sealed class DashboardMutationEndpointTests : IDisposable
 
         Assert.Contains("id=\"workspace-detail-stack\"", stack, StringComparison.Ordinal);
         Assert.Contains("rev 43", stack, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DetailStackFragment_ClaimsAnUnobservedTerminalJob()
+    {
+        string workspaceId = NewWorkspaceId();
+        SeedWorkspace(workspaceId, "alpha-abcd1234");
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        var gate = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
+        gate.SetResult();
+        string stack = (await PollUntilAsync(
+            client,
+            $"/fragments/detail-stack?workspace_id={workspaceId}",
+            body => body.Contains("rev 43", StringComparison.Ordinal))).Body;
+
+        Assert.Contains("rev 43", stack, StringComparison.Ordinal);
+        Assert.Null(DashboardRefreshJobs.Peek(workspaceId));
     }
 
     [Fact]

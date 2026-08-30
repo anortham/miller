@@ -132,36 +132,41 @@ public sealed class DashboardRefreshJobsTests
     }
 
     [Fact]
-    public async Task PeekLive_ReportsARunningJobWithoutConsumingIt()
+    public async Task PeekDetail_ReportsARunningJobWithoutConsumingIt()
     {
         string workspaceId = NewWorkspaceId();
         var gate = new TaskCompletionSource();
         DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
 
-        Assert.Equal(DashboardRefreshJobState.Running, DashboardRefreshJobs.PeekLive(workspaceId)?.State);
-        Assert.Equal(DashboardRefreshJobState.Running, DashboardRefreshJobs.PeekLive(workspaceId)?.State);
+        Assert.Equal(DashboardRefreshJobState.Running, DashboardRefreshJobs.PeekDetail(workspaceId)?.State);
+        Assert.Equal(DashboardRefreshJobState.Running, DashboardRefreshJobs.PeekDetail(workspaceId)?.State);
 
         gate.SetResult();
         Assert.Equal(43L, (await WaitForCompletedAsync(workspaceId)).Result?.Revision);
     }
 
     [Fact]
-    public async Task PeekLive_ReportsAFinishedJobWithoutTakingPeeksExactlyOnceRender()
+    public async Task PeekDetail_ClaimsAFinishedJobExactlyOnce()
     {
         string workspaceId = NewWorkspaceId();
         var gate = new TaskCompletionSource();
         DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
         gate.SetResult();
-        await WaitAsync(() =>
-            DashboardRefreshJobs.PeekLive(workspaceId) is { State: DashboardRefreshJobState.Completed });
 
-        Assert.Equal(43L, DashboardRefreshJobs.PeekLive(workspaceId)?.Result?.Revision);
-        Assert.Equal(43L, DashboardRefreshJobs.Peek(workspaceId)?.Result?.Revision);
-        Assert.Null(DashboardRefreshJobs.PeekLive(workspaceId));
+        DashboardRefreshJobStatus? completed = null;
+        await WaitAsync(() =>
+        {
+            completed = DashboardRefreshJobs.PeekDetail(workspaceId);
+            return completed is { State: DashboardRefreshJobState.Completed };
+        });
+
+        Assert.Equal(43L, completed?.Result?.Revision);
+        Assert.Null(DashboardRefreshJobs.Peek(workspaceId));
+        Assert.Equal(43L, DashboardRefreshJobs.PeekLastOutcome(workspaceId)?.Result?.Revision);
     }
 
     [Fact]
-    public async Task PeekLive_AfterANewRefreshStarts_OutranksTheRetainedOutcomeTheRefetchWouldShow()
+    public async Task PeekDetail_AfterANewRefreshStarts_OutranksTheRetainedOutcomeTheRefetchWouldShow()
     {
         string workspaceId = NewWorkspaceId();
         var first = new TaskCompletionSource();
@@ -173,8 +178,7 @@ public sealed class DashboardRefreshJobsTests
         var second = new TaskCompletionSource();
         DashboardRefreshJobs.Start(workspaceId, GatedRefresh(second, workspaceId));
 
-        DashboardRefreshJobStatus? rendered =
-            DashboardRefreshJobs.PeekLive(workspaceId) ?? DashboardRefreshJobs.PeekLastOutcome(workspaceId);
+        DashboardRefreshJobStatus? rendered = DashboardRefreshJobs.PeekDetail(workspaceId);
 
         Assert.Equal(DashboardRefreshJobState.Running, rendered?.State);
 
@@ -191,16 +195,66 @@ public sealed class DashboardRefreshJobsTests
         first.SetResult();
         await WaitForCompletedAsync(workspaceId);
 
-        // The reader starts a second refresh during the detail-stack round trip, and it reaches a terminal
-        // state before that GET lands — a lock-busy or unknown-workspace refresh returns in milliseconds.
         DashboardRefreshJobs.Start(workspaceId, () => Refreshed(workspaceId, revision: 77));
+        DashboardRefreshJobStatus? rendered = null;
         await WaitAsync(() =>
-            DashboardRefreshJobs.PeekLive(workspaceId) is { State: DashboardRefreshJobState.Completed });
-
-        DashboardRefreshJobStatus? rendered =
-            DashboardRefreshJobs.PeekLive(workspaceId) ?? DashboardRefreshJobs.PeekLastOutcome(workspaceId);
+        {
+            rendered = DashboardRefreshJobs.PeekDetail(workspaceId);
+            return rendered is { State: DashboardRefreshJobState.Completed };
+        });
 
         Assert.Equal(77L, rendered?.Result?.Revision);
+        Assert.Null(DashboardRefreshJobs.Peek(workspaceId));
+        Assert.Equal(77L, DashboardRefreshJobs.PeekLastOutcome(workspaceId)?.Result?.Revision);
+    }
+
+    [Fact]
+    public async Task Peek_ConcurrentTerminalReaders_ClaimTheCompletedResultExactlyOnce()
+    {
+        string workspaceId = NewWorkspaceId();
+        var gate = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
+        gate.SetResult();
+        await Task.Delay(10, TestContext.Current.CancellationToken);
+
+        using var barrier = new Barrier(32);
+        Task<DashboardRefreshJobStatus?>[] reads = Enumerable.Range(0, 32)
+            .Select(_ => Task.Factory.StartNew(
+                () =>
+                {
+                    barrier.SignalAndWait();
+                    return DashboardRefreshJobs.Peek(workspaceId);
+                },
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default))
+            .ToArray();
+
+        DashboardRefreshJobStatus?[] results = await Task.WhenAll(reads);
+
+        Assert.Single(results, result => result is { State: DashboardRefreshJobState.Completed });
+        Assert.Null(DashboardRefreshJobs.Peek(workspaceId));
+    }
+
+    [Fact]
+    public async Task Start_ImmediateCompletion_IsRetainedAfterTheJobIsClaimed()
+    {
+        string workspaceId = NewWorkspaceId();
+        DashboardRefreshJobStatus status =
+            DashboardRefreshJobs.Start(workspaceId, () => Refreshed(workspaceId));
+
+        Assert.Equal(DashboardRefreshJobState.Running, status.State);
+
+        DashboardRefreshJobStatus? completed = null;
+        await WaitAsync(() =>
+        {
+            completed = DashboardRefreshJobs.Peek(workspaceId);
+            return completed is { State: DashboardRefreshJobState.Completed };
+        });
+
+        Assert.Equal(43L, completed?.Result?.Revision);
+        Assert.Null(DashboardRefreshJobs.Peek(workspaceId));
+        Assert.Equal(43L, DashboardRefreshJobs.PeekLastOutcome(workspaceId)?.Result?.Revision);
     }
 
     private static Func<WorkspaceRefreshResult> GatedRefresh(TaskCompletionSource gate, string workspaceId) =>

@@ -181,6 +181,7 @@ public static class StoreMaintenanceRunner
                    && counts.TryGetProperty("pruned_request_rows", out JsonElement pruned)
                    && pruned.ValueKind == JsonValueKind.Number
                    && pruned.TryGetInt64(out long rows)
+                   && rows >= 0
                 ? new StoreMaintenanceOutcome(rows, null)
                 : new StoreMaintenanceOutcome(0, "store maintenance report omitted pruned_request_rows");
         }

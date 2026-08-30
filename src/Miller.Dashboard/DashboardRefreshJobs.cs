@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Miller.Server.Workspaces;
 
 namespace Miller.Dashboard;
@@ -24,9 +23,11 @@ public sealed record DashboardRefreshJobStatus(
 /// </summary>
 public static class DashboardRefreshJobs
 {
-    private static readonly ConcurrentDictionary<string, Job> Jobs = new(StringComparer.Ordinal);
+    private static readonly object StateGate = new();
 
-    private static readonly ConcurrentDictionary<string, LastOutcome> LastOutcomes = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, Job> Jobs = new(StringComparer.Ordinal);
+
+    private static readonly Dictionary<string, LastOutcome> LastOutcomes = new(StringComparer.Ordinal);
 
     /// <summary>
     /// How long a consumed outcome stays readable through <see cref="PeekLastOutcome(string)"/>: long
@@ -39,19 +40,30 @@ public static class DashboardRefreshJobs
     /// Returns the job already running for this workspace, or starts one. A second click while a refresh is
     /// in flight must never run <paramref name="refresh"/> again — one workspace cannot converge twice at
     /// once. A finished-but-unobserved job is replaced, so a click after a poll was abandoned refreshes for
-    /// real instead of replaying the stale result.
+    /// real instead of replaying the stale result. New work always returns a running status so the caller
+    /// installs a poll even when the task finishes before this method returns.
     /// </summary>
     public static DashboardRefreshJobStatus Start(string workspaceId, Func<WorkspaceRefreshResult> refresh)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
         ArgumentNullException.ThrowIfNull(refresh);
 
-        Job job = Jobs.AddOrUpdate(
-            workspaceId,
-            _ => NewJob(workspaceId, refresh),
-            (_, running) => running.IsFinished ? NewJob(workspaceId, refresh) : running);
+        Job job;
+        lock (StateGate)
+        {
+            if (Jobs.TryGetValue(workspaceId, out Job? running) && !running.IsFinished)
+            {
+                job = running;
+            }
+            else
+            {
+                job = NewJob(workspaceId, refresh);
+                Jobs[workspaceId] = job;
+            }
+        }
+
         _ = job.Task.Value;
-        return Describe(job);
+        return DescribeRunning(job);
     }
 
     /// <summary>
@@ -64,39 +76,30 @@ public static class DashboardRefreshJobs
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
 
-        if (!Jobs.TryGetValue(workspaceId, out Job? job))
-            return null;
-        if (!job.IsFinished)
-            return Describe(job);
-
-        // Remove only this job: a Start racing the observation must keep its fresh job.
-        Jobs.TryRemove(new KeyValuePair<string, Job>(workspaceId, job));
-        DashboardRefreshJobStatus status = Describe(job);
-        LastOutcomes[workspaceId] = new LastOutcome(status, DateTimeOffset.UtcNow);
-        return status;
+        lock (StateGate)
+        {
+            return ReadCurrentLocked(workspaceId);
+        }
     }
 
     /// <summary>
-    /// This workspace's CURRENT job — running or finished-but-unobserved — without consuming it.
-    ///
-    /// <para>The detail-stack refetch needs this: it is triggered by one refresh finishing but arrives a round
-    /// trip later, by which time the reader may have started another. Rendering the retained outcome then would
-    /// morph the OLD verdict over the new refresh and take its poll attributes with it.</para>
-    ///
-    /// <para>"Running" is not the test, because the newer refresh may also have finished inside that round trip —
-    /// a lock-busy, an unknown workspace, or a throwing refresh all reach a terminal state in milliseconds. Any
-    /// job still in the map is newer than the retained outcome and outranks it. Consuming stays
-    /// <see cref="Peek"/>'s alone, so the poll keeps its exactly-once render.</para>
+    /// Reads the detail state as one decision. A running job is returned without consuming it. A completed
+    /// current job is claimed and retained. With no current job, the still-fresh most recently claimed
+    /// terminal outcome is returned.
     /// </summary>
-    public static DashboardRefreshJobStatus? PeekLive(string workspaceId)
+    public static DashboardRefreshJobStatus? PeekDetail(string workspaceId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
 
-        return Jobs.TryGetValue(workspaceId, out Job? job) ? Describe(job) : null;
+        lock (StateGate)
+        {
+            DashboardRefreshJobStatus? current = ReadCurrentLocked(workspaceId);
+            return current ?? ReadLastOutcomeLocked(workspaceId, DateTimeOffset.UtcNow);
+        }
     }
 
     /// <summary>
-    /// The outcome <see cref="Peek"/> last consumed, WITHOUT consuming it, for
+    /// The most recently claimed terminal outcome, WITHOUT consuming it, for
     /// <see cref="LastOutcomeRetention"/> after that observation. The detail-stack refetch that follows a
     /// finished refresh re-renders the status span, and Peek's exactly-once contract would render it empty —
     /// the outcome the reader just saw would be unrecoverable. Null once the retention window has passed.
@@ -108,14 +111,39 @@ public static class DashboardRefreshJobs
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
 
+        lock (StateGate)
+        {
+            return ReadLastOutcomeLocked(workspaceId, now);
+        }
+    }
+
+    private static DashboardRefreshJobStatus? ReadCurrentLocked(string workspaceId)
+    {
+        if (!Jobs.TryGetValue(workspaceId, out Job? job))
+            return null;
+        if (!job.IsFinished)
+            return DescribeRunning(job);
+
+        DashboardRefreshJobStatus status = DescribeCompleted(job);
+        Jobs.Remove(workspaceId);
+        RetainLocked(workspaceId, status);
+        return status;
+    }
+
+    private static DashboardRefreshJobStatus? ReadLastOutcomeLocked(string workspaceId, DateTimeOffset now)
+    {
         if (!LastOutcomes.TryGetValue(workspaceId, out LastOutcome? outcome))
             return null;
         if (now - outcome.ObservedAt < LastOutcomeRetention)
             return outcome.Status;
 
-        LastOutcomes.TryRemove(new KeyValuePair<string, LastOutcome>(workspaceId, outcome));
+        LastOutcomes.Remove(workspaceId);
+
         return null;
     }
+
+    private static void RetainLocked(string workspaceId, DashboardRefreshJobStatus status) =>
+        LastOutcomes[workspaceId] = new LastOutcome(status, DateTimeOffset.UtcNow);
 
     private static Job NewJob(string workspaceId, Func<WorkspaceRefreshResult> refresh) =>
         new(
@@ -143,23 +171,23 @@ public static class DashboardRefreshJobs
         }
     }
 
-    private static DashboardRefreshJobStatus Describe(Job job) =>
-        job.IsFinished
-            ? new DashboardRefreshJobStatus(
-                DashboardRefreshJobState.Completed,
-                DateTimeOffset.UtcNow - job.StartedAt,
-                job.Task.Value.GetAwaiter().GetResult())
-            : new DashboardRefreshJobStatus(
-                DashboardRefreshJobState.Running,
-                DateTimeOffset.UtcNow - job.StartedAt,
-                Result: null);
+    private static DashboardRefreshJobStatus DescribeRunning(Job job) =>
+        new(
+            DashboardRefreshJobState.Running,
+            DateTimeOffset.UtcNow - job.StartedAt,
+            Result: null);
+
+    private static DashboardRefreshJobStatus DescribeCompleted(Job job) =>
+        new(
+            DashboardRefreshJobState.Completed,
+            DateTimeOffset.UtcNow - job.StartedAt,
+            job.Task.Value.GetAwaiter().GetResult());
 
     private sealed record LastOutcome(DashboardRefreshJobStatus Status, DateTimeOffset ObservedAt);
 
     private sealed record Job(Lazy<Task<WorkspaceRefreshResult>> Task, DateTimeOffset StartedAt)
     {
-        // Not yet valued means Start is still publishing it — running, and never force it here: only the
-        // publishing Start may start the work.
+        // Not yet valued means Start is still publishing it. Treat it as running and never force it here.
         public bool IsFinished => Task.IsValueCreated && Task.Value.IsCompleted;
     }
 }

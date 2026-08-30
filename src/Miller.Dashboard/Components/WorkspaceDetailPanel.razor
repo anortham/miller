@@ -14,6 +14,7 @@
                         type="button"
                         hx-post="/fragments/refresh?workspace_id=@Esc(Facts.WorkspaceId)"
                         hx-target="#workspace-detail-stack"
+                        hx-sync="#workspace-detail-stack:replace"
                         hx-ext="morph"
                         hx-swap="morph:outerHTML"
                         hx-disabled-elt="this">
