@@ -3630,7 +3630,8 @@ public static class CliDispatch
         // MarkMissing ⇒ missing), and the statuses that deliberately leave it untouched are reconciled after.
         WorkspaceRegistryRow? priorRow = registry.Get(id);
         registry.UpsertSeen(
-            id, display, canonicalRoot, dbPath, priorRow?.State ?? WorkspaceRegistryState.Refreshing);
+            id, display, canonicalRoot, dbPath, priorRow?.State ?? WorkspaceRegistryState.Refreshing,
+            lineage: IndexBootstrapService.CaptureLineage(canonicalRoot));
 
         var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar, CliScanGovernor(ctx));
         WorkspaceRefreshResult result = refresh.Refresh(id, force: full, bypassBackoff: true);

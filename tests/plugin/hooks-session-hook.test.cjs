@@ -13,7 +13,7 @@ const HOOK_SCRIPT_PATH = path.join(repoRoot, 'hooks', 'miller-session-hook.cjs')
 const ROUTING_BLOCK_PATH = path.join(repoRoot, 'hooks', 'miller-routing-block.md');
 const HOOKS_MANIFEST_PATH = path.join(repoRoot, 'hooks', 'claude-codex-hooks.json');
 const ROUTING_BLOCK_FRAGMENT = 'One Miller call beats shell greps and full-file reads';
-const WORKTREE_CLEANUP_GUIDANCE = 'After `git worktree remove <path>` succeeds, call Miller `workspace remove` for that exact old path. If cleanup was missed, inspect `workspace list`, run `workspace prune` as a dry run, then apply it.';
+const WORKTREE_CLEANUP_GUIDANCE = 'A deleted worktree leaves a dead registry row, however it went — `git worktree remove`, `rm -rf`, or a harness/CI teardown. Call Miller `workspace remove path=<exact old path>`; it works after the directory is gone. At session end run `workspace prune dry_run=true`, and apply it once the preview lists only roots you know are gone.';
 const HOOK_TIMEOUT_MS = 10000;
 
 const EMITTING_EVENTS = [

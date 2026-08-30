@@ -208,6 +208,8 @@ public sealed class WorkspaceTool
                 telemetry.Outcome = result.Outcome;
             }
             string output = result.Output;
+            if (!json && result.Hint is { } hint)
+                output = output + "\n" + hint;
             ToolDiagnostic? diagnostic = result.Diagnostic;
             if (diagnostic is null && result.Outcome is TelemetryOutcome.Empty or TelemetryOutcome.Error)
             {
@@ -482,7 +484,7 @@ public sealed class WorkspaceTool
             facts.Root,
             facts.DbPath,
             storeEnabled: facts.Store is not null);
-        return OnboardingResult(onboarding, json);
+        return OnboardingResult(onboarding, json, StaleRegistryHint(json));
     }
 
     // Leader facts: identity + liveness, this process's extractor, and the same artifact version Evaluate uses.
@@ -568,7 +570,8 @@ public sealed class WorkspaceTool
                     ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true),
                     _bootstrap.Snapshot),
                 currentFacts,
-                "workspace(operation=\"health\")");
+                "workspace(operation=\"health\")",
+                StaleRegistryHint(json));
         }
 
         WorkspaceRegistryRow row = target.Row
@@ -592,13 +595,15 @@ public sealed class WorkspaceTool
                 json,
                 leader),
             facts,
-            "workspace(operation=\"health\", workspace_id=\"" + row.DisplayId + "\")");
+            "workspace(operation=\"health\", workspace_id=\"" + row.DisplayId + "\")",
+            StaleRegistryHint(json));
     }
 
     private static WorkspaceOperationResult StatusResult(
         string output,
         WorkspaceFacts facts,
-        string healthAction)
+        string healthAction,
+        string? hint)
     {
         bool unavailable = facts.FreshnessStatus is "missing_index" or "unreadable_index";
         return new WorkspaceOperationResult(
@@ -612,8 +617,55 @@ public sealed class WorkspaceTool
                     [new ToolDiagnosticAction(
                         healthAction,
                         "inspect the workspace artifacts")])
-                : null);
+                : null,
+            hint);
     }
+
+    private const int StaleRegistryHintMinimumDeadRows = 10;
+    private const int StaleRegistryHintMinimumPercent = 25;
+
+    /// <summary>
+    /// The compact-only nudge that a registry has accumulated rows whose roots are gone. Agent harnesses create
+    /// and delete worktrees without ever calling <c>workspace remove</c>, and a dead row keeps answering
+    /// selectors — it can shadow the short name of the live repository it was branched from. Null for JSON output
+    /// and null below the threshold, so the JSON contract stays byte-identical (ADR-0001) and a registry with a
+    /// normal amount of churn says nothing.
+    /// </summary>
+    private string? StaleRegistryHint(bool json)
+    {
+        if (json)
+            return null;
+
+        int registered;
+        int dead;
+        try
+        {
+            IReadOnlyList<WorkspaceRegistryRow> rows = _registry.List();
+            registered = rows.Count;
+            dead = rows.Count(static row => !Directory.Exists(row.CanonicalRoot));
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        return ShouldHintStaleRegistry(dead, registered)
+            ? NextStepHint.Render(
+                "workspace(operation=\"prune\", dry_run=true)",
+                $"{dead} of {registered} registered roots are gone from disk")
+            : null;
+    }
+
+    /// <summary>
+    /// Whether a registry is stale enough to be worth a nudge: at least
+    /// <see cref="StaleRegistryHintMinimumDeadRows"/> dead rows AND at least
+    /// <see cref="StaleRegistryHintMinimumPercent"/> of the registry. Both bars exist so neither a small registry
+    /// with one dead row nor a large one with a handful of them interrupts a healthy workspace.
+    /// </summary>
+    internal static bool ShouldHintStaleRegistry(int deadRows, int registeredRows) =>
+        deadRows >= StaleRegistryHintMinimumDeadRows
+        && registeredRows > 0
+        && deadRows * 100 >= registeredRows * StaleRegistryHintMinimumPercent;
 
     private WorkspaceOperationResult RenderTargetHealth(
         string? workspaceId, string? path, bool json)
@@ -708,12 +760,13 @@ public sealed class WorkspaceTool
             row.CanonicalRoot,
             row.IndexDbPath,
             storeEnabled: statusFacts.Store is not null);
-        return OnboardingResult(onboarding, json);
+        return OnboardingResult(onboarding, json, StaleRegistryHint(json));
     }
 
     private static WorkspaceOperationResult OnboardingResult(
         WorkspaceOnboardingFacts onboarding,
-        bool json)
+        bool json,
+        string? hint)
     {
         bool unavailable = !onboarding.Telemetry.Available;
         return new WorkspaceOperationResult(
@@ -730,7 +783,8 @@ public sealed class WorkspaceTool
                     [new ToolDiagnosticAction(
                         "workspace(operation=\"status\")",
                         "inspect the workspace and telemetry state")])
-                : null);
+                : null,
+            hint);
     }
 
     private WorkspaceOperationResult RenderTargetLeader(
@@ -799,7 +853,8 @@ public sealed class WorkspaceTool
             facts,
             target.IsCurrent
                 ? "workspace(operation=\"health\")"
-                : "workspace(operation=\"health\", workspace_id=\"" + facts.DisplayId + "\")");
+                : "workspace(operation=\"health\", workspace_id=\"" + facts.DisplayId + "\")",
+            hint: null);
     }
 
     private static string RecommendationForLeader(WorkspaceFacts facts, LeaderHealthFacts leader, bool handoffRequested)
@@ -1270,7 +1325,8 @@ public sealed class WorkspaceTool
             stableWorkspaceId,
             displayId,
             canonicalRoot,
-            dbPath);
+            dbPath,
+            lineage: IndexBootstrapService.CaptureLineage(canonicalRoot));
         WorkspaceOpenPrimeEnqueueResult enqueue = _enqueueOpenPrime(stableWorkspaceId);
 
         string note;
@@ -1618,7 +1674,8 @@ public sealed class WorkspaceTool
         string Output,
         int ResultCount,
         TelemetryOutcome Outcome,
-        ToolDiagnostic? Diagnostic = null)
+        ToolDiagnostic? Diagnostic = null,
+        string? Hint = null)
     {
         public static implicit operator WorkspaceOperationResult(
             (string Output, int ResultCount, TelemetryOutcome Outcome) value) =>

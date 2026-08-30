@@ -1781,16 +1781,32 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
-    public async Task WorkspaceIndex_RendersPruneButtonForMissingRoots()
+    public async Task WorkspaceIndex_PruneControlPromisesNoCountPruneCannotDeliver()
     {
         string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
         {
             ["Index"] = SampleWorkspaceIndex(),
         });
 
-        // The stale section offers one-click prune for missing-root registrations (sample has exactly one).
         Assert.Contains("action=\"/workspaces/prune\"", html);
-        Assert.Contains("Prune 1 stale", html);
+        Assert.Contains("Prune stale registrations", html);
+        Assert.DoesNotContain("Prune 1 stale", html);
+        Assert.Contains("1 missing-root registration whose removal it can confirm", html);
+        Assert.Contains("keeps the rest", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_PruneOutcomeNoticeReportsTheRowsThatStayed()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+            ["Notice"] = "pruned",
+            ["NoticeDetail"] = "0",
+        });
+
+        Assert.Contains("Pruned no stale registrations.", html);
+        Assert.Contains("1 missing root stayed", html);
     }
 
     [Fact]
@@ -1928,6 +1944,76 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.True(err.IsStale);
         Assert.Equal("error", err.Workspace.State);
     }
+
+    [Fact]
+    public void ReadIndex_StoreModeMissingRootReportsTheMissingRootWithoutOpeningTheIndex()
+    {
+        RegisterMissingRootRow("ws-store-gone", "storegone-abcd1234");
+
+        DashboardWorkspaceIndexEntry entry = Assert.Single(
+            DashboardData.ReadIndex(_registryDb, telemetryDbPath: null, storeEnabled: true).Entries);
+
+        Assert.False(entry.RootExists);
+        Assert.False(entry.HasFacts);
+        Assert.Equal("unreadable", entry.Facts.Status);
+        Assert.Equal(0, entry.Facts.FileCount);
+        Assert.Equal(0, entry.Facts.SymbolCount);
+        Assert.Empty(entry.Facts.Languages);
+        Assert.Equal("failed", entry.Facts.Store?.State);
+        Assert.Equal("pointer_unreadable", entry.Facts.Store?.Failure);
+        Assert.Equal($"Workspace root is missing: {entry.Workspace.CanonicalRoot}", entry.Facts.Message);
+    }
+
+    [Fact]
+    public void ReadIndex_LegacyModeMissingRootKeepsTheMissingStatus()
+    {
+        RegisterMissingRootRow("ws-legacy-gone", "legacygone-abcd1234");
+
+        DashboardWorkspaceIndexEntry entry = Assert.Single(
+            DashboardData.ReadIndex(_registryDb, telemetryDbPath: null, storeEnabled: false).Entries);
+
+        Assert.False(entry.RootExists);
+        Assert.False(entry.HasFacts);
+        Assert.Equal("missing", entry.Facts.Status);
+        Assert.Null(entry.Facts.Store);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_MissingRootRowRendersTheSameWithoutTheFactsRead()
+    {
+        RegisterMissingRootRow("ws-render-gone", "rendergone-abcd1234");
+
+        DashboardWorkspaceIndexEntry skipped = Assert.Single(
+            DashboardData.ReadIndex(_registryDb, telemetryDbPath: null, storeEnabled: true).Entries);
+        DashboardWorkspaceIndexEntry read = skipped with
+        {
+            Facts = DashboardIndexFactsReader.Read(skipped.Workspace, storeEnabled: true),
+        };
+
+        Assert.Equal(await RenderMissingRootIndexAsync(read), await RenderMissingRootIndexAsync(skipped));
+    }
+
+    private void RegisterMissingRootRow(string workspaceId, string displayId)
+    {
+        string missingRoot = Path.Combine(_dir, workspaceId);
+        using var registry = WorkspaceRegistry.Open(_registryDb);
+        registry.UpsertSeen(
+            workspaceId,
+            displayId,
+            missingRoot,
+            Path.Combine(missingRoot, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Ready,
+            DateTimeOffset.Parse("2026-05-31T09:00:00Z"));
+    }
+
+    private static Task<string> RenderMissingRootIndexAsync(DashboardWorkspaceIndexEntry entry) =>
+        RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = new DashboardWorkspaceIndex(
+                Entries: [entry],
+                WorkspaceCount: 1, TotalFiles: 0, TotalSymbols: 0, LanguageCount: 0,
+                LiveCount: 0, MissingRootCount: 1, ErrorCount: 0),
+        });
 
     [Fact]
     public void DashboardHost_PreservesFragmentCompatibilityRoutes()

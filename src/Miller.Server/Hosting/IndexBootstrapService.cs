@@ -1648,6 +1648,23 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             layout.CommonDir, layout.IsLinkedWorktree, identity.GitDir, identity.GitDirCreatedAtUtc);
     }
 
+    /// <summary>
+    /// The lineage to persist while touching a registry row: the caller's own sample when it has one, otherwise a
+    /// fresh capture, so a row written before the lineage columns existed gains its lineage on the next touch and
+    /// becomes prunable. A root that is GONE captures nothing — the filesystem can no longer answer for it, and a
+    /// null lineage leaves the stored columns alone (<see cref="WorkspaceRegistry.UpsertSeen"/>) instead of
+    /// replacing the evidence <c>workspace prune</c> needs with nulls.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="canonicalRoot"/> is null or blank.</exception>
+    internal static WorkspaceLineage? LineageForLiveRoot(string canonicalRoot, WorkspaceLineage? sampled)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
+        if (sampled is not null)
+            return sampled;
+
+        return Directory.Exists(canonicalRoot) ? CaptureLineage(canonicalRoot) : null;
+    }
+
     /// <summary>The checkout-generation half of a captured lineage, or unknown when no git layout resolved.</summary>
     internal static WorkspaceRootIdentity IdentityOf(WorkspaceLineage? lineage) =>
         lineage is null
@@ -2184,7 +2201,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 canonicalRoot,
                 canonicalDbPath,
                 state,
-                lineage: lineage);
+                lineage: LineageForLiveRoot(canonicalRoot, lineage));
             if (revision is null)
                 return row;
 
@@ -2219,10 +2236,15 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             canonicalRoot,
             canonicalDbPath,
             WorkspaceRegistryState.Ready,
-            lineage: lineage);
+            lineage: LineageForLiveRoot(canonicalRoot, lineage));
         return revision is { } rev ? registry.MarkScanned(stableWorkspaceId, rev) : row;
     }
 
+    /// <summary>
+    /// Record that this workspace's bootstrap or scan failed. It writes NO lineage on purpose: the stored
+    /// generation is the evidence <see cref="DisqualifiesRebind"/> reads on the next start, and a failed run has
+    /// not rebuilt anything, so refreshing it here would retire a rebuild that is still owed.
+    /// </summary>
     internal static WorkspaceRegistryRow MarkRegistryError(
         WorkspaceContext workspace, string stableWorkspaceId, string error)
     {

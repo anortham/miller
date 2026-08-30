@@ -23,7 +23,7 @@ namespace Miller.Server.Workspaces;
 /// </summary>
 public static class WorkspaceRegistryPrune
 {
-    private const int MaxProducerRetirementsPerRun = 1;
+    private const int DefaultMaxProducerRetirementsPerRun = 5;
 
     public sealed record Entry(
         string WorkspaceId,
@@ -50,9 +50,11 @@ public static class WorkspaceRegistryPrune
         bool dryRun,
         Func<string, IDisposable?>? acquireSidecarLease = null,
         Func<string, StoreMaintenanceOutcome>? maintainStore = null,
-        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView = null)
+        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView = null,
+        int maxProducerRetirements = DefaultMaxProducerRetirementsPerRun)
     {
         ArgumentNullException.ThrowIfNull(registry);
+        ArgumentOutOfRangeException.ThrowIfNegative(maxProducerRetirements);
 
         var pruned = new List<Entry>();
         var retirementFailures = new List<RetirementFailure>();
@@ -92,7 +94,7 @@ public static class WorkspaceRegistryPrune
             StoreSidecarReclaimTarget? target = capture.Target;
             if (target is not null)
             {
-                if (!HasConfirmedLinkedWorktreeRemoval(row))
+                if (!HasConfirmedLinkedWorktreeRemoval(registry, row, target))
                 {
                     retirementFailures.Add(new RetirementFailure(
                         row.WorkspaceId,
@@ -104,7 +106,7 @@ public static class WorkspaceRegistryPrune
                     continue;
                 }
 
-                if (producerRetirements >= MaxProducerRetirementsPerRun)
+                if (producerRetirements >= maxProducerRetirements)
                 {
                     retirementFailures.Add(new RetirementFailure(
                         row.WorkspaceId,
@@ -116,7 +118,6 @@ public static class WorkspaceRegistryPrune
                     continue;
                 }
 
-                producerRetirements++;
                 if (!WorkspaceRemoval.TryRetireView(
                         target,
                         retireView,
@@ -132,6 +133,8 @@ public static class WorkspaceRegistryPrune
                     kept++;
                     continue;
                 }
+
+                producerRetirements++;
             }
 
             if (dryRun)
@@ -159,26 +162,79 @@ public static class WorkspaceRegistryPrune
         return new Result(dryRun, pruned, kept, reclaimed, maintained, retirementFailures);
     }
 
-    private static bool HasConfirmedLinkedWorktreeRemoval(WorkspaceRegistryRow row)
+    /// <summary>
+    /// Whether the missing root of <paramref name="row"/> is PROVEN to be a linked worktree git itself removed,
+    /// which is the only shape whose family-store view a prune may retire.
+    ///
+    /// <para>The proof is the repository's COMMON dir present and readable while this worktree's admin dir is
+    /// gone. The admin dir's PARENT (<c>&lt;repo&gt;/.git/worktrees</c>) is not the proof: git deletes that
+    /// directory when the last worktree of a repository goes, so a tidy cleanup made every remaining row
+    /// permanently unprunable. The common dir only vanishes with the repository.</para>
+    ///
+    /// <para>This is STRICTER than reading the parent, and every failure direction refuses. An unmounted worktree
+    /// volume leaves the admin dir in place — refuse. A whole repository on an unmounted volume loses the common
+    /// dir — refuse. <see cref="Directory.Exists"/> answers false on any error, not only on absence, so the
+    /// admin-dir half alone would read a fault as a removal; requiring the common dir to answer TRUE is what
+    /// refuses a fault at or above the repository. A fault confined to <c>&lt;common&gt;/worktrees</c> still reads
+    /// as a removal, exactly as it did when the parent was the proof.</para>
+    ///
+    /// <para>Lineage falls back to the store tables because <c>workspaces.git_is_linked</c>/<c>git_dir</c> were
+    /// added after many rows were written, and <c>store_members.root_git_dir</c> plus
+    /// <c>store_families.canonical_common_dir</c> carry the same facts for those rows. Only a NULL
+    /// <c>git_is_linked</c> falls back — an explicit <c>0</c> is a recorded answer of "plain checkout", and a
+    /// plain checkout's admin dir IS its common dir, which is refused outright.</para>
+    /// </summary>
+    private static bool HasConfirmedLinkedWorktreeRemoval(
+        WorkspaceRegistry registry,
+        WorkspaceRegistryRow row,
+        StoreSidecarReclaimTarget target)
     {
-        if (row.GitIsLinked != true || string.IsNullOrWhiteSpace(row.GitDir))
+        if (row.GitIsLinked == false)
             return false;
 
-        string? adminParent;
+        string? adminDir = LineageDirectory(row.GitDir)
+            ?? LineageDirectory(registry.GetStoreMember(row.WorkspaceId)?.RootGitDir);
+        string? commonDir = LineageDirectory(row.GitCommonDir)
+            ?? LineageDirectory(registry.GetStoreFamily(target.FamilyId)?.CanonicalCommonDir);
+        if (adminDir is null || commonDir is null)
+            return false;
+        if (string.Equals(adminDir, commonDir, LineagePathComparison))
+            return false;
+
+        return Directory.Exists(commonDir) &&
+            !Directory.Exists(adminDir) &&
+            !File.Exists(adminDir);
+    }
+
+    /// <summary>
+    /// A recorded lineage path in the one spelling the presence and equality tests can trust, or null when it is
+    /// blank or unusable. Pure string work: these paths are expected to be gone, so nothing resolves them against
+    /// the filesystem.
+    /// </summary>
+    private static string? LineageDirectory(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
         try
         {
-            adminParent = Path.GetDirectoryName(row.GitDir);
+            return TrimTrailingSeparators(
+                PathCanonicalizer.StripWindowsVerbatimPrefix(Path.GetFullPath(path)));
         }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
         {
-            return false;
+            return null;
         }
-
-        return adminParent is not null &&
-            Directory.Exists(adminParent) &&
-            !Directory.Exists(row.GitDir) &&
-            !File.Exists(row.GitDir);
     }
+
+    private static string TrimTrailingSeparators(string path)
+    {
+        string trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return trimmed.Length == 0 ? path : trimmed;
+    }
+
+    private static StringComparison LineagePathComparison =>
+        ArtifactRootIdentity.ComparisonFor(OperatingSystem.IsWindows(), OperatingSystem.IsMacOS());
 
     private static StoreViewRetirementOutcome UnconfirmedLinkedWorktreeRemoval(
         StoreSidecarReclaimTarget target) =>
@@ -200,7 +256,7 @@ public static class WorkspaceRegistryPrune
             0,
             0,
             0,
-            "producer retirement deferred by the one-target prune limit; rerun prune to advance");
+            "producer retirement deferred by the per-run prune limit; rerun prune to advance");
 
     /// <summary>
     /// One pass over EVERY registered family, not only the families this prune touched.

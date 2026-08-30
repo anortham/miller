@@ -3,9 +3,23 @@ using Miller.Server.Tools;
 
 namespace Miller.Server.Workspaces;
 
+/// <summary>
+/// What the resolved row is for. A read may break an otherwise ambiguous match by root presence; a mutation
+/// may not. <c>workspace remove</c> resolves the same selectors, and there the dead row is what the caller
+/// means — breaking the tie toward the live root would delete the wrong workspace's index and store view.
+/// </summary>
+internal enum WorkspaceSelectorIntent
+{
+    Read,
+    Mutate,
+}
+
 internal static class WorkspaceRegistrySelector
 {
-    public static WorkspaceRegistryRow Resolve(WorkspaceRegistry registry, string selector)
+    public static WorkspaceRegistryRow Resolve(
+        WorkspaceRegistry registry,
+        string selector,
+        WorkspaceSelectorIntent intent = WorkspaceSelectorIntent.Read)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(selector);
@@ -21,7 +35,7 @@ internal static class WorkspaceRegistrySelector
         if (exactDisplayMatches.Length == 1)
             return exactDisplayMatches[0];
         if (exactDisplayMatches.Length > 1)
-            throw Ambiguous(trimmed, exactDisplayMatches);
+            return SingleLiveMatch(exactDisplayMatches, intent) ?? throw Ambiguous(trimmed, exactDisplayMatches);
 
         if (Path.IsPathRooted(trimmed))
         {
@@ -46,11 +60,38 @@ internal static class WorkspaceRegistrySelector
         if (prefixMatches.Length == 1)
             return prefixMatches[0];
         if (prefixMatches.Length > 1)
-            throw Ambiguous(trimmed, prefixMatches);
+            return SingleLiveMatch(prefixMatches, intent) ?? throw Ambiguous(trimmed, prefixMatches);
 
         throw new KeyNotFoundException(
             $"unknown workspace selector '{trimmed}'. Use workspace(operation=\"list\") to see display IDs; " +
             "selectors accept display_id, unique prefix, full workspace_id, registered root path, current, or primary.");
+    }
+
+    /// <summary>
+    /// Breaks an otherwise ambiguous match set by root presence, and returns null unless exactly one candidate
+    /// root is present on disk. Null keeps the caller on the ambiguity it would have reported anyway, so a tie
+    /// between live roots and a tie between dead roots both behave as they always have. A mutation never breaks
+    /// the tie: <c>Directory.Exists</c> answers false on a permission fault as well as on absence, and picking a
+    /// delete target from that guess is exactly the mistake the ambiguity refusal exists to prevent.
+    /// </summary>
+    private static WorkspaceRegistryRow? SingleLiveMatch(
+        IReadOnlyList<WorkspaceRegistryRow> matches,
+        WorkspaceSelectorIntent intent)
+    {
+        if (intent != WorkspaceSelectorIntent.Read)
+            return null;
+
+        WorkspaceRegistryRow? live = null;
+        foreach (WorkspaceRegistryRow row in matches)
+        {
+            if (!Directory.Exists(row.CanonicalRoot))
+                continue;
+            if (live is not null)
+                return null;
+            live = row;
+        }
+
+        return live;
     }
 
     private static KeyNotFoundException Ambiguous(string selector, IReadOnlyList<WorkspaceRegistryRow> matches)

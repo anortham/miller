@@ -447,6 +447,13 @@ internal static class DashboardEndpoints
                     protectedWorkspaceId: null,
                     dryRun: false,
                     retireView: StoreViewRetirementRunner.ForToolsRoot(toolsRoot));
+            // A kept row is the normal outcome, not a failure: a run that hits the per-run retirement cap, or a
+            // row whose removal it cannot confirm, still prunes everything else. Reporting an error whenever any
+            // row was kept would show one on every registry that has a backlog — which is every registry that
+            // needs pruning at all. The panel names what stayed behind.
+            if (result.Pruned.Count > 0)
+                return NoticeRedirect("pruned", result.Pruned.Count.ToString(CultureInfo.InvariantCulture));
+
             if (result.RetirementFailures.Count > 0)
             {
                 WorkspaceRegistryPrune.RetirementFailure failure = result.RetirementFailures[0];
@@ -455,7 +462,8 @@ internal static class DashboardEndpoints
                     : $"Producer view retirement failed for {result.RetirementFailures.Count} workspaces. The registry entries were kept for retry. First failure: {failure.Outcome.Error ?? "Unknown producer retirement failure"}";
                 return NoticeRedirect("remove-error", detail);
             }
-            return NoticeRedirect("pruned", result.Pruned.Count.ToString(CultureInfo.InvariantCulture));
+
+            return NoticeRedirect("pruned", "0");
         }
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
