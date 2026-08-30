@@ -145,12 +145,10 @@ public static class StoreMaintenanceRunner
                 return null;
             }
 
-            string? code = error.TryGetProperty("code", out JsonElement codeElement)
-                ? codeElement.GetString()
-                : null;
-            string? message = error.TryGetProperty("message", out JsonElement messageElement)
-                ? messageElement.GetString()
-                : null;
+            // ValueKind first: GetString throws InvalidOperationException on a number, array, or object, and
+            // that escapes the JsonException catch to surface as a diagnostic with no exit code in it.
+            string? code = Text(error, "code");
+            string? message = Text(error, "message");
             if (string.IsNullOrWhiteSpace(message))
                 return string.IsNullOrWhiteSpace(code) ? null : code;
 
@@ -161,6 +159,11 @@ public static class StoreMaintenanceRunner
             return null;
         }
     }
+
+    private static string? Text(JsonElement parent, string property) =>
+        parent.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
     internal static StoreMaintenanceOutcome ReadPrunedRequestRows(string reportJson)
     {

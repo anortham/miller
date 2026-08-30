@@ -240,6 +240,22 @@ public sealed class StoreViewRetirementRunnerTests : IDisposable
         Assert.Null(outcome.Error);
     }
 
+    [Theory]
+    [InlineData("planned")]
+    [InlineData("applied")]
+    public void ASuccessReportFromAProcessThatDied_IsFailedNotARetirement(string disposition)
+    {
+        RequireUnix();
+        string report = Report("plan", disposition, retiredViews: 1);
+        string binary = WriteExecutable($"printf '%s\\n' {ShellQuote(report)}\nexit 137");
+
+        StoreViewRetirementOutcome outcome = StoreViewRetirementRunner.Run(
+            binary, _target, apply: false, timeout: TimeSpan.FromSeconds(2));
+
+        Assert.Equal(StoreViewRetirementDisposition.Failed, outcome.Disposition);
+        Assert.Contains("exited 137", outcome.Error, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void NonzeroExitCarryingAReport_ReportsTheProducersOwnErrorNotAnEmptyStderr()
     {

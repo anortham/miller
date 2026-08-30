@@ -29,8 +29,44 @@ public sealed class StoreMaintenanceRunnerTests
     [InlineData("not json")]
     [InlineData("""{"action":"gc","error":null}""")]
     [InlineData("""{"action":"gc"}""")]
+    [InlineData("""{"action":"gc","error":{"code":7,"message":["a"]}}""")]
+    [InlineData("""{"action":"gc","error":{"code":{},"message":{}}}""")]
     public void AReportWithNoReadableErrorNamesNone(string reportJson) =>
         Assert.Null(StoreMaintenanceRunner.ReadReportedError(reportJson));
+
+    [Fact]
+    public void ANonzeroExitReportsTheProducersOwnErrorAlongsideTheExitCode()
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("The fake producer uses a POSIX executable.");
+
+        string root = Path.Combine(Path.GetTempPath(), $"miller-store-maintenance-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string report =
+                """{"action":"gc","failure_class":"invalid_arguments","error":{"class":"invalid_arguments","code":"store_locked","message":"another writer holds the store"}}""";
+            string binary = Path.Combine(root, "julie-extract");
+            File.WriteAllText(binary, $"#!/bin/sh\nprintf '%s\\n' '{report}'\nexit 9\n");
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    binary,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+
+            StoreMaintenanceOutcome outcome = StoreMaintenanceRunner.Run(
+                binary, root, TimeSpan.FromSeconds(5));
+
+            Assert.Equal(0, outcome.PrunedRequestRows);
+            Assert.Contains("exited 9", outcome.Error, StringComparison.Ordinal);
+            Assert.Contains("another writer holds the store", outcome.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
 
     [Theory]
     [InlineData("")]

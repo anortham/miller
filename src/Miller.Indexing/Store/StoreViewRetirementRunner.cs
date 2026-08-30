@@ -108,19 +108,21 @@ public static class StoreViewRetirementRunner
 
             process.WaitForExit();
             string report = standardOutput.ToString();
-
-            // The exit code alone must not decide this. julie-extract writes its diagnosis INTO the JSON
-            // report on stdout and exits non-zero with an empty stderr, so reading only stderr reported
-            // "no diagnostic output" and discarded the report — including `view_not_found`, the one code
-            // that means the retirement goal is already met. That left the registry row unprunable forever.
-            if (HasReport(report))
+            if (process.ExitCode == 0)
                 return ReadReport(report, target, apply);
 
-            return process.ExitCode == 0
-                ? ReadReport(report, target, apply)
-                : Failed(
-                    target,
-                    $"store view retirement exited {process.ExitCode}: {FirstLine(standardError.ToString())}");
+            // A non-zero exit can still carry the producer's diagnosis: julie-extract writes it INTO the JSON
+            // report on stdout and leaves stderr empty, and `view_not_found` — the one code meaning the
+            // retirement goal is already met — arrives exactly that way. Only a report that ADMITS failure is
+            // read here. A success-shaped report from a process that then died (a signal, an OOM kill, a crash
+            // after the report was flushed) must never read as a retirement: the caller deletes a registry row
+            // and the whole per-view sidecar set on that word.
+            if (DeclaresFailure(report))
+                return ReadReport(report, target, apply);
+
+            return Failed(
+                target,
+                $"store view retirement exited {process.ExitCode}: {FirstLine(standardError.ToString())}");
         }
         catch (Exception failure) when (
             failure is IOException
@@ -135,10 +137,26 @@ public static class StoreViewRetirementRunner
     }
 
     /// <summary>
-    /// Whether stdout carries something worth parsing as the producer's report, whatever the exit code was.
+    /// Whether stdout carries a report that says the run FAILED. This is the only report a non-zero exit is
+    /// allowed to speak through, so a report claiming success cannot outrank the exit code that contradicts it.
     /// </summary>
-    private static bool HasReport(string standardOutput) =>
-        standardOutput.AsSpan().TrimStart().StartsWith("{", StringComparison.Ordinal);
+    private static bool DeclaresFailure(string standardOutput)
+    {
+        if (!standardOutput.AsSpan().TrimStart().StartsWith("{", StringComparison.Ordinal))
+            return false;
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(standardOutput);
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                TryGetString(document.RootElement, "disposition", out string? disposition) &&
+                disposition == "failed";
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     internal static StoreViewRetirementOutcome ReadReport(
         string reportJson,
