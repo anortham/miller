@@ -553,7 +553,7 @@ public sealed class WorkspaceTool
     private WorkspaceOperationResult RenderTargetStatus(
         string? workspaceId, string? path, bool json)
     {
-        TargetWorkspace target = ResolveTarget(workspaceId, path);
+        TargetWorkspace target = ResolveTarget(workspaceId, path, WorkspaceSelectorIntent.Read);
         if (target.UnknownNote is { } note)
             return (Note(note, json), 0, TelemetryOutcome.Empty);
 
@@ -670,7 +670,7 @@ public sealed class WorkspaceTool
     private WorkspaceOperationResult RenderTargetHealth(
         string? workspaceId, string? path, bool json)
     {
-        TargetWorkspace target = ResolveTarget(workspaceId, path);
+        TargetWorkspace target = ResolveTarget(workspaceId, path, WorkspaceSelectorIntent.Read);
         if (target.UnknownNote is { } note)
             return (Note(note, json), 0, TelemetryOutcome.Empty);
 
@@ -734,7 +734,7 @@ public sealed class WorkspaceTool
     private WorkspaceOperationResult RenderTargetOnboarding(
         string? workspaceId, string? path, bool json)
     {
-        TargetWorkspace target = ResolveTarget(workspaceId, path);
+        TargetWorkspace target = ResolveTarget(workspaceId, path, WorkspaceSelectorIntent.Read);
         if (target.UnknownNote is { } note)
             return (Note(note, json), 0, TelemetryOutcome.Empty);
 
@@ -790,7 +790,7 @@ public sealed class WorkspaceTool
     private WorkspaceOperationResult RenderTargetLeader(
         string? workspaceId, string? path, bool json, bool handoff, bool wait)
     {
-        TargetWorkspace target = ResolveTarget(workspaceId, path);
+        TargetWorkspace target = ResolveTarget(workspaceId, path, WorkspaceSelectorIntent.Mutate);
         if (target.UnknownNote is { } note)
             return (Note(note, json), 0, TelemetryOutcome.Empty);
 
@@ -1161,7 +1161,7 @@ public sealed class WorkspaceTool
     private WorkspaceOperationResult RenderTargetAction(
         string operation, string? workspaceId, string? path, bool force, bool json)
     {
-        TargetWorkspace target = ResolveTarget(workspaceId, path);
+        TargetWorkspace target = ResolveTarget(workspaceId, path, WorkspaceSelectorIntent.Mutate);
         if (target.UnknownNote is { } note)
             return (Note(note, json), 0, TelemetryOutcome.Empty);
 
@@ -1558,7 +1558,7 @@ public sealed class WorkspaceTool
     private TargetWorkspace ResolveTarget(
         string? workspaceId,
         string? path,
-        WorkspaceSelectorIntent intent = WorkspaceSelectorIntent.Read)
+        WorkspaceSelectorIntent intent)
     {
         if (!string.IsNullOrWhiteSpace(workspaceId))
         {

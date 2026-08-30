@@ -217,7 +217,7 @@ internal static class DashboardEndpoints
                 paths,
                 launchDirectory,
                 workspace_id,
-                DashboardRefreshJobs.PeekRunning(workspace_id)
+                DashboardRefreshJobs.PeekLive(workspace_id)
                     ?? DashboardRefreshJobs.PeekLastOutcome(workspace_id)));
 
         // Tests-panel lifecycle triggers. Same CSRF proof as the other htmx POSTs; the action itself

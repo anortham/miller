@@ -172,9 +172,14 @@ public static class StoreMaintenanceRunner
 
         try
         {
+            // ValueKind before every read: TryGetProperty throws on a non-object and TryGetInt64 throws on a
+            // non-number, and both throw InvalidOperationException, which is NOT the JsonException caught below.
             using JsonDocument document = JsonDocument.Parse(reportJson);
-            return document.RootElement.TryGetProperty("counts", out JsonElement counts)
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                   && document.RootElement.TryGetProperty("counts", out JsonElement counts)
+                   && counts.ValueKind == JsonValueKind.Object
                    && counts.TryGetProperty("pruned_request_rows", out JsonElement pruned)
+                   && pruned.ValueKind == JsonValueKind.Number
                    && pruned.TryGetInt64(out long rows)
                 ? new StoreMaintenanceOutcome(rows, null)
                 : new StoreMaintenanceOutcome(0, "store maintenance report omitted pruned_request_rows");

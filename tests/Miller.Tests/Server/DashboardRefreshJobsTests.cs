@@ -132,34 +132,36 @@ public sealed class DashboardRefreshJobsTests
     }
 
     [Fact]
-    public async Task PeekRunning_ReportsARunningJobWithoutConsumingIt()
+    public async Task PeekLive_ReportsARunningJobWithoutConsumingIt()
     {
         string workspaceId = NewWorkspaceId();
         var gate = new TaskCompletionSource();
         DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
 
-        Assert.Equal(DashboardRefreshJobState.Running, DashboardRefreshJobs.PeekRunning(workspaceId)?.State);
-        Assert.Equal(DashboardRefreshJobState.Running, DashboardRefreshJobs.PeekRunning(workspaceId)?.State);
+        Assert.Equal(DashboardRefreshJobState.Running, DashboardRefreshJobs.PeekLive(workspaceId)?.State);
+        Assert.Equal(DashboardRefreshJobState.Running, DashboardRefreshJobs.PeekLive(workspaceId)?.State);
 
         gate.SetResult();
         Assert.Equal(43L, (await WaitForCompletedAsync(workspaceId)).Result?.Revision);
     }
 
     [Fact]
-    public async Task PeekRunning_OnceTheJobFinished_ReportsNothingSoPeekStillOwnsTheOutcome()
+    public async Task PeekLive_ReportsAFinishedJobWithoutTakingPeeksExactlyOnceRender()
     {
         string workspaceId = NewWorkspaceId();
         var gate = new TaskCompletionSource();
         DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
         gate.SetResult();
-        await WaitAsync(() => DashboardRefreshJobs.PeekRunning(workspaceId) is null);
+        await WaitAsync(() =>
+            DashboardRefreshJobs.PeekLive(workspaceId) is { State: DashboardRefreshJobState.Completed });
 
-        Assert.Null(DashboardRefreshJobs.PeekRunning(workspaceId));
+        Assert.Equal(43L, DashboardRefreshJobs.PeekLive(workspaceId)?.Result?.Revision);
         Assert.Equal(43L, DashboardRefreshJobs.Peek(workspaceId)?.Result?.Revision);
+        Assert.Null(DashboardRefreshJobs.PeekLive(workspaceId));
     }
 
     [Fact]
-    public async Task PeekRunning_AfterANewRefreshStarts_OutranksTheRetainedOutcomeTheRefetchWouldShow()
+    public async Task PeekLive_AfterANewRefreshStarts_OutranksTheRetainedOutcomeTheRefetchWouldShow()
     {
         string workspaceId = NewWorkspaceId();
         var first = new TaskCompletionSource();
@@ -172,12 +174,33 @@ public sealed class DashboardRefreshJobsTests
         DashboardRefreshJobs.Start(workspaceId, GatedRefresh(second, workspaceId));
 
         DashboardRefreshJobStatus? rendered =
-            DashboardRefreshJobs.PeekRunning(workspaceId) ?? DashboardRefreshJobs.PeekLastOutcome(workspaceId);
+            DashboardRefreshJobs.PeekLive(workspaceId) ?? DashboardRefreshJobs.PeekLastOutcome(workspaceId);
 
         Assert.Equal(DashboardRefreshJobState.Running, rendered?.State);
 
         second.SetResult();
         await WaitForCompletedAsync(workspaceId);
+    }
+
+    [Fact]
+    public async Task ARefreshThatFinishesInsideTheRefetchRoundTrip_IsStillWhatTheRefetchRenders()
+    {
+        string workspaceId = NewWorkspaceId();
+        var first = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(first, workspaceId));
+        first.SetResult();
+        await WaitForCompletedAsync(workspaceId);
+
+        // The reader starts a second refresh during the detail-stack round trip, and it reaches a terminal
+        // state before that GET lands — a lock-busy or unknown-workspace refresh returns in milliseconds.
+        DashboardRefreshJobs.Start(workspaceId, () => Refreshed(workspaceId, revision: 77));
+        await WaitAsync(() =>
+            DashboardRefreshJobs.PeekLive(workspaceId) is { State: DashboardRefreshJobState.Completed });
+
+        DashboardRefreshJobStatus? rendered =
+            DashboardRefreshJobs.PeekLive(workspaceId) ?? DashboardRefreshJobs.PeekLastOutcome(workspaceId);
+
+        Assert.Equal(77L, rendered?.Result?.Revision);
     }
 
     private static Func<WorkspaceRefreshResult> GatedRefresh(TaskCompletionSource gate, string workspaceId) =>
@@ -187,13 +210,13 @@ public sealed class DashboardRefreshJobsTests
             return Refreshed(workspaceId);
         };
 
-    private static WorkspaceRefreshResult Refreshed(string workspaceId) =>
+    private static WorkspaceRefreshResult Refreshed(string workspaceId, long revision = 43) =>
         new(
             WorkspaceRefreshStatus.Refreshed,
             workspaceId,
             "/repo/a",
             "/repo/a/.miller/symbols.db",
-            Revision: 43,
+            Revision: revision,
             Scanned: true);
 
     private static string NewWorkspaceId() => "ws-jobs-" + Guid.NewGuid().ToString("N");

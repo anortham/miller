@@ -77,19 +77,22 @@ public static class DashboardRefreshJobs
     }
 
     /// <summary>
-    /// The job for this workspace only while it is still RUNNING, and never consuming. The detail-stack
-    /// refetch needs this: it is triggered by one refresh finishing but arrives a round trip later, by which
-    /// time the reader may have started another. Rendering the retained outcome then would morph a finished
-    /// verdict over the running panel and drop its poll attributes, so the new refresh would never report.
-    /// Null while a job is finished, which leaves <see cref="Peek"/> the only reader that may consume it.
+    /// This workspace's CURRENT job — running or finished-but-unobserved — without consuming it.
+    ///
+    /// <para>The detail-stack refetch needs this: it is triggered by one refresh finishing but arrives a round
+    /// trip later, by which time the reader may have started another. Rendering the retained outcome then would
+    /// morph the OLD verdict over the new refresh and take its poll attributes with it.</para>
+    ///
+    /// <para>"Running" is not the test, because the newer refresh may also have finished inside that round trip —
+    /// a lock-busy, an unknown workspace, or a throwing refresh all reach a terminal state in milliseconds. Any
+    /// job still in the map is newer than the retained outcome and outranks it. Consuming stays
+    /// <see cref="Peek"/>'s alone, so the poll keeps its exactly-once render.</para>
     /// </summary>
-    public static DashboardRefreshJobStatus? PeekRunning(string workspaceId)
+    public static DashboardRefreshJobStatus? PeekLive(string workspaceId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
 
-        return Jobs.TryGetValue(workspaceId, out Job? job) && !job.IsFinished
-            ? Describe(job)
-            : null;
+        return Jobs.TryGetValue(workspaceId, out Job? job) ? Describe(job) : null;
     }
 
     /// <summary>

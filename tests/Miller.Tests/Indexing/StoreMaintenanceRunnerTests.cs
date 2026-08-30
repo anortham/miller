@@ -74,6 +74,11 @@ public sealed class StoreMaintenanceRunnerTests
     [InlineData("not json")]
     [InlineData("""{"action":"gc"}""")]
     [InlineData("""{"action":"gc","counts":{}}""")]
+    [InlineData("[1,2]")]
+    [InlineData("\"text\"")]
+    [InlineData("""{"counts":7}""")]
+    [InlineData("""{"counts":{"pruned_request_rows":"2163"}}""")]
+    [InlineData("""{"counts":{"pruned_request_rows":null}}""")]
     public void AReportThatNamesNoCountIsAnErrorRatherThanAZero(string reportJson)
     {
         StoreMaintenanceOutcome outcome = StoreMaintenanceRunner.ReadPrunedRequestRows(reportJson);
