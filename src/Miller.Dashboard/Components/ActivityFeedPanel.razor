@@ -29,7 +29,7 @@
         <ol class="activity-feed">
             @foreach (DashboardActivityEntry entry in Feed.Entries)
             {
-                <li class="activity-row">
+                <li id="activity-@entry.Id" class="activity-row">
                     <time class="rel-ts timestamp" datetime="@entry.Ts" data-ts="@entry.Ts">@RelativeTime(entry.Ts, Now)</time>
                     <code class="activity-tool">@entry.Tool</code>
                     @if (!string.IsNullOrWhiteSpace(entry.Op))

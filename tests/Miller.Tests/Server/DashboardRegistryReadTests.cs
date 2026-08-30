@@ -14,6 +14,7 @@ using Miller.Server.Tools;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -800,7 +801,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
-    public void DashboardIndexFactsCache_DoesNotUseLegacyFileFreshnessForStoreReads()
+    public void DashboardIndexFactsCache_NeverCachesAStoreItCannotProbe()
     {
         using JulieDbFixture fixture = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema,
@@ -824,6 +825,140 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.NotSame(first, second);
         Assert.Equal("binding_not_ready", first.Store?.Failure);
         Assert.Equal(first.Store, second.Store);
+    }
+
+    [Fact]
+    public void DashboardIndexFactsCache_ReusesStoreFactsUntilTheStoreAdvances()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        DashboardWorkspaceRow workspace = StoreWorkspaceRow(fixture, "ws-store-advance", "store-advance-abcd1234");
+
+        DashboardIndexFactsCache.Clear();
+        DashboardWorkspaceFacts first = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+        DashboardWorkspaceFacts second = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+
+        Assert.Same(first, second);
+        Assert.NotNull(first.Store);
+        Assert.Equal(2, first.IndexRevision);
+
+        AppendStoreLogEvent(fixture, sequence: 3);
+        DashboardWorkspaceFacts third = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+
+        Assert.NotSame(first, third);
+        Assert.Equal(3, third.IndexRevision);
+    }
+
+    [Fact]
+    public void DashboardIndexFactsCache_AfterAnotherViewJoinsTheStore_DoesNotServeTheStaleMemberSummary()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        DashboardWorkspaceRow workspace = StoreWorkspaceRow(fixture, "ws-store-members", "store-members-abcd1234");
+
+        DashboardIndexFactsCache.Clear();
+        DashboardWorkspaceFacts first = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+        Assert.Equal(1, first.Store?.MemberCount);
+
+        AddStoreView(fixture, "view-b", Path.Combine(fixture.Binding.WorkspaceRoot, "..", "sibling"));
+        DashboardStoreViewsWitness.Clear();
+        DashboardWorkspaceFacts second = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+
+        Assert.NotSame(first, second);
+        Assert.Equal(2, second.Store?.MemberCount);
+    }
+
+    [Fact]
+    public void DashboardIndexFactsCache_PastItsCapacity_DropsTheLeastRecentlyCachedEntries()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows: []);
+
+        DashboardIndexFactsCache.Clear();
+        for (int index = 0; index <= DashboardIndexFactsCache.Capacity; index++)
+        {
+            DashboardIndexFactsCache.Read(
+                new DashboardWorkspaceRow(
+                    "ws-capacity-" + index.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    "capacity-abcd1234",
+                    fixture.WorkspaceRoot,
+                    fixture.DbPath,
+                    "2026-05-31T10:00:00Z",
+                    "2026-05-31T10:01:00Z",
+                    3,
+                    "ready",
+                    null),
+                storeEnabled: false);
+        }
+
+        Assert.Equal(DashboardIndexFactsCache.Capacity, DashboardIndexFactsCache.Count);
+    }
+
+    [Fact]
+    public void DashboardIndexFactsCache_NeverServesALegacyEntryToAStoreRead()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        DashboardWorkspaceRow workspace = StoreWorkspaceRow(fixture, "ws-mode-isolation", "mode-isolation-abcd1234");
+
+        DashboardIndexFactsCache.Clear();
+        DashboardWorkspaceFacts legacy = DashboardIndexFactsCache.Read(workspace, storeEnabled: false);
+        DashboardWorkspaceFacts store = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+        DashboardWorkspaceFacts legacyAgain = DashboardIndexFactsCache.Read(workspace, storeEnabled: false);
+
+        Assert.NotSame(legacy, store);
+        Assert.Same(legacy, legacyAgain);
+        Assert.Equal("unreadable", legacy.Status);
+        Assert.Null(legacy.Store);
+        Assert.Equal("ready", store.Status);
+        Assert.NotNull(store.Store);
+    }
+
+    private static DashboardWorkspaceRow StoreWorkspaceRow(StoreFixture fixture, string workspaceId, string displayId) =>
+        new(
+            workspaceId,
+            displayId,
+            fixture.Binding.WorkspaceRoot,
+            Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"),
+            "2026-08-09T00:00:00Z",
+            "2026-08-09T00:01:00Z",
+            2,
+            "ready",
+            null);
+
+    private static void AddStoreView(StoreFixture fixture, string viewId, string root)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db"),
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            "INSERT INTO views VALUES ($view,$root,2,'unbound',NULL,NULL,NULL," +
+            "'2026-08-09T00:00:00Z','2026-08-09T00:00:00Z');";
+        command.Parameters.AddWithValue("$view", viewId);
+        command.Parameters.AddWithValue("$root", root);
+        command.ExecuteNonQuery();
+    }
+
+    private static void AppendStoreLogEvent(StoreFixture fixture, long sequence)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db"),
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            "INSERT INTO store_log VALUES ($sequence,'request-b','manifest_flipped','view-a',2,NULL,NULL,1,'{}'," +
+            "'2026-08-09T00:00:02Z');";
+        command.Parameters.AddWithValue("$sequence", sequence);
+        command.ExecuteNonQuery();
     }
 
     [Fact]
@@ -1710,16 +1845,32 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
-    public async Task WorkspaceIndex_RendersPruneButtonForMissingRoots()
+    public async Task WorkspaceIndex_PruneControlPromisesNoCountPruneCannotDeliver()
     {
         string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
         {
             ["Index"] = SampleWorkspaceIndex(),
         });
 
-        // The stale section offers one-click prune for missing-root registrations (sample has exactly one).
         Assert.Contains("action=\"/workspaces/prune\"", html);
-        Assert.Contains("Prune 1 stale", html);
+        Assert.Contains("Prune stale registrations", html);
+        Assert.DoesNotContain("Prune 1 stale", html);
+        Assert.Contains("1 missing-root registration whose removal it can confirm", html);
+        Assert.Contains("keeps the rest", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_PruneOutcomeNoticeReportsTheRowsThatStayed()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+            ["Notice"] = "pruned",
+            ["NoticeDetail"] = "0",
+        });
+
+        Assert.Contains("Pruned no stale registrations.", html);
+        Assert.Contains("1 missing root stayed", html);
     }
 
     [Fact]
@@ -1857,6 +2008,76 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.True(err.IsStale);
         Assert.Equal("error", err.Workspace.State);
     }
+
+    [Fact]
+    public void ReadIndex_StoreModeMissingRootReportsTheMissingRootWithoutOpeningTheIndex()
+    {
+        RegisterMissingRootRow("ws-store-gone", "storegone-abcd1234");
+
+        DashboardWorkspaceIndexEntry entry = Assert.Single(
+            DashboardData.ReadIndex(_registryDb, telemetryDbPath: null, storeEnabled: true).Entries);
+
+        Assert.False(entry.RootExists);
+        Assert.False(entry.HasFacts);
+        Assert.Equal("unreadable", entry.Facts.Status);
+        Assert.Equal(0, entry.Facts.FileCount);
+        Assert.Equal(0, entry.Facts.SymbolCount);
+        Assert.Empty(entry.Facts.Languages);
+        Assert.Equal("failed", entry.Facts.Store?.State);
+        Assert.Equal("pointer_unreadable", entry.Facts.Store?.Failure);
+        Assert.Equal($"Workspace root is missing: {entry.Workspace.CanonicalRoot}", entry.Facts.Message);
+    }
+
+    [Fact]
+    public void ReadIndex_LegacyModeMissingRootKeepsTheMissingStatus()
+    {
+        RegisterMissingRootRow("ws-legacy-gone", "legacygone-abcd1234");
+
+        DashboardWorkspaceIndexEntry entry = Assert.Single(
+            DashboardData.ReadIndex(_registryDb, telemetryDbPath: null, storeEnabled: false).Entries);
+
+        Assert.False(entry.RootExists);
+        Assert.False(entry.HasFacts);
+        Assert.Equal("missing", entry.Facts.Status);
+        Assert.Null(entry.Facts.Store);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_MissingRootRowRendersTheSameWithoutTheFactsRead()
+    {
+        RegisterMissingRootRow("ws-render-gone", "rendergone-abcd1234");
+
+        DashboardWorkspaceIndexEntry skipped = Assert.Single(
+            DashboardData.ReadIndex(_registryDb, telemetryDbPath: null, storeEnabled: true).Entries);
+        DashboardWorkspaceIndexEntry read = skipped with
+        {
+            Facts = DashboardIndexFactsReader.Read(skipped.Workspace, storeEnabled: true),
+        };
+
+        Assert.Equal(await RenderMissingRootIndexAsync(read), await RenderMissingRootIndexAsync(skipped));
+    }
+
+    private void RegisterMissingRootRow(string workspaceId, string displayId)
+    {
+        string missingRoot = Path.Combine(_dir, workspaceId);
+        using var registry = WorkspaceRegistry.Open(_registryDb);
+        registry.UpsertSeen(
+            workspaceId,
+            displayId,
+            missingRoot,
+            Path.Combine(missingRoot, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Ready,
+            DateTimeOffset.Parse("2026-05-31T09:00:00Z"));
+    }
+
+    private static Task<string> RenderMissingRootIndexAsync(DashboardWorkspaceIndexEntry entry) =>
+        RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = new DashboardWorkspaceIndex(
+                Entries: [entry],
+                WorkspaceCount: 1, TotalFiles: 0, TotalSymbols: 0, LanguageCount: 0,
+                LiveCount: 0, MissingRootCount: 1, ErrorCount: 0),
+        });
 
     [Fact]
     public void DashboardHost_PreservesFragmentCompatibilityRoutes()

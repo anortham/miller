@@ -245,7 +245,7 @@ public sealed class ToolDiagnosticTests : IDisposable
         using WorkspaceRegistry registry = OpenRegistryWithTwoSharedPrefixWorkspaces();
 
         var exception = Assert.Throws<KeyNotFoundException>(
-            () => WorkspaceRegistrySelector.Resolve(registry, "shared-"));
+            () => WorkspaceRegistrySelector.Resolve(registry, "shared-", WorkspaceSelectorIntent.Read));
         ToolDiagnostic diagnostic = ToolDiagnostic.FromException(exception);
 
         Assert.StartsWith("ambiguous workspace selector", exception.Message, StringComparison.Ordinal);
@@ -260,7 +260,7 @@ public sealed class ToolDiagnosticTests : IDisposable
         using WorkspaceRegistry registry = OpenRegistryWithTwoSharedPrefixWorkspaces();
 
         var exception = Assert.Throws<KeyNotFoundException>(
-            () => WorkspaceRegistrySelector.Resolve(registry, "no-such-workspace"));
+            () => WorkspaceRegistrySelector.Resolve(registry, "no-such-workspace", WorkspaceSelectorIntent.Read));
         ToolDiagnostic diagnostic = ToolDiagnostic.FromException(exception);
 
         Assert.StartsWith("unknown workspace selector", exception.Message, StringComparison.Ordinal);
@@ -274,7 +274,7 @@ public sealed class ToolDiagnosticTests : IDisposable
     {
         using WorkspaceRegistry registry = OpenRegistryWithTwoSharedPrefixWorkspaces();
         var exception = Assert.Throws<KeyNotFoundException>(
-            () => WorkspaceRegistrySelector.Resolve(registry, "no-such-workspace"));
+            () => WorkspaceRegistrySelector.Resolve(registry, "no-such-workspace", WorkspaceSelectorIntent.Read));
         using TelemetryLedger ledger = OpenLedger();
         using TelemetryScope scope = ledger.Measure("workspace", op: null);
         scope.SetError(exception);

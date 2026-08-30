@@ -960,7 +960,7 @@ public sealed class ContentTool
         }
 
         using var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath);
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, selector);
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, selector, WorkspaceSelectorIntent.Read);
         return Location(row);
     }
 
@@ -1136,7 +1136,7 @@ public sealed class ContentTool
             ];
         }
 
-        return [WorkspaceRegistrySelector.Resolve(registry, selector)];
+        return [WorkspaceRegistrySelector.Resolve(registry, selector, WorkspaceSelectorIntent.Read)];
     }
 
     private static string? SearchContentKindOrDefault(string? value) =>

@@ -24,6 +24,9 @@ namespace Miller.Tests.Server;
 /// </summary>
 public sealed class DashboardMutationEndpointTests : IDisposable
 {
+    // htmx 2.0.4's "stop polling" code; System.Net.HttpStatusCode has no name for it.
+    private const int PollingStopped = 286;
+
     private readonly string _dir;
     private readonly DashboardPaths _paths;
 
@@ -226,11 +229,151 @@ public sealed class DashboardMutationEndpointTests : IDisposable
         Assert.False(gate.Task.IsCompleted);
         Assert.Contains($"hx-get=\"/fragments/refresh-status?workspace_id={workspaceId}\"", body, StringComparison.Ordinal);
         Assert.Contains("hx-trigger=\"every 2s\"", body, StringComparison.Ordinal);
+        Assert.Contains("hx-target=\"this\"", body, StringComparison.Ordinal);
+        Assert.Contains("hx-swap=\"morph:outerHTML\"", body, StringComparison.Ordinal);
+        Assert.Contains("hx-trigger=\"miller:refresh-finished from:body\"", body, StringComparison.Ordinal);
         Assert.Contains("Refreshing", body, StringComparison.Ordinal);
 
         gate.SetResult();
     }
 
+    // The whole stop: htmx captures the poll's element, target and URL in a closure at process time and
+    // clears the timer only when it re-inits THAT element. An ancestor target never re-inits the span, so
+    // the poll outlives the job — forever, against a route that used to answer with all ten panels.
+    [Fact]
+    public async Task RefreshStatusFragment_RunningRender_SelfTargetsSoHtmxClearsItsOwnPollTimer()
+    {
+        string workspaceId = NewWorkspaceId();
+        SeedWorkspace(workspaceId, "alpha-abcd1234");
+        var gate = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        (HttpResponseMessage response, string body) = await ReadAsync(
+            client, $"/fragments/refresh-status?workspace_id={workspaceId}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("hx-target=\"this\"", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("#workspace-detail-stack", body, StringComparison.Ordinal);
+
+        gate.SetResult();
+    }
+
+    [Fact]
+    public async Task RefreshStatusFragment_RendersTheStatusSpanWithoutTheTenPanelStack()
+    {
+        string workspaceId = NewWorkspaceId();
+        SeedWorkspace(workspaceId, "alpha-abcd1234");
+        var gate = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        string body = await GetBodyAsync(client, $"/fragments/refresh-status?workspace_id={workspaceId}");
+
+        Assert.Contains("id=\"refresh-status\"", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("id=\"workspace-detail-stack\"", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Index transparency", body, StringComparison.Ordinal);
+
+        gate.SetResult();
+    }
+
+    [Fact]
+    public async Task RefreshStatusFragment_TerminalResponse_FiresTheDetailStackRefetchEvent()
+    {
+        string workspaceId = NewWorkspaceId();
+        SeedWorkspace(workspaceId, "alpha-abcd1234");
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        (HttpResponseMessage response, _) = await ReadAsync(
+            client, $"/fragments/refresh-status?workspace_id={workspaceId}");
+
+        Assert.Equal(PollingStopped, (int)response.StatusCode);
+        Assert.True(response.Headers.TryGetValues("HX-Trigger", out IEnumerable<string>? trigger));
+        Assert.Equal("miller:refresh-finished", Assert.Single(trigger!));
+    }
+
+    [Fact]
+    public async Task WorkspaceDetailStack_RefetchesItselfWhenARefreshFinishes()
+    {
+        string workspaceId = NewWorkspaceId();
+        SeedWorkspace(workspaceId, "alpha-abcd1234");
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        string body = await GetBodyAsync(client, $"/workspace?workspace_id={workspaceId}");
+
+        Assert.Contains("hx-trigger=\"miller:refresh-finished from:body\"", body, StringComparison.Ordinal);
+        Assert.Contains(
+            $"hx-get=\"/fragments/detail-stack?workspace_id={workspaceId}\"", body, StringComparison.Ordinal);
+    }
+
+    // An empty selector would render "workspace_id=", which the detail-stack route cannot resolve.
+    [Fact]
+    public async Task WorkspaceDetailStack_WithNoWorkspaceSelected_RendersNoRefetchTrigger()
+    {
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        string body = await GetBodyAsync(client, "/workspace");
+
+        Assert.Contains("id=\"workspace-detail-stack\"", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("miller:refresh-finished", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("/fragments/detail-stack", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DetailStackFragment_RendersTheOutcomeTheStatusPollAlreadyConsumed()
+    {
+        string workspaceId = NewWorkspaceId();
+        SeedWorkspace(workspaceId, "alpha-abcd1234");
+        var gate = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        gate.SetResult();
+        await PollUntilAsync(
+            client,
+            $"/fragments/refresh-status?workspace_id={workspaceId}",
+            body => body.Contains("rev 43", StringComparison.Ordinal));
+        string stack = await GetBodyAsync(client, $"/fragments/detail-stack?workspace_id={workspaceId}");
+
+        Assert.Contains("id=\"workspace-detail-stack\"", stack, StringComparison.Ordinal);
+        Assert.Contains("rev 43", stack, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PeekLastOutcome_SurvivesThePeekThatConsumedTheJob()
+    {
+        string workspaceId = NewWorkspaceId();
+        var gate = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
+        gate.SetResult();
+        await PeekUntilCompletedAsync(workspaceId);
+
+        Assert.Null(DashboardRefreshJobs.Peek(workspaceId));
+        Assert.Equal(43L, DashboardRefreshJobs.PeekLastOutcome(workspaceId)?.Result?.Revision);
+    }
+
+    [Fact]
+    public async Task PeekLastOutcome_ExpiresAfterTheRetentionWindow()
+    {
+        string workspaceId = NewWorkspaceId();
+        var gate = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
+        gate.SetResult();
+        await PeekUntilCompletedAsync(workspaceId);
+
+        Assert.NotNull(DashboardRefreshJobs.PeekLastOutcome(workspaceId));
+        Assert.Null(DashboardRefreshJobs.PeekLastOutcome(
+            workspaceId, DateTimeOffset.UtcNow + TimeSpan.FromMinutes(5)));
+    }
+
+    // 286 is a success code, so EnsureSuccessStatusCode proves nothing about the stop; the terminal status
+    // code is asserted on its own.
     [Fact]
     public async Task RefreshStatusFragment_RendersRunningThenTheTerminalResultExactlyOnce()
     {
@@ -242,24 +385,28 @@ public sealed class DashboardMutationEndpointTests : IDisposable
         HttpClient client = host.GetTestClient();
         string url = $"/fragments/refresh-status?workspace_id={workspaceId}";
 
-        string running = await GetBodyAsync(client, url);
+        (HttpResponseMessage runningResponse, string running) = await ReadAsync(client, url);
+        Assert.Equal(HttpStatusCode.OK, runningResponse.StatusCode);
         Assert.Contains("hx-trigger=\"every 2s\"", running, StringComparison.Ordinal);
         Assert.DoesNotContain("rev 43", running, StringComparison.Ordinal);
 
         gate.SetResult();
-        string terminal = await PollUntilAsync(client, url, body => body.Contains("rev 43", StringComparison.Ordinal));
+        (HttpResponseMessage terminalResponse, string terminal) =
+            await PollUntilAsync(client, url, body => body.Contains("rev 43", StringComparison.Ordinal));
+        Assert.Equal(PollingStopped, (int)terminalResponse.StatusCode);
         Assert.Contains("refreshed", terminal, StringComparison.Ordinal);
         Assert.DoesNotContain("hx-trigger=\"every 2s\"", terminal, StringComparison.Ordinal);
         Assert.DoesNotContain("/fragments/refresh-status", terminal, StringComparison.Ordinal);
 
-        string afterConsumed = await GetBodyAsync(client, url);
+        (HttpResponseMessage consumedResponse, string afterConsumed) = await ReadAsync(client, url);
+        Assert.Equal(PollingStopped, (int)consumedResponse.StatusCode);
         Assert.DoesNotContain("rev 43", afterConsumed, StringComparison.Ordinal);
         Assert.DoesNotContain("hx-trigger=\"every 2s\"", afterConsumed, StringComparison.Ordinal);
     }
 
-    // A Running body repeats verbatim between polls, so an ETag match would 304 the panel into a permanent
-    // "Refreshing…" — the status route must stay out of the fragment ETag cache. The activity fragment is the
-    // control: it proves the middleware is live for every other fragment.
+    // The status route's terminal render is delivered exactly once, so a 304 would drop the outcome and the
+    // event that refreshes the panels — it must stay out of the fragment ETag cache. The activity fragment is
+    // the control: it proves the middleware is live for every other fragment.
     [Fact]
     public async Task RefreshStatusFragment_IsExcludedFromFragmentETagCaching()
     {
@@ -273,7 +420,7 @@ public sealed class DashboardMutationEndpointTests : IDisposable
         HttpResponseMessage activity = await SendWithIfNoneMatchAsync(
             client, $"/fragments/activity?workspace_id={workspaceId}");
 
-        Assert.Equal(HttpStatusCode.OK, status.StatusCode);
+        Assert.Equal(PollingStopped, (int)status.StatusCode);
         Assert.Null(status.Headers.ETag);
         Assert.Equal(HttpStatusCode.NotModified, activity.StatusCode);
     }
@@ -355,24 +502,40 @@ public sealed class DashboardMutationEndpointTests : IDisposable
         return await client.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
-    private static async Task<string> GetBodyAsync(HttpClient client, string url)
+    private static async Task<(HttpResponseMessage Response, string Body)> ReadAsync(HttpClient client, string url)
     {
         HttpResponseMessage response = await client.GetAsync(url, TestContext.Current.CancellationToken);
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        return (response, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 
-    private static async Task<string> PollUntilAsync(HttpClient client, string url, Func<string, bool> matches)
+    private static async Task<string> GetBodyAsync(HttpClient client, string url) =>
+        (await ReadAsync(client, url)).Body;
+
+    private static async Task<(HttpResponseMessage Response, string Body)> PollUntilAsync(
+        HttpClient client, string url, Func<string, bool> matches)
     {
         for (int attempt = 0; attempt < 3000; attempt++)
         {
-            string body = await GetBodyAsync(client, url);
+            (HttpResponseMessage response, string body) = await ReadAsync(client, url);
             if (matches(body))
-                return body;
+                return (response, body);
             await Task.Delay(10, TestContext.Current.CancellationToken);
         }
 
         throw new TimeoutException($"{url} never rendered the expected state within 30s.");
+    }
+
+    private static async Task PeekUntilCompletedAsync(string workspaceId)
+    {
+        for (int attempt = 0; attempt < 3000; attempt++)
+        {
+            if (DashboardRefreshJobs.Peek(workspaceId) is { State: DashboardRefreshJobState.Completed })
+                return;
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        throw new TimeoutException($"the refresh job for {workspaceId} never completed within 30s.");
     }
 
     private static Func<WorkspaceRefreshResult> GatedRefresh(TaskCompletionSource gate, string workspaceId) =>

@@ -628,11 +628,16 @@ public static class DashboardData
 
     /// <summary>
     /// Landing-page view: every registered workspace paired with its index facts, plus machine-wide totals.
-    /// Opens each workspace's symbols.db once (best effort — missing/unreadable ones still appear with their state).
+    /// Opens each live workspace's index once (best effort — missing/unreadable ones still appear with their state);
+    /// a row whose root is gone goes to <see cref="MissingRootFacts"/>, which opens nothing under store mode.
     /// When <paramref name="telemetryDbPath"/> is supplied, each entry also carries the newest recorded tool-call
     /// timestamp; a missing/unreadable telemetry DB degrades those to null rather than failing the page.
+    /// <paramref name="storeEnabled"/> follows <c>MILLER_INDEX_STORE</c> when null, as the facts reader does.
     /// </summary>
-    public static DashboardWorkspaceIndex ReadIndex(string registryDbPath, string? telemetryDbPath = null)
+    public static DashboardWorkspaceIndex ReadIndex(
+        string registryDbPath,
+        string? telemetryDbPath = null,
+        bool? storeEnabled = null)
     {
         (IReadOnlyList<DashboardWorkspaceRow> workspaces, string? registryError) = TryReadWorkspaces(registryDbPath);
         IReadOnlyDictionary<string, string> lastActivity = ReadLastActivityByWorkspace(telemetryDbPath);
@@ -648,7 +653,9 @@ public static class DashboardData
         foreach (DashboardWorkspaceRow workspace in workspaces)
         {
             bool rootExists = Directory.Exists(workspace.CanonicalRoot);
-            DashboardWorkspaceFacts facts = DashboardIndexFactsCache.Read(workspace);
+            DashboardWorkspaceFacts facts = rootExists
+                ? DashboardIndexFactsCache.Read(workspace, storeEnabled)
+                : MissingRootFacts(workspace, storeEnabled);
             lastActivity.TryGetValue(workspace.WorkspaceId, out string? lastActivityTs);
             var entry = new DashboardWorkspaceIndexEntry(workspace, facts, rootExists, lastActivityTs);
             entries.Add(entry);
@@ -679,6 +686,28 @@ public static class DashboardData
             missingRootCount,
             errorCount,
             registryError);
+    }
+
+    /// <summary>
+    /// Index facts for a registry row whose root no longer exists, built without opening anything.
+    ///
+    /// <para>Under store mode the read can only fail: the <c>store.json</c> pointer that names the view lives
+    /// inside the missing root, and resolving its path THREW — once in the cache probe and once in the reader —
+    /// for every dead row on every page render. These facts carry the shape that throw produced: status
+    /// <c>unreadable</c>, no counts, and an untyped failed store read.</para>
+    ///
+    /// <para>Legacy mode keeps the shared cached path. It reaches its <c>missing</c> status from two file checks,
+    /// opens nothing and throws nothing — and a registry row may still name an artifact that outlived its root,
+    /// which only a real read can report.</para>
+    /// </summary>
+    private static DashboardWorkspaceFacts MissingRootFacts(DashboardWorkspaceRow workspace, bool? storeEnabled)
+    {
+        if (!(storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()))
+            return DashboardIndexFactsCache.Read(workspace, storeEnabled: false);
+
+        return DashboardIndexFactsReader.ReadStoreUnavailable(
+            workspace,
+            $"Workspace root is missing: {workspace.CanonicalRoot}");
     }
 
     /// <summary>

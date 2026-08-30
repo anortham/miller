@@ -77,7 +77,7 @@
                 </div>
                 @foreach (DashboardWorkspaceIndexEntry entry in live)
                 {
-                    <div class="ws-index-row" role="row" @attributes="SortKeys(entry)">
+                    <div class="ws-index-row" id="ws-row-@entry.Workspace.WorkspaceId" role="row" @attributes="SortKeys(entry)">
                         <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
                         <span class="workspace-row-main" role="cell">
                             <a class="workspace-name" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)">@entry.Workspace.DisplayId</a>
@@ -127,12 +127,15 @@
                         }
                     </span>
                 </summary>
+                @* The button names no count. Prune removes only the missing-root rows whose removal its
+                   confirmation gate proves, and proving one row runs julie-extract, which this 30s poll cannot
+                   afford — so the real number can only be reported after the run, by the outcome notice. *@
                 @if (staleMissing > 0)
                 {
                     <form class="detail-actions" method="post" action="/workspaces/prune">
                         <AntiforgeryToken />
-                        <button type="submit" class="refresh-button">Prune @staleMissing.ToString("N0", CultureInfo.InvariantCulture) stale</button>
-                        <span class="muted">removes every registration whose root folder no longer exists</span>
+                        <button type="submit" class="refresh-button">Prune stale registrations</button>
+                        <span class="muted">removes the @staleMissing.ToString("N0", CultureInfo.InvariantCulture) missing-root @(staleMissing == 1 ? "registration" : "registrations") whose removal it can confirm, and keeps the rest</span>
                     </form>
                 }
                 <div class="ws-index ws-index-stale" role="table" aria-label="Stale registrations">
@@ -150,7 +153,7 @@
                     </div>
                     @foreach (DashboardWorkspaceIndexEntry entry in stale)
                     {
-                        <div class="ws-index-row" role="row" @attributes="SortKeys(entry)">
+                        <div class="ws-index-row" id="ws-row-@entry.Workspace.WorkspaceId" role="row" @attributes="SortKeys(entry)">
                             <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
                             <span class="workspace-row-main" role="cell">
                                 <a class="workspace-name" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)">@entry.Workspace.DisplayId</a>
@@ -225,10 +228,28 @@
 
     private string Subject => string.IsNullOrWhiteSpace(NoticeDetail) ? "the workspace" : NoticeDetail!;
 
-    private string PrunedMessage =>
-        int.TryParse(NoticeDetail, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n > 0
-            ? $"Pruned {n.ToString("N0", CultureInfo.InvariantCulture)} stale registration{(n == 1 ? "" : "s")}."
-            : "No stale registrations to prune.";
+    // A run keeps a missing-root row it cannot confirm AND one the per-run retirement cap deferred to the next
+    // run, so removing fewer rows than the list showed is normal. The redirect carries only the removed count,
+    // so the notice states how many stayed and leaves the per-row reason to the CLI.
+    private string PrunedMessage
+    {
+        get
+        {
+            int removed = int.TryParse(NoticeDetail, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n > 0
+                ? n
+                : 0;
+            int kept = Index.MissingRootCount;
+            if (removed == 0 && kept == 0)
+                return "No stale registrations to prune.";
+
+            string first = removed > 0
+                ? $"Pruned {removed.ToString("N0", CultureInfo.InvariantCulture)} stale registration{(removed == 1 ? "" : "s")}."
+                : "Pruned no stale registrations.";
+            return kept > 0
+                ? $"{first} {kept.ToString("N0", CultureInfo.InvariantCulture)} missing root{(kept == 1 ? "" : "s")} stayed registered — run miller workspace prune to see why each one was kept."
+                : first;
+        }
+    }
 
     // One "now" per render so every row humanizes against the same instant.
     private readonly DateTimeOffset Now = DateTimeOffset.UtcNow;

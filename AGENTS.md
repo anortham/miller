@@ -213,6 +213,14 @@ Each rule below is load-bearing; the linked code/doc carries the full design.
   captured from `store_members` BEFORE the delete; never rediscover by listing or re-hashing; never
   touch a view a survivor claims; unfinished reclaims write a `.reclaim-owed` record and are owed,
   never dropped).
+- **The registry only grows on its own:** bootstrap registers the process cwd on every start
+  (`IndexBootstrapService` → `WorkspaceRegistry.UpsertSeen`), so every agent worktree and temp dir
+  becomes a row and nothing retires it; each removal is user-triggered (`workspace remove`/`prune`)
+  and there is no sweeper. Design:
+  [`docs/plans/2026-08-29-registry-accumulation-design.md`](docs/plans/2026-08-29-registry-accumulation-design.md).
+- **Prune reads the root, never the index:** a row is a candidate only when `Directory.Exists` on
+  its canonical root is false; an unreadable or missing `symbols.db` is never the signal. A dead row
+  is not just clutter — it still matches selectors, so it can make a short name ambiguous.
 - **Hash split:** `workspace_id` = SHA-256 of the root; file freshness = `files.content_hash`
   (blake3), guarded by `artifact_metadata.hash_algorithm`.
 - **Telemetry:** shared ledger at `~/.miller/telemetry.db` (`tool_telemetry`); export via

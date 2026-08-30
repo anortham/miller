@@ -306,6 +306,198 @@ public sealed class WorkspaceToolPruneTests : IDisposable
         Assert.NotNull(registry.Get("ws-a"));
     }
 
+    [Fact]
+    public void Open_PersistsTheLineageOfTheRegisteredRoot()
+    {
+        (WorkspaceTool tool, WorkspaceRegistry registry, _) = BuildTool();
+        string opened = NewTempDir("open-lineage");
+        Directory.CreateDirectory(Path.Combine(opened, ".git"));
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(opened);
+
+        tool.Workspace(operation: "open", path: opened);
+
+        WorkspaceRegistryRow? row = registry.Get(WorkspaceId.FromCanonicalRoot(canonicalRoot));
+        Assert.NotNull(row);
+        Assert.Equal(Path.Combine(canonicalRoot, ".git"), row!.GitDir);
+        Assert.Equal(
+            WorkspaceLineage.CanonicalizeCommonDir(Path.Combine(canonicalRoot, ".git")),
+            row.GitCommonDir);
+        Assert.False(row.GitIsLinked);
+    }
+
+    [Fact]
+    public void CliOpen_PersistsTheLineageOfTheRegisteredRoot()
+    {
+        string home = NewTempDir("cli-open-home");
+        string appBase = NewTempDir("cli-open-tools");
+        Directory.CreateDirectory(Path.Combine(appBase, ".tools"));
+        File.WriteAllText(
+            Path.Combine(appBase, ".tools", OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract"),
+            "placeholder: located, never executed on the lock-busy path");
+
+        string root = NewTempDir("cli-open-root");
+        Directory.CreateDirectory(Path.Combine(root, ".git"));
+        string millerDir = Path.Combine(root, ".miller");
+        Directory.CreateDirectory(millerDir);
+        File.WriteAllText(Path.Combine(millerDir, "symbols.db"), "not a readable artifact");
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
+        WorkspaceContext ctx = WorkspaceContext.Create(root, appBase, home);
+
+        using (IDisposable? held = SingleWriterLock.TryAcquire(millerDir))
+        {
+            Assert.NotNull(held);
+            CliDispatch.Run(
+                ["workspace", "open", "--path", root], ctx, TextWriter.Null, TextWriter.Null);
+        }
+
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+        WorkspaceRegistryRow? row = registry.Get(WorkspaceId.FromCanonicalRoot(canonicalRoot));
+        Assert.NotNull(row);
+        Assert.Equal(Path.Combine(canonicalRoot, ".git"), row!.GitDir);
+        Assert.False(row.GitIsLinked);
+    }
+
+    [Fact]
+    public void MarkRegistryScanned_WithALiveRoot_HealsARowThatCarriesNoLineage()
+    {
+        const string workspaceId = "ws-heal-live-001";
+        string home = NewTempDir("heal-live-home");
+        string root = NewTempDir("heal-live-root");
+        Directory.CreateDirectory(Path.Combine(root, ".git"));
+        WorkspaceContext workspace = WorkspaceAt(root, workspaceId, home);
+        using (WorkspaceRegistry seed = WorkspaceRegistry.Open(workspace.RegistryDbPath))
+        {
+            seed.UpsertSeen(
+                workspaceId, "heal-live", workspace.CanonicalRoot!, workspace.CanonicalExtractDbPath!,
+                WorkspaceRegistryState.Ready);
+            Assert.Null(seed.Get(workspaceId)!.GitDir);
+        }
+
+        WorkspaceRegistryRow healed = IndexBootstrapService.MarkRegistryScanned(
+            workspace, workspaceId, revision: 4);
+
+        Assert.Equal(Path.Combine(workspace.CanonicalRoot!, ".git"), healed.GitDir);
+        Assert.Equal(
+            WorkspaceLineage.CanonicalizeCommonDir(Path.Combine(workspace.CanonicalRoot!, ".git")),
+            healed.GitCommonDir);
+        Assert.False(healed.GitIsLinked);
+    }
+
+    [Fact]
+    public void MarkRegistryScanned_WithAGoneRoot_KeepsTheStoredLineage()
+    {
+        const string workspaceId = "ws-heal-gone-001";
+        string home = NewTempDir("heal-gone-home");
+        string root = NewTempDir("heal-gone-root");
+        Directory.CreateDirectory(Path.Combine(root, ".git"));
+        WorkspaceContext workspace = WorkspaceAt(root, workspaceId, home);
+        WorkspaceLineage? captured = IndexBootstrapService.CaptureLineage(workspace.CanonicalRoot!);
+        Assert.NotNull(captured);
+        using (WorkspaceRegistry seed = WorkspaceRegistry.Open(workspace.RegistryDbPath))
+        {
+            seed.UpsertSeen(
+                workspaceId, "heal-gone", workspace.CanonicalRoot!, workspace.CanonicalExtractDbPath!,
+                WorkspaceRegistryState.Ready, lineage: captured);
+        }
+        Directory.Delete(root, recursive: true);
+
+        WorkspaceRegistryRow row = IndexBootstrapService.MarkRegistryScanned(
+            workspace, workspaceId, revision: 5);
+
+        Assert.Equal(captured!.GitDir, row.GitDir);
+        Assert.Equal(WorkspaceLineage.CanonicalizeCommonDir(captured.GitCommonDir), row.GitCommonDir);
+        Assert.Equal(captured.GitDirCreatedAtUtc, row.GitDirCreatedAtUtc);
+    }
+
+    [Theory]
+    [InlineData(10, 40, true)]
+    [InlineData(9, 40, false)]
+    [InlineData(10, 41, false)]
+    [InlineData(23, 59, true)]
+    [InlineData(0, 0, false)]
+    public void ShouldHintStaleRegistry_RequiresTenDeadRowsAndAQuarterOfTheRegistry(
+        int deadRows, int registeredRows, bool expected)
+    {
+        Assert.Equal(expected, WorkspaceTool.ShouldHintStaleRegistry(deadRows, registeredRows));
+    }
+
+    [Fact]
+    public void Status_Compact_NamesTheDeadRegistryRowsAboveTheThreshold()
+    {
+        (WorkspaceTool tool, _, _) = BuildTool((registry, _, _, _) => SeedDeadRows(registry, count: 12));
+
+        string output = tool.Workspace(operation: "status");
+
+        Assert.Contains(
+            "next: workspace(operation=\"prune\", dry_run=true) — 13 of 15 registered roots are gone from disk",
+            output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Compact_SaysNothingBelowTheThreshold()
+    {
+        (WorkspaceTool tool, _, _) = BuildTool();
+
+        string output = tool.Workspace(operation: "status");
+
+        Assert.DoesNotContain("dry_run=true", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Onboarding_Compact_NamesTheDeadRegistryRowsAboveTheThreshold()
+    {
+        (WorkspaceTool tool, _, _) = BuildTool((registry, _, _, _) => SeedDeadRows(registry, count: 12));
+
+        string output = tool.Workspace(operation: "onboarding");
+
+        Assert.Contains(
+            "next: workspace(operation=\"prune\", dry_run=true) — 13 of 15 registered roots are gone from disk",
+            output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StaleRegistryHint_NeverReachesJsonOutput()
+    {
+        (WorkspaceTool tool, _, _) = BuildTool((registry, _, _, _) => SeedDeadRows(registry, count: 12));
+
+        string status = tool.Workspace(operation: "status", format: "json");
+        string onboarding = tool.Workspace(operation: "onboarding", format: "json");
+
+        using (JsonDocument.Parse(status))
+        using (JsonDocument.Parse(onboarding))
+        {
+            Assert.DoesNotContain("dry_run=true", status, StringComparison.Ordinal);
+            Assert.DoesNotContain("dry_run=true", onboarding, StringComparison.Ordinal);
+        }
+    }
+
+    private void SeedDeadRows(WorkspaceRegistry registry, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            string root = Path.Combine(NewTempDir($"dead-{i}"), "gone");
+            registry.UpsertSeen(
+                $"ws-prune-dead-{i:D3}",
+                $"dead-{i:D3}",
+                Path.GetFullPath(root),
+                Path.Combine(root, ".miller", "symbols.db"),
+                WorkspaceRegistryState.Stale);
+        }
+    }
+
+    private WorkspaceContext WorkspaceAt(string root, string workspaceId, string home)
+    {
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
+        return WorkspaceContext.Create(root, AppContext.BaseDirectory, home) with
+        {
+            WorkspaceId = workspaceId,
+            CanonicalRoot = canonicalRoot,
+            CanonicalExtractDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db"),
+        };
+    }
+
     private sealed class RecordingDashboardLauncher(DashboardLaunchResult result) : IDashboardLauncher
     {
         public DashboardLaunchResult EnsureRunning(DashboardLaunchRequest request) => result;

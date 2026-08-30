@@ -1977,6 +1977,43 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Remove_AmbiguousSelectorMatchingALiveAndADeadRoot_RefusesAndDeletesNothing()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            acquireLock: _ => new NoopLease());
+
+        string liveRoot = NewTempDir("remove-ambiguous-live");
+        string liveMiller = Path.Combine(liveRoot, ".miller");
+        Directory.CreateDirectory(liveMiller);
+        File.WriteAllText(Path.Combine(liveMiller, "symbols.db"), "stub");
+        harness.Registry.UpsertSeen(
+            "ws-ambiguous-live-00",
+            "twin-000000000001",
+            liveRoot,
+            Path.Combine(liveMiller, "symbols.db"),
+            WorkspaceRegistryState.Ready);
+
+        string deadRoot = Path.Combine(NewTempDir("remove-ambiguous-dead"), "gone");
+        harness.Registry.UpsertSeen(
+            "ws-ambiguous-dead-00",
+            "twin-000000000002",
+            deadRoot,
+            Path.Combine(deadRoot, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Ready);
+
+        string output = harness.Tool.Workspace(operation: "remove", workspace_id: "twin");
+
+        Assert.Contains("ambiguous", output, StringComparison.OrdinalIgnoreCase);
+        Assert.True(Directory.Exists(liveMiller));
+        Assert.NotNull(harness.Registry.Get("ws-ambiguous-live-00"));
+        Assert.NotNull(harness.Registry.Get("ws-ambiguous-dead-00"));
+    }
+
+    [Fact]
     public void Remove_StoreMemberWithoutExtractorRefusesAndKeepsTheRegistryEntry()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);

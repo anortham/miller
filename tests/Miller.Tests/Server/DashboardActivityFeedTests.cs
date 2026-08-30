@@ -1339,6 +1339,224 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.DoesNotContain("theme-toggle-label", js, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ActivityFeedPanel_RowsCarryStableIdsFromTheEntryId()
+    {
+        string html = await RenderComponentAsync<ActivityFeedPanel>(new Dictionary<string, object?>
+        {
+            ["Feed"] = FeedOf("call-2", "call-1"),
+        });
+
+        Assert.Contains("<li id=\"activity-call-2\" class=\"activity-row\">", html, StringComparison.Ordinal);
+        Assert.Contains("<li id=\"activity-call-1\" class=\"activity-row\">", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ActivityFeedPanel_TwoRendersOfTheSameEntriesProduceTheSameRowIds()
+    {
+        DashboardActivityFeed feed = FeedOf("call-2", "call-1");
+
+        string first = await RenderComponentAsync<ActivityFeedPanel>(new Dictionary<string, object?>
+        {
+            ["Feed"] = feed,
+        });
+        string second = await RenderComponentAsync<ActivityFeedPanel>(new Dictionary<string, object?>
+        {
+            ["Feed"] = feed,
+        });
+
+        Assert.Equal(new[] { "call-2", "call-1" }, IdsAfter(first, ActivityRowMarker));
+        Assert.Equal(IdsAfter(first, ActivityRowMarker), IdsAfter(second, ActivityRowMarker));
+    }
+
+    [Fact]
+    public async Task ActivityFeedPanel_PrependedEntryLeavesTheEarlierRowIdsUnchanged()
+    {
+        string before = await RenderComponentAsync<ActivityFeedPanel>(new Dictionary<string, object?>
+        {
+            ["Feed"] = FeedOf("call-2", "call-1"),
+        });
+        string after = await RenderComponentAsync<ActivityFeedPanel>(new Dictionary<string, object?>
+        {
+            ["Feed"] = FeedOf("call-3", "call-2", "call-1"),
+        });
+
+        Assert.Equal(new[] { "call-2", "call-1" }, IdsAfter(before, ActivityRowMarker));
+        Assert.Equal(new[] { "call-3", "call-2", "call-1" }, IdsAfter(after, ActivityRowMarker));
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_LiveAndStaleRowsCarryStableIdsFromTheWorkspaceId()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = IndexWithLiveAndStaleRows(),
+        });
+
+        Assert.Contains("<div class=\"ws-index-row\" id=\"ws-row-ws-a\" role=\"row\"", html, StringComparison.Ordinal);
+        Assert.Contains("<div class=\"ws-index-row\" id=\"ws-row-ws-b\" role=\"row\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WorkspaceTestsPanel_ProjectAndFailureRowsCarryStableIds()
+    {
+        string html = await RenderComponentAsync<WorkspaceTestsPanel>(new Dictionary<string, object?>
+        {
+            ["Tests"] = TestsPanelWith(
+                projectPath: "tests/A.csproj",
+                testCaseId: "xunit:Miller.Tests.FooTests.Bar(value: \"a b\")"),
+        });
+
+        Assert.Contains("<li id=\"tests-project-tests%2FA.csproj\">", html, StringComparison.Ordinal);
+        Assert.Contains(
+            "<li id=\"tests-failure-xunit%3AMiller.Tests.FooTests.Bar%28value%3A%20%22a%20b%22%29\">",
+            html,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PatternInventoryPanel_FamilyRowsCarryStableIdsFromTheFamilyName()
+    {
+        var inventory = new DashboardPatternInventoryPanel(
+            "ws-a",
+            "ready",
+            [
+                new DashboardPatternFamily("json.property", 1, 128, ["json"], ["property"]),
+                new DashboardPatternFamily("dotnet.route", 3, 12, ["csharp", "razor"], ["route", "verb"]),
+            ]);
+
+        string html = await RenderComponentAsync<PatternInventoryPanel>(new Dictionary<string, object?>
+        {
+            ["Inventory"] = inventory,
+        });
+
+        Assert.Contains("<li id=\"pattern-family-json.property\">", html, StringComparison.Ordinal);
+        Assert.Contains("<li id=\"pattern-family-dotnet.route\">", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WorkspaceTrendsPanel_SeriesRowsCarryStableIdsFromTheMetricName()
+    {
+        var trends = new DashboardWorkspaceTrendsPanel(
+            "ws-a",
+            [
+                new DashboardTrendSeries("symbol_count", "Symbols", [10d, 30d, 20d], First: 10d, Latest: 20d),
+                new DashboardTrendSeries("marker_total", "Markers", [1d, 2d], First: 1d, Latest: 2d),
+            ]);
+
+        string html = await RenderComponentAsync<WorkspaceTrendsPanel>(new Dictionary<string, object?>
+        {
+            ["Trends"] = trends,
+        });
+
+        Assert.Contains("<div id=\"trend-symbol_count\" class=\"trend-row\">", html, StringComparison.Ordinal);
+        Assert.Contains("<div id=\"trend-marker_total\" class=\"trend-row\">", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TelemetryPanel_ToolAndRecentErrorRowsCarryStableIds()
+    {
+        var telemetry = new DashboardTelemetrySummary(
+            "ws-a",
+            [
+                new DashboardToolStat("search", 12, 3.5, 8, 20, 1, 400, null, "ok", null, null),
+                new DashboardToolStat("inspect", 4, 1.5, 2, 3, 0, 90, null, "ok", null, null),
+            ],
+            16,
+            null,
+            null,
+            [
+                new DashboardRecentError("2026-08-29T10:00:00Z", "search", "text", "timeout", 900, Id: "cid-1"),
+                new DashboardRecentError("2026-08-29T09:00:00Z", "edit", null, "conflict", 12, Id: null),
+            ]);
+
+        string html = await RenderComponentAsync<TelemetryPanel>(new Dictionary<string, object?>
+        {
+            ["Telemetry"] = telemetry,
+            ["SelectedWorkspaceId"] = "ws-a",
+        });
+
+        Assert.Contains("<tr id=\"telemetry-tool-search\"", html, StringComparison.Ordinal);
+        Assert.Contains("<tr id=\"telemetry-tool-inspect\"", html, StringComparison.Ordinal);
+        Assert.Contains("<li id=\"recent-error-cid-1\" class=\"recent-error-row\">", html, StringComparison.Ordinal);
+        Assert.Contains("<li id=\"recent-error-edit-2026-08-29T09:00:00Z\" class=\"recent-error-row\">", html, StringComparison.Ordinal);
+    }
+
+    private const string ActivityRowMarker = "<li id=\"activity-";
+
+    private static List<string> IdsAfter(string html, string marker)
+    {
+        var ids = new List<string>();
+        int at = html.IndexOf(marker, StringComparison.Ordinal);
+        while (at >= 0)
+        {
+            int start = at + marker.Length;
+            int end = html.IndexOf('"', start);
+            ids.Add(html[start..end]);
+            at = html.IndexOf(marker, end, StringComparison.Ordinal);
+        }
+
+        return ids;
+    }
+
+    private static DashboardActivityFeed FeedOf(params string[] ids) =>
+        new("ws-a", Array.ConvertAll(ids, static id => new DashboardActivityEntry(
+            Id: id,
+            Ts: "2026-06-12T10:00:00.000Z",
+            Tool: "search",
+            Op: "auto",
+            WorkspaceId: "ws-a",
+            WorkspaceDisplayId: "alpha-abcd1234",
+            DurationMs: 12,
+            Outcome: "ok",
+            ErrorKind: null,
+            ResultCount: 6,
+            EstTokens: 120)));
+
+    private static DashboardWorkspaceIndex IndexWithLiveAndStaleRows()
+    {
+        var live = new DashboardWorkspaceRow(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
+            "2026-05-31T10:00:00Z", "2026-05-31T10:01:00Z", 42, "ready", null);
+        var stale = new DashboardWorkspaceRow(
+            "ws-b", "beta-efgh5678", "/repo/b-gone", "/repo/b-gone/.miller/symbols.db",
+            "2026-05-31T10:00:00Z", null, null, "missing", "missing index");
+        DashboardWorkspaceFacts facts = FactsWithStatus("ready", fileCount: 4);
+
+        return new DashboardWorkspaceIndex(
+            Entries:
+            [
+                new DashboardWorkspaceIndexEntry(live, facts, RootExists: true),
+                new DashboardWorkspaceIndexEntry(stale, facts, RootExists: false),
+            ],
+            WorkspaceCount: 2, TotalFiles: 4, TotalSymbols: 4,
+            LanguageCount: 1, LiveCount: 1, MissingRootCount: 1, ErrorCount: 0);
+    }
+
+    private static DashboardTestsPanel TestsPanelWith(string projectPath, string testCaseId) =>
+        new(
+            WorkspaceId: "ws-a",
+            State: "ready",
+            Enabled: true,
+            KillSwitchOff: false,
+            ProjectsDiscovered: false,
+            Projects: [new DashboardTestsProject(projectPath, "xunit", Enabled: true)],
+            Verdict: "red",
+            Selected: "rev 42",
+            StaleCount: 1,
+            TrackedCaseCount: 3,
+            LastRun: null,
+            DaemonState: "stopped",
+            DaemonReason: "not running",
+            DaemonActivity: "idle",
+            DaemonRun: null,
+            DaemonVersionMismatch: false,
+            DaemonVersionReason: null,
+            DaemonLoopStalled: false,
+            DaemonLoopReason: null,
+            Failures: [new DashboardTestsFailure(testCaseId, "Xunit.EqualException: expected 1, actual 2")],
+            FailuresTruncated: 0);
+
     private static DashboardWorkspaceFacts FactsWithStatus(string status, long fileCount) =>
         new(
             "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db", status, null,

@@ -496,7 +496,7 @@ public sealed class WorkspaceRegistryTests : IDisposable
             WorkspaceRegistryState.Ready,
             Utc(1));
 
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, canonicalRoot);
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, canonicalRoot, WorkspaceSelectorIntent.Read);
 
         Assert.Equal("ws-a", row.WorkspaceId);
     }
@@ -518,7 +518,7 @@ public sealed class WorkspaceRegistryTests : IDisposable
 
         WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(
             registry,
-            canonicalRoot + Path.DirectorySeparatorChar);
+            canonicalRoot + Path.DirectorySeparatorChar, WorkspaceSelectorIntent.Read);
 
         Assert.Equal("ws-b", row.WorkspaceId);
     }

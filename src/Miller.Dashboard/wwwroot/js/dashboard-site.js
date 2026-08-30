@@ -1,6 +1,12 @@
 // Miller dashboard site glue — delegated handlers, htmx helpers, no inline onclick.
 
 (function () {
+    // idiomorph copies the server's value onto every input it morphs, so the 30s workspace poll would
+    // wipe the filter box under a reader who is still typing into it.
+    if (typeof Idiomorph !== 'undefined' && Idiomorph.defaults) {
+        Idiomorph.defaults.ignoreActiveValue = true;
+    }
+
     var openIssueDetails = window.__millerOpenIssueDetails || (window.__millerOpenIssueDetails = new Set());
 
     // Filter/sort/stale-open state for the #workspace-index section. It survives the 30s htmx
@@ -117,7 +123,8 @@
     function updateRelativeTimes(root) {
         var now = Date.now();
         (root || document).querySelectorAll('time.rel-ts[data-ts]').forEach(function (el) {
-            var parsed = Date.parse(el.getAttribute('data-ts'));
+            var stamp = el.getAttribute('data-ts');
+            var parsed = Date.parse(stamp);
             if (isNaN(parsed)) {
                 return;
             }
@@ -134,10 +141,14 @@
             } else {
                 label = Math.floor(seconds / 86400) + 'd ago';
             }
-            if (!el.title) {
-                el.title = el.getAttribute('data-ts');
+            if (el.title !== stamp) {
+                el.title = stamp;
             }
-            el.textContent = label;
+            // Rewriting an identical text node still collapses any selection inside it, and 11 of every
+            // 12 ticks compute the label the element already shows.
+            if (el.textContent !== label) {
+                el.textContent = label;
+            }
         });
     }
 
@@ -282,16 +293,30 @@
         persistStaleOpen(panel);
     }
 
+    // The swapped node can be a descendant of the panel (a fragment that replaces part of it) as well
+    // as the panel itself or an ancestor, so both containment directions count as in scope.
+    function panelInScope(panel, scope) {
+        if (!scope || scope === panel) {
+            return true;
+        }
+        return scope.contains(panel) || panel.contains(scope);
+    }
+
     // A morph swap patches these panels in place, so the server's freshly rendered rows arrive
-    // unsorted, unfiltered, and with the stale section closed. Reapply the reader's view.
-    function rehydrateSortableTables() {
+    // unsorted, unfiltered, and with the stale section closed. Reapply the reader's view. A swap of an
+    // unrelated panel must not reorder 59 workspace rows, so the caller passes the swapped subtree.
+    function rehydrateSortableTables(scope) {
         sortableTables.forEach(function (table) {
+            var sorted = sortablePanel(table);
+            if (!sorted || !panelInScope(sorted, scope)) {
+                return;
+            }
             applyTableSort(table);
             reflectSortButtons(table);
         });
 
         var panel = document.getElementById('workspace-index');
-        if (!panel) {
+        if (!panel || !panelInScope(panel, scope)) {
             return;
         }
         var stale = panel.querySelector('.ws-stale-collapse');
@@ -418,7 +443,12 @@
         mirrorNoticeAsToast();
     });
 
-    document.addEventListener('visibilitychange', applyVisibilityPolling);
+    document.addEventListener('visibilitychange', function () {
+        applyVisibilityPolling();
+        if (!document.hidden) {
+            updateRelativeTimes(document);
+        }
+    });
 
     // "/" jumps to the workspace filter, the search convention users arrive with. Never steal the key
     // while the user is typing (including into the filter itself), and it only exists on the home page.
@@ -483,11 +513,14 @@
     document.addEventListener('htmx:afterSwap', function (event) {
         updateRelativeTimes(event.target);
         window.rememberIssueDetailsState(event.target);
-        rehydrateSortableTables();
+        rehydrateSortableTables(event.target);
         applyVisibilityPolling();
     });
 
     window.setInterval(function () {
+        if (document.hidden) {
+            return;
+        }
         updateRelativeTimes(document);
     }, 5000);
 

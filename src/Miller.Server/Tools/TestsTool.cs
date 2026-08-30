@@ -240,7 +240,7 @@ public sealed class TestsTool
         }
 
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath);
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, workspaceId);
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, workspaceId, WorkspaceSelectorIntent.Mutate);
         return (row.CanonicalRoot, row.WorkspaceId);
     }
 

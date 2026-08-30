@@ -18,6 +18,20 @@ internal static class DashboardEndpoints
     private const string DashboardRequestHeader = "X-Miller-Dashboard";
 
     /// <summary>
+    /// htmx 2.0.4 cancels the REQUESTING element's polling on a 286 and still swaps the body. It is the
+    /// second belt behind the self-targeted swap, and the only thing that stops a SECOND browser tab:
+    /// refresh jobs are process-global, so only the first tab to poll ever observes the outcome.
+    /// </summary>
+    private const int PollingStoppedStatusCode = 286;
+
+    /// <summary>
+    /// Fired by the terminal refresh-status response's <c>HX-Trigger</c> header, which htmx dispatches on
+    /// the requesting span before the swap. <c>#workspace-detail-stack</c> listens for it on <c>body</c>
+    /// and refetches the ten panels once, so the 2-second poll never carries them again.
+    /// </summary>
+    private const string RefreshFinishedEvent = "miller:refresh-finished";
+
+    /// <summary>
     /// CSRF guard for the POSTs that carry no antiforgery token (they are htmx triggers, not forms, and
     /// the loopback dashboard has no cookie session to bind a token to). A cross-origin <c>&lt;form&gt;</c>
     /// cannot set a custom request header at all, and a cross-origin <c>fetch</c> that sets one turns the
@@ -171,8 +185,40 @@ internal static class DashboardEndpoints
             return DetailStackResult(paths, launchDirectory, workspace_id, job);
         });
 
-        endpoints.MapGet("/fragments/refresh-status", (string workspace_id) =>
-            DetailStackResult(paths, launchDirectory, workspace_id, DashboardRefreshJobs.Peek(workspace_id)));
+        // The status span alone — the ten-panel stack used to ride along on every 2-second poll. The running
+        // render self-targets, so htmx re-inits the swapped-in span and clears its own timer as soon as the
+        // terminal render drops the poll attributes.
+        endpoints.MapGet("/fragments/refresh-status", (string workspace_id, HttpContext context) =>
+        {
+            DashboardRefreshJobStatus? job = DashboardRefreshJobs.Peek(workspace_id);
+            bool running = job is { State: DashboardRefreshJobState.Running };
+            if (!running)
+            {
+                context.Response.Headers["HX-Trigger"] = RefreshFinishedEvent;
+            }
+
+            return new RazorComponentResult<RefreshStatusPanel>(new
+            {
+                Job = job,
+                WorkspaceId = workspace_id,
+            })
+            {
+                PreventStreamingRendering = true,
+                StatusCode = running ? StatusCodes.Status200OK : PollingStoppedStatusCode,
+            };
+        });
+
+        // The one refetch the terminal refresh-status response triggers. Peek has already consumed the job by
+        // the time this lands, so the retained outcome is what keeps the status span readable — but a refresh
+        // the reader started during that round trip outranks it, or this render would morph the OLD verdict
+        // over the new running panel and take its poll attributes with it.
+        endpoints.MapGet("/fragments/detail-stack", (string workspace_id) =>
+            DetailStackResult(
+                paths,
+                launchDirectory,
+                workspace_id,
+                DashboardRefreshJobs.PeekRunning(workspace_id)
+                    ?? DashboardRefreshJobs.PeekLastOutcome(workspace_id)));
 
         // Tests-panel lifecycle triggers. Same CSRF proof as the other htmx POSTs; the action itself
         // runs the public `miller tests` verb so the dashboard reuses the CLI's refusal, anchoring,
@@ -404,6 +450,13 @@ internal static class DashboardEndpoints
                     protectedWorkspaceId: null,
                     dryRun: false,
                     retireView: StoreViewRetirementRunner.ForToolsRoot(toolsRoot));
+            // A kept row is the normal outcome, not a failure: a run that hits the per-run retirement cap, or a
+            // row whose removal it cannot confirm, still prunes everything else. Reporting an error whenever any
+            // row was kept would show one on every registry that has a backlog — which is every registry that
+            // needs pruning at all. The panel names what stayed behind.
+            if (result.Pruned.Count > 0)
+                return NoticeRedirect("pruned", result.Pruned.Count.ToString(CultureInfo.InvariantCulture));
+
             if (result.RetirementFailures.Count > 0)
             {
                 WorkspaceRegistryPrune.RetirementFailure failure = result.RetirementFailures[0];
@@ -412,7 +465,8 @@ internal static class DashboardEndpoints
                     : $"Producer view retirement failed for {result.RetirementFailures.Count} workspaces. The registry entries were kept for retry. First failure: {failure.Outcome.Error ?? "Unknown producer retirement failure"}";
                 return NoticeRedirect("remove-error", detail);
             }
-            return NoticeRedirect("pruned", result.Pruned.Count.ToString(CultureInfo.InvariantCulture));
+
+            return NoticeRedirect("pruned", "0");
         }
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)

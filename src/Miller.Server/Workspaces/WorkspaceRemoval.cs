@@ -79,7 +79,10 @@ public static class WorkspaceRemoval
         ArgumentException.ThrowIfNullOrWhiteSpace(selector);
         ArgumentException.ThrowIfNullOrWhiteSpace(millerDirectory);
 
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, selector);
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(
+            registry,
+            selector,
+            WorkspaceSelectorIntent.Mutate);
         if (!TryRegisteredMillerDir(row, out string millerDir))
         {
             return WorkspaceRemoveResult.RefusedInvalidRegistration(
