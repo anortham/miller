@@ -141,7 +141,7 @@
                     <ol>
                         @foreach (DashboardTestsProject project in Tests.Projects)
                         {
-                            <li>
+                            <li id="@ProjectRowId(project)">
                                 <div class="breakdown-row">
                                     <span>@project.ProjectPath</span>
                                     <span>@(project.Framework ?? "unknown")</span>
@@ -167,7 +167,7 @@
                     <ol>
                         @foreach (DashboardTestsFailure failure in Tests.Failures)
                         {
-                            <li>
+                            <li id="@FailureRowId(failure)">
                                 <div class="breakdown-row">
                                     <code>@failure.TestCaseId</code>
                                 </div>
@@ -205,6 +205,14 @@
     private bool CanAct => Tests is { Error: null, KillSwitchOff: false, WorkspaceId.Length: > 0 };
 
     private bool DaemonRunning => string.Equals(Tests?.DaemonState, "running", StringComparison.Ordinal);
+
+    // Percent-encoded because an HTML id may not contain whitespace and an xUnit theory display name does.
+    // The encoding is injective, so two identities never collapse onto one id.
+    private static string ProjectRowId(DashboardTestsProject project) =>
+        "tests-project-" + Esc(project.ProjectPath);
+
+    private static string FailureRowId(DashboardTestsFailure failure) =>
+        "tests-failure-" + Esc(failure.TestCaseId);
 
     // One "now" per render so every timestamp on the panel humanizes against the same instant.
     private readonly DateTimeOffset Now = DateTimeOffset.UtcNow;

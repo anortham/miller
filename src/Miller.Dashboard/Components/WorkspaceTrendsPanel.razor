@@ -24,7 +24,7 @@
         <div class="trend-list">
             @foreach (DashboardTrendSeries series in Trends.Series)
             {
-                <div class="trend-row">
+                <div id="trend-@series.Metric" class="trend-row">
                     <div class="trend-label">
                         <span>@series.Label</span>
                         <strong>@FormatValue(series.Latest)</strong>

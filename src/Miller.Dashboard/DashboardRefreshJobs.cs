@@ -26,6 +26,15 @@ public static class DashboardRefreshJobs
 {
     private static readonly ConcurrentDictionary<string, Job> Jobs = new(StringComparer.Ordinal);
 
+    private static readonly ConcurrentDictionary<string, LastOutcome> LastOutcomes = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// How long a consumed outcome stays readable through <see cref="PeekLastOutcome(string)"/>: long
+    /// enough to cover the detail-stack refetch the terminal render triggers, short enough that a page
+    /// opened much later does not present an old verdict as news.
+    /// </summary>
+    private static readonly TimeSpan LastOutcomeRetention = TimeSpan.FromSeconds(60);
+
     /// <summary>
     /// Returns the job already running for this workspace, or starts one. A second click while a refresh is
     /// in flight must never run <paramref name="refresh"/> again — one workspace cannot converge twice at
@@ -47,8 +56,9 @@ public static class DashboardRefreshJobs
 
     /// <summary>
     /// The job's current state: null when the workspace has none. A completed result is CONSUMED by the
-    /// observation — the next poll of a terminal job sees no job at all, which is what makes the status
-    /// panel render an outcome exactly once and then stop polling.
+    /// observation — the next poll of a terminal job sees no job at all — which is what makes the status
+    /// panel render an outcome exactly once. <see cref="PeekLastOutcome(string)"/> is the non-consuming
+    /// read that keeps the same outcome renderable for the detail-stack refetch that follows it.
     /// </summary>
     public static DashboardRefreshJobStatus? Peek(string workspaceId)
     {
@@ -61,7 +71,31 @@ public static class DashboardRefreshJobs
 
         // Remove only this job: a Start racing the observation must keep its fresh job.
         Jobs.TryRemove(new KeyValuePair<string, Job>(workspaceId, job));
-        return Describe(job);
+        DashboardRefreshJobStatus status = Describe(job);
+        LastOutcomes[workspaceId] = new LastOutcome(status, DateTimeOffset.UtcNow);
+        return status;
+    }
+
+    /// <summary>
+    /// The outcome <see cref="Peek"/> last consumed, WITHOUT consuming it, for
+    /// <see cref="LastOutcomeRetention"/> after that observation. The detail-stack refetch that follows a
+    /// finished refresh re-renders the status span, and Peek's exactly-once contract would render it empty —
+    /// the outcome the reader just saw would be unrecoverable. Null once the retention window has passed.
+    /// </summary>
+    public static DashboardRefreshJobStatus? PeekLastOutcome(string workspaceId) =>
+        PeekLastOutcome(workspaceId, DateTimeOffset.UtcNow);
+
+    internal static DashboardRefreshJobStatus? PeekLastOutcome(string workspaceId, DateTimeOffset now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+
+        if (!LastOutcomes.TryGetValue(workspaceId, out LastOutcome? outcome))
+            return null;
+        if (now - outcome.ObservedAt < LastOutcomeRetention)
+            return outcome.Status;
+
+        LastOutcomes.TryRemove(new KeyValuePair<string, LastOutcome>(workspaceId, outcome));
+        return null;
     }
 
     private static Job NewJob(string workspaceId, Func<WorkspaceRefreshResult> refresh) =>
@@ -100,6 +134,8 @@ public static class DashboardRefreshJobs
                 DashboardRefreshJobState.Running,
                 DateTimeOffset.UtcNow - job.StartedAt,
                 Result: null);
+
+    private sealed record LastOutcome(DashboardRefreshJobStatus Status, DateTimeOffset ObservedAt);
 
     private sealed record Job(Lazy<Task<WorkspaceRefreshResult>> Task, DateTimeOffset StartedAt)
     {

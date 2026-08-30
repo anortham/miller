@@ -14,6 +14,7 @@ using Miller.Server.Tools;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -800,7 +801,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
-    public void DashboardIndexFactsCache_DoesNotUseLegacyFileFreshnessForStoreReads()
+    public void DashboardIndexFactsCache_NeverCachesAStoreItCannotProbe()
     {
         using JulieDbFixture fixture = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema,
@@ -824,6 +825,76 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.NotSame(first, second);
         Assert.Equal("binding_not_ready", first.Store?.Failure);
         Assert.Equal(first.Store, second.Store);
+    }
+
+    [Fact]
+    public void DashboardIndexFactsCache_ReusesStoreFactsUntilTheStoreAdvances()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        DashboardWorkspaceRow workspace = StoreWorkspaceRow(fixture, "ws-store-advance", "store-advance-abcd1234");
+
+        DashboardIndexFactsCache.Clear();
+        DashboardWorkspaceFacts first = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+        DashboardWorkspaceFacts second = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+
+        Assert.Same(first, second);
+        Assert.NotNull(first.Store);
+        Assert.Equal(2, first.IndexRevision);
+
+        AppendStoreLogEvent(fixture, sequence: 3);
+        DashboardWorkspaceFacts third = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+
+        Assert.NotSame(first, third);
+        Assert.Equal(3, third.IndexRevision);
+    }
+
+    [Fact]
+    public void DashboardIndexFactsCache_NeverServesALegacyEntryToAStoreRead()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        DashboardWorkspaceRow workspace = StoreWorkspaceRow(fixture, "ws-mode-isolation", "mode-isolation-abcd1234");
+
+        DashboardIndexFactsCache.Clear();
+        DashboardWorkspaceFacts legacy = DashboardIndexFactsCache.Read(workspace, storeEnabled: false);
+        DashboardWorkspaceFacts store = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+        DashboardWorkspaceFacts legacyAgain = DashboardIndexFactsCache.Read(workspace, storeEnabled: false);
+
+        Assert.NotSame(legacy, store);
+        Assert.Same(legacy, legacyAgain);
+        Assert.Equal("unreadable", legacy.Status);
+        Assert.Null(legacy.Store);
+        Assert.Equal("ready", store.Status);
+        Assert.NotNull(store.Store);
+    }
+
+    private static DashboardWorkspaceRow StoreWorkspaceRow(StoreFixture fixture, string workspaceId, string displayId) =>
+        new(
+            workspaceId,
+            displayId,
+            fixture.Binding.WorkspaceRoot,
+            Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db"),
+            "2026-08-09T00:00:00Z",
+            "2026-08-09T00:01:00Z",
+            2,
+            "ready",
+            null);
+
+    private static void AppendStoreLogEvent(StoreFixture fixture, long sequence)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db"),
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            "INSERT INTO store_log VALUES ($sequence,'request-b','manifest_flipped','view-a',2,NULL,NULL,1,'{}'," +
+            "'2026-08-09T00:00:02Z');";
+        command.Parameters.AddWithValue("$sequence", sequence);
+        command.ExecuteNonQuery();
     }
 
     [Fact]

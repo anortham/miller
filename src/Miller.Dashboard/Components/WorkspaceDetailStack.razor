@@ -1,6 +1,8 @@
 @namespace Miller.Dashboard.Components
 
-<div id="workspace-detail-stack" class="main-stack detail-stack">
+@* hx-ext="morph" here is inherited by every panel inside, which is inert only because the dashboard
+   renders no hx-swap-oob and no hx-preserve — the sole markup the extension's inline swap would change. *@
+<div id="workspace-detail-stack" class="main-stack detail-stack" @attributes="RefreshFinishedAttributes">
     <WorkspaceDetailPanel Facts="Snapshot.SelectedWorkspaceFacts" RefreshJob="RefreshJob" />
     <WorkspaceHealthPanel Health="Snapshot.Health" />
     <WorkspaceTestsPanel Tests="Snapshot.Tests" />
@@ -21,4 +23,18 @@
         new(null, Array.Empty<DashboardActivityEntry>());
 
     [Parameter] public DashboardRefreshJobStatus? RefreshJob { get; set; }
+
+    // One refetch when a refresh finishes, instead of the 2-second status poll carrying all ten panels.
+    // With nothing selected the URL would read "workspace_id=", which the detail-stack route cannot resolve.
+    private Dictionary<string, object>? RefreshFinishedAttributes =>
+        string.IsNullOrWhiteSpace(Snapshot.SelectedWorkspaceId)
+            ? null
+            : new Dictionary<string, object>
+            {
+                ["hx-get"] = $"/fragments/detail-stack?workspace_id={Esc(Snapshot.SelectedWorkspaceId)}",
+                ["hx-trigger"] = "miller:refresh-finished from:body",
+                ["hx-target"] = "this",
+                ["hx-ext"] = "morph",
+                ["hx-swap"] = "morph:outerHTML",
+            };
 }

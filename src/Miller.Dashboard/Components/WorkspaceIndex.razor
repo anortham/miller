@@ -77,7 +77,7 @@
                 </div>
                 @foreach (DashboardWorkspaceIndexEntry entry in live)
                 {
-                    <div class="ws-index-row" role="row" @attributes="SortKeys(entry)">
+                    <div class="ws-index-row" id="ws-row-@entry.Workspace.WorkspaceId" role="row" @attributes="SortKeys(entry)">
                         <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
                         <span class="workspace-row-main" role="cell">
                             <a class="workspace-name" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)">@entry.Workspace.DisplayId</a>
@@ -150,7 +150,7 @@
                     </div>
                     @foreach (DashboardWorkspaceIndexEntry entry in stale)
                     {
-                        <div class="ws-index-row" role="row" @attributes="SortKeys(entry)">
+                        <div class="ws-index-row" id="ws-row-@entry.Workspace.WorkspaceId" role="row" @attributes="SortKeys(entry)">
                             <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
                             <span class="workspace-row-main" role="cell">
                                 <a class="workspace-name" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)">@entry.Workspace.DisplayId</a>

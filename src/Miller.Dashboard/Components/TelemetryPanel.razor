@@ -16,7 +16,8 @@
                 type="button"
                 hx-get="/fragments/telemetry?workspace_id=@Esc(SelectedWorkspaceId)"
                 hx-target="#telemetry-panel"
-                hx-swap="morph:outerHTML">Refresh</button>
+                hx-swap="morph:outerHTML"
+                hx-disabled-elt="this">Refresh</button>
     </div>
 
     @if (!string.IsNullOrWhiteSpace(Telemetry.Error))
@@ -66,7 +67,7 @@
                 <tbody>
                     @foreach (DashboardToolStat tool in Telemetry.Tools)
                     {
-                        <tr class="telemetry-row @(tool.ErrorCount > 0 ? "has-errors" : "")" @attributes="SortKeys(tool)">
+                        <tr id="telemetry-tool-@tool.Tool" class="telemetry-row @(tool.ErrorCount > 0 ? "has-errors" : "")" @attributes="SortKeys(tool)">
                             <td><code>@tool.Tool</code></td>
                             <td>@tool.Calls.ToString("N0", CultureInfo.InvariantCulture)</td>
                             <td class="telemetry-col-optional">@tool.AvgMs.ToString("0.0", CultureInfo.InvariantCulture)</td>
@@ -109,7 +110,7 @@
                 <ol>
                     @foreach (DashboardRecentError error in Telemetry.RecentErrors)
                     {
-                        <li class="recent-error-row">
+                        <li id="recent-error-@IssueId(error)" class="recent-error-row">
                             <time class="rel-ts timestamp recent-error-time" datetime="@error.Ts" data-ts="@error.Ts">@RelativeTime(error.Ts, Now)</time>
                             <code class="recent-error-tool">@error.Tool</code>
                             <span class="muted recent-error-op">@Cell(error.Op)</span>

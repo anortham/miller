@@ -24,6 +24,7 @@
                         type="button"
                         hx-post="/workspaces/@Esc(Facts.WorkspaceId)/open-folder"
                         hx-swap="none"
+                        hx-disabled-elt="this"
                         data-toast-success="Opening the workspace folder…">Open folder</button>
                 <span class="workspace-state @StateClass(Facts.Status)">@Facts.Status</span>
                 <WorkspaceRemoveConfirm WorkspaceId="@Facts.WorkspaceId" />

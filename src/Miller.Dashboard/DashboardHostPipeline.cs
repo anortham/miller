@@ -158,9 +158,10 @@ internal static partial class DashboardHostPipeline
         new(["localhost", "127.0.0.1", "[::1]", "::1"], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// The refresh-job status route. Its <c>Refreshing…</c> body repeats verbatim between polls, so an ETag
-    /// match would answer <c>304</c> — a no-swap on the client — for as long as the job runs, and the panel
-    /// would still be polling a route whose terminal render it agreed not to look at. Never cache it.
+    /// The refresh-job status route. Its terminal render is delivered exactly once, because the read consumes
+    /// the job, so a <c>304</c> — a no-swap on the client — would silently drop the one response that carries
+    /// the outcome and the event that refreshes the detail panels. Never cache it. (The running body would
+    /// rarely match an ETag in any case: its <c>Refreshing…</c> label counts elapsed seconds.)
     /// </summary>
     private static readonly PathString RefreshStatusPath = new("/fragments/refresh-status");
 

@@ -29,7 +29,7 @@
         <ol class="pattern-family-list">
             @foreach (DashboardPatternFamily family in Inventory.Families)
             {
-                <li>
+                <li id="pattern-family-@family.Family">
                     <div class="breakdown-row">
                         <code>@family.Family</code>
                         <span>@family.FactCount facts</span>

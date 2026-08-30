@@ -3,7 +3,8 @@
 
 @* Swap target for the workspace refresh button. Rendered empty on the page; the POST /fragments/refresh
    response replaces it with a running state that polls itself to the refresh outcome. The poll attributes
-   exist ONLY while the job runs — a terminal render drops them, which is what stops the polling. *@
+   exist ONLY while the job runs, and hx-target MUST stay "this": htmx re-inits the swapped-in node and
+   clears the poll timer there, so an ancestor target would leave the 2-second timer running forever. *@
 <span id="refresh-status" class="refresh-status @CssClass" @attributes="PollAttributes">@Label</span>
 
 @code {
@@ -21,7 +22,7 @@
             ["hx-get"] = $"/fragments/refresh-status?workspace_id={Esc(WorkspaceId)}",
             ["data-poll-trigger"] = "every 2s",
             ["hx-trigger"] = "every 2s",
-            ["hx-target"] = "#workspace-detail-stack",
+            ["hx-target"] = "this",
             ["hx-ext"] = "morph",
             ["hx-swap"] = "morph:outerHTML",
         }

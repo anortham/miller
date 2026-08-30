@@ -1491,10 +1491,21 @@ tr.has-errors td:nth-child(6) {
   .live-dot { animation: none; }
 }
 
-/* ---- HTMX request state -------------------------------------------- */
-.htmx-request {
-  opacity: 0.5;
-  pointer-events: none;
+/* ---- HTMX busy cue --------------------------------------------------
+   Scoped to the controls a reader presses. htmx puts .htmx-request on the
+   REQUESTING element, and every polled panel is its own requester, so an
+   unscoped rule here dims and freezes whole panels on automatic polls.
+   hx-disabled-elt sets a real disabled attribute, so the cue must cover
+   both states — and both :hover forms, or the accent hover rule above
+   repaints an inert button as soon as the pointer rests on it. */
+.refresh-button.htmx-request,
+.refresh-button.htmx-request:hover,
+.refresh-button:disabled,
+.refresh-button:disabled:hover {
+  color: var(--muted);
+  border-color: var(--rule);
+  background: var(--surface-inset);
+  cursor: progress;
 }
 
 @media (prefers-reduced-motion: reduce) {
