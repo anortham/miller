@@ -1469,7 +1469,9 @@ public sealed class WorkspaceTool
         WorkspaceRemoveResult result;
         if (!string.IsNullOrWhiteSpace(workspaceId))
         {
-            TargetWorkspace target = ResolveTarget(workspaceId, path: null);
+            // Resolving here rather than inside RemoveById means the row is already unambiguous by the time
+            // WorkspaceRemoval sees it, so its own Mutate guard can never fire. The intent has to travel.
+            TargetWorkspace target = ResolveTarget(workspaceId, path: null, WorkspaceSelectorIntent.Mutate);
             if (target.UnknownNote is { } note)
                 return (Note(note, json), 0, TelemetryOutcome.Empty);
 
@@ -1553,7 +1555,10 @@ public sealed class WorkspaceTool
                 $"Unknown workspace removal outcome '{result.Result}'."),
         };
 
-    private TargetWorkspace ResolveTarget(string? workspaceId, string? path)
+    private TargetWorkspace ResolveTarget(
+        string? workspaceId,
+        string? path,
+        WorkspaceSelectorIntent intent = WorkspaceSelectorIntent.Read)
     {
         if (!string.IsNullOrWhiteSpace(workspaceId))
         {
@@ -1562,7 +1567,7 @@ public sealed class WorkspaceTool
 
             try
             {
-                WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, workspaceId);
+                WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, workspaceId, intent);
                 return TargetWorkspace.Registered(row, IsCurrentWorkspace(row));
             }
             catch (KeyNotFoundException ex)

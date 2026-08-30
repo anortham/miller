@@ -171,12 +171,11 @@ public static class WorkspaceRegistryPrune
     /// directory when the last worktree of a repository goes, so a tidy cleanup made every remaining row
     /// permanently unprunable. The common dir only vanishes with the repository.</para>
     ///
-    /// <para>This is STRICTER than reading the parent, and every failure direction refuses. An unmounted worktree
-    /// volume leaves the admin dir in place — refuse. A whole repository on an unmounted volume loses the common
-    /// dir — refuse. <see cref="Directory.Exists"/> answers false on any error, not only on absence, so the
-    /// admin-dir half alone would read a fault as a removal; requiring the common dir to answer TRUE is what
-    /// refuses a fault at or above the repository. A fault confined to <c>&lt;common&gt;/worktrees</c> still reads
-    /// as a removal, exactly as it did when the parent was the proof.</para>
+    /// <para>Every failure direction refuses. An unmounted worktree volume leaves the admin dir in place —
+    /// refuse. A whole repository on an unmounted volume loses the common dir — refuse. A fault at or above the
+    /// repository stops the common dir answering TRUE — refuse. A fault confined to
+    /// <c>&lt;common&gt;/worktrees</c> is refused by <see cref="ConfirmedAbsent"/>, which will not read a failed
+    /// probe as an absence.</para>
     ///
     /// <para>Lineage falls back to the store tables because <c>workspaces.git_is_linked</c>/<c>git_dir</c> were
     /// added after many rows were written, and <c>store_members.root_git_dir</c> plus
@@ -202,8 +201,42 @@ public static class WorkspaceRegistryPrune
             return false;
 
         return Directory.Exists(commonDir) &&
-            !Directory.Exists(adminDir) &&
-            !File.Exists(adminDir);
+            !File.Exists(adminDir) &&
+            ConfirmedAbsent(adminDir, commonDir);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="adminDir"/> is proven ABSENT rather than merely unreadable.
+    /// <see cref="Directory.Exists"/> answers false on a permission or I/O fault as well as on absence, and a
+    /// wrong answer here retires a live worktree's store view, so the absence has to come from a listing that
+    /// SUCCEEDED. While git still keeps <c>&lt;common&gt;/worktrees</c>, list it and require the admin dir to be
+    /// missing from it. Once git has removed the last worktree and taken that directory with it, list the common
+    /// dir instead and require the parent itself to be missing. A listing that throws proves nothing and refuses.
+    /// </summary>
+    private static bool ConfirmedAbsent(string adminDir, string commonDir)
+    {
+        string? parent = LineageDirectory(Path.GetDirectoryName(adminDir));
+        if (parent is null)
+            return false;
+
+        bool parentPresent = Directory.Exists(parent);
+        string listed = parentPresent ? parent : commonDir;
+        string absentee = parentPresent ? adminDir : parent;
+
+        try
+        {
+            foreach (string entry in Directory.EnumerateFileSystemEntries(listed))
+            {
+                if (string.Equals(LineageDirectory(entry), absentee, LineagePathComparison))
+                    return false;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>

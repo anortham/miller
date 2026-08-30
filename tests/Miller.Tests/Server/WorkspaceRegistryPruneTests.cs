@@ -289,6 +289,40 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
     }
 
     [Fact]
+    public void Run_AdminDirParentUnreadable_RefusesTheRemoval()
+    {
+        // POSIX-only: File.SetUnixFileMode is unsupported on Windows, and root reads a 000 directory anyway.
+        if (OperatingSystem.IsWindows())
+            return;
+        Assert.SkipWhen(Environment.UserName == "root", "root reads a directory whatever its mode bits say.");
+
+        StoreFamilyRegistryRow family = SeedFamily("lineage-parent-unreadable");
+        string goneRoot = Register("ws-prune-unreadable-1", "unreadable-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-unreadable-1", goneRoot, "view-unreadable");
+
+        string adminDir = AdminDirFor("ws-prune-unreadable-1");
+        string parent = Path.GetDirectoryName(adminDir)!;
+        Directory.CreateDirectory(adminDir);
+        File.SetUnixFileMode(parent, UnixFileMode.None);
+        try
+        {
+            Assert.SkipWhen(Directory.Exists(adminDir), "The mode bits did not hide the admin dir.");
+
+            WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+                _registry, protectedWorkspaceId: null, dryRun: false, retireView: RetireView);
+
+            Assert.Empty(result.Pruned);
+            Assert.NotNull(_registry.Get("ws-prune-unreadable-1"));
+        }
+        finally
+        {
+            File.SetUnixFileMode(
+                parent,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Fact]
     public void Run_CommonDirAbsent_RefusesTheRemoval()
     {
         StoreFamilyRegistryRow family = SeedFamily("lineage-common-gone");
