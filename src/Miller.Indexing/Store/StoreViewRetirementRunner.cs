@@ -107,8 +107,17 @@ public static class StoreViewRetirementRunner
             }
 
             process.WaitForExit();
+            string report = standardOutput.ToString();
+
+            // The exit code alone must not decide this. julie-extract writes its diagnosis INTO the JSON
+            // report on stdout and exits non-zero with an empty stderr, so reading only stderr reported
+            // "no diagnostic output" and discarded the report — including `view_not_found`, the one code
+            // that means the retirement goal is already met. That left the registry row unprunable forever.
+            if (HasReport(report))
+                return ReadReport(report, target, apply);
+
             return process.ExitCode == 0
-                ? ReadReport(standardOutput.ToString(), target, apply)
+                ? ReadReport(report, target, apply)
                 : Failed(
                     target,
                     $"store view retirement exited {process.ExitCode}: {FirstLine(standardError.ToString())}");
@@ -124,6 +133,12 @@ public static class StoreViewRetirementRunner
             return Failed(target, failure.Message);
         }
     }
+
+    /// <summary>
+    /// Whether stdout carries something worth parsing as the producer's report, whatever the exit code was.
+    /// </summary>
+    private static bool HasReport(string standardOutput) =>
+        standardOutput.AsSpan().TrimStart().StartsWith("{", StringComparison.Ordinal);
 
     internal static StoreViewRetirementOutcome ReadReport(
         string reportJson,

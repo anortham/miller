@@ -15,6 +15,23 @@ public sealed class StoreMaintenanceRunnerTests
         Assert.Null(outcome.Error);
     }
 
+    [Fact]
+    public void TheProducersOwnErrorIsReadOutOfAFailedReport()
+    {
+        string? reported = StoreMaintenanceRunner.ReadReportedError(
+            """{"action":"gc","failure_class":"invalid_arguments","error":{"class":"invalid_arguments","code":"view_not_found","message":"store has no view abc"}}""");
+
+        Assert.Equal("view_not_found: store has no view abc", reported);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("""{"action":"gc","error":null}""")]
+    [InlineData("""{"action":"gc"}""")]
+    public void AReportWithNoReadableErrorNamesNone(string reportJson) =>
+        Assert.Null(StoreMaintenanceRunner.ReadReportedError(reportJson));
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]

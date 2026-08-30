@@ -105,10 +105,16 @@ public static class StoreMaintenanceRunner
             }
 
             process.WaitForExit();
-            return process.ExitCode == 0
-                ? ReadPrunedRequestRows(standardOutput.ToString())
-                : new StoreMaintenanceOutcome(
-                    0, $"store maintenance exited {process.ExitCode}: {FirstLine(standardError.ToString())}");
+            if (process.ExitCode == 0)
+                return ReadPrunedRequestRows(standardOutput.ToString());
+
+            // julie-extract puts its diagnosis in the JSON report on stdout and exits non-zero with an empty
+            // stderr, so the stderr line alone read as "no diagnostic output" for a failure the report names.
+            string? reported = ReadReportedError(standardOutput.ToString());
+            return new StoreMaintenanceOutcome(
+                0,
+                $"store maintenance exited {process.ExitCode}: " +
+                (reported ?? FirstLine(standardError.ToString())));
         }
         catch (Exception failure) when (
             failure is IOException
@@ -117,6 +123,42 @@ public static class StoreMaintenanceRunner
                 or System.ComponentModel.Win32Exception)
         {
             return new StoreMaintenanceOutcome(0, failure.Message);
+        }
+    }
+
+    /// <summary>
+    /// The producer's own <c>error.code: error.message</c> from a failed report, or null when stdout carries
+    /// no readable one. This is the diagnosis a non-zero exit leaves on stdout rather than stderr.
+    /// </summary>
+    internal static string? ReadReportedError(string reportJson)
+    {
+        if (string.IsNullOrWhiteSpace(reportJson))
+            return null;
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(reportJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("error", out JsonElement error) ||
+                error.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            string? code = error.TryGetProperty("code", out JsonElement codeElement)
+                ? codeElement.GetString()
+                : null;
+            string? message = error.TryGetProperty("message", out JsonElement messageElement)
+                ? messageElement.GetString()
+                : null;
+            if (string.IsNullOrWhiteSpace(message))
+                return string.IsNullOrWhiteSpace(code) ? null : code;
+
+            return string.IsNullOrWhiteSpace(code) ? message : $"{code}: {message}";
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 

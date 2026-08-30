@@ -223,6 +223,38 @@ public sealed class StoreViewRetirementRunnerTests : IDisposable
     }
 
     [Fact]
+    public void NonzeroExitCarryingAViewNotFoundReport_IsAlreadyAbsent()
+    {
+        RequireUnix();
+        string report = FailureReport(
+            "plan",
+            FamilyId,
+            "view_not_found",
+            $"store has no view {_target.ViewId}");
+        string binary = WriteExecutable($"printf '%s\\n' {ShellQuote(report)}\nexit 1");
+
+        StoreViewRetirementOutcome outcome = StoreViewRetirementRunner.Run(
+            binary, _target, apply: false, timeout: TimeSpan.FromSeconds(2));
+
+        Assert.Equal(StoreViewRetirementDisposition.AlreadyAbsent, outcome.Disposition);
+        Assert.Null(outcome.Error);
+    }
+
+    [Fact]
+    public void NonzeroExitCarryingAReport_ReportsTheProducersOwnErrorNotAnEmptyStderr()
+    {
+        RequireUnix();
+        string report = FailureReport("plan", FamilyId, "store_locked", "another writer holds the store");
+        string binary = WriteExecutable($"printf '%s\\n' {ShellQuote(report)}\nexit 1");
+
+        StoreViewRetirementOutcome outcome = StoreViewRetirementRunner.Run(
+            binary, _target, apply: false, timeout: TimeSpan.FromSeconds(2));
+
+        Assert.Equal(StoreViewRetirementDisposition.Failed, outcome.Disposition);
+        Assert.Contains("another writer holds the store", outcome.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void MalformedReport_IsFailed()
     {
         StoreViewRetirementOutcome outcome = StoreViewRetirementRunner.ReadReport(
