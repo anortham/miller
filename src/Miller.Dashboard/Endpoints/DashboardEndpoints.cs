@@ -209,13 +209,16 @@ internal static class DashboardEndpoints
         });
 
         // The one refetch the terminal refresh-status response triggers. Peek has already consumed the job by
-        // the time this lands, so the retained outcome is what keeps the status span readable.
+        // the time this lands, so the retained outcome is what keeps the status span readable — but a refresh
+        // the reader started during that round trip outranks it, or this render would morph the OLD verdict
+        // over the new running panel and take its poll attributes with it.
         endpoints.MapGet("/fragments/detail-stack", (string workspace_id) =>
             DetailStackResult(
                 paths,
                 launchDirectory,
                 workspace_id,
-                DashboardRefreshJobs.PeekLastOutcome(workspace_id)));
+                DashboardRefreshJobs.PeekRunning(workspace_id)
+                    ?? DashboardRefreshJobs.PeekLastOutcome(workspace_id)));
 
         // Tests-panel lifecycle triggers. Same CSRF proof as the other htmx POSTs; the action itself
         // runs the public `miller tests` verb so the dashboard reuses the CLI's refusal, anchoring,

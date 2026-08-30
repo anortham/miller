@@ -43,6 +43,17 @@ public sealed class WorkspaceRegistrySelectorTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_DeclaresNoDefaultIntent_SoNoMutatingCallerCanInheritTheTieBreak()
+    {
+        System.Reflection.ParameterInfo intent = typeof(WorkspaceRegistrySelector)
+            .GetMethod(nameof(WorkspaceRegistrySelector.Resolve))!
+            .GetParameters()
+            .Single(parameter => parameter.ParameterType == typeof(WorkspaceSelectorIntent));
+
+        Assert.False(intent.HasDefaultValue);
+    }
+
+    [Fact]
     public void Resolve_ForAMutation_NeverBreaksTheTieAndStillRefusesTheAmbiguousSelector()
     {
         Register("ws-selector-mut-live-01", "miller-91250a0fd4f3", rootExists: true);
@@ -61,7 +72,7 @@ public sealed class WorkspaceRegistrySelectorTests : IDisposable
         Register("ws-selector-live-0001", "miller-91250a0fd4f3", rootExists: true);
         Register("ws-selector-dead-0001", "miller-release-smoke.Jmoi8N-dd49aef90432", rootExists: false);
 
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, "miller");
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, "miller", WorkspaceSelectorIntent.Read);
 
         Assert.Equal("ws-selector-live-0001", row.WorkspaceId);
     }
@@ -72,7 +83,7 @@ public sealed class WorkspaceRegistrySelectorTests : IDisposable
         Register("ws-selector-dupe-dead", "worktrees-aaaaaaaaaaaa", rootExists: false);
         Register("ws-selector-dupe-live", "worktrees-aaaaaaaaaaaa", rootExists: true);
 
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, "worktrees-aaaaaaaaaaaa");
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, "worktrees-aaaaaaaaaaaa", WorkspaceSelectorIntent.Read);
 
         Assert.Equal("ws-selector-dupe-live", row.WorkspaceId);
     }
@@ -84,7 +95,7 @@ public sealed class WorkspaceRegistrySelectorTests : IDisposable
         Register("ws-selector-both-0002", "twin-live-b-222222222222", rootExists: true);
 
         var exception = Assert.Throws<KeyNotFoundException>(
-            () => WorkspaceRegistrySelector.Resolve(_registry, "twin"));
+            () => WorkspaceRegistrySelector.Resolve(_registry, "twin", WorkspaceSelectorIntent.Read));
 
         Assert.Equal(
             "ambiguous workspace selector 'twin'. Matches: twin-live-a-111111111111, twin-live-b-222222222222. " +
@@ -99,7 +110,7 @@ public sealed class WorkspaceRegistrySelectorTests : IDisposable
         Register("ws-selector-ghost-002", "ghost-b-222222222222", rootExists: false);
 
         var exception = Assert.Throws<KeyNotFoundException>(
-            () => WorkspaceRegistrySelector.Resolve(_registry, "ghost"));
+            () => WorkspaceRegistrySelector.Resolve(_registry, "ghost", WorkspaceSelectorIntent.Read));
 
         Assert.Equal(
             "ambiguous workspace selector 'ghost'. Matches: ghost-a-111111111111, ghost-b-222222222222. " +
@@ -114,10 +125,10 @@ public sealed class WorkspaceRegistrySelectorTests : IDisposable
 
         Assert.Equal(
             "ws-selector-only-dead",
-            WorkspaceRegistrySelector.Resolve(_registry, "orphan").WorkspaceId);
+            WorkspaceRegistrySelector.Resolve(_registry, "orphan", WorkspaceSelectorIntent.Read).WorkspaceId);
         Assert.Equal(
             "ws-selector-only-dead",
-            WorkspaceRegistrySelector.Resolve(_registry, "orphan-111111111111").WorkspaceId);
+            WorkspaceRegistrySelector.Resolve(_registry, "orphan-111111111111", WorkspaceSelectorIntent.Read).WorkspaceId);
     }
 
     [Fact]
@@ -126,7 +137,7 @@ public sealed class WorkspaceRegistrySelectorTests : IDisposable
         Register("ws-selector-exact-live", "exact-live-111111111111", rootExists: true);
         Register("ws-selector-exact-dead", "exact-dead-222222222222", rootExists: false);
 
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, "ws-selector-exact-dead");
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, "ws-selector-exact-dead", WorkspaceSelectorIntent.Read);
 
         Assert.Equal("ws-selector-exact-dead", row.WorkspaceId);
     }
@@ -137,7 +148,7 @@ public sealed class WorkspaceRegistrySelectorTests : IDisposable
         WorkspaceRegistryRow dead = Register("ws-selector-path-dead", "path-dead-111111111111", rootExists: false);
         Register("ws-selector-path-live", "path-live-222222222222", rootExists: true);
 
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, dead.CanonicalRoot);
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, dead.CanonicalRoot, WorkspaceSelectorIntent.Read);
 
         Assert.Equal("ws-selector-path-dead", row.WorkspaceId);
     }
@@ -151,7 +162,7 @@ public sealed class WorkspaceRegistrySelectorTests : IDisposable
         Register("ws-selector-keyword-dead", "keyword-dead-222222222222", rootExists: false);
 
         var exception = Assert.Throws<KeyNotFoundException>(
-            () => WorkspaceRegistrySelector.Resolve(_registry, keyword));
+            () => WorkspaceRegistrySelector.Resolve(_registry, keyword, WorkspaceSelectorIntent.Read));
 
         Assert.StartsWith("unknown workspace selector", exception.Message, StringComparison.Ordinal);
     }

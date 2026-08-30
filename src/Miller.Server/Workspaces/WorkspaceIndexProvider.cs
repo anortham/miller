@@ -1031,7 +1031,7 @@ public sealed class WorkspaceIndexProvider
 
     private RegisteredWorkspaceState ResolveRegisteredState(string workspaceId, WorkspaceRefreshMode refresh)
     {
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, workspaceId);
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, workspaceId, WorkspaceSelectorIntent.Read);
         VerifyRegisteredRoot(row);
 
         // A serve-then-refresh read needs something to serve. With NO readable index there is no pinned view and
@@ -1062,7 +1062,7 @@ public sealed class WorkspaceIndexProvider
                 throw new InvalidOperationException(
                     refreshResult.Error ?? $"Workspace '{row.WorkspaceId}' refresh failed.");
 
-            row = WorkspaceRegistrySelector.Resolve(_registry, row.WorkspaceId);
+            row = WorkspaceRegistrySelector.Resolve(_registry, row.WorkspaceId, WorkspaceSelectorIntent.Read);
             VerifyRegisteredRoot(row);
 
             // A Refreshed scan whose revision did NOT advance is a from-scratch rebuild: julie deleted and
@@ -1604,7 +1604,7 @@ public sealed class WorkspaceIndexProvider
         if (IsCurrentSelector(selector))
             return true;
 
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, selector);
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, selector, WorkspaceSelectorIntent.Read);
         return IsCurrentWorkspace(row);
     }
 

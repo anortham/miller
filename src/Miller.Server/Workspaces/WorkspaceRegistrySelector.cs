@@ -7,6 +7,10 @@ namespace Miller.Server.Workspaces;
 /// What the resolved row is for. A read may break an otherwise ambiguous match by root presence; a mutation
 /// may not. <c>workspace remove</c> resolves the same selectors, and there the dead row is what the caller
 /// means — breaking the tie toward the live root would delete the wrong workspace's index and store view.
+///
+/// <para>There is deliberately NO default. A caller that says nothing would inherit <see cref="Read"/>, and a
+/// mutating caller that inherits it silently opts its writes into the guess — which is how a destructive path
+/// once reached the tie-break by pre-resolving its row before the routine that guards it.</para>
 /// </summary>
 internal enum WorkspaceSelectorIntent
 {
@@ -19,7 +23,7 @@ internal static class WorkspaceRegistrySelector
     public static WorkspaceRegistryRow Resolve(
         WorkspaceRegistry registry,
         string selector,
-        WorkspaceSelectorIntent intent = WorkspaceSelectorIntent.Read)
+        WorkspaceSelectorIntent intent)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(selector);

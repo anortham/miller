@@ -2710,7 +2710,7 @@ public static class CliDispatch
             using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
             try
             {
-                WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, id);
+                WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, id, WorkspaceSelectorIntent.Mutate);
                 root = row.CanonicalRoot;
                 return true;
             }
@@ -2753,7 +2753,7 @@ public static class CliDispatch
         {
             try
             {
-                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!);
+                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!, WorkspaceSelectorIntent.Mutate);
             }
             catch (KeyNotFoundException ex)
             {
@@ -2870,7 +2870,7 @@ public static class CliDispatch
             WorkspaceRegistryRow row;
             try
             {
-                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!);
+                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!, WorkspaceSelectorIntent.Read);
             }
             catch (KeyNotFoundException ex)
             {
@@ -2960,7 +2960,7 @@ public static class CliDispatch
             WorkspaceRegistryRow row;
             try
             {
-                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!);
+                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!, WorkspaceSelectorIntent.Read);
             }
             catch (KeyNotFoundException ex)
             {
@@ -3089,7 +3089,7 @@ public static class CliDispatch
             WorkspaceRegistryRow row;
             try
             {
-                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!);
+                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!, WorkspaceSelectorIntent.Mutate);
             }
             catch (KeyNotFoundException ex)
             {
@@ -3150,7 +3150,7 @@ public static class CliDispatch
             WorkspaceRegistryRow row;
             try
             {
-                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!);
+                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!, WorkspaceSelectorIntent.Read);
             }
             catch (KeyNotFoundException ex)
             {
@@ -3354,7 +3354,7 @@ public static class CliDispatch
         {
             try
             {
-                row = WorkspaceRegistrySelector.Resolve(registry, selector);
+                row = WorkspaceRegistrySelector.Resolve(registry, selector, WorkspaceSelectorIntent.Mutate);
             }
             catch (KeyNotFoundException ex)
             {
@@ -4116,7 +4116,7 @@ public static class CliDispatch
         WorkspaceRegistryRow row;
         try
         {
-            row = WorkspaceRegistrySelector.Resolve(registry, selector);
+            row = WorkspaceRegistrySelector.Resolve(registry, selector, WorkspaceSelectorIntent.Read);
         }
         catch (KeyNotFoundException ex)
         {

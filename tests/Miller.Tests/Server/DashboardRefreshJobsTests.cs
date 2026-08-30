@@ -131,6 +131,55 @@ public sealed class DashboardRefreshJobsTests
         await WaitForCompletedAsync(workspaceId);
     }
 
+    [Fact]
+    public async Task PeekRunning_ReportsARunningJobWithoutConsumingIt()
+    {
+        string workspaceId = NewWorkspaceId();
+        var gate = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
+
+        Assert.Equal(DashboardRefreshJobState.Running, DashboardRefreshJobs.PeekRunning(workspaceId)?.State);
+        Assert.Equal(DashboardRefreshJobState.Running, DashboardRefreshJobs.PeekRunning(workspaceId)?.State);
+
+        gate.SetResult();
+        Assert.Equal(43L, (await WaitForCompletedAsync(workspaceId)).Result?.Revision);
+    }
+
+    [Fact]
+    public async Task PeekRunning_OnceTheJobFinished_ReportsNothingSoPeekStillOwnsTheOutcome()
+    {
+        string workspaceId = NewWorkspaceId();
+        var gate = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
+        gate.SetResult();
+        await WaitAsync(() => DashboardRefreshJobs.PeekRunning(workspaceId) is null);
+
+        Assert.Null(DashboardRefreshJobs.PeekRunning(workspaceId));
+        Assert.Equal(43L, DashboardRefreshJobs.Peek(workspaceId)?.Result?.Revision);
+    }
+
+    [Fact]
+    public async Task PeekRunning_AfterANewRefreshStarts_OutranksTheRetainedOutcomeTheRefetchWouldShow()
+    {
+        string workspaceId = NewWorkspaceId();
+        var first = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(first, workspaceId));
+        first.SetResult();
+        await WaitForCompletedAsync(workspaceId);
+        Assert.NotNull(DashboardRefreshJobs.PeekLastOutcome(workspaceId));
+
+        var second = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(second, workspaceId));
+
+        DashboardRefreshJobStatus? rendered =
+            DashboardRefreshJobs.PeekRunning(workspaceId) ?? DashboardRefreshJobs.PeekLastOutcome(workspaceId);
+
+        Assert.Equal(DashboardRefreshJobState.Running, rendered?.State);
+
+        second.SetResult();
+        await WaitForCompletedAsync(workspaceId);
+    }
+
     private static Func<WorkspaceRefreshResult> GatedRefresh(TaskCompletionSource gate, string workspaceId) =>
         () =>
         {

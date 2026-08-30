@@ -19,12 +19,16 @@ namespace Miller.Dashboard;
 /// is what flips the facts between a preserved legacy export and a native store view. A probe that cannot answer
 /// reads uncached, so an unreadable or unbound store is never served from cache.</para>
 ///
-/// <para>The stamp also carries the registry row and the sidecar files, because the facts copy both and neither
-/// moves the store-log sequence.</para>
+/// <para>The stamp also carries the registry row, the sidecar files, the producer binary version and the
+/// store-wide views identity (<see cref="DashboardStoreViewsWitness"/>), because the facts copy all of them and
+/// none of them moves the store-log sequence. The views identity is the load-bearing one: the facts summarize
+/// EVERY view in the store, so registering or retiring any other workspace changes what this one renders.</para>
 /// </summary>
 public static class DashboardIndexFactsCache
 {
     private static readonly ConcurrentDictionary<string, CacheEntry> Entries = new(StringComparer.Ordinal);
+
+    private const int MaxEntries = 256;
 
     private static readonly TimeSpan DefaultTtl = TimeSpan.FromSeconds(
         int.TryParse(Environment.GetEnvironmentVariable("MILLER_DASHBOARD_INDEX_CACHE_SECONDS"), out int seconds) && seconds >= 0
@@ -49,10 +53,38 @@ public static class DashboardIndexFactsCache
 
         DashboardWorkspaceFacts facts = DashboardIndexFactsReader.Read(workspace, storeEnabled: enabled);
         Entries[key] = new CacheEntry(facts, stamp, DateTime.UtcNow);
+        TrimToCapacity();
         return facts;
     }
 
-    public static void Clear() => Entries.Clear();
+    public static void Clear()
+    {
+        Entries.Clear();
+        DashboardStoreViewsWitness.Clear();
+    }
+
+    /// <summary>
+    /// Drops the least recently cached entries once the map is larger than a registry realistically serves.
+    /// An entry is replaced only when its own workspace is read again, so a workspace removed through the CLI
+    /// or MCP is never read again and would otherwise hold its fact graph for the life of the process — and this
+    /// registry grows a row for every agent worktree, which nothing retires on its own.
+    /// </summary>
+    private static void TrimToCapacity()
+    {
+        if (Entries.Count <= MaxEntries)
+            return;
+
+        foreach (KeyValuePair<string, CacheEntry> entry in Entries
+            .OrderBy(entry => entry.Value.CachedAt)
+            .Take(Entries.Count - MaxEntries))
+        {
+            Entries.TryRemove(entry);
+        }
+    }
+
+    internal static int Count => Entries.Count;
+
+    internal static int Capacity => MaxEntries;
 
     private static string BuildKey(DashboardWorkspaceRow workspace, bool storeEnabled) =>
         (storeEnabled ? "store|" : "legacy|") + workspace.WorkspaceId;
@@ -82,12 +114,20 @@ public static class DashboardIndexFactsCache
             return null;
         }
 
+        // A store that cannot name its views cannot witness the member summary the facts copy, so that read
+        // stays uncached rather than being stamped with a witness that is missing.
+        string? views = DashboardStoreViewsWitness.Read(probe.StoreRoot);
+        if (views is null)
+            return null;
+
         return string.Join(
             '|',
             probe.IndexGenerationIdentity ?? "null",
             probe.ManifestGeneration?.ToString(CultureInfo.InvariantCulture) ?? "null",
             probe.ManifestHash ?? "null",
             probe.Revision.ToString(CultureInfo.InvariantCulture),
+            probe.BinaryVersion ?? "null",
+            views,
             File.Exists(workspace.IndexDbPath) ? "legacy_export" : "native",
             StoreSidecarState(probe.StoreRoot, probe.ViewId),
             RegistryState(workspace));
@@ -168,21 +208,7 @@ public static class DashboardIndexFactsCache
         long spread = DefaultTtl.Ticks / 4;
         return spread <= 0
             ? DefaultTtl
-            : TimeSpan.FromTicks(DefaultTtl.Ticks - (long)(StableHash(workspaceId) % (ulong)spread));
-    }
-
-    // FNV-1a, not `string.GetHashCode`: .NET randomizes that seed per process, so the jitter would move on
-    // every dashboard restart instead of staying with the workspace.
-    private static ulong StableHash(string value)
-    {
-        ulong hash = 14695981039346656037UL;
-        foreach (char character in value)
-        {
-            hash ^= character;
-            hash *= 1099511628211UL;
-        }
-
-        return hash;
+            : TimeSpan.FromTicks(DefaultTtl.Ticks - (long)(DashboardStableHash.Of(workspaceId) % (ulong)spread));
     }
 
     private static long TryGetIndexWriteTicks(string indexDbPath)

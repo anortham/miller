@@ -105,6 +105,19 @@ A whole repo on an unmounted volume loses the common dir → refuse. A permissio
 unreadable → refuse. Today's gate reads a directory git deletes on purpose; the new one reads a
 directory that only vanishes with the repository.
 
+### Two holes external review found in the first cut
+
+Both were reproduced as failing tests before the fix, and both retired a live view:
+
+- **The pair was never proved to be a pair.** Admin dir and common dir can come from different
+  sources (row lineage vs `store_members`/`store_families`), and "unequal" alone does not mean
+  "linked": a submodule and a `--separate-git-dir` checkout both read as unequal. The gate now
+  requires the admin dir to sit directly in this repository's `<common>/worktrees`.
+- **A missing pathname is not a removal.** An admin directory that was RENAMED leaves the recorded
+  path absent while git still registers the worktree. `ConfirmedAbsent` now reads each surviving
+  entry's `<admin>/gitdir` backlink and refuses when one still names this workspace's root. An
+  unreadable backlink answers "still registered" — a fault may not clear a worktree.
+
 ## Step 2 — stop creating unprunable rows
 
 - `src/Miller.Server/Tools/WorkspaceTool.cs:1269` and `src/Miller.Server/Cli/CliDispatch.cs:3632` —

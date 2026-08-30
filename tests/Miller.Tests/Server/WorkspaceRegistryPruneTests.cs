@@ -289,6 +289,66 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
     }
 
     [Fact]
+    public void Run_AdminDirOutsideTheRepositoryWorktreesDirectory_RefusesTheRemoval()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-submodule", canonicalCommonDir: CommonDir);
+        string goneRoot = Register("ws-prune-submodule-1", "submodule-repo", rootExists: false);
+        JoinFamily(
+            family,
+            "ws-prune-submodule-1",
+            goneRoot,
+            "view-submodule",
+            markConfirmedRemovedLinked: false,
+            rootIdentity: new WorkspaceRootIdentity(
+                Path.Combine(CommonDir, "modules", "submodule-a"), DateTimeOffset.UtcNow));
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry, protectedWorkspaceId: null, dryRun: false, retireView: RetireView);
+
+        Assert.Empty(result.Pruned);
+        Assert.NotNull(_registry.Get("ws-prune-submodule-1"));
+    }
+
+    [Fact]
+    public void Run_ASurvivingAdminEntryStillRegistersTheRoot_RefusesTheRemoval()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-renamed-admin");
+        string goneRoot = Register("ws-prune-renamed-1", "renamed-admin-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-renamed-1", goneRoot, "view-renamed");
+
+        string renamed = Path.Combine(CommonDir, "worktrees", "renamed-admin-repo-moved");
+        Directory.CreateDirectory(renamed);
+        File.WriteAllText(Path.Combine(renamed, "gitdir"), Path.Combine(goneRoot, ".git"));
+        Assert.False(Directory.Exists(AdminDirFor("ws-prune-renamed-1")));
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry, protectedWorkspaceId: null, dryRun: false, retireView: RetireView);
+
+        Assert.Empty(result.Pruned);
+        Assert.NotNull(_registry.Get("ws-prune-renamed-1"));
+    }
+
+    [Fact]
+    public void Run_ASurvivingAdminEntryRegisteringAnotherRoot_StillConfirmsTheRemoval()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-sibling-admin");
+        string goneRoot = Register("ws-prune-sibling-1", "sibling-admin-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-sibling-1", goneRoot, "view-sibling");
+
+        string sibling = Path.Combine(CommonDir, "worktrees", "some-other-worktree");
+        Directory.CreateDirectory(sibling);
+        File.WriteAllText(
+            Path.Combine(sibling, "gitdir"),
+            Path.Combine(_dir, "some-other-worktree", ".git"));
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry, protectedWorkspaceId: null, dryRun: false, retireView: RetireView);
+
+        Assert.Single(result.Pruned);
+        Assert.Null(_registry.Get("ws-prune-sibling-1"));
+    }
+
+    [Fact]
     public void Run_AdminDirParentUnreadable_RefusesTheRemoval()
     {
         // POSIX-only: File.SetUnixFileMode is unsupported on Windows, and root reads a 000 directory anyway.

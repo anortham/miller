@@ -279,6 +279,23 @@ store-mode cache test can build a real store.
 The test suite runs with `MILLER_INDEX_STORE=off` (`tests/Miller.Tests/test.runsettings:5`), so any
 store-mode test must pass `storeEnabled: true` explicitly.
 
+## What external review corrected
+
+- **The stamp did not witness every fact it cached.** The facts summarize EVERY view in the family
+  store — `StoreMemberSummaryReader` runs `SELECT COUNT(*) FROM views` and labels the whole table —
+  and registering or retiring any other workspace moves no single view's manifest generation,
+  manifest hash or store-log sequence. The member count and labels went stale for a whole TTL.
+  `DashboardStoreViewsWitness` now reads that table's identity once per store root per 2 s and the
+  stamp carries it, alongside the producer binary version. Reproduced as a failing test first.
+- **The detail-stack refetch could erase a newer refresh.** The refetch is triggered by one refresh
+  finishing but arrives a round trip later, and it rendered the retained outcome unconditionally. A
+  refresh the reader started inside that window had its running panel morphed away, poll attributes
+  and all, so it never reported. `DashboardRefreshJobs.PeekRunning` — a non-consuming, running-only
+  read — now outranks the retained outcome.
+- **The cache had no bound.** An entry is replaced only when its own workspace is read again, so a
+  workspace removed through the CLI or MCP held its fact graph for the life of the process. It now
+  trims the least recently cached entries past 256.
+
 ## Follow-ups, recorded not fixed
 
 - The detail page still takes about 1 s per view with the store path out of the picture.

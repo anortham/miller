@@ -77,6 +77,22 @@ public static class DashboardRefreshJobs
     }
 
     /// <summary>
+    /// The job for this workspace only while it is still RUNNING, and never consuming. The detail-stack
+    /// refetch needs this: it is triggered by one refresh finishing but arrives a round trip later, by which
+    /// time the reader may have started another. Rendering the retained outcome then would morph a finished
+    /// verdict over the running panel and drop its poll attributes, so the new refresh would never report.
+    /// Null while a job is finished, which leaves <see cref="Peek"/> the only reader that may consume it.
+    /// </summary>
+    public static DashboardRefreshJobStatus? PeekRunning(string workspaceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+
+        return Jobs.TryGetValue(workspaceId, out Job? job) && !job.IsFinished
+            ? Describe(job)
+            : null;
+    }
+
+    /// <summary>
     /// The outcome <see cref="Peek"/> last consumed, WITHOUT consuming it, for
     /// <see cref="LastOutcomeRetention"/> after that observation. The detail-stack refetch that follows a
     /// finished refresh re-renders the status span, and Peek's exactly-once contract would render it empty —

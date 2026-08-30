@@ -182,6 +182,10 @@ public static class WorkspaceRegistryPrune
     /// <c>store_families.canonical_common_dir</c> carry the same facts for those rows. Only a NULL
     /// <c>git_is_linked</c> falls back — an explicit <c>0</c> is a recorded answer of "plain checkout", and a
     /// plain checkout's admin dir IS its common dir, which is refused outright.</para>
+    ///
+    /// <para>The two paths can be filled from different sources, so the pair has to prove it IS a pair: the admin
+    /// dir must sit directly in this repository's <c>&lt;common&gt;/worktrees</c>. Unequal alone is not linked —
+    /// a submodule, a <c>--separate-git-dir</c> checkout and a differently spelled path all read as unequal.</para>
     /// </summary>
     private static bool HasConfirmedLinkedWorktreeRemoval(
         WorkspaceRegistry registry,
@@ -200,34 +204,53 @@ public static class WorkspaceRegistryPrune
         if (string.Equals(adminDir, commonDir, LineagePathComparison))
             return false;
 
+        string worktreesDir = Path.Combine(commonDir, "worktrees");
+        if (!string.Equals(
+                LineageDirectory(Path.GetDirectoryName(adminDir)),
+                worktreesDir,
+                LineagePathComparison))
+        {
+            return false;
+        }
+
         return Directory.Exists(commonDir) &&
             !File.Exists(adminDir) &&
-            ConfirmedAbsent(adminDir, commonDir);
+            ConfirmedAbsent(adminDir, worktreesDir, commonDir, row.CanonicalRoot);
     }
 
     /// <summary>
-    /// Whether <paramref name="adminDir"/> is proven ABSENT rather than merely unreadable.
-    /// <see cref="Directory.Exists"/> answers false on a permission or I/O fault as well as on absence, and a
-    /// wrong answer here retires a live worktree's store view, so the absence has to come from a listing that
+    /// Whether <paramref name="adminDir"/> is proven ABSENT rather than merely unreadable, and no sibling entry
+    /// still registers this worktree under another name.
+    ///
+    /// <para><see cref="Directory.Exists"/> answers false on a permission or I/O fault as well as on absence, and
+    /// a wrong answer here retires a live worktree's store view, so the absence has to come from a listing that
     /// SUCCEEDED. While git still keeps <c>&lt;common&gt;/worktrees</c>, list it and require the admin dir to be
     /// missing from it. Once git has removed the last worktree and taken that directory with it, list the common
-    /// dir instead and require the parent itself to be missing. A listing that throws proves nothing and refuses.
+    /// dir instead and require <c>worktrees</c> itself to be missing. A listing that throws proves nothing and
+    /// refuses.</para>
+    ///
+    /// <para>A missing pathname is not by itself a removal: an admin directory that was RENAMED leaves the
+    /// recorded path absent while git still registers the worktree. Every surviving entry's backlink is checked
+    /// for that.</para>
     /// </summary>
-    private static bool ConfirmedAbsent(string adminDir, string commonDir)
+    private static bool ConfirmedAbsent(
+        string adminDir,
+        string worktreesDir,
+        string commonDir,
+        string workspaceRoot)
     {
-        string? parent = LineageDirectory(Path.GetDirectoryName(adminDir));
-        if (parent is null)
-            return false;
-
-        bool parentPresent = Directory.Exists(parent);
-        string listed = parentPresent ? parent : commonDir;
-        string absentee = parentPresent ? adminDir : parent;
+        bool worktreesPresent = Directory.Exists(worktreesDir);
+        string listed = worktreesPresent ? worktreesDir : commonDir;
+        string absentee = worktreesPresent ? adminDir : worktreesDir;
 
         try
         {
             foreach (string entry in Directory.EnumerateFileSystemEntries(listed))
             {
-                if (string.Equals(LineageDirectory(entry), absentee, LineagePathComparison))
+                string? canonical = LineageDirectory(entry);
+                if (string.Equals(canonical, absentee, LineagePathComparison))
+                    return false;
+                if (worktreesPresent && canonical is not null && RegistersWorktree(canonical, workspaceRoot))
                     return false;
             }
         }
@@ -237,6 +260,30 @@ public static class WorkspaceRegistryPrune
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Whether the surviving admin entry <paramref name="adminDir"/> still registers
+    /// <paramref name="workspaceRoot"/> as its worktree. Git writes the worktree's own <c>.git</c> FILE path into
+    /// <c>&lt;admin&gt;/gitdir</c>, so this is the fact that outlives a rename of the admin directory. A read that
+    /// fails answers TRUE: an unreadable backlink cannot clear a worktree of being registered.
+    /// </summary>
+    private static bool RegistersWorktree(string adminDir, string workspaceRoot)
+    {
+        string backlink = Path.Combine(adminDir, "gitdir");
+        try
+        {
+            if (!File.Exists(backlink))
+                return false;
+
+            string? registered = LineageDirectory(Path.GetDirectoryName(File.ReadAllText(backlink).Trim()));
+            return registered is not null &&
+                string.Equals(registered, LineageDirectory(workspaceRoot), LineagePathComparison);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
     }
 
     /// <summary>

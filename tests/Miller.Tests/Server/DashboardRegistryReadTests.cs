@@ -850,6 +850,53 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public void DashboardIndexFactsCache_AfterAnotherViewJoinsTheStore_DoesNotServeTheStaleMemberSummary()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        DashboardWorkspaceRow workspace = StoreWorkspaceRow(fixture, "ws-store-members", "store-members-abcd1234");
+
+        DashboardIndexFactsCache.Clear();
+        DashboardWorkspaceFacts first = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+        Assert.Equal(1, first.Store?.MemberCount);
+
+        AddStoreView(fixture, "view-b", Path.Combine(fixture.Binding.WorkspaceRoot, "..", "sibling"));
+        DashboardStoreViewsWitness.Clear();
+        DashboardWorkspaceFacts second = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+
+        Assert.NotSame(first, second);
+        Assert.Equal(2, second.Store?.MemberCount);
+    }
+
+    [Fact]
+    public void DashboardIndexFactsCache_PastItsCapacity_DropsTheLeastRecentlyCachedEntries()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows: []);
+
+        DashboardIndexFactsCache.Clear();
+        for (int index = 0; index <= DashboardIndexFactsCache.Capacity; index++)
+        {
+            DashboardIndexFactsCache.Read(
+                new DashboardWorkspaceRow(
+                    "ws-capacity-" + index.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    "capacity-abcd1234",
+                    fixture.WorkspaceRoot,
+                    fixture.DbPath,
+                    "2026-05-31T10:00:00Z",
+                    "2026-05-31T10:01:00Z",
+                    3,
+                    "ready",
+                    null),
+                storeEnabled: false);
+        }
+
+        Assert.Equal(DashboardIndexFactsCache.Capacity, DashboardIndexFactsCache.Count);
+    }
+
+    [Fact]
     public void DashboardIndexFactsCache_NeverServesALegacyEntryToAStoreRead()
     {
         using StoreFixture fixture = StoreFixture.Create();
@@ -880,6 +927,23 @@ public sealed class DashboardRegistryReadTests : IDisposable
             2,
             "ready",
             null);
+
+    private static void AddStoreView(StoreFixture fixture, string viewId, string root)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db"),
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            "INSERT INTO views VALUES ($view,$root,2,'unbound',NULL,NULL,NULL," +
+            "'2026-08-09T00:00:00Z','2026-08-09T00:00:00Z');";
+        command.Parameters.AddWithValue("$view", viewId);
+        command.Parameters.AddWithValue("$root", root);
+        command.ExecuteNonQuery();
+    }
 
     private static void AppendStoreLogEvent(StoreFixture fixture, long sequence)
     {
