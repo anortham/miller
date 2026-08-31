@@ -1,4 +1,6 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using Miller.Core.Graph;
 using Miller.Core.Search;
@@ -6,6 +8,7 @@ using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using Miller.Server;
+using Miller.Server.Hosting;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -91,6 +94,98 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         Assert.Same(holderIndex, context.Index);
         Assert.Equal(0, projectionLoads);
+    }
+
+    [Fact]
+    public void Resolve_ExplicitWorkspace_WorksBeforePrimaryBinds()
+    {
+        using var target = DbWithSymbol("target-ws", revision: 4, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string targetRoot = NewRoot("unbound-target");
+        registry.UpsertSeen("target-ws", "target-111111111111", targetRoot, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 4);
+
+        WorkspaceIndexProvider provider = NewProvider(holder: null, workspace: null, registry);
+
+        using WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
+
+        Assert.Equal("target-ws", context.WorkspaceId);
+        Assert.Equal(targetRoot, context.WorkspaceRoot);
+        var hit = Assert.Single(context.Index.Search("TargetType", limit: 10));
+        Assert.Equal("TargetType", context.Index.Resolve(hit.Document.DocId).Name);
+    }
+
+    [Fact]
+    public void ServiceRegistration_ResolvesProviderBeforePrimaryBinds()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices(semanticMode: SemanticMode.Off, startIndexer: false);
+        string runnerPath = Path.Combine(_dir, "julie-extract");
+        File.WriteAllText(runnerPath, string.Empty);
+        services.AddSingleton(new JulieExtractRunner(runnerPath, TimeSpan.FromSeconds(1)));
+
+        using var serviceProvider = services.BuildServiceProvider();
+        IndexBootstrapService bootstrap = serviceProvider.GetRequiredService<IndexBootstrapService>();
+        bootstrap.TestHomeDirectoryOverride = NewRoot("provider-home");
+
+        WorkspaceIndexProvider provider = serviceProvider.GetRequiredService<WorkspaceIndexProvider>();
+
+        Assert.NotNull(provider);
+        Assert.False(bootstrap.IsBound);
+    }
+
+    [Fact]
+    public void Resolve_ExplicitWorkspace_WithDifferentPrimaryUsesRegisteredRoute()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 4, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string targetRoot = NewRoot("different-primary-target");
+        registry.UpsertSeen("target-ws", "target-111111111111", targetRoot, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 4);
+        WorkspaceIndexProvider provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry);
+
+        using WorkspaceReadContext context = provider.Resolve("target-ws", WorkspaceRefreshMode.None);
+
+        Assert.Equal("target-ws", context.WorkspaceId);
+        Assert.Equal(targetRoot, context.WorkspaceRoot);
+        Assert.Equal(4, context.Revision);
+        Assert.Empty(context.Index.FindByName("CurrentType"));
+        Assert.Single(context.Index.FindByName("TargetType"));
+    }
+
+    [Fact]
+    public void Resolve_ExplicitWorkspace_HasTheSameRegisteredResultWithOrWithoutMatchingPrimary()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 4, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string targetRoot = NewRoot("matching-primary-target");
+        const string workspaceId = "matching-primary";
+        registry.UpsertSeen(workspaceId, "matching-111111111111", targetRoot, target.DbPath);
+        registry.MarkScanned(workspaceId, revision: 4);
+
+        WorkspaceIndexProvider unboundProvider = NewProvider(holder: null, workspace: null, registry);
+        using WorkspaceReadContext unbound = unboundProvider.Resolve(workspaceId, WorkspaceRefreshMode.None);
+
+        WorkspaceIndexProvider boundProvider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, workspaceId),
+            registry);
+        using WorkspaceReadContext bound = boundProvider.Resolve(workspaceId, WorkspaceRefreshMode.None);
+
+        Assert.Equal(unbound.WorkspaceId, bound.WorkspaceId);
+        Assert.Equal(unbound.WorkspaceRoot, bound.WorkspaceRoot);
+        Assert.Equal(unbound.Revision, bound.Revision);
+        Assert.Equal(unbound.FreshnessStatus, bound.FreshnessStatus);
+        Assert.Equal(unbound.WarningText, bound.WarningText);
+        Assert.Single(unbound.Index.FindByName("TargetType"));
+        Assert.Single(bound.Index.FindByName("TargetType"));
+        Assert.Empty(bound.Index.FindByName("CurrentType"));
     }
 
     [Fact]
@@ -2105,7 +2200,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     [Theory]
     [InlineData("current")]
     [InlineData("primary")]
-    public void ResolveSymbolSearch_CurrentAliasesRouteToServedWorkspace(string selector)
+    public void ResolveSymbolSearch_CurrentAliasesUseRegisteredRouting(string selector)
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
@@ -2114,15 +2209,14 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry);
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch(selector, WorkspaceRefreshMode.None);
+        KeyNotFoundException failure = Assert.Throws<KeyNotFoundException>(
+            () => provider.ResolveSymbolSearch(selector, WorkspaceRefreshMode.None));
 
-        Assert.Equal("current-ws", context.WorkspaceId);
-        var hit = Assert.Single(context.Index.Search("CurrentType", limit: 10));
-        Assert.Equal("CurrentType", context.Index.Resolve(hit.Document.DocId).Name);
+        Assert.StartsWith("unknown workspace selector", failure.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ResolveSymbolSearch_CurrentDisplayIdPrefixRoutesToServedWorkspaceWithoutRefresh()
+    public void ResolveSymbolSearch_CurrentDisplayIdPrefixUsesRegisteredRouting()
     {
         const string currentId = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
         using var current = DbWithSymbol(currentId, revision: 1, "CurrentType");
@@ -2138,11 +2232,11 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             registry,
             refresh: _ => throw new InvalidOperationException("current display prefix should not refresh through registry"));
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("current-display-prefix-abcdef", WorkspaceRefreshMode.Blocking);
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("current-display-prefix-abcdef", WorkspaceRefreshMode.None);
 
         Assert.Equal(currentId, context.WorkspaceId);
         Assert.Equal(displayId, context.DisplayId);
-        Assert.Equal("current", context.FreshnessStatus);
+        Assert.False(context.IsCurrent);
         var hit = Assert.Single(context.Index.Search("CurrentType", limit: 10));
         Assert.Equal("CurrentType", context.Index.Resolve(hit.Document.DocId).Name);
     }
@@ -2577,6 +2671,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using var fx = DbWithDoc("docs/guide.md", "# Guide\nThe freshness gate verifies blake3 hashes.\n");
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         var holder = new IndexHolder(RepositoryIndexLoader.Load(fx.DbPath), builtRevision: 7);
+        registry.UpsertSeen("current-ws", "current-111111111111", fx.WorkspaceRoot, fx.DbPath);
+        registry.MarkScanned("current-ws", revision: 7);
 
         int contentLoadCount = 0;
         var provider = NewProvider(
@@ -2596,7 +2692,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal("current", byNull.FreshnessStatus);
         var hit = Assert.Single(byNull.Index.Search("freshness", limit: 10));
         Assert.Equal("docs/guide.md", hit.Path);
-        Assert.Same(byNull.Index, byId.Index); // null and the explicit current id resolve to one cached build
+        Assert.Same(byNull.Index, byId.Index);
         Assert.Equal(1, contentLoadCount);
     }
 
@@ -2683,6 +2779,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             revision: 7);
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         var holder = new IndexHolder(RepositoryIndexLoader.Load(fx.DbPath), builtRevision: 7);
+        registry.UpsertSeen("current-ws", "current-111111111111", fx.WorkspaceRoot, fx.DbPath);
+        registry.MarkScanned("current-ws", revision: 7);
 
         int textLoadCount = 0;
         var provider = NewProvider(
@@ -2706,7 +2804,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal(7, byNull.Revision);
         Assert.Equal("current", byNull.FreshnessStatus);
         Assert.True(byNull.IsCurrent);
-        Assert.True(byId.IsCurrent);
+        Assert.False(byId.IsCurrent);
         Assert.Same(byNull.Index, byId.Index);
         Assert.Equal(1, textLoadCount);
         Assert.Single(byNull.Index.Search("KnownSourceError", TextContentKind.WorkspaceSource, 10));
@@ -2730,6 +2828,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             revision: 1);
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         string root = NewRoot("current-store-content-cache");
+        registry.UpsertSeen("current-ws", "current-111111111111", root, current.DbPath);
+        registry.MarkScanned("current-ws", revision: 12);
         WorkspaceReadSnapshot snapshot = StoreSnapshot(root, "manifest-a");
         int loadCount = 0;
         var provider = NewProvider(
@@ -2781,6 +2881,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             revision: 1);
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         string root = NewRoot("current-store-content-concurrent");
+        registry.UpsertSeen("current-ws", "current-111111111111", root, current.DbPath);
+        registry.MarkScanned("current-ws", revision: 12);
         WorkspaceReadSnapshot snapshot = StoreSnapshot(root, "manifest-a");
         using var loadEntered = new ManualResetEventSlim();
         using var releaseLoad = new ManualResetEventSlim();
@@ -3934,8 +4036,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     private WorkspaceIndexProvider NewProvider(
-        IndexHolder holder,
-        WorkspaceContext workspace,
+        IndexHolder? holder,
+        WorkspaceContext? workspace,
         WorkspaceRegistry registry,
         Func<string, WorkspaceRefreshResult>? refresh = null,
         Func<string, MillerRepositoryIndex>? loadIndex = null,

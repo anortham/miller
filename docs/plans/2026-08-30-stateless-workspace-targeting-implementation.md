@@ -160,11 +160,11 @@
 **Approach:** Access primary lazily only for null routes. Add no-primary, different-primary, and matching-primary A/B coverage.
 
 **Acceptance criteria:**
-- [ ] Explicit IDs work unbound
-- [ ] Binding state does not change explicit semantics
-- [ ] Null current routes stay green
-- [ ] Registered level/freshness contracts stay green
-- [ ] Focused verification passes and the diff is handed to the lead
+- [x] Explicit IDs work unbound
+- [x] Binding state does not change explicit semantics
+- [x] Null current routes stay green
+- [x] Registered level/freshness contracts stay green
+- [x] Focused verification passes and the diff is handed to the lead
 
 ### Task 4: Lifecycle, content, and CT
 

@@ -59,10 +59,8 @@ public static class MillerServiceRegistration
         services.AddSingleton<WorkspaceBindingService>();
         services.AddSingleton<IWorkspaceBindingService>(sp => sp.GetRequiredService<WorkspaceBindingService>());
 
-        // Holder-backed current-workspace services resolved from the bootstrap. These factories read the bootstrap getters, so
-        // they MUST only be resolved after StartAsync — i.e. by per-call tools and the lazily-resolved probe
-        // below, NEVER by a hosted-service constructor (see the lifecycle contract above). They are transient
-        // rather than singleton so MCP roots/list_changed rebinds resolve the latest primary workspace.
+        // Primary-backed services remain transient so a null/internal route sees the latest binding. The read provider
+        // itself is constructible before bootstrap binds; it touches the primary only when a null route is resolved.
         services.AddTransient(sp => sp.GetRequiredService<IndexBootstrapService>().Holder);
         services.AddTransient(sp => sp.GetRequiredService<IndexBootstrapService>().Resolver);
         services.AddTransient(sp => sp.GetRequiredService<IndexBootstrapService>().Workspace);
@@ -221,7 +219,17 @@ public static class MillerServiceRegistration
         // provider below is transient (one tool call builds several instances), so a guard living on the instance
         // would coalesce nothing.
         services.AddSingleton<BackgroundRefreshGate>();
-        services.AddTransient<WorkspaceIndexProvider>();
+        services.AddTransient<WorkspaceIndexProvider>(sp =>
+            new WorkspaceIndexProvider(
+                holder: null,
+                currentWorkspace: null,
+                registry: sp.GetRequiredService<WorkspaceRegistry>(),
+                refreshService: sp.GetRequiredService<CrossWorkspaceRefreshService>(),
+                sidecar: sp.GetRequiredService<SymbolSearchSidecar>(),
+                supplementalEdgesCache: sp.GetRequiredService<SupplementalEdgeCache>(),
+                factCacheStore: sp.GetRequiredService<RevisionFactCacheStore>(),
+                backgroundRefreshGate: sp.GetRequiredService<BackgroundRefreshGate>(),
+                primary: sp.GetRequiredService<IndexBootstrapService>()));
         services.AddTransient<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceArtifactProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());

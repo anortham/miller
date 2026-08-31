@@ -114,6 +114,29 @@ public sealed class IndexLevelContextTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_ExplicitWorkspaceWithMatchingPrimary_CarriesTheRegisteredArtifactLevel()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string currentRoot = NewDir("matching-current");
+        string currentDbPath = SymbolsLevelArtifact.CreateFull(currentRoot);
+        string targetRoot = NewDir("matching-target");
+        string targetDbPath = SymbolsLevelArtifact.Create(targetRoot);
+        const string workspaceId = "matching-primary";
+        registry.UpsertSeen(workspaceId, "matching-111111111111", targetRoot, targetDbPath);
+        registry.MarkScanned(workspaceId, revision: 1);
+
+        WorkspaceIndexProvider provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(currentDbPath), builtRevision: 1),
+            CurrentWorkspaceAt(currentRoot, currentDbPath) with { WorkspaceId = workspaceId },
+            registry);
+
+        WorkspaceReadContext context = provider.Resolve(workspaceId, WorkspaceRefreshMode.None);
+
+        Assert.Equal(IndexLevels.SymbolsMetadataValue, context.IndexLevel);
+        Assert.True(IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel));
+    }
+
+    [Fact]
     public void ReferenceLayerConverging_RepositoryIndexOverload_AgreesWithTheCarriedLevelOverload()
     {
         MillerRepositoryIndex symbols = RepositoryIndexLoader.Load(SymbolsLevelArtifact.Create(NewDir("symbols-index")));

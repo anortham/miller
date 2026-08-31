@@ -3,6 +3,7 @@ using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Resolution;
 using Miller.Indexing.Store;
+using Miller.Server.Hosting;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -13,8 +14,9 @@ public sealed class WorkspaceIndexProvider
     : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceSymbolReadProvider, IWorkspaceContentSearchProvider,
       IWorkspaceRegionSearchProvider, IWorkspaceTextContentSearchProvider, IWorkspaceArtifactProvider
 {
-    private readonly IndexHolder _holder;
-    private readonly WorkspaceContext _currentWorkspace;
+    private readonly IndexHolder? _holder;
+    private readonly WorkspaceContext? _currentWorkspace;
+    private readonly IndexBootstrapService? _primary;
     private readonly WorkspaceRegistry _registry;
     private readonly Func<string, WorkspaceRefreshResult> _refresh;
     private readonly Func<string, MillerRepositoryIndex> _loadIndex;
@@ -48,14 +50,15 @@ public sealed class WorkspaceIndexProvider
     private readonly BackgroundRefreshGate _backgroundRefreshGate;
 
     public WorkspaceIndexProvider(
-        IndexHolder holder,
-        WorkspaceContext currentWorkspace,
+        IndexHolder? holder,
+        WorkspaceContext? currentWorkspace,
         WorkspaceRegistry registry,
         CrossWorkspaceRefreshService refreshService,
         SymbolSearchSidecar sidecar,
         SupplementalEdgeCache supplementalEdgesCache,
         RevisionFactCacheStore factCacheStore,
-        BackgroundRefreshGate backgroundRefreshGate)
+        BackgroundRefreshGate backgroundRefreshGate,
+        IndexBootstrapService? primary = null)
         : this(
             holder,
             currentWorkspace,
@@ -76,13 +79,14 @@ public sealed class WorkspaceIndexProvider
                 WorkspaceReadSessionFactory.Open(databasePath, root, workspaceId, storeEnabled: null, factCacheStore),
             supplementalEdgesCache: supplementalEdgesCache,
             factCacheStore: factCacheStore,
-            backgroundRefreshGate: backgroundRefreshGate)
+            backgroundRefreshGate: backgroundRefreshGate,
+            primary: primary)
     {
     }
 
     internal WorkspaceIndexProvider(
-        IndexHolder holder,
-        WorkspaceContext currentWorkspace,
+        IndexHolder? holder,
+        WorkspaceContext? currentWorkspace,
         WorkspaceRegistry registry,
         Func<string, WorkspaceRefreshResult> refresh,
         Func<string, MillerRepositoryIndex> loadIndex,
@@ -104,10 +108,9 @@ public sealed class WorkspaceIndexProvider
         RevisionFactCacheStore? factCacheStore = null,
         Action<Action>? scheduleBackgroundRefresh = null,
         Func<WorkspaceRegistryRow, bool>? hasReadableIndex = null,
-        BackgroundRefreshGate? backgroundRefreshGate = null)
+        BackgroundRefreshGate? backgroundRefreshGate = null,
+        IndexBootstrapService? primary = null)
     {
-        ArgumentNullException.ThrowIfNull(holder);
-        ArgumentNullException.ThrowIfNull(currentWorkspace);
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(refresh);
         ArgumentNullException.ThrowIfNull(loadIndex);
@@ -119,6 +122,7 @@ public sealed class WorkspaceIndexProvider
         ArgumentNullException.ThrowIfNull(sidecar);
         _holder = holder;
         _currentWorkspace = currentWorkspace;
+        _primary = primary;
         _registry = registry;
         _refresh = refresh;
         _loadIndex = loadIndex;
@@ -160,9 +164,6 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrent();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (SelectorTargetsCurrent(workspaceId))
-            return ResolveCurrent();
-
         return ResolveRegistered(workspaceId, refresh);
     }
 
@@ -172,9 +173,6 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrentArtifact();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (SelectorTargetsCurrent(workspaceId))
-            return ResolveCurrentArtifact();
-
         return ResolveRegisteredArtifact(workspaceId, refresh);
     }
 
@@ -184,9 +182,6 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrentSymbolSearch();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (SelectorTargetsCurrent(workspaceId))
-            return ResolveCurrentSymbolSearch();
-
         return ResolveRegisteredSymbolSearch(workspaceId, refresh);
     }
 
@@ -196,9 +191,6 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrentSymbolRead();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (SelectorTargetsCurrent(workspaceId))
-            return ResolveCurrentSymbolRead();
-
         return ResolveRegisteredSymbolRead(workspaceId, refresh);
     }
 
@@ -211,9 +203,6 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrentContentSearch();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (SelectorTargetsCurrent(workspaceId))
-            return ResolveCurrentContentSearch();
-
         return ResolveRegisteredContentSearch(workspaceId, refresh);
     }
 
@@ -223,9 +212,6 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrentRegionSearch();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (SelectorTargetsCurrent(workspaceId))
-            return ResolveCurrentRegionSearch();
-
         return ResolveRegisteredRegionSearch(workspaceId, refresh);
     }
 
@@ -238,9 +224,7 @@ public sealed class WorkspaceIndexProvider
         else
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-            context = SelectorTargetsCurrent(workspaceId)
-                ? ResolveCurrentTextContentSearch()
-                : ResolveRegisteredTextContentSearch(workspaceId, refresh);
+            context = ResolveRegisteredTextContentSearch(workspaceId, refresh);
         }
 
         ObserveTextContentIndexResolve(TextContentIndexResolveFamily.Resolve, startedAt);
@@ -262,16 +246,16 @@ public sealed class WorkspaceIndexProvider
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-            IndexHolderMetadata? holderMetadata = familyStore ? _holder.MetadataSnapshot() : null;
-            (MillerRepositoryIndex Index, long Revision)? legacySnapshot = familyStore ? null : _holder.Snapshot();
+            IndexHolderMetadata? holderMetadata = familyStore ? CurrentHolder.MetadataSnapshot() : null;
+            (MillerRepositoryIndex Index, long Revision)? legacySnapshot = familyStore ? null : CurrentHolder.Snapshot();
             long holderRevision = holderMetadata?.Revision ?? legacySnapshot!.Value.Revision;
             long revision = ContextRevision(readSession.Snapshot, holderRevision);
             MillerRepositoryIndex? holderIndex = legacySnapshot?.Index;
             ISymbolLookupIndex index = familyStore
-                ? ResolveFamilyStoreLookup(_currentWorkspace.WorkspaceId, readSession)
+                ? ResolveFamilyStoreLookup(CurrentWorkspace.WorkspaceId, readSession)
                 : holderIndex!;
             ISymbolGraphReachability innerGraph = familyStore
-                ? ResolveFamilyStoreGraph(_currentWorkspace.WorkspaceId, readSession)
+                ? ResolveFamilyStoreGraph(CurrentWorkspace.WorkspaceId, readSession)
                 : holderIndex!.Graph;
             var measuredGraph = familyStore
                 ? new MeasuredSymbolGraphReachability(innerGraph, _graphStatementObserver)
@@ -292,8 +276,8 @@ public sealed class WorkspaceIndexProvider
                 bridgeGraph,
                 resolver,
                 readSession,
-                _currentWorkspace.WorkspaceId,
-                _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+                CurrentWorkspace.WorkspaceId,
+                CurrentWorkspace.CanonicalRoot ?? CurrentWorkspace.WorkspaceRoot,
                 revision,
                 familyStore ? null : _currentIndexFresh(holderRevision),
                 "current",
@@ -319,13 +303,13 @@ public sealed class WorkspaceIndexProvider
         try
         {
             long holderRevision = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore
-                ? _holder.MetadataSnapshot().Revision
-                : _holder.Snapshot().Revision;
+                ? CurrentHolder.MetadataSnapshot().Revision
+                : CurrentHolder.Snapshot().Revision;
             long revision = ContextRevision(readSession.Snapshot, holderRevision);
             return new WorkspaceArtifactContext(
                 readSession,
-                _currentWorkspace.WorkspaceId,
-                _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+                CurrentWorkspace.WorkspaceId,
+                CurrentWorkspace.CanonicalRoot ?? CurrentWorkspace.WorkspaceRoot,
                 revision,
                 readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore ? null : _currentIndexFresh(holderRevision),
                 "current",
@@ -351,8 +335,8 @@ public sealed class WorkspaceIndexProvider
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-            IndexHolderMetadata? holderMetadata = familyStore ? _holder.MetadataSnapshot() : null;
-            (MillerRepositoryIndex Index, long Revision)? legacySnapshot = familyStore ? null : _holder.Snapshot();
+            IndexHolderMetadata? holderMetadata = familyStore ? CurrentHolder.MetadataSnapshot() : null;
+            (MillerRepositoryIndex Index, long Revision)? legacySnapshot = familyStore ? null : CurrentHolder.Snapshot();
             long holderRevision = holderMetadata?.Revision ?? legacySnapshot!.Value.Revision;
             long revision = ContextRevision(readSession.Snapshot, holderRevision);
             ISymbolLookupIndex searchIndex = ResolveCurrentSymbolSearchIndex(
@@ -362,8 +346,8 @@ public sealed class WorkspaceIndexProvider
             return new WorkspaceSymbolSearchContext(
                 searchIndex,
                 readSession,
-                _currentWorkspace.WorkspaceId,
-                _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+                CurrentWorkspace.WorkspaceId,
+                CurrentWorkspace.CanonicalRoot ?? CurrentWorkspace.WorkspaceRoot,
                 revision,
                 familyStore ? null : _currentIndexFresh(holderRevision),
                 "current",
@@ -389,12 +373,12 @@ public sealed class WorkspaceIndexProvider
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-            IndexHolderMetadata? holderMetadata = familyStore ? _holder.MetadataSnapshot() : null;
-            (MillerRepositoryIndex Index, long Revision)? legacySnapshot = familyStore ? null : _holder.Snapshot();
+            IndexHolderMetadata? holderMetadata = familyStore ? CurrentHolder.MetadataSnapshot() : null;
+            (MillerRepositoryIndex Index, long Revision)? legacySnapshot = familyStore ? null : CurrentHolder.Snapshot();
             long holderRevision = holderMetadata?.Revision ?? legacySnapshot!.Value.Revision;
             long revision = ContextRevision(readSession.Snapshot, holderRevision);
             ISymbolLookupIndex index = familyStore
-                ? ResolveFamilyStoreLookup(_currentWorkspace.WorkspaceId, readSession, completeRecall)
+                ? ResolveFamilyStoreLookup(CurrentWorkspace.WorkspaceId, readSession, completeRecall)
                 : legacySnapshot!.Value.Index;
             ReadPhaseTelemetry? readTelemetry = familyStore
                 ? ReadTelemetry((MeasuredSymbolLookupIndex)index, graph: null)
@@ -402,8 +386,8 @@ public sealed class WorkspaceIndexProvider
             var context = new WorkspaceSymbolReadContext(
                 index,
                 readSession,
-                _currentWorkspace.WorkspaceId,
-                _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+                CurrentWorkspace.WorkspaceId,
+                CurrentWorkspace.CanonicalRoot ?? CurrentWorkspace.WorkspaceRoot,
                 revision,
                 familyStore ? null : _currentIndexFresh(holderRevision),
                 "current",
@@ -440,7 +424,7 @@ public sealed class WorkspaceIndexProvider
         if (readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore)
         {
             ServedSearchSidecar? served = TryServedSearchStamp(readSession);
-            CacheKey storeKey = KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot, served?.Stamp);
+            CacheKey storeKey = KeyFor(CurrentWorkspace.WorkspaceId, readSession.Snapshot, served?.Stamp);
             if (_sidecar.Enabled)
             {
                 return GetOrAddSymbolSearchCache(
@@ -466,8 +450,8 @@ public sealed class WorkspaceIndexProvider
         if (!_sidecar.Enabled)
             return legacyIndex;
 
-        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
-        string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
+        string dbPath = CurrentWorkspace.CanonicalExtractDbPath ?? CurrentWorkspace.ExtractDbPath;
+        string workspaceKey = string.IsNullOrEmpty(CurrentWorkspace.WorkspaceId) ? dbPath : CurrentWorkspace.WorkspaceId;
         var key = KeyFor(workspaceKey, dbPath, revision);
         return GetOrLoadSymbolSearch(key, dbPath, () => legacyIndex).Index;
     }
@@ -814,10 +798,10 @@ public sealed class WorkspaceIndexProvider
         // No content index lives in the holder (the bootstrap seeds only the full repository index), so the
         // current workspace builds its content projection lazily on first content query and caches it keyed on
         // the holder's built revision — a freshness Swap (reindex) bumps the revision and rebuilds.
-        long holderRevision = _holder.MetadataSnapshot().Revision;
-        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
-        string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
-        string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
+        long holderRevision = CurrentHolder.MetadataSnapshot().Revision;
+        string dbPath = CurrentWorkspace.CanonicalExtractDbPath ?? CurrentWorkspace.ExtractDbPath;
+        string root = CurrentWorkspace.CanonicalRoot ?? CurrentWorkspace.WorkspaceRoot;
+        string workspaceKey = string.IsNullOrEmpty(CurrentWorkspace.WorkspaceId) ? dbPath : CurrentWorkspace.WorkspaceId;
         using WorkspaceReadHandle readSession = OpenCurrentReadSession();
         bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
         long revision = ContextRevision(readSession.Snapshot, holderRevision);
@@ -829,7 +813,7 @@ public sealed class WorkspaceIndexProvider
         return new WorkspaceContentSearchContext(
             cached.Index,
             familyStore ? readSession.FamilyStoreRoot! : dbPath,
-            _currentWorkspace.WorkspaceId,
+            CurrentWorkspace.WorkspaceId,
             root,
             revision,
             familyStore ? null : _currentIndexFresh(revision),
@@ -866,10 +850,10 @@ public sealed class WorkspaceIndexProvider
 
     private WorkspaceTextContentSearchContext ResolveCurrentTextContentSearch()
     {
-        long holderRevision = _holder.MetadataSnapshot().Revision;
-        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
-        string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
-        string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
+        long holderRevision = CurrentHolder.MetadataSnapshot().Revision;
+        string dbPath = CurrentWorkspace.CanonicalExtractDbPath ?? CurrentWorkspace.ExtractDbPath;
+        string root = CurrentWorkspace.CanonicalRoot ?? CurrentWorkspace.WorkspaceRoot;
+        string workspaceKey = string.IsNullOrEmpty(CurrentWorkspace.WorkspaceId) ? dbPath : CurrentWorkspace.WorkspaceId;
         long sessionStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         using WorkspaceReadHandle readSession = OpenCurrentReadSession();
         ObserveTextContentIndexResolve(TextContentIndexResolveFamily.ReadSessionOpen, sessionStartedAt);
@@ -889,7 +873,7 @@ public sealed class WorkspaceIndexProvider
         return new WorkspaceTextContentSearchContext(
             cached.Index,
             sourcePath,
-            _currentWorkspace.WorkspaceId,
+            CurrentWorkspace.WorkspaceId,
             root,
             revision,
             familyStore ? null : _currentIndexFresh(revision),
@@ -935,10 +919,10 @@ public sealed class WorkspaceIndexProvider
 
     private WorkspaceRegionSearchContext ResolveCurrentRegionSearch()
     {
-        long holderRevision = _holder.MetadataSnapshot().Revision;
-        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
-        string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
-        string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
+        long holderRevision = CurrentHolder.MetadataSnapshot().Revision;
+        string dbPath = CurrentWorkspace.CanonicalExtractDbPath ?? CurrentWorkspace.ExtractDbPath;
+        string root = CurrentWorkspace.CanonicalRoot ?? CurrentWorkspace.WorkspaceRoot;
+        string workspaceKey = string.IsNullOrEmpty(CurrentWorkspace.WorkspaceId) ? dbPath : CurrentWorkspace.WorkspaceId;
         WorkspaceReadHandle readSession = OpenCurrentReadSession();
         try
         {
@@ -956,7 +940,7 @@ public sealed class WorkspaceIndexProvider
             return new WorkspaceRegionSearchContext(
                 cached.Index,
                 readSession,
-                _currentWorkspace.WorkspaceId,
+                CurrentWorkspace.WorkspaceId,
                 root,
                 revision,
                 familyStore ? null : _currentIndexFresh(revision),
@@ -1567,58 +1551,35 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
+    private IndexHolder CurrentHolder =>
+        _holder ?? _primary?.Holder ??
+        throw new InvalidOperationException("A primary workspace is not bound.");
+
+    private WorkspaceContext CurrentWorkspace =>
+        _currentWorkspace ?? _primary?.Workspace ??
+        throw new InvalidOperationException("A primary workspace is not bound.");
+
     private string? CurrentDisplayId()
     {
-        if (string.IsNullOrWhiteSpace(_currentWorkspace.WorkspaceId))
+        if (string.IsNullOrWhiteSpace(CurrentWorkspace.WorkspaceId))
             return null;
 
-        string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
+        string root = CurrentWorkspace.CanonicalRoot ?? CurrentWorkspace.WorkspaceRoot;
         try
         {
-            return WorkspaceId.Display(root, _currentWorkspace.WorkspaceId);
+            return WorkspaceId.Display(root, CurrentWorkspace.WorkspaceId);
         }
         catch (ArgumentException)
         {
-            return _currentWorkspace.WorkspaceId;
+            return CurrentWorkspace.WorkspaceId;
         }
     }
 
-    private bool IsCurrentSelector(string selector)
-    {
-        string trimmed = selector.Trim();
-        if (string.Equals(trimmed, "current", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(trimmed, "primary", StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        if (!string.IsNullOrWhiteSpace(_currentWorkspace.WorkspaceId) &&
-            string.Equals(trimmed, _currentWorkspace.WorkspaceId, StringComparison.Ordinal))
-            return true;
-
-        string? displayId = CurrentDisplayId();
-        return !string.IsNullOrWhiteSpace(displayId) &&
-               string.Equals(trimmed, displayId, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private bool SelectorTargetsCurrent(string selector)
-    {
-        if (IsCurrentSelector(selector))
-            return true;
-
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, selector, WorkspaceSelectorIntent.Read);
-        return IsCurrentWorkspace(row);
-    }
-
-    private bool IsCurrentWorkspace(WorkspaceRegistryRow row) =>
-        string.Equals(row.WorkspaceId, _currentWorkspace.WorkspaceId, StringComparison.Ordinal) ||
-        WorkspaceSafety.IsLiveWorkspace(
-            row.CanonicalRoot,
-            _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot);
-
     private WorkspaceReadHandle OpenCurrentReadSession()
     {
-        string databasePath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
-        string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
-        return OpenReadSession(databasePath, root, _currentWorkspace.WorkspaceId);
+        string databasePath = CurrentWorkspace.CanonicalExtractDbPath ?? CurrentWorkspace.ExtractDbPath;
+        string root = CurrentWorkspace.CanonicalRoot ?? CurrentWorkspace.WorkspaceRoot;
+        return OpenReadSession(databasePath, root, CurrentWorkspace.WorkspaceId);
     }
 
     private WorkspaceReadHandle OpenReadSession(string databasePath, string root, string? workspaceId)
