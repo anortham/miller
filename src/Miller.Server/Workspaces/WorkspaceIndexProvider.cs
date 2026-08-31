@@ -197,6 +197,15 @@ public sealed class WorkspaceIndexProvider
     public WorkspaceSymbolReadContext ResolveCompleteCurrentSymbolRead() =>
         ResolveCurrentSymbolRead(completeRecall: true);
 
+    public WorkspaceSymbolReadContext ResolveCompleteSymbolRead(string? workspaceId, WorkspaceRefreshMode refresh)
+    {
+        if (workspaceId is null)
+            return ResolveCurrentSymbolRead(completeRecall: true);
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        return ResolveRegisteredSymbolRead(workspaceId, refresh, completeRecall: true);
+    }
+
     public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, WorkspaceRefreshMode refresh)
     {
         if (workspaceId is null)
@@ -711,7 +720,10 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
-    private WorkspaceSymbolReadContext ResolveRegisteredSymbolRead(string workspaceId, WorkspaceRefreshMode refresh)
+    private WorkspaceSymbolReadContext ResolveRegisteredSymbolRead(
+        string workspaceId,
+        WorkspaceRefreshMode refresh,
+        bool completeRecall = false)
     {
         long resolveStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, refresh);
@@ -724,7 +736,7 @@ public sealed class WorkspaceIndexProvider
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
             long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
             ISymbolLookupIndex index = familyStore
-                ? ResolveFamilyStoreLookup(row.WorkspaceId, readSession)
+                ? ResolveFamilyStoreLookup(row.WorkspaceId, readSession, completeRecall)
                 : GetOrAddSymbolReadCache(
                     KeyFor(row.WorkspaceId, row.IndexDbPath, revision),
                     () => new CachedSymbolRead(_loadSymbolSearch(row.IndexDbPath))).Index;

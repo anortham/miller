@@ -118,8 +118,9 @@ Rules that gate every release:
 Each rule below is load-bearing; the linked code/doc carries the full design.
 
 - **Host lifecycle:** the Generic Host constructs every `IHostedService` up front; no hosted-service
-  constructor may read an `IndexBootstrapService` getter (they throw until bound). Tool calls wait
-  only the `MILLER_BOOTSTRAP_GRACE_SECONDS` window then return an actionable not-ready result. The
+  constructor may read an `IndexBootstrapService` getter (they throw until bound). A process may serve
+  tool calls with no primary ever bound, so no request path may read a bootstrap getter unguarded;
+  per-call factories resolve them lazily and report "not measured" instead of throwing. The
   host graph lives in
   [`MillerServiceRegistration.AddMillerServices`](src/Miller.Server/Hosting/MillerServiceRegistration.cs),
   guarded by `HostStartupRegistrationTests`.
@@ -204,7 +205,7 @@ Each rule below is load-bearing; the linked code/doc carries the full design.
   or root path); `current` and `primary` remain CLI-only. Discover with `workspace list`; if absent,
   call `workspace open path=/absolute/project`, then pass the returned ID on every workspace-bound call.
   Explicit IDs default to serve-then-refresh (background, coalesced); `ensure_fresh=true` blocks and
-  `ensure_fresh=false` does zero refresh work. `workspace list/open/prune/dashboard` are unscoped
+  `ensure_fresh=false` does zero refresh work. `workspace list/open/remove/prune/dashboard` are unscoped
   exceptions; `content search workspace_id=all|registered` is the text-audit exception.
 - The dashboard reads the registry, telemetry, and read-only aggregate facts; it may perform
   registry-lifecycle mutations through its antiforgery-protected POST endpoints (ADR-0002). It must

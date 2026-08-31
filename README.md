@@ -175,20 +175,23 @@ Read tools accept a `workspace_id` selector (display ID, unique prefix, full ID,
 
 ## Supported languages
 
-Miller indexes what the pinned extractor parses. `julie-extract` 2.23.1 ships hand-written extractors
-for **38 languages**:
+Miller indexes what the pinned extractor parses. `julie-extract` 2.38.0 ships hand-written extractors
+for **40 languages**:
 
 - **Systems and compiled:** Rust (`.rs`), C (`.c`, `.h`), C++ (`.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`,
   `.hh`, `.hxx`, `.h++`), Go (`.go`), Zig (`.zig`), Swift (`.swift`), Java (`.java`),
-  Kotlin (`.kt`, `.kts`), Scala (`.scala`, `.sc`), C# (`.cs`), VB.NET (`.vb`), Dart (`.dart`)
+  Kotlin (`.kt`, `.kts`), Scala (`.scala`, `.sc`), C# (`.cs`), F# (`.fs`, `.fsx`, `.fsi`),
+  VB.NET (`.vb`), Dart (`.dart`)
 - **Scripting and dynamic:** Python (`.py`, `.pyi`, `.pyw`), Ruby (`.rb`, `.rbw`),
   PHP (`.php`, `.phtml`), Elixir (`.ex`, `.exs`), Erlang (`.erl`, `.hrl`), Lua (`.lua`), R (`.r`, `.R`), Bash (`.sh`, `.bash`),
   PowerShell (`.ps1`, `.psm1`, `.psd1`), GDScript (`.gd`)
 - **Web and UI:** TypeScript (`.ts`, `.mts`, `.cts`), TSX (`.tsx`), JavaScript (`.js`, `.mjs`, `.cjs`),
   JSX (`.jsx`), Vue (`.vue`), HTML (`.html`, `.htm`), CSS (`.css`), Razor (`.razor`, `.cshtml`),
-  QML (`.qml`)
+  QML (`.qml`, `.qmltypes`), qmldir modules (`qmldir`)
 - **Data, docs, and query:** SQL (`.sql`), JSON (`.json`, `.jsonl`, `.jsonc`), YAML (`.yml`, `.yaml`),
-  TOML (`.toml`), XML (`.xml`, `.xsd`, `.wsdl`), Markdown (`.md`, `.markdown`), Regex (`.regex`)
+  TOML (`.toml`), XML (`.xml`, `.xsd`, `.wsdl`, and .NET project files such as `.csproj`, `.fsproj`,
+  `.vbproj`, `.props`, `.targets`, `.slnx`, `.nuspec`, `.resx`), Markdown (`.md`, `.markdown`),
+  Regex (`.regex`)
 
 Depth is not uniform, and it should not be: the programming languages get symbols with real signatures,
 doc comments, identifiers, relationships, types, complexity metrics, and structural facts, while the

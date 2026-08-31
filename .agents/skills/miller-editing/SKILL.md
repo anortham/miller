@@ -10,6 +10,24 @@ Use Miller's index-aware `edit` tool for existing indexed files. It previews a d
 indexed spans. Only `replace_text` can explicitly allow a stale index because it proves its match against current
 disk text.
 
+## Workspace targeting (required)
+
+Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
+workspace from the launch directory, environment variables, MCP Roots, or a previous call.
+
+```text
+workspace(operation="list")
+workspace(operation="open", path="/absolute/project")
+```
+
+Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
+`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
+`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
+
+`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
+`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
+`current` and `primary` are CLI-only selectors; MCP refuses them.
+
 ## When To Use
 
 - Localized existing-file text replacements, especially when a full-file Read would be wasteful
@@ -25,8 +43,8 @@ Creating a brand-new file is outside this skill; use the normal file creation pa
 1. Resolve the target:
 
 ```text
-search(query="<symbol or file>")
-inspect(target="<symbol-or-file>")
+search(workspace_id="<id>", query="<symbol or file>")
+inspect(workspace_id="<id>", target="<symbol-or-file>")
 ```
 
 For symbols, start with `inspect(target="<symbol>", depth="overview")` to choose the edit target and understand
@@ -38,23 +56,23 @@ small file-level text edits where you know the old value and a nearby selector, 
 Miller prove the match in preview:
 
 ```text
-edit(operation="replace_text", target="<file>", old_text="<known-old>", new_text="<new>", match_mode="auto", query="<nearby text>")
+edit(workspace_id="<id>", operation="replace_text", target="<file>", old_text="<known-old>", new_text="<new>", match_mode="auto", query="<nearby text>")
 ```
 
 2. For refactors or public/shared symbols, run impact first:
 
 ```text
-impact(target="<symbol-or-file>")
+impact(workspace_id="<id>", target="<symbol-or-file>")
 ```
 
 3. Preview the edit. Dry run is the default:
 
 ```text
-edit(operation="replace_text", target="<file>", old_text="<old>", new_text="<new>")
-edit(operation="replace_text", target="<file>", old_text="<old>", new_text="<new>", match_mode="auto", line=42)
-edit(operation="replace_text", target="<file>", old_text="<old>", new_text="<new>", match_mode="auto", anchor="<nearby text>")
-edit(operation="replace_symbol_body", target="<symbol>", new_text="<body>")
-edit(operation="rename_symbol", target="<symbol>", new_text="<new-name>")
+edit(workspace_id="<id>", operation="replace_text", target="<file>", old_text="<old>", new_text="<new>")
+edit(workspace_id="<id>", operation="replace_text", target="<file>", old_text="<old>", new_text="<new>", match_mode="auto", line=42)
+edit(workspace_id="<id>", operation="replace_text", target="<file>", old_text="<old>", new_text="<new>", match_mode="auto", anchor="<nearby text>")
+edit(workspace_id="<id>", operation="replace_symbol_body", target="<symbol>", new_text="<body>")
+edit(workspace_id="<id>", operation="rename_symbol", target="<symbol>", new_text="<new-name>")
 ```
 
 The preview should show match mode, match source, line range, occurrence, disk verification, and a concise diff.
@@ -63,13 +81,13 @@ If it is the intended edit, re-run the same call with `apply=true`.
 4. Apply only after reviewing the preview:
 
 ```text
-edit(operation="...", target="...", new_text="...", apply=true)
+edit(workspace_id="<id>", operation="...", target="...", new_text="...", apply=true)
 ```
 
 5. If Miller reports a stale target, run:
 
 ```text
-workspace(operation="refresh")
+workspace(workspace_id="<id>", operation="refresh")
 ```
 
 Use `allow_stale=true` only for `replace_text` after independently checking current disk state. Symbol-body,

@@ -19,6 +19,7 @@ using Xunit;
 
 namespace Miller.Tests.Server;
 
+[Collection("DashboardIndexFactsCache")]
 public sealed class DashboardRegistryReadTests : IDisposable
 {
     private readonly string _dir;
@@ -2855,3 +2856,11 @@ public sealed class DashboardRegistryReadTests : IDisposable
             double.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture));
     }
 }
+
+/// <summary>
+/// DashboardIndexFactsCache is process-wide static state with a global Count and Clear. Every class that reads
+/// or clears it — directly or through DashboardData/DashboardEndpoints — shares this collection so xUnit never
+/// runs two of them at once and the capacity assertions read only their own writes.
+/// </summary>
+[CollectionDefinition("DashboardIndexFactsCache", DisableParallelization = true)]
+public sealed class DashboardIndexFactsCacheCollection;

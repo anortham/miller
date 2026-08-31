@@ -70,6 +70,12 @@ internal static class McpWorkspaceTargetPolicy
         if (!requiresWorkspace)
             return Unscoped();
 
+        // A root path names the target as explicitly as an ID does — a registered root path is itself a valid
+        // workspace_id form — and the workspace tool's own schema documents path for status/health/onboarding/
+        // refresh/full/remove. Refusing it here would contradict the published schema.
+        if (!WorkspaceBoundTools.Contains(tool) && TryGetString(arguments, "path", out string targetPath))
+            return new(McpWorkspaceTargetKind.Explicit, targetPath.Trim(), null);
+
         if (!TryGetString(arguments, "workspace_id", out string workspaceId))
         {
             return new(
@@ -95,7 +101,13 @@ internal static class McpWorkspaceTargetPolicy
                 return new(McpWorkspaceTargetKind.All, workspaceId, null);
             }
 
-            return Implicit(tool, workspaceId);
+            return new(
+                McpWorkspaceTargetKind.Implicit,
+                workspaceId,
+                ToolDiagnostic.Refusal(
+                    ImplicitWorkspaceSelectorRefusedCode,
+                    $"MCP tool '{tool}' does not accept workspace_id=all. Only content search may fan out across "
+                    + "registered workspaces. Pass an explicit registered workspace_id."));
         }
 
         return new(McpWorkspaceTargetKind.Explicit, workspaceId, null);

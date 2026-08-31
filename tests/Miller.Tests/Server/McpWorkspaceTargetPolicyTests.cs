@@ -101,6 +101,39 @@ public sealed class McpWorkspaceTargetPolicyTests
     }
 
     [Fact]
+    public void WorkspaceStatus_ByPath_IsAnExplicitTargetTheSchemaDocuments()
+    {
+        McpWorkspaceTargetDecision decision = McpWorkspaceTargetPolicy.Evaluate(
+            "workspace",
+            Arguments(("operation", "status"), ("path", "/abs/project")));
+
+        Assert.Equal(McpWorkspaceTargetKind.Explicit, decision.Kind);
+        Assert.Null(decision.Diagnostic);
+    }
+
+    [Fact]
+    public void WorkspaceStatus_ByPathNamingAnImplicitSelector_IsStillRefused()
+    {
+        McpWorkspaceTargetDecision decision = McpWorkspaceTargetPolicy.Evaluate(
+            "workspace",
+            Arguments(("operation", "status"), ("workspace_id", "current"), ("path", "/abs/project")));
+
+        Assert.Equal(McpWorkspaceTargetKind.Implicit, decision.Kind);
+        Assert.Equal("implicit_workspace_selector_refused", decision.Diagnostic?.Code);
+    }
+
+    [Fact]
+    public void SearchByPath_IsNotATarget_BecauseSearchHasNoPathArgument()
+    {
+        McpWorkspaceTargetDecision decision = McpWorkspaceTargetPolicy.Evaluate(
+            "search",
+            Arguments(("query", "foo"), ("path", "/abs/project")));
+
+        Assert.Equal(McpWorkspaceTargetKind.Missing, decision.Kind);
+        Assert.Equal("workspace_id_required", decision.Diagnostic?.Code);
+    }
+
+    [Fact]
     public void UnknownTool_IsNotChangedByWorkspacePolicy()
     {
         McpWorkspaceTargetDecision decision = McpWorkspaceTargetPolicy.Evaluate(

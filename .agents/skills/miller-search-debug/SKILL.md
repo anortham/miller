@@ -10,26 +10,44 @@ allowed-tools: mcp__miller__search, mcp__miller__inspect, mcp__miller__context, 
 
 Diagnose search behavior by checking the query mode, index freshness, projection limits, and whether the expected result exists.
 
+## Workspace targeting (required)
+
+Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
+workspace from the launch directory, environment variables, MCP Roots, or a previous call.
+
+```text
+workspace(operation="list")
+workspace(operation="open", path="/absolute/project")
+```
+
+Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
+`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
+`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
+
+`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
+`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
+`current` and `primary` are CLI-only selectors; MCP refuses them.
+
 ## Workflow
 
 1. Reproduce the exact query:
 
 ```text
-search(query="<original>", limit=20)
+search(workspace_id="<id>", query="<original>", limit=20)
 ```
 
 2. Compare modes when the query intent is unclear:
 
 ```text
-search(query="<symbol-ish>", mode="symbol")
-search(query="<path-ish>", mode="file")
-search(query="<docs or prose>", mode="content")
-search(query="<source body text>", mode="source")
-search(query="<imported log text>", mode="external")
-search(query="<imported web text>", mode="web")
-search(query="<broad text>", mode="all-text")
-search(query="<comment or literal>", regions="comment|string_literal|doc_comment")
-search(query="<known area>", file_pattern="src/ui/**", language="typescript")
+search(workspace_id="<id>", query="<symbol-ish>", mode="symbol")
+search(workspace_id="<id>", query="<path-ish>", mode="file")
+search(workspace_id="<id>", query="<docs or prose>", mode="content")
+search(workspace_id="<id>", query="<source body text>", mode="source")
+search(workspace_id="<id>", query="<imported log text>", mode="external")
+search(workspace_id="<id>", query="<imported web text>", mode="web")
+search(workspace_id="<id>", query="<broad text>", mode="all-text")
+search(workspace_id="<id>", query="<comment or literal>", regions="comment|string_literal|doc_comment")
+search(workspace_id="<id>", query="<known area>", file_pattern="src/ui/**", language="typescript")
 ```
 
 3. Check common beta gotchas:
@@ -46,15 +64,15 @@ search(query="<known area>", file_pattern="src/ui/**", language="typescript")
 4. Verify the expected item exists:
 
 ```text
-search(query="<exact symbol or file>", mode="auto", exclude_tests=false)
-inspect(target="<expected-symbol-or-file>")
+search(workspace_id="<id>", query="<exact symbol or file>", mode="auto", exclude_tests=false)
+inspect(workspace_id="<id>", target="<expected-symbol-or-file>")
 ```
 
 5. If the expected result is connected by calls rather than text, use:
 
 ```text
-trace(target="<nearby-symbol>")
-context(query="<workflow around expected result>")
+trace(workspace_id="<id>", target="<nearby-symbol>")
+context(workspace_id="<id>", query="<workflow around expected result>")
 ```
 
 ## Report

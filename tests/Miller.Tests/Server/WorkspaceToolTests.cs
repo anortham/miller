@@ -173,7 +173,9 @@ public sealed class WorkspaceToolTests : IDisposable
         MillerHostPaths paths,
         WorkspaceRegistry registry,
         TelemetryLedger ledger,
-        Func<string, WorkspaceOpenPrimeEnqueueResult>? enqueueOpenPrime = null)
+        Func<string, WorkspaceOpenPrimeEnqueueResult>? enqueueOpenPrime = null,
+        Func<string, IDisposable?>? acquireWriterLock = null,
+        IDashboardLauncher? dashboardLauncher = null)
     {
         return new WorkspaceTool(
             paths,
@@ -182,9 +184,9 @@ public sealed class WorkspaceToolTests : IDisposable
             () => throw new InvalidOperationException("cross-workspace refresh was not expected"),
             SymbolSearchSidecar.Disabled,
             VectorSidecar.Disabled,
-            acquireWriterLock: _ => null,
+            acquireWriterLock: acquireWriterLock ?? (_ => null),
             enqueueOpenPrime ?? (_ => WorkspaceOpenPrimeEnqueueResult.AlreadyQueued),
-            new RecordingDashboardLauncher(new DashboardLaunchResult(
+            dashboardLauncher ?? new RecordingDashboardLauncher(new DashboardLaunchResult(
                 DashboardLaunchOutcome.AlreadyRunning,
                 new Uri("http://127.0.0.1:4977/"),
                 ProcessId: null,
@@ -210,6 +212,31 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Equal(
             "unbound-workspace",
             output.RootElement.GetProperty("workspaces")[0].GetProperty("workspace_id").GetString());
+    }
+
+    [Fact]
+    public void Remove_WorkspaceOwningTheMachineGlobalMillerDir_IsRefusedWithNoPrimaryBound()
+    {
+        string home = NewTempDir("protected-home");
+        MillerHostPaths paths = MillerHostPaths.Create(AppContext.BaseDirectory, home);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        using var ledger = TelemetryLedger.Open(paths.TelemetryDbPath, workspaceId: null);
+        string dbPath = Path.Combine(paths.MillerDirectory, "symbols.db");
+        File.WriteAllText(dbPath, "stub");
+        registry.UpsertSeen("home-workspace", "homews", home, dbPath, WorkspaceRegistryState.Ready);
+
+        WorkspaceTool tool = BuildUnboundTool(
+            paths,
+            registry,
+            ledger,
+            acquireWriterLock: _ => new NoopLease());
+
+        string output = tool.Workspace(operation: "remove", workspace_id: "home-workspace");
+
+        Assert.True(File.Exists(paths.RegistryDbPath));
+        Assert.True(File.Exists(paths.TelemetryDbPath));
+        Assert.True(Directory.Exists(paths.MillerDirectory));
+        Assert.DoesNotContain("removed", output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -2081,6 +2108,28 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Equal(4977, request.Port);
         Assert.Equal(harness.Workspace, request.Context);
         Assert.Equal(MillerVersion.Current, request.OwnVersion);
+        Assert.True(request.OpenWorkspaceView);
+    }
+
+    [Fact]
+    public void Dashboard_WithoutAPrimaryWorkspace_RequestsTheRegistryListView()
+    {
+        string home = NewTempDir("dashboard-unbound-home");
+        MillerHostPaths paths = MillerHostPaths.Create(AppContext.BaseDirectory, home);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        using var ledger = TelemetryLedger.Open(paths.TelemetryDbPath, workspaceId: null);
+        var launcher = new RecordingDashboardLauncher(new DashboardLaunchResult(
+            DashboardLaunchOutcome.Started,
+            new Uri("http://127.0.0.1:4977/"),
+            ProcessId: 4242,
+            Message: "started"));
+
+        WorkspaceTool tool = BuildUnboundTool(paths, registry, ledger, dashboardLauncher: launcher);
+        using var doc = JsonDocument.Parse(tool.Workspace(operation: "dashboard", format: "json"));
+
+        Assert.Equal("http://127.0.0.1:4977/", doc.RootElement.GetProperty("url").GetString());
+        DashboardLaunchRequest request = launcher.Requests.Single();
+        Assert.False(request.OpenWorkspaceView);
     }
 
     [Fact]
@@ -2466,24 +2515,26 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
-    public void Refresh_ExplicitCurrentWorkspaceId_UsesRegisteredRouting()
+    public void RefreshAndFull_ExplicitCurrentWorkspaceId_KeepTheInProcessFastPath()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
-        bool? observedForce = null;
+        bool crossWorkspaceScanInvoked = false;
         WorkspaceToolHarness harness = BuildHarness(
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            crossWorkspaceScan: (root, db, force, _, _) =>
+            crossWorkspaceScan: (root, db, _, _, _) =>
             {
-                observedForce = force;
+                crossWorkspaceScanInvoked = true;
                 return Report(root, db, Ws, revision: 5);
             });
 
-        string output = harness.Tool.Workspace(operation: "refresh", workspace_id: Ws);
+        string refreshOutput = harness.Tool.Workspace(operation: "refresh", workspace_id: Ws);
+        string fullOutput = harness.Tool.Workspace(operation: "full", workspace_id: Ws);
 
-        Assert.False(observedForce);
-        Assert.Contains("status: refreshed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.False(crossWorkspaceScanInvoked);
+        Assert.Contains("scanned: no", refreshOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("scanned: no", fullOutput, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -17,6 +17,7 @@ using Xunit;
 
 namespace Miller.Tests.Server;
 
+[Collection("DashboardIndexFactsCache")]
 public sealed class DashboardTestsPanelTests : IDisposable
 {
     private readonly string _dir;

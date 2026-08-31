@@ -14,6 +14,7 @@ namespace Miller.Tests.Server;
 /// temp file is fast, so this stays in the default suite (mirrors <c>TelemetryLedgerTests</c>, which is not
 /// Scale).
 /// </summary>
+[Collection("DashboardIndexFactsCache")]
 public sealed class TelemetrySummaryTests : IDisposable
 {
     private readonly string _dir;

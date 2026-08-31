@@ -109,6 +109,27 @@ public sealed class DashboardCliLauncherTests : IDisposable
     }
 
     [Fact]
+    public void EnsureRunning_WithoutWorkspaceView_ReturnsTheRegistryListUrl()
+    {
+        var launcher = new DashboardCliLauncher(
+            startProcess: _ => throw new InvalidOperationException("no launch expected"),
+            isHealthy: _ => true,
+            tryAcquireLaunchLock: _ => throw new InvalidOperationException("lock should not be acquired"),
+            writeMetadata: (_, _) => throw new InvalidOperationException("metadata should not be written"),
+            sleep: _ => throw new InvalidOperationException("sleep should not run"));
+
+        DashboardLaunchResult result = launcher.EnsureRunning(new DashboardLaunchRequest(
+            Context(),
+            DashboardCliLauncher.DefaultPort,
+            TimeSpan.FromMilliseconds(10),
+            OpenWorkspaceView: false));
+
+        Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
+        Assert.Equal("/", result.Url.AbsolutePath);
+        Assert.True(string.IsNullOrEmpty(result.Url.Query));
+    }
+
+    [Fact]
     public void EnsureRunning_WhenNotHealthy_StartsOnceUnderLaunchLockAndWritesMetadata()
     {
         Environment.SetEnvironmentVariable("MILLER_DASHBOARD_DLL", _dashboardDll);

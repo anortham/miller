@@ -12,13 +12,31 @@ Use `patterns` when the question is about known structural facts emitted by `jul
 matching. Runtime list output is authoritative for the current catalog. Start by listing observed pattern IDs in
 the selected workspace, then search the relevant ID with path, language, and metadata filters.
 
+## Workspace targeting (required)
+
+Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
+workspace from the launch directory, environment variables, MCP Roots, or a previous call.
+
+```text
+workspace(operation="list")
+workspace(operation="open", path="/absolute/project")
+```
+
+Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
+`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
+`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
+
+`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
+`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
+`current` and `primary` are CLI-only selectors; MCP refuses them.
+
 ## Workflow
 
 1. Discover available IDs:
 
 ```text
-patterns(operation="list")
-patterns(operation="list", language="razor")
+patterns(workspace_id="<id>", operation="list")
+patterns(workspace_id="<id>", operation="list", language="razor")
 ```
 
 List output includes `Next:` / JSON `next_actions` derived from observed IDs. Prefer those follow-up calls
@@ -27,23 +45,23 @@ before inventing a raw text grep.
 2. Search a concrete pattern:
 
 ```text
-patterns(operation="search", pattern_id="aspnet.minimal_api.route.v1", where="verb=GET")
-patterns(operation="search", pattern_id="htmx.attribute.v1", where="name=hx-get", path="Views/**")
-patterns(operation="search", pattern_id="alpine.directive.v1", where="directive=x-data", path="Views/**")
-patterns(operation="search", pattern_id="sql.merge_statement.v1")
+patterns(workspace_id="<id>", operation="search", pattern_id="aspnet.minimal_api.route.v1", where="verb=GET")
+patterns(workspace_id="<id>", operation="search", pattern_id="htmx.attribute.v1", where="name=hx-get", path="Views/**")
+patterns(workspace_id="<id>", operation="search", pattern_id="alpine.directive.v1", where="directive=x-data", path="Views/**")
+patterns(workspace_id="<id>", operation="search", pattern_id="sql.merge_statement.v1")
 ```
 
 3. Summarize before broad audits:
 
 ```text
-patterns(operation="summary", pattern_id="markdown.heading.v1", path="docs/**")
-patterns(operation="summary", pattern_id="json.property.v1", language="json")
+patterns(workspace_id="<id>", operation="summary", pattern_id="markdown.heading.v1", path="docs/**")
+patterns(workspace_id="<id>", operation="summary", pattern_id="json.property.v1", language="json")
 ```
 
 4. Inspect source only after the pattern rows identify a file and line:
 
 ```text
-inspect(target="<path from pattern row>")
+inspect(workspace_id="<id>", target="<path from pattern row>")
 ```
 
 ## Good Uses

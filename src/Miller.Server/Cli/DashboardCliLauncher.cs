@@ -20,12 +20,16 @@ internal interface IDashboardLauncher
 /// <paramref name="OwnVersion"/> is the calling build, and it turns the version check on. Left null,
 /// a healthy dashboard is always reused — the behaviour every caller had before the check existed.
 /// Production passes <see cref="MillerVersion.Current"/>.
+/// <paramref name="OpenWorkspaceView"/> false means the caller has no workspace to show, so the
+/// returned URL is the registry list view (<c>/</c>) instead of a workspace detail derived from
+/// <paramref name="Context"/>; the context still supplies the machine paths the launch needs.
 /// </summary>
 internal sealed record DashboardLaunchRequest(
     WorkspaceContext Context,
     int Port,
     TimeSpan StartupTimeout,
-    string? OwnVersion = null);
+    string? OwnVersion = null,
+    bool OpenWorkspaceView = true);
 
 internal sealed record DashboardStopRequest(WorkspaceContext Context, TimeSpan StopTimeout);
 
@@ -158,7 +162,7 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
             return reuse;
 
         Uri baseUri = BaseUri(request.Port);
-        Uri url = WorkspaceUrl(baseUri, request.Context);
+        Uri url = LaunchUrl(baseUri, request);
         if (existing.Replace is null && _isHealthy(baseUri))
             return new DashboardLaunchResult(DashboardLaunchOutcome.AlreadyRunning, url, null, "already running");
 
@@ -200,7 +204,7 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
                 ? new DashboardLaunchResult(DashboardLaunchOutcome.Failed, url, null, BinaryMissing)
                 : new DashboardLaunchResult(
                     DashboardLaunchOutcome.AlreadyRunning,
-                    WorkspaceUrl(existing.BaseUri!, request.Context),
+                    LaunchUrl(existing.BaseUri!, request),
                     null,
                     $"already running; the dashboard on {existing.Replace.RunningVersionLabel} could not be "
                         + $"replaced: {BinaryMissing}");
@@ -217,7 +221,7 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
                     ? new DashboardLaunchResult(DashboardLaunchOutcome.Failed, url, null, stopped.Message)
                     : new DashboardLaunchResult(
                         DashboardLaunchOutcome.AlreadyRunning,
-                        WorkspaceUrl(existing.BaseUri!, request.Context),
+                        LaunchUrl(existing.BaseUri!, request),
                         null,
                         $"already running; the dashboard on {replace.RunningVersionLabel} could not be "
                             + $"replaced: {stopped.Message}");
@@ -527,7 +531,7 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
             Replace: null,
             new DashboardLaunchResult(
                 DashboardLaunchOutcome.AlreadyRunning,
-                WorkspaceUrl(recordedBaseUri, request.Context),
+                LaunchUrl(recordedBaseUri, request),
                 null,
                 decision is { Mismatch: true } ? $"already running; {decision.Reason}" : "already running"));
     }
@@ -599,6 +603,9 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
             port = DefaultPort;
         return new Uri($"http://127.0.0.1:{port}/");
     }
+
+    internal static Uri LaunchUrl(Uri baseUri, DashboardLaunchRequest request) =>
+        request.OpenWorkspaceView ? WorkspaceUrl(baseUri, request.Context) : baseUri;
 
     internal static Uri WorkspaceUrl(Uri baseUri, WorkspaceContext context)
     {

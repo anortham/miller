@@ -10,6 +10,24 @@ allowed-tools: mcp__miller__workspace, mcp__miller__search, mcp__miller__inspect
 
 Miller can read registered workspaces without changing directories. Use `workspace_id` on read tools instead of shelling into another repo.
 
+## Workspace targeting (required)
+
+Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
+workspace from the launch directory, environment variables, MCP Roots, or a previous call.
+
+```text
+workspace(operation="list")
+workspace(operation="open", path="/absolute/project")
+```
+
+Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
+`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
+`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
+
+`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
+`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
+`current` and `primary` are CLI-only selectors; MCP refuses them.
+
 ## Select A Workspace
 
 List known workspaces:

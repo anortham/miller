@@ -10,19 +10,37 @@ allowed-tools: mcp__miller__search, mcp__miller__inspect, mcp__miller__context, 
 
 Pick the right Miller tool and mode on the first call instead of guessing or falling back to Grep/Read. One call from the table below answers most tasks.
 
+## Workspace targeting (required)
+
+Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
+workspace from the launch directory, environment variables, MCP Roots, or a previous call.
+
+```text
+workspace(operation="list")
+workspace(operation="open", path="/absolute/project")
+```
+
+Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
+`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
+`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
+
+`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
+`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
+`current` and `primary` are CLI-only selectors; MCP refuses them.
+
 ## Freshness first
 
 If you are unsure whether the index is current, start here:
 
 ```text
-workspace(operation="status")
-workspace(operation="health")
+workspace(workspace_id="<id>", operation="status")
+workspace(workspace_id="<id>", operation="health")
 ```
 
 Refresh only if stale or `health` reports a missing/corrupt sidecar:
 
 ```text
-workspace(operation="refresh")
+workspace(workspace_id="<id>", operation="refresh")
 ```
 
 ## Intent to first call

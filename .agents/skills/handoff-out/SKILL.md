@@ -10,6 +10,24 @@ allowed-tools: mcp__miller__workspace, mcp__miller__impact, mcp__miller__context
 
 Create a local markdown handoff packet from current workspace facts, Miller context, impact analysis, and explicit session notes. This is a skill workflow, not a Miller MCP tool or CLI command.
 
+## Workspace targeting (required)
+
+Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
+workspace from the launch directory, environment variables, MCP Roots, or a previous call.
+
+```text
+workspace(operation="list")
+workspace(operation="open", path="/absolute/project")
+```
+
+Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
+`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
+`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
+
+`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
+`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
+`current` and `primary` are CLI-only selectors; MCP refuses them.
+
 ## Rules
 
 - Store packets under `.miller/handoffs/`; write both a timestamped packet and `.miller/handoffs/latest.md`.
@@ -23,8 +41,8 @@ Create a local markdown handoff packet from current workspace facts, Miller cont
 1. Confirm Miller freshness:
 
 ```text
-workspace(operation="status", format="json")
-workspace(operation="health")
+workspace(workspace_id="<id>", operation="status", format="json")
+workspace(workspace_id="<id>", operation="health")
 ```
 
 If `health` reports stale, missing, or corrupt sidecars, run `workspace(operation="refresh")` before collecting packet evidence. From JSON status, record `index.built_revision` and `index.latest_revision` as `index_built_revision` and `index_latest_revision`; do not invent a generic revision field.
@@ -43,8 +61,8 @@ git diff --name-only
 3. Capture Miller impact and context:
 
 ```text
-impact(git=true)
-context(query="<goal, changed area, or next action>", token_budget=<budget>)
+impact(workspace_id="<id>", git=true)
+context(workspace_id="<id>", query="<goal, changed area, or next action>", token_budget=<budget>)
 ```
 
 If the worktree is clean, write `no local diff` in the Impact section and use the goal/session notes to drive `context(...)`.

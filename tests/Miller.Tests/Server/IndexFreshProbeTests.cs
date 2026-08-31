@@ -52,6 +52,37 @@ public sealed class IndexFreshProbeTests
     }
 
     [Fact]
+    public void Deferred_HolderThatThrowsBecauseNoPrimaryIsBound_IsNotMeasured()
+    {
+        var probe = IndexFreshProbe.Deferred(
+            () => throw new InvalidOperationException("Holder requested before bootstrap completed."),
+            latestRevision: () => 5,
+            queueEmpty: () => true);
+
+        Assert.Null(probe.Compute());
+    }
+
+    [Fact]
+    public void Deferred_ResolvesTheHolderOnEveryCompute_NotAtConstruction()
+    {
+        int resolved = 0;
+        IndexHolder holder = Holder(5);
+        var probe = IndexFreshProbe.Deferred(
+            () =>
+            {
+                resolved++;
+                return holder;
+            },
+            latestRevision: () => 5,
+            queueEmpty: () => true);
+
+        Assert.Equal(0, resolved);
+        probe.Compute();
+        probe.Compute();
+        Assert.Equal(2, resolved);
+    }
+
+    [Fact]
     public void Ctor_NullArguments_Throw()
     {
         var holder = Holder(1);

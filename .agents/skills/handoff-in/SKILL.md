@@ -10,6 +10,24 @@ allowed-tools: mcp__miller__workspace, mcp__miller__impact, mcp__miller__context
 
 Read a Miller handoff packet, validate it against the current workspace, and produce a compact resume summary. Do not blindly trust stale packet context.
 
+## Workspace targeting (required)
+
+Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
+workspace from the launch directory, environment variables, MCP Roots, or a previous call.
+
+```text
+workspace(operation="list")
+workspace(operation="open", path="/absolute/project")
+```
+
+Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
+`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
+`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
+
+`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
+`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
+`current` and `primary` are CLI-only selectors; MCP refuses them.
+
 ## Inputs
 
 If no packet path is supplied, read:
@@ -37,8 +55,8 @@ Also extract the packet's changed-file list from the `Changed Files` section, es
 2. Collect current facts:
 
 ```text
-workspace(operation="status", format="json")
-workspace(operation="health")
+workspace(workspace_id="<id>", operation="status", format="json")
+workspace(workspace_id="<id>", operation="health")
 ```
 
 ```bash
@@ -69,13 +87,13 @@ git diff --name-only
 When there is a current dirty diff, rerun:
 
 ```text
-impact(git=true)
+impact(workspace_id="<id>", git=true)
 ```
 
 When packet context is stale or the next action is vague, rerun:
 
 ```text
-context(query="<packet goal or next action>", token_budget=<budget>)
+context(workspace_id="<id>", query="<packet goal or next action>", token_budget=<budget>)
 ```
 
 ## Resume Summary

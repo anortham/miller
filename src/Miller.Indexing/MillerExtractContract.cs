@@ -17,5 +17,5 @@ internal static class MillerExtractContract
     public const long ExpectedJsonlSchemaVersion = 5;
     public const string ExpectedHashAlgorithm = "blake3";
 
-    public const string PinnedJulieExtractVersion = "2.37.2";
+    public const string PinnedJulieExtractVersion = "2.38.0";
 }

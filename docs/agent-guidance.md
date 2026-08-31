@@ -21,10 +21,28 @@
 - **This reference** — the complete workflow catalog, the subagent primer, and per-tool parameter detail, for
   everyone via the repo.
 
+## Workspace targeting (MCP)
+
+Every workspace-bound MCP call names its target. `search`, `inspect`, `context`, `trace`, `impact`, `edit`,
+`patterns`, `content`, and `tests` require a non-empty registered `workspace_id`: a display ID, unique prefix,
+full ID, or registered root path. Miller never derives an MCP target from launch cwd, `MILLER_WORKSPACE_ROOT`,
+MCP Roots, connection identity, or a prior call.
+
+- Discover the ID with `workspace operation=list`. If the project is absent, call
+  `workspace operation=open path=/absolute/project` and use the ID it returns.
+- `current` and `primary` are refused at the MCP boundary. Both remain valid CLI selectors.
+- Unscoped exceptions: `workspace` `list`, `open`, `remove`, `prune`, and `dashboard`.
+- Fan-out exception: `content operation=search workspace_id=all|registered` for read-only text audits.
+- A missing target fails with reason code `workspace_id_required`; `current`/`primary` fail with
+  `implicit_workspace_selector_refused`. Both diagnostics name the list/open recovery.
+
+The CLI contract is unchanged: CLI verbs still derive the workspace from the process working directory.
+
 ## Per-tool detail
 
 The one-line "what each tool is for" lives in the embedded core and in each tool's MCP description. The residual
-parameters and selectors below are what those short forms omit.
+parameters and selectors below are what those short forms omit. Every `workspace_id` below is required for MCP
+calls and optional only for the CLI.
 
 - **`search`** — `mode=auto|text|symbol|file|markers|content|source|external|web|all-text`. Natural-language
   queries auto-hide tests (`exclude_tests=false` to include them). `mode=content` has the alias `docs`. Scope with
@@ -35,19 +53,19 @@ parameters and selectors below are what those short forms omit.
   nudge; JSON marks those rows with `exact_match=false`.
   `retrieval=auto|lexical|hybrid|semantic` selects the per-call symbol policy; lexical does no vector work and the
   global semantic off switch remains authoritative. `mode=markers` with `query=TODO,FIXME,HACK,XXX` runs
-  a marker audit. Symbol hits may include `has_doc`. Optional `workspace_id` accepts a display ID, unique prefix,
-  full ID, root path, `current`, or `primary`. An explicit `workspace_id` serves the pinned index immediately and
+  a marker audit. Symbol hits may include `has_doc`. `workspace_id` accepts a display ID, unique prefix,
+  full ID, or root path; MCP calls require it and refuse `current`/`primary`. An explicit `workspace_id` serves the pinned index immediately and
   refreshes in the background (`freshness: refresh_pending` plus the served `revision`); `ensure_fresh=true`
   waits for the refresh, `ensure_fresh=false` does zero refresh work.
 - **`inspect`** — a file path lists symbols; a symbol name gives definition, signature, and docs. Default depth is
   `summary`. The first symbol read should usually be `inspect target depth=overview` (bounded refs/calls/body
-  preview); use `depth=full` for the complete body and complete relation lists. Optional `workspace_id` and
+  preview); use `depth=full` for the complete body and complete relation lists. `workspace_id` and
   `ensure_fresh` follow `search`.
 - **`context`** — give the task plus optional `entry_symbols`, `edited_files`, `failing_test`, or `stack_trace`.
   Compact output leads with ranked pivots and bounded implementation snippets, then neighbour signatures and an
   evidence disposition. A next action appears only when the bundle is insufficient. `reference_mode=usage` adds
   implementations, identifiers, and source chunks in the same reason/confidence schema; treat
-  `confidence=name_based` as possible, not proven. `exclude_tests=true` filters tests only in usage mode. Optional
+  `confidence=name_based` as possible, not proven. `exclude_tests=true` filters tests only in usage mode.
   `workspace_id` and `ensure_fresh` route through the registry provider.
 - **`trace`** — `mode=refs` (name-based usages; optional `reference_kind=call|variable_ref|type_usage|member_access|import`;
   on empty, fall back to `search mode=source`), `mode=path` (shortest path to `to`; no path means no extracted

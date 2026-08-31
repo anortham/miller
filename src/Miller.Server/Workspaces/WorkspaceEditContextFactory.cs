@@ -104,7 +104,7 @@ public sealed class WorkspaceEditContextFactory
                 throw new DirectoryNotFoundException($"Workspace root not found: {row.CanonicalRoot}");
             WorkspaceRootSafety.RejectSensitiveRoot(row.CanonicalRoot, fromCwd: false);
             targetWorkspaceId = row.WorkspaceId;
-            readContext = _symbolReads.ResolveSymbolRead(targetWorkspaceId, WorkspaceRefreshMode.None);
+            readContext = _symbolReads.ResolveCompleteSymbolRead(targetWorkspaceId, WorkspaceRefreshMode.None);
         }
 
         try
@@ -152,7 +152,7 @@ public sealed class WorkspaceEditContextFactory
                     _logger);
             Func<WorkspaceSymbolReadContext> resolveFreshContext = string.IsNullOrWhiteSpace(workspaceId)
                 ? _symbolReads.ResolveCompleteCurrentSymbolRead
-                : () => _symbolReads.ResolveSymbolRead(targetWorkspaceId, WorkspaceRefreshMode.None);
+                : () => _symbolReads.ResolveCompleteSymbolRead(targetWorkspaceId, WorkspaceRefreshMode.None);
             var service = new EditService(
                 readContext.Index,
                 new SmartTargetResolver(readContext.Index),

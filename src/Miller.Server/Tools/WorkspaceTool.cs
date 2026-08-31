@@ -518,8 +518,8 @@ public sealed class WorkspaceTool
         WorkspaceContext current = CurrentWorkspace;
         return WorkspaceHealthFacts.Create(
             AssembleFacts(),
-            _ledger.SummarizeRecent(TelemetryHighlights.RecentWindowDays),
-            _ledger.SummarizeOutcomes(TelemetryHighlights.RecentWindowDays),
+            _ledger.SummarizeRecentForWorkspace(current.WorkspaceId, TelemetryHighlights.RecentWindowDays),
+            _ledger.SummarizeOutcomesForWorkspace(current.WorkspaceId, TelemetryHighlights.RecentWindowDays),
             ReadExtractionHealth(
                 current.ExtractDbPath,
                 current.CanonicalRoot ?? current.WorkspaceRoot,
@@ -621,7 +621,7 @@ public sealed class WorkspaceTool
             return StatusResult(
                 WorkspaceRender.Status(
                     currentFacts,
-                    _ledger.SummarizeRecent(TelemetryHighlights.RecentWindowDays),
+                    _ledger.SummarizeRecentForWorkspace(current.WorkspaceId, TelemetryHighlights.RecentWindowDays),
                     json,
                     ReadLeaderFacts(current.ExtractDbPath, ownWorkspace: true),
                     CurrentBootstrapSnapshot),
@@ -1235,7 +1235,9 @@ public sealed class WorkspaceTool
         if (target.UnknownNote is { } note)
             return (Note(note, json), 0, TelemetryOutcome.Empty);
 
-        if (target.IsCurrent)
+        // An explicit workspace_id that names the bound primary keeps the in-process fast path: this process
+        // already holds the primary's index and indexer, so queueing itself a leader request only adds latency.
+        if (target.IsCurrent || (target.Row is { } targetRow && IsCurrentWorkspace(targetRow)))
             return RenderAction(operation, force, json);
 
         // A live MCP call gets the SHORT scan-admission budget, not the operator one: subagents share the lead's
@@ -1460,7 +1462,8 @@ public sealed class WorkspaceTool
             DashboardContext(),
             launchPort,
             StartupTimeout: TimeSpan.FromSeconds(5),
-            OwnVersion: MillerVersion.Current));
+            OwnVersion: MillerVersion.Current,
+            OpenWorkspaceView: CurrentWorkspaceOrNull is not null));
         var result = new WorkspaceDashboardResult(
             DashboardStatus(launch.Outcome),
             launch.Success,
@@ -1570,7 +1573,7 @@ public sealed class WorkspaceTool
                     _registry,
                     target.WorkspaceId,
                     liveRoot: current?.WorkspaceRoot,
-                    protectedMillerDir: current is null ? null : Path.GetDirectoryName(current.ExtractDbPath),
+                    protectedMillerDir: _hostPaths.MillerDirectory,
                     acquireWriterLock: _acquireWriterLock,
                     retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot));
         }
@@ -1580,7 +1583,7 @@ public sealed class WorkspaceTool
                 _registry,
                 path!,
                 liveRoot: current?.WorkspaceRoot,
-                protectedMillerDir: current is null ? null : Path.GetDirectoryName(current.ExtractDbPath),
+                protectedMillerDir: _hostPaths.MillerDirectory,
                 acquireWriterLock: _acquireWriterLock,
                 retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot));
         }

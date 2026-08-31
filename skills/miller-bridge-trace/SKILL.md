@@ -22,55 +22,73 @@ generic over the fact's `client` label — to Express/Fastify/FastAPI/Flask/Djan
 net/http/gin/echo/Rails/NestJS/Laravel/Phoenix/axum/actix/Symfony/Ktor route facts, with cross-file mount-prefix
 composition and rails/laravel/phoenix resource-route expansion).
 
+## Workspace targeting (required)
+
+Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
+workspace from the launch directory, environment variables, MCP Roots, or a previous call.
+
+```text
+workspace(operation="list")
+workspace(operation="open", path="/absolute/project")
+```
+
+Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
+`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
+`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
+
+`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
+`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
+`current` and `primary` are CLI-only selectors; MCP refuses them.
+
 ## Workflow
 
 1. Find a concrete anchor:
 
 ```text
-search(query="<URL, route, method, controller, DTO, entity, or table>")
-search(query="<route text>", regions="string_literal")
+search(workspace_id="<id>", query="<URL, route, method, controller, DTO, entity, or table>")
+search(workspace_id="<id>", query="<route text>", regions="string_literal")
 ```
 
 For Next.js/Nuxt and Vue/React navigation bridges, links require matching route-reference facts plus file-route
 or route-definition structural facts. If target facts look missing, check patterns before assuming bridge support:
 
 ```text
-patterns(operation="search", query="nextjs")
-patterns(operation="search", query="nuxt")
-patterns(operation="search", query="vue")
-patterns(operation="search", query="react")
-patterns(operation="search", query="route")
+patterns(workspace_id="<id>", operation="search", query="nextjs")
+patterns(workspace_id="<id>", operation="search", query="nuxt")
+patterns(workspace_id="<id>", operation="search", query="vue")
+patterns(workspace_id="<id>", operation="search", query="react")
+patterns(workspace_id="<id>", operation="search", query="route")
 ```
 
 For the HTTP boundary bridges (`dotnet-web` client requests, `nextjs-api`, `nuxt-api`, `backend-http`), audit the
 HTTP boundary fact families directly:
 
 ```text
-patterns(operation="search", pattern_id="http.client_request.v1")
-patterns(operation="search", pattern_id="aspnet.attribute_route.v1")
-patterns(operation="search", pattern_id="nextjs.route_handler.v1")
-patterns(operation="search", pattern_id="nuxt.server_route.v1")
-patterns(operation="search", pattern_id="express.route.v1")
-patterns(operation="search", pattern_id="fastapi.route.v1")
-patterns(operation="search", pattern_id="rails.resource_route.v1")
+patterns(workspace_id="<id>", operation="search", pattern_id="http.client_request.v1")
+patterns(workspace_id="<id>", operation="search", pattern_id="aspnet.attribute_route.v1")
+patterns(workspace_id="<id>", operation="search", pattern_id="nextjs.route_handler.v1")
+patterns(workspace_id="<id>", operation="search", pattern_id="nuxt.server_route.v1")
+patterns(workspace_id="<id>", operation="search", pattern_id="express.route.v1")
+patterns(workspace_id="<id>", operation="search", pattern_id="fastapi.route.v1")
+patterns(workspace_id="<id>", operation="search", pattern_id="rails.resource_route.v1")
 ```
 
 2. Inspect the best anchor when names are ambiguous:
 
 ```text
-inspect(target="<symbol>", depth="full")
+inspect(workspace_id="<id>", target="<symbol>", depth="full")
 ```
 
 3. Run bridge trace:
 
 ```text
-trace(target="<anchor>", mode="bridge")
+trace(workspace_id="<id>", target="<anchor>", mode="bridge")
 ```
 
 If the anchor name is ambiguous but you know the file, pass scope instead of doing a JSON search for the id:
 
 ```text
-trace(target="<symbol>", mode="bridge", scope="<file>")
+trace(workspace_id="<id>", target="<symbol>", mode="bridge", scope="<file>")
 ```
 
 Unsupported-provider or no-link bridge results include `Next:` / JSON `next_actions`. Follow those fallbacks
@@ -80,8 +98,8 @@ before calling the bridge absent: usually `patterns(query="route")`, `trace(mode
 4. If the user asks for a specific route from one node to another, use path mode first, then bridge mode if the path crosses provider boundaries:
 
 ```text
-trace(target="<from>", mode="path", to="<to>")
-trace(target="<from>", mode="bridge")
+trace(workspace_id="<id>", target="<from>", mode="path", to="<to>")
+trace(workspace_id="<id>", target="<from>", mode="bridge")
 ```
 
 ## Reading Results

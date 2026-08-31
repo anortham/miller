@@ -141,16 +141,16 @@ public static class MillerServiceRegistration
         });
 
         // The index_fresh probe (decision-8) the telemetry filter reads per call: built revision vs. the freshness
-        // service's last-observed revision AND the indexer's queue-empty state. Resolved lazily (per call / by the
-        // filter), well after StartAsync, so its GetRequiredService<IndexHolder>() is safe. Cheap — no SQLite on
-        // the tool hot path.
+        // service's last-observed revision AND the indexer's queue-empty state. Explicit workspace targeting means
+        // a process may serve tool calls with no primary ever bound, and the bootstrap's Holder getter throws in
+        // that state — so the holder is passed as a supplier and resolved inside Compute(), which reads an unbound
+        // bootstrap as "not measured". Cheap — no SQLite on the tool hot path.
         services.AddTransient(sp =>
         {
-            var holder = sp.GetRequiredService<IndexHolder>();
             var freshness = sp.GetRequiredService<FreshnessService>();
             var indexer = sp.GetRequiredService<IndexerService>();
-            return new IndexFreshProbe(
-                holder,
+            return IndexFreshProbe.Deferred(
+                () => sp.GetRequiredService<IndexHolder>(),
                 latestRevision: () => freshness.LatestObservedRevision,
                 queueEmpty: () => indexer.QueueEmpty);
         });

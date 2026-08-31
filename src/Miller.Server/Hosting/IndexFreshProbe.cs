@@ -15,12 +15,27 @@ namespace Miller.Server.Hosting;
 /// </summary>
 public sealed class IndexFreshProbe
 {
-    private readonly IndexHolder _holder;
+    private readonly Func<IndexHolder> _holder;
     private readonly Func<long> _latestRevision;
     private readonly Func<bool> _queueEmpty;
 
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     public IndexFreshProbe(IndexHolder holder, Func<long> latestRevision, Func<bool> queueEmpty)
+        : this(HolderSupplier(holder), latestRevision, queueEmpty)
+    {
+    }
+
+    /// <summary>
+    /// Supplier form for hosts that may serve tool calls before — or without — a primary bind. The holder is
+    /// resolved inside <see cref="Compute"/>, so an unbound bootstrap reads as "not measured" rather than
+    /// throwing into the caller.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">Any argument is null.</exception>
+    public static IndexFreshProbe Deferred(
+        Func<IndexHolder> holder, Func<long> latestRevision, Func<bool> queueEmpty) =>
+        new(holder, latestRevision, queueEmpty);
+
+    private IndexFreshProbe(Func<IndexHolder> holder, Func<long> latestRevision, Func<bool> queueEmpty)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(latestRevision);
@@ -30,16 +45,22 @@ public sealed class IndexFreshProbe
         _queueEmpty = queueEmpty;
     }
 
+    private static Func<IndexHolder> HolderSupplier(IndexHolder holder)
+    {
+        ArgumentNullException.ThrowIfNull(holder);
+        return () => holder;
+    }
+
     /// <summary>
-    /// Compute the coarse <c>index_fresh</c> boolean, or null when the revision read fails (unknown). Cheap —
-    /// one volatile holder read, one revision query, one queue-count read.
+    /// Compute the coarse <c>index_fresh</c> boolean, or null when the revision read fails or no primary is
+    /// bound (unknown). Cheap — one volatile holder read, one revision query, one queue-count read.
     /// </summary>
     public bool? Compute()
     {
         try
         {
             long latest = _latestRevision();
-            return FreshnessState.Compute(_holder.BuiltRevision, latest, _queueEmpty());
+            return FreshnessState.Compute(_holder().BuiltRevision, latest, _queueEmpty());
         }
         catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException
                                        or Microsoft.Data.Sqlite.SqliteException)

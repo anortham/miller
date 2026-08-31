@@ -10,6 +10,24 @@ allowed-tools: mcp__miller__context, mcp__miller__search, mcp__miller__inspect, 
 
 Use Miller's indexed context before raw file reads. The goal is to identify the important symbols, files, and flows with a few targeted calls.
 
+## Workspace targeting (required)
+
+Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
+workspace from the launch directory, environment variables, MCP Roots, or a previous call.
+
+```text
+workspace(operation="list")
+workspace(operation="open", path="/absolute/project")
+```
+
+Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
+`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
+`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
+
+`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
+`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
+`current` and `primary` are CLI-only selectors; MCP refuses them.
+
 ## Workflow
 
 1. If the workspace may be stale, run `workspace(operation="status")`; use `workspace(operation="refresh")` when needed.
@@ -18,7 +36,7 @@ Use Miller's indexed context before raw file reads. The goal is to identify the 
 2. For unfamiliar task-shaped work, start with:
 
 ```text
-context(query="<task or concept>")
+context(workspace_id="<id>", query="<task or concept>")
 ```
 
 Use `failing_test`, `stack_trace`, or `entry_symbols` when the user gave those anchors.
@@ -26,8 +44,8 @@ Use `failing_test`, `stack_trace`, or `entry_symbols` when the user gave those a
 3. If the user already named a symbol or file, use `inspect` first:
 
 ```text
-inspect(target="<file-or-symbol>")
-inspect(target="<symbol>", depth="overview")
+inspect(workspace_id="<id>", target="<file-or-symbol>")
+inspect(workspace_id="<id>", target="<symbol>", depth="overview")
 ```
 
 Omitted `inspect` depth is `summary`. Use `depth=overview` for the first symbol read; escalate to
@@ -36,11 +54,11 @@ Omitted `inspect` depth is `summary`. Use `depth=overview` for the first symbol 
 4. Use `search` for missing anchors:
 
 ```text
-search(query="<identifier or phrase>")
-search(query="<docs/prose phrase>", mode="content")
-search(query="<source-body literal>", mode="source")
-search(query="<imported log or web phrase>", mode="external|web")
-search(query="<comment or literal>", regions="comment|string_literal|doc_comment")
+search(workspace_id="<id>", query="<identifier or phrase>")
+search(workspace_id="<id>", query="<docs/prose phrase>", mode="content")
+search(workspace_id="<id>", query="<source-body literal>", mode="source")
+search(workspace_id="<id>", query="<imported log or web phrase>", mode="external|web")
+search(workspace_id="<id>", query="<comment or literal>", regions="comment|string_literal|doc_comment")
 ```
 
 For audits across registered workspaces, use `content search "<term>" --workspace-id all --kind source|docs|config|external_file|web` and bounded `content read` windows before escalating to broader context.
@@ -50,8 +68,8 @@ For audits across registered workspaces, use `content search "<term>" --workspac
 5. Use `trace` when the question is about flow:
 
 ```text
-trace(target="<symbol>")
-trace(target="<from>", mode="path", to="<to>")
+trace(workspace_id="<id>", target="<symbol>")
+trace(workspace_id="<id>", target="<from>", mode="path", to="<to>")
 ```
 
 If `trace` returns no refs, no neighbours, no path, or an unsupported bridge, follow its `Next:` actions first.

@@ -22,6 +22,7 @@ namespace Miller.Tests.Server;
 /// antiforgery cookie is carried between polls exactly as a browser does, because the fragment embeds
 /// per-cookie form tokens and a fresh cookie per request would defeat the hash.
 /// </summary>
+[Collection("DashboardIndexFactsCache")]
 public sealed class DashboardFragmentCachingTests : IDisposable
 {
     private readonly string _dir;

@@ -10,22 +10,40 @@ allowed-tools: mcp__miller__impact, mcp__miller__search, mcp__miller__inspect, m
 
 Use Miller's graph-backed `impact` tool before refactors or shared behavior changes. One impact call should replace manual reference greps.
 
+## Workspace targeting (required)
+
+Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
+workspace from the launch directory, environment variables, MCP Roots, or a previous call.
+
+```text
+workspace(operation="list")
+workspace(operation="open", path="/absolute/project")
+```
+
+Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
+`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
+`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
+
+`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
+`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
+`current` and `primary` are CLI-only selectors; MCP refuses them.
+
 ## Workflow
 
 1. Resolve the target if it is ambiguous:
 
 ```text
-search(query="<symbol or concept>")
-inspect(target="<candidate>")
+search(workspace_id="<id>", query="<symbol or concept>")
+inspect(workspace_id="<id>", target="<candidate>")
 ```
 
 2. Run exactly one impact seed:
 
 ```text
-impact()
-impact(target="<symbol-or-file>")
-impact(changed_paths=["<file1>", "<file2>"])
-impact(diff="<unified diff>")
+impact(workspace_id="<id>")
+impact(workspace_id="<id>", target="<symbol-or-file>")
+impact(workspace_id="<id>", changed_paths=["<file1>", "<file2>"])
+impact(workspace_id="<id>", diff="<unified diff>")
 ```
 
 With no args, `impact()` reads the working-tree git diff and maps changed ranges to impacted symbols plus likely
@@ -35,9 +53,9 @@ tests — run it after edits, before committing, to see what your uncommitted ch
 3. Inspect or trace only the risky results:
 
 ```text
-inspect(target="<impacted-symbol>", depth="full")
-trace(target="<impacted-symbol>")
-trace(target="<source>", mode="path", to="<sink>")
+inspect(workspace_id="<id>", target="<impacted-symbol>", depth="full")
+trace(workspace_id="<id>", target="<impacted-symbol>")
+trace(workspace_id="<id>", target="<source>", mode="path", to="<sink>")
 ```
 
 4. If `impact` reports likely tests, treat that list as the starting verification set. Add broader tests when the touched surface is shared infrastructure or cross-workspace behavior.

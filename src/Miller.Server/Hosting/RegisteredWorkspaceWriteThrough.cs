@@ -178,7 +178,11 @@ public sealed class RegisteredWorkspaceWriteThrough : IEditWriteThrough, IEditRe
 
             string fullPath = Path.GetFullPath(path);
             string relative = Path.GetRelativePath(_workspaceRoot, fullPath);
-            if (relative is "." or ".." ||
+
+            // GetRelativePath hands back an ABSOLUTE path when no relative one exists — a different Windows
+            // volume — and that string carries no leading "..", so the escape test alone would admit it.
+            if (Path.IsPathRooted(relative) ||
+                relative is "." or ".." ||
                 relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
                 relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
             {
