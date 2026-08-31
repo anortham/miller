@@ -128,11 +128,11 @@
 **Approach:** Test `tools/list` schemas. Reject `current` and `primary` only on MCP. Keep `content all` read-only and use typed diagnostics.
 
 **Acceptance criteria:**
-- [ ] Nine schemas require `workspace_id`
-- [ ] Only approved workspace operations omit it
-- [ ] Missing/implicit targets fail before construction
-- [ ] CLI/direct cores keep current behavior
-- [ ] Focused verification passes and the diff is handed to the lead
+- [x] Nine schemas require `workspace_id`
+- [x] Only approved workspace operations omit it
+- [x] Missing/implicit targets fail before construction
+- [x] CLI/direct cores keep current behavior
+- [x] Focused verification passes and the diff is handed to the lead
 
 ### Task 3: Registered routing
 

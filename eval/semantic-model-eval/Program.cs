@@ -82,9 +82,6 @@ builder.Services
         filters.AddCallToolFilter(WorkspaceBindingCallToolFilter.Create());
         filters.AddCallToolFilter(TelemetryCallToolFilter.Create());
     });
-builder.Services.AddSingleton<WorkspaceRootsNotificationService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<WorkspaceRootsNotificationService>());
-
 await builder.Build().RunAsync();
 return 0;
 

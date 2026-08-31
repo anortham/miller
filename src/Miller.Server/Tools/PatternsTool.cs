@@ -145,7 +145,7 @@ public sealed class PatternsTool
         [Description("Top-level metadata equality filter as key=value. Accepts up to 16 semicolon-separated AND filters; repeat --where on CLI. Requires pattern_id or query for search.")] string? where = null,
         [Description("summary grouping: language_pattern_capture|file|directory|top_directory. Default language_pattern_capture.")] string? group_by = null,
         [Description("Optional summary metadata facet key using letters, digits, underscore, or hyphen.")] string? facet = null,
-        [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
+        [Description("Registered workspace selector: display ID, unique prefix, full ID, or root path. Required for MCP calls.")] [System.ComponentModel.DataAnnotations.Required] string? workspace_id = null,
         [Description("Wait for a refresh before reading. With workspace_id the default now serves the pinned index immediately and refreshes in the background; true still waits, false does zero refresh work.")] bool? ensure_fresh = null,
         [Description("Max search results. Default 50, maximum 500.")] int limit = DefaultLimit,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",

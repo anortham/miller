@@ -82,7 +82,7 @@ public sealed class ContentTool
         [Description("URL metadata for operation=add_markdown with web content.")] string? url = null,
         [Description("Human display path/title for imported content. Optional.")] string? display_path = null,
         [Description("Content kind for search/list. Search defaults external_file; bare list inventories external_file and web.")] string? content_kind = null,
-        [Description("Workspace selector for search/read. Use all only for registered workspace search. Optional.")] string? workspace_id = null,
+        [Description("Registered workspace selector for search/read. Use all only for read-only registered workspace search. Required for MCP calls.")] [System.ComponentModel.DataAnnotations.Required] string? workspace_id = null,
         [Description("1-based center line for operation=read.")] int? line = null,
         [Description("Context lines before/after the read line (0–1,000,000). Default 10. A window over 200 lines is clamped to 200, keeping the requested line; output reports continuation.")] int? context_lines = null,
         [Description("Max search results (1–100), or returned list rows per kind. List is capped at 20 per kind. Default 6.")] int limit = SearchTool.DefaultLimit,

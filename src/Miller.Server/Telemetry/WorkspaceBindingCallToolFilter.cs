@@ -1,166 +1,39 @@
-using System.Globalization;
 using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
-using Miller.Server;
-using Miller.Server.Hosting;
+using Miller.Server.Tools;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace Miller.Server.Telemetry;
 
-/// <summary>
-/// Ensures the primary workspace is bound via MCP roots before any tool handler runs.
-/// </summary>
+/// <summary>Rejects ambiguous or missing MCP workspace targets before the SDK constructs a tool call.</summary>
 public static class WorkspaceBindingCallToolFilter
 {
     public static McpRequestFilter<CallToolRequestParams, CallToolResult> Create()
     {
         return next => async (request, cancellationToken) =>
         {
-            var binding = request.Services?.GetService<IWorkspaceBindingService>();
-            var server = request.Services?.GetService<McpServer>();
-            if (binding is not null && server is not null)
+            string? toolName = request.Params?.Name;
+            McpWorkspaceTargetDecision decision = McpWorkspaceTargetPolicy.Evaluate(
+                toolName,
+                request.Params?.Arguments);
+            if (decision.Diagnostic is not { } diagnostic)
+                return await next(request, cancellationToken).ConfigureAwait(false);
+
+            bool json = IsJson(request.Params?.Arguments);
+            string output = ToolDiagnosticRenderer.Render(toolName ?? "(unknown)", diagnostic, json);
+            return new CallToolResult
             {
-                await binding.EnsurePrimaryBoundAsync(server, cancellationToken).ConfigureAwait(false);
-
-                var snapshot = binding.Snapshot;
-                if (snapshot.Phase == BootstrapPhase.Bound)
-                    return await next(request, cancellationToken).ConfigureAwait(false);
-
-                // The workspace tool is exempt on IsBound, not Phase: while a rebind is running or
-                // after one failed, the previous workspace is still bound and the tool constructs —
-                // it must flow through so `workspace status` keeps working (and renders the rebind
-                // notice). tests status follows the same unbound path so the cheap read stays honest.
-                // Only when nothing is bound does the filter render the snapshot itself,
-                // because the tool cannot construct before the first bind.
-                if (IsWorkspaceTool(request) || IsTestsStatus(request))
-                {
-                    if (snapshot.IsBound)
-                        return await next(request, cancellationToken).ConfigureAwait(false);
-                    return TextResult(RenderWorkspaceSnapshot(snapshot), isError: false);
-                }
-
-                if (snapshot.LastFailureMessage is { Length: > 0 } lastFailure)
-                    return TextResult(FailedText(lastFailure), isError: true);
-
-                if (snapshot.Phase == BootstrapPhase.Failed)
-                    return TextResult(FailedText(snapshot.FailureMessage ?? "unknown error"), isError: true);
-
-                if (snapshot.Phase == BootstrapPhase.Running)
-                {
-                    TimeSpan grace = BootstrapGraceTimeout();
-                    if (grace > TimeSpan.Zero)
-                    {
-                        bool completed = await WaitForRunWithinGraceAsync(
-                            binding, snapshot.RunGeneration, grace, cancellationToken).ConfigureAwait(false);
-                        if (completed)
-                        {
-                            snapshot = binding.Snapshot;
-                            if (snapshot.Phase == BootstrapPhase.Bound)
-                                return await next(request, cancellationToken).ConfigureAwait(false);
-                            if (snapshot.LastFailureMessage is { Length: > 0 } completedFailure)
-                                return TextResult(FailedText(completedFailure), isError: true);
-                            if (snapshot.Phase == BootstrapPhase.Failed)
-                                return TextResult(
-                                    FailedText(snapshot.FailureMessage ?? "unknown error"), isError: true);
-                        }
-                    }
-
-                    return TextResult(NotReadyText(snapshot), isError: true);
-                }
-            }
-
-            return await next(request, cancellationToken).ConfigureAwait(false);
+                IsError = true,
+                Content = [new TextContentBlock { Text = output }],
+            };
         };
     }
 
-    private static bool IsWorkspaceTool(RequestContext<CallToolRequestParams> request) =>
-        string.Equals(request.Params?.Name, "workspace", StringComparison.Ordinal);
-
-    private static bool IsTestsStatus(RequestContext<CallToolRequestParams> request)
+    private static bool IsJson(IDictionary<string, JsonElement>? arguments)
     {
-        if (!string.Equals(request.Params?.Name, "tests", StringComparison.Ordinal))
+        if (arguments is null || !arguments.TryGetValue("format", out JsonElement format))
             return false;
-
-        IDictionary<string, JsonElement>? arguments = request.Params!.Arguments;
-        if (arguments is null || !arguments.TryGetValue("operation", out JsonElement operation))
-            return true;
-        if (operation.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-            return true;
-
-        string? text = operation.ValueKind == JsonValueKind.String ? operation.GetString() : operation.ToString();
-        return string.IsNullOrWhiteSpace(text)
-            || string.Equals(text.Trim(), "status", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static async Task<bool> WaitForRunWithinGraceAsync(
-        IWorkspaceBindingService binding,
-        int runGeneration,
-        TimeSpan grace,
-        CancellationToken cancellationToken)
-    {
-        var waitTask = binding.WaitForRunAsync(runGeneration, cancellationToken);
-        var timeoutTask = Task.Delay(grace, cancellationToken);
-        var completed = await Task.WhenAny(waitTask, timeoutTask).ConfigureAwait(false);
-        if (ReferenceEquals(completed, timeoutTask))
-        {
-            await timeoutTask.ConfigureAwait(false);
-            return false;
-        }
-
-        await waitTask.ConfigureAwait(false);
-        return true;
-    }
-
-    private static TimeSpan BootstrapGraceTimeout()
-    {
-        const double DefaultSeconds = 5;
-        string? raw = Environment.GetEnvironmentVariable("MILLER_BOOTSTRAP_GRACE_SECONDS");
-        if (string.IsNullOrWhiteSpace(raw))
-            return TimeSpan.FromSeconds(DefaultSeconds);
-
-        if (double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) &&
-            seconds >= 0)
-        {
-            return TimeSpan.FromSeconds(seconds);
-        }
-
-        return TimeSpan.FromSeconds(DefaultSeconds);
-    }
-
-    private static CallToolResult TextResult(string text, bool isError) =>
-        new()
-        {
-            IsError = isError,
-            Content = [new TextContentBlock { Text = text }],
-        };
-
-    private static string NotReadyText(BootstrapSnapshot snapshot) =>
-        $"Miller is indexing this workspace for the first time: {snapshot.CanonicalRoot ?? "(unknown)"} " +
-        $"(started {ElapsedSeconds(snapshot.StartedAtUtc)}s ago). Tool calls will work once indexing completes — " +
-        "retry shortly, or run 'workspace status' for progress.";
-
-    private static string FailedText(string message) =>
-        $"bootstrap failed: {message}; retry started — call again shortly.";
-
-    private static string RenderWorkspaceSnapshot(BootstrapSnapshot snapshot) =>
-        snapshot.Phase switch
-        {
-            BootstrapPhase.Running =>
-                $"bootstrap: running {snapshot.CanonicalRoot ?? "(unknown)"}, " +
-                $"started {ElapsedSeconds(snapshot.StartedAtUtc)}s ago",
-            BootstrapPhase.Failed =>
-                $"bootstrap: failed — {snapshot.FailureMessage ?? snapshot.LastFailureMessage ?? "unknown error"}",
-            BootstrapPhase.Idle => "bootstrap: idle",
-            _ => "bootstrap: unavailable",
-        };
-
-    private static long ElapsedSeconds(DateTimeOffset? startedAtUtc)
-    {
-        if (startedAtUtc is null)
-            return 0;
-
-        var elapsed = DateTimeOffset.UtcNow - startedAtUtc.Value;
-        return Math.Max(0, (long)elapsed.TotalSeconds);
+        return format.ValueKind == JsonValueKind.String
+            && string.Equals(format.GetString(), "json", StringComparison.OrdinalIgnoreCase);
     }
 }

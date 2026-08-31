@@ -2,8 +2,6 @@ using System.IO.Pipelines;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Miller.Server;
-using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -12,460 +10,204 @@ using Xunit;
 
 namespace Miller.Tests.Server;
 
-/// <summary>
-/// Pins the workspace-binding CallToolFilter: every tools/call must invoke
-/// <see cref="IWorkspaceBindingService.EnsurePrimaryBoundAsync"/> before the tool body runs.
-/// </summary>
 public sealed class WorkspaceBindingCallToolFilterTests
 {
-    private sealed class RecordingBindingService : IWorkspaceBindingService
+    [McpServerToolType]
+    public sealed class PolicyProbeTool
     {
-        public int EnsureCalls { get; private set; }
+        public static int Calls;
 
-        public int BindingGeneration => 1;
-
-        public bool IsDeferred => true;
-
-        public BootstrapSnapshot Snapshot { get; set; } = BoundSnapshot();
-
-        public Task WaitUntilBoundAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task WaitForRunAsync(int runGeneration, CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task EnsurePrimaryBoundAsync(McpServer server, CancellationToken cancellationToken)
+        [McpServerTool(Name = "search")]
+        public static string Search(string? workspace_id = null)
         {
-            EnsureCalls++;
-            return Task.CompletedTask;
+            Interlocked.Increment(ref Calls);
+            return workspace_id ?? "handled";
         }
-
-        public void MarkRootsDirty() { }
-    }
-
-    private sealed class ScriptedBindingService : IWorkspaceBindingService
-    {
-        public int EnsureCalls { get; private set; }
-        public int WaitForRunCalls { get; private set; }
-        public int? LastWaitedRunGeneration { get; private set; }
-        public Func<CancellationToken, Task>? OnEnsure { get; set; }
-        public Func<int, CancellationToken, Task>? OnWaitForRun { get; set; }
-
-        public int BindingGeneration => 1;
-
-        public bool IsDeferred => true;
-
-        public BootstrapSnapshot Snapshot { get; set; } = BoundSnapshot();
-
-        public Task WaitUntilBoundAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task EnsurePrimaryBoundAsync(McpServer server, CancellationToken cancellationToken)
-        {
-            EnsureCalls++;
-            return OnEnsure?.Invoke(cancellationToken) ?? Task.CompletedTask;
-        }
-
-        public Task WaitForRunAsync(int runGeneration, CancellationToken cancellationToken)
-        {
-            WaitForRunCalls++;
-            LastWaitedRunGeneration = runGeneration;
-            return OnWaitForRun?.Invoke(runGeneration, cancellationToken) ?? Task.CompletedTask;
-        }
-
-        public void MarkRootsDirty() { }
     }
 
     [Fact]
-    public async Task BoundSnapshot_CallsNextHandler()
+    public async Task MissingWorkspaceId_ReturnsTypedErrorBeforeToolConstruction()
     {
-        var binding = new ScriptedBindingService { Snapshot = BoundSnapshot() };
         int nextCalls = 0;
 
-        var result = await InvokeFilterAsync(binding, "search", (_, _) =>
-        {
-            nextCalls++;
-            return Task.FromResult(TextResult("next-result"));
-        }, TestContext.Current.CancellationToken);
-
-        Assert.Equal(1, binding.EnsureCalls);
-        Assert.Equal(1, nextCalls);
-        Assert.Equal("next-result", ResultText(result));
-    }
-
-    [Fact]
-    public async Task RunningSnapshot_WhenRunCompletesWithinGrace_CallsNextHandler()
-    {
-        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = RunningSnapshot("/tmp/miller-running", runGeneration: 7),
-        };
-        binding.OnWaitForRun = async (_, ct) =>
-        {
-            await gate.Task.WaitAsync(ct);
-            binding.Snapshot = BoundSnapshot("/tmp/miller-running", runGeneration: 7);
-        };
-
-        var call = InvokeFilterAsync(
-            binding, "search", (_, _) => Task.FromResult(TextResult("after-bind")),
-            TestContext.Current.CancellationToken);
-        gate.SetResult();
-        var result = await call;
-
-        Assert.Equal(1, binding.WaitForRunCalls);
-        Assert.Equal(7, binding.LastWaitedRunGeneration);
-        Assert.Equal("after-bind", ResultText(result));
-    }
-
-    [Fact]
-    public async Task RunningSnapshot_WhenGraceExpires_ReturnsNotReadyToolError()
-    {
-        using var env = ScopedEnvironment.Set("MILLER_BOOTSTRAP_GRACE_SECONDS", "0.01");
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = RunningSnapshot("/tmp/miller-running", runGeneration: 9),
-        };
-        binding.OnWaitForRun = (_, ct) => Task.Delay(TimeSpan.FromSeconds(5), ct);
-
-        var result = await InvokeFilterAsync(
-            binding, "search", (_, _) => Task.FromResult(TextResult("unreachable")),
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(true, result.IsError);
-        Assert.Equal(
-            "Miller is indexing this workspace for the first time: /tmp/miller-running (started 0s ago). Tool calls will work once indexing completes — retry shortly, or run 'workspace status' for progress.",
-            ResultText(result));
-    }
-
-    [Fact]
-    public async Task RunningSnapshot_WithZeroGrace_ReturnsNotReadyWithoutWaiting()
-    {
-        using var env = ScopedEnvironment.Set("MILLER_BOOTSTRAP_GRACE_SECONDS", "0");
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = RunningSnapshot("/tmp/miller-zero", runGeneration: 11),
-        };
-        binding.OnWaitForRun = (_, _) => throw new InvalidOperationException("zero grace must not wait");
-
-        var result = await InvokeFilterAsync(
-            binding, "search", (_, _) => Task.FromResult(TextResult("unreachable")),
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(true, result.IsError);
-        Assert.Equal(0, binding.WaitForRunCalls);
-        Assert.Contains("/tmp/miller-zero", ResultText(result), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task RunningSnapshot_CancellationDuringGrace_PropagatesCancellation()
-    {
-        using var env = ScopedEnvironment.Set("MILLER_BOOTSTRAP_GRACE_SECONDS", "5");
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(50));
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = RunningSnapshot("/tmp/miller-cancel", runGeneration: 13),
-        };
-        binding.OnWaitForRun = (_, ct) => Task.Delay(TimeSpan.FromSeconds(5), ct);
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await InvokeFilterAsync(binding, "search", (_, _) => Task.FromResult(TextResult("unreachable")), cts.Token));
-    }
-
-    [Fact]
-    public async Task FailedRetrySnapshot_ReturnsStoredFailureToolError()
-    {
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = FailedSnapshot("/tmp/miller-failed", "synthetic failure", runGeneration: 17),
-        };
-        binding.OnEnsure = _ =>
-        {
-            binding.Snapshot = RunningSnapshot(
-                "/tmp/miller-failed", runGeneration: 18, lastFailureMessage: "synthetic failure");
-            return Task.CompletedTask;
-        };
-
-        var result = await InvokeFilterAsync(
-            binding, "search", (_, _) => Task.FromResult(TextResult("unreachable")),
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(true, result.IsError);
-        Assert.Equal("bootstrap failed: synthetic failure; retry started — call again shortly.", ResultText(result));
-    }
-
-    [Fact]
-    public async Task UnboundWorkspaceTool_RendersRunningSnapshotWithoutCallingTool()
-    {
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = RunningSnapshot("/tmp/miller-workspace", runGeneration: 21),
-        };
-
-        var result = await InvokeFilterAsync(
-            binding, "workspace", (_, _) => Task.FromResult(TextResult("unreachable")),
-            TestContext.Current.CancellationToken);
-
-        Assert.NotEqual(true, result.IsError);
-        Assert.Equal("bootstrap: running /tmp/miller-workspace, started 0s ago", ResultText(result));
-    }
-
-    [Fact]
-    public async Task BoundWorkspaceTool_CallsNextHandler()
-    {
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = BoundSnapshot("/tmp/miller-bound-workspace", runGeneration: 23),
-        };
-        int nextCalls = 0;
-
-        var result = await InvokeFilterAsync(binding, "workspace", (_, _) =>
-        {
-            nextCalls++;
-            return Task.FromResult(TextResult("workspace-status"));
-        }, TestContext.Current.CancellationToken);
-
-        Assert.Equal(1, nextCalls);
-        Assert.Equal("workspace-status", ResultText(result));
-    }
-
-    [Fact]
-    public async Task RebindRunningWhileBound_WorkspaceToolCallsNextHandler()
-    {
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = RunningSnapshot("/tmp/miller-rebind-b", runGeneration: 31, isBound: true),
-        };
-        int nextCalls = 0;
-
-        var result = await InvokeFilterAsync(binding, "workspace", (_, _) =>
-        {
-            nextCalls++;
-            return Task.FromResult(TextResult("workspace-status-with-rebind-notice"));
-        }, TestContext.Current.CancellationToken);
-
-        Assert.Equal(1, nextCalls);
-        Assert.Equal("workspace-status-with-rebind-notice", ResultText(result));
-    }
-
-    [Fact]
-    public async Task RebindFailedWhileBound_WorkspaceToolCallsNextHandler()
-    {
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = FailedSnapshot("/tmp/miller-rebind-b", "rebind failure", runGeneration: 33, isBound: true),
-        };
-        int nextCalls = 0;
-
-        var result = await InvokeFilterAsync(binding, "workspace", (_, _) =>
-        {
-            nextCalls++;
-            return Task.FromResult(TextResult("workspace-status-after-failed-rebind"));
-        }, TestContext.Current.CancellationToken);
-
-        Assert.Equal(1, nextCalls);
-        Assert.Equal("workspace-status-after-failed-rebind", ResultText(result));
-    }
-
-    [Fact]
-    public async Task RebindRunningWhileBound_NonWorkspaceToolStillReturnsNotReady()
-    {
-        using var env = ScopedEnvironment.Set("MILLER_BOOTSTRAP_GRACE_SECONDS", "0");
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = RunningSnapshot("/tmp/miller-rebind-b", runGeneration: 35, isBound: true),
-        };
-
-        var result = await InvokeFilterAsync(
-            binding, "search", (_, _) => Task.FromResult(TextResult("stale-answer-from-old-root")),
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(true, result.IsError);
-        Assert.Contains("/tmp/miller-rebind-b", ResultText(result), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task UnboundTestsStatus_RendersRunningSnapshotWithoutCallingTool()
-    {
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = RunningSnapshot("/tmp/miller-tests", runGeneration: 41),
-        };
-
-        var result = await InvokeFilterAsync(
-            binding, "tests", (_, _) => Task.FromResult(TextResult("unreachable")),
-            TestContext.Current.CancellationToken);
-
-        Assert.NotEqual(true, result.IsError);
-        Assert.Equal("bootstrap: running /tmp/miller-tests, started 0s ago", ResultText(result));
-    }
-
-    [Fact]
-    public async Task UnboundTestsDefaultOperation_TreatsAsStatus()
-    {
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = RunningSnapshot("/tmp/miller-tests-default", runGeneration: 43),
-        };
-
-        var result = await InvokeFilterAsync(
-            binding, "tests", (_, _) => Task.FromResult(TextResult("unreachable")),
-            TestContext.Current.CancellationToken,
-            arguments: new Dictionary<string, JsonElement>());
-
-        Assert.NotEqual(true, result.IsError);
-        Assert.Contains("/tmp/miller-tests-default", ResultText(result), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task UnboundTestsStart_ReturnsNotReadyToolError()
-    {
-        using var env = ScopedEnvironment.Set("MILLER_BOOTSTRAP_GRACE_SECONDS", "0");
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = RunningSnapshot("/tmp/miller-tests-start", runGeneration: 45),
-        };
-        int nextCalls = 0;
-
-        var result = await InvokeFilterAsync(
-            binding, "tests", (_, _) =>
+        CallToolResult result = await InvokeFilterAsync(
+            "search",
+            arguments: null,
+            (_, _) =>
             {
                 nextCalls++;
                 return Task.FromResult(TextResult("unreachable"));
-            },
-            TestContext.Current.CancellationToken,
-            arguments: new Dictionary<string, JsonElement>
-            {
-                ["operation"] = JsonSerializer.SerializeToElement("start"),
             });
 
+        Assert.True(result.IsError);
         Assert.Equal(0, nextCalls);
-        Assert.Equal(true, result.IsError);
-        Assert.Contains("/tmp/miller-tests-start", ResultText(result), StringComparison.Ordinal);
+        Assert.Contains("diagnostic_code=workspace_id_required", ResultText(result), StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task BoundTestsTool_CallsNextHandler()
+    [Theory]
+    [InlineData("current")]
+    [InlineData("primary")]
+    public async Task ImplicitWorkspaceSelector_ReturnsTypedErrorBeforeToolConstruction(string selector)
     {
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = BoundSnapshot("/tmp/miller-bound-tests", runGeneration: 47),
-        };
         int nextCalls = 0;
 
-        var result = await InvokeFilterAsync(
-            binding, "tests", (_, _) =>
+        CallToolResult result = await InvokeFilterAsync(
+            "inspect",
+            Arguments(("workspace_id", selector)),
+            (_, _) =>
             {
                 nextCalls++;
-                return Task.FromResult(TextResult("tests-status"));
-            },
-            TestContext.Current.CancellationToken);
+                return Task.FromResult(TextResult("unreachable"));
+            });
 
+        Assert.True(result.IsError);
+        Assert.Equal(0, nextCalls);
+        Assert.Contains(
+            "diagnostic_code=implicit_workspace_selector_refused",
+            ResultText(result),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExplicitWorkspaceSelector_InvokesToolHandler()
+    {
+        int nextCalls = 0;
+
+        CallToolResult result = await InvokeFilterAsync(
+            "context",
+            Arguments(("workspace_id", "registered-workspace")),
+            (_, _) =>
+            {
+                nextCalls++;
+                return Task.FromResult(TextResult("handled"));
+            });
+
+        Assert.NotEqual(true, result.IsError);
         Assert.Equal(1, nextCalls);
-        Assert.Equal("tests-status", ResultText(result));
+        Assert.Equal("handled", ResultText(result));
     }
 
     [Fact]
-    public async Task CallToolFilter_InvokesBindingBeforeToolHandler()
+    public async Task WorkspaceOpenWithoutWorkspaceId_InvokesToolHandler()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var binding = new RecordingBindingService();
+        int nextCalls = 0;
 
+        CallToolResult result = await InvokeFilterAsync(
+            "workspace",
+            Arguments(("operation", "open"), ("path", "/tmp/registered-workspace")),
+            (_, _) =>
+            {
+                nextCalls++;
+                return Task.FromResult(TextResult("opened"));
+            });
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Equal(1, nextCalls);
+        Assert.Equal("opened", ResultText(result));
+    }
+
+    [Fact]
+    public async Task ContentAllSearch_InvokesToolHandler()
+    {
+        int nextCalls = 0;
+
+        CallToolResult result = await InvokeFilterAsync(
+            "content",
+            Arguments(("operation", "search"), ("workspace_id", "all")),
+            (_, _) =>
+            {
+                nextCalls++;
+                return Task.FromResult(TextResult("searched"));
+            });
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Equal(1, nextCalls);
+        Assert.Equal("searched", ResultText(result));
+    }
+
+    [Fact]
+    public async Task UnknownTool_IsNotSubjectToWorkspaceTargetPolicy()
+    {
+        int nextCalls = 0;
+
+        CallToolResult result = await InvokeFilterAsync(
+            "pin_greet",
+            Arguments(("workspace_id", "current")),
+            (_, _) =>
+            {
+                nextCalls++;
+                return Task.FromResult(TextResult("greeted"));
+            });
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Equal(1, nextCalls);
+        Assert.Equal("greeted", ResultText(result));
+    }
+
+    [Fact]
+    public async Task JsonDiagnostic_UsesStructuredRendererOutput()
+    {
+        CallToolResult result = await InvokeFilterAsync(
+            "search",
+            Arguments(("format", "json")),
+            (_, _) => Task.FromResult(TextResult("unreachable")));
+
+        using JsonDocument json = JsonDocument.Parse(ResultText(result));
+        Assert.Equal("search", json.RootElement.GetProperty("tool").GetString());
+        Assert.Equal(
+            "workspace_id_required",
+            json.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task SdkCallWithoutWorkspaceId_ReturnsBeforeToolConstruction()
+    {
+        Interlocked.Exchange(ref PolicyProbeTool.Calls, 0);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         var clientToServer = new Pipe();
         var serverToClient = new Pipe();
-
         var services = new ServiceCollection();
-        services.AddSingleton<IWorkspaceBindingService>(binding);
         services
-            .AddMcpServer(o => { o.ServerInfo = new() { Name = "bind-filter", Version = "0" }; })
+            .AddMcpServer(options => { options.ServerInfo = new() { Name = "target-filter-sdk", Version = "0" }; })
             .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
-            .WithToolsFromAssembly(typeof(PinProbeTool).Assembly)
-            .WithRequestFilters(f =>
-            {
-                f.AddCallToolFilter(WorkspaceBindingCallToolFilter.Create());
-            });
+            .WithTools<PolicyProbeTool>()
+            .WithRequestFilters(filters => filters.AddCallToolFilter(WorkspaceBindingCallToolFilter.Create()));
 
         await using var provider = services.BuildServiceProvider();
         var server = provider.GetRequiredService<McpServer>();
-        var serverTask = server.RunAsync(ct);
-
+        var serverTask = server.RunAsync(cancellationToken);
         var clientTransport = new StreamClientTransport(
-            clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream(), NullLoggerFactory.Instance);
-        await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
+            clientToServer.Writer.AsStream(),
+            serverToClient.Reader.AsStream(),
+            NullLoggerFactory.Instance);
+        await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: cancellationToken);
 
-        await client.CallToolAsync(
-            "pin_greet", new Dictionary<string, object?> { ["who"] = "binding" }!, cancellationToken: ct);
+        CallToolResult result = await client.CallToolAsync(
+            "search",
+            new Dictionary<string, object?>(),
+            cancellationToken: cancellationToken);
+
+        Assert.True(result.IsError);
+        Assert.Equal(0, Volatile.Read(ref PolicyProbeTool.Calls));
+        Assert.Contains("diagnostic_code=workspace_id_required", ResultText(result), StringComparison.Ordinal);
 
         await client.DisposeAsync();
         await clientToServer.Writer.CompleteAsync();
         await serverToClient.Writer.CompleteAsync();
-        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); } catch (Exception) { }
-
-        Assert.Equal(1, binding.EnsureCalls);
-    }
-
-    [Fact]
-    public async Task BindingFilter_ComposesOutsideTelemetry_ForUnboundResponses()
-    {
-        using var env = ScopedEnvironment.Set("MILLER_BOOTSTRAP_GRACE_SECONDS", "0");
-        var ct = TestContext.Current.CancellationToken;
-        var binding = new ScriptedBindingService
-        {
-            Snapshot = RunningSnapshot("/tmp/miller-order", runGeneration: 29),
-        };
-
-        var clientToServer = new Pipe();
-        var serverToClient = new Pipe();
-
-        var services = new ServiceCollection();
-        services.AddSingleton<IWorkspaceBindingService>(binding);
-        services.AddSingleton<TelemetryLedger>(_ => throw new InvalidOperationException(
-            "telemetry filter ran before binding produced the unbound response"));
-        services
-            .AddMcpServer(o => { o.ServerInfo = new() { Name = "bind-filter-order", Version = "0" }; })
-            .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
-            .WithToolsFromAssembly(typeof(PinProbeTool).Assembly)
-            .WithRequestFilters(f =>
-            {
-                f.AddCallToolFilter(WorkspaceBindingCallToolFilter.Create());
-                f.AddCallToolFilter(TelemetryCallToolFilter.Create());
-            });
-
-        await using var provider = services.BuildServiceProvider();
-        var server = provider.GetRequiredService<McpServer>();
-        var serverTask = server.RunAsync(ct);
-
-        var clientTransport = new StreamClientTransport(
-            clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream(), NullLoggerFactory.Instance);
-        await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
-
-        var result = await client.CallToolAsync(
-            "pin_greet", new Dictionary<string, object?> { ["who"] = "order" }!, cancellationToken: ct);
-
-        await client.DisposeAsync();
-        await clientToServer.Writer.CompleteAsync();
-        await serverToClient.Writer.CompleteAsync();
-        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); } catch (Exception) { }
-
-        Assert.Equal(true, result.IsError);
-        Assert.Contains("/tmp/miller-order", ResultText(result), StringComparison.Ordinal);
+        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken); } catch (Exception) { }
     }
 
     private static async Task<CallToolResult> InvokeFilterAsync(
-        IWorkspaceBindingService binding,
         string toolName,
-        Func<RequestContext<CallToolRequestParams>, CancellationToken, Task<CallToolResult>> next,
-        CancellationToken cancellationToken = default,
-        Dictionary<string, JsonElement>? arguments = null)
+        Dictionary<string, JsonElement>? arguments,
+        Func<RequestContext<CallToolRequestParams>, CancellationToken, Task<CallToolResult>> next)
     {
-        if (cancellationToken == default)
-            cancellationToken = TestContext.Current.CancellationToken;
-
-        var services = new ServiceCollection();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         var clientToServer = new Pipe();
         var serverToClient = new Pipe();
-        services.AddSingleton(binding);
-        services.AddSingleton<IWorkspaceBindingService>(binding);
+        var services = new ServiceCollection();
         services
-            .AddMcpServer(o => { o.ServerInfo = new() { Name = "bind-filter-direct", Version = "0" }; })
+            .AddMcpServer(options => { options.ServerInfo = new() { Name = "target-filter", Version = "0" }; })
             .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream());
 
         await using var provider = services.BuildServiceProvider();
@@ -474,73 +216,22 @@ public sealed class WorkspaceBindingCallToolFilterTests
             server,
             new JsonRpcRequest { Method = "tools/call" },
             new CallToolRequestParams { Name = toolName, Arguments = arguments });
-        var filtered = WorkspaceBindingCallToolFilter.Create()(async (ctx, ct) => await next(ctx, ct));
+        var filtered = WorkspaceBindingCallToolFilter.Create()(
+            async (context, ct) => await next(context, ct));
         return await filtered(request, cancellationToken);
     }
 
-    private static BootstrapSnapshot BoundSnapshot(
-        string canonicalRoot = "/tmp/miller-bound", int runGeneration = 1) =>
-        new(
-            BootstrapPhase.Bound,
-            canonicalRoot,
-            StartedAtUtc: null,
-            FailureMessage: null,
-            LastFailureMessage: null,
-            runGeneration,
-            IsBound: true);
+    private static Dictionary<string, JsonElement> Arguments(params (string Name, object? Value)[] values) =>
+        values.ToDictionary(
+            static pair => pair.Name,
+            static pair => JsonSerializer.SerializeToElement(pair.Value));
 
-    private static BootstrapSnapshot RunningSnapshot(
-        string canonicalRoot,
-        int runGeneration,
-        string? lastFailureMessage = null,
-        bool isBound = false) =>
-        new(
-            BootstrapPhase.Running,
-            canonicalRoot,
-            DateTimeOffset.UtcNow.AddSeconds(1),
-            FailureMessage: null,
-            lastFailureMessage,
-            runGeneration,
-            isBound);
-
-    private static BootstrapSnapshot FailedSnapshot(
-        string canonicalRoot,
-        string failureMessage,
-        int runGeneration,
-        bool isBound = false) =>
-        new(
-            BootstrapPhase.Failed,
-            canonicalRoot,
-            StartedAtUtc: null,
-            failureMessage,
-            failureMessage,
-            runGeneration,
-            isBound);
-
-    private static CallToolResult TextResult(string text, bool isError = false) =>
+    private static CallToolResult TextResult(string text) =>
         new()
         {
-            IsError = isError,
             Content = [new TextContentBlock { Text = text }],
         };
 
     private static string ResultText(CallToolResult result) =>
         Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
-
-    private sealed class ScopedEnvironment : IDisposable
-    {
-        private readonly string _name;
-        private readonly string? _previous;
-
-        private ScopedEnvironment(string name, string? value)
-        {
-            _name = name;
-            _previous = Environment.GetEnvironmentVariable(name);
-            Environment.SetEnvironmentVariable(name, value);
-        }
-
-        public static ScopedEnvironment Set(string name, string? value) => new(name, value);
-
-        public void Dispose() => Environment.SetEnvironmentVariable(_name, _previous);
-    }
 }

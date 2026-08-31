@@ -410,7 +410,9 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
         await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
 
         var result = await client.CallToolAsync(
-            "inspect", new Dictionary<string, object?>(), cancellationToken: ct);
+            "inspect",
+            new Dictionary<string, object?> { ["workspace_id"] = "pin-ws" },
+            cancellationToken: ct);
 
         Assert.Equal(true, result.IsError);
         string text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;

@@ -52,7 +52,7 @@ public sealed class TestsTool
         string? project = null,
         [Description("For operation=failures: error_class groups red rows by derived exception class. Optional.")]
         string? group = null,
-        [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
+        [Description("Registered workspace selector: display ID, unique prefix, full ID, or root path. Required for MCP calls.")] [System.ComponentModel.DataAnnotations.Required]
         string? workspace_id = null,
         [Description("For operation=failures, rows per page. 1-200, default 20.")]
         int limit = TestsCore.FailuresDefaultLimit,

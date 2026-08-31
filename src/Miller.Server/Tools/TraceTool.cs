@@ -88,7 +88,7 @@ public sealed class TraceTool
         [Description("Max links/neighbours to return. Default 20.")] int limit = 20,
         [Description("Output format: compact|json|full. full adds the firing signals per bridge link in compact output. Default compact.")]
         string format = "compact",
-        [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
+        [Description("Registered workspace selector: display ID, unique prefix, full ID, or root path. Required for MCP calls.")] [System.ComponentModel.DataAnnotations.Required] string? workspace_id = null,
         [Description("Wait for a refresh before reading. With workspace_id the default now serves the pinned index immediately and refreshes in the background; true still waits, false does zero refresh work.")]
         bool? ensure_fresh = null)
     {

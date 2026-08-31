@@ -13,8 +13,8 @@ using Serilog;
 using Serilog.Core;
 
 // Miller MCP server host bootstrap (M2).
-// IndexBootstrapService builds the in-memory index before tools need it — eagerly when cwd/env is safe, or
-// deferred until MCP client roots arrive on the first tools/call. MCP transport starts even when deferred.
+// IndexBootstrapService builds the primary background index from a safe startup workspace when one is available.
+// MCP tool calls select their registered workspace explicitly and do not depend on process cwd or MCP roots.
 // [McpServerToolType] tool is registered explicitly for Native AOT; each ctor's deps resolve from DI. The ONE
 // central telemetry CallToolFilter wraps every call.
 //
@@ -45,8 +45,8 @@ var workspacePath = Environment.CurrentDirectory;
 var startupWorkspace = WorkspaceBindingResolver.TryResolveStartup(workspacePath);
 bool eagerBootstrap = startupWorkspace is not null;
 
-// SAFETY (eager path only): refuse to run in a sensitive system root when cwd/env is the binding source.
-// Deferred MCP startup (bad plugin/global cwd) skips this guard and binds from MCP roots on the first tool call.
+// SAFETY (eager path only): refuse to run in a sensitive system root when cwd/env is the background-index source.
+// MCP startup with no safe primary skips this guard; per-call target validation still applies.
 startupStage = "safety-guard";
 if (startupWorkspace?.Source == WorkspaceBindingResolver.WorkspaceSource.Cwd)
 {
@@ -58,7 +58,7 @@ else if (startupWorkspace is not null)
     workspacePath = startupWorkspace.Path;
 }
 
-// Deferred launches log to machine-global ~/.miller/logs until MCP roots bind the primary workspace.
+// Launches without a safe primary log to the machine-global ~/.miller/logs directory.
 startupStage = "create-logs-dir";
 var logsPath = eagerBootstrap
     ? Path.Combine(workspacePath, ".miller", "logs")
@@ -137,9 +137,6 @@ builder.Services
         filters.AddCallToolFilter(WorkspaceBindingCallToolFilter.Create());
         filters.AddCallToolFilter(TelemetryCallToolFilter.Create());
     });
-
-builder.Services.AddSingleton<WorkspaceRootsNotificationService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<WorkspaceRootsNotificationService>());
 
 var host = builder.Build();
 

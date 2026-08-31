@@ -153,7 +153,7 @@ public sealed class WorkspaceTool
         "NOT for: reading code (search/inspect). Example: workspace operation=list filter=eros limit=10.")]
     public string Workspace(
         [Description("status|refresh|full|list|open|remove|prune|health|onboarding|leader|dashboard. Default status.")] string operation = "status",
-        [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
+        [Description("Registered workspace selector: display ID, unique prefix, full ID, or root path. Current and primary are not valid MCP selectors.")]
         string? workspace_id = null,
         [Description("A workspace root path. Required for open; optional for status/health/onboarding/refresh/full/remove.")]
         string? path = null,

@@ -300,7 +300,7 @@ public sealed class SearchTool
         [Description("Hide test code: leave unset to auto-hide for natural-language queries; true/false to force.")]
         bool? exclude_tests = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
-        [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
+        [Description("Registered workspace selector: display ID, unique prefix, full ID, or root path. Required for MCP calls.")] [System.ComponentModel.DataAnnotations.Required] string? workspace_id = null,
         [Description("Wait for a refresh before reading. With workspace_id the default now serves the pinned index immediately and refreshes in the background; true still waits, false does zero refresh work.")]
         bool? ensure_fresh = null,
         [Description("Source-region kinds to search: comma list of comment, doc_comment, string_literal. Alias: docstring.")]

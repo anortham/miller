@@ -89,7 +89,8 @@ public sealed class EditTool
         [Description("Disambiguate an ambiguous symbol name to a file. Optional.")] string? scope = null,
         [Description("rename_symbol safety: exact (default) or include_fallback (explicit name-based fallback).")]
         string rename_mode = "exact",
-        [Description("Output format: compact|json. Default compact.")] string format = "compact")
+        [Description("Output format: compact|json. Default compact.")] string format = "compact",
+        [Description("Registered workspace selector: display ID, unique prefix, full ID, or root path. Required for MCP calls.")] [System.ComponentModel.DataAnnotations.Required] string? workspace_id = null)
     {
         var telemetry = TelemetryContext.Current;
         try

@@ -134,7 +134,7 @@ public sealed partial class ContextTool
         int reference_depth = 1,
         [Description("When reference_mode=usage, filter test symbols, test-path references, and test content chunks. Default false.")]
         bool exclude_tests = false,
-        [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
+        [Description("Registered workspace selector: display ID, unique prefix, full ID, or root path. Required for MCP calls.")] [System.ComponentModel.DataAnnotations.Required] string? workspace_id = null,
         [Description("Wait for a refresh before reading. With workspace_id the default now serves the pinned index immediately and refreshes in the background; true still waits, false does zero refresh work.")]
         bool? ensure_fresh = null,
         [Description("Workspace-relative files changed by the current task; their symbols rank as pivots. Optional.")]
