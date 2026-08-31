@@ -471,7 +471,7 @@ miller tests stop</code></pre>
           <h3>Other install paths</h3>
           <ul>
             <li>Claude Code and Codex plugin manifests ship in this repo.</li>
-            <li>For Cursor, install the Miller plugin or add <code>miller serve</code> to <code>~/.cursor/mcp.json</code>. Miller binds the open project via MCP roots on the first tool call.</li>
+            <li>For Cursor, install the Miller plugin or add <code>miller serve</code> to <code>~/.cursor/mcp.json</code>. For a user-level GUI registration, call <code>workspace operation=list</code>; if absent, call <code>workspace operation=open path=/absolute/project</code>, then pass the returned <code>workspace_id</code> on every workspace-bound call.</li>
             <li><a href="https://github.com/anortham/miller/releases/latest" target="_blank" rel="noopener">Download a release archive</a> for manual MCP setup; it ships the extractor and embedding sidecar.</li>
             <li>After installing, add the <a href="https://github.com/anortham/miller/blob/main/docs/agent-setup-snippet.md" target="_blank" rel="noopener">agent instructions snippet</a> to your CLAUDE.md / AGENTS.md so agents reach for Miller before shell grep.</li>
             <li>Use the source checkout only for Miller development or unreleased local changes.</li>

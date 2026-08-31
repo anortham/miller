@@ -1,5 +1,9 @@
 # MCP Roots Workspace Binding Design
 
+> Historical/superseded for workspace target selection by the implemented
+> [`2026-08-30-stateless-workspace-targeting-design.md`](2026-08-30-stateless-workspace-targeting-design.md).
+> Retained to document the earlier Roots-based approach and its rationale.
+
 ## Problem
 
 Miller's MCP server binds its primary workspace from `Environment.CurrentDirectory` at process

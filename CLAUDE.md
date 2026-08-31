@@ -199,12 +199,13 @@ Each rule below is load-bearing; the linked code/doc carries the full design.
 
 ## Workspace registry & sidecars
 
-- Index DBs live at `<workspace>/.miller/symbols.db`; discovery is `~/.miller/workspaces.db`. Read
-  tools accept `workspace_id` selectors (display ID, prefix, full ID, root path, `current`,
-  `primary`). An explicit `workspace_id` defaults to serve-then-refresh (background, coalesced);
-  `ensure_fresh=true` blocks; `ensure_fresh=false` does zero refresh work. Cross-workspace asks:
-  stay in the current session, `workspace list`, pass the selector; `workspace_id=all` is only for
-  `content search` text audits.
+- Index DBs live at `<workspace>/.miller/symbols.db`; discovery is `~/.miller/workspaces.db`.
+  MCP workspace-bound calls require a non-empty registered `workspace_id` (display ID, prefix, full ID,
+  or root path); `current` and `primary` remain CLI-only. Discover with `workspace list`; if absent,
+  call `workspace open path=/absolute/project`, then pass the returned ID on every workspace-bound call.
+  Explicit IDs default to serve-then-refresh (background, coalesced); `ensure_fresh=true` blocks and
+  `ensure_fresh=false` does zero refresh work. `workspace list/open/prune/dashboard` are unscoped
+  exceptions; `content search workspace_id=all|registered` is the text-audit exception.
 - The dashboard reads the registry, telemetry, and read-only aggregate facts; it may perform
   registry-lifecycle mutations through its antiforgery-protected POST endpoints (ADR-0002). It must
   not hydrate full indexes for list/detail views.

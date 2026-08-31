@@ -4,24 +4,31 @@ Fresh index of this workspace's code. One Miller call beats shell greps and full
 
 ## Rules
 
-1. Search before reading: run `search` before grep/rg/cat or opening whole files.
-2. Structure before content: `inspect` a file's symbols or a symbol's signature before reading it whole.
-3. Impact before changing: run `impact` to see blast radius and which tests to run.
-4. Trace a thread with `trace refs|path|bridge`; use `inspect` for callers/callees.
-5. Edit with a preview: `edit` dry-runs a diff; set apply=true only after it looks right.
-6. Trust the index: results are current for the indexed revision; if one looks stale, run `workspace refresh` and retry — beats re-checking by hand.
+1. Search before reading with `search`.
+2. Structure before content: use `inspect` first.
+3. Impact before changing: use `impact` before refactor or after edits.
+4. Trace with `trace`; inspect callers/callees.
+5. Edit with a preview; apply after diff looks right.
+6. Trust the index: results are current for the indexed revision; `workspace refresh` re-indexes changed files — beats re-checking by hand.
+
+## Workspace targeting
+
+- User-level GUI clients (Codex, Cursor, VS Code) must not use launch cwd, `MILLER_WORKSPACE_ROOT`/`GOLDFISH_WORKSPACE`, MCP Roots, `current`, `primary`, or session binding for workspace-bound MCP calls.
+- Discover with `workspace operation=list`; if absent, call `workspace operation=open path=/absolute/project`; use returned `workspace_id` on every workspace-bound call. Explicit registered selectors work with no primary, matching primary, or different primary.
+- Unscoped exceptions: `workspace` list/open/prune/dashboard and `content search workspace_id=all|registered` for text audits. Follow schemas; not every operation needs an ID.
+- CLI/source-checkout startup-root behavior is separate from GUI MCP targeting.
 
 ## When to reach for each tool
 
-- search — ranked symbol, natural-language, marker, docs/config, or source-body search; auto may use semantics, lexical does zero vector work.
-- inspect — a file or symbol you can already NAME: definition, signature, docs, refs, callers, body.
-- context — FIRST call in an unfamiliar area: a token-budgeted bundle of entry-point symbols for a task, with reasons.
-- trace — exact refs, shortest dependency paths, or cross-language route chains.
-- impact — before a refactor or after edits: impacted symbols plus likely tests, from a symbol, file, or git diff.
-- edit — index-aware replace/rename/body-rewrite with a diff preview and match proof.
-- patterns — pre-extracted code-shape facts (routes, config keys, doc structure).
-- content — import then search/read logs, CI output, web markdown, and large text.
-- workspace — index lifecycle and semantic-broker health: status, refresh, health, list, onboarding, dashboard.
-- tests — which tests your change made stale, and their last verdict; opt-in per workspace.
+- content — external text.
+- context — unfamiliar areas.
+- edit — indexed rewrite + preview.
+- impact — affected symbols/tests.
+- inspect — named file/symbol.
+- patterns — extracted routes/config/docs.
+- search — ranked symbol/source/docs/marker/text; auto may use semantics, lexical does zero vector work.
+- tests — continuous verdicts; runner for inner-loop tests.
+- trace — refs, dependency paths, bridges.
+- workspace — lifecycle, registered workspaces, onboarding, health, semantic-broker health.
 
-Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
+`workspace onboarding` gives guidance

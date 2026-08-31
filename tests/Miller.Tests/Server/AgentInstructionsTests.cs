@@ -114,6 +114,54 @@ public sealed class AgentInstructionsTests
     }
 
     [Fact]
+    public void Load_PinsStatelessWorkspaceTargeting()
+    {
+        string instructions = AgentInstructions.Load();
+
+        Assert.Contains("workspace operation=list", instructions);
+        Assert.Contains("workspace operation=open path=/absolute/project", instructions);
+        Assert.Contains("workspace_id", instructions);
+        Assert.Contains("every workspace-bound call", instructions);
+        Assert.Contains("User-level GUI clients", instructions);
+        Assert.DoesNotContain("set `MILLER_WORKSPACE_ROOT`", instructions);
+        Assert.DoesNotContain("set `GOLDFISH_WORKSPACE`", instructions);
+        Assert.DoesNotContain("roots/list", instructions);
+        Assert.DoesNotContain("use `current`", instructions);
+        Assert.DoesNotContain("use `primary`", instructions);
+    }
+
+    [Fact]
+    public void PublicGuidance_UsesStatelessWorkspaceSelection()
+    {
+        string repoRoot = ScaleTestSupport.RepoRoot();
+        string readme = File.ReadAllText(Path.Combine(repoRoot, "README.md"));
+        string install = File.ReadAllText(Path.Combine(repoRoot, "docs", "install.md"));
+        string migration = File.ReadAllText(Path.Combine(repoRoot, "docs", "migration-from-julie.md"));
+        string site = File.ReadAllText(Path.Combine(repoRoot, "docs", "site", "index.html"));
+        string finding = File.ReadAllText(Path.Combine(repoRoot, "docs", "findings", "2026-06-08-cursor-plugin-relative-launcher-root-cause.md"));
+
+        foreach (string guidance in new[] { readme, install, migration, site, finding })
+        {
+            Assert.Contains("workspace operation=list", guidance);
+            Assert.Contains("operation=open", guidance);
+            Assert.Contains("path=/absolute/project", guidance);
+            Assert.Contains("workspace_id", guidance);
+        }
+
+        Assert.DoesNotContain("If your client lacks MCP roots support, set", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"env\": { \"MILLER_WORKSPACE_ROOT\"", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain("Miller resolves the open project via MCP", install, StringComparison.Ordinal);
+        Assert.DoesNotContain("For clients without MCP roots support, set", install, StringComparison.Ordinal);
+        Assert.DoesNotContain("Miller binds from MCP client roots", migration, StringComparison.Ordinal);
+        Assert.DoesNotContain("set `MILLER_WORKSPACE_ROOT`", migration, StringComparison.Ordinal);
+        Assert.DoesNotContain("Miller binds the open project via MCP roots on the first tool call", site, StringComparison.Ordinal);
+        Assert.DoesNotContain("**Current recommendation:**", finding, StringComparison.Ordinal);
+        Assert.DoesNotContain("Miller binds via MCP roots", finding, StringComparison.Ordinal);
+        Assert.DoesNotContain("Optional `MILLER_WORKSPACE_ROOT` env", finding, StringComparison.Ordinal);
+        Assert.DoesNotContain("Miller now binds workspace from MCP", finding, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ToolDescriptions_PinSemanticActivationAndBrokerDiagnostics()
     {
         IReadOnlyDictionary<string, string> descriptions = DiscoverToolMethods()

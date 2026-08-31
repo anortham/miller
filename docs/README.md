@@ -319,8 +319,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`findings/2026-06-26-v1.1.0-release-verification.md`](findings/2026-06-26-v1.1.0-release-verification.md) - live `v1.1.0` release verification.
 - [`release-notes/v1.0.1.md`](release-notes/v1.0.1.md) - historical `v1.0.1` release notes.
 - [`findings/2026-06-26-v1.0.1-release-verification.md`](findings/2026-06-26-v1.0.1-release-verification.md) - live `v1.0.1` release verification.
-- [`plans/2026-06-25-mcp-roots-workspace-binding-design.md`](plans/2026-06-25-mcp-roots-workspace-binding-design.md) - current Cursor/MCP roots binding design and fallback-root guardrails.
-- [`findings/2026-06-25-cursor-project-local-mcp-config.md`](findings/2026-06-25-cursor-project-local-mcp-config.md) - superseded interim Cursor project-local MCP workaround.
+- [`plans/2026-08-30-stateless-workspace-targeting-design.md`](plans/2026-08-30-stateless-workspace-targeting-design.md) - implemented stateless targeting for user-level GUI MCP registrations.
+- [`plans/2026-06-25-mcp-roots-workspace-binding-design.md`](plans/2026-06-25-mcp-roots-workspace-binding-design.md) - historical/superseded MCP Roots binding design and fallback-root guardrails.
+- [`findings/2026-06-25-cursor-project-local-mcp-config.md`](findings/2026-06-25-cursor-project-local-mcp-config.md) - historical/superseded interim Cursor project-local MCP workaround.
 - [`release-notes/v1.0.0.md`](release-notes/v1.0.0.md) - historical `v1.0.0` release notes.
 - [`findings/2026-06-24-v1.0.0-release-verification.md`](findings/2026-06-24-v1.0.0-release-verification.md) - live `v1.0.0` release verification.
 - [`release-notes/v0.5.8.md`](release-notes/v0.5.8.md) - historical `v0.5.8` release notes.

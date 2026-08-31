@@ -76,10 +76,15 @@ repo checkouts that Cursor's Claude-plugin import can launch from. If the client
 Miller still uses it. If no workspace root is available, Miller fails with guidance instead of silently indexing the
 plugin directory.
 
-## 2026-06-12 Follow-up (superseded by MCP roots binding, 2026-06-25)
+## 2026-06-12 Follow-up (historical; superseded by stateless targeting, 2026-08-30)
 
 Historical config churn (`${workspaceFolder}` in user-global MCP, interim project-local `.cursor/mcp.json`) is
-retired. Miller now binds workspace from MCP `roots/list` on the first tool call. See
+retired. The former Roots-based binding design is historical and superseded for target selection by the implemented
+stateless workspace-targeting design
+([`2026-08-30-stateless-workspace-targeting-design.md`](../plans/2026-08-30-stateless-workspace-targeting-design.md)).
+For a current user-level GUI registration, call `workspace operation=list`; if the project is absent, call
+`workspace operation=open path=/absolute/project`, then pass the returned `workspace_id` on every workspace-bound
+call. See the historical design:
 [`2026-06-25-mcp-roots-workspace-binding-design.md`](../plans/2026-06-25-mcp-roots-workspace-binding-design.md)
 and the superseded interim note in
 [`2026-06-25-cursor-project-local-mcp-config.md`](2026-06-25-cursor-project-local-mcp-config.md).
@@ -96,9 +101,10 @@ Historical notes from the superseded global-config attempt:
   env `MILLER_WORKSPACE_ROOT="${workspaceFolder}"`, resolved a real workspace to `C:\source\miller` on one probe and
   failed closed when `${workspaceFolder}` was unresolved on others.
 
-**Current recommendation:** Cursor plugin marketplace install, or user-global `~/.cursor/mcp.json` with direct
-`miller serve` (absolute path). The plugin launcher no longer guesses workspace cwd; Miller binds via MCP roots.
-Optional `MILLER_WORKSPACE_ROOT` env for clients without roots support.
+**Current stateless recommendation (2026-08-30):** Cursor plugin marketplace install, or user-global
+`~/.cursor/mcp.json` with direct `miller serve` (absolute path). Discover the target with `workspace operation=list`
+or `workspace operation=open path=/absolute/project`, then pass the returned `workspace_id` on every
+workspace-bound call. Do not rely on launch cwd, environment variables, MCP Roots, `current`, or `primary`.
 
 Treat `~/.cursor/plugins/local/miller` as a package/testing artifact, not the normal user install, because Cursor
 can launch plugin MCP servers before a workspace exists and can auto-import Claude plugin copies as duplicate Miller

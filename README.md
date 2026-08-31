@@ -56,10 +56,10 @@ codex
 
 Cursor: install Miller from the Cursor plugin marketplace.
 
-Then ask your agent to search, inspect, or trace something. Miller binds the workspace from MCP client
-roots on the first tool call and writes its index under that workspace's `.miller/` directory. To watch
-tests, ask the agent to enable continuous testing (`tests enable`) then start it (`tests start`); status
-never starts the daemon.
+Then ask your agent to search, inspect, or trace something. For a user-level GUI client, call
+`workspace operation=list`; if the project is absent, call `workspace operation=open path=/absolute/project`,
+then pass the returned `workspace_id` on every workspace-bound call. To watch tests, ask the agent to enable
+continuous testing (`tests enable`) then start it (`tests start`); status never starts the daemon.
 
 Every other install path is covered step by step in [docs/install.md](docs/install.md):
 
@@ -86,8 +86,9 @@ The minimal MCP config for clients you configure by hand:
 }
 ```
 
-On Windows, use the full path to `miller.exe` as `command`. If your client lacks MCP roots support, set
-`"env": { "MILLER_WORKSPACE_ROOT": "/absolute/path/to/project" }` on the server entry.
+On Windows, use the full path to `miller.exe` as `command`. For user-level GUI clients, call
+`workspace operation=list`; if the project is absent, call `workspace operation=open path=/absolute/project`,
+then pass the returned `workspace_id` on every workspace-bound call. See [workspace targeting](#getting-agents-to-use-miller).
 
 ### Enable semantic retrieval
 
@@ -135,6 +136,13 @@ Miller's embedded MCP server instructions are kept to a ~1,900-character discove
 subagent-dispatch primer, and per-tool parameter detail live in
 [docs/agent-guidance.md](docs/agent-guidance.md); plugin users also get the same depth through the
 `miller-*` skills.
+
+For a user-level GUI registration, select the workspace explicitly: call `workspace` with
+`operation=list`; if the project is absent, call `operation=open` with `path=/absolute/project`; pass the
+returned `workspace_id` to every workspace-bound tool. Do not rely on launch cwd, `MILLER_WORKSPACE_ROOT`,
+`GOLDFISH_WORKSPACE`, MCP Roots, `current`, `primary`, or session binding. `workspace` list/open/prune/dashboard
+and `content search workspace_id=all|registered` are documented exceptions. CLI/source-checkout startup-root
+behavior is separate.
 
 ## The tools
 
@@ -395,10 +403,10 @@ local plugin development are in [docs/install.md](docs/install.md); the full doc
 - Cursor shows duplicate or stale Miller rows (`user-miller`, `plugin-miller-miller`): remove extra
   `miller` entries from `~/.cursor/mcp.json`, move aside `~/.cursor/plugins/local/miller` if it
   exists, and reload Cursor.
-- Cursor fails with `Could not determine a Miller workspace root`: open a project folder (Miller binds
-  via MCP `roots/list` on the first tool call), or set `MILLER_WORKSPACE_ROOT` to an absolute project
-  path in the MCP server env. Do not use `${workspaceFolder}` in user-global config; it often stays
-  unresolved.
+- A GUI client reports a missing or wrong Miller workspace: call `workspace operation=list`; if the project
+  is absent, call `workspace operation=open path=/absolute/project`, then pass the returned `workspace_id`
+  on every workspace-bound call. User-level GUI registration does not use launch cwd, environment variables,
+  MCP Roots, `current`, `primary`, or session binding for target selection.
 - Search results come from the wrong repo: reload the window or run `workspace status` and confirm the
   header root matches the open project. Pass an explicit `workspace_id` for another registered
   workspace when needed.

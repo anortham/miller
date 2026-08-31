@@ -33,8 +33,9 @@ the versioned binary with the explicit `serve` argument:
 }
 ```
 
-Miller binds from MCP client roots. For clients that do not send roots, set `MILLER_WORKSPACE_ROOT` to the
-project root. Do not point it at a home directory, filesystem root, or system directory.
+For a user-level GUI registration, call `workspace operation=list`. If the project is absent, call
+`workspace operation=open path=/absolute/project`, then pass the returned `workspace_id` on every
+workspace-bound call. Do not rely on launch cwd, environment variables, MCP Roots, `current`, or `primary`.
 
 ## Replace Julie Workflows
 

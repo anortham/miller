@@ -1,8 +1,9 @@
 # Stateless workspace targeting design
 
 Date: 2026-08-30
-Status: draft for user review
+Status: implemented
 Linear: [BRE-57](https://linear.app/breakingdevelopment/issue/BRE-57/require-explicit-workspace-id-for-stateless-mcp-calls)
+Implementation: [implementation plan](2026-08-30-stateless-workspace-targeting-implementation.md), integrated in commit [`e36a6f6a`](https://github.com/anortham/miller/commit/e36a6f6a0e6475f4b85440a94e2a2e55e3cf54ba)
 
 ## Goal
 

@@ -87,8 +87,9 @@ codex
 
 Cursor: install Miller from the Cursor plugin marketplace, or add a user-global `~/.cursor/mcp.json`
 entry with an absolute path to `miller serve` (see [MCP configuration](#mcp-configuration) below).
-Miller binds its workspace from MCP client roots on the first tool call, so one global install works per
-editor window without `${workspaceFolder}` placeholders.
+For a user-level GUI registration, call `workspace operation=list`; if the project is absent, call
+`workspace operation=open path=/absolute/project`, then pass the returned `workspace_id` on every
+workspace-bound call.
 
 ### Session hooks
 
@@ -206,10 +207,12 @@ absolute path inside the versioned directory and the explicit `serve` argument:
 }
 ```
 
-On Windows, use the full path to `miller.exe` as `command`. Miller resolves the open project via MCP
-`roots/list` on the first tool call. For clients without MCP roots support, set
-`"env": { "MILLER_WORKSPACE_ROOT": "/absolute/path/to/project" }` on the server entry. Do not use
-`${workspaceFolder}` in user-global config; it often stays unresolved.
+On Windows, use the full path to `miller.exe` as `command`. This registers Miller; it does not select a
+project. In a user-level GUI client, call `workspace` with `operation=list`; if the project is absent, call
+`operation=open` with `path=/absolute/project`, then pass the returned `workspace_id` to every workspace-bound
+tool. Do not rely on launch cwd, `MILLER_WORKSPACE_ROOT`, `GOLDFISH_WORKSPACE`, MCP Roots, `current`, `primary`,
+or session binding. Do not use `${workspaceFolder}` in user-global config; it often stays unresolved. CLI and
+source-checkout startup-root behavior is documented separately.
 
 ## Other harnesses (instruction tier)
 

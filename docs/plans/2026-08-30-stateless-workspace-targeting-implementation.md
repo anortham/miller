@@ -264,7 +264,9 @@
 
 **Files:**
 - Modify: `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md`
-- Modify: `README.md` and `docs/install.md`
+- Modify: `README.md`, `docs/install.md`, and `docs/README.md`
+- Modify: `docs/migration-from-julie.md` and `docs/site/index.html`
+- Modify: `docs/findings/2026-06-08-cursor-plugin-relative-launcher-root-cause.md`
 - Modify: `docs/findings/2026-06-25-cursor-project-local-mcp-config.md`
 - Modify: `docs/plans/2026-06-25-mcp-roots-workspace-binding-design.md`
 - Modify: `docs/plans/2026-08-30-stateless-workspace-targeting-design.md`
@@ -275,7 +277,7 @@
 
 **Contract inputs:** Server instructions stay within 1,900 characters. Existing description budgets do not grow.
 
-**File ownership:** Modify `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md`, `README.md`, `docs/install.md`, `docs/findings/2026-06-25-cursor-project-local-mcp-config.md`, `docs/plans/2026-06-25-mcp-roots-workspace-binding-design.md`, `docs/plans/2026-08-30-stateless-workspace-targeting-design.md`, `CLAUDE.md`; regenerate `AGENTS.md`; test `tests/Miller.Tests/Server/AgentInstructionsTests.cs`
+**File ownership:** Modify `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md`, `README.md`, `docs/install.md`, `docs/README.md`, `docs/migration-from-julie.md`, `docs/site/index.html`, `docs/findings/2026-06-08-cursor-plugin-relative-launcher-root-cause.md`, `docs/findings/2026-06-25-cursor-project-local-mcp-config.md`, `docs/plans/2026-06-25-mcp-roots-workspace-binding-design.md`, `docs/plans/2026-08-30-stateless-workspace-targeting-design.md`, `CLAUDE.md`; regenerate `AGENTS.md`; test `tests/Miller.Tests/Server/AgentInstructionsTests.cs`
 
 **Serialization required:** Yes
 
@@ -286,8 +288,8 @@
 **Approach:** Replace text within budgets, keep CLI wording separate, edit CLAUDE first, then sync.
 
 **Acceptance criteria:**
-- [ ] GUI setup explains list/open then required ID
-- [ ] Instruction and metadata budgets pass
-- [ ] Old Roots guidance is historical
-- [ ] CLAUDE and AGENTS are byte-identical
-- [ ] Focused verification passes and the diff is handed to the lead
+- [x] GUI setup explains list/open then required ID
+- [x] Instruction and metadata budgets pass
+- [x] Old Roots guidance is historical
+- [x] CLAUDE and AGENTS are byte-identical
+- [x] Focused verification passes and the diff is handed to the lead
