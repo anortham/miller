@@ -372,6 +372,245 @@ public sealed class ContinuousTestDaemonHostHeartbeatTests : IDisposable
     /// No lease and no queue: the loop needs neither to reach its status writes, and leaving both
     /// out keeps the test pure — no lock file, no SQLite, no second process.
     /// </summary>
+    [Fact]
+    public async Task Loop_AcksRunCommandWhilePollReadInFlight()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new BlockingRevisionSource(gate)
+        {
+            Observation = new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId,
+                new CtFreshnessKey(EngineTestSupport.Identity, 2),
+                true,
+                "fresh",
+                DateTimeOffset.UtcNow),
+        };
+        var writer = new RecordingStatusWriter();
+        var delay = new CountingDelay();
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                WorkspaceId = EngineTestSupport.WorkspaceId,
+                AcquireLease = false,
+                Poller = new ContinuousTestRevisionPoller(source),
+                Enqueuer = new RecordingEnqueuer(),
+                StatusWriter = writer.Write,
+                PollInterval = TimeSpan.FromMilliseconds(5),
+                Delay = delay.DelayAsync,
+            },
+            cts.Token);
+        try
+        {
+            await WaitForAsync(() => source.RefreshCount >= 1 || run.IsCompleted);
+            Assert.False(run.IsCompleted, "the loop exited while the poll read was still pending");
+
+            CtDaemonCommandRequest request = CtCommandChannel.WriteRequest(
+                _root,
+                CtDaemonCommandKind.Run,
+                reason: "run",
+                freshness: new CtFreshnessKey(EngineTestSupport.Identity, 2));
+
+            await WaitForAckAsync(request.CommandId);
+            Assert.False(gate.Task.IsCompleted, "the poll read finished before the run command was acked");
+            Assert.NotNull(CtCommandChannel.TryReadAck(_root, request.CommandId));
+
+            gate.TrySetResult();
+            await WaitForAsync(() =>
+                writer.Written.Any(write => write.Reason == "idle") || run.IsCompleted);
+            Assert.Contains(writer.Written, write => write.Reason == "idle");
+        }
+        finally
+        {
+            gate.TrySetResult();
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+    [Fact]
+    public async Task Loop_Stop_unblocks_an_in_flight_poll_read()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new BlockingRevisionSource(gate)
+        {
+            Observation = new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId,
+                new CtFreshnessKey(EngineTestSupport.Identity, 2),
+                true,
+                "fresh",
+                DateTimeOffset.UtcNow),
+        };
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                AcquireLease = false,
+                Poller = new ContinuousTestRevisionPoller(source),
+                Enqueuer = new RecordingEnqueuer(),
+                PollInterval = TimeSpan.FromMilliseconds(5),
+            },
+            CancellationToken.None);
+
+        await WaitForAsync(() => source.RefreshCount >= 1 || run.IsCompleted);
+        Assert.False(run.IsCompleted, "the loop exited before the poll read blocked");
+
+        CtCommandChannel.WriteRequest(
+            _root,
+            CtDaemonCommandKind.Stop,
+            reason: "stop",
+            freshness: null);
+
+        ContinuousTestDaemonSnapshot snapshot = await run.WaitAsync(
+            TimeSpan.FromSeconds(2),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(CtDaemonLifecycleState.Stopped, snapshot.State);
+        Assert.False(gate.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task Loop_Shutdown_survives_a_faulted_in_flight_poll_read()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new FaultingRevisionSource(gate, new IOException("poll boom"));
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                AcquireLease = false,
+                Poller = new ContinuousTestRevisionPoller(source),
+                Enqueuer = new RecordingEnqueuer(),
+                PollInterval = TimeSpan.FromMilliseconds(5),
+            },
+            CancellationToken.None);
+
+        await WaitForAsync(() => source.RefreshCount >= 1 || run.IsCompleted);
+        Assert.False(run.IsCompleted, "the loop exited before the poll read blocked");
+
+        CtDaemonCommandRequest stop = CtCommandChannel.WriteRequest(
+            _root,
+            CtDaemonCommandKind.Stop,
+            reason: "stop",
+            freshness: null);
+        await WaitForAsync(() => CtCommandChannel.TryReadAck(_root, stop.CommandId) is not null || run.IsCompleted);
+
+        gate.TrySetResult();
+        ContinuousTestDaemonSnapshot snapshot = await run.WaitAsync(
+            TimeSpan.FromSeconds(2),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(CtDaemonLifecycleState.Stopped, snapshot.State);
+    }
+
+    [Fact]
+    public async Task Loop_DefersExplicitRunUntilInFlightPollAppliesLiveKey()
+    {
+        ContinuousTestWorkspace workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
+        var enqueueLog = new ConcurrentQueue<string>();
+        var queue = new ContinuousTestDaemonQueue(
+            store,
+            EngineTestSupport.Selector(store),
+            new ContinuousTestCoordinator(new FakeContinuousTestProvider(), store),
+            lifecycleLog: enqueueLog.Enqueue);
+        var budget = CtExecutionBudget.ForMillerHome(Path.Combine(_root, "budget-home"));
+        using CtExecutionBudgetLease? held = budget.TryAcquire(
+            new CtExecutionBudgetRequest(_root, "run"),
+            TimeSpan.Zero,
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(held);
+
+        var source = new RepeatableBlockingSource
+        {
+            Observation = new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId,
+                new CtFreshnessKey(EngineTestSupport.Identity, 2),
+                true,
+                "fresh",
+                DateTimeOffset.UtcNow),
+        };
+        var delay = new CountingDelay();
+        using var cts = new CancellationTokenSource();
+        Task<ContinuousTestDaemonSnapshot> run = ContinuousTestDaemonHost.RunAsync(
+            _root,
+            new ContinuousTestDaemonHostOptions
+            {
+                Enabled = true,
+                WorkspaceId = EngineTestSupport.WorkspaceId,
+                AcquireLease = false,
+                Store = store,
+                Queue = queue,
+                Poller = new ContinuousTestRevisionPoller(source),
+                Projects =
+                [
+                    new ContinuousTestProject(
+                        "proj:1",
+                        EngineTestSupport.WorkspaceId,
+                        workspace.ProjectPath,
+                        Framework: "xunit"),
+                ],
+                Budget = budget,
+                PollInterval = TimeSpan.FromMilliseconds(5),
+                Delay = delay.DelayAsync,
+            },
+            cts.Token);
+        try
+        {
+            await WaitForAsync(() => source.RefreshCount >= 1 || run.IsCompleted);
+            source.Release();
+            await WaitForAsync(() => delay.Count >= 2 || run.IsCompleted);
+
+            const string rebuiltIdentity = "gen-rebuild";
+            source.Observation = new ContinuousTestRevisionObservation(
+                EngineTestSupport.WorkspaceId,
+                new CtFreshnessKey(rebuiltIdentity, 1),
+                true,
+                "fresh",
+                DateTimeOffset.UtcNow,
+                Rebuild: true);
+
+            await WaitForAsync(() => source.RefreshCount >= 2 || run.IsCompleted);
+            Assert.Equal(0, ExplicitEnqueueCount(enqueueLog));
+
+            CtDaemonCommandRequest request = CtCommandChannel.WriteRequest(
+                _root,
+                CtDaemonCommandKind.Run,
+                reason: "run",
+                freshness: new CtFreshnessKey(EngineTestSupport.Identity, 2));
+            await WaitForAckAsync(request.CommandId);
+            Assert.Equal(0, ExplicitEnqueueCount(enqueueLog));
+
+            source.Release();
+            await WaitForAsync(() => ExplicitEnqueueCount(enqueueLog) >= 1 || run.IsCompleted);
+            string line = Assert.Single(enqueueLog, row => row.StartsWith("ct enqueue workspace=", StringComparison.Ordinal));
+            Assert.Contains("identity=" + rebuiltIdentity, line, StringComparison.Ordinal);
+            Assert.Contains("revision=1", line, StringComparison.Ordinal);
+        }
+        finally
+        {
+            source.Release();
+            await cts.CancelAsync();
+            await run;
+        }
+    }
+
+
+    private async Task WaitForAckAsync(string commandId)
+    {
+        for (int attempt = 0; attempt < 400; attempt++)
+        {
+            if (CtCommandChannel.TryReadAck(_root, commandId) is not null)
+                return;
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        throw new TimeoutException("the run command was not acked while the poll read was in flight");
+    }
+
     private static ContinuousTestDaemonHostOptions StatusWriterOptions(RecordingStatusWriter writer) =>
         new()
         {
@@ -384,6 +623,9 @@ public sealed class ContinuousTestDaemonHostHeartbeatTests : IDisposable
 
     private static int EnqueueCount(IEnumerable<string> lifecycleLog) =>
         lifecycleLog.Count(line => line.StartsWith("ct enqueue", StringComparison.Ordinal));
+
+    private static int ExplicitEnqueueCount(IEnumerable<string> lifecycleLog) =>
+        lifecycleLog.Count(line => line.StartsWith("ct enqueue workspace=", StringComparison.Ordinal));
 
     private static ProviderRunResult Passed(string testCaseId, string revision) =>
         new(
@@ -468,6 +710,85 @@ public sealed class ContinuousTestDaemonHostHeartbeatTests : IDisposable
         {
             Interlocked.Increment(ref _count);
             return Task.Delay(duration, cancellationToken);
+        }
+    }
+
+    private sealed class BlockingRevisionSource : IContinuousTestRevisionSource
+    {
+        private readonly TaskCompletionSource _gate;
+        private int _refreshCount;
+
+        public BlockingRevisionSource(TaskCompletionSource gate)
+        {
+            _gate = gate;
+        }
+
+        public ContinuousTestRevisionObservation? Observation { get; init; }
+
+        public int RefreshCount => Volatile.Read(ref _refreshCount);
+
+        public async Task<ContinuousTestRevisionObservation?> RefreshAsync(
+            string workspaceId,
+            string workspaceRoot,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _refreshCount);
+            await _gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return Observation;
+        }
+    }
+
+    private sealed class FaultingRevisionSource : IContinuousTestRevisionSource
+    {
+        private readonly TaskCompletionSource _gate;
+        private readonly Exception _fault;
+        private int _refreshCount;
+
+        public FaultingRevisionSource(TaskCompletionSource gate, Exception fault)
+        {
+            _gate = gate;
+            _fault = fault;
+        }
+
+        public int RefreshCount => Volatile.Read(ref _refreshCount);
+
+        public async Task<ContinuousTestRevisionObservation?> RefreshAsync(
+            string workspaceId,
+            string workspaceRoot,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _refreshCount);
+            await _gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            throw _fault;
+        }
+    }
+
+    private sealed class RepeatableBlockingSource : IContinuousTestRevisionSource
+    {
+        private volatile TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _refreshCount;
+
+        public ContinuousTestRevisionObservation? Observation { get; set; }
+
+        public int RefreshCount => Volatile.Read(ref _refreshCount);
+
+        public void Release()
+        {
+            TaskCompletionSource previous = _gate;
+            _gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            previous.TrySetResult();
+        }
+
+        public void BlockAgain() =>
+            _gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<ContinuousTestRevisionObservation?> RefreshAsync(
+            string workspaceId,
+            string workspaceRoot,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _refreshCount);
+            await _gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return Observation;
         }
     }
 }

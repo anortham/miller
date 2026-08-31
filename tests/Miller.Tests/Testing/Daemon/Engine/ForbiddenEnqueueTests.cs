@@ -537,7 +537,7 @@ public sealed class ForbiddenEnqueueTests : IDisposable
                 Budget = CtExecutionBudget.Disabled(),
                 AcquireLease = false,
                 Clock = () => DateTimeOffset.UtcNow,
-                Delay = (_, token) => Task.Delay(Timeout.Infinite, token),
+                Delay = (_, token) => Task.Delay(5, token),
                 Diagnostic = diagnostics.Add,
             });
 

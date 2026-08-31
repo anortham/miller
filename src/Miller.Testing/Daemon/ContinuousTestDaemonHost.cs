@@ -145,6 +145,11 @@ public sealed class ContinuousTestWorkspaceContext : IDisposable
 
     public ContinuousTestRevisionPoller? Poller { get; init; }
 
+    public Task<ContinuousTestRevisionReadResult>? PollReadTask;
+
+    internal bool ExplicitRunOwed;
+
+
     public IReadOnlyList<ContinuousTestProject> Projects { get; init; } = [];
 
     public IContinuousTestDaemonEnqueuer? Enqueuer { get; init; }
@@ -590,6 +595,8 @@ public sealed class ContinuousTestDaemonHost
         // token. Its own source lets the shutdown tail stop the pulse and then observe it, instead of
         // blocking the exit for a whole pulse interval or leaving the task unobserved.
         using var pulseCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var pollCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
         Task pulse = lease is null
             ? Task.CompletedTask
             : PulseStatusAsync(lease, pulseCancellation.Token);
@@ -613,27 +620,24 @@ public sealed class ContinuousTestDaemonHost
 
             ScanWorktrees();
 
-            bool pollCancelled = false;
-            foreach (ContinuousTestWorkspaceContext context in EnumerateContexts())
-            {
-                if (!await PollContextAsync(context, cancellationToken).ConfigureAwait(false))
-                {
-                    pollCancelled = true;
-                    break;
-                }
-            }
-
-            if (pollCancelled)
+            if (!await CollectCompletedPollReads(cancellationToken).ConfigureAwait(false))
                 break;
+
 
             DateTimeOffset now = _options.Clock();
             foreach (ContinuousTestWorkspaceContext context in EnumerateContexts())
+            {
+                if (context.PollReadTask is { IsCompleted: false })
+                    continue;
                 TryScheduleIdleDrain(context, now);
+            }
 
             bool executing = false;
             List<ContinuousTestWorkspaceContext>? ready = null;
             foreach (ContinuousTestWorkspaceContext context in EnumerateContexts())
             {
+                if (context.PollReadTask is { IsCompleted: false })
+                    continue;
                 if (context.Queue is not null && context.Backoff.CanEnqueue && context.Queue.HasReadyWork(now))
                     (ready ??= []).Add(context);
             }
@@ -721,6 +725,29 @@ public sealed class ContinuousTestDaemonHost
             if (executing)
                 Publish(Evaluate("executing", CtDaemonLifecycleState.Running, executing: true));
 
+            foreach (ContinuousTestWorkspaceContext context in EnumerateContexts())
+            {
+                if (context.Poller is null || !context.Backoff.CanPoll)
+                    continue;
+                if (context.PollReadTask is not null)
+                    continue;
+                IContinuousTestDaemonEnqueuer? fireEnqueuer = context.Enqueuer ?? context.Queue;
+                if (fireEnqueuer is null)
+                    continue;
+                ContinuousTestRevisionPoller poller = context.Poller;
+                context.PollReadTask = Task.Run(
+                    () => poller.ReadAsync(
+                        new ContinuousTestRevisionPollRequest(
+                            context.WorkspaceId,
+                            context.WorkspaceRoot,
+                            context.Projects,
+                            fireEnqueuer,
+                            EnqueueArmed: context.StartedAt is not null && context.Backoff.CanEnqueue,
+                            OnRebuild: rebuilt => DemotePriorGreen(context, rebuilt)),
+                        pollCancellation.Token),
+                    pollCancellation.Token);
+            }
+
             try
             {
                 await _options.Delay(_options.PollInterval, cancellationToken).ConfigureAwait(false);
@@ -733,6 +760,26 @@ public sealed class ContinuousTestDaemonHost
 
         TryWriteStatus(lease, CtDaemonLifecycleState.Stopped, "stopped");
         Publish(Evaluate("stopped", CtDaemonLifecycleState.Stopped, executing: false));
+
+        await pollCancellation.CancelAsync().ConfigureAwait(false);
+        Task<ContinuousTestRevisionReadResult>[] inFlight = EnumerateContexts()
+            .Where(c => c.PollReadTask is { IsCompleted: false })
+            .Select(c => c.PollReadTask!)
+            .ToArray();
+        if (inFlight.Length > 0)
+        {
+            try
+            {
+                await Task.WhenAll(inFlight).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                if (exception is not OperationCanceledException)
+                    Diagnostic($"ct poll error during shutdown {CtDaemonLog.FailureDetail(exception)}");
+            }
+        }
+
+
         ReleaseAdoptedContexts();
 
         // Stop the pulse first, then await it. Awaiting an uncancelled pulse would hang the exit,
@@ -1030,8 +1077,6 @@ public sealed class ContinuousTestDaemonHost
         bool targetsPrimary = targetRoot is null || PathsEqual(targetRoot, _workspaceRoot);
         if (request.Kind == CtDaemonCommandKind.Stop)
         {
-            // A stop request targets the daemon that was alive when it was written. One left
-            // unacknowledged by a dead predecessor must not kill this instance at startup.
             if (request.RequestedAtUtc < _runStartedAtUtc)
             {
                 TryWriteAck(id, "stale-stop-ignored");
@@ -1040,9 +1085,6 @@ public sealed class ContinuousTestDaemonHost
 
             if (!targetsPrimary)
             {
-                // A worktree stop detaches THAT context only. It never stops the family daemon:
-                // the daemon belongs to the main root, and every other adopted worktree still
-                // depends on it.
                 if (_adopted.TryGetValue(targetRoot!, out ContinuousTestWorkspaceContext? adopted))
                 {
                     DetachWorktree(targetRoot!, adopted, "detached");
@@ -1073,44 +1115,57 @@ public sealed class ContinuousTestDaemonHost
                 return false;
             }
 
-            if (target.Queue is not null && target.Projects.Count > 0)
+            if (target.PollReadTask is not null)
             {
-                // Select at the LIVE cursor the poller last observed, never at the daemon's
-                // START key. Falling back to StartedAt made every explicit run after an index
-                // advance select at the birth revision forever (defect D2): the store rightly
-                // records stale-revision results as history-only, so the verdict never
-                // converged and only a daemon restart (which reset StartedAt) recovered.
-                CtFreshnessKey? selected = request.Freshness
-                    ?? target.LatestFreshness
-                    ?? target.StartedAt;
-                if (selected is not { } freshness)
-                {
-                    // No poll has landed yet, so no real key exists. The old
-                    // ("unspecified", 0) sentinel enqueued anyway, burning the whole suite to
-                    // store results at a key that can never match the live one - the
-                    // watermark-freshness design removes that sentinel everywhere. Refuse
-                    // honestly instead; the caller retries after the first poll lands.
-                    TryWriteAck(id, "no-live-key", CtDaemonCommandState.Rejected);
-                    return false;
-                }
+                if (target.Queue is not null && target.Projects.Count > 0)
+                    target.ExplicitRunOwed = true;
+                TryWriteAck(id, "run");
+                return false;
+            }
 
-                foreach (ContinuousTestProjectWorkItem item in ContinuousTestProjectInventory.MaterializeProjectWorkItems(
-                             target.Projects, target.WorkspaceRoot))
-                {
-                    target.Queue.EnqueueExplicit(new ContinuousTestDaemonChange(
-                        item.Workspace,
-                        freshness.Revision.ToString(CultureInfo.InvariantCulture),
-                        freshness.IndexIdentity,
-                        WorkspaceScope: true,
-                        ObservedAt: DateTimeOffset.UtcNow,
-                        Command: item.Project.Command,
-                        Framework: item.Project.Framework));
-                }
+            if (!EnqueueExplicitRun(target, request.Freshness))
+            {
+                TryWriteAck(id, "no-live-key", CtDaemonCommandState.Rejected);
+                return false;
             }
         }
 
         TryWriteAck(id, "run");
         return false;
+    }
+
+    private bool EnqueueExplicitRun(ContinuousTestWorkspaceContext target, CtFreshnessKey? requested)
+    {
+        if (target.Queue is null || target.Projects.Count == 0)
+            return true;
+
+        CtFreshnessKey? selected = requested ?? target.LatestFreshness ?? target.StartedAt;
+        if (selected is not { } freshness)
+            return false;
+
+        foreach (ContinuousTestProjectWorkItem item in ContinuousTestProjectInventory.MaterializeProjectWorkItems(
+                     target.Projects, target.WorkspaceRoot))
+        {
+            target.Queue.EnqueueExplicit(new ContinuousTestDaemonChange(
+                item.Workspace,
+                freshness.Revision.ToString(CultureInfo.InvariantCulture),
+                freshness.IndexIdentity,
+                WorkspaceScope: true,
+                ObservedAt: DateTimeOffset.UtcNow,
+                Command: item.Project.Command,
+                Framework: item.Project.Framework));
+        }
+
+        return true;
+    }
+
+    private void DrainOwedExplicitRun(ContinuousTestWorkspaceContext context)
+    {
+        if (!context.ExplicitRunOwed)
+            return;
+        if (!EnqueueExplicitRun(context, requested: null))
+            return;
+        context.ExplicitRunOwed = false;
     }
 
     /// <summary>
@@ -1194,6 +1249,39 @@ public sealed class ContinuousTestDaemonHost
             yield return context;
     }
 
+    private async Task<bool> CollectCompletedPollReads(CancellationToken cancellationToken)
+    {
+        foreach (ContinuousTestWorkspaceContext context in EnumerateContexts())
+        {
+            if (context.PollReadTask is null)
+                continue;
+            if (!context.PollReadTask.IsCompleted)
+                continue;
+            Task<ContinuousTestRevisionReadResult> task = context.PollReadTask;
+            context.PollReadTask = null;
+            try
+            {
+                ContinuousTestRevisionReadResult readResult = await task.ConfigureAwait(false);
+                IContinuousTestDaemonEnqueuer? collectEnqueuer = context.Enqueuer ?? context.Queue;
+                ApplyPollResult(context, readResult, collectEnqueuer, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+            catch (Exception exception)
+            {
+                context.PollSettled = false;
+                context.LastActivityAt = _options.Clock();
+                context.Backoff.RecordDegraded();
+                context.Watch.RecordError("poll_error");
+                Diagnostic($"ct poll error workspace={context.WorkspaceId} {CtDaemonLog.FailureDetail(exception)}");
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>
     /// One context's poll pass: the same freshness/backoff/watch bookkeeping the single-workspace
     /// loop always did, against THIS context's poller, queue, and cursor. Returns false only when
@@ -1210,7 +1298,7 @@ public sealed class ContinuousTestDaemonHost
             return true;
         try
         {
-            ContinuousTestRevisionPollResult poll = await context.Poller.PollAsync(
+            ContinuousTestRevisionReadResult read = await context.Poller.ReadAsync(
                 new ContinuousTestRevisionPollRequest(
                     context.WorkspaceId,
                     context.WorkspaceRoot,
@@ -1219,62 +1307,7 @@ public sealed class ContinuousTestDaemonHost
                     EnqueueArmed: context.StartedAt is not null && context.Backoff.CanEnqueue,
                     OnRebuild: rebuilt => DemotePriorGreen(context, rebuilt)),
                 cancellationToken).ConfigureAwait(false);
-            // Settled means the saved cursor equals the live revision and the poll was healthy;
-            // every other answer is activity, which restarts the idle drain's quiet window.
-            context.PollSettled = poll.Freshness is not null
-                && string.Equals(poll.Reason, SettledPollReason, StringComparison.Ordinal);
-            if (!context.PollSettled)
-                context.LastActivityAt = _options.Clock();
-
-            string? pauseBefore = context.Unavailable.StuckReason;
-            if (poll.Freshness is { } freshness)
-            {
-                context.StartedAt ??= freshness;
-                context.LatestFreshness = freshness;
-                context.Queue?.ObserveFreshRevision(context.WorkspaceId, freshness);
-
-                // An unavailable delta is the one answer that is neither a success nor the word
-                // "degraded", and it is STICKY: the poller may not absorb an interval whose impact it
-                // could not read, so the same unreadable interval comes back every 250 ms. Recording
-                // that as a healthy poll left a daemon that looked fine at 4 Hz while automatic runs
-                // had silently stopped. A run of them is treated as a degradation instead — of the
-                // POLL only, so work accepted at an earlier readable base still drains.
-                bool unavailable = string.Equals(poll.Reason, UnavailableDeltaReason, StringComparison.Ordinal);
-                bool stuck = unavailable && context.Unavailable.RecordUnavailable(poll.DeltaReason);
-                if (!unavailable)
-                    context.Unavailable.RecordOther();
-
-                if (string.Equals(poll.Reason, "degraded", StringComparison.Ordinal))
-                {
-                    context.Backoff.RecordDegraded();
-                    context.Watch.RecordError("degraded");
-                }
-                else if (stuck)
-                {
-                    context.Backoff.RecordPollDegraded();
-
-                    // Degraded watch health reads as Unknown, which is the honest verdict here: the
-                    // daemon cannot say what the unread interval changed, so it cannot stand behind a
-                    // green it recorded before that interval.
-                    context.Watch.RecordError(
-                        string.IsNullOrWhiteSpace(poll.DeltaReason)
-                            ? UnavailableDeltaReason
-                            : poll.DeltaReason);
-                }
-                else
-                {
-                    context.Backoff.RecordHealthy();
-                    context.Watch.RecordSuccess(freshness.ToString());
-                }
-            }
-            else
-            {
-                context.Unavailable.RecordOther();
-                context.Backoff.RecordDegraded();
-                context.Watch.RecordError(poll.Reason);
-            }
-
-            LogPauseTransition(context, pauseBefore);
+            ApplyPollResult(context, read, enqueuer, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1286,14 +1319,77 @@ public sealed class ContinuousTestDaemonHost
             context.LastActivityAt = _options.Clock();
             context.Backoff.RecordDegraded();
             context.Watch.RecordError("poll_error");
-
-            // The exception used to be discarded here, so a daemon that degraded on every poll
-            // reported only the word "poll_error" and never the reason. Safe inside this
-            // last-resort catch because CtDaemonLog.Write never throws for an I/O reason.
             Diagnostic($"ct poll error workspace={context.WorkspaceId} {CtDaemonLog.FailureDetail(exception)}");
         }
 
         return true;
+    }
+
+    private void ApplyPollResult(
+        ContinuousTestWorkspaceContext context,
+        ContinuousTestRevisionReadResult readResult,
+        IContinuousTestDaemonEnqueuer? enqueuer,
+        CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        if (context.Poller is null || enqueuer is null)
+            return;
+
+        ContinuousTestRevisionPollResult poll = context.Poller.ApplyRead(
+            new ContinuousTestRevisionPollRequest(
+                context.WorkspaceId,
+                context.WorkspaceRoot,
+                context.Projects,
+                enqueuer,
+                EnqueueArmed: context.StartedAt is not null && context.Backoff.CanEnqueue,
+                OnRebuild: rebuilt => DemotePriorGreen(context, rebuilt)),
+            readResult);
+
+        context.PollSettled = poll.Freshness is not null
+            && string.Equals(poll.Reason, SettledPollReason, StringComparison.Ordinal);
+        if (!context.PollSettled)
+            context.LastActivityAt = _options.Clock();
+
+        string? pauseBefore = context.Unavailable.StuckReason;
+        if (poll.Freshness is { } freshness)
+        {
+            context.StartedAt ??= freshness;
+            context.LatestFreshness = freshness;
+            context.Queue?.ObserveFreshRevision(context.WorkspaceId, freshness);
+
+            bool unavailable = string.Equals(poll.Reason, UnavailableDeltaReason, StringComparison.Ordinal);
+            bool stuck = unavailable && context.Unavailable.RecordUnavailable(poll.DeltaReason);
+            if (!unavailable)
+                context.Unavailable.RecordOther();
+
+            if (string.Equals(poll.Reason, "degraded", StringComparison.Ordinal))
+            {
+                context.Backoff.RecordDegraded();
+                context.Watch.RecordError("degraded");
+            }
+            else if (stuck)
+            {
+                context.Backoff.RecordPollDegraded();
+                context.Watch.RecordError(
+                    string.IsNullOrWhiteSpace(poll.DeltaReason)
+                        ? UnavailableDeltaReason
+                        : poll.DeltaReason);
+            }
+            else
+            {
+                context.Backoff.RecordHealthy();
+                context.Watch.RecordSuccess(freshness.ToString());
+            }
+        }
+        else
+        {
+            context.Unavailable.RecordOther();
+            context.Backoff.RecordDegraded();
+            context.Watch.RecordError(poll.Reason);
+        }
+
+        LogPauseTransition(context, pauseBefore);
+        DrainOwedExplicitRun(context);
     }
 
     /// <summary>

@@ -474,6 +474,10 @@ public sealed class ContinuousTestDebouncedAutoRunTests : IDisposable
         await delay.WaitForDelayCountAsync(1, TestContext.Current.CancellationToken);
         source.Observations.Enqueue(Observation(3));
         delay.CompleteNext();
+        await delay.WaitForDelayCountAsync(2, TestContext.Current.CancellationToken);
+        delay.CompleteNext();
+        await delay.WaitForDelayCountAsync(3, TestContext.Current.CancellationToken);
+        delay.CompleteNext();
         await WaitUntil(() => provider.RunRequests.Count == 1, TestContext.Current.CancellationToken);
 
         ContinuousTestProviderRunRequest request = provider.RunRequests[0];
