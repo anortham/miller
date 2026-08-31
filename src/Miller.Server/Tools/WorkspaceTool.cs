@@ -218,7 +218,7 @@ public sealed class WorkspaceTool
         bool handoff = false,
         [Description("For operation=leader with handoff=true, wait briefly for the live leader to observe the request.")]
         bool wait = false,
-        [Description("operation=list only: case-insensitive substring filter on display id or root, applied before the cap. Default null (no filter).")]
+        [Description("operation=list only: case-insensitive substring filter on display id, root, or state, applied before the cap. Default null (no filter).")]
         string? filter = null,
         [Description("operation=list only: max entries before the exact omitted-count tail. Range 1-100; default 20.")]
         int? limit = null,
@@ -452,24 +452,13 @@ public sealed class WorkspaceTool
         return ToolDiagnosticRenderer.Render("workspace", diagnostic, json, telemetry);
     }
 
-    private static WorkspaceOperationResult HealthResult(WorkspaceHealthFacts health, bool json)
-    {
-        bool unavailable = health.State == HealthState.Unavailable;
-        return new WorkspaceOperationResult(
+    private static WorkspaceOperationResult HealthResult(WorkspaceHealthFacts health, bool json) =>
+        new(
             WorkspaceRender.Health(
                 health,
                 json ? WorkspaceHealthFormat.JsonSummary : WorkspaceHealthFormat.Compact),
-            unavailable ? 0 : 1,
-            unavailable ? TelemetryOutcome.Error : TelemetryOutcome.Ok,
-            unavailable
-                ? ToolDiagnostic.Unavailable(
-                    "workspace_health_unavailable",
-                    "Workspace health could not establish a readable index.",
-                    [new ToolDiagnosticAction(
-                        "workspace(operation=\"list\")",
-                        "inspect the registered workspace state")])
-                : null);
-    }
+            1,
+            TelemetryOutcome.Ok);
 
     // The pure-ish dispatch: route the operation to its handler, returning the rendered output, a result count
     // (for the telemetry KPI), and the outcome. An unknown operation is a usage note (Empty, not an error).

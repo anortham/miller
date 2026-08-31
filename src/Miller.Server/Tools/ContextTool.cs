@@ -115,7 +115,7 @@ public sealed partial class ContextTool
         "reasons, and an evidence disposition within token_budget; a next action appears only when evidence is " +
         "insufficient. When disposition is sufficient, answer from the bundle instead of inspecting every pivot. " +
         "NOT for: a symbol you can already name (inspect it) or text lookups (search). Example: " +
-        "context query=\"how does workspace refresh converge the search sidecar\". Compact by default; " +
+        "context query=\"<the task in this area>\". Compact by default; " +
         "format=json to chain.")]
     public string ContextWithCancellation(
         [Description("The task or question to anchor the bundle on.")] string query,

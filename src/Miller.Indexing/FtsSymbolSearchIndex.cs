@@ -195,7 +195,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         // Distinct query terms in first-seen order — preserving the in-memory index's per-document
         // summation order so the floating-point scores are bit-identical.
         var queryTokens = new List<string>(8);
-        CodeTokenizer.Tokenize(query, queryTokens);
+        CodeTokenizer.TokenizeQuery(query, queryTokens);
         var distinctTerms = new List<string>(queryTokens.Count);
         var seenTerms = new HashSet<string>(StringComparer.Ordinal);
         foreach (string t in queryTokens)

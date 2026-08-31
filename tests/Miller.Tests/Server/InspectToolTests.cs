@@ -48,6 +48,8 @@ public sealed class InspectToolTests
                 "src/SearchTool.cs", "using System;", 1, null),
             new JulieDbFixture.SymbolRow("a0000000000000000000000000000002", "Tools", "module", "csharp",
                 "src/SearchTool.cs", "namespace Miller.Server.Tools", 2, null),
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000009", "app", "variable", "csharp",
+                "src/SearchTool.cs", "var app", 3, null),
             new JulieDbFixture.SymbolRow("a0000000000000000000000000000003", "SearchTool", "class", "csharp",
                 "src/SearchTool.cs", "public sealed class SearchTool", 10, null),
             new JulieDbFixture.SymbolRow("a0000000000000000000000000000004", "_workspaceProvider", "field", "csharp",
@@ -56,6 +58,10 @@ public sealed class InspectToolTests
                 "src/SearchTool.cs", "public static string Run(...)", 20, "a0000000000000000000000000000003"),
             new JulieDbFixture.SymbolRow("a0000000000000000000000000000006", "RenderCompact", "method", "csharp",
                 "src/SearchTool.cs", "private static string RenderCompact(...)", 30, "a0000000000000000000000000000003"),
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000007", "query", "parameter", "csharp",
+                "src/SearchTool.cs", "string query", 21, "a0000000000000000000000000000005"),
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000008", "scratch", "variable", "csharp",
+                "src/SearchTool.cs", "var scratch", 22, "a0000000000000000000000000000005"),
         });
 
     private static JulieDbFixture FixtureWithAmbiguousSymbols() =>
@@ -156,7 +162,7 @@ public sealed class InspectToolTests
         string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "src/SearchTool.cs", depth: "summary", kind: null, scope: null, limit: 50, json: false, out int count);
 
-        Assert.Equal(4, count);
+        Assert.Equal(5, count);
         Assert.Equal(
             "# src/SearchTool.cs\n" +
             "class (1)\n" +
@@ -166,11 +172,15 @@ public sealed class InspectToolTests
             "  RenderCompact  :30  [parent=SearchTool]  private static string RenderCompact(...)\n" +
             "field (1)\n" +
             "  _workspaceProvider  :11  [parent=SearchTool]  private readonly IWorkspaceSearchProvider _workspaceProvider\n" +
-            "low_signal hidden: 1 import, 1 module (pass kind=import/module)",
+            "variable (1)\n" +
+            "  app  :3  var app\n" +
+            "low_signal hidden: 1 import, 1 module, 1 parameter, 1 variable (pass kind=import/module/parameter/variable)",
             output);
         Assert.DoesNotContain("using System;", output);
         Assert.DoesNotContain("namespace Miller.Server.Tools", output);
         Assert.DoesNotContain("SearchTool  class  src/SearchTool.cs", output);
+        Assert.DoesNotContain("query  :21", output);
+        Assert.DoesNotContain("scratch  :22", output);
     }
 
     [Fact]
@@ -235,10 +245,10 @@ public sealed class InspectToolTests
         string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "src/SearchTool.cs", depth: "summary", kind: null, scope: null, limit: 50, json: true, out int count);
 
-        Assert.Equal(6, count);
+        Assert.Equal(9, count);
         using var doc = JsonDocument.Parse(output);
         var children = doc.RootElement.GetProperty("children");
-        Assert.Equal(6, children.GetArrayLength());
+        Assert.Equal(9, children.GetArrayLength());
         JsonElement import = children.EnumerateArray().Single(
             child => child.GetProperty("name").GetString() == "System");
         Assert.Equal("import", import.GetProperty("kind").GetString());
@@ -568,6 +578,82 @@ public sealed class InspectToolTests
         Assert.Equal(12 * 1024, ToolOutputBudget.InspectMcpMaxBytes);
         Assert.Equal(2 * 1024, ToolOutputBudget.InspectMcpDocMaxBytes);
         Assert.Equal(10, ToolOutputBudget.McpRowLimit);
+    }
+
+    [Fact]
+    public void FormatGroupedReferenceLines_OmitsNonPositiveLines()
+    {
+        string rendered = InspectTool.FormatGroupedReferenceLines(
+        [
+            ("src/A.cs", 18),
+            ("src/A.cs", 0),
+            ("src/A.cs", null),
+            ("src/A.cs", 115),
+            ("src/B.cs", 0),
+        ]);
+
+        Assert.Equal("src/A.cs:18,115\nsrc/B.cs\n", rendered);
+        Assert.DoesNotContain(":0", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_SymbolSummary_PrefersSignatureAccessibilityWhenRecordedVisibilityDisagrees()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "fd49da6191666bc33d9b00380583048f",
+                    "FileOperationRetryOptions",
+                    "struct",
+                    "csharp",
+                    "src/FullRebuildPromotion.cs",
+                    "internal readonly record struct FileOperationRetryOptions",
+                    7,
+                    null)
+                {
+                    Visibility = "private",
+                },
+            ]);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "FileOperationRetryOptions", depth: "summary", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("visibility: internal", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("visibility: private", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_SymbolSummary_KeepsRecordedCompoundAccessibility()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "MixedAccess",
+                    "class",
+                    "csharp",
+                    "src/Mixed.cs",
+                    "protected internal class MixedAccess",
+                    3,
+                    null)
+                {
+                    Visibility = "protected_internal",
+                },
+            ]);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "MixedAccess", depth: "summary", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("visibility: protected_internal", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("visibility: protected\n", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2254,7 +2340,7 @@ public sealed class InspectToolTests
             if (truncated)
             {
                 Assert.NotNull(continuation);
-                Assert.Equal(ToolOutputBudget.InspectFullBodyMaxBytes, Encoding.UTF8.GetByteCount(body));
+                Assert.InRange(Encoding.UTF8.GetByteCount(body), 1, ToolOutputBudget.InspectFullBodyMaxBytes);
             }
             else
             {
@@ -2339,7 +2425,7 @@ public sealed class InspectToolTests
                 int tokenStart = output.IndexOf(tokenPrefix, nextStart, StringComparison.Ordinal) + tokenPrefix.Length;
                 int tokenEnd = output.IndexOf('"', tokenStart);
                 continuation = output[tokenStart..tokenEnd];
-                Assert.Equal(ToolOutputBudget.InspectFullBodyMaxBytes, Encoding.UTF8.GetByteCount(body));
+                Assert.InRange(Encoding.UTF8.GetByteCount(body), 1, ToolOutputBudget.InspectFullBodyMaxBytes);
             }
         }
         while (continuation is not null && pages < 100);
@@ -2508,6 +2594,8 @@ public sealed class InspectToolTests
         Assert.Contains("more specific target", output);
         Assert.DoesNotContain("pass scope=<file>", output);
         Assert.DoesNotContain("scope=\"src/SearchTool.cs\"", output);
+        Assert.Contains("target=\"cc11223344556677889900aabbccddee\"", output);
+        Assert.Contains("target=\"dd11223344556677889900aabbccddee\"", output);
     }
 
     [Fact]

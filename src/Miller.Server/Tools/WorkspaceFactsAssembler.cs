@@ -530,16 +530,15 @@ internal static class WorkspaceFactsAssembler
         {
             matched = matched.Where(entry =>
                 entry.DisplayId.Contains(activeFilter, StringComparison.OrdinalIgnoreCase) ||
-                entry.Root.Contains(activeFilter, StringComparison.OrdinalIgnoreCase));
+                entry.Root.Contains(activeFilter, StringComparison.OrdinalIgnoreCase) ||
+                entry.State.Contains(activeFilter, StringComparison.OrdinalIgnoreCase));
         }
 
         List<WorkspaceListEntry> matchedEntries = matched.ToList();
         WorkspaceListEntry[] returnedEntries = activeLimit is { } cap
-            ? [.. matchedEntries.Take(cap)]
+            ? TakePreferringErrors(matchedEntries, cap)
             : [.. matchedEntries];
-        int omittedErrors = matchedEntries
-            .Skip(returnedEntries.Length)
-            .Count(static entry => string.Equals(entry.State, "error", StringComparison.Ordinal));
+        int omittedErrors = matchedEntries.Count(IsErrorRow) - returnedEntries.Count(IsErrorRow);
         return new WorkspaceListFacts(
             returnedEntries,
             entries.Count,
@@ -552,6 +551,43 @@ internal static class WorkspaceFactsAssembler
             RegisteredMissing: entries.Count(static entry => entry.RootMissing),
             MatchedMissing: matchedEntries.Count(static entry => entry.RootMissing),
             ReturnedMissing: returnedEntries.Count(static entry => entry.RootMissing));
+    }
+
+    private static bool IsErrorRow(WorkspaceListEntry entry) =>
+        string.Equals(entry.State, "error", StringComparison.Ordinal);
+
+    private static WorkspaceListEntry[] TakePreferringErrors(
+        IReadOnlyList<WorkspaceListEntry> matched,
+        int cap)
+    {
+        bool keepCurrent = matched.Any(static entry => entry.Current && !IsErrorRow(entry));
+        int reservedCurrentSlots = keepCurrent ? 1 : 0;
+        int errorSlots = Math.Min(matched.Count(IsErrorRow), Math.Max(0, cap - reservedCurrentSlots));
+        int nonErrorSlots = cap - errorSlots;
+        int takenErrors = 0;
+        int takenNonErrors = 0;
+        var returned = new List<WorkspaceListEntry>(Math.Min(cap, matched.Count));
+        foreach (WorkspaceListEntry entry in matched)
+        {
+            if (IsErrorRow(entry))
+            {
+                if (takenErrors >= errorSlots)
+                    continue;
+                takenErrors++;
+            }
+            else
+            {
+                if (takenNonErrors >= nonErrorSlots)
+                    continue;
+                takenNonErrors++;
+            }
+
+            returned.Add(entry);
+            if (returned.Count == cap)
+                break;
+        }
+
+        return [.. returned];
     }
 
     private static WorkspaceFacts MissingIndexFacts(

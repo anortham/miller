@@ -1399,6 +1399,23 @@ public sealed class WorkspaceRenderTests
     }
 
     [Fact]
+    public void Status_Compact_MatchingWatermarkNamesTheFailureInsteadOfEqualRevisions()
+    {
+        var facts = Facts() with
+        {
+            BuiltRevision = 2463,
+            LatestObservedRevision = 2463,
+            IndexFresh = false,
+            FreshnessStatus = "scan_failing",
+        };
+
+        string text = WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false);
+
+        Assert.Contains("STALE scan_failing", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("built 2463 = latest 2463", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Status_Compact_ShowsSearchSidecarState()
     {
         var facts = Facts() with
@@ -1932,6 +1949,83 @@ public sealed class WorkspaceRenderTests
 
         Assert.Contains("preview registry cleanup with a prune dry run", text);
         Assert.DoesNotContain("workspace(operation=", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void List_Compact_NamesOmittedErrorRowsInsideTheDefaultCap()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        var rows = new[]
+        {
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-ready-1",
+                DisplayId: "ready-111111111111",
+                Root: "/repo/ready-1",
+                DbPath: "/repo/ready-1/.miller/symbols.db",
+                State: "ready",
+                LastRevision: 3,
+                Current: false,
+                LastError: null,
+                LastSeenAt: now),
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-ready-2",
+                DisplayId: "ready-222222222222",
+                Root: "/repo/ready-2",
+                DbPath: "/repo/ready-2/.miller/symbols.db",
+                State: "ready",
+                LastRevision: 2,
+                Current: false,
+                LastError: null,
+                LastSeenAt: now.AddMinutes(-1)),
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-error",
+                DisplayId: "user-relief-2026-08-11-7d6756cc5362",
+                Root: "/repo/broken",
+                DbPath: "/repo/broken/.miller/symbols.db",
+                State: "error",
+                LastRevision: 1,
+                Current: false,
+                LastError: "store failed",
+                LastSeenAt: now.AddMinutes(-2)),
+        };
+
+        string text = WorkspaceRender.List(rows, json: false, limit: 2);
+
+        Assert.Contains("user-relief-2026-08-11-7d6756cc5362", text);
+        Assert.Contains("error: store failed", text);
+        Assert.DoesNotContain("workspace(s) in error state", text);
+    }
+
+    [Fact]
+    public void List_Compact_FilterErrorMatchesState()
+    {
+        var rows = new[]
+        {
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-ready",
+                DisplayId: "ready-111111111111",
+                Root: "/repo/ready",
+                DbPath: "/repo/ready/.miller/symbols.db",
+                State: "ready",
+                LastRevision: 3,
+                Current: false,
+                LastError: null),
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-error",
+                DisplayId: "broken-222222222222",
+                Root: "/tmp/broken",
+                DbPath: "/tmp/broken/.miller/symbols.db",
+                State: "error",
+                LastRevision: 1,
+                Current: false,
+                LastError: "store failed"),
+        };
+
+        string text = WorkspaceRender.List(rows, json: false, filter: "error");
+
+        Assert.Contains("broken-222222222222", text);
+        Assert.DoesNotContain("ready-111111111111", text);
+        Assert.Contains("filter=\"error\"", text);
     }
 
     [Fact]

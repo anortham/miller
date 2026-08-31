@@ -300,8 +300,13 @@ public sealed class EditService
             case TargetResolution.Candidates cands:
                 return Candidates(cands.Matches, json);
             case TargetResolution.NotFound:
-            case TargetResolution.File: // a file target for a symbol op is a usage error
                 return NotFound(request.Target, json);
+            case TargetResolution.File:
+                return Error(
+                    $"'{request.Target}' is a file. {request.Operation} needs a symbol name or id. " +
+                    "Use replace_text to edit the file, or inspect it and pass a symbol.",
+                    json,
+                    failureReason: FailureInvalidRequest);
             default:
                 return Error(
                     $"could not resolve '{request.Target}' to a single symbol. Locate it with inspect or search, " +
@@ -351,7 +356,7 @@ public sealed class EditService
             plan = op switch
             {
                 EditOperation.ReplaceSymbolBody => EditPlanner.ReplaceSymbolBody(span!, request.NewText ?? string.Empty),
-                EditOperation.ReplaceSymbolSignature => EditPlanner.ReplaceSymbolSignature(span!, request.NewText ?? string.Empty),
+                EditOperation.ReplaceSymbolSignature => EditPlanner.ReplaceSymbolSignature(content, span!, request.NewText ?? string.Empty),
                 EditOperation.InsertBefore => EditPlanner.InsertBefore(span!, request.NewText ?? string.Empty),
                 EditOperation.InsertAfter => EditPlanner.InsertAfter(span!, request.NewText ?? string.Empty),
                 EditOperation.AddDoc => EditPlanner.AddDoc(content, span!, request.NewText ?? string.Empty),

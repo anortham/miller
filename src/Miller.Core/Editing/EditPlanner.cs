@@ -49,8 +49,9 @@ public static class EditPlanner
     /// Rejects a symbol with no body span (the signature span's exclusive end is undefined without it).
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="span"/> or <paramref name="newText"/> is null.</exception>
-    public static EditPlan ReplaceSymbolSignature(SymbolEditSpan span, string newText)
+    public static EditPlan ReplaceSymbolSignature(string content, SymbolEditSpan span, string newText)
     {
+        ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(span);
         ArgumentNullException.ThrowIfNull(newText);
 
@@ -59,10 +60,21 @@ public static class EditPlanner
         if (newText.Length == 0)
             return EmptyNewText("replace_symbol_signature");
 
+        byte[] bytes = Encoding.UTF8.GetBytes(content);
+        if (span.StartByte >= 0 && bodyStart <= bytes.Length && span.StartByte <= bodyStart)
+        {
+            string current = Encoding.UTF8.GetString(bytes, span.StartByte, bodyStart - span.StartByte);
+            if (string.Equals(newText.TrimEnd(), current.TrimEnd(), StringComparison.Ordinal))
+                return EditPlan.Success([]);
+        }
+
         return EditPlan.Success([new TextEdit(span.StartByte, bodyStart, newText)]);
     }
 
-    /// <summary>Plan a zero-width insertion at the symbol's <c>start_byte</c> (decision log #7).</summary>
+    /// <summary>
+    /// Plan a zero-width insertion at the symbol's <c>start_byte</c> (decision log #7).
+    /// A trailing newline is added when the caller omitted one, so the insert cannot glue onto the symbol.
+    /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="span"/> or <paramref name="newText"/> is null.</exception>
     public static EditPlan InsertBefore(SymbolEditSpan span, string newText)
     {
@@ -74,10 +86,13 @@ public static class EditPlanner
         if (newText.Length == 0)
             return EmptyNewText("insert_before");
 
-        return EditPlan.Success([new TextEdit(span.StartByte, span.StartByte, newText)]);
+        return EditPlan.Success([new TextEdit(span.StartByte, span.StartByte, EnsureTrailingLineBreak(newText))]);
     }
 
-    /// <summary>Plan a zero-width insertion at the symbol's <c>end_byte</c> (decision log #7).</summary>
+    /// <summary>
+    /// Plan a zero-width insertion at the symbol's <c>end_byte</c> (decision log #7).
+    /// A leading newline is added when the caller omitted one, so the insert cannot glue onto the symbol.
+    /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="span"/> or <paramref name="newText"/> is null.</exception>
     public static EditPlan InsertAfter(SymbolEditSpan span, string newText)
     {
@@ -89,7 +104,7 @@ public static class EditPlanner
         if (newText.Length == 0)
             return EmptyNewText("insert_after");
 
-        return EditPlan.Success([new TextEdit(span.EndByte, span.EndByte, newText)]);
+        return EditPlan.Success([new TextEdit(span.EndByte, span.EndByte, EnsureLeadingLineBreak(newText))]);
     }
 
     /// <summary>
@@ -246,4 +261,19 @@ public static class EditPlanner
         EditPlan.Failure(new EditError(
             EditErrorKind.MissingArgument,
             $"new_text must not be empty for {operation}."));
+
+    private static string EnsureTrailingLineBreak(string text)
+    {
+        if (text.EndsWith('\n'))
+            return text;
+
+        int lastBreak = text.LastIndexOf('\n');
+        if (lastBreak >= 0 && string.IsNullOrWhiteSpace(text[(lastBreak + 1)..]))
+            return text;
+
+        return text + "\n";
+    }
+
+    private static string EnsureLeadingLineBreak(string text) =>
+        text.StartsWith('\n') || text.StartsWith("\r\n", StringComparison.Ordinal) ? text : "\n" + text;
 }

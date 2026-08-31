@@ -120,4 +120,37 @@ public sealed class CodeTokenizerTests
         // digit -> letter boundary (3d -> 3|d after the camel/digit rule).
         Assert.Equal(new[] { "v8engine", "v", "8", "engine" }, Tokenize("v8Engine"));
     }
+
+    private static List<string> TokenizeQuery(string text)
+    {
+        var output = new List<string>();
+        CodeTokenizer.TokenizeQuery(text, output);
+        return output;
+    }
+
+    [Fact]
+    public void TokenizeQuery_DropsDigitsSplitFromAnIdentifier_KeepsTheLetterRun()
+    {
+        Assert.Equal(
+            new[] { "doesnotexistxyzzy123", "doesnotexistxyzzy" },
+            TokenizeQuery("doesnotexistxyzzy123"));
+    }
+
+    [Fact]
+    public void TokenizeQuery_KeepsAStandaloneNumber()
+    {
+        Assert.Equal(new[] { "123" }, TokenizeQuery("123"));
+    }
+
+    [Fact]
+    public void TokenizeQuery_KeepsANumberTypedAsItsOwnWord()
+    {
+        Assert.Equal(new[] { "pid", "123" }, TokenizeQuery("pid 123"));
+    }
+
+    [Fact]
+    public void TokenizeQuery_Vector512_KeepsTheIdentifierAndLetterRun()
+    {
+        Assert.Equal(new[] { "vector512", "vector" }, TokenizeQuery("Vector512"));
+    }
 }

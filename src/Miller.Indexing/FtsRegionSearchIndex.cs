@@ -136,7 +136,7 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
             return Array.Empty<RegionSearchHit>();
 
         var queryTokens = new List<string>(8);
-        CodeTokenizer.Tokenize(query, queryTokens);
+        CodeTokenizer.TokenizeQuery(query, queryTokens);
         if (queryTokens.Count == 0)
             return Array.Empty<RegionSearchHit>();
 

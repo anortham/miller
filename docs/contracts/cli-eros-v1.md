@@ -573,7 +573,8 @@ Every row includes `root_missing`. These totals come from one registry read plus
 never opens a workspace index. The exact missing-root totals require one synchronous existence probe per
 registered row, including rows omitted by the output limit. `filter` and `limit` are `null` when inactive.
 Compact output applies the default limit of 20 and prints the same primary totals plus the active filter and
-limit before the returned rows.
+limit before the returned rows. `filter` is a case-insensitive substring of display id, root, or state.
+Error-state rows stay inside the cap when a non-error would otherwise occupy the last slots.
 
 `workspace remove` resolves a registered selector or registered root before deleting. An existing but
 unregistered `.miller` directory returns `not_found` and is left untouched. The live workspace, sensitive roots,

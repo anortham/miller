@@ -334,29 +334,37 @@ public sealed class TraceTool
         ToolDiagnosticAction sourceRefs = new(
             $"trace(target=\"{ToolDiagnosticText.EscapeCallArgument(target)}\", mode=\"refs\")",
             "check extracted identifier references from the resolved target");
-        ToolDiagnosticAction sourceSearch = new(
-            $"search(query=\"{ToolDiagnosticText.EscapeCallArgument(target)}\", mode=\"source\")",
-            "look for source text links not represented in the graph");
+        ToolDiagnosticAction? sourceSearch = LooksLikeSymbolIdToken(target)
+            ? null
+            : new ToolDiagnosticAction(
+                $"search(query=\"{ToolDiagnosticText.EscapeCallArgument(target)}\", mode=\"source\")",
+                "look for source text links not represented in the graph");
         if (mode == ModeRefs)
         {
+            var refsActions = new List<ToolDiagnosticAction>
+            {
+                CrossToolHandoff.StringLiteralUsages(target),
+            };
+            if (sourceSearch is not null)
+                refsActions.Add(sourceSearch);
+            refsActions.Add(new ToolDiagnosticAction(
+                $"inspect(target=\"{ToolDiagnosticText.EscapeCallArgument(target)}\", depth=\"full\")",
+                "inspect callers and callees from the symbol graph"));
             return ToolDiagnostic.ExpectedEmpty(
                 "no_references",
                 "Trace produced no references.",
-                [
-                    CrossToolHandoff.StringLiteralUsages(target),
-                    sourceSearch,
-                    new ToolDiagnosticAction(
-                        $"inspect(target=\"{ToolDiagnosticText.EscapeCallArgument(target)}\", depth=\"full\")",
-                        "inspect callers and callees from the symbol graph"),
-                ]);
+                refsActions);
         }
 
         if (mode == ModeBridge)
         {
+            var bridgeActions = new List<ToolDiagnosticAction> { sourceRefs };
+            if (sourceSearch is not null)
+                bridgeActions.Add(sourceSearch);
             return ToolDiagnostic.ExpectedEmpty(
                 "no_bridge_path",
                 "Trace produced no bridge path.",
-                [sourceRefs, sourceSearch]);
+                bridgeActions);
         }
 
         var pathActions = new List<ToolDiagnosticAction> { sourceRefs };
@@ -367,8 +375,23 @@ public sealed class TraceTool
                 $"trace(target=\"{ToolDiagnosticText.EscapeCallArgument(to)}\", mode=\"refs\")",
                 "check extracted identifier references from the resolved destination"));
         }
-        pathActions.Add(sourceSearch);
+        if (sourceSearch is not null)
+            pathActions.Add(sourceSearch);
         return ToolDiagnostic.ExpectedEmpty("no_path", "Trace produced no dependency path.", pathActions);
+    }
+
+    private static bool LooksLikeSymbolIdToken(string value)
+    {
+        if (value.Length != 32)
+            return false;
+        foreach (char c in value)
+        {
+            bool hex = c is >= '0' and <= '9' or >= 'a' and <= 'f';
+            if (!hex)
+                return false;
+        }
+
+        return true;
     }
 
     private static string LimitBucket(int limit) => limit switch
@@ -801,6 +824,89 @@ public sealed class TraceTool
     private static bool IsCallLikePathEdge(GraphNeighbour edge) =>
         edge.EdgeKind.ToLowerInvariant() is "calls" or "call" or "invokes" or "instantiates";
 
+    private static bool IsTypeKind(string kind) =>
+        kind is "class" or "struct" or "interface" or "enum" or "record" or "type";
+
+    private static bool IsMemberCallableKind(string kind) =>
+        kind is "method" or "function" or "constructor";
+
+    private static ReferenceEvidenceSet CollectReferenceEvidence(
+        ISymbolLookupIndex index,
+        IndexedSymbol targetSymbol,
+        ReferenceEvidenceQuery populationQuery,
+        Func<IndexedSymbol, ReferenceEvidenceQuery, ReferenceEvidenceSet> readReferenceEvidence,
+        int limit)
+    {
+        ReferenceEvidenceSet own = readReferenceEvidence(targetSymbol, populationQuery);
+        if (!IsTypeKind(targetSymbol.Kind))
+            return own;
+
+        var exact = own.Exact.ToList();
+        var fallback = own.Fallback.ToList();
+        var seenSites = new HashSet<string>(StringComparer.Ordinal);
+        foreach (ReferenceEvidence reference in exact.Concat(fallback))
+        {
+            if (!string.IsNullOrEmpty(reference.ReferenceSiteId))
+                seenSites.Add(reference.ReferenceSiteId);
+        }
+
+        int exactAvailable = own.Coverage.ExactAvailable;
+        bool exactTruncated = own.Coverage.ExactTruncated;
+        foreach (IndexedSymbol child in index.FindChildren(targetSymbol.SymbolId))
+        {
+            if (!IsMemberCallableKind(child.Kind))
+                continue;
+
+            ReferenceEvidenceSet childSet = readReferenceEvidence(child, populationQuery);
+            exactAvailable += childSet.Coverage.ExactAvailable;
+            exactTruncated |= childSet.Coverage.ExactTruncated;
+            if (exact.Count >= limit)
+                continue;
+
+            foreach (ReferenceEvidence reference in childSet.Exact)
+            {
+                if (!string.IsNullOrEmpty(reference.ReferenceSiteId) &&
+                    !seenSites.Add(reference.ReferenceSiteId))
+                    continue;
+                exact.Add(reference);
+                if (exact.Count >= limit)
+                    break;
+            }
+        }
+
+        if (exact.Count >= limit && exactAvailable > exact.Count)
+            exactTruncated = true;
+
+        int remainingFallback = Math.Max(0, limit - exact.Count);
+        if (remainingFallback > 0)
+        {
+            var keptFallback = new List<ReferenceEvidence>(Math.Min(remainingFallback, fallback.Count));
+            foreach (ReferenceEvidence reference in fallback)
+            {
+                if (keptFallback.Count >= remainingFallback)
+                    break;
+                keptFallback.Add(reference);
+            }
+            fallback = keptFallback;
+        }
+        else
+            fallback = [];
+
+        return own with
+        {
+            Exact = exact,
+            Fallback = fallback,
+            Coverage = own.Coverage with
+            {
+                ExactObserved = exact.Count,
+                ExactAvailable = Math.Max(exactAvailable, exact.Count),
+                ExactReturned = Math.Min(limit, exact.Count),
+                ExactTruncated = exactTruncated,
+                FallbackReturned = fallback.Count,
+            },
+        };
+    }
+
     private static string RefsEmptyHint(string name, string? normalizedKind) =>
         normalizedKind is null
             ? $"No extracted refs for '{name}' — the extractor may not emit refs here."
@@ -865,7 +971,8 @@ public sealed class TraceTool
             kind,
             0,
             0);
-        ReferenceEvidenceSet evidence = readReferenceEvidence(targetSymbol, populationQuery);
+        ReferenceEvidenceSet evidence = CollectReferenceEvidence(
+            index, targetSymbol, populationQuery, readReferenceEvidence, limit);
         ReferenceEvidence[] exactPopulation = evidence.Exact
             .Where(reference => kind is null || reference.Kind == kind)
             .Take(limit)
@@ -2178,19 +2285,25 @@ public sealed class TraceTool
         ];
     }
 
-    private static IReadOnlyList<TraceNextAction> RefsEmptyNextActions(string target) =>
-    [
-        NextAction(
-            "search",
-            "look for text occurrences because extracted refs may be unavailable or incomplete",
-            ("query", target),
-            ("mode", "source")),
-        NextAction(
+    private static IReadOnlyList<TraceNextAction> RefsEmptyNextActions(string target)
+    {
+        var actions = new List<TraceNextAction>();
+        if (!LooksLikeSymbolIdToken(target))
+        {
+            actions.Add(NextAction(
+                "search",
+                "look for text occurrences because extracted refs may be unavailable or incomplete",
+                ("query", target),
+                ("mode", "source")));
+        }
+
+        actions.Add(NextAction(
             "inspect",
             "inspect callers and callees from the symbol graph",
             ("target", target),
-            ("depth", "full")),
-    ];
+            ("depth", "full")));
+        return actions;
+    }
 
     private static IReadOnlyList<TraceNextAction> BridgeFallbackNextActions(string target, BridgeCapabilityReport? capabilityReport = null)
     {
@@ -2206,12 +2319,15 @@ public sealed class TraceTool
             "inspect callers and callees from the symbol graph",
             ("target", target),
             ("depth", "full")),
-            NextAction(
-            "search",
-            "look for source text links not represented in the bridge graph",
-            ("query", target),
-            ("mode", "source")),
         };
+        if (!LooksLikeSymbolIdToken(target))
+        {
+            actions.Add(NextAction(
+                "search",
+                "look for source text links not represented in the bridge graph",
+                ("query", target),
+                ("mode", "source")));
+        }
 
         if (capabilityReport is not null && HasRouteFactEvidence(capabilityReport))
         {

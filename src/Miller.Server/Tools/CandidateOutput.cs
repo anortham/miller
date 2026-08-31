@@ -24,16 +24,21 @@ internal static class CandidateOutput
         bool supportsScope,
         string command = "inspect")
     {
-        if (!supportsScope || !SpansMultipleFiles(matches))
-            return Array.Empty<string>();
-
-        string escapedTarget = EscapeShellishArgument(target);
         string escapedCommand = EscapeShellishArgument(command);
+        if (supportsScope && SpansMultipleFiles(matches))
+        {
+            string escapedTarget = EscapeShellishArgument(target);
+            return matches
+                .Select(static match => match.FilePath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(3)
+                .Select(path => $"{escapedCommand} target=\"{escapedTarget}\" scope=\"{EscapeShellishArgument(path)}\"")
+                .ToArray();
+        }
+
         return matches
-            .Select(static match => match.FilePath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(3)
-            .Select(path => $"{escapedCommand} target=\"{escapedTarget}\" scope=\"{EscapeShellishArgument(path)}\"")
+            .Select(match => $"{escapedCommand} target=\"{EscapeShellishArgument(match.SymbolId)}\"")
             .ToArray();
     }
 

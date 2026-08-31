@@ -905,12 +905,21 @@ public static class WorkspaceRender
     }
 
     // "fresh" / "STALE (built N < latest M)" / "unknown" — a stale index is called out, never silently glossed.
+    // Matching watermarks must not print "built N = latest N"; that proves nothing. Name the failure instead.
     private static string FreshLabel(WorkspaceFacts facts) => facts.IndexFresh switch
     {
         true => "fresh",
+        false when facts.BuiltRevision == facts.LatestObservedRevision =>
+            StaleWithoutWatermarkDelta(facts),
         false => $"STALE ({RevisionComparison(facts.BuiltRevision, facts.LatestObservedRevision, "latest")})",
         null => "unknown",
     };
+
+    private static string StaleWithoutWatermarkDelta(WorkspaceFacts facts) =>
+        !string.IsNullOrEmpty(facts.FreshnessStatus) &&
+        !string.Equals(facts.FreshnessStatus, "current", StringComparison.OrdinalIgnoreCase)
+            ? "STALE " + facts.FreshnessStatus
+            : "STALE";
 
     private static string RevisionComparison(long? builtRevision, long expectedRevision, string expectedLabel)
     {
@@ -2014,8 +2023,9 @@ public static class WorkspaceRender
 
     /// <summary>
     /// Render the registry-backed workspace list. Entries are ordered current-first then most-recently-seen.
-    /// <paramref name="filter"/> is a case-insensitive substring matched against display id or root, applied
-    /// before the cap. <paramref name="limit"/> caps the compact view (default 20; <c>&lt;= 0</c> unlimited);
+    /// <paramref name="filter"/> is a case-insensitive substring matched against display id, root, or state,
+    /// applied before the cap. Error-state rows stay inside the cap when a non-error would otherwise occupy
+    /// the last slots. <paramref name="limit"/> caps the compact view (default 20; <c>&lt;= 0</c> unlimited);
     /// JSON is unlimited unless <paramref name="limit"/> is set to a positive value (additive <c>last_seen_at</c>).
     /// </summary>
     public static string List(

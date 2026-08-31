@@ -1984,7 +1984,7 @@ public sealed class ContentTool
             $"content_hash: {shape.ContentHash}",
             $"source_bytes: {shape.SourceBytes}",
             $"line_count: {shape.LineCount}",
-            $"severity (text-derived): fatal={shape.Severity.Fatal} error={shape.Severity.Error} " +
+            $"token counts (not log severity): fatal={shape.Severity.Fatal} error={shape.Severity.Error} " +
             $"warning={shape.Severity.Warning} info={shape.Severity.Info} debug={shape.Severity.Debug} " +
             $"other={shape.Severity.Other}",
             "head:",

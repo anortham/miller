@@ -415,6 +415,81 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
     }
 
     [Fact]
+    public void ToListFacts_FilterMatchesStateWhenDisplayIdAndRootDoNot()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        var entries = new[]
+        {
+            ListEntry("ready-aaaa", "ready", now, lastError: null),
+            ListEntry("broken-bbbb", "error", now.AddMinutes(-1), lastError: "store failed"),
+        };
+
+        WorkspaceListFacts facts = WorkspaceFactsAssembler.ToListFacts(entries, "error", limit: 20);
+
+        WorkspaceListEntry only = Assert.Single(facts.Entries);
+        Assert.Equal("broken-bbbb", only.DisplayId);
+        Assert.Equal(2, facts.Registered);
+        Assert.Equal(1, facts.Matched);
+        Assert.Equal(0, facts.OmittedErrors);
+    }
+
+    [Fact]
+    public void ToListFacts_LimitKeepsErrorRowsInsideTheCap()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        var entries = new[]
+        {
+            ListEntry("recent-ready", "ready", now, lastError: null),
+            ListEntry("older-ready", "ready", now.AddMinutes(-1), lastError: null),
+            ListEntry("oldest-error", "error", now.AddMinutes(-2), lastError: "store failed"),
+        };
+
+        WorkspaceListFacts facts = WorkspaceFactsAssembler.ToListFacts(entries, filter: null, limit: 2);
+
+        Assert.Equal(2, facts.Returned);
+        Assert.Equal(1, facts.Omitted);
+        Assert.Equal(0, facts.OmittedErrors);
+        Assert.Contains(facts.Entries, entry => entry.DisplayId == "oldest-error");
+        Assert.Contains(facts.Entries, entry => entry.DisplayId == "recent-ready");
+        Assert.DoesNotContain(facts.Entries, entry => entry.DisplayId == "older-ready");
+    }
+
+    [Fact]
+    public void ToListFacts_LimitKeepsCurrentWhenErrorCountFillsTheCap()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        var entries = new[]
+        {
+            ListEntry("current-ready", "ready", now, lastError: null) with { Current = true },
+            ListEntry("error-a", "error", now.AddMinutes(-1), lastError: "a"),
+            ListEntry("error-b", "error", now.AddMinutes(-2), lastError: "b"),
+        };
+
+        WorkspaceListFacts facts = WorkspaceFactsAssembler.ToListFacts(entries, filter: null, limit: 2);
+
+        Assert.Equal(2, facts.Returned);
+        Assert.Contains(facts.Entries, entry => entry.DisplayId == "current-ready");
+        Assert.Contains(facts.Entries, entry => entry.State == "error");
+        Assert.Equal(1, facts.OmittedErrors);
+    }
+
+    private static WorkspaceListEntry ListEntry(
+        string displayId,
+        string state,
+        DateTimeOffset lastSeenAt,
+        string? lastError) =>
+        new(
+            WorkspaceId: displayId,
+            DisplayId: displayId,
+            Root: $"/repo/{displayId}",
+            DbPath: $"/repo/{displayId}/.miller/symbols.db",
+            State: state,
+            LastRevision: 1,
+            Current: false,
+            LastError: lastError,
+            LastSeenAt: lastSeenAt);
+
+    [Fact]
     public void SemanticOff_FactsReportDisabledVectorsAndAnOffBrokerWithoutDerivingAnEndpoint()
     {
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(_temp, "workspaces.db"));

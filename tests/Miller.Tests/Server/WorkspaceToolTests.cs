@@ -1043,19 +1043,18 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
-    public void List_Compact_OmittedErrorStateProducesErrorSummary()
+    public void List_Compact_KeepsErrorStateInsideTheDefaultCap()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
-        // The oldest seeded row (i=1) is error-state; being oldest it falls outside the default cap.
         SeedOtherWorkspaces(
             harness, count: 25, baseSeenAt: DateTimeOffset.UtcNow.AddDays(-1),
             stateFor: i => i == 1 ? WorkspaceRegistryState.Error : WorkspaceRegistryState.Ready);
 
         string output = harness.Tool.Workspace(operation: "list");
 
-        Assert.DoesNotContain("seed-001-aaaaaaaa", output); // omitted past the cap
-        Assert.Contains("errors: 1 workspace(s) in error state — filter or raise limit to see them", output);
+        Assert.Contains("seed-001-aaaaaaaa", output);
+        Assert.DoesNotContain("workspace(s) in error state", output);
     }
 
     [Fact]
@@ -1687,6 +1686,35 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Equal("unavailable", doc.RootElement.GetProperty("verdict").GetProperty("state").GetString());
         Assert.Contains("could not read", doc.RootElement.GetProperty("warnings")[0].GetProperty("message").GetString(),
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Health_UnavailableIndex_IsUsablePayloadNotMcpError()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
+        string otherRoot = NewTempDir("health-unavailable-mcp");
+        string missingDb = Path.Combine(otherRoot, ".miller", "symbols.db");
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, missingDb, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        using var telemetry = harness.Ledger.Measure("workspace", op: null);
+        string json = harness.Tool.Workspace(
+            operation: "health",
+            workspace_id: OtherWs,
+            format: "json");
+        string compact = harness.Tool.Workspace(
+            operation: "health",
+            workspace_id: OtherWs);
+
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal("unavailable", doc.RootElement.GetProperty("verdict").GetProperty("state").GetString());
+        Assert.False(doc.RootElement.TryGetProperty("diagnostic", out _));
+        Assert.DoesNotContain("workspace_health_unavailable", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("diagnostic_code=workspace_health_unavailable", compact, StringComparison.Ordinal);
+        Assert.Equal(TelemetryOutcome.Ok, telemetry.Outcome);
+        Assert.False(telemetry.UseMcpErrorChannel);
+        Assert.Equal(1, telemetry.ResultCount);
     }
 
     // ---- open / remove arg guards ----

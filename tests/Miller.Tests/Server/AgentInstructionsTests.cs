@@ -248,6 +248,18 @@ public sealed class AgentInstructionsTests
         Assert.DoesNotContain("metrics(operation=", instructions);
     }
 
+    [Fact]
+    public void ToolDescriptions_DoNotEmbedSelfMatchingExampleQueries()
+    {
+        string search = typeof(SearchTool).GetMethod(nameof(SearchTool.Search))!
+            .GetCustomAttribute<DescriptionAttribute>()!.Description!;
+        string context = typeof(ContextTool).GetMethod(nameof(ContextTool.ContextWithCancellation))!
+            .GetCustomAttribute<DescriptionAttribute>()!.Description!;
+
+        Assert.DoesNotContain("promote rebuild", search, StringComparison.Ordinal);
+        Assert.DoesNotContain("converge the search sidecar", context, StringComparison.Ordinal);
+    }
+
     [Theory]
     [MemberData(nameof(ToolMethods))]
     public void ToolDescriptions_StayWithinPerToolBudget(MethodInfo method)

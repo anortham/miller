@@ -135,13 +135,31 @@ public sealed class EditPlannerTests
     {
         // signature span = [start, bodyStart)
         var span = MethodSpan(start: 81, end: 130, bodyStart: 112, bodyEnd: 130);
-        var plan = EditPlanner.ReplaceSymbolSignature(span, "public int Total() ");
+        string content = new string('a', 200);
+        var plan = EditPlanner.ReplaceSymbolSignature(content, span, "public int Total() ");
 
         Assert.True(plan.IsSuccess);
         var edit = Assert.Single(plan.Edits);
         Assert.Equal(81, edit.StartByte);
         Assert.Equal(112, edit.EndByte);
         Assert.Equal("public int Total() ", edit.Replacement);
+    }
+
+    [Fact]
+    public void ReplaceSymbolSignature_TrimmedIdenticalText_IsNoOp()
+    {
+        const string prefix = "class C { ";
+        const string signature = "public int Total()";
+        const string between = "\n    ";
+        const string body = "{ return 0; } }";
+        string content = prefix + signature + between + body;
+        int start = ByteLen(prefix);
+        int bodyStart = start + ByteLen(signature + between);
+        var span = MethodSpan(start, ByteLen(content), bodyStart, ByteLen(content));
+        var plan = EditPlanner.ReplaceSymbolSignature(content, span, signature);
+
+        Assert.True(plan.IsSuccess);
+        Assert.Empty(plan.Edits);
     }
 
     [Fact]
@@ -161,7 +179,7 @@ public sealed class EditPlannerTests
     {
         // Signature span needs body_start as its exclusive end; without it the op is undefined.
         var span = new SymbolEditSpan(10, 20, BodyStartByte: null, BodyEndByte: null, StartLine: 2, Name: "count");
-        var plan = EditPlanner.ReplaceSymbolSignature(span, "x");
+        var plan = EditPlanner.ReplaceSymbolSignature(string.Empty, span, "x");
 
         Assert.False(plan.IsSuccess);
         Assert.Equal(EditErrorKind.BodySpanUnavailable, plan.Error!.Kind);
@@ -192,6 +210,39 @@ public sealed class EditPlannerTests
     }
 
     [Fact]
+    public void InsertBefore_WithoutTrailingNewline_SeparatesFromTheSymbol()
+    {
+        var span = MethodSpan(start: 81, end: 130, bodyStart: 112, bodyEnd: 130);
+        var plan = EditPlanner.InsertBefore(span, "// marker");
+
+        Assert.True(plan.IsSuccess);
+        var edit = Assert.Single(plan.Edits);
+        Assert.Equal("// marker\n", edit.Replacement);
+    }
+
+    [Fact]
+    public void InsertBefore_AlreadyContainsANewline_DoesNotAppendAnother()
+    {
+        var span = MethodSpan(start: 81, end: 130, bodyStart: 112, bodyEnd: 130);
+        var plan = EditPlanner.InsertBefore(span, "[Obsolete]\n  ");
+
+        Assert.True(plan.IsSuccess);
+        var edit = Assert.Single(plan.Edits);
+        Assert.Equal("[Obsolete]\n  ", edit.Replacement);
+    }
+
+    [Fact]
+    public void InsertBefore_MultilineCommentWithoutTrailingNewline_SeparatesFromTheSymbol()
+    {
+        var span = MethodSpan(start: 81, end: 130, bodyStart: 112, bodyEnd: 130);
+        var plan = EditPlanner.InsertBefore(span, "// first\n// second");
+
+        Assert.True(plan.IsSuccess);
+        var edit = Assert.Single(plan.Edits);
+        Assert.Equal("// first\n// second\n", edit.Replacement);
+    }
+
+    [Fact]
     public void InsertAfter_IsZeroWidthAtEndByte()
     {
         var span = MethodSpan(start: 81, end: 130, bodyStart: 112, bodyEnd: 130);
@@ -202,6 +253,17 @@ public sealed class EditPlannerTests
         Assert.Equal(130, edit.StartByte);
         Assert.Equal(130, edit.EndByte); // zero-width
         Assert.Equal("\n// done", edit.Replacement);
+    }
+
+    [Fact]
+    public void InsertAfter_WithoutLeadingNewline_SeparatesFromTheSymbol()
+    {
+        var span = MethodSpan(start: 81, end: 130, bodyStart: 112, bodyEnd: 130);
+        var plan = EditPlanner.InsertAfter(span, "// after");
+
+        Assert.True(plan.IsSuccess);
+        var edit = Assert.Single(plan.Edits);
+        Assert.Equal("\n// after", edit.Replacement);
     }
 
     [Fact]

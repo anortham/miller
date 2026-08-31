@@ -4324,7 +4324,7 @@ public static class CliDispatch
                    Summarize local tool telemetry into starter guidance for an indexed repo.
           leader   Diagnose the current indexer leader; --handoff queues a graceful abdication request.
           list     List registered workspaces (current first, then most-recently-seen). [--filter SUBSTR] [--limit N]
-                   Compact caps at 20 rows (--limit N, <=0 unlimited); --filter narrows by display id or root.
+                   Compact caps at 20 rows (--limit N, <=0 unlimited); --filter narrows by display id, root, or state.
           refresh  Incrementally refresh the index if the working tree changed.
           full     Force a full re-index (ignores the freshness check).
           open     Register + index a directory (creates .miller/symbols.db).  [--path DIR] [--full]

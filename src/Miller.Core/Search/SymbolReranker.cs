@@ -190,7 +190,7 @@ public static class SymbolReranker
     private static double PhraseProximity(string query, SymbolCandidate candidate)
     {
         var queryTokens = new List<string>(8);
-        CodeTokenizer.Tokenize(query, queryTokens);
+        CodeTokenizer.TokenizeQuery(query, queryTokens);
         string[] terms = queryTokens
             .Distinct(StringComparer.Ordinal)
             .ToArray();

@@ -48,6 +48,20 @@ public sealed class ToolContinuationTests
     }
 
     [Fact]
+    public void Page_PrefersALineBoundaryWhenTheBudgetCutsMidLine()
+    {
+        const string text = "alpha\nbeta gamma\n";
+        int budget = Encoding.UTF8.GetByteCount("alpha\nbe");
+
+        ToolOutputPage first = ToolOutputBudget.PageBody(text, budget, Identity, continuation: null);
+        ToolOutputPage second = ToolOutputBudget.PageBody(text, 64, Identity, first.Continuation);
+
+        Assert.Equal("alpha\n", first.Text);
+        Assert.Equal("beta gamma\n", second.Text);
+        Assert.Equal(text, first.Text + second.Text);
+    }
+
+    [Fact]
     public void BoundSearchSnippet_UsesUtf8BudgetWithoutSplittingCodePoint()
     {
         string snippet = new string('a', 510) + "😀";

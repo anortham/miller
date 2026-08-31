@@ -32,6 +32,60 @@ public static class CodeTokenizer
         }
     }
 
+    /// <summary>
+    /// Tokenize a user query. Digit-only components split from a longer identifier are dropped
+    /// so <c>doesnotexistxyzzy123</c> cannot match a bare <c>123</c>. A number the user typed as
+    /// its own word is kept.
+    /// </summary>
+    public static void TokenizeQuery(ReadOnlySpan<char> text, List<string> output)
+    {
+        int start = output.Count;
+        Tokenize(text, output);
+        if (output.Count == start)
+            return;
+
+        HashSet<string>? standaloneDigits = null;
+        for (int i = output.Count - 1; i >= start; i--)
+        {
+            if (!IsDigitOnly(output[i]))
+                continue;
+            standaloneDigits ??= StandaloneDigitWords(text);
+            if (!standaloneDigits.Contains(output[i]))
+                output.RemoveAt(i);
+        }
+    }
+
+    private static HashSet<string> StandaloneDigitWords(ReadOnlySpan<char> text)
+    {
+        var digits = new HashSet<string>(StringComparer.Ordinal);
+        int i = 0, n = text.Length;
+        while (i < n)
+        {
+            while (i < n && !IsWordChar(text[i])) i++;
+            if (i >= n) break;
+            int start = i;
+            while (i < n && IsWordChar(text[i])) i++;
+            ReadOnlySpan<char> word = text.Slice(start, i - start);
+            if (IsDigitOnly(word))
+                digits.Add(ToLower(word));
+        }
+
+        return digits;
+    }
+
+    private static bool IsDigitOnly(ReadOnlySpan<char> text)
+    {
+        if (text.IsEmpty)
+            return false;
+        foreach (char c in text)
+        {
+            if (!char.IsAsciiDigit(c))
+                return false;
+        }
+
+        return true;
+    }
+
     private static void EmitWord(ReadOnlySpan<char> word, List<string> output)
     {
         if (word.IsEmpty) return;

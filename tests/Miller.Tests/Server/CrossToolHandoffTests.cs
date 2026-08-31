@@ -223,6 +223,22 @@ public sealed class CrossToolHandoffTests : IDisposable
     }
 
     [Fact]
+    public void TracePathMiss_WithSymbolId_DoesNotSearchTheHashAsSourceText()
+    {
+        const string id = "11bee7f4218a5c89fa31ce606b0d2694";
+        ToolDiagnostic diagnostic = TraceTool.TraceEmptyDiagnostic(
+            "path",
+            "No path from A to B",
+            id,
+            to: "RebuildDbPathFor");
+
+        Assert.DoesNotContain(
+            diagnostic.NextActions,
+            action => action.Call.Contains("mode=\"source\"", StringComparison.Ordinal) &&
+                      action.Call.Contains(id, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ImpactChangeWithNoSeedSymbols_OffersStructureFactsForThatFile()
     {
         IReadOnlyList<ToolDiagnosticAction> actions =

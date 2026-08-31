@@ -291,7 +291,7 @@ public sealed class SearchTool
         "mode=external/web/all-text search imported corpus text. regions=comment,doc_comment,string_literal " +
         "restricts to those source regions. Scope with file_pattern/language/limit. NOT for: a symbol you can " +
         "already name exactly (inspect it), orienting on an unfamiliar area (use context), or finding who " +
-        "references a symbol (use trace). Example: search query=\"promote rebuild\" mode=source. Compact by " +
+        "references a symbol (use trace). Example: search query=\"FullRebuildPromotion\" mode=symbol. Compact by " +
         "default; format=json to chain.")]
     public string Search(
         [Description("Symbol name, identifier, or natural-language phrase.")] string query,

@@ -1339,6 +1339,7 @@ public sealed class ImpactTool
             .Append(" returned=").Append(impacted.Count + tests.Count)
             .Append(" graph_returned=").Append(impacted.Count + tests.Count - traversal.TestCandidateCount)
             .Append(" test_candidates=").Append(traversal.TestCandidateCount)
+            .Append(" likely_tests=").Append(tests.Count)
             .Append(" test_candidates_truncated=").Append(traversal.TestCandidatesTruncated)
             .Append(" truncated_by_depth=").Append(traversal.Graph?.TruncatedByDepth ?? false)
             .Append(" truncated_by_limit=").Append(traversal.Graph?.TruncatedByLimit ?? false)

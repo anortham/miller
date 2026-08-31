@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Frozen;
 using System.ComponentModel;
 using System.Security.Cryptography;
 using System.Text;
@@ -517,7 +518,7 @@ public sealed class InspectTool
         }
 
         List<IndexedSymbol> ordered = all
-            .OrderBy(static symbol => IsLowSignalKind(symbol.Kind) ? 1 : 0)
+            .OrderBy(static symbol => IsLowSignalKind(symbol) ? 1 : 0)
             .ThenBy(static symbol => KindRank(symbol.Kind))
             .ThenBy(static symbol => symbol.StartLine)
             .ThenBy(static symbol => symbol.Name, StringComparer.Ordinal)
@@ -525,7 +526,7 @@ public sealed class InspectTool
             .ToList();
         List<IndexedSymbol> population = json || !string.IsNullOrWhiteSpace(kind)
             ? ordered
-            : ordered.Where(static symbol => !IsLowSignalKind(symbol.Kind)).ToList();
+            : ordered.Where(static symbol => !IsLowSignalKind(symbol)).ToList();
         if (population.Count == 0)
         {
             resultCount = 0;
@@ -738,24 +739,26 @@ public sealed class InspectTool
         _ => 6,
     };
 
-    private static bool IsLowSignalKind(string kind) =>
-        string.Equals(kind, "import", StringComparison.Ordinal) ||
-        string.Equals(kind, "module", StringComparison.Ordinal);
+    private static bool IsLowSignalKind(IndexedSymbol symbol) =>
+        symbol.Kind is "import" or "module" or "parameter"
+        || (symbol.Kind is "variable" && !string.IsNullOrEmpty(symbol.ParentId));
 
     private static void AppendHiddenLowSignalNote(StringBuilder sb, IReadOnlyList<IndexedSymbol> all)
     {
-        var hidden = all
-            .Where(static s => IsLowSignalKind(s.Kind))
+        var hiddenGroups = all
+            .Where(static s => IsLowSignalKind(s))
             .GroupBy(static s => s.Kind, StringComparer.Ordinal)
             .OrderBy(static g => g.Key, StringComparer.Ordinal)
-            .Select(static g => $"{g.Count()} {g.Key}{(g.Count() == 1 ? string.Empty : "s")}")
             .ToList();
-        if (hidden.Count == 0)
+        if (hiddenGroups.Count == 0)
             return;
 
         sb.Append("low_signal hidden: ")
-          .Append(string.Join(", ", hidden))
-          .Append(" (pass kind=import/module)\n");
+          .Append(string.Join(", ", hiddenGroups.Select(static g =>
+              $"{g.Count()} {g.Key}{(g.Count() == 1 ? string.Empty : "s")}")))
+          .Append(" (pass kind=")
+          .Append(string.Join("/", hiddenGroups.Select(static g => g.Key)))
+          .Append(")\n");
     }
 
     // ---------- symbol ----------
@@ -782,8 +785,9 @@ public sealed class InspectTool
                 .Append(IsCompleteValueDeclaration(sym) ? "true" : "false")
                 .Append('\n');
         }
-        if (detail is not null && !string.IsNullOrEmpty(detail.Visibility))
-            sb.Append("visibility: ").Append(detail.Visibility).Append('\n');
+        string? visibility = DisplayVisibility(detail, sym);
+        if (!string.IsNullOrEmpty(visibility))
+            sb.Append("visibility: ").Append(visibility).Append('\n');
         if (detail is not null && !string.IsNullOrEmpty(detail.DocComment))
         {
             bool docTruncated =
@@ -1418,22 +1422,72 @@ public sealed class InspectTool
                 .Append(" (").Append(recovery).Append(")\n");
     }
 
-    private static void AppendGroupedReferences(StringBuilder sb, IEnumerable<ReferenceEvidence> refs)
+    private static void AppendGroupedReferences(StringBuilder sb, IEnumerable<ReferenceEvidence> refs) =>
+        sb.Append(FormatGroupedReferenceLines(refs.Select(static r => (r.FilePath, r.StartLine))));
+
+    /// <summary>
+    /// Group reference sites by file. Lines that are null or not 1-based are omitted so inspect
+    /// does not print <c>:0</c> for unresolved locations.
+    /// </summary>
+    internal static string FormatGroupedReferenceLines(IEnumerable<(string FilePath, int? StartLine)> refs)
     {
         var order = new List<string>();
         var linesByFile = new Dictionary<string, List<int>>(StringComparer.Ordinal);
-        foreach (var r in refs)
+        foreach (var (filePath, startLine) in refs)
         {
-            if (!linesByFile.TryGetValue(r.FilePath, out var lines))
+            if (!linesByFile.TryGetValue(filePath, out var lines))
             {
                 lines = new List<int>();
-                linesByFile[r.FilePath] = lines;
-                order.Add(r.FilePath);
+                linesByFile[filePath] = lines;
+                order.Add(filePath);
             }
-            lines.Add(r.StartLine ?? 0);
+            if (startLine is > 0)
+                lines.Add(startLine.Value);
         }
-        foreach (var file in order)
-            sb.Append(file).Append(':').Append(string.Join(',', linesByFile[file])).Append('\n');
+
+        var sb = new StringBuilder();
+        foreach (string file in order)
+        {
+            sb.Append(file);
+            List<int> lines = linesByFile[file];
+            if (lines.Count > 0)
+                sb.Append(':').Append(string.Join(',', lines));
+            sb.Append('\n');
+        }
+
+        return sb.ToString();
+    }
+
+    private static readonly FrozenSet<string> SignatureAccessibilityTokens =
+        new[] { "public", "private", "protected", "internal", "exported", "export", "pub", "open", "file" }
+            .ToFrozenSet(StringComparer.Ordinal);
+
+    internal static string? DisplayVisibility(SymbolDetail? detail, IndexedSymbol symbol)
+    {
+        string? recorded = detail?.Visibility;
+        string? fromSignature = AccessibilityFromSignature(symbol.Signature);
+        if (fromSignature is not null &&
+            (recorded is null || string.Equals(recorded, "private", StringComparison.Ordinal)))
+            return fromSignature;
+        return string.IsNullOrEmpty(recorded) ? null : recorded;
+    }
+
+    private static string? AccessibilityFromSignature(string? signature)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return null;
+
+        int i = 0;
+        while (i < signature.Length && char.IsWhiteSpace(signature[i]))
+            i++;
+        int start = i;
+        while (i < signature.Length && (char.IsAsciiLetter(signature[i]) || signature[i] == '_'))
+            i++;
+        if (i == start)
+            return null;
+
+        string token = signature[start..i];
+        return SignatureAccessibilityTokens.Contains(token) ? token : null;
     }
 
     private readonly record struct DistinctCallee(
@@ -2034,7 +2088,8 @@ public sealed class InspectTool
                 if (docTruncated)
                     w.WriteBoolean("doc_truncated", true);
             }
-            if (detail.Visibility is null) w.WriteNull("visibility"); else w.WriteString("visibility", detail.Visibility);
+            string? visibility = DisplayVisibility(detail, s);
+            if (visibility is null) w.WriteNull("visibility"); else w.WriteString("visibility", visibility);
         }
         w.WriteEndObject();
     }

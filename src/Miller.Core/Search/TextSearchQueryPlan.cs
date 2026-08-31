@@ -45,7 +45,7 @@ public sealed class TextSearchQueryPlan
             return null;
 
         var queryTokens = new List<string>(8);
-        CodeTokenizer.Tokenize(query, queryTokens);
+        CodeTokenizer.TokenizeQuery(query, queryTokens);
         if (queryTokens.Count == 0)
             return null;
 

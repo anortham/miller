@@ -80,7 +80,7 @@ public static partial class ToolOutputBudget
         }
 
         long tentativeEnd = Math.Min(bytes.LongLength, start + maxBytes);
-        long end = FindValidEnd(bytes, start, tentativeEnd);
+        long end = PreferLineBoundary(bytes, start, FindValidEnd(bytes, start, tentativeEnd));
         if (end == start && end < bytes.LongLength)
             throw Refusal(
                 "output_budget_too_small",
@@ -331,6 +331,24 @@ public static partial class ToolOutputBudget
         }
 
         return start;
+    }
+
+    /// <summary>
+    /// Prefer the last newline in the page so a body continuation does not start mid-line.
+    /// A window with no newline (one long line) keeps the UTF-8 byte cut.
+    /// </summary>
+    private static long PreferLineBoundary(byte[] bytes, long start, long end)
+    {
+        if (end >= bytes.LongLength)
+            return end;
+
+        for (long i = end - 1; i > start; i--)
+        {
+            if (bytes[i] == (byte)'\n')
+                return i + 1;
+        }
+
+        return end;
     }
 
     private static string Encode(ToolContinuationIdentity identity, long nextOffset)

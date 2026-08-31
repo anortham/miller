@@ -957,6 +957,25 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
+    public void Execute_InsertBefore_FileTarget_NamesTheSymbolRequirement()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("insert_before", "orders/OrderService.cs") with
+        {
+            NewText = "// marker",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("invalid_request", result.FailureReason);
+        Assert.Contains("is a file", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("insert_before", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("not found", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Execute_InsertAfter_Apply_InsertsAtSymbolEndByte()
     {
         using var fx = JulieDbFixture.CreateForEdit();

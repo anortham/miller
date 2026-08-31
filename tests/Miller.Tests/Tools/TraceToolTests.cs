@@ -749,6 +749,83 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Refs_TypeTarget_IncludesExactMemberReferences()
+    {
+        var index = MillerRepositoryIndex.Build(
+            [
+                new IndexedSymbol(0, "type", "Widget", "class Widget", "class", "csharp", "src/Widget.cs", 1, 40, null, false),
+                new IndexedSymbol(1, "method", "Promote", "void Promote()", "method", "csharp", "src/Widget.cs", 10, 20, "type", false),
+                new IndexedSymbol(2, "caller", "Caller", "void Caller()", "method", "csharp", "src/Caller.cs", 5, 8, null, false),
+            ],
+            Array.Empty<GraphEdge>());
+        var typeFallback = FallbackReference(
+            "site:file:src/Caller.cs:600:601",
+            "caller",
+            "src/Caller.cs",
+            6,
+            ReferenceKind.TypeUsage);
+        var methodExact = new ReferenceEvidence(
+            "method",
+            "caller",
+            "src/Caller.cs",
+            6,
+            8,
+            6,
+            16,
+            80,
+            90,
+            ReferenceKind.Call,
+            "call",
+            ReferenceEvidenceSource.IdentifierResolution,
+            2,
+            0.9,
+            ReferenceResolutionStatus.Exact,
+            Language: "csharp",
+            ReferenceSiteId: "site:caller:80:90",
+            IsExact: true,
+            SiteProvenance: "target_token");
+
+        string json = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Widget",
+            scope: null,
+            mode: "refs",
+            to: null,
+            depth: 3,
+            limit: 20,
+            fullFormat: false,
+            json: true,
+            referenceKind: null,
+            includeDefinition: true,
+            readReferenceEvidence: (symbol, _) => symbol.SymbolId switch
+            {
+                "type" => new ReferenceEvidenceSet(
+                    [],
+                    [typeFallback],
+                    new ReferenceEvidenceCoverage(0, 0, 0, 1, 1, 1, false, false, ReferenceFallbackStatus.Available)),
+                "method" => new ReferenceEvidenceSet(
+                    [methodExact],
+                    [],
+                    new ReferenceEvidenceCoverage(1, 1, 1, 0, 0, 1, false, false, ReferenceFallbackStatus.NoCandidates)),
+                _ => new ReferenceEvidenceSet(
+                    [],
+                    [],
+                    new ReferenceEvidenceCoverage(0, 0, 0, 0, 0, 0, false, false, ReferenceFallbackStatus.NoCandidates)),
+            },
+            out int emitted,
+            out _);
+
+        Assert.Equal(2, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        JsonElement exact = Assert.Single(root.GetProperty("exact_references").EnumerateArray());
+        Assert.Equal("method", exact.GetProperty("target_symbol_id").GetString());
+        Assert.Equal("call", exact.GetProperty("kind").GetString());
+        Assert.Single(root.GetProperty("fallback_references").EnumerateArray());
+    }
+
+    [Fact]
     public void Refs_Json_ExplainsAmbiguousFallbackSuppressionWithoutCallingItLimitTruncation()
     {
         var index = BuildSymbolIndex(

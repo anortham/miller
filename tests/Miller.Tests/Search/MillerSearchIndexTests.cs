@@ -131,6 +131,18 @@ public sealed class MillerSearchIndexTests
     }
 
     [Fact]
+    public void Search_DoesNotRankABareNumberSplitFromAMissingIdentifier()
+    {
+        var index = MillerSearchIndex.Build(new[]
+        {
+            Doc(0, "pid", "pid = 123"),
+        });
+
+        Assert.Empty(index.Search("doesnotexistxyzzy123", limit: 10));
+        Assert.Equal(new[] { 0 }, Ids(index.Search("123", limit: 10)));
+    }
+
+    [Fact]
     public void Search_And_OnlyReturnsDocsMatchingAllDistinctQueryTerms()
     {
         var index = MillerSearchIndex.Build(new[]

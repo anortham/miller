@@ -314,7 +314,7 @@ public sealed class ImpactToolTests
         Assert.Equal(4, impactedCount);
         Assert.Equal(
             "# traversal\n" +
-            "status=exhausted reason=complete max_depth=1 limit=100 reached=5 returned=5 graph_returned=5 test_candidates=0 test_candidates_truncated=False truncated_by_depth=False truncated_by_limit=False\n" +
+            "status=exhausted reason=complete max_depth=1 limit=100 reached=5 returned=5 graph_returned=5 test_candidates=0 likely_tests=1 test_candidates_truncated=False truncated_by_depth=False truncated_by_limit=False\n" +
             "\n" +
             "# impacted (4)\n" +
             "src/Service.cs:\n" +
