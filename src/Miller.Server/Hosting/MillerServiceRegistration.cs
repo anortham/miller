@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Indexing.Resolution;
 using Miller.Indexing.Semantic;
+using Miller.Server.Cli;
 using Miller.Server.Git;
 using Miller.Server.Tools;
 using Miller.Server.Resolution;
@@ -55,9 +56,6 @@ public static class MillerServiceRegistration
                 sp.GetRequiredService<ILogger<IndexBootstrapService>>(),
                 scanGovernorFactory: () => sp.GetRequiredService<ScanGovernor>()));
         services.AddHostedService(sp => sp.GetRequiredService<IndexBootstrapService>());
-
-        services.AddSingleton<WorkspaceBindingService>();
-        services.AddSingleton<IWorkspaceBindingService>(sp => sp.GetRequiredService<WorkspaceBindingService>());
 
         // Primary-backed services remain transient so a null/internal route sees the latest binding. The read provider
         // itself is constructible before bootstrap binds; it touches the primary only when a null route is resolved.
@@ -246,6 +244,33 @@ public static class MillerServiceRegistration
                 sp.GetRequiredService<LeaderWriteThrough>(),
                 sp.GetRequiredService<CrossWorkspaceRefreshService>(),
                 sp.GetRequiredService<ILogger<RegisteredWorkspaceWriteThrough>>()));
+
+        services.AddTransient<WorkspaceTool>(sp =>
+            new WorkspaceTool(
+                sp.GetRequiredService<MillerHostPaths>(),
+                sp.GetRequiredService<WorkspaceRegistry>(),
+                sp.GetRequiredService<TelemetryLedger>(),
+                () => sp.GetRequiredService<CrossWorkspaceRefreshService>(),
+                sp.GetRequiredService<SymbolSearchSidecar>(),
+                sp.GetRequiredService<VectorSidecar>(),
+                millerDir => SingleWriterLock.TryAcquire(millerDir),
+                sp.GetRequiredService<WorkspaceOpenPrimeService>().TryEnqueue,
+                new DashboardCliLauncher(),
+                sp.GetRequiredService<ILogger<WorkspaceTool>>(),
+                indexer: sp.GetRequiredService<IndexerService>(),
+                freshness: sp.GetRequiredService<FreshnessService>(),
+                primary: sp.GetRequiredService<IndexBootstrapService>(),
+                semanticBroker: sp.GetRequiredService<SemanticEmbeddingSessionBroker>(),
+                governor: sp.GetRequiredService<ScanGovernor>()));
+        services.AddTransient<ContentTool>(sp =>
+            new ContentTool(
+                sp.GetRequiredService<MillerHostPaths>(),
+                sp.GetRequiredService<WorkspaceRegistry>(),
+                sp.GetRequiredService<ContentCorpusExternalStore>()));
+        services.AddTransient<TestsTool>(sp =>
+            new TestsTool(
+                sp.GetRequiredService<MillerHostPaths>(),
+                sp.GetRequiredService<WorkspaceRegistry>()));
 
         return services;
     }

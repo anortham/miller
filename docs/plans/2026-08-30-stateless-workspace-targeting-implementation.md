@@ -254,11 +254,11 @@
 **Approach:** Use isolated home and unsafe cwd, open two temp workspaces, call both IDs, and assert no state bleed or Roots callback.
 
 **Acceptance criteria:**
-- [ ] Production sends no `roots/list`
-- [ ] Deferred bootstrap blocks no explicit call
-- [ ] One process serves two IDs
-- [ ] Matching/different primary changes nothing
-- [ ] Focused verification passes and the diff is handed to the lead
+- [x] Production sends no `roots/list`
+- [x] Deferred bootstrap blocks no explicit call
+- [x] One process serves two IDs
+- [x] Matching/different primary changes nothing
+- [x] Focused verification passes and the diff is handed to the lead
 
 ### Task 7: Guidance and docs
 

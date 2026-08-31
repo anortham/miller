@@ -22,7 +22,8 @@ public interface IWorkspaceBindingService
 }
 
 /// <summary>
-/// Resolves the primary workspace from MCP client roots on demand and drives deferred bootstrap.
+/// Legacy test seam for the retired primary Roots binding path. Production never registers this service;
+/// stateless MCP calls resolve registered workspace IDs instead.
 /// </summary>
 public sealed class WorkspaceBindingService : IWorkspaceBindingService
 {
@@ -63,7 +64,6 @@ public sealed class WorkspaceBindingService : IWorkspaceBindingService
         }
     }
 
-    /// <summary>Test seam: bind using explicit root URIs without an MCP transport.</summary>
     internal Task EnsurePrimaryBoundFromRootsAsync(
         IReadOnlyList<string>? rootUris, CancellationToken cancellationToken) =>
         EnsurePrimaryBoundCoreAsync(rootUris, cancellationToken);
@@ -115,13 +115,6 @@ public sealed class WorkspaceBindingService : IWorkspaceBindingService
         }
     }
 
-    /// <summary>
-    /// Settled = bound with no rebind pending or in flight. Keyed on the snapshot PHASE, not
-    /// <c>IsBound</c>: after a failed background rebind the old workspace stays bound (IsBound true)
-    /// but the phase is Failed — the next ensure call must re-enter <c>BootstrapForRoot</c> to start
-    /// the retry (design: Failed → BootstrapForRoot (retry) → Running), or the Failed state strands
-    /// with no in-band recovery.
-    /// </summary>
     private bool IsSettled() =>
         _bootstrap.Snapshot.Phase == BootstrapPhase.Bound && !NeedsRefresh();
 

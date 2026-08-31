@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -13,8 +15,8 @@ using Serilog;
 using Serilog.Core;
 
 // Miller MCP server host bootstrap (M2).
-// IndexBootstrapService builds the primary background index from a safe startup workspace when one is available.
-// MCP tool calls select their registered workspace explicitly and do not depend on process cwd or MCP roots.
+// IndexBootstrapService may build a primary background index from a safe startup workspace when one is available.
+// MCP tool calls select their registered workspace explicitly and do not depend on process cwd or MCP Roots.
 // [McpServerToolType] tool is registered explicitly for Native AOT; each ctor's deps resolve from DI. The ONE
 // central telemetry CallToolFilter wraps every call.
 //
@@ -112,6 +114,7 @@ builder.Services.AddSerilog();
 // getter (see MillerServiceRegistration's contract + HostStartupRegistrationTests). The MCP transport is wired
 // LAST below so it starts only after the bootstrap's StartAsync has seeded the holder/workspace.
 builder.Services.AddMillerServices();
+StatelessMcpToolRegistration.Add(builder.Services);
 
 builder.Services
     .AddMcpServer(options =>
@@ -128,10 +131,7 @@ builder.Services
     .WithTools<TraceTool>()
     .WithTools<ImpactTool>()
     .WithTools<EditTool>()
-    .WithTools<ContentTool>()
     .WithTools<PatternsTool>()
-    .WithTools<WorkspaceTool>()
-    .WithTools<TestsTool>()
     .WithRequestFilters(filters =>
     {
         filters.AddCallToolFilter(WorkspaceBindingCallToolFilter.Create());
@@ -159,4 +159,31 @@ catch (Exception startupFailure)
 finally
 {
     Log.CloseAndFlush();
+}
+
+internal static class StatelessMcpToolRegistration
+{
+    public static void Add(IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.AddSingleton<McpServerTool>(sp => Create<ContentTool>(sp, nameof(ContentTool.Content)));
+        services.AddSingleton<McpServerTool>(sp => Create<WorkspaceTool>(sp, nameof(WorkspaceTool.Workspace)));
+        services.AddSingleton<McpServerTool>(sp => Create<TestsTool>(sp, nameof(TestsTool.Tests)));
+    }
+
+    private static McpServerTool Create<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicMethods)] TTool>(
+        IServiceProvider services,
+        string methodName)
+        where TTool : class
+    {
+        MethodInfo method = typeof(TTool).GetMethod(
+            methodName,
+            BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new InvalidOperationException($"Could not find the MCP method '{methodName}'.");
+        return McpServerTool.Create(
+            method,
+            context => context.Services!.GetRequiredService<TTool>(),
+            new McpServerToolCreateOptions { Services = services });
+    }
 }

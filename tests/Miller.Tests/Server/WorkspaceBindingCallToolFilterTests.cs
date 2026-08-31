@@ -88,6 +88,25 @@ public sealed class WorkspaceBindingCallToolFilterTests
     }
 
     [Fact]
+    public async Task WorkspaceListWithoutWorkspaceId_InvokesToolHandlerWithoutAmbientBinding()
+    {
+        int nextCalls = 0;
+
+        CallToolResult result = await InvokeFilterAsync(
+            "workspace",
+            Arguments(("operation", "list")),
+            (_, _) =>
+            {
+                nextCalls++;
+                return Task.FromResult(TextResult("listed"));
+            });
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Equal(1, nextCalls);
+        Assert.Equal("listed", ResultText(result));
+    }
+
+    [Fact]
     public async Task WorkspaceOpenWithoutWorkspaceId_InvokesToolHandler()
     {
         int nextCalls = 0;

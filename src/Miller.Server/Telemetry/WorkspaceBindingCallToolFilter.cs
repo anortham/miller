@@ -5,7 +5,7 @@ using ModelContextProtocol.Server;
 
 namespace Miller.Server.Telemetry;
 
-/// <summary>Rejects ambiguous or missing MCP workspace targets before the SDK constructs a tool call.</summary>
+/// <summary>Rejects ambiguous or missing MCP workspace targets without consulting process state or MCP Roots.</summary>
 public static class WorkspaceBindingCallToolFilter
 {
     public static McpRequestFilter<CallToolRequestParams, CallToolResult> Create()

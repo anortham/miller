@@ -573,6 +573,58 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
         Assert.DoesNotContain("workspace override query", targetHash, StringComparison.OrdinalIgnoreCase);
         Assert.False(reader.Read(), "exactly one row expected (the filter must fire once per call)");
     }
+
+    [Fact]
+    public async Task CentralFilter_PersistsExplicitTargetWithoutAmbientWorkspace()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        string targetRoot = Path.Combine(_dir, "target-without-ambient");
+        using var ledger = TelemetryLedger.Open(_telemetryDb, workspaceId: null);
+
+        var clientToServer = new Pipe();
+        var serverToClient = new Pipe();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(ledger);
+        services
+            .AddMcpServer(o => { o.ServerInfo = new() { Name = "pin", Version = "0" }; })
+            .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
+            .WithToolsFromAssembly(typeof(PinProbeTool).Assembly)
+            .WithRequestFilters(f => f.AddCallToolFilter(TelemetryCallToolFilter.Create()));
+
+        await using var provider = services.BuildServiceProvider();
+        var server = provider.GetRequiredService<McpServer>();
+        var serverTask = server.RunAsync(ct);
+
+        var clientTransport = new StreamClientTransport(
+            clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream(), NullLoggerFactory.Instance);
+        await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
+
+        var result = await client.CallToolAsync(
+            "pin_workspace_override",
+            new Dictionary<string, object?> { ["workspaceId"] = "target-ws", ["workspaceRoot"] = targetRoot }!,
+            cancellationToken: ct);
+        Assert.Equal("workspace override recorded", Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text);
+
+        await client.DisposeAsync();
+        await clientToServer.Writer.CompleteAsync();
+        await serverToClient.Writer.CompleteAsync();
+        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); } catch (Exception) { }
+
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _telemetryDb, Mode = SqliteOpenMode.ReadOnly, Pooling = false,
+        }.ToString());
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT workspace_id, workspace_root FROM tool_telemetry;";
+        using var reader = cmd.ExecuteReader();
+        Assert.True(reader.Read(), "the central CallToolFilter did not record a telemetry row");
+        Assert.Equal("target-ws", reader.GetString(0));
+        Assert.Equal(targetRoot, reader.GetString(1));
+        Assert.False(reader.Read(), "exactly one row expected (the filter must fire once per call)");
+    }
 }
 
 file static class NullLoggerFactory

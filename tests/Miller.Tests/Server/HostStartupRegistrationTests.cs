@@ -89,6 +89,31 @@ public sealed class HostStartupRegistrationTests : IDisposable
     }
 
     [Fact]
+    public void StatelessGraph_ResolvesWorkspaceToolsBeforePrimaryBindsWithoutRootsServices()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices(semanticMode: SemanticMode.Off, startIndexer: false);
+
+        Assert.DoesNotContain(
+            services,
+            descriptor => descriptor.ServiceType.FullName is
+                "Miller.Server.Hosting.IWorkspaceBindingService"
+                or "Miller.Server.Hosting.WorkspaceBindingService"
+                or "Miller.Server.Hosting.WorkspaceRootsNotificationService");
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.NotNull(provider.GetRequiredService<WorkspaceTool>());
+        Assert.NotNull(provider.GetRequiredService<ContentTool>());
+        Assert.NotNull(provider.GetRequiredService<TestsTool>());
+        Assert.Contains(
+            services,
+            descriptor => descriptor.ServiceType == typeof(WorkspaceEditContextFactory)
+                && descriptor.Lifetime == ServiceLifetime.Transient);
+    }
+
+    [Fact]
     public void BackgroundRefreshGate_IsOneProcessSingletonBehindTransientProviders()
     {
         var services = new ServiceCollection();
