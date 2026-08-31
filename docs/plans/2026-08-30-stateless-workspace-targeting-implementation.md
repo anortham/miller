@@ -221,12 +221,12 @@
 **Approach:** Add index DB path to resolved context. Construct `EditApplier` against target `.miller`. Reuse local write-through only for the actual serviced primary.
 
 **Acceptance criteria:**
-- [ ] Non-primary preview/apply works
-- [ ] Only target edit lock is used
-- [ ] Apply queues target file convergence
-- [ ] Recovery reopens the same target and bounds fallback
-- [ ] Ambiguous mutation touches no files
-- [ ] Focused verification passes and the diff is handed to the lead
+- [x] Non-primary preview/apply works
+- [x] Only target edit lock is used
+- [x] Apply queues target file convergence
+- [x] Recovery reopens the same target and bounds fallback
+- [x] Ambiguous mutation touches no files
+- [x] Focused verification passes and the diff is handed to the lead
 
 ### Task 6: Remove Roots targeting
 

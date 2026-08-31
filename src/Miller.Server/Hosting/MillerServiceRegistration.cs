@@ -169,11 +169,12 @@ public static class MillerServiceRegistration
             string millerDir = Path.GetDirectoryName(workspace.ExtractDbPath)!;
             return new EditApplier(() => EditWriteLock.TryAcquire(millerDir));
         });
-        services.AddSingleton<IEditWriteThrough>(sp =>
+        services.AddSingleton<LeaderWriteThrough>(sp =>
             new LeaderWriteThrough(
                 sp.GetRequiredService<IndexerService>(),
                 sp.GetRequiredService<IndexBootstrapService>(),
                 sp.GetRequiredService<ILoggerFactory>().CreateLogger<LeaderWriteThrough>()));
+        services.AddSingleton<IEditWriteThrough>(sp => sp.GetRequiredService<LeaderWriteThrough>());
 
         // Soft budgets (M7 decision-4): per-tool latency + est-token warn thresholds the central telemetry filter
         // evaluates after each call, logging a WARN per breach (warn-only — never blocks or errors the call). The
@@ -237,6 +238,14 @@ public static class MillerServiceRegistration
         services.AddTransient<IWorkspaceContentSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceRegionSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceTextContentSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
+        services.AddTransient<WorkspaceEditContextFactory>(sp =>
+            new WorkspaceEditContextFactory(
+                sp.GetRequiredService<IWorkspaceSymbolReadProvider>(),
+                sp.GetRequiredService<WorkspaceRegistry>(),
+                sp.GetRequiredService<IndexBootstrapService>(),
+                sp.GetRequiredService<LeaderWriteThrough>(),
+                sp.GetRequiredService<CrossWorkspaceRefreshService>(),
+                sp.GetRequiredService<ILogger<RegisteredWorkspaceWriteThrough>>()));
 
         return services;
     }

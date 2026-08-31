@@ -38,15 +38,29 @@ public sealed class EditTool
     /// <summary>Prefix for the exception backstop bucket; the suffix is the exception TYPE NAME, never its message.</summary>
     private const string UnhandledFailureReasonPrefix = "unhandled_";
 
+    private readonly WorkspaceEditContextFactory? _editContextFactory;
     private readonly IWorkspaceSymbolReadProvider _workspaceSymbolReadProvider;
     private readonly WorkspaceContext _workspace;
     private readonly EditApplier _applier;
     private readonly IEditWriteThrough _writeThrough;
     private readonly ILogger<EditTool> _logger;
 
+    /// <summary>Construct the stateless target-bound edit shell used by the MCP host.</summary>
+    public EditTool(WorkspaceEditContextFactory editContextFactory, ILogger<EditTool> logger)
+    {
+        ArgumentNullException.ThrowIfNull(editContextFactory);
+        ArgumentNullException.ThrowIfNull(logger);
+        _editContextFactory = editContextFactory;
+        _workspaceSymbolReadProvider = null!;
+        _workspace = null!;
+        _applier = null!;
+        _writeThrough = null!;
+        _logger = logger;
+    }
+
     /// <summary>Construct over the singleton symbol-read and apply/write-through seams.</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
-    public EditTool(
+    internal EditTool(
         IWorkspaceSymbolReadProvider workspaceSymbolReadProvider, WorkspaceContext workspace,
         EditApplier applier, IEditWriteThrough writeThrough, ILogger<EditTool> logger)
     {
@@ -55,6 +69,7 @@ public sealed class EditTool
         ArgumentNullException.ThrowIfNull(applier);
         ArgumentNullException.ThrowIfNull(writeThrough);
         ArgumentNullException.ThrowIfNull(logger);
+        _editContextFactory = null;
         _workspaceSymbolReadProvider = workspaceSymbolReadProvider;
         _workspace = workspace;
         _applier = applier;
@@ -127,20 +142,28 @@ public sealed class EditTool
                 telemetry.SetMetadata("has_line", line is not null);
             }
 
-            using WorkspaceSymbolReadContext readContext =
-                _workspaceSymbolReadProvider.ResolveCompleteCurrentSymbolRead();
-            var service = new EditService(
-                readContext.Index,
-                new SmartTargetResolver(readContext.Index),
-                _workspace.ExtractDbPath,
-                _workspace.WorkspaceRoot,
-                _applier,
-                _writeThrough,
-                readSession: readContext.ReadSession,
-                resolveFreshContext: () =>
-                    _workspaceSymbolReadProvider.ResolveCompleteCurrentSymbolRead());
-
-            EditService.EditResult result = service.Execute(request);
+            EditService.EditResult result;
+            if (_editContextFactory is not null)
+            {
+                using WorkspaceEditContext editContext = _editContextFactory.Create(workspace_id);
+                result = editContext.Service.Execute(request);
+            }
+            else
+            {
+                using WorkspaceSymbolReadContext readContext =
+                    _workspaceSymbolReadProvider.ResolveCompleteCurrentSymbolRead();
+                var service = new EditService(
+                    readContext.Index,
+                    new SmartTargetResolver(readContext.Index),
+                    _workspace.ExtractDbPath,
+                    _workspace.WorkspaceRoot,
+                    _applier,
+                    _writeThrough,
+                    readSession: readContext.ReadSession,
+                    resolveFreshContext: () =>
+                        _workspaceSymbolReadProvider.ResolveCompleteCurrentSymbolRead());
+                result = service.Execute(request);
+            }
 
             if (telemetry is not null)
             {

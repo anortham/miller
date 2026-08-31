@@ -131,9 +131,20 @@ public sealed class EditToolTests : IDisposable
 
     private sealed class NoopLease : IDisposable { public void Dispose() { } }
 
-    private sealed class FixedSymbolReadProvider(Func<WorkspaceSymbolReadContext> factory) : IWorkspaceSymbolReadProvider
+    private sealed class FixedSymbolReadProvider : IWorkspaceSymbolReadProvider
     {
-        private readonly Func<WorkspaceSymbolReadContext> _factory = factory;
+        private readonly Func<string?, WorkspaceSymbolReadContext> _factory;
+
+        public FixedSymbolReadProvider(Func<WorkspaceSymbolReadContext> factory)
+            : this(_ => factory())
+        {
+        }
+
+        public FixedSymbolReadProvider(Func<string?, WorkspaceSymbolReadContext> factory)
+        {
+            ArgumentNullException.ThrowIfNull(factory);
+            _factory = factory;
+        }
 
         public int Calls { get; private set; }
 
@@ -142,13 +153,13 @@ public sealed class EditToolTests : IDisposable
         public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, WorkspaceRefreshMode refresh)
         {
             Calls++;
-            return _factory();
+            return _factory(workspaceId);
         }
 
         public WorkspaceSymbolReadContext ResolveCompleteCurrentSymbolRead()
         {
             CompleteCalls++;
-            return _factory();
+            return _factory(null);
         }
     }
 
@@ -414,6 +425,352 @@ public sealed class EditToolTests : IDisposable
         Assert.Equal("preview", document.RootElement.GetProperty("mode").GetString());
         Assert.Equal(0, provider.Calls);
         Assert.Equal(1, provider.CompleteCalls);
+    }
+
+    [Fact]
+    public void Edit_ExplicitRegisteredWorkspace_UsesTargetRootAndEditLock()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+
+        string targetRoot = Path.Combine(_root, "registered-target");
+        string targetMillerDir = Path.Combine(targetRoot, ".miller");
+        string targetDbPath = Path.Combine(targetMillerDir, "symbols.db");
+        Directory.CreateDirectory(targetMillerDir);
+        File.Copy(fx.DbPath, targetDbPath);
+        foreach (var (rel, content) in EditFixtureFiles)
+        {
+            string targetPath = Path.Combine(targetRoot, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            File.WriteAllText(targetPath, content);
+        }
+
+        using var registry = WorkspaceRegistry.Open(Path.Combine(_root, "workspaces.db"));
+        registry.UpsertSeen("target-ws", "target-111111111111", targetRoot, targetDbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        var targetIndex = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(targetDbPath));
+        var provider = new FixedSymbolReadProvider(_ =>
+        {
+            WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                targetDbPath, targetRoot, "target-ws", storeEnabled: false);
+            return new WorkspaceSymbolReadContext(
+                targetIndex,
+                session,
+                "target-ws",
+                targetRoot,
+                1,
+                true,
+                "target",
+                null,
+                "target-111111111111",
+                false,
+                session.Snapshot.IndexLevel,
+                targetDbPath);
+        });
+        var factory = new WorkspaceEditContextFactory(
+            provider,
+            registry,
+            primaryWorkspace: () => null,
+            primaryWriteThrough: new RecordingWriteThrough(),
+            fallbackRefresh: _ => throw new InvalidOperationException("fallback was not expected"),
+            logger: NullLogger<RegisteredWorkspaceWriteThrough>.Instance);
+        var tool = new EditTool(factory, NullLogger<EditTool>.Instance);
+
+        string preview = tool.Edit(
+            "replace_symbol_body",
+            "OrderService.Total",
+            new_text: "{ return 7; }",
+            workspace_id: "target-ws");
+
+        Assert.Contains("return 7", preview, StringComparison.Ordinal);
+        Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(Path.Combine(targetRoot, "orders/OrderService.cs")));
+        Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
+
+        string applied = tool.Edit(
+            "replace_symbol_body",
+            "OrderService.Total",
+            new_text: "{ return 7; }",
+            apply: true,
+            workspace_id: "target-ws");
+
+        Assert.Contains("return 7", applied, StringComparison.Ordinal);
+        Assert.Contains("return 7", File.ReadAllText(Path.Combine(targetRoot, "orders/OrderService.cs")), StringComparison.Ordinal);
+        Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
+        Assert.True(File.Exists(Path.Combine(targetMillerDir, EditWriteLock.LockFileName)));
+        Assert.False(File.Exists(Path.Combine(_root, ".miller", EditWriteLock.LockFileName)));
+    }
+
+    [Fact]
+    public void Edit_ExplicitRegisteredWorkspace_AttributesTelemetryToTarget()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+
+        string targetRoot = Path.Combine(_root, "telemetry-registered-target");
+        string targetMillerDir = Path.Combine(targetRoot, ".miller");
+        string targetDbPath = Path.Combine(targetMillerDir, "symbols.db");
+        Directory.CreateDirectory(targetMillerDir);
+        File.Copy(fx.DbPath, targetDbPath);
+        foreach (var (rel, content) in EditFixtureFiles)
+        {
+            string targetPath = Path.Combine(targetRoot, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            File.WriteAllText(targetPath, content);
+        }
+
+        using var registry = WorkspaceRegistry.Open(Path.Combine(_root, "telemetry-workspaces.db"));
+        registry.UpsertSeen("target-ws", "target-222222222222", targetRoot, targetDbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        var targetIndex = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(targetDbPath));
+        var provider = new FixedSymbolReadProvider(_ =>
+        {
+            WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                targetDbPath, targetRoot, "target-ws", storeEnabled: false);
+            return new WorkspaceSymbolReadContext(
+                targetIndex,
+                session,
+                "target-ws",
+                targetRoot,
+                1,
+                true,
+                "target",
+                null,
+                "target-222222222222",
+                false,
+                session.Snapshot.IndexLevel,
+                targetDbPath);
+        });
+        var factory = new WorkspaceEditContextFactory(
+            provider,
+            registry,
+            primaryWorkspace: () => WorkspaceContext.Create(_root, AppContext.BaseDirectory, _root) with
+            {
+                WorkspaceId = "primary-ws",
+            },
+            primaryWriteThrough: new RecordingWriteThrough(),
+            fallbackRefresh: _ => throw new InvalidOperationException("fallback was not expected"),
+            logger: NullLogger<RegisteredWorkspaceWriteThrough>.Instance);
+        var tool = new EditTool(factory, NullLogger<EditTool>.Instance);
+        string telemetryPath = Path.Combine(_root, "telemetry.db");
+
+        using (var ledger = TelemetryLedger.Open(telemetryPath, "primary-ws", _root))
+        using (ledger.Measure("edit", op: null))
+        {
+            tool.Edit(
+                "replace_symbol_body",
+                "OrderService.Total",
+                new_text: "{ return 8; }",
+                workspace_id: "target-ws");
+        }
+
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={telemetryPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT workspace_id, workspace_root FROM tool_telemetry ORDER BY ts DESC, id DESC LIMIT 1;";
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal("target-ws", reader.GetString(0));
+        Assert.Equal(targetRoot, reader.GetString(1));
+    }
+
+    [Fact]
+    public void Edit_RegisteredTarget_QueuesConvergenceBeforeFallbackRefresh()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        string targetRoot = Path.Combine(_root, "registered-recovery-target");
+        string targetMillerDir = Path.Combine(targetRoot, ".miller");
+        string targetDbPath = Path.Combine(targetMillerDir, "symbols.db");
+        Directory.CreateDirectory(targetMillerDir);
+        File.Copy(fx.DbPath, targetDbPath);
+        foreach (var (rel, content) in EditFixtureFiles)
+        {
+            string targetPath = Path.Combine(targetRoot, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            File.WriteAllText(targetPath, content);
+        }
+
+        string stalePath = Path.Combine(targetRoot, "orders/OrderService.cs");
+        File.WriteAllText(stalePath, JulieDbFixture.OrderServiceContent + "// drifted\n");
+        using var registry = WorkspaceRegistry.Open(Path.Combine(_root, "recovery-workspaces.db"));
+        registry.UpsertSeen("target-ws", "target-111111111111", targetRoot, targetDbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        bool fallbackCalled = false;
+        bool queueWasWrittenFirst = false;
+        var writeThrough = new RegisteredWorkspaceWriteThrough(
+            "target-ws",
+            targetRoot,
+            targetDbPath,
+            registry,
+            workspaceId =>
+            {
+                fallbackCalled = true;
+                queueWasWrittenFirst = Directory.EnumerateFiles(
+                        targetMillerDir, "*.file-converge.json", SearchOption.AllDirectories)
+                    .Any();
+                using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={targetDbPath}");
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE files SET content_hash = $hash WHERE path = $path;";
+                command.Parameters.AddWithValue("$hash", "blake3:" + ContentHasher.Blake3FileHex(stalePath));
+                command.Parameters.AddWithValue("$path", "orders/OrderService.cs");
+                Assert.Equal(1, command.ExecuteNonQuery());
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.Unchanged,
+                    workspaceId,
+                    targetRoot,
+                    targetDbPath,
+                    Revision: 1);
+            },
+            NullLogger<RegisteredWorkspaceWriteThrough>.Instance);
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(targetDbPath));
+        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+            targetDbPath, targetRoot, "target-ws", storeEnabled: false);
+        var service = new EditService(
+            index,
+            new SmartTargetResolver(index),
+            targetDbPath,
+            targetRoot,
+            new EditApplier(() => EditWriteLock.TryAcquire(targetMillerDir)),
+            writeThrough,
+            recoveryOptions: new EditService.RecoveryOptions(
+                Timeout: TimeSpan.Zero,
+                PollInterval: TimeSpan.Zero),
+            readSession: session);
+
+        EditService.EditResult result = service.Execute(Req("replace_symbol_body", "OrderService.Total") with
+        {
+            NewText = "{ return 8; }",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied, result.Output);
+        Assert.True(fallbackCalled);
+        Assert.True(queueWasWrittenFirst);
+        Assert.Contains("return 8", File.ReadAllText(stalePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Edit_AmbiguousWorkspaceSelector_WritesNothing()
+    {
+        string firstRoot = Path.Combine(_root, "ambiguous-first");
+        string secondRoot = Path.Combine(_root, "ambiguous-second");
+        Directory.CreateDirectory(firstRoot);
+        Directory.CreateDirectory(secondRoot);
+        using var registry = WorkspaceRegistry.Open(Path.Combine(_root, "ambiguous-workspaces.db"));
+        registry.UpsertSeen(
+            "ambiguous-first-id",
+            "same-display",
+            firstRoot,
+            Path.Combine(firstRoot, ".miller", "symbols.db"));
+        registry.UpsertSeen(
+            "ambiguous-second-id",
+            "same-display",
+            secondRoot,
+            Path.Combine(secondRoot, ".miller", "symbols.db"));
+
+        bool providerCalled = false;
+        var provider = new FixedSymbolReadProvider(_ =>
+        {
+            providerCalled = true;
+            throw new InvalidOperationException("ambiguous target reached the read provider");
+        });
+        var factory = new WorkspaceEditContextFactory(
+            provider,
+            registry,
+            primaryWorkspace: () => null,
+            primaryWriteThrough: new RecordingWriteThrough(),
+            fallbackRefresh: _ => throw new InvalidOperationException("fallback was not expected"),
+            logger: NullLogger<RegisteredWorkspaceWriteThrough>.Instance);
+        var tool = new EditTool(factory, NullLogger<EditTool>.Instance);
+
+        string output = tool.Edit(
+            "replace_text",
+            "orders/OrderService.cs",
+            old_text: "before",
+            new_text: "after",
+            apply: true,
+            workspace_id: "same-display");
+
+        Assert.False(providerCalled);
+        Assert.Contains("ambiguous workspace selector", output, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(Path.Combine(firstRoot, ".miller", EditWriteLock.LockFileName)));
+        Assert.False(File.Exists(Path.Combine(secondRoot, ".miller", EditWriteLock.LockFileName)));
+    }
+
+    [Fact]
+    public void Edit_MissingWorkspaceSelector_WritesNothing()
+    {
+        string targetRoot = Path.Combine(_root, "missing-target");
+        Directory.CreateDirectory(targetRoot);
+        using var registry = WorkspaceRegistry.Open(Path.Combine(_root, "missing-workspaces.db"));
+        bool providerCalled = false;
+        var provider = new FixedSymbolReadProvider(_ =>
+        {
+            providerCalled = true;
+            throw new InvalidOperationException("missing target reached the read provider");
+        });
+        var factory = new WorkspaceEditContextFactory(
+            provider,
+            registry,
+            primaryWorkspace: () => null,
+            primaryWriteThrough: new RecordingWriteThrough(),
+            fallbackRefresh: _ => throw new InvalidOperationException("fallback was not expected"),
+            logger: NullLogger<RegisteredWorkspaceWriteThrough>.Instance);
+        var tool = new EditTool(factory, NullLogger<EditTool>.Instance);
+
+        string output = tool.Edit(
+            "replace_text",
+            "orders/OrderService.cs",
+            old_text: "before",
+            new_text: "after",
+            apply: true,
+            workspace_id: "missing-target");
+
+        Assert.False(providerCalled);
+        Assert.Contains("unknown workspace selector", output, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(Path.Combine(targetRoot, ".miller", EditWriteLock.LockFileName)));
+    }
+
+    [Fact]
+    public void Edit_RegisteredWorkspaceMissingRoot_WritesNothing()
+    {
+        string targetRoot = Path.Combine(_root, "removed-target");
+        using var registry = WorkspaceRegistry.Open(Path.Combine(_root, "removed-workspaces.db"));
+        registry.UpsertSeen(
+            "removed-target-id",
+            "removed-target-display",
+            targetRoot,
+            Path.Combine(targetRoot, ".miller", "symbols.db"));
+
+        bool providerCalled = false;
+        var provider = new FixedSymbolReadProvider(_ =>
+        {
+            providerCalled = true;
+            throw new InvalidOperationException("missing root reached the read provider");
+        });
+        var factory = new WorkspaceEditContextFactory(
+            provider,
+            registry,
+            primaryWorkspace: () => null,
+            primaryWriteThrough: new RecordingWriteThrough(),
+            fallbackRefresh: _ => throw new InvalidOperationException("fallback was not expected"),
+            logger: NullLogger<RegisteredWorkspaceWriteThrough>.Instance);
+        var tool = new EditTool(factory, NullLogger<EditTool>.Instance);
+
+        string output = tool.Edit(
+            "replace_text",
+            "orders/OrderService.cs",
+            old_text: "before",
+            new_text: "after",
+            apply: true,
+            workspace_id: "removed-target-id");
+
+        Assert.False(providerCalled);
+        Assert.Contains("Workspace root not found", output, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(Path.Combine(targetRoot, ".miller", EditWriteLock.LockFileName)));
     }
 
     [Fact]

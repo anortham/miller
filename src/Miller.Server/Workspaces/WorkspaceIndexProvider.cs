@@ -393,7 +393,8 @@ public sealed class WorkspaceIndexProvider
                 "current",
                 WarningText: null,
                 DisplayId: CurrentDisplayId(),
-                IndexLevel: readSession.Snapshot.IndexLevel)
+                IndexLevel: readSession.Snapshot.IndexLevel,
+                IndexDbPath: CurrentWorkspace.CanonicalExtractDbPath ?? CurrentWorkspace.ExtractDbPath)
             {
                 ReadTelemetry = readTelemetry,
             };
@@ -744,7 +745,8 @@ public sealed class WorkspaceIndexProvider
                 WorkspaceFreshnessView.WarningTextFor(refreshResult),
                 row.DisplayId,
                 IsCurrent: false,
-                IndexLevel: readSession.Snapshot.IndexLevel)
+                IndexLevel: readSession.Snapshot.IndexLevel,
+                IndexDbPath: row.IndexDbPath)
             {
                 ReadTelemetry = readTelemetry,
             };

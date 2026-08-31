@@ -697,8 +697,17 @@ public sealed class EditService
                         return retry;
                 }
 
-                if (attempt == StaleRecoveryAttempt.Converged || elapsed.Elapsed >= recoveryBudget)
+                if (attempt == StaleRecoveryAttempt.Converged)
                     return null;
+                if (elapsed.Elapsed >= recoveryBudget)
+                {
+                    if (_writeThrough is IEditRecoveryFallback fallback && fallback.TryFallbackRefresh())
+                    {
+                        attempt = StaleRecoveryAttempt.Converged;
+                        continue;
+                    }
+                    return null;
+                }
                 Thread.Sleep(_recovery.PollInterval);
             }
         }
@@ -1979,8 +1988,25 @@ public sealed class EditService
                 }
                 if (fresh)
                     return true;
-                if (attempt == StaleRecoveryAttempt.Converged || elapsed.Elapsed >= budget)
+                if (attempt == StaleRecoveryAttempt.Converged)
                     return false;
+                if (elapsed.Elapsed >= budget)
+                {
+                    if (_writeThrough is IEditRecoveryFallback fallback && fallback.TryFallbackRefresh())
+                    {
+                        try
+                        {
+                            return CheckFreshness(relativePath, absPath, diskText).Result
+                                == FreshnessResult.Fresh;
+                        }
+                        catch (Exception ex) when (
+                            ex is SqliteException or FileNotFoundException or InvalidOperationException)
+                        {
+                            return false;
+                        }
+                    }
+                    return false;
+                }
                 Thread.Sleep(_recovery.PollInterval);
             }
         }
