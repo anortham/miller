@@ -218,7 +218,6 @@ public sealed class ContinuousTestVerdictTests : IDisposable
         var source = new ScriptedRevisionSource();
         source.Observations.Enqueue(Observation(3));
         source.Observations.Enqueue(Observation(4));
-        var delay = new ManualDelay();
         var host = new ContinuousTestDaemonHost(
             workspace.WorkspaceRoot,
             new ContinuousTestDaemonHostOptions
@@ -232,15 +231,11 @@ public sealed class ContinuousTestVerdictTests : IDisposable
                 Budget = CtExecutionBudget.Disabled(),
                 AcquireLease = false,
                 Clock = () => DateTimeOffset.UtcNow,
-                Delay = delay.DelayAsync,
+                Delay = (_, token) => Task.Delay(5, token),
             });
 
         using var cancellation = new CancellationTokenSource();
         Task run = host.RunAsync(cancellation.Token);
-        await delay.WaitForDelayCountAsync(1, TestContext.Current.CancellationToken);
-        delay.CompleteNext();
-        await delay.WaitForDelayCountAsync(2, TestContext.Current.CancellationToken);
-        delay.CompleteNext();
         await WaitUntil(
             () => host.LastSnapshot is { Verdict: ContinuousTestVerdict.Green } snapshot
                 && snapshot.Selected == new CtFreshnessKey(EngineTestSupport.Identity, 4),
