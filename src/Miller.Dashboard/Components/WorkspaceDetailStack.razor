@@ -29,6 +29,7 @@
 
     // One refetch when a refresh finishes, instead of the 2-second status poll carrying all ten panels.
     // With nothing selected the URL would read "workspace_id=", which the detail-stack route cannot resolve.
+    // Do not set hx-target here: child polls inherit it and replace this stack with one panel.
     private Dictionary<string, object>? RefreshFinishedAttributes =>
         string.IsNullOrWhiteSpace(Snapshot.SelectedWorkspaceId)
             ? null
@@ -36,7 +37,6 @@
             {
                 ["hx-get"] = $"/fragments/detail-stack?workspace_id={Esc(Snapshot.SelectedWorkspaceId)}",
                 ["hx-trigger"] = "miller:refresh-finished from:body",
-                ["hx-target"] = "this",
                 ["hx-ext"] = "morph",
                 ["hx-swap"] = "morph:outerHTML",
             };

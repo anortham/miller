@@ -54,7 +54,7 @@ internal static class DashboardTestsActions
             CreateNoWindow = true,
         };
         startInfo.ArgumentList.Add("tests");
-        startInfo.ArgumentList.Add(action);
+        startInfo.ArgumentList.Add(string.Equals(action, "start", StringComparison.Ordinal) ? "serve" : action);
         bool isRun = string.Equals(action, "run", StringComparison.Ordinal);
         if (isRun)
             startInfo.ArgumentList.Add("--json");
@@ -91,7 +91,8 @@ internal static class DashboardTestsActions
 
             if (raw.Success)
                 return new DashboardTestsActionOutcome(true, $"tests ran — verdict {verdict ?? "unknown"}");
-            if (string.Equals(reason, "not acknowledged", StringComparison.Ordinal))
+            if (string.Equals(reason, "not acknowledged", StringComparison.Ordinal)
+                || string.Equals(reason, "unacked", StringComparison.Ordinal))
             {
                 return new DashboardTestsActionOutcome(
                     true,

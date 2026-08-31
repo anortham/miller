@@ -126,6 +126,30 @@ public sealed class DashboardTestsActionEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task Post_Start_RunsTheServeCliVerbInTheWorkspaceRoot()
+    {
+        string root = SeedWorkspace("ws-a", "alpha-abcd1234");
+        ProcessStartInfo? received = null;
+        DashboardTestsActions.RunProcessOverride = startInfo =>
+        {
+            received = startInfo;
+            return new DashboardTestsActionOutcome(true, "daemon started");
+        };
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        HttpResponseMessage response = await SendAsync(client, "/workspaces/ws-a/tests/start");
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(received);
+        Assert.Equal(["tests", "serve"], received!.ArgumentList);
+        Assert.Equal(PathCanonicalizer.CanonicalizeRoot(root), received.WorkingDirectory);
+        Assert.Contains("daemon started", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("error-notice", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Post_FailedAction_RendersTheOutcomeAsAnErrorNotice()
     {
         SeedWorkspace("ws-a", "alpha-abcd1234");
@@ -176,6 +200,19 @@ public sealed class DashboardTestsActionEndpointTests : IDisposable
 
         Assert.True(outcome.Success);
         Assert.Contains("did not confirm within 5 seconds", outcome.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TranslateRunOutcome_TreatsTheCliUnackedReasonAsLikelyBusyNotFailure()
+    {
+        DashboardTestsActionOutcome outcome = DashboardTestsActions.TranslateRunOutcome(
+            new DashboardTestsActionOutcome(
+                false,
+                "{\"execution\":\"daemon\",\"verdict\":\"unknown\",\"reason\":\"unacked\",\"waited\":false,\"paused\":false,\"selected\":null}"));
+
+        Assert.True(outcome.Success);
+        Assert.Contains("did not confirm within 5 seconds", outcome.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("unacked", outcome.Message, StringComparison.Ordinal);
     }
 
     [Fact]

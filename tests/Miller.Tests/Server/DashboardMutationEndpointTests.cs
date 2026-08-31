@@ -311,6 +311,26 @@ public sealed class DashboardMutationEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task WorkspaceDetailStack_OmitsHxTargetSoChildPollsDoNotReplaceTheStack()
+    {
+        string workspaceId = NewWorkspaceId();
+        SeedWorkspace(workspaceId, "alpha-abcd1234");
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        string body = await GetBodyAsync(client, $"/workspace?workspace_id={workspaceId}");
+
+        int start = body.IndexOf("<div id=\"workspace-detail-stack\"", StringComparison.Ordinal);
+        Assert.True(start >= 0, "workspace-detail-stack div is missing");
+        int end = body.IndexOf('>', start);
+        Assert.True(end > start, "workspace-detail-stack open tag is not closed");
+        string openTag = body[start..(end + 1)];
+
+        Assert.Contains($"hx-get=\"/fragments/detail-stack?workspace_id={workspaceId}\"", openTag, StringComparison.Ordinal);
+        Assert.DoesNotContain("hx-target", openTag, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task WorkspaceDetailStack_RefreshAndRefetchRequestsHaveOrderedSyncStrategies()
     {
         string workspaceId = NewWorkspaceId();
