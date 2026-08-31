@@ -109,21 +109,30 @@ public sealed class WorkspaceEditContextFactory
 
         try
         {
-            string targetRoot = row?.CanonicalRoot ?? readContext.WorkspaceRoot;
+            string targetRoot;
+            string indexDbPath;
+            if (row is not null)
+            {
+                targetRoot = row.CanonicalRoot;
+                indexDbPath = row.IndexDbPath;
+            }
+            else
+            {
+                WorkspaceContext primary = _primaryWorkspace()
+                    ?? throw new InvalidOperationException("The current workspace is not ready for edits.");
+                targetRoot = primary.CanonicalRoot ?? primary.WorkspaceRoot;
+                indexDbPath = primary.CanonicalExtractDbPath ?? primary.ExtractDbPath;
+                if (!string.Equals(readContext.WorkspaceId, primary.WorkspaceId, StringComparison.Ordinal) ||
+                    !WorkspaceSafety.IsLiveWorkspace(readContext.WorkspaceRoot, targetRoot))
+                {
+                    throw new InvalidOperationException(
+                        "The current workspace resolved to inconsistent target metadata.");
+                }
+            }
             TelemetryContext.Current?.SetWorkspace(targetWorkspaceId, targetRoot);
-            string indexDbPath = row?.IndexDbPath
-                ?? readContext.IndexDbPath
-                ?? Path.Combine(targetRoot, ".miller", "symbols.db");
             if (row is not null &&
                 (!string.Equals(readContext.WorkspaceId, row.WorkspaceId, StringComparison.Ordinal) ||
-                 !WorkspaceSafety.IsLiveWorkspace(readContext.WorkspaceRoot, row.CanonicalRoot) ||
-                 (readContext.IndexDbPath is not null &&
-                  !string.Equals(
-                      Path.GetFullPath(readContext.IndexDbPath),
-                      Path.GetFullPath(row.IndexDbPath),
-                      OperatingSystem.IsWindows()
-                          ? StringComparison.OrdinalIgnoreCase
-                          : StringComparison.Ordinal))))
+                 !WorkspaceSafety.IsLiveWorkspace(readContext.WorkspaceRoot, row.CanonicalRoot)))
             {
                 throw new InvalidOperationException(
                     $"The selected workspace '{row.WorkspaceId}' resolved to inconsistent target metadata.");

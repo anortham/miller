@@ -75,17 +75,6 @@ public sealed class IndexLevelContextTests : IDisposable
     }
 
     [Fact]
-    public void ResolveSymbolRead_RegisteredWorkspace_CarriesSelectedIndexDbPath()
-    {
-        using var registry = WorkspaceRegistry.Open(_registryDbPath);
-        WorkspaceIndexProvider provider = RegisteredProvider(SymbolsLevelArtifact.CreateFull, registry);
-
-        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead("target-ws", WorkspaceRefreshMode.None);
-
-        Assert.Equal(registry.Get("target-ws")!.IndexDbPath, context.IndexDbPath);
-    }
-
-    [Fact]
     public void Resolve_CurrentWorkspaceSymbolsLevelArtifact_CarriesTheArtifactLevel()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
@@ -107,17 +96,6 @@ public sealed class IndexLevelContextTests : IDisposable
 
         Assert.Equal(IndexLevels.SymbolsMetadataValue, context.IndexLevel);
         Assert.True(IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel));
-    }
-
-    [Fact]
-    public void ResolveSymbolRead_CurrentWorkspace_CarriesSelectedIndexDbPath()
-    {
-        using var registry = WorkspaceRegistry.Open(_registryDbPath);
-        WorkspaceIndexProvider provider = CurrentWorkspaceProvider(SymbolsLevelArtifact.CreateFull, registry);
-
-        using WorkspaceSymbolReadContext context = provider.ResolveSymbolRead(null, WorkspaceRefreshMode.None);
-
-        Assert.Equal(context.ReadSession.LegacyArtifactPath, context.IndexDbPath);
     }
 
     [Fact]

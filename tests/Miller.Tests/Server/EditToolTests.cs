@@ -465,8 +465,7 @@ public sealed class EditToolTests : IDisposable
                 null,
                 "target-111111111111",
                 false,
-                session.Snapshot.IndexLevel,
-                targetDbPath);
+                session.Snapshot.IndexLevel);
         });
         var factory = new WorkspaceEditContextFactory(
             provider,
@@ -499,6 +498,66 @@ public sealed class EditToolTests : IDisposable
         Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
         Assert.True(File.Exists(Path.Combine(targetMillerDir, EditWriteLock.LockFileName)));
         Assert.False(File.Exists(Path.Combine(_root, ".miller", EditWriteLock.LockFileName)));
+    }
+
+    [Fact]
+    public void Edit_CurrentWorkspace_UsesAuthoritativeLazyPrimaryPath()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+
+        string readDbPath = Path.Combine(_root, ".miller", "symbols.db");
+        string primaryDbPath = Path.Combine(_root, ".miller", "authoritative", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(readDbPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(primaryDbPath)!);
+        File.Copy(fx.DbPath, readDbPath);
+        File.Copy(fx.DbPath, primaryDbPath);
+
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(readDbPath));
+        var provider = new FixedSymbolReadProvider(_ =>
+        {
+            WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                readDbPath, _root, "primary-ws", storeEnabled: false);
+            return new WorkspaceSymbolReadContext(
+                index,
+                session,
+                "primary-ws",
+                _root,
+                1,
+                true,
+                "current",
+                null,
+                "primary",
+                true,
+                session.Snapshot.IndexLevel);
+        });
+        WorkspaceContext primary = WorkspaceContext.Create(_root, AppContext.BaseDirectory, _root) with
+        {
+            WorkspaceId = "primary-ws",
+            CanonicalRoot = _root,
+            ExtractDbPath = primaryDbPath,
+            CanonicalExtractDbPath = primaryDbPath,
+        };
+        using var registry = WorkspaceRegistry.Open(Path.Combine(_root, "workspaces.db"));
+        var factory = new WorkspaceEditContextFactory(
+            provider,
+            registry,
+            primaryWorkspace: () => primary,
+            primaryWriteThrough: new RecordingWriteThrough(),
+            fallbackRefresh: _ => throw new InvalidOperationException("fallback was not expected"),
+            logger: NullLogger<RegisteredWorkspaceWriteThrough>.Instance);
+        var tool = new EditTool(factory, NullLogger<EditTool>.Instance);
+
+        string output = tool.Edit(
+            "replace_symbol_body",
+            "OrderService.Total",
+            new_text: "{ return 9; }",
+            apply: true);
+
+        Assert.Contains("return 9", output, StringComparison.Ordinal);
+        Assert.Contains("return 9", File.ReadAllText(Path.Combine(_root, "orders/OrderService.cs")), StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(primaryDbPath)!, EditWriteLock.LockFileName)));
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(readDbPath)!, EditWriteLock.LockFileName)));
     }
 
     [Fact]
@@ -539,8 +598,7 @@ public sealed class EditToolTests : IDisposable
                 null,
                 "target-222222222222",
                 false,
-                session.Snapshot.IndexLevel,
-                targetDbPath);
+                session.Snapshot.IndexLevel);
         });
         var factory = new WorkspaceEditContextFactory(
             provider,

@@ -10,7 +10,6 @@ namespace Miller.Server.Workspaces;
 /// type reports "full" for exactly the reads that cannot see it. Defaults to
 /// <see cref="IndexLevels.FullMetadataValue"/>, the value under which no guard fires.
 /// </param>
-/// <param name="IndexDbPath">The selected workspace's index database path, when the route can provide it.</param>
 public sealed record WorkspaceSymbolReadContext(
     ISymbolLookupIndex Index,
     WorkspaceReadHandle ReadSession,
@@ -22,8 +21,7 @@ public sealed record WorkspaceSymbolReadContext(
     string? WarningText,
     string? DisplayId = null,
     bool IsCurrent = true,
-    string IndexLevel = IndexLevels.FullMetadataValue,
-    string? IndexDbPath = null) : IDisposable
+    string IndexLevel = IndexLevels.FullMetadataValue) : IDisposable
 {
     public WorkspaceReadSnapshot Snapshot => ReadSession.Snapshot;
 
