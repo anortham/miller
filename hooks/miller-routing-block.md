@@ -20,7 +20,7 @@ Miller serves a fresh, structured index of this workspace's code. One Miller cal
 - trace — exact refs, shortest dependency paths, or cross-language route chains.
 - impact — before a refactor or after edits: impacted symbols plus likely tests, from a symbol, file, or git diff. With no args it reads the working-tree diff.
 - edit — index-aware replace/rename/body-rewrite with a diff preview and match proof.
-- patterns — pre-extracted code-shape facts (routes, config keys, doc structure) across 38 languages.
+- patterns — pre-extracted code-shape facts (routes, config keys, doc structure) across 40 languages.
 - content — import then search/read logs, CI output, web markdown, and large text.
 - workspace — index lifecycle and semantic-broker health: status, refresh, health, list, onboarding, dashboard.
 - tests — which tests your change made stale, and their last verdict; opt-in per workspace.

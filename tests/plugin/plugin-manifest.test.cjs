@@ -247,7 +247,7 @@ test('patterns skill gives recipe-shaped structural fact workflows', () => {
     'utf8',
   );
 
-  assert.match(skill, /patterns\(operation="list"/);
+  assert.match(skill, /patterns\(workspace_id="<id>", operation="list"/);
   assert.match(skill, /aspnet\.minimal_api\.route\.v1/);
   assert.match(skill, /htmx\.attribute\.v1/);
   assert.match(skill, /where="verb=GET"/);
@@ -260,7 +260,7 @@ test('editing skill explains exact replace_text recovery', () => {
   );
 
   assert.match(skill, /replace_text` still requires a known `old_text`/);
-  assert.match(skill, /inspect\(target="<symbol-or-file>"/);
+  assert.match(skill, /inspect\(workspace_id="<id>", target="<symbol-or-file>"/);
 });
 
 test('handoff skills define packet workflows without adding tool surface', () => {

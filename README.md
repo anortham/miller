@@ -19,7 +19,7 @@ Miller keeps serving lexical-only. [Continuous testing](#continuous-testing) is 
 default: `tests status` is a cheap read that starts nothing; `tests start` / `miller tests serve` is the
 only daemon start. Set `MILLER_CT=off` for a permanent zero-work switch. The extraction
 layer ([`julie-extractors`](https://github.com/anortham/julie-extractors)) is hand-written across all
-[38 supported languages](#supported-languages), so it reaches structure shell search cannot: framework route facts across ~25
+[40 supported languages](#supported-languages), so it reaches structure shell search cannot: framework route facts across ~25
 framework families, dependency-injection registrations as real graph edges, partial classes linked
 across files, SQL DDL/DML shapes, and owned grammar forks (Razor, T-SQL, C#) where the ecosystem had
 gaps. The full argument is
@@ -175,7 +175,7 @@ Read tools accept a `workspace_id` selector (display ID, unique prefix, full ID,
 
 ## Supported languages
 
-Miller indexes what the pinned extractor parses. `julie-extract` 2.38.0 ships hand-written extractors
+Miller indexes what the pinned extractor parses. `julie-extract` 2.38.1 ships hand-written extractors
 for **40 languages**:
 
 - **Systems and compiled:** Rust (`.rs`), C (`.c`, `.h`), C++ (`.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`,
