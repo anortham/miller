@@ -276,6 +276,8 @@ public sealed class ContinuousTestIdleDrainTests : IDisposable
         await delay.WaitForDelayCountAsync(1, TestContext.Current.CancellationToken);
         delay.CompleteNext();
         await delay.WaitForDelayCountAsync(2, TestContext.Current.CancellationToken);
+        delay.CompleteNext();
+        await delay.WaitForDelayCountAsync(3, TestContext.Current.CancellationToken);
         Assert.Empty(provider.RunRequests);
 
         clock.Advance(CtIdleDrainPolicy.Cooldown + TimeSpan.FromSeconds(1));
@@ -287,13 +289,13 @@ public sealed class ContinuousTestIdleDrainTests : IDisposable
         Assert.False(request.WholeSuite);
 
         clock.Advance(CtIdleDrainPolicy.Cooldown + TimeSpan.FromSeconds(1));
-        for (int i = 3; i <= 6; i++)
+        for (int i = 4; i <= 7; i++)
         {
             await delay.WaitForDelayCountAsync(i, TestContext.Current.CancellationToken);
             delay.CompleteNext();
         }
 
-        await delay.WaitForDelayCountAsync(7, TestContext.Current.CancellationToken);
+        await delay.WaitForDelayCountAsync(8, TestContext.Current.CancellationToken);
         Assert.Single(provider.RunRequests);
 
         cancellation.Cancel();

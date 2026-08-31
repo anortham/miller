@@ -185,7 +185,7 @@ public sealed class ContinuousTestVerdictTests : IDisposable
                 Budget = CtExecutionBudget.Disabled(),
                 AcquireLease = false,
                 Clock = () => DateTimeOffset.UtcNow,
-                Delay = (_, token) => Task.Delay(Timeout.Infinite, token),
+                Delay = (_, token) => Task.Delay(5, token),
             });
 
         using var cancellation = new CancellationTokenSource();
@@ -238,6 +238,8 @@ public sealed class ContinuousTestVerdictTests : IDisposable
         using var cancellation = new CancellationTokenSource();
         Task run = host.RunAsync(cancellation.Token);
         await delay.WaitForDelayCountAsync(1, TestContext.Current.CancellationToken);
+        delay.CompleteNext();
+        await delay.WaitForDelayCountAsync(2, TestContext.Current.CancellationToken);
         delay.CompleteNext();
         await WaitUntil(
             () => host.LastSnapshot is { Verdict: ContinuousTestVerdict.Green } snapshot

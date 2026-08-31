@@ -724,6 +724,175 @@ public sealed class ContinuousTestRevisionPollerTests
         }
     }
 
+    [Fact]
+    public async Task ReadAsync_DoesNotEnqueueOrSaveCursor()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-read-async-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            var persisted = new CtFreshnessKey(EngineTestSupport.Identity, 2);
+            store.SaveLastReconciledCursor(EngineTestSupport.WorkspaceId, persisted);
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(Observation(3));
+            var impact = new ScriptedImpactSource { Result = ChangedImpact(from: 2, to: 3) };
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(source, impact, cursorStore: store);
+
+            ContinuousTestRevisionReadResult read = await poller.ReadAsync(
+                Request(workspace, enqueuer, armed: true),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("enqueue-ready", read.Reason);
+            Assert.NotNull(read.Impact);
+            Assert.Empty(enqueuer.Changes);
+            Assert.Equal(persisted, store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task ApplyRead_EnqueuesAndAdvancesCursor()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-apply-read-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            store.SaveLastReconciledCursor(
+                EngineTestSupport.WorkspaceId,
+                new CtFreshnessKey(EngineTestSupport.Identity, 2));
+            var source = new ScriptedRevisionSource();
+            source.Observations.Enqueue(Observation(3));
+            var impact = new ScriptedImpactSource { Result = ChangedImpact(from: 2, to: 3) };
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(source, impact, cursorStore: store);
+            ContinuousTestRevisionPollRequest request = Request(workspace, enqueuer, armed: true);
+            ContinuousTestRevisionReadResult read = await poller.ReadAsync(
+                request,
+                TestContext.Current.CancellationToken);
+
+            ContinuousTestRevisionPollResult result = poller.ApplyRead(request, read);
+
+            Assert.Equal("enqueued", result.Reason);
+            Assert.Equal(1, result.EnqueuedProjects);
+            Assert.Single(enqueuer.Changes);
+            Assert.Equal(
+                new CtFreshnessKey(EngineTestSupport.Identity, 3),
+                store.ReadLastReconciledCursor(EngineTestSupport.WorkspaceId));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void ApplyRead_FiresOnRebuildOncePerFreshness()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-apply-rebuild-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            var enqueuer = new RecordingEnqueuer();
+            var poller = new ContinuousTestRevisionPoller(new ScriptedRevisionSource());
+            int rebuilds = 0;
+            var request = new ContinuousTestRevisionPollRequest(
+                EngineTestSupport.WorkspaceId,
+                workspace.WorkspaceRoot,
+                [
+                    new ContinuousTestProject("proj:1", EngineTestSupport.WorkspaceId, workspace.ProjectPath),
+                ],
+                enqueuer,
+                OnRebuild: _ => rebuilds++);
+            var freshness = new CtFreshnessKey(EngineTestSupport.Identity, 4);
+            var read = new ContinuousTestRevisionReadResult(
+                EngineTestSupport.WorkspaceId,
+                freshness,
+                "fresh",
+                Impact: null,
+                Observation: null,
+                Reason: "rebuild",
+                DeltaFromRevision: null,
+                DeltaToRevision: null)
+            {
+                RebuildDetected = true,
+            };
+
+            poller.ApplyRead(request, read);
+            poller.ApplyRead(request, read);
+
+            Assert.Equal(1, rebuilds);
+            Assert.Empty(enqueuer.Changes);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task PollAsync_Facade_MatchesSplit()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-poll-facade-").FullName;
+        try
+        {
+            var workspace = EngineTestSupport.Workspace(root);
+            using var store = new ContinuousTestStore(CtSchema.DbPathFor(root));
+            using var splitStore = new ContinuousTestStore(CtSchema.DbPathFor(Path.Combine(root, "split")));
+            var persisted = new CtFreshnessKey(EngineTestSupport.Identity, 2);
+            store.SaveLastReconciledCursor(EngineTestSupport.WorkspaceId, persisted);
+            splitStore.SaveLastReconciledCursor(EngineTestSupport.WorkspaceId, persisted);
+            var facadeSource = new ScriptedRevisionSource();
+            facadeSource.Observations.Enqueue(Observation(3));
+            var splitSource = new ScriptedRevisionSource();
+            splitSource.Observations.Enqueue(Observation(3));
+            var facadeImpact = new ScriptedImpactSource { Result = ChangedImpact(from: 2, to: 3) };
+            var splitImpact = new ScriptedImpactSource { Result = ChangedImpact(from: 2, to: 3) };
+            var facadeEnqueuer = new RecordingEnqueuer();
+            var splitEnqueuer = new RecordingEnqueuer();
+            var facadePoller = new ContinuousTestRevisionPoller(facadeSource, facadeImpact, cursorStore: store);
+            var splitPoller = new ContinuousTestRevisionPoller(splitSource, splitImpact, cursorStore: splitStore);
+
+            ContinuousTestRevisionPollResult facade = await facadePoller.PollAsync(
+                Request(workspace, facadeEnqueuer, armed: true),
+                TestContext.Current.CancellationToken);
+            ContinuousTestRevisionPollRequest splitRequest = Request(workspace, splitEnqueuer, armed: true);
+            ContinuousTestRevisionReadResult read = await splitPoller.ReadAsync(
+                splitRequest,
+                TestContext.Current.CancellationToken);
+            ContinuousTestRevisionPollResult split = splitPoller.ApplyRead(splitRequest, read);
+
+            Assert.Equal(facade.Status, split.Status);
+            Assert.Equal(facade.EnqueuedProjects, split.EnqueuedProjects);
+            Assert.Equal(facade.SelectedTests, split.SelectedTests);
+            Assert.Equal(facade.Reason, split.Reason);
+            Assert.Equal(facade.DeltaFromRevision, split.DeltaFromRevision);
+            Assert.Equal(facade.DeltaToRevision, split.DeltaToRevision);
+            Assert.Equal(facadeEnqueuer.Changes.Count, splitEnqueuer.Changes.Count);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    private static ContinuousTestImpactResult ChangedImpact(long from, long to) =>
+        new(
+            EngineTestSupport.WorkspaceId,
+            ["src/App.cs"],
+            [new ContinuousTestImpactedSymbol(Name: "App", Path: "src/App.cs")],
+            [new ContinuousTestImpactedTest(Name: "AppTests", Path: "tests/AppTests.cs")])
+        {
+            Outcome = ContinuousTestImpactOutcome.Changed,
+            FromRevision = from,
+            ToRevision = to,
+        };
+
     private static string CreateWorkspaceRoot(ResolutionArtifactFixture fixture, out string dbPath)
     {
         string root = Directory.CreateTempSubdirectory("miller-ct-source-").FullName;

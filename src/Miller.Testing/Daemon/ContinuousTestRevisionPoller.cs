@@ -108,6 +108,23 @@ public sealed record ContinuousTestRevisionPollResult(
     public int SelectedTests { get; init; }
 }
 
+public sealed record ContinuousTestRevisionReadResult(
+    string WorkspaceId,
+    CtFreshnessKey? Freshness,
+    string Status,
+    ContinuousTestImpactResult? Impact,
+    ContinuousTestRevisionObservation? Observation,
+    string Reason,
+    long? DeltaFromRevision,
+    long? DeltaToRevision)
+{
+    public bool RebuildDetected { get; init; }
+
+    public bool FirstPoll { get; init; }
+
+    public string? DeltaReason { get; init; }
+}
+
 /// <summary>
 /// Polls the live artifact through its cheap freshness probe and enqueues only a complete delta: a changed delta
 /// selects impacted tests, an empty delta becomes a pure watermark advance (known-empty in the
@@ -180,13 +197,23 @@ public sealed class ContinuousTestRevisionPoller
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ContinuousTestRevisionReadResult read = await ReadAsync(request, cancellationToken)
+            .ConfigureAwait(false);
+        return ApplyRead(request, read);
+    }
+
+    public async Task<ContinuousTestRevisionReadResult> ReadAsync(
+        ContinuousTestRevisionPollRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
         LoadCursor(request.WorkspaceId);
 
         ContinuousTestRevisionObservation? observation = await _source
             .RefreshAsync(request.WorkspaceId, request.WorkspaceRoot, cancellationToken)
             .ConfigureAwait(false);
         if (observation is null)
-            return Result(request.WorkspaceId, null, "missing", 0, "missing_revision");
+            return Read(request.WorkspaceId, null, "missing", "missing_revision");
 
         if (!string.Equals(observation.WorkspaceId, request.WorkspaceId, StringComparison.Ordinal))
         {
@@ -195,25 +222,25 @@ public sealed class ContinuousTestRevisionPoller
         }
 
         if (observation.Freshness is not { } freshness || !observation.IndexFresh)
-            return Result(request.WorkspaceId, observation.Freshness, observation.Status, 0, "degraded");
+            return Read(request.WorkspaceId, observation.Freshness, observation.Status, "degraded", observation: observation);
 
         if (observation.Rebuild || IdentityChanged(freshness))
         {
-            if (_lastObserved != freshness)
-                request.OnRebuild?.Invoke(freshness);
-            _lastObserved = freshness;
-            return Result(request.WorkspaceId, freshness, observation.Status, 0, "rebuild");
+            return Read(request.WorkspaceId, freshness, observation.Status, "rebuild", observation: observation) with
+            {
+                RebuildDetected = true,
+            };
         }
 
         if (_lastFresh is { } last && last == freshness)
-            return Result(request.WorkspaceId, freshness, observation.Status, 0, "same_revision");
+            return Read(request.WorkspaceId, freshness, observation.Status, "same_revision", observation: observation);
 
         if (_lastFresh is null)
         {
-            _lastObserved = freshness;
-            _lastFresh = freshness;
-            SaveCursor(freshness);
-            return Result(request.WorkspaceId, freshness, observation.Status, 0, "status-only");
+            return Read(request.WorkspaceId, freshness, observation.Status, "status-only", observation: observation) with
+            {
+                FirstPoll = true,
+            };
         }
 
         ContinuousTestImpactResult? impact = null;
@@ -231,7 +258,7 @@ public sealed class ContinuousTestRevisionPoller
                 .RefreshAsync(request.WorkspaceId, request.WorkspaceRoot, cancellationToken)
                 .ConfigureAwait(false);
             if (observation is null)
-                return Result(request.WorkspaceId, null, "missing", 0, "missing_revision");
+                return Read(request.WorkspaceId, null, "missing", "missing_revision");
             if (!string.Equals(observation.WorkspaceId, request.WorkspaceId, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
@@ -239,32 +266,92 @@ public sealed class ContinuousTestRevisionPoller
             }
 
             if (observation.Freshness is not { } retriedFreshness || !observation.IndexFresh)
-                return Result(request.WorkspaceId, observation.Freshness, observation.Status, 0, "degraded");
+                return Read(request.WorkspaceId, observation.Freshness, observation.Status, "degraded", observation: observation);
             if (observation.Rebuild || IdentityChanged(retriedFreshness))
             {
-                if (_lastObserved != retriedFreshness)
-                    request.OnRebuild?.Invoke(retriedFreshness);
-                _lastObserved = retriedFreshness;
-                return Result(request.WorkspaceId, retriedFreshness, observation.Status, 0, "rebuild");
+                return Read(request.WorkspaceId, retriedFreshness, observation.Status, "rebuild", observation: observation) with
+                {
+                    RebuildDetected = true,
+                };
             }
 
             freshness = retriedFreshness;
         }
+
         ContinuousTestImpactOutcome outcome = impact?.Outcome ?? ContinuousTestImpactOutcome.Unavailable;
         if (outcome == ContinuousTestImpactOutcome.Unavailable)
         {
-            return Result(request.WorkspaceId, freshness, observation.Status, 0, "unavailable_delta") with
+            return Read(
+                request.WorkspaceId,
+                freshness,
+                observation.Status,
+                "unavailable_delta",
+                impact,
+                observation,
+                impact?.FromRevision,
+                impact?.ToRevision) with
             {
                 DeltaReason = impact?.Reason,
-                DeltaFromRevision = impact?.FromRevision,
-                DeltaToRevision = impact?.ToRevision,
             };
         }
 
-        // An EMPTY outcome flows through the enqueuer like a known-empty change (defect D3): the
-        // queue's ApplyRevisionAdvance is the ONE watermark writer, so absorbing the advance here
-        // would strand every green watermark at the old revision. A changed outcome must name at
-        // least one path; an empty one must name none.
+        return Read(
+            request.WorkspaceId,
+            freshness,
+            observation.Status,
+            "enqueue-ready",
+            impact,
+            observation,
+            impact?.FromRevision,
+            impact?.ToRevision);
+    }
+
+    public ContinuousTestRevisionPollResult ApplyRead(
+        ContinuousTestRevisionPollRequest request,
+        ContinuousTestRevisionReadResult readResult)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(readResult);
+
+        if (readResult.RebuildDetected)
+        {
+            if (_lastObserved != readResult.Freshness && readResult.Freshness is { } rebuilt)
+                request.OnRebuild?.Invoke(rebuilt);
+            _lastObserved = readResult.Freshness;
+            return Result(request.WorkspaceId, readResult.Freshness, readResult.Status, 0, "rebuild");
+        }
+
+        if (readResult.FirstPoll)
+        {
+            if (readResult.Freshness is not { } first)
+                return Result(request.WorkspaceId, null, readResult.Status, 0, "status-only");
+            _lastObserved = first;
+            _lastFresh = first;
+            SaveCursor(first);
+            return Result(request.WorkspaceId, first, readResult.Status, 0, "status-only");
+        }
+
+        if (readResult.Reason is "missing_revision" or "degraded" or "same_revision" or "unavailable_delta" or "no_projects")
+        {
+            return Result(request.WorkspaceId, readResult.Freshness, readResult.Status, 0, readResult.Reason) with
+            {
+                DeltaReason = readResult.DeltaReason,
+                DeltaFromRevision = readResult.DeltaFromRevision,
+                DeltaToRevision = readResult.DeltaToRevision,
+            };
+        }
+
+        ContinuousTestImpactResult? impact = readResult.Impact;
+        ContinuousTestRevisionObservation? observation = readResult.Observation;
+        if (readResult.Freshness is not { } freshness || observation is null)
+        {
+            return Result(request.WorkspaceId, readResult.Freshness, readResult.Status, 0, "unavailable_delta") with
+            {
+                DeltaReason = impact?.Reason ?? "delta_interval_incomplete",
+            };
+        }
+
+        ContinuousTestImpactOutcome outcome = impact?.Outcome ?? ContinuousTestImpactOutcome.Unavailable;
         bool empty = outcome == ContinuousTestImpactOutcome.Empty;
         if (impact is null
             || impact.FromRevision is not { } from
@@ -285,10 +372,6 @@ public sealed class ContinuousTestRevisionPoller
             ContinuousTestProjectInventory.MaterializeProjectWorkItems(request.Projects, request.WorkspaceRoot);
         if (workItems.Count == 0)
         {
-            // The enqueuer's ApplyRevisionAdvance is what makes an interval's staleness land, and
-            // it runs once per work item. With zero work items nothing landed, so the cursor must
-            // stay put: saving here would let the next advance seed green watermarks across an
-            // interval nobody reconciled.
             return Result(request.WorkspaceId, freshness, observation.Status, 0, "no_projects") with
             {
                 DeltaFromRevision = from,
@@ -336,6 +419,17 @@ public sealed class ContinuousTestRevisionPoller
             DeltaToRevision = to,
         };
     }
+
+    private static ContinuousTestRevisionReadResult Read(
+        string workspaceId,
+        CtFreshnessKey? freshness,
+        string status,
+        string reason,
+        ContinuousTestImpactResult? impact = null,
+        ContinuousTestRevisionObservation? observation = null,
+        long? from = null,
+        long? to = null) =>
+        new(workspaceId, freshness, status, impact, observation, reason, from, to);
 
     private bool IdentityChanged(CtFreshnessKey freshness) =>
         _lastFresh is { } last
