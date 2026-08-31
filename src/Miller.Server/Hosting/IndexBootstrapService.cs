@@ -65,7 +65,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     // The bootstrap scan runs on a detached Task.Run, so without this a scan blocked on machine-wide admission
     // would survive host shutdown holding an OS handle.
     private readonly CancellationTokenSource _shutdown = new();
-    private readonly ScanGovernor _governor;
+    private readonly ScanGovernor? _governor;
+    private readonly Func<ScanGovernor>? _governorFactory;
     private readonly Func<bool> _storeEnabled;
     private readonly IIndexerPhaseSink _phaseSink;
 
@@ -81,15 +82,20 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     public IndexBootstrapService(
         ILogger<IndexBootstrapService> logger,
         ScanGovernor? scanGovernor = null,
-        Func<bool>? storeEnabled = null)
+        Func<bool>? storeEnabled = null,
+        Func<ScanGovernor>? scanGovernorFactory = null)
     {
         ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
         _phaseSink = new LoggingIndexerPhaseSink(logger);
         // Default = OFF, so no fast test ever opens a lease under the real user-global ~/.miller.
-        _governor = scanGovernor ?? ScanGovernor.Disabled();
+        _governor = scanGovernor;
+        _governorFactory = scanGovernorFactory;
         _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
     }
+
+    private ScanGovernor Governor =>
+        _governorFactory?.Invoke() ?? _governor ?? ScanGovernor.Disabled();
 
     private sealed record BoundWorkspace(
         IndexHolder Holder,
@@ -268,6 +274,9 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// </summary>
     internal string? TestHomeDirectoryOverride { get; set; }
 
+    internal MillerHostPaths CreateHostPaths() =>
+        MillerHostPaths.Create(AppContext.BaseDirectory, TestHomeDirectoryOverride);
+
     /// <summary>
     /// Test-only override for the machine-wide scan-admission budget, so a contention test does not sit out the
     /// ten-minute production wait.
@@ -275,7 +284,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     internal TimeSpan? TestBootstrapScanAdmissionWait { get; set; }
 
     private WorkspaceContext CreateWorkspaceContext(string canonicalRoot) =>
-        WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory, TestHomeDirectoryOverride);
+        WorkspaceContext.Create(canonicalRoot, CreateHostPaths());
 
     /// <summary>
     /// Bind and bootstrap the primary workspace. Idempotent when already bound to the same canonical root;
@@ -642,7 +651,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     {
                         throw new ScanAdmissionTimeoutException(
                             $"Timed out waiting for machine-wide scan admission to index {canonicalRoot}, and no " +
-                            $"usable index exists at {canonicalDbPath}. {_governor.DescribeHolder()}");
+                            $"usable index exists at {canonicalDbPath}. {Governor.DescribeHolder()}");
                     }
 
                     TestScanObserver?.Invoke();
@@ -750,7 +759,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                             _logger.LogWarning(
                                 "Auto-rebuild skipped: machine-wide scan admission was refused for {Db}. " +
                                 "Retrying the load against the existing artifact. {Holder}",
-                                canonicalDbPath, _governor.DescribeHolder());
+                                canonicalDbPath, Governor.DescribeHolder());
                             return null;
                         }
 
@@ -1050,7 +1059,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 {
                     throw new ScanAdmissionTimeoutException(
                         $"Timed out waiting for machine-wide scan admission to initialize family store " +
-                        $"'{binding.StoreRoot}'. {_governor.DescribeHolder()}");
+                        $"'{binding.StoreRoot}'. {Governor.DescribeHolder()}");
                 }
 
                 // A store import writes into a SHARED family. store_meta.binary_version is family-wide, so an
@@ -1753,7 +1762,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         try
         {
             return ScanGovernorAdmission.TryAcquire(
-                _governor,
+                Governor,
                 ScanGovernorState.Shared,
                 new ScanGovernorRequest(canonicalRoot, reason, ExtractJobsPolicy.FromEnvironment()),
                 TestBootstrapScanAdmissionWait ?? BootstrapScanLockWait(),

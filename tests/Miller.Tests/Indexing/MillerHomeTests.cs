@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Server.Hosting;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -74,5 +75,19 @@ public sealed class MillerHomeTests
         Assert.Equal(
             Path.Combine(MillerHome.Resolve(), ".miller"),
             MillerHome.ResolveMillerDirectory());
+    }
+
+    [Fact]
+    public void MillerHostPaths_UsesOneResolvedHomeForAllMachineGlobalPaths()
+    {
+        string home = Path.Combine(Path.GetTempPath(), "miller-host-paths-home");
+        string appBase = Path.Combine(Path.GetTempPath(), "miller-host-paths-app");
+
+        MillerHostPaths paths = MillerHostPaths.Create(appBase, home);
+
+        Assert.Equal(Path.Combine(Path.GetFullPath(home), ".miller"), paths.MillerDirectory);
+        Assert.Equal(Path.Combine(paths.MillerDirectory, "workspaces.db"), paths.RegistryDbPath);
+        Assert.Equal(Path.Combine(paths.MillerDirectory, "telemetry.db"), paths.TelemetryDbPath);
+        Assert.Equal(Path.Combine(Path.GetFullPath(appBase), ".tools"), paths.ToolsRoot);
     }
 }

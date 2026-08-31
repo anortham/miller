@@ -37,16 +37,23 @@ public static class MillerServiceRegistration
         ArgumentNullException.ThrowIfNull(services);
         SemanticMode activeSemanticMode = semanticMode ?? SemanticActivation.FromEnvironment();
 
+        services.AddSingleton(sp =>
+            sp.GetRequiredService<IndexBootstrapService>().CreateHostPaths());
+
         // Machine-wide (per-user) admission over whole-repo scans. Registered BEFORE its consumers, and built
         // from the user profile directly: the governor is workspace-independent, and reading an
         // IndexBootstrapService getter here would throw (the host constructs every hosted service before any
         // StartAsync — the lifecycle contract above).
-        services.AddSingleton(_ => ScanGovernor.FromEnvironment(MillerHome.ResolveMillerDirectory()));
+        services.AddSingleton(sp =>
+            ScanGovernor.FromEnvironment(sp.GetRequiredService<MillerHostPaths>().MillerDirectory));
 
         // The bootstrap holds the built current-workspace state. Registered as a singleton AND as the FIRST hosted service so
         // its StartAsync (index build + ledger open + holder seed + canonical-root resolve) completes before any
         // OTHER hosted service's StartAsync (the indexer, the freshness poller, the MCP transport) runs.
-        services.AddSingleton<IndexBootstrapService>();
+        services.AddSingleton<IndexBootstrapService>(sp =>
+            new IndexBootstrapService(
+                sp.GetRequiredService<ILogger<IndexBootstrapService>>(),
+                scanGovernorFactory: () => sp.GetRequiredService<ScanGovernor>()));
         services.AddHostedService(sp => sp.GetRequiredService<IndexBootstrapService>());
 
         services.AddSingleton<WorkspaceBindingService>();
@@ -59,7 +66,12 @@ public static class MillerServiceRegistration
         services.AddTransient(sp => sp.GetRequiredService<IndexBootstrapService>().Holder);
         services.AddTransient(sp => sp.GetRequiredService<IndexBootstrapService>().Resolver);
         services.AddTransient(sp => sp.GetRequiredService<IndexBootstrapService>().Workspace);
-        services.AddSingleton(sp => sp.GetRequiredService<IndexBootstrapService>().Ledger);
+        services.AddSingleton(sp =>
+        {
+            MillerHostPaths paths = sp.GetRequiredService<MillerHostPaths>();
+            Directory.CreateDirectory(paths.MillerDirectory);
+            return TelemetryLedger.Open(paths.TelemetryDbPath, workspaceId: null);
+        });
 
         // M3 hosted services (registered AFTER the bootstrap so its StartAsync seeds the holder + canonical root
         // first). BOTH take only the bootstrap and read its getters lazily inside ExecuteAsync — never at
@@ -84,14 +96,10 @@ public static class MillerServiceRegistration
         {
             services.AddSingleton(sp =>
             {
-                WorkspaceContext workspace =
-                    sp.GetRequiredService<IndexBootstrapService>().Workspace;
-                string millerHome = Path.GetDirectoryName(workspace.RegistryDbPath)
-                    ?? throw new InvalidOperationException(
-                        $"Registry path '{workspace.RegistryDbPath}' has no parent directory.");
+                MillerHostPaths paths = sp.GetRequiredService<MillerHostPaths>();
                 return new SharedSemanticBrokerConnectionFactory(
-                    workspace.ToolsRoot,
-                    millerHome,
+                    paths.ToolsRoot,
+                    paths.MillerDirectory,
                     SemanticEncoderSelection.Active);
             });
         }
@@ -103,9 +111,8 @@ public static class MillerServiceRegistration
                 if (evaluationAdapter is not null)
                     return evaluationAdapter.CreateSession();
 
-                WorkspaceContext workspace =
-                    sp.GetRequiredService<IndexBootstrapService>().Workspace;
-                string executable = SemanticSidecarLayout.ExecutablePath(workspace.ToolsRoot);
+                MillerHostPaths paths = sp.GetRequiredService<MillerHostPaths>();
+                string executable = SemanticSidecarLayout.ExecutablePath(paths.ToolsRoot);
                 return File.Exists(executable)
                     ? SemanticSearchArm.ProcessSession(
                         sp.GetRequiredService<SharedSemanticBrokerConnectionFactory>(),
@@ -182,7 +189,7 @@ public static class MillerServiceRegistration
         {
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(JulieExtractRunner));
             return JulieExtractRunner.Locate(
-                sp.GetRequiredService<WorkspaceContext>().ToolsRoot,
+                sp.GetRequiredService<MillerHostPaths>().ToolsRoot,
                 reason => logger.LogWarning(
                     "julie-extract is running WITHOUT Windows orphan containment: {Reason}. The scan " +
                     "proceeds, but if this Miller is killed the extractor can outlive it.", reason));
@@ -191,7 +198,7 @@ public static class MillerServiceRegistration
         // Task 5 cross-workspace read seam. The registry is machine-global (<home>/.miller/workspaces.db); target
         // indexes remain local to their owning workspace and are loaded through WorkspaceIndexProvider only.
         services.AddSingleton(sp =>
-            WorkspaceRegistry.Open(sp.GetRequiredService<WorkspaceContext>().RegistryDbPath));
+            WorkspaceRegistry.Open(sp.GetRequiredService<MillerHostPaths>().RegistryDbPath));
         // Search sidecar flag — default ON (the Phase-5 recall eval cleared it: interior recall up, zero word-arm
         // regression, ranking parity exact). The lock-holding writer (IndexerService leader / CrossWorkspaceRefreshService)
         // converges the on-disk search.db; reads require it when enabled so missing/stale artifacts are visible.

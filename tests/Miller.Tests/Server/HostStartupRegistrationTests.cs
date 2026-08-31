@@ -66,6 +66,29 @@ public sealed class HostStartupRegistrationTests : IDisposable
     }
 
     [Fact]
+    public void GlobalServices_ResolveBeforePrimaryWorkspaceBinds()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices(semanticMode: SemanticMode.Off, startIndexer: false);
+
+        using var provider = services.BuildServiceProvider();
+        var bootstrap = provider.GetRequiredService<IndexBootstrapService>();
+        string tempHome = CreateTempRoot();
+        bootstrap.TestHomeDirectoryOverride = tempHome;
+
+        MillerHostPaths paths = provider.GetRequiredService<MillerHostPaths>();
+        WorkspaceRegistry registry = provider.GetRequiredService<WorkspaceRegistry>();
+        TelemetryLedger ledger = provider.GetRequiredService<TelemetryLedger>();
+
+        Assert.False(bootstrap.IsBound);
+        Assert.Equal(Path.Combine(Path.GetFullPath(tempHome), ".miller"), paths.MillerDirectory);
+        Assert.Equal(paths.RegistryDbPath, registry.DatabasePath);
+        Assert.Equal(paths.TelemetryDbPath, ledger.DbPath);
+        Assert.Null(ledger.WorkspaceId);
+    }
+
+    [Fact]
     public void BackgroundRefreshGate_IsOneProcessSingletonBehindTransientProviders()
     {
         var services = new ServiceCollection();
@@ -361,6 +384,7 @@ public sealed class HostStartupRegistrationTests : IDisposable
     {
         string root = CreateTempRoot();
         string toolsBase = CreateTempRoot();
+        string tempHome = CreateTempRoot();
         Directory.CreateDirectory(Path.Combine(toolsBase, ".tools"));
         File.WriteAllText(
             Path.Combine(toolsBase, ".tools", OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract"),
@@ -368,10 +392,10 @@ public sealed class HostStartupRegistrationTests : IDisposable
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddMillerServices();
+        services.AddSingleton(MillerHostPaths.Create(toolsBase, tempHome));
 
         using var provider = services.BuildServiceProvider();
         var bootstrap = provider.GetRequiredService<IndexBootstrapService>();
-        string tempHome = CreateTempRoot();
         bootstrap.TestHomeDirectoryOverride = tempHome;
         bootstrap.TestBootstrapInterceptor = (canonicalRoot, _) =>
         {

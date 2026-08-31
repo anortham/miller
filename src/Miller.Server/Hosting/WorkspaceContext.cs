@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Server.Hosting;
 
 namespace Miller.Server;
 
@@ -39,16 +40,21 @@ public sealed record WorkspaceContext(
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(appBaseDirectory);
         string root = Path.GetFullPath(workspaceRoot);
-        string home = Path.GetFullPath(
-            string.IsNullOrWhiteSpace(homeDirectory)
-                ? MillerHome.Resolve()
-                : homeDirectory);
+        return Create(root, MillerHostPaths.Create(appBaseDirectory, homeDirectory));
+    }
+
+    /// <summary>Build a per-workspace context using the machine-global paths supplied by the host.</summary>
+    public static WorkspaceContext Create(string workspaceRoot, MillerHostPaths hostPaths)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        ArgumentNullException.ThrowIfNull(hostPaths);
+        string root = Path.GetFullPath(workspaceRoot);
         return new WorkspaceContext(
             WorkspaceRoot: root,
             ExtractDbPath: Path.Combine(root, ".miller", "symbols.db"),
-            TelemetryDbPath: Path.Combine(home, ".miller", "telemetry.db"),
-            RegistryDbPath: Path.Combine(home, ".miller", "workspaces.db"),
-            ToolsRoot: Path.Combine(Path.GetFullPath(appBaseDirectory), ".tools"),
+            TelemetryDbPath: hostPaths.TelemetryDbPath,
+            RegistryDbPath: hostPaths.RegistryDbPath,
+            ToolsRoot: hostPaths.ToolsRoot,
             WorkspaceId: null,
             CanonicalRoot: null,
             CanonicalExtractDbPath: null);

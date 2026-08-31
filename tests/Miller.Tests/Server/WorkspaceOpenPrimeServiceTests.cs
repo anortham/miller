@@ -90,6 +90,26 @@ public sealed class WorkspaceOpenPrimeServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_DrainsRegisteredWorkspaceWithoutPrimaryBinding()
+    {
+        using var harness = new PrimeHarness(
+            (root, db, _, _, _) => Report(root, db, revision: 1),
+            seedBootstrap: false);
+        WorkspaceTarget target = harness.AddTarget("unbound");
+
+        Assert.False(harness.Bootstrap.IsBound);
+        await harness.Service.StartAsync(CancellationToken.None);
+        Assert.Equal(WorkspaceOpenPrimeEnqueueResult.Queued, harness.Service.TryEnqueue(target.Id));
+
+        Assert.True(SpinWait.SpinUntil(
+            () => harness.Registry.Get(target.Id)?.State == WorkspaceRegistryState.Ready,
+            TimeSpan.FromSeconds(5)));
+        Assert.False(harness.Bootstrap.IsBound);
+
+        await harness.Service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ReconcilesLockBusyWithReadableIndexAsLoadedExisting()
     {
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -337,24 +357,28 @@ public sealed class WorkspaceOpenPrimeServiceTests
             Func<WorkspaceRegistry, CrossWorkspaceRefreshService, IServiceProvider>? servicesFactory = null,
             Func<string, IDisposable?>? acquireLock = null,
             Func<string, LeadershipVerdict>? eligibilityGate = null,
-            Action<TimeSpan>? sleep = null)
+            Action<TimeSpan>? sleep = null,
+            bool seedBootstrap = true)
         {
             _root = Path.Combine(Path.GetTempPath(), "miller-open-prime-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_root);
             string registryPath = Path.Combine(_root, "registry.db");
             Registry = WorkspaceRegistry.Open(registryPath);
             Bootstrap = NewBootstrap(Path.Combine(_root, "home"));
-            string bootstrapDb = Path.Combine(_root, ".miller", "symbols.db");
-            Directory.CreateDirectory(Path.GetDirectoryName(bootstrapDb)!);
-            WorkspaceContext workspace = WorkspaceContext.Create(_root, AppContext.BaseDirectory, _root) with
+            if (seedBootstrap)
             {
-                CanonicalRoot = _root,
-                ExtractDbPath = bootstrapDb,
-                CanonicalExtractDbPath = bootstrapDb,
-            };
-            Bootstrap.SeedForTest(
-                workspace,
-                new IndexHolder(MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>()), builtRevision: 0));
+                string bootstrapDb = Path.Combine(_root, ".miller", "symbols.db");
+                Directory.CreateDirectory(Path.GetDirectoryName(bootstrapDb)!);
+                WorkspaceContext workspace = WorkspaceContext.Create(_root, AppContext.BaseDirectory, _root) with
+                {
+                    CanonicalRoot = _root,
+                    ExtractDbPath = bootstrapDb,
+                    CanonicalExtractDbPath = bootstrapDb,
+                };
+                Bootstrap.SeedForTest(
+                    workspace,
+                    new IndexHolder(MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>()), builtRevision: 0));
+            }
 
             Refresh = new CrossWorkspaceRefreshService(
                 Registry,

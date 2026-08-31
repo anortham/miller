@@ -19,7 +19,6 @@ public sealed class WorkspaceOpenPrimeService : BackgroundService
 {
     internal const int QueueCapacity = 64;
 
-    private readonly IndexBootstrapService _bootstrap;
     private readonly IServiceProvider _services;
     private readonly ILogger<WorkspaceOpenPrimeService> _logger;
     private readonly Channel<string> _queue = Channel.CreateBounded<string>(
@@ -41,7 +40,6 @@ public sealed class WorkspaceOpenPrimeService : BackgroundService
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(logger);
-        _bootstrap = bootstrap;
         _services = services;
         _logger = logger;
     }
@@ -77,8 +75,6 @@ public sealed class WorkspaceOpenPrimeService : BackgroundService
     {
         try
         {
-            await _bootstrap.WaitUntilBoundAsync(stoppingToken).ConfigureAwait(false);
-
             await foreach (string workspaceId in _queue.Reader.ReadAllAsync(stoppingToken).ConfigureAwait(false))
             {
                 WorkspaceRegistry? registry = null;
