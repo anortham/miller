@@ -6,6 +6,7 @@ using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
@@ -21,7 +22,9 @@ internal readonly record struct ContentToolExecutionResult(
 public sealed class ContentTool
 {
     public const int MaxSearchLimit = 100;
-    private readonly WorkspaceContext _workspace;
+    private readonly WorkspaceContext? _workspace;
+    private readonly MillerHostPaths? _hostPaths;
+    private readonly WorkspaceRegistry? _registry;
     private readonly ContentCorpusExternalStore _store;
     private readonly Func<bool> _storeEnabled;
 
@@ -58,10 +61,33 @@ public sealed class ContentTool
         WorkspaceContext workspace,
         ContentCorpusExternalStore store,
         Func<bool>? storeEnabled = null)
+        : this(workspace, null, null, store, storeEnabled)
     {
-        ArgumentNullException.ThrowIfNull(workspace);
+    }
+
+    /// <summary>Constructs content operations from machine-global paths before a primary workspace binds.</summary>
+    internal ContentTool(
+        MillerHostPaths hostPaths,
+        WorkspaceRegistry registry,
+        ContentCorpusExternalStore store,
+        Func<bool>? storeEnabled = null)
+        : this(null, hostPaths, registry, store, storeEnabled)
+    {
+    }
+
+    private ContentTool(
+        WorkspaceContext? workspace,
+        MillerHostPaths? hostPaths,
+        WorkspaceRegistry? registry,
+        ContentCorpusExternalStore store,
+        Func<bool>? storeEnabled)
+    {
         ArgumentNullException.ThrowIfNull(store);
+        if (workspace is null && (hostPaths is null || registry is null))
+            throw new ArgumentException("An unbound content tool requires host paths and a workspace registry.");
         _workspace = workspace;
+        _hostPaths = hostPaths;
+        _registry = registry;
         _store = store;
         _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
     }
@@ -128,8 +154,9 @@ public sealed class ContentTool
         try
         {
             ValidateInputs(operation, path, query, sourceId, url, displayPath, contentKind, workspaceId, format);
-            ContentReadLocation currentLocation = CurrentLocation();
-            string contentDbPath = currentLocation.ContentDbPath;
+            ContentReadLocation? currentLocation = ResolveOperationLocation(op, sourceId, workspaceId);
+            StampWorkspace(telemetry, currentLocation);
+            string contentDbPath = currentLocation?.ContentDbPath ?? string.Empty;
             if (telemetry is not null)
                 telemetry.Op = op;
 
@@ -150,9 +177,9 @@ public sealed class ContentTool
                     telemetry,
                     outputByteBudget),
                 "read" => Read(
-                    sourceId, workspaceId, line, contextLines, json, telemetry, outputByteBudget),
+                    currentLocation, sourceId, workspaceId, line, contextLines, json, telemetry, outputByteBudget),
                 "shape" => Shape(
-                    sourceId, workspaceId, json, telemetry, outputByteBudget),
+                    currentLocation, sourceId, workspaceId, json, telemetry, outputByteBudget),
                 "list" => List(
                     contentDbPath, OptionalContentKind(contentKind), limit, json, telemetry, outputByteBudget),
                 "remove" or "delete" => Remove(
@@ -237,6 +264,7 @@ public sealed class ContentTool
     }
 
     private string Shape(
+        ContentReadLocation? currentLocation,
         string? sourceId,
         string? workspaceId,
         bool json,
@@ -246,7 +274,6 @@ public sealed class ContentTool
         if (string.IsNullOrWhiteSpace(sourceId))
             throw new InvalidOperationException("content shape requires source_id.");
 
-        ContentReadLocation currentLocation = CurrentLocation();
         ContentReadLocation shapeLocation = ResolveReadLocation(currentLocation, sourceId, workspaceId);
         string resolvedSourceId = ResolveReadSourceId(shapeLocation.ContentDbPath, sourceId);
         shapeLocation = ResolveReadLocation(shapeLocation, resolvedSourceId, workspaceId: null);
@@ -254,8 +281,7 @@ public sealed class ContentTool
         EnsureWorkspaceContentFresh(shapeLocation, result.ContentKind);
         if (telemetry is not null)
         {
-            if (!string.IsNullOrWhiteSpace(shapeLocation.WorkspaceId))
-                telemetry.SetWorkspace(shapeLocation.WorkspaceId, shapeLocation.WorkspaceRoot);
+            StampWorkspace(telemetry, shapeLocation);
             telemetry.SetTarget(result.DisplayPath);
             telemetry.ResultCount = result.Head.Count + result.Tail.Count;
             telemetry.SourceBytes = result.SourceBytes;
@@ -327,7 +353,7 @@ public sealed class ContentTool
     }
 
     private string Search(
-        ContentReadLocation currentLocation,
+        ContentReadLocation? currentLocation,
         string? query,
         string? contentKind,
         int limit,
@@ -355,6 +381,9 @@ public sealed class ContentTool
                 json,
                 telemetry,
                 outputByteBudget);
+
+        if (currentLocation is null)
+            throw new InvalidOperationException("content search requires a selected workspace.");
 
         var failures = new List<WorkspaceSearchFailure>();
         int probeLimit = limit == int.MaxValue ? int.MaxValue : limit + 1;
@@ -421,14 +450,16 @@ public sealed class ContentTool
                 .Search(query, contentKind, limit, excludeTests: false);
         }
 
-        if (!File.Exists(_workspace.ExtractDbPath))
+        string indexDbPath = location.IndexDbPath
+            ?? throw new InvalidOperationException("Workspace symbols.db not found; content corpus freshness cannot be verified.");
+        if (!File.Exists(indexDbPath))
             throw new InvalidOperationException("Workspace symbols.db not found; content corpus freshness cannot be verified.");
 
         long expectedRevision;
-        using (var freshness = new FreshnessReader(_workspace.ExtractDbPath))
+        using (var freshness = new FreshnessReader(indexDbPath))
             expectedRevision = freshness.LatestRevision();
         return ContentCorpusSidecar
-            .OpenGenerationChecked(location.ContentDbPath, _workspace.ExtractDbPath, expectedRevision)
+            .OpenGenerationChecked(location.ContentDbPath, indexDbPath, expectedRevision)
             .Search(query, contentKind, limit, excludeTests: false);
     }
 
@@ -448,7 +479,7 @@ public sealed class ContentTool
         if (kindFailures.Count > 0)
             AddWorkspaceSearchFailure(
                 failures,
-                _workspace.WorkspaceId ?? "current",
+                _workspace?.WorkspaceId ?? "current",
                 "current",
                 kindFailures);
 
@@ -780,6 +811,7 @@ public sealed class ContentTool
     }
 
     private string Read(
+        ContentReadLocation? currentLocation,
         string? sourceId,
         string? workspaceId,
         int? line,
@@ -794,7 +826,6 @@ public sealed class ContentTool
             throw new InvalidOperationException("content read requires line.");
 
         int effectiveContextLines = contextLines ?? ContentCorpusExternalStore.DefaultContextLines;
-        ContentReadLocation currentLocation = CurrentLocation();
         ContentReadLocation readLocation = ResolveReadLocation(currentLocation, sourceId, workspaceId);
         string resolvedSourceId = ResolveReadSourceId(readLocation.ContentDbPath, sourceId);
         readLocation = ResolveReadLocation(readLocation, resolvedSourceId, workspaceId: null);
@@ -806,8 +837,7 @@ public sealed class ContentTool
         EnsureWorkspaceContentFresh(readLocation, result.ContentKind);
         if (telemetry is not null)
         {
-            if (!string.IsNullOrWhiteSpace(readLocation.WorkspaceId))
-                telemetry.SetWorkspace(readLocation.WorkspaceId, readLocation.WorkspaceRoot);
+            StampWorkspace(telemetry, readLocation);
             telemetry.SetTarget(result.DisplayPath);
             telemetry.ResultCount = result.Lines.Count;
             telemetry.Outcome = result.Lines.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
@@ -908,18 +938,109 @@ public sealed class ContentTool
     private static string[] PathSegments(string value) =>
         value.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
 
+    private ContentReadLocation? ResolveOperationLocation(
+        string operation,
+        string? sourceId,
+        string? workspaceId)
+    {
+        if (operation == "search" && IsAllWorkspaces(workspaceId))
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(workspaceId))
+        {
+            if (operation is "read" or "shape")
+                return ResolveReadLocation(CurrentLocationOrNull(), sourceId ?? string.Empty, workspaceId);
+
+            WorkspaceSelectorIntent intent = operation is "import" or "add" or "add_markdown"
+                or "add-markdown" or "import_markdown" or "import-markdown" or "remove" or "delete"
+                ? WorkspaceSelectorIntent.Mutate
+                : WorkspaceSelectorIntent.Read;
+            return ResolveWorkspaceLocation(workspaceId, intent);
+        }
+
+        return CurrentLocation();
+    }
+
+    private static void StampWorkspace(
+        TelemetryScope? telemetry,
+        ContentReadLocation? location)
+    {
+        if (telemetry is not null
+            && location is not null
+            && !string.IsNullOrWhiteSpace(location.WorkspaceId)
+            && !string.IsNullOrWhiteSpace(location.WorkspaceRoot))
+        {
+            telemetry.SetWorkspace(location.WorkspaceId, location.WorkspaceRoot);
+        }
+    }
+
+    private ContentReadLocation ResolveWorkspaceLocation(
+        string workspaceId,
+        WorkspaceSelectorIntent intent)
+    {
+        string selector = workspaceId.Trim();
+        if (IsAllWorkspaces(selector))
+            throw new InvalidOperationException(
+                "content workspace_id=all is only valid for read-only workspace search.");
+
+        WorkspaceRegistry registry = OpenRegistry(out bool shouldDispose);
+        try
+        {
+            WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, selector, intent);
+            return Location(row);
+        }
+        finally
+        {
+            if (shouldDispose)
+                registry.Dispose();
+        }
+    }
+
+    private WorkspaceRegistry OpenRegistry(out bool shouldDispose)
+    {
+        if (_registry is not null)
+        {
+            shouldDispose = false;
+            return _registry;
+        }
+
+        shouldDispose = true;
+        string path = _hostPaths?.RegistryDbPath
+            ?? _workspace?.RegistryDbPath
+            ?? throw new InvalidOperationException("A workspace registry is not available.");
+        return WorkspaceRegistry.Open(path);
+    }
+
+    private ContentReadLocation? CurrentLocationOrNull() =>
+        _workspace is null ? null : CurrentLocation();
+
+    private static bool IsAllWorkspaces(string? selector) =>
+        string.Equals(selector?.Trim(), "all", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(selector?.Trim(), "registered", StringComparison.OrdinalIgnoreCase);
+
     private ContentReadLocation ResolveReadLocation(
-        ContentReadLocation defaultLocation,
+        ContentReadLocation? defaultLocation,
         string sourceId,
         string? workspaceId)
     {
-        if (TryResolveSourceIdWorkspace(sourceId) is { } routed)
-            return routed;
-
         if (!string.IsNullOrWhiteSpace(workspaceId))
-            return ResolveReadWorkspace(defaultLocation, workspaceId);
+        {
+            ContentReadLocation selected = ResolveReadWorkspace(defaultLocation, workspaceId);
+            if (TryResolveSourceIdWorkspace(sourceId) is { } routed
+                && !string.Equals(routed.WorkspaceId, selected.WorkspaceId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "content source_id and workspace_id name different workspaces; pass the source_id returned for the selected workspace.");
+            }
 
-        return defaultLocation;
+            return selected;
+        }
+
+        if (TryResolveSourceIdWorkspace(sourceId) is { } routedLocation)
+            return routedLocation;
+
+        return defaultLocation
+            ?? throw new InvalidOperationException("content read requires a selected workspace.");
     }
 
     private ContentReadLocation? TryResolveSourceIdWorkspace(string sourceId)
@@ -931,9 +1052,18 @@ public sealed class ContentTool
         string sourceWorkspaceId = sourceId[..separator];
         try
         {
-            using WorkspaceRegistry registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath);
-            WorkspaceRegistryRow? row = registry.List()
+            WorkspaceRegistry registry = OpenRegistry(out bool shouldDispose);
+            WorkspaceRegistryRow? row;
+            try
+            {
+                row = registry.List()
                 .FirstOrDefault(r => string.Equals(r.WorkspaceId, sourceWorkspaceId, StringComparison.Ordinal));
+            }
+            finally
+            {
+                if (shouldDispose)
+                    registry.Dispose();
+            }
             return row is null ? null : Location(row);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
@@ -942,7 +1072,7 @@ public sealed class ContentTool
         }
     }
 
-    private ContentReadLocation ResolveReadWorkspace(ContentReadLocation defaultLocation, string workspaceId)
+    private ContentReadLocation ResolveReadWorkspace(ContentReadLocation? defaultLocation, string workspaceId)
     {
         string selector = workspaceId.Trim();
         if (string.Equals(selector, "all", StringComparison.OrdinalIgnoreCase)
@@ -956,18 +1086,22 @@ public sealed class ContentTool
         if (string.Equals(selector, "current", StringComparison.OrdinalIgnoreCase)
             || string.Equals(selector, "primary", StringComparison.OrdinalIgnoreCase))
         {
-            return defaultLocation;
+            return defaultLocation
+                ?? throw new InvalidOperationException("content read requires a selected workspace.");
         }
 
-        using var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath);
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, selector, WorkspaceSelectorIntent.Read);
-        return Location(row);
+        return ResolveWorkspaceLocation(selector, WorkspaceSelectorIntent.Read);
     }
 
-    private ContentReadLocation CurrentLocation() => Location(
-        _workspace.ExtractDbPath,
-        _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot,
-        _workspace.WorkspaceId);
+    private ContentReadLocation CurrentLocation()
+    {
+        WorkspaceContext current = _workspace
+            ?? throw new InvalidOperationException("content operation requires a selected workspace.");
+        return Location(
+            current.ExtractDbPath,
+            current.CanonicalRoot ?? current.WorkspaceRoot,
+            current.WorkspaceId);
+    }
 
     private ContentReadLocation Location(WorkspaceRegistryRow row) =>
         Location(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
@@ -1107,36 +1241,36 @@ public sealed class ContentTool
     private IReadOnlyList<WorkspaceRegistryRow> ResolveContentSearchWorkspaces(string workspaceId)
     {
         string selector = workspaceId.Trim();
-        using var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath);
-        if (string.Equals(selector, "all", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(selector, "registered", StringComparison.OrdinalIgnoreCase))
+        WorkspaceRegistry registry = OpenRegistry(out bool shouldDispose);
+        try
         {
-            return registry.List()
-                .Where(static row => row.State is WorkspaceRegistryState.Current
-                    or WorkspaceRegistryState.Ready
-                    or WorkspaceRegistryState.LoadedExisting)
-                .ToArray();
-        }
+            if (string.Equals(selector, "all", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(selector, "registered", StringComparison.OrdinalIgnoreCase))
+            {
+                return registry.List()
+                    .Where(static row => row.State is WorkspaceRegistryState.Current
+                        or WorkspaceRegistryState.Ready
+                        or WorkspaceRegistryState.LoadedExisting)
+                    .ToArray();
+            }
 
-        if (string.Equals(selector, "current", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(selector, "primary", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(selector, "current", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(selector, "primary", StringComparison.OrdinalIgnoreCase))
+            {
+                ContentReadLocation current = CurrentLocation();
+                WorkspaceRegistryRow? row = registry.Get(current.WorkspaceId ?? string.Empty);
+                return row is null
+                    ? []
+                    : [row];
+            }
+
+            return [WorkspaceRegistrySelector.Resolve(registry, selector, WorkspaceSelectorIntent.Read)];
+        }
+        finally
         {
-            return
-            [
-                new WorkspaceRegistryRow(
-                    _workspace.WorkspaceId ?? "current",
-                    "current",
-                    _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot,
-                    _workspace.CanonicalExtractDbPath ?? _workspace.ExtractDbPath,
-                    DateTimeOffset.UtcNow,
-                    LastScanAt: null,
-                    LastRevision: null,
-                    WorkspaceRegistryState.Current,
-                    LastError: null),
-            ];
+            if (shouldDispose)
+                registry.Dispose();
         }
-
-        return [WorkspaceRegistrySelector.Resolve(registry, selector, WorkspaceSelectorIntent.Read)];
     }
 
     private static string? SearchContentKindOrDefault(string? value) =>

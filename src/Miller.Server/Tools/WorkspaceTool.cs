@@ -18,17 +18,18 @@ namespace Miller.Server.Tools;
 
 /// <summary>
 /// Provides bounded workspace status, lifecycle, registry, health, onboarding, leadership, and dashboard
-/// operations while keeping the serving process bound to one workspace.
+/// operations from machine-global registry state, with primary-only facts used when a workspace is bound.
 /// </summary>
 [McpServerToolType]
 public sealed class WorkspaceTool
 {
-    private readonly IndexHolder _holder;
-    private readonly WorkspaceContext _workspace;
-    private readonly IndexerService _indexer;
-    private readonly FreshnessService _freshness;
-    private readonly IndexFreshProbe _freshProbe;
-    private readonly IndexBootstrapService _bootstrap;
+    private readonly IndexHolder? _holder;
+    private readonly WorkspaceContext? _workspace;
+    private readonly IndexerService? _indexer;
+    private readonly FreshnessService? _freshness;
+    private readonly IndexFreshProbe? _freshProbe;
+    private readonly IndexBootstrapService? _bootstrap;
+    private readonly IndexBootstrapService? _primary;
     private readonly TelemetryLedger _ledger;
     private readonly WorkspaceRegistry _registry;
     private readonly Func<CrossWorkspaceRefreshService> _crossWorkspaceRefresh;
@@ -41,6 +42,7 @@ public sealed class WorkspaceTool
     private readonly IDashboardLauncher _dashboardLauncher;
     private readonly ILogger<WorkspaceTool> _logger;
     private readonly ScanGovernor _governor;
+    private readonly MillerHostPaths _hostPaths;
 
     /// <summary>Construct over the live admin singletons (production).</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
@@ -89,12 +91,12 @@ public sealed class WorkspaceTool
     }
 
     internal WorkspaceTool(
-        IndexHolder holder,
-        WorkspaceContext workspace,
-        IndexerService indexer,
-        FreshnessService freshness,
-        IndexFreshProbe freshProbe,
-        IndexBootstrapService bootstrap,
+        IndexHolder? holder,
+        WorkspaceContext? workspace,
+        IndexerService? indexer,
+        FreshnessService? freshness,
+        IndexFreshProbe? freshProbe,
+        IndexBootstrapService? bootstrap,
         TelemetryLedger ledger,
         WorkspaceRegistry registry,
         Func<CrossWorkspaceRefreshService> crossWorkspaceRefresh,
@@ -105,14 +107,10 @@ public sealed class WorkspaceTool
         IDashboardLauncher dashboardLauncher,
         ILogger<WorkspaceTool> logger,
         SemanticEmbeddingSessionBroker? semanticBroker = null,
-        ScanGovernor? governor = null)
+        ScanGovernor? governor = null,
+        MillerHostPaths? hostPaths = null,
+        IndexBootstrapService? primary = null)
     {
-        ArgumentNullException.ThrowIfNull(holder);
-        ArgumentNullException.ThrowIfNull(workspace);
-        ArgumentNullException.ThrowIfNull(indexer);
-        ArgumentNullException.ThrowIfNull(freshness);
-        ArgumentNullException.ThrowIfNull(freshProbe);
-        ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(ledger);
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(crossWorkspaceRefresh);
@@ -122,12 +120,16 @@ public sealed class WorkspaceTool
         ArgumentNullException.ThrowIfNull(acquireWriterLock);
         ArgumentNullException.ThrowIfNull(dashboardLauncher);
         ArgumentNullException.ThrowIfNull(logger);
+        if (hostPaths is null && workspace is null)
+            throw new ArgumentException("An unbound workspace tool requires machine-global host paths.", nameof(hostPaths));
+        _hostPaths = hostPaths ?? HostPathsFor(workspace!);
         _holder = holder;
         _workspace = workspace;
         _indexer = indexer;
         _freshness = freshness;
         _freshProbe = freshProbe;
         _bootstrap = bootstrap;
+        _primary = primary;
         _ledger = ledger;
         _registry = registry;
         _crossWorkspaceRefresh = crossWorkspaceRefresh;
@@ -139,6 +141,57 @@ public sealed class WorkspaceTool
         _dashboardLauncher = dashboardLauncher;
         _logger = logger;
         _governor = governor ?? ScanGovernor.Disabled();
+    }
+
+    /// <summary>Constructs lifecycle operations from machine-global state before a primary workspace binds.</summary>
+    internal WorkspaceTool(
+        MillerHostPaths hostPaths,
+        WorkspaceRegistry registry,
+        TelemetryLedger ledger,
+        Func<CrossWorkspaceRefreshService> crossWorkspaceRefresh,
+        SymbolSearchSidecar sidecar,
+        VectorSidecar vectors,
+        Func<string, IDisposable?> acquireWriterLock,
+        Func<string, WorkspaceOpenPrimeEnqueueResult> enqueueOpenPrime,
+        IDashboardLauncher dashboardLauncher,
+        ILogger<WorkspaceTool> logger,
+        IndexerService? indexer = null,
+        FreshnessService? freshness = null,
+        IndexBootstrapService? primary = null,
+        SemanticEmbeddingSessionBroker? semanticBroker = null,
+        ScanGovernor? governor = null)
+        : this(
+            holder: null,
+            workspace: null,
+            indexer,
+            freshness,
+            freshProbe: null,
+            bootstrap: primary,
+            ledger,
+            registry,
+            crossWorkspaceRefresh,
+            sidecar,
+            vectors,
+            acquireWriterLock,
+            enqueueOpenPrime,
+            dashboardLauncher,
+            logger,
+            semanticBroker,
+            governor,
+            hostPaths,
+            primary)
+    {
+    }
+
+    private static MillerHostPaths HostPathsFor(WorkspaceContext workspace)
+    {
+        string millerDirectory = Path.GetDirectoryName(workspace.RegistryDbPath)
+            ?? throw new ArgumentException("The workspace registry path has no parent directory.", nameof(workspace));
+        return new MillerHostPaths(
+            millerDirectory,
+            workspace.RegistryDbPath,
+            workspace.TelemetryDbPath,
+            workspace.ToolsRoot);
     }
 
     [McpServerTool(Name = "workspace")]
@@ -462,16 +515,17 @@ public sealed class WorkspaceTool
 
     private WorkspaceHealthFacts ReadCurrentHealth()
     {
+        WorkspaceContext current = CurrentWorkspace;
         return WorkspaceHealthFacts.Create(
             AssembleFacts(),
             _ledger.SummarizeRecent(TelemetryHighlights.RecentWindowDays),
             _ledger.SummarizeOutcomes(TelemetryHighlights.RecentWindowDays),
             ReadExtractionHealth(
-                _workspace.ExtractDbPath,
-                _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot,
-                _workspace.WorkspaceId),
-            ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true),
-            ReadHistoryStatus(_workspace.ExtractDbPath));
+                current.ExtractDbPath,
+                current.CanonicalRoot ?? current.WorkspaceRoot,
+                current.WorkspaceId),
+            ReadLeaderFacts(current.ExtractDbPath, ownWorkspace: true),
+            ReadHistoryStatus(current.ExtractDbPath));
     }
 
     private WorkspaceOperationResult RenderCurrentOnboarding(bool json)
@@ -497,7 +551,7 @@ public sealed class WorkspaceTool
 
     private LeaderHealthFacts ReadLeaderFacts(string indexDbPath, bool ownWorkspace)
     {
-        string? ownVersion = _indexer.OwnExtractorVersion;
+        string? ownVersion = _indexer?.OwnExtractorVersion;
         string? artifactVersion;
         LeadershipVerdict? verdict = null;
         try
@@ -512,7 +566,7 @@ public sealed class WorkspaceTool
             }
             else if (ownWorkspace)
             {
-                verdict = _indexer.EligibilityVerdict;
+                verdict = _indexer?.EligibilityVerdict;
             }
         }
         catch (StoreArtifactVersionReadException ex)
@@ -541,7 +595,8 @@ public sealed class WorkspaceTool
     // reap here reclaims the leak without a background timer and cannot fail the call.
     private void ReapStagingOrphans(TargetWorkspace target)
     {
-        string? indexDbPath = target.IsCurrent ? _workspace.ExtractDbPath : target.Row?.IndexDbPath;
+        WorkspaceContext? current = CurrentWorkspaceOrNull;
+        string? indexDbPath = target.IsCurrent ? current?.ExtractDbPath : target.Row?.IndexDbPath;
         ReapStagingOrphans(string.IsNullOrWhiteSpace(indexDbPath) ? null : Path.GetDirectoryName(indexDbPath));
     }
 
@@ -561,14 +616,15 @@ public sealed class WorkspaceTool
 
         if (target.IsCurrent)
         {
+            WorkspaceContext current = CurrentWorkspace;
             WorkspaceFacts currentFacts = AssembleFacts();
             return StatusResult(
                 WorkspaceRender.Status(
                     currentFacts,
                     _ledger.SummarizeRecent(TelemetryHighlights.RecentWindowDays),
                     json,
-                    ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true),
-                    _bootstrap.Snapshot),
+                    ReadLeaderFacts(current.ExtractDbPath, ownWorkspace: true),
+                    CurrentBootstrapSnapshot),
                 currentFacts,
                 "workspace(operation=\"health\")",
                 StaleRegistryHint(json));
@@ -931,40 +987,45 @@ public sealed class WorkspaceTool
     // (identity), the indexer (leadership + queue), and the freshness service / probe (revision + freshness).
     private WorkspaceFacts AssembleFacts()
     {
+        WorkspaceContext current = CurrentWorkspace;
+        IndexHolder holder = CurrentHolder;
+        IndexerService indexer = CurrentIndexer;
+        FreshnessService freshness = CurrentFreshness;
+        IndexFreshProbe freshProbe = CurrentFreshProbe;
         if (TryAssembleCurrentStoreFacts() is { } storeFacts)
             return storeFacts;
 
-        IndexHolderMetadata holderMetadata = _holder.MetadataSnapshot();
+        IndexHolderMetadata holderMetadata = holder.MetadataSnapshot();
         (string diskStatus, string? diskWarning) = CurrentIndexDiskStatus();
         bool indexAvailable = diskStatus == "current";
         return new WorkspaceFacts(
-            Root: _workspace.WorkspaceRoot,
-            WorkspaceId: _workspace.WorkspaceId,
-            DbPath: _workspace.ExtractDbPath,
-            IsLeader: _indexer.IsLeader,
+            Root: current.WorkspaceRoot,
+            WorkspaceId: current.WorkspaceId,
+            DbPath: current.ExtractDbPath,
+            IsLeader: indexer.IsLeader,
             DocumentCount: holderMetadata.DocumentCount,
             KnownExtensionsCount: holderMetadata.KnownExtensionsCount,
             BuiltRevision: holderMetadata.Revision,
-            LatestObservedRevision: _freshness.LatestObservedRevision,
-            IndexFresh: indexAvailable ? _freshProbe.Compute() : false,
-            QueueEmpty: _indexer.QueueEmpty,
+            LatestObservedRevision: freshness.LatestObservedRevision,
+            IndexFresh: indexAvailable ? freshProbe.Compute() : false,
+            QueueEmpty: indexer.QueueEmpty,
             ArtifactId: CurrentArtifactId(),
             FreshnessStatus: diskStatus,
             WarningText: diskWarning,
             DisplayId: CurrentDisplayId(),
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
-            SearchSidecar: _sidecar.Inspect(_workspace.ExtractDbPath, holderMetadata.Revision),
-            ContentCorpus: _contentSidecar.Inspect(_workspace.ExtractDbPath, holderMetadata.Revision),
+            SearchSidecar: _sidecar.Inspect(current.ExtractDbPath, holderMetadata.Revision),
+            ContentCorpus: _contentSidecar.Inspect(current.ExtractDbPath, holderMetadata.Revision),
             Vectors: WorkspaceFactsAssembler.WithPendingFiles(
-                _vectors.Inspect(_workspace.WorkspaceRoot),
-                _workspace.ExtractDbPath),
+                _vectors.Inspect(current.WorkspaceRoot),
+                current.ExtractDbPath),
             SemanticBroker: CurrentSemanticBrokerFacts(),
             ScanGovernor: WorkspaceFactsAssembler.ScanGovernorFacts(
-                ScanGovernorKey.For(_workspace) ?? _workspace.WorkspaceRoot, _governor),
-            ScanFailure: WorkspaceFactsAssembler.ScanFailureFacts(_workspace.ExtractDbPath),
+                ScanGovernorKey.For(current) ?? current.WorkspaceRoot, _governor),
+            ScanFailure: WorkspaceFactsAssembler.ScanFailureFacts(current.ExtractDbPath),
             RebindProvenance: WorkspaceFactsAssembler.RebindProvenanceFactsFor(
-                _workspace.ExtractDbPath, _registry));
+                current.ExtractDbPath, _registry));
     }
 
     private WorkspaceFacts? TryAssembleCurrentStoreFacts()
@@ -972,8 +1033,12 @@ public sealed class WorkspaceTool
         if (!WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
             return null;
 
-        string workspaceId = _workspace.WorkspaceId
-            ?? WorkspaceId.FromCanonicalRoot(_workspace.CanonicalRoot ?? _workspace.WorkspaceRoot);
+        WorkspaceContext current = CurrentWorkspace;
+        IndexHolder holder = CurrentHolder;
+        IndexerService indexer = CurrentIndexer;
+        FreshnessService freshness = CurrentFreshness;
+        string workspaceId = current.WorkspaceId
+            ?? WorkspaceId.FromCanonicalRoot(current.CanonicalRoot ?? current.WorkspaceRoot);
         WorkspaceRegistryRow? row = _registry.Get(workspaceId);
         if (row is null)
             return null;
@@ -988,16 +1053,16 @@ public sealed class WorkspaceTool
             CurrentSemanticBrokerFacts(),
             _governor,
             storeEnabled: true);
-        IndexHolderMetadata holderMetadata = _holder.MetadataSnapshot();
+        IndexHolderMetadata holderMetadata = holder.MetadataSnapshot();
         bool isStoreFacts = facts.Store is not null;
         return facts with
         {
-            IsLeader = _indexer.IsLeader,
+            IsLeader = indexer.IsLeader,
             DocumentCount = holderMetadata.DocumentCount,
             KnownExtensionsCount = holderMetadata.KnownExtensionsCount,
             BuiltRevision = isStoreFacts ? facts.BuiltRevision : holderMetadata.Revision,
-            LatestObservedRevision = isStoreFacts ? facts.LatestObservedRevision : _freshness.LatestObservedRevision,
-            QueueEmpty = _indexer.QueueEmpty,
+            LatestObservedRevision = isStoreFacts ? facts.LatestObservedRevision : freshness.LatestObservedRevision,
+            QueueEmpty = indexer.QueueEmpty,
         };
     }
 
@@ -1006,12 +1071,13 @@ public sealed class WorkspaceTool
 
     private (string Status, string? Warning) CurrentIndexDiskStatus()
     {
-        if (!File.Exists(_workspace.ExtractDbPath))
-            return ("missing_index", $"Workspace index DB not found: {_workspace.ExtractDbPath}");
+        WorkspaceContext current = CurrentWorkspace;
+        if (!File.Exists(current.ExtractDbPath))
+            return ("missing_index", $"Workspace index DB not found: {current.ExtractDbPath}");
 
         try
         {
-            using var reader = new FreshnessReader(_workspace.ExtractDbPath);
+            using var reader = new FreshnessReader(current.ExtractDbPath);
             _ = reader.LatestRevision();
             return ("current", null);
         }
@@ -1020,18 +1086,20 @@ public sealed class WorkspaceTool
         {
             return (
                 "unreadable_index",
-                $"Could not read workspace index DB '{_workspace.ExtractDbPath}': {ex.Message}");
+                $"Could not read workspace index DB '{current.ExtractDbPath}': {ex.Message}");
         }
     }
 
     private string? CurrentArtifactId()
     {
-        if (!string.IsNullOrWhiteSpace(_holder.BuiltArtifactId))
-            return _holder.BuiltArtifactId;
+        IndexHolder holder = CurrentHolder;
+        WorkspaceContext current = CurrentWorkspace;
+        if (!string.IsNullOrWhiteSpace(holder.BuiltArtifactId))
+            return holder.BuiltArtifactId;
 
         try
         {
-            using var reader = new FreshnessReader(_workspace.ExtractDbPath);
+            using var reader = new FreshnessReader(current.ExtractDbPath);
             return reader.ArtifactId();
         }
         catch (Exception ex) when (ex is FileNotFoundException or IOException or InvalidOperationException
@@ -1049,11 +1117,13 @@ public sealed class WorkspaceTool
     // in-memory index current without waiting for the 2s loop tick.
     private WorkspaceOperationResult RenderAction(string operation, bool force, bool json)
     {
+        IndexerService indexer = CurrentIndexer;
+        FreshnessService freshness = CurrentFreshness;
         string? artifactIdBeforeScan = CurrentArtifactId();
         // bypassBackoff: this is a person asking directly, which is not the automatic path the persisted
         // scan-failure backoff exists to throttle. The attempt is still recorded, and it still carries the
         // post-SIGKILL jobs clamp.
-        ScanOutcome scan = _indexer.TryScanAsLeader(
+        ScanOutcome scan = indexer.TryScanAsLeader(
             force ? ScanIntent.UserFullRebuild : ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
         string? note = scan.Result switch
@@ -1080,7 +1150,7 @@ public sealed class WorkspaceTool
 
         // Always poll+swap after the scan attempt so the held index reflects the newest persisted revision NOW
         // (a leader's own scan, or a non-leader picking up the leader's writes). Best-effort; never throws.
-        PollResult poll = _freshness.PollNow();
+        PollResult poll = freshness.PollNow();
 
         bool downgraded = scan.Result == ScanOutcome.Kind.Downgraded;
         bool scanned = scan.Result == ScanOutcome.Kind.Scanned || downgraded;
@@ -1301,7 +1371,8 @@ public sealed class WorkspaceTool
                     "The requested path is a sensitive system root."));
         }
 
-        if (WorkspaceSafety.IsLiveWorkspace(path, _workspace.WorkspaceRoot))
+        WorkspaceContext? current = CurrentWorkspaceOrNull;
+        if (current is not null && WorkspaceSafety.IsLiveWorkspace(path, current.WorkspaceRoot))
         {
             string liveNote =
                 "that path IS the live workspace this process is serving; open does not prime the in-use " +
@@ -1327,6 +1398,7 @@ public sealed class WorkspaceTool
             canonicalRoot,
             dbPath,
             lineage: IndexBootstrapService.CaptureLineage(canonicalRoot));
+        StampWorkspace(row.WorkspaceId, row.CanonicalRoot);
         WorkspaceOpenPrimeEnqueueResult enqueue = _enqueueOpenPrime(stableWorkspaceId);
 
         string note;
@@ -1385,7 +1457,7 @@ public sealed class WorkspaceTool
     {
         int launchPort = port is > 0 and <= 65535 ? port.Value : DashboardCliLauncher.DefaultPort;
         DashboardLaunchResult launch = _dashboardLauncher.EnsureRunning(new DashboardLaunchRequest(
-            _workspace,
+            DashboardContext(),
             launchPort,
             StartupTimeout: TimeSpan.FromSeconds(5),
             OwnVersion: MillerVersion.Current));
@@ -1410,6 +1482,18 @@ public sealed class WorkspaceTool
         _ => outcome.ToString().ToLowerInvariant(),
     };
 
+    private WorkspaceContext DashboardContext() =>
+        CurrentWorkspaceOrNull
+        ?? new WorkspaceContext(
+            _hostPaths.MillerDirectory,
+            Path.Combine(_hostPaths.MillerDirectory, "symbols.db"),
+            _hostPaths.TelemetryDbPath,
+            _hostPaths.RegistryDbPath,
+            _hostPaths.ToolsRoot,
+            WorkspaceId: null,
+            CanonicalRoot: null,
+            CanonicalExtractDbPath: null);
+
     // ---------- prune ----------
 
     // Remove registry rows whose canonical_root no longer exists. Never prunes the current workspace row (guarded
@@ -1417,12 +1501,13 @@ public sealed class WorkspaceTool
     // maintenance, which is the only thing that reclaims the coordinator's terminal request rows.
     private WorkspaceOperationResult Prune(bool json, bool dryRun)
     {
+        WorkspaceContext? current = CurrentWorkspaceOrNull;
         WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
             _registry,
-            _workspace.WorkspaceId,
+            current?.WorkspaceId,
             dryRun,
-            maintainStore: StoreMaintenanceRunner.ForToolsRoot(_workspace.ToolsRoot),
-            retireView: StoreViewRetirementRunner.ForToolsRoot(_workspace.ToolsRoot));
+            maintainStore: StoreMaintenanceRunner.ForToolsRoot(_hostPaths.ToolsRoot),
+            retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot));
         var rendered = new WorkspacePruneResult(
             result.DryRun,
             result.Pruned.Select(e => new WorkspacePruneEntry(e.WorkspaceId, e.DisplayId, e.Root)).ToArray(),
@@ -1467,6 +1552,7 @@ public sealed class WorkspaceTool
         }
 
         WorkspaceRemoveResult result;
+        WorkspaceContext? current = CurrentWorkspaceOrNull;
         if (!string.IsNullOrWhiteSpace(workspaceId))
         {
             // Resolving here rather than inside RemoveById means the row is already unambiguous by the time
@@ -1477,27 +1563,29 @@ public sealed class WorkspaceTool
 
             result = target.IsCurrent
                 ? WorkspaceRemoveResult.RefusedLive(
-                    Path.GetDirectoryName(_workspace.ExtractDbPath)!,
-                    _workspace.WorkspaceId,
-                    _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot)
+                    Path.GetDirectoryName(current?.ExtractDbPath ?? string.Empty) ?? string.Empty,
+                    current?.WorkspaceId,
+                    current?.CanonicalRoot ?? current?.WorkspaceRoot ?? string.Empty)
                 : WorkspaceRemoval.RemoveById(
                     _registry,
                     target.WorkspaceId,
-                    liveRoot: _workspace.WorkspaceRoot,
-                    protectedMillerDir: Path.GetDirectoryName(_workspace.RegistryDbPath),
+                    liveRoot: current?.WorkspaceRoot,
+                    protectedMillerDir: current is null ? null : Path.GetDirectoryName(current.ExtractDbPath),
                     acquireWriterLock: _acquireWriterLock,
-                    retireView: StoreViewRetirementRunner.ForToolsRoot(_workspace.ToolsRoot));
+                    retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot));
         }
         else
         {
             result = WorkspaceRemoval.RemoveByPath(
                 _registry,
                 path!,
-                liveRoot: _workspace.WorkspaceRoot,
-                protectedMillerDir: Path.GetDirectoryName(_workspace.RegistryDbPath),
+                liveRoot: current?.WorkspaceRoot,
+                protectedMillerDir: current is null ? null : Path.GetDirectoryName(current.ExtractDbPath),
                 acquireWriterLock: _acquireWriterLock,
-                retireView: StoreViewRetirementRunner.ForToolsRoot(_workspace.ToolsRoot));
+                retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot));
         }
+
+        StampWorkspace(result.WorkspaceId, result.Root);
 
         return RemoveResult(result, json);
     }
@@ -1560,38 +1648,71 @@ public sealed class WorkspaceTool
         string? path,
         WorkspaceSelectorIntent intent)
     {
+        TargetWorkspace target;
         if (!string.IsNullOrWhiteSpace(workspaceId))
         {
             if (IsCurrentSelector(workspaceId))
-                return TargetWorkspace.Current(_workspace.WorkspaceId);
-
-            try
             {
-                WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, workspaceId, intent);
-                return TargetWorkspace.Registered(row, IsCurrentWorkspace(row));
+                target = CurrentTarget();
             }
-            catch (KeyNotFoundException ex)
+            else
             {
-                return TargetWorkspace.Unknown(ex.Message);
+                try
+                {
+                    WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, workspaceId, intent);
+                    target = TargetWorkspace.Registered(row, isCurrent: false);
+                }
+                catch (KeyNotFoundException ex)
+                {
+                    target = TargetWorkspace.Unknown(ex.Message);
+                }
             }
         }
-
-        if (!string.IsNullOrWhiteSpace(path))
+        else if (!string.IsNullOrWhiteSpace(path))
         {
-            if (WorkspaceSafety.IsLiveWorkspace(path, _workspace.WorkspaceRoot))
-                return TargetWorkspace.Current(_workspace.WorkspaceId);
-
-            if (!Directory.Exists(path))
-                return TargetWorkspace.Unknown(UnknownWorkspacePathNote(path));
-
-            string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(path);
-            WorkspaceRegistryRow? row = FindByCanonicalRoot(canonicalRoot);
-            return row is null
-                ? TargetWorkspace.Unknown(UnknownWorkspacePathNote(canonicalRoot))
-                : TargetWorkspace.Registered(row, IsCurrentWorkspace(row));
+            WorkspaceContext? current = CurrentWorkspaceOrNull;
+            if (current is not null && WorkspaceSafety.IsLiveWorkspace(path, current.WorkspaceRoot))
+                target = TargetWorkspace.Current(current.WorkspaceId);
+            else if (!Directory.Exists(path))
+                target = TargetWorkspace.Unknown(UnknownWorkspacePathNote(path));
+            else
+            {
+                string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(path);
+                WorkspaceRegistryRow? row = FindByCanonicalRoot(canonicalRoot);
+                target = row is null
+                    ? TargetWorkspace.Unknown(UnknownWorkspacePathNote(canonicalRoot))
+                    : TargetWorkspace.Registered(row, IsCurrentWorkspace(row));
+            }
+        }
+        else
+        {
+            target = CurrentTarget();
         }
 
-        return TargetWorkspace.Current(_workspace.WorkspaceId);
+        StampTarget(target);
+        return target;
+    }
+
+    private void StampTarget(TargetWorkspace target)
+    {
+        if (target.UnknownNote is not null)
+            return;
+
+        StampWorkspace(
+            target.WorkspaceId,
+            target.Row?.CanonicalRoot
+                ?? (target.IsCurrent
+                    ? CurrentWorkspaceOrNull?.CanonicalRoot ?? CurrentWorkspaceOrNull?.WorkspaceRoot
+                    : null));
+    }
+
+    private static void StampWorkspace(string? workspaceId, string? workspaceRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(workspaceId)
+            && !string.IsNullOrWhiteSpace(workspaceRoot))
+        {
+            TelemetryContext.Current?.SetWorkspace(workspaceId, workspaceRoot);
+        }
     }
 
     private WorkspaceRegistryRow? FindByCanonicalRoot(string canonicalRoot)
@@ -1600,39 +1721,78 @@ public sealed class WorkspaceTool
         return WorkspaceRegistryRootMatcher.FindByRoot(rows, canonicalRoot);
     }
 
+    private WorkspaceContext? CurrentWorkspaceOrNull =>
+        _workspace ?? (_primary?.IsBound == true ? _primary.Workspace : null);
+
+    private WorkspaceContext CurrentWorkspace =>
+        CurrentWorkspaceOrNull
+        ?? throw new InvalidOperationException("A primary workspace is not bound.");
+
+    private IndexHolder CurrentHolder =>
+        _holder ?? (_primary?.IsBound == true ? _primary.Holder : null)
+        ?? throw new InvalidOperationException("A primary workspace is not bound.");
+
+    private IndexerService CurrentIndexer =>
+        _indexer ?? throw new InvalidOperationException("A primary workspace indexer is not available.");
+
+    private FreshnessService CurrentFreshness =>
+        _freshness ?? throw new InvalidOperationException("A primary workspace freshness service is not available.");
+
+    private IndexFreshProbe CurrentFreshProbe
+    {
+        get
+        {
+            if (_freshProbe is not null)
+                return _freshProbe;
+            if (_freshness is null || _indexer is null)
+                throw new InvalidOperationException("A primary workspace freshness probe is not available.");
+
+            return new IndexFreshProbe(
+                CurrentHolder,
+                () => _freshness.LatestObservedRevision,
+                () => _indexer.QueueEmpty);
+        }
+    }
+
+    private BootstrapSnapshot CurrentBootstrapSnapshot =>
+        _bootstrap?.Snapshot
+        ?? throw new InvalidOperationException("A primary workspace bootstrap is not available.");
+
+    private TargetWorkspace CurrentTarget()
+    {
+        WorkspaceContext? current = CurrentWorkspaceOrNull;
+        return current is null
+            ? TargetWorkspace.Unknown(
+                "no primary workspace is bound; pass a registered workspace_id for this operation")
+            : TargetWorkspace.Current(current.WorkspaceId);
+    }
+
     private bool IsCurrentWorkspace(WorkspaceRegistryRow row) =>
-        string.Equals(row.WorkspaceId, _workspace.WorkspaceId, StringComparison.Ordinal)
-        || WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, _workspace.WorkspaceRoot);
+        CurrentWorkspaceOrNull is { } current
+        && (string.Equals(row.WorkspaceId, current.WorkspaceId, StringComparison.Ordinal)
+            || WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, current.WorkspaceRoot));
 
     private bool IsCurrentSelector(string selector)
     {
         string trimmed = selector.Trim();
-        if (string.Equals(trimmed, "current", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(trimmed, "primary", StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        if (!string.IsNullOrWhiteSpace(_workspace.WorkspaceId) &&
-            string.Equals(trimmed, _workspace.WorkspaceId, StringComparison.Ordinal))
-            return true;
-
-        string? displayId = CurrentDisplayId();
-        return !string.IsNullOrWhiteSpace(displayId) &&
-               string.Equals(trimmed, displayId, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(trimmed, "current", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmed, "primary", StringComparison.OrdinalIgnoreCase);
     }
 
     private string? CurrentDisplayId()
     {
-        if (string.IsNullOrWhiteSpace(_workspace.WorkspaceId))
+        WorkspaceContext? current = CurrentWorkspaceOrNull;
+        if (string.IsNullOrWhiteSpace(current?.WorkspaceId))
             return null;
 
-        string root = _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot;
+        string root = current.CanonicalRoot ?? current.WorkspaceRoot;
         try
         {
-            return WorkspaceId.Display(root, _workspace.WorkspaceId);
+            return WorkspaceId.Display(root, current.WorkspaceId!);
         }
         catch (ArgumentException)
         {
-            return _workspace.WorkspaceId;
+            return current.WorkspaceId;
         }
     }
 

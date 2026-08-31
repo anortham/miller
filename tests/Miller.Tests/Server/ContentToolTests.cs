@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Server.Hosting;
 using Miller.Server;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -1624,6 +1625,144 @@ public sealed class ContentToolTests : IDisposable
             row.GetProperty("workspace_id").GetString() == "ws-beta"
             && row.GetProperty("display_id").GetString() == "beta"
             && row.GetProperty("display_path").GetString() == "beta.log");
+    }
+
+    [Fact]
+    public void Content_SearchAllRegisteredWorkspaces_DoesNotInventAnUnboundCurrentRow()
+    {
+        string currentSymbols = Path.Combine(_dir, ".miller", "symbols.db");
+        string currentLog = Path.Combine(_dir, "ambient.log");
+        File.WriteAllText(currentLog, "AmbientOnlyMarker");
+        var store = new ContentCorpusExternalStore();
+        store.Import(ContentCorpusSidecar.ContentDbPathFor(currentSymbols), currentLog, displayPath: "ambient.log");
+
+        MillerHostPaths paths = new(
+            Path.Combine(_dir, "host-miller"),
+            _workspace.RegistryDbPath,
+            _workspace.TelemetryDbPath,
+            _workspace.ToolsRoot);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        var tool = new ContentTool(paths, registry, store);
+
+        string output = tool.Content(
+            "search",
+            query: "AmbientOnlyMarker",
+            workspace_id: "all",
+            limit: 10);
+
+        Assert.Contains("No results for content search", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ambient.log", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_ImportTargetsTheSelectedRegisteredWorkspaceWhenUnbound()
+    {
+        string currentRoot = Path.Combine(_dir, "ambient");
+        string selectedRoot = Path.Combine(_dir, "selected");
+        Directory.CreateDirectory(currentRoot);
+        Directory.CreateDirectory(selectedRoot);
+        string currentSymbols = Path.Combine(currentRoot, ".miller", "symbols.db");
+        string selectedSymbols = Path.Combine(selectedRoot, ".miller", "symbols.db");
+        string input = Path.Combine(_dir, "selected.log");
+        File.WriteAllText(input, "SelectedImportMarker");
+
+        MillerHostPaths paths = new(
+            Path.Combine(_dir, "host-miller"),
+            _workspace.RegistryDbPath,
+            _workspace.TelemetryDbPath,
+            _workspace.ToolsRoot);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        registry.UpsertSeen("ws-selected", "selected", selectedRoot, selectedSymbols, WorkspaceRegistryState.Ready);
+        var tool = new ContentTool(paths, registry, new ContentCorpusExternalStore());
+
+        string output = tool.Content(
+            "import",
+            path: input,
+            workspace_id: "ws-selected");
+
+        Assert.Contains("imported", output, StringComparison.OrdinalIgnoreCase);
+        var selectedStore = new ContentCorpusExternalStore();
+        Assert.Single(selectedStore.List(
+            ContentCorpusSidecar.ContentDbPathFor(selectedSymbols),
+            TextContentKind.ExternalFile));
+        Assert.Empty(selectedStore.List(
+            ContentCorpusSidecar.ContentDbPathFor(currentSymbols),
+            TextContentKind.ExternalFile));
+    }
+
+    [Fact]
+    public void Content_SelectedWorkspaceMutationAndSearchStampTelemetryWhenUnbound()
+    {
+        string selectedRoot = Path.Combine(_dir, "selected-telemetry");
+        Directory.CreateDirectory(selectedRoot);
+        string selectedSymbols = Path.Combine(selectedRoot, ".miller", "symbols.db");
+        string input = Path.Combine(_dir, "selected-telemetry.log");
+        File.WriteAllText(input, "SelectedContentTelemetryMarker");
+
+        MillerHostPaths paths = new(
+            Path.Combine(_dir, "host-miller-telemetry"),
+            _workspace.RegistryDbPath,
+            _workspace.TelemetryDbPath,
+            _workspace.ToolsRoot);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        using var ledger = TelemetryLedger.Open(paths.TelemetryDbPath, workspaceId: null);
+        registry.UpsertSeen(
+            "ws-selected-content-telemetry",
+            "selected-content-telemetry",
+            selectedRoot,
+            selectedSymbols,
+            WorkspaceRegistryState.Ready);
+        var tool = new ContentTool(paths, registry, new ContentCorpusExternalStore());
+
+        using (TelemetryScope scope = ledger.Measure("content", op: null))
+        {
+            string output = tool.Content(
+                "import",
+                path: input,
+                workspace_id: "ws-selected-content-telemetry");
+            Assert.Contains("imported", output, StringComparison.OrdinalIgnoreCase);
+        }
+
+        using (TelemetryScope scope = ledger.Measure("content", op: null))
+        {
+            string output = tool.Content(
+                "search",
+                query: "SelectedContentTelemetryMarker",
+                workspace_id: "ws-selected-content-telemetry",
+                limit: 10);
+            Assert.Contains("SelectedContentTelemetryMarker", output, StringComparison.Ordinal);
+        }
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = paths.TelemetryDbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT op, workspace_id, workspace_root
+            FROM tool_telemetry
+            WHERE tool = 'content' AND op IN ('import', 'search')
+            ORDER BY id;
+            """;
+        using var reader = command.ExecuteReader();
+        var rows = new List<(string Op, string? WorkspaceId, string? WorkspaceRoot)>();
+        while (reader.Read())
+        {
+            rows.Add((
+                reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2)));
+        }
+
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, row =>
+        {
+            Assert.Equal("ws-selected-content-telemetry", row.WorkspaceId);
+            Assert.Equal(selectedRoot, row.WorkspaceRoot);
+        });
     }
 
     [Fact]

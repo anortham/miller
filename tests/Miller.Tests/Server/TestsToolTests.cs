@@ -3,7 +3,9 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Indexing.Testing;
+using Miller.Server.Hosting;
 using Miller.Server;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Testing;
 using Miller.Tests.Testing.Selection;
@@ -410,6 +412,106 @@ public sealed class TestsToolTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(_root, ".miller")));
         Assert.False(Directory.Exists(CtDaemonProtocol.RootDirectory(_root)));
         Assert.Null(CtDaemonLease.TryRead(_root));
+    }
+
+    [Fact]
+    public void Enable_UsesTheSelectedRegisteredWorkspaceWhenNoPrimaryIsBound()
+    {
+        string selectedRoot = Path.Combine(_dir, "selected");
+        Directory.CreateDirectory(selectedRoot);
+        string project = Path.Combine(selectedRoot, "tests", "Selected.Tests", "Selected.Tests.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        File.WriteAllText(project, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="xunit.v3" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        MillerHostPaths paths = new(
+            Path.Combine(_dir, "host-miller"),
+            _workspace.RegistryDbPath,
+            _workspace.TelemetryDbPath,
+            _workspace.ToolsRoot);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        registry.UpsertSeen(
+            "ws-selected",
+            "selected",
+            selectedRoot,
+            Path.Combine(selectedRoot, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Ready);
+        var tool = new TestsTool(paths, registry);
+
+        string output = tool.Tests(operation: "enable", format: "json", workspace_id: "ws-selected");
+
+        Assert.Contains("enabled", output, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(selectedRoot, ".miller", "ct.enabled")));
+        Assert.False(File.Exists(Path.Combine(_root, ".miller", "ct.enabled")));
+    }
+
+    [Fact]
+    public void Enable_StampsSelectedRegisteredWorkspaceTelemetryWhenNoPrimaryIsBound()
+    {
+        string selectedRoot = Path.Combine(_dir, "selected-telemetry");
+        Directory.CreateDirectory(selectedRoot);
+        string project = Path.Combine(selectedRoot, "tests", "Selected.Tests", "Selected.Tests.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        File.WriteAllText(project, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="xunit.v3" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        MillerHostPaths paths = new(
+            Path.Combine(_dir, "host-miller-telemetry"),
+            _workspace.RegistryDbPath,
+            _workspace.TelemetryDbPath,
+            _workspace.ToolsRoot);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        using var ledger = TelemetryLedger.Open(paths.TelemetryDbPath, workspaceId: null);
+        registry.UpsertSeen(
+            "ws-selected-telemetry",
+            "selected-telemetry",
+            selectedRoot,
+            Path.Combine(selectedRoot, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Ready);
+        var tool = new TestsTool(paths, registry);
+
+        using (TelemetryScope scope = ledger.Measure("tests", op: null))
+        {
+            string output = tool.Tests(
+                operation: "enable",
+                format: "json",
+                workspace_id: "ws-selected-telemetry");
+            Assert.Contains("enabled", output, StringComparison.OrdinalIgnoreCase);
+        }
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = paths.TelemetryDbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT workspace_id, workspace_root
+            FROM tool_telemetry
+            WHERE tool = 'tests' AND op = 'enable'
+            ORDER BY id DESC
+            LIMIT 1;
+            """;
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read(), "expected tests/enable telemetry row");
+        Assert.Equal(
+            "ws-selected-telemetry",
+            reader.IsDBNull(0) ? null : reader.GetString(0));
+        Assert.Equal(
+            selectedRoot,
+            reader.IsDBNull(1) ? null : reader.GetString(1));
     }
 
     [Fact]

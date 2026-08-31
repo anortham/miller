@@ -169,8 +169,233 @@ public sealed class WorkspaceToolTests : IDisposable
         return new WorkspaceToolHarness(tool, indexer, ledger, root, workspace, registry, bootstrap);
     }
 
+    private WorkspaceTool BuildUnboundTool(
+        MillerHostPaths paths,
+        WorkspaceRegistry registry,
+        TelemetryLedger ledger,
+        Func<string, WorkspaceOpenPrimeEnqueueResult>? enqueueOpenPrime = null)
+    {
+        return new WorkspaceTool(
+            paths,
+            registry,
+            ledger,
+            () => throw new InvalidOperationException("cross-workspace refresh was not expected"),
+            SymbolSearchSidecar.Disabled,
+            VectorSidecar.Disabled,
+            acquireWriterLock: _ => null,
+            enqueueOpenPrime ?? (_ => WorkspaceOpenPrimeEnqueueResult.AlreadyQueued),
+            new RecordingDashboardLauncher(new DashboardLaunchResult(
+                DashboardLaunchOutcome.AlreadyRunning,
+                new Uri("http://127.0.0.1:4977/"),
+                ProcessId: null,
+                Message: "already running")),
+            NullLogger<WorkspaceTool>.Instance);
+    }
+
+    [Fact]
+    public void RegistryWideOperations_WorkWithoutAPrimaryWorkspace()
+    {
+        string home = NewTempDir("unbound-home");
+        MillerHostPaths paths = MillerHostPaths.Create(AppContext.BaseDirectory, home);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        using var ledger = TelemetryLedger.Open(paths.TelemetryDbPath, workspaceId: null);
+        string root = NewTempDir("unbound-registered");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("unbound-workspace", "unbound", root, dbPath, WorkspaceRegistryState.Ready);
+
+        WorkspaceTool tool = BuildUnboundTool(paths, registry, ledger);
+
+        using JsonDocument output = JsonDocument.Parse(tool.Workspace(operation: "list", format: "json"));
+
+        Assert.Equal(
+            "unbound-workspace",
+            output.RootElement.GetProperty("workspaces")[0].GetProperty("workspace_id").GetString());
+    }
+
+    [Fact]
+    public void Open_RegistersAndQueuesAWorkspaceWithoutAPrimaryWorkspace()
+    {
+        string home = NewTempDir("unbound-open-home");
+        MillerHostPaths paths = MillerHostPaths.Create(AppContext.BaseDirectory, home);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        using var ledger = TelemetryLedger.Open(paths.TelemetryDbPath, workspaceId: null);
+        string root = NewTempDir("unbound-open-root");
+        string? queuedWorkspaceId = null;
+        WorkspaceTool tool = BuildUnboundTool(
+            paths,
+            registry,
+            ledger,
+            workspaceId =>
+            {
+                queuedWorkspaceId = workspaceId;
+                return WorkspaceOpenPrimeEnqueueResult.AlreadyQueued;
+            });
+
+        string output = tool.Workspace(operation: "open", path: root, format: "json");
+
+        string expectedId = WorkspaceId.FromCanonicalRoot(PathCanonicalizer.CanonicalizeRoot(root));
+        Assert.Equal(expectedId, queuedWorkspaceId);
+        using JsonDocument document = JsonDocument.Parse(output);
+        Assert.Equal(expectedId, document.RootElement.GetProperty("workspace_id").GetString());
+        Assert.NotNull(registry.Get(expectedId));
+    }
+
+    [Fact]
+    public void Status_UsesTheSelectedRegisteredWorkspaceWithoutAPrimaryWorkspace()
+    {
+        using var fixture = CreateSynth(revision: 7, workspaceId: "unbound-status");
+        string root = Path.GetDirectoryName(fixture.DbPath)!;
+        string home = NewTempDir("unbound-status-home");
+        MillerHostPaths paths = MillerHostPaths.Create(AppContext.BaseDirectory, home);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        using var ledger = TelemetryLedger.Open(paths.TelemetryDbPath, workspaceId: null);
+        registry.UpsertSeen(
+            "unbound-status",
+            "unbound-status",
+            root,
+            fixture.DbPath,
+            WorkspaceRegistryState.Ready);
+        registry.MarkScanned("unbound-status", revision: 7);
+        WorkspaceTool tool = BuildUnboundTool(paths, registry, ledger);
+
+        using JsonDocument document = JsonDocument.Parse(tool.Workspace(
+            operation: "status",
+            workspace_id: "unbound-status",
+            format: "json"));
+
+        Assert.Equal("unbound-status", document.RootElement.GetProperty("workspace")
+            .GetProperty("workspace_id").GetString());
+        Assert.Equal(7, document.RootElement.GetProperty("index")
+            .GetProperty("built_revision").GetInt64());
+    }
+
+    [Fact]
+    public void Status_StampsSelectedRegisteredWorkspaceTelemetryWithoutAPrimaryWorkspace()
+    {
+        using var fixture = CreateSynth(revision: 7, workspaceId: "unbound-status-telemetry");
+        string root = Path.GetDirectoryName(fixture.DbPath)!;
+        string home = NewTempDir("unbound-status-telemetry-home");
+        MillerHostPaths paths = MillerHostPaths.Create(AppContext.BaseDirectory, home);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        using var ledger = TelemetryLedger.Open(paths.TelemetryDbPath, workspaceId: null);
+        registry.UpsertSeen(
+            "unbound-status-telemetry",
+            "unbound-status-telemetry",
+            root,
+            fixture.DbPath,
+            WorkspaceRegistryState.Ready);
+        registry.MarkScanned("unbound-status-telemetry", revision: 7);
+        WorkspaceTool tool = BuildUnboundTool(paths, registry, ledger);
+
+        using (TelemetryScope scope = ledger.Measure("workspace", op: null))
+        {
+            string output = tool.Workspace(
+                operation: "status",
+                workspace_id: "unbound-status-telemetry",
+                format: "json");
+            Assert.Contains("unbound-status-telemetry", output, StringComparison.Ordinal);
+        }
+
+        (string? workspaceId, string? workspaceRoot) = ReadTelemetryWorkspace(
+            paths.TelemetryDbPath,
+            "workspace",
+            "status");
+        Assert.Equal("unbound-status-telemetry", workspaceId);
+        Assert.Equal(root, workspaceRoot);
+    }
+
+    [Fact]
+    public void Onboarding_StampsSelectedRegisteredWorkspaceTelemetryWithoutAPrimaryWorkspace()
+    {
+        using var fixture = CreateSynth(revision: 7, workspaceId: "unbound-onboarding-telemetry");
+        string root = Path.GetDirectoryName(fixture.DbPath)!;
+        string home = NewTempDir("unbound-onboarding-telemetry-home");
+        MillerHostPaths paths = MillerHostPaths.Create(AppContext.BaseDirectory, home);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        using var ledger = TelemetryLedger.Open(paths.TelemetryDbPath, workspaceId: null);
+        registry.UpsertSeen(
+            "unbound-onboarding-telemetry",
+            "unbound-onboarding-telemetry",
+            root,
+            fixture.DbPath,
+            WorkspaceRegistryState.Ready);
+        registry.MarkScanned("unbound-onboarding-telemetry", revision: 7);
+        WorkspaceTool tool = BuildUnboundTool(paths, registry, ledger);
+
+        using (TelemetryScope scope = ledger.Measure("workspace", op: null))
+        {
+            string output = tool.Workspace(
+                operation: "onboarding",
+                workspace_id: "unbound-onboarding-telemetry",
+                format: "json");
+            Assert.Contains("unbound-onboarding-telemetry", output, StringComparison.Ordinal);
+        }
+
+        (string? workspaceId, string? workspaceRoot) = ReadTelemetryWorkspace(
+            paths.TelemetryDbPath,
+            "workspace",
+            "onboarding");
+        Assert.Equal("unbound-onboarding-telemetry", workspaceId);
+        Assert.Equal(root, workspaceRoot);
+    }
+
+    [Fact]
+    public void Prune_UsesTheGlobalRegistryWithoutAPrimaryWorkspace()
+    {
+        string home = NewTempDir("unbound-prune-home");
+        MillerHostPaths paths = MillerHostPaths.Create(AppContext.BaseDirectory, home);
+        using var registry = WorkspaceRegistry.Open(paths.RegistryDbPath);
+        using var ledger = TelemetryLedger.Open(paths.TelemetryDbPath, workspaceId: null);
+        string missingRoot = Path.Combine(NewTempDir("unbound-prune-parent"), "gone");
+        registry.UpsertSeen(
+            "unbound-prune",
+            "unbound-prune",
+            missingRoot,
+            Path.Combine(missingRoot, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Stale);
+        WorkspaceTool tool = BuildUnboundTool(paths, registry, ledger);
+
+        using JsonDocument document = JsonDocument.Parse(tool.Workspace(
+            operation: "prune",
+            dry_run: true,
+            format: "json"));
+
+        Assert.Equal("unbound-prune", document.RootElement.GetProperty("pruned")[0]
+            .GetProperty("workspace_id").GetString());
+        Assert.NotNull(registry.Get("unbound-prune"));
+    }
+
     private static string DisplayFor(string canonicalRoot, string workspaceId) =>
         workspaceId.Length >= 12 ? WorkspaceId.Display(canonicalRoot, workspaceId) : workspaceId;
+
+    private static (string? WorkspaceId, string? WorkspaceRoot) ReadTelemetryWorkspace(
+        string dbPath,
+        string tool,
+        string operation)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT workspace_id, workspace_root
+            FROM tool_telemetry
+            WHERE tool = $tool AND op = $operation
+            ORDER BY id DESC
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$tool", tool);
+        command.Parameters.AddWithValue("$operation", operation);
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read(), $"expected telemetry row for {tool}/{operation}");
+        return (
+            reader.IsDBNull(0) ? null : reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1));
+    }
 
     private sealed record WorkspaceToolHarness(
         WorkspaceTool Tool,
@@ -2241,21 +2466,24 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
-    public void Refresh_CurrentWorkspaceId_StillUsesIndexerLeaderPath()
+    public void Refresh_ExplicitCurrentWorkspaceId_UsesRegisteredRouting()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        bool? observedForce = null;
         WorkspaceToolHarness harness = BuildHarness(
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            crossWorkspaceScan: (_, _, _, _, _) => throw new InvalidOperationException("current refresh must not use cross-workspace scan"));
-        var ops = new RecordingScanOps();
-        harness.Indexer.PublishOpsForTest(ops);
+            crossWorkspaceScan: (root, db, force, _, _) =>
+            {
+                observedForce = force;
+                return Report(root, db, Ws, revision: 5);
+            });
 
         string output = harness.Tool.Workspace(operation: "refresh", workspace_id: Ws);
 
-        Assert.Equal(new[] { false }, ops.ScanForce);
-        Assert.Contains("scanned: yes", output, StringComparison.OrdinalIgnoreCase);
+        Assert.False(observedForce);
+        Assert.Contains("status: refreshed", output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

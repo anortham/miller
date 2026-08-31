@@ -190,11 +190,11 @@
 **Approach:** Use optional primary facts only for live self-protection. Keep CT start explicit and content locks per selected DB.
 
 **Acceptance criteria:**
-- [ ] Registry-wide operations work unbound
-- [ ] Named lifecycle operations use the selected row
-- [ ] Content and CT target the selected workspace
-- [ ] Prune/remove retain safety
-- [ ] Focused verification passes and the diff is handed to the lead
+- [x] Registry-wide operations work unbound
+- [x] Named lifecycle operations use the selected row
+- [x] Content and CT target the selected workspace
+- [x] Prune/remove retain safety
+- [x] Focused verification passes and the diff is handed to the lead
 
 ### Task 5: Target-bound edit
 

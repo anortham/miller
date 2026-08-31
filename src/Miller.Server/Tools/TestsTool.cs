@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text;
 using Miller.Indexing;
+using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
 using Miller.Testing;
@@ -18,7 +19,9 @@ public sealed class TestsTool
     private const int McpWaitSecondsMinimum = 1;
     private const int McpWaitSecondsMaximum = 240;
 
-    private readonly WorkspaceContext _workspace;
+    private readonly WorkspaceContext? _workspace;
+    private readonly MillerHostPaths? _hostPaths;
+    private readonly WorkspaceRegistry? _registry;
     private readonly TestsCoreHooks? _hooks;
 
     public TestsTool(WorkspaceContext workspace)
@@ -30,6 +33,19 @@ public sealed class TestsTool
     {
         ArgumentNullException.ThrowIfNull(workspace);
         _workspace = workspace;
+        _hooks = hooks;
+    }
+
+    /// <summary>Constructs continuous-test operations from global paths before a primary workspace binds.</summary>
+    internal TestsTool(
+        MillerHostPaths hostPaths,
+        WorkspaceRegistry registry,
+        TestsCoreHooks? hooks = null)
+    {
+        ArgumentNullException.ThrowIfNull(hostPaths);
+        ArgumentNullException.ThrowIfNull(registry);
+        _hostPaths = hostPaths;
+        _registry = registry;
         _hooks = hooks;
     }
 
@@ -110,7 +126,14 @@ public sealed class TestsTool
             if (telemetry is not null)
                 telemetry.Op = normalized;
 
-            TestsCoreRequest request = CreateRequest(workspace_id, json, wait, wait_seconds, project);
+            bool mutation = normalized is "start" or "stop" or "enable" or "disable" or "run";
+            TestsCoreRequest request = CreateRequest(
+                workspace_id,
+                json,
+                wait,
+                wait_seconds,
+                project,
+                mutation ? WorkspaceSelectorIntent.Mutate : WorkspaceSelectorIntent.Read);
             string output;
             string? hint;
             switch (normalized)
@@ -212,13 +235,20 @@ public sealed class TestsTool
         }
     }
 
-    private TestsCoreRequest CreateRequest(string? workspaceId, bool json, bool wait, int? waitSeconds, string? project)
+    private TestsCoreRequest CreateRequest(
+        string? workspaceId,
+        bool json,
+        bool wait,
+        int? waitSeconds,
+        string? project,
+        WorkspaceSelectorIntent intent)
     {
-        (string root, string? id) = ResolveWorkspace(workspaceId);
+        (string root, string? id) = ResolveWorkspace(workspaceId, intent);
         return new TestsCoreRequest(
             WorkspaceRoot: root,
             WorkspaceId: id,
-            MillerHome: Path.GetDirectoryName(_workspace.RegistryDbPath),
+            MillerHome: _hostPaths?.MillerDirectory
+                ?? Path.GetDirectoryName(_workspace?.RegistryDbPath),
             KillSwitch: Environment.GetEnvironmentVariable(CtEnvironment.KillSwitch),
             MillerVersion: MillerVersion.Current,
             Hooks: _hooks,
@@ -230,18 +260,41 @@ public sealed class TestsTool
                 : null);
     }
 
-    private (string Root, string? WorkspaceId) ResolveWorkspace(string? workspaceId)
+    private (string Root, string? WorkspaceId) ResolveWorkspace(
+        string? workspaceId,
+        WorkspaceSelectorIntent intent)
     {
+        (string Root, string? WorkspaceId) resolved;
         if (string.IsNullOrWhiteSpace(workspaceId)
             || string.Equals(workspaceId, "current", StringComparison.OrdinalIgnoreCase)
             || string.Equals(workspaceId, "primary", StringComparison.OrdinalIgnoreCase))
         {
-            return (_workspace.CanonicalRoot ?? _workspace.WorkspaceRoot, _workspace.WorkspaceId);
+            WorkspaceContext current = _workspace
+                ?? throw new InvalidOperationException(
+                    "tests requires an explicit registered workspace_id when no primary workspace is bound.");
+            resolved = (current.CanonicalRoot ?? current.WorkspaceRoot, current.WorkspaceId);
+        }
+        else
+        {
+            WorkspaceRegistry registry = _registry ?? WorkspaceRegistry.Open(
+                _hostPaths?.RegistryDbPath
+                ?? _workspace?.RegistryDbPath
+                ?? throw new InvalidOperationException("A workspace registry is not available."));
+            try
+            {
+                WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, workspaceId, intent);
+                resolved = (row.CanonicalRoot, row.WorkspaceId);
+            }
+            finally
+            {
+                if (_registry is null)
+                    registry.Dispose();
+            }
         }
 
-        using WorkspaceRegistry registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath);
-        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, workspaceId, WorkspaceSelectorIntent.Mutate);
-        return (row.CanonicalRoot, row.WorkspaceId);
+        if (!string.IsNullOrWhiteSpace(resolved.WorkspaceId))
+            TelemetryContext.Current?.SetWorkspace(resolved.WorkspaceId, resolved.Root);
+        return resolved;
     }
 
     internal static string? StatusHint(TestsStatusResult result)
