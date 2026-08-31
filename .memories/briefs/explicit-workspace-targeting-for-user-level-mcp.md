@@ -1,9 +1,9 @@
 ---
 id: explicit-workspace-targeting-for-user-level-mcp
 title: Explicit workspace targeting for user-level MCP
-status: active
+status: completed
 created: 2026-08-30T23:34:37.687Z
-updated: 2026-08-30T23:34:37.687Z
+updated: 2026-08-31T02:50:11.181Z
 tags:
   - mcp
   - workspace
