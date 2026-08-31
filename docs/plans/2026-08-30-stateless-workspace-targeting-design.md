@@ -393,18 +393,18 @@ registry guessing, primary edit locks, whole-workspace edit scans, and a second 
 
 ## Acceptance criteria
 
-- [ ] One user-level MCP registration safely serves several projects in one process.
-- [ ] Every workspace-bound MCP schema requires `workspace_id`.
-- [ ] Registry-wide bootstrap operations work with no primary bound.
-- [ ] `workspace open(path)` returns the ID needed for subsequent calls and primes without a primary.
-- [ ] Explicit calls never derive a target from cwd, Roots, prior calls, or connection identity.
-- [ ] `current` and `primary` are rejected only at the MCP boundary; CLI behavior remains intact.
-- [ ] Explicit IDs always use registered routing, independent of primary binding state.
-- [ ] All MCP tool types can be constructed while the primary bootstrap is deferred.
-- [ ] Registry, telemetry, tools, broker, and scan-governor paths share one `MillerHome` source.
-- [ ] `edit` resolves, locks, writes, and converges the named workspace.
-- [ ] A mutation never guesses between aliases.
-- [ ] `content all` searches registered workspaces only.
-- [ ] No MCP call sends `roots/list`.
-- [ ] Existing typed diagnostics, output budgets, continuation guards, and privacy rules remain intact.
-- [ ] Public docs explain the list/open then pass-ID flow for Codex, Cursor, and VS Code.
+- [x] One user-level MCP registration safely serves several projects in one process.
+- [x] Every workspace-bound MCP schema requires `workspace_id`.
+- [x] Registry-wide bootstrap operations work with no primary bound.
+- [x] `workspace open(path)` returns the ID needed for subsequent calls and primes without a primary.
+- [x] Explicit calls never derive a target from cwd, Roots, prior calls, or connection identity.
+- [x] `current` and `primary` are rejected only at the MCP boundary; CLI behavior remains intact.
+- [x] Explicit IDs always use registered routing, independent of primary binding state.
+- [x] All MCP tool types can be constructed while the primary bootstrap is deferred.
+- [x] Registry, telemetry, tools, broker, and scan-governor paths share one `MillerHome` source.
+- [x] `edit` resolves, locks, writes, and converges the named workspace.
+- [x] A mutation never guesses between aliases.
+- [x] `content all` searches registered workspaces only.
+- [x] No MCP call sends `roots/list`.
+- [x] Existing typed diagnostics, output budgets, continuation guards, and privacy rules remain intact.
+- [x] Public docs explain the list/open then pass-ID flow for Codex, Cursor, and VS Code.
