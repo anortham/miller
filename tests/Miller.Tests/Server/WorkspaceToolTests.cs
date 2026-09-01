@@ -2316,7 +2316,7 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
-    public void Remove_StoreMemberWithoutExtractorRefusesAndKeepsTheRegistryEntry()
+    public void Remove_StoreMemberWithoutExtractorUnregistersAndOwesRetirement()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         string appBaseDirectory = NewTempDir("remove-no-extractor");
@@ -2347,14 +2347,11 @@ public sealed class WorkspaceToolTests : IDisposable
         using JsonDocument document = JsonDocument.Parse(
             harness.Tool.Workspace(operation: "remove", workspace_id: OtherWs, format: "json"));
 
-        Assert.Equal("refused_retirement", document.RootElement.GetProperty("result").GetString());
-        Assert.Equal(
-            "workspace_remove_retirement_failed",
-            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
-        Assert.Contains("producer view retirement", document.RootElement.GetProperty("message").GetString()!);
-        Assert.True(Directory.Exists(otherMiller));
-        Assert.NotNull(harness.Registry.Get(OtherWs));
-        Assert.NotNull(harness.Registry.GetStoreMember(OtherWs));
+        Assert.Equal("removed", document.RootElement.GetProperty("result").GetString());
+        Assert.True(document.RootElement.GetProperty("view_retirement_owed").GetBoolean());
+        Assert.False(Directory.Exists(otherMiller));
+        Assert.Null(harness.Registry.Get(OtherWs));
+        Assert.Null(harness.Registry.GetStoreMember(OtherWs));
     }
 
     [Fact]
