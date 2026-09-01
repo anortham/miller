@@ -38,6 +38,7 @@ public sealed class WorkspaceTool
     private readonly VectorSidecar _vectors;
     private readonly SemanticEmbeddingSessionBroker? _semanticBroker;
     private readonly Func<string, WorkspaceOpenPrimeEnqueueResult> _enqueueOpenPrime;
+    private readonly Action<StoreSidecarReclaimTarget>? _enqueueRetirement;
     private readonly Func<string, IDisposable?> _acquireWriterLock;
     private readonly IDashboardLauncher _dashboardLauncher;
     private readonly ILogger<WorkspaceTool> _logger;
@@ -109,7 +110,8 @@ public sealed class WorkspaceTool
         SemanticEmbeddingSessionBroker? semanticBroker = null,
         ScanGovernor? governor = null,
         MillerHostPaths? hostPaths = null,
-        IndexBootstrapService? primary = null)
+        IndexBootstrapService? primary = null,
+        Action<StoreSidecarReclaimTarget>? enqueueRetirement = null)
     {
         ArgumentNullException.ThrowIfNull(ledger);
         ArgumentNullException.ThrowIfNull(registry);
@@ -137,6 +139,7 @@ public sealed class WorkspaceTool
         _vectors = vectors;
         _semanticBroker = semanticBroker;
         _enqueueOpenPrime = enqueueOpenPrime;
+        _enqueueRetirement = enqueueRetirement;
         _acquireWriterLock = acquireWriterLock;
         _dashboardLauncher = dashboardLauncher;
         _logger = logger;
@@ -159,7 +162,8 @@ public sealed class WorkspaceTool
         FreshnessService? freshness = null,
         IndexBootstrapService? primary = null,
         SemanticEmbeddingSessionBroker? semanticBroker = null,
-        ScanGovernor? governor = null)
+        ScanGovernor? governor = null,
+        Action<StoreSidecarReclaimTarget>? enqueueRetirement = null)
         : this(
             holder: null,
             workspace: null,
@@ -179,7 +183,8 @@ public sealed class WorkspaceTool
             semanticBroker,
             governor,
             hostPaths,
-            primary)
+            primary,
+            enqueueRetirement)
     {
     }
 
@@ -1499,7 +1504,9 @@ public sealed class WorkspaceTool
             current?.WorkspaceId,
             dryRun,
             maintainStore: StoreMaintenanceRunner.ForToolsRoot(_hostPaths.ToolsRoot),
-            retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot));
+            retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot),
+            awaitProducerRetirement: false,
+            onRetirementOwed: _enqueueRetirement);
         var rendered = new WorkspacePruneResult(
             result.DryRun,
             result.Pruned.Select(e => new WorkspacePruneEntry(e.WorkspaceId, e.DisplayId, e.Root)).ToArray(),
@@ -1564,7 +1571,9 @@ public sealed class WorkspaceTool
                     liveRoot: current?.WorkspaceRoot,
                     protectedMillerDir: _hostPaths.MillerDirectory,
                     acquireWriterLock: _acquireWriterLock,
-                    retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot));
+                    retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot),
+                    awaitProducerRetirement: false,
+                    onRetirementOwed: _enqueueRetirement);
         }
         else
         {
@@ -1574,7 +1583,9 @@ public sealed class WorkspaceTool
                 liveRoot: current?.WorkspaceRoot,
                 protectedMillerDir: _hostPaths.MillerDirectory,
                 acquireWriterLock: _acquireWriterLock,
-                retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot));
+                retireView: StoreViewRetirementRunner.ForToolsRoot(_hostPaths.ToolsRoot),
+                awaitProducerRetirement: false,
+                onRetirementOwed: _enqueueRetirement);
         }
 
         StampWorkspace(result.WorkspaceId, result.Root);

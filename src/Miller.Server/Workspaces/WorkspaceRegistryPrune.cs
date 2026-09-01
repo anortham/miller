@@ -51,7 +51,9 @@ public static class WorkspaceRegistryPrune
         Func<string, IDisposable?>? acquireSidecarLease = null,
         Func<string, StoreMaintenanceOutcome>? maintainStore = null,
         Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView = null,
-        int maxProducerRetirements = DefaultMaxProducerRetirementsPerRun)
+        int maxProducerRetirements = DefaultMaxProducerRetirementsPerRun,
+        bool awaitProducerRetirement = true,
+        Action<StoreSidecarReclaimTarget>? onRetirementOwed = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentOutOfRangeException.ThrowIfNegative(maxProducerRetirements);
@@ -106,36 +108,39 @@ public static class WorkspaceRegistryPrune
                     continue;
                 }
 
-                if (producerRetirements >= maxProducerRetirements)
+                if (awaitProducerRetirement)
                 {
-                    retirementFailures.Add(new RetirementFailure(
-                        row.WorkspaceId,
-                        row.DisplayId,
-                        row.CanonicalRoot,
-                        DeferredProducerRetirement(target)));
-                    blockedFamilies.Add(target.FamilyId);
-                    kept++;
-                    continue;
-                }
+                    if (producerRetirements >= maxProducerRetirements)
+                    {
+                        retirementFailures.Add(new RetirementFailure(
+                            row.WorkspaceId,
+                            row.DisplayId,
+                            row.CanonicalRoot,
+                            DeferredProducerRetirement(target)));
+                        blockedFamilies.Add(target.FamilyId);
+                        kept++;
+                        continue;
+                    }
 
-                if (!WorkspaceRemoval.TryRetireView(
-                        target,
-                        retireView,
-                        apply: !dryRun,
-                        out StoreViewRetirementOutcome outcome))
-                {
-                    retirementFailures.Add(new RetirementFailure(
-                        row.WorkspaceId,
-                        row.DisplayId,
-                        row.CanonicalRoot,
-                        outcome));
-                    blockedFamilies.Add(target.FamilyId);
-                    kept++;
-                    continue;
-                }
+                    if (!WorkspaceRemoval.TryRetireView(
+                            target,
+                            retireView,
+                            apply: !dryRun,
+                            out StoreViewRetirementOutcome outcome))
+                    {
+                        retirementFailures.Add(new RetirementFailure(
+                            row.WorkspaceId,
+                            row.DisplayId,
+                            row.CanonicalRoot,
+                            outcome));
+                        blockedFamilies.Add(target.FamilyId);
+                        kept++;
+                        continue;
+                    }
 
-                producerRetirements++;
-            }
+                    producerRetirements++;
+                }
+                }
 
             if (dryRun)
             {
@@ -145,14 +150,20 @@ public static class WorkspaceRegistryPrune
 
             _ = StoreSidecarReclaim.RecordIntent(target);
             registry.Remove(row.WorkspaceId);
-            reclaimed = StoreSidecarReclaimResult.Combine(
-                reclaimed,
-                StoreSidecarReclaim.Reclaim(registry, target, acquireSidecarLease));
+            if (awaitProducerRetirement)
+            {
+                reclaimed = StoreSidecarReclaimResult.Combine(
+                    reclaimed,
+                    StoreSidecarReclaim.Reclaim(registry, target, acquireSidecarLease));
+            }
+            else if (target is not null)
+            {
+                onRetirementOwed?.Invoke(target);
+            }
             pruned.Add(new Entry(row.WorkspaceId, row.DisplayId, row.CanonicalRoot));
         }
-
         var maintained = StoreMaintenanceOutcome.None;
-        if (!dryRun)
+        if (!dryRun && awaitProducerRetirement)
         {
             (StoreSidecarReclaimResult discharged, maintained) =
                 SweepFamilies(registry, acquireSidecarLease, maintainStore, blockedFamilies);

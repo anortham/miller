@@ -337,7 +337,8 @@ public readonly record struct WorkspaceRemoveResult(
     bool IndexDirDeleted = false,
     StoreSidecarReclaimResult SidecarReclaim = default,
     string? IgnorePolicyCleanupError = null,
-    StoreViewRetirementOutcome? ViewRetirement = null)
+    StoreViewRetirementOutcome? ViewRetirement = null,
+    bool ViewRetirementOwed = false)
 {
     /// <summary>Removal outcome.</summary>
     public enum Outcome
@@ -371,7 +372,8 @@ public readonly record struct WorkspaceRemoveResult(
         string? root = null,
         bool indexDirDeleted = true,
         StoreSidecarReclaimResult sidecarReclaim = default,
-        string? ignorePolicyCleanupError = null) =>
+        string? ignorePolicyCleanupError = null,
+        bool viewRetirementOwed = false) =>
         new(
             Outcome.Removed,
             millerDir,
@@ -379,7 +381,9 @@ public readonly record struct WorkspaceRemoveResult(
             root,
             indexDirDeleted,
             sidecarReclaim,
-            ignorePolicyCleanupError);
+            ignorePolicyCleanupError,
+            ViewRetirement: null,
+            viewRetirementOwed);
 
     /// <summary>Refused because the path is the live (in-use) workspace.</summary>
     public static WorkspaceRemoveResult RefusedLive(string millerDir, string? workspaceId = null, string? root = null) =>
@@ -2813,12 +2817,14 @@ public static class WorkspaceRender
         WorkspaceRemoveResult.Outcome.Removed when result.IndexDirDeleted =>
             $"removed workspace index: {result.MillerDir}" +
             SidecarReclaimSuffix(result.SidecarReclaim) +
-            IgnorePolicyCleanupSuffix(result.IgnorePolicyCleanupError),
+            IgnorePolicyCleanupSuffix(result.IgnorePolicyCleanupError) +
+            ViewRetirementOwedSuffix(result.ViewRetirementOwed),
         WorkspaceRemoveResult.Outcome.Removed =>
             $"removed workspace registry entry: {result.Root ?? result.WorkspaceId ?? result.MillerDir} " +
             $"(no index dir at {result.MillerDir})" +
             SidecarReclaimSuffix(result.SidecarReclaim) +
-            IgnorePolicyCleanupSuffix(result.IgnorePolicyCleanupError),
+            IgnorePolicyCleanupSuffix(result.IgnorePolicyCleanupError) +
+            ViewRetirementOwedSuffix(result.ViewRetirementOwed),
         WorkspaceRemoveResult.Outcome.RefusedLive =>
             $"refused: {result.MillerDir} is the workspace this Miller is serving (in use). " +
             "Stop that Miller first, or remove a different workspace.",
@@ -2864,6 +2870,7 @@ public static class WorkspaceRender
                 w.WriteNull("ignore_policy_cleanup_error");
             else
                 w.WriteString("ignore_policy_cleanup_error", result.IgnorePolicyCleanupError);
+            w.WriteBoolean("view_retirement_owed", result.ViewRetirementOwed);
             if (result.ViewRetirement is { } retirement)
                 WriteViewRetirement(w, retirement);
             w.WriteString("message", RemoveCompact(result));
@@ -2881,6 +2888,10 @@ public static class WorkspaceRender
 
     private static string IgnorePolicyCleanupSuffix(string? error) =>
         error is null ? string.Empty : $" (generated ignore policy cleanup failed: {error})";
+
+    private static string ViewRetirementOwedSuffix(bool owed) =>
+        owed ? " (view retirement owed)" : string.Empty;
+
 
     internal static string SidecarReclaimText(StoreSidecarReclaimResult reclaim)
     {

@@ -397,7 +397,8 @@ internal static class DashboardEndpoints
                     workspaceId,
                     liveRoot: null,
                     protectedMillerDir: Path.GetDirectoryName(registryDbPath),
-                    retireView: StoreViewRetirementRunner.ForToolsRoot(toolsRoot));
+                    retireView: StoreViewRetirementRunner.ForToolsRoot(toolsRoot),
+                    awaitProducerRetirement: false);
                 code = result.Result switch
                 {
                     WorkspaceRemoveResult.Outcome.Removed when result.IndexDirDeleted => "removed",
@@ -444,7 +445,8 @@ internal static class DashboardEndpoints
                     registry,
                     protectedWorkspaceId: null,
                     dryRun: false,
-                    retireView: StoreViewRetirementRunner.ForToolsRoot(toolsRoot));
+                    retireView: StoreViewRetirementRunner.ForToolsRoot(toolsRoot),
+                    awaitProducerRetirement: false);
             // A kept row is the normal outcome, not a failure: a run that hits the per-run retirement cap, or a
             // row whose removal it cannot confirm, still prunes everything else. Reporting an error whenever any
             // row was kept would show one on every registry that has a backlog — which is every registry that

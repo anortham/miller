@@ -212,6 +212,8 @@ public static class MillerServiceRegistration
             () => sp.GetRequiredService<CrossWorkspaceRefreshService>());
         services.AddSingleton<WorkspaceOpenPrimeService>();
         services.AddHostedService(sp => sp.GetRequiredService<WorkspaceOpenPrimeService>());
+        services.AddSingleton<StoreViewRetirementDrainService>();
+        services.AddHostedService(sp => sp.GetRequiredService<StoreViewRetirementDrainService>());
         services.AddSingleton<SupplementalEdgeCache>();
         services.AddSingleton<RevisionFactCacheStore>();
         // The coalescing guard for serve-then-refresh cross-workspace reads. It is a SINGLETON on purpose: the
@@ -261,7 +263,8 @@ public static class MillerServiceRegistration
                 freshness: sp.GetRequiredService<FreshnessService>(),
                 primary: sp.GetRequiredService<IndexBootstrapService>(),
                 semanticBroker: sp.GetRequiredService<SemanticEmbeddingSessionBroker>(),
-                governor: sp.GetRequiredService<ScanGovernor>()));
+                governor: sp.GetRequiredService<ScanGovernor>(),
+                enqueueRetirement: sp.GetRequiredService<StoreViewRetirementDrainService>().Enqueue));
         services.AddTransient<ContentTool>(sp =>
             new ContentTool(
                 sp.GetRequiredService<MillerHostPaths>(),

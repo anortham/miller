@@ -63,6 +63,7 @@ public sealed class HostStartupRegistrationTests : IDisposable
         Assert.Contains(hosted, h => h is FreshnessService);
         Assert.Contains(hosted, h => h is IndexerService);
         Assert.Contains(hosted, h => h is WorkspaceOpenPrimeService);
+        Assert.Contains(hosted, h => h is StoreViewRetirementDrainService);
     }
 
     [Fact]

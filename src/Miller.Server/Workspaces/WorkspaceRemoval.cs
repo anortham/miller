@@ -35,7 +35,9 @@ public static class WorkspaceRemoval
         string? protectedMillerDir = null,
         Func<string, IDisposable?>? acquireWriterLock = null,
         Func<string, IDisposable?>? acquireSidecarLease = null,
-        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView = null) =>
+        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView = null,
+        bool awaitProducerRetirement = true,
+        Action<StoreSidecarReclaimTarget>? onRetirementOwed = null) =>
         RemoveByIdCore(
             registry,
             selector,
@@ -44,7 +46,10 @@ public static class WorkspaceRemoval
             acquireWriterLock,
             acquireSidecarLease,
             retireView,
-            MillerHome.ResolveMillerDirectory());
+            MillerHome.ResolveMillerDirectory(),
+            awaitProducerRetirement,
+            onRetirementOwed);
+
 
     internal static WorkspaceRemoveResult RemoveById(
         WorkspaceRegistry registry,
@@ -54,7 +59,9 @@ public static class WorkspaceRemoval
         string? protectedMillerDir = null,
         Func<string, IDisposable?>? acquireWriterLock = null,
         Func<string, IDisposable?>? acquireSidecarLease = null,
-        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView = null) =>
+        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView = null,
+        bool awaitProducerRetirement = true,
+        Action<StoreSidecarReclaimTarget>? onRetirementOwed = null) =>
         RemoveByIdCore(
             registry,
             selector,
@@ -63,7 +70,10 @@ public static class WorkspaceRemoval
             acquireWriterLock,
             acquireSidecarLease,
             retireView,
-            millerDirectory);
+            millerDirectory,
+            awaitProducerRetirement,
+            onRetirementOwed);
+
 
     private static WorkspaceRemoveResult RemoveByIdCore(
         WorkspaceRegistry registry,
@@ -73,7 +83,9 @@ public static class WorkspaceRemoval
         Func<string, IDisposable?>? acquireWriterLock,
         Func<string, IDisposable?>? acquireSidecarLease,
         Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView,
-        string millerDirectory)
+        string millerDirectory,
+        bool awaitProducerRetirement,
+        Action<StoreSidecarReclaimTarget>? onRetirementOwed)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(selector);
@@ -107,7 +119,9 @@ public static class WorkspaceRemoval
             protectedMillerDir,
             acquireWriterLock,
             acquireSidecarLease,
-            retireView);
+            retireView,
+            awaitProducerRetirement,
+            onRetirementOwed);
     }
 
     /// <summary>Remove by workspace root path (the dir that CONTAINS the <c>.miller</c> index dir).</summary>
@@ -118,7 +132,9 @@ public static class WorkspaceRemoval
         string? protectedMillerDir = null,
         Func<string, IDisposable?>? acquireWriterLock = null,
         Func<string, IDisposable?>? acquireSidecarLease = null,
-        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView = null) =>
+        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView = null,
+        bool awaitProducerRetirement = true,
+        Action<StoreSidecarReclaimTarget>? onRetirementOwed = null) =>
         RemoveByPathCore(
             registry,
             path,
@@ -127,7 +143,10 @@ public static class WorkspaceRemoval
             acquireWriterLock,
             acquireSidecarLease,
             retireView,
-            MillerHome.ResolveMillerDirectory());
+            MillerHome.ResolveMillerDirectory(),
+            awaitProducerRetirement,
+            onRetirementOwed);
+
 
     internal static WorkspaceRemoveResult RemoveByPath(
         WorkspaceRegistry registry,
@@ -137,7 +156,9 @@ public static class WorkspaceRemoval
         string? protectedMillerDir = null,
         Func<string, IDisposable?>? acquireWriterLock = null,
         Func<string, IDisposable?>? acquireSidecarLease = null,
-        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView = null) =>
+        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView = null,
+        bool awaitProducerRetirement = true,
+        Action<StoreSidecarReclaimTarget>? onRetirementOwed = null) =>
         RemoveByPathCore(
             registry,
             path,
@@ -146,7 +167,10 @@ public static class WorkspaceRemoval
             acquireWriterLock,
             acquireSidecarLease,
             retireView,
-            millerDirectory);
+            millerDirectory,
+            awaitProducerRetirement,
+            onRetirementOwed);
+
 
     private static WorkspaceRemoveResult RemoveByPathCore(
         WorkspaceRegistry registry,
@@ -156,7 +180,9 @@ public static class WorkspaceRemoval
         Func<string, IDisposable?>? acquireWriterLock,
         Func<string, IDisposable?>? acquireSidecarLease,
         Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView,
-        string millerDirectory)
+        string millerDirectory,
+        bool awaitProducerRetirement,
+        Action<StoreSidecarReclaimTarget>? onRetirementOwed)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -220,7 +246,9 @@ public static class WorkspaceRemoval
                 protectedMillerDir,
                 acquireWriterLock,
                 acquireSidecarLease,
-                retireView);
+                retireView,
+                awaitProducerRetirement,
+                onRetirementOwed);
         }
 
         string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(fullPath);
@@ -260,7 +288,9 @@ public static class WorkspaceRemoval
             protectedMillerDir,
             acquireWriterLock,
             acquireSidecarLease,
-            retireView);
+            retireView,
+            awaitProducerRetirement,
+            onRetirementOwed);
     }
 
     private static WorkspaceRemoveResult Remove(
@@ -273,7 +303,9 @@ public static class WorkspaceRemoval
         string? protectedMillerDir,
         Func<string, IDisposable?>? acquireWriterLock,
         Func<string, IDisposable?>? acquireSidecarLease,
-        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView)
+        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView,
+        bool awaitProducerRetirement,
+        Action<StoreSidecarReclaimTarget>? onRetirementOwed)
     {
         if (liveRoot is not null && root is not null && WorkspaceSafety.IsLiveWorkspace(root, liveRoot))
             return WorkspaceRemoveResult.RefusedLive(millerDir, workspaceId, root);
@@ -312,27 +344,32 @@ public static class WorkspaceRemoval
         {
             if (workspaceId is null)
                 return WorkspaceRemoveResult.NotFound(millerDir, workspaceId, root);
-            StoreViewRetirementTargetResult retirement = RetireView(sidecarTarget, retireView, apply: true);
-            if (!retirement.Succeeded)
+            if (awaitProducerRetirement)
             {
-                return WorkspaceRemoveResult.RefusedRetirement(
-                    millerDir,
-                    workspaceId,
-                    root,
-                    retirement.Outcome);
+                StoreViewRetirementTargetResult missingRetirement =
+                    RetireView(sidecarTarget, retireView, apply: true);
+                if (!missingRetirement.Succeeded)
+                {
+                    return WorkspaceRemoveResult.RefusedRetirement(
+                        millerDir,
+                        workspaceId,
+                        root,
+                        missingRetirement.Outcome);
+                }
             }
+
             string? missingIgnorePolicyCleanupError = TryDeleteGeneratedPolicy(globalPolicyPath);
-            _ = StoreSidecarReclaim.RecordIntent(sidecarTarget);
-            registry.Remove(workspaceId);
-            StoreSidecarReclaimResult missingSidecarReclaim =
-                StoreSidecarReclaim.Reclaim(registry, sidecarTarget, acquireSidecarLease);
-            return WorkspaceRemoveResult.Removed(
-                millerDir,
+            return UnregisterAndMaybeDefer(
+                registry,
                 workspaceId,
                 root,
+                millerDir,
+                sidecarTarget,
+                acquireSidecarLease,
                 indexDirDeleted: false,
-                missingSidecarReclaim,
-                missingIgnorePolicyCleanupError);
+                missingIgnorePolicyCleanupError,
+                awaitProducerRetirement,
+                onRetirementOwed);
         }
 
         // The CT daemon is a FIFTH live holder, and the only one the lease bundle CANNOT hold. Its lease sits
@@ -364,14 +401,18 @@ public static class WorkspaceRemoval
             {
                 if (leases is null)
                     return WorkspaceRemoveResult.RefusedInUse(millerDir, workspaceId, root);
-                StoreViewRetirementTargetResult retirement = RetireView(sidecarTarget, retireView, apply: true);
-                if (!retirement.Succeeded)
+                if (awaitProducerRetirement)
                 {
-                    return WorkspaceRemoveResult.RefusedRetirement(
-                        millerDir,
-                        workspaceId,
-                        root,
-                        retirement.Outcome);
+                    StoreViewRetirementTargetResult retirement =
+                        RetireView(sidecarTarget, retireView, apply: true);
+                    if (!retirement.Succeeded)
+                    {
+                        return WorkspaceRemoveResult.RefusedRetirement(
+                            millerDir,
+                            workspaceId,
+                            root,
+                            retirement.Outcome);
+                    }
                 }
                 SingleWriterLock.DeleteContentsExceptLock(millerDir, DeleteSkipNames);
             }
@@ -383,10 +424,49 @@ public static class WorkspaceRemoval
 
         SingleWriterLock.TryDeleteEmptiedDir(millerDir);
         string? ignorePolicyCleanupError = TryDeleteGeneratedPolicy(globalPolicyPath);
+        return UnregisterAndMaybeDefer(
+            registry,
+            workspaceId,
+            root,
+            millerDir,
+            sidecarTarget,
+            acquireSidecarLease,
+            indexDirDeleted: true,
+            ignorePolicyCleanupError,
+            awaitProducerRetirement,
+            onRetirementOwed);
+    }
+
+    private static WorkspaceRemoveResult UnregisterAndMaybeDefer(
+        WorkspaceRegistry registry,
+        string? workspaceId,
+        string? root,
+        string millerDir,
+        StoreSidecarReclaimTarget? sidecarTarget,
+        Func<string, IDisposable?>? acquireSidecarLease,
+        bool indexDirDeleted,
+        string? ignorePolicyCleanupError,
+        bool awaitProducerRetirement,
+        Action<StoreSidecarReclaimTarget>? onRetirementOwed)
+    {
         if (workspaceId is not null)
         {
             _ = StoreSidecarReclaim.RecordIntent(sidecarTarget);
             registry.Remove(workspaceId);
+        }
+
+        if (!awaitProducerRetirement)
+        {
+            if (sidecarTarget is not null)
+                onRetirementOwed?.Invoke(sidecarTarget);
+            return WorkspaceRemoveResult.Removed(
+                millerDir,
+                workspaceId,
+                root,
+                indexDirDeleted,
+                sidecarReclaim: default,
+                ignorePolicyCleanupError,
+                viewRetirementOwed: sidecarTarget is not null);
         }
 
         StoreSidecarReclaimResult sidecarReclaim =
@@ -395,7 +475,7 @@ public static class WorkspaceRemoval
             millerDir,
             workspaceId,
             root,
-            indexDirDeleted: true,
+            indexDirDeleted,
             sidecarReclaim,
             ignorePolicyCleanupError);
     }
@@ -410,6 +490,18 @@ public static class WorkspaceRemoval
         outcome = result.Outcome;
         return result.Succeeded;
     }
+
+    public static StoreSidecarReclaimResult FinishProducerRetirement(
+        WorkspaceRegistry registry,
+        StoreSidecarReclaimTarget? target,
+        Func<StoreSidecarReclaimTarget, bool, StoreViewRetirementOutcome>? retireView,
+        Func<string, IDisposable?>? acquireSidecarLease = null)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        _ = TryRetireView(target, retireView, apply: true, out _);
+        return StoreSidecarReclaim.Reclaim(registry, target, acquireSidecarLease);
+    }
+
 
     internal static StoreViewCapture CaptureStoreView(WorkspaceRegistry registry, string? workspaceId)
     {

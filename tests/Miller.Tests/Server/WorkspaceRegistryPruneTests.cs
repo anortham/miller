@@ -961,4 +961,64 @@ public sealed class WorkspaceRegistryPruneTests : IDisposable
         Assert.False(result.SidecarReclaim.HasReport);
         Assert.All(paths, p => Assert.True(File.Exists(p)));
     }
+
+    [Fact]
+    public void Run_WhenNotAwaitingProducer_UnregistersWithoutCallingRetireView()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-prune-defer");
+        string goneRoot = Register("ws-prune-defer-01", "defer-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-defer-01", goneRoot, "view-prune-defer");
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-prune-defer");
+        int producerCalls = 0;
+        StoreSidecarReclaimTarget? owed = null;
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: false,
+            retireView: (target, apply) =>
+            {
+                producerCalls++;
+                return RetireView(target, apply);
+            },
+            awaitProducerRetirement: false,
+            onRetirementOwed: target => owed = target);
+
+        Assert.Single(result.Pruned);
+        Assert.Equal(0, producerCalls);
+        Assert.Equal(0, result.SidecarReclaim.FilesDeleted);
+        Assert.Null(_registry.Get("ws-prune-defer-01"));
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+        Assert.Equal(
+            new StoreSidecarReclaimTarget(family.FamilyId, "view-prune-defer", family.StoreRoot),
+            owed);
+    }
+
+    [Fact]
+    public void Run_DryRunWithoutAwait_DoesNotEnqueue()
+    {
+        StoreFamilyRegistryRow family = SeedFamily("lineage-prune-defer-dry");
+        string goneRoot = Register("ws-prune-defdry-01", "defer-dry-repo", rootExists: false);
+        JoinFamily(family, "ws-prune-defdry-01", goneRoot, "view-prune-defer-dry");
+        int producerCalls = 0;
+        int owedCalls = 0;
+
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            _registry,
+            protectedWorkspaceId: null,
+            dryRun: true,
+            retireView: (target, apply) =>
+            {
+                producerCalls++;
+                return RetireView(target, apply);
+            },
+            awaitProducerRetirement: false,
+            onRetirementOwed: _ => owedCalls++);
+
+        Assert.Single(result.Pruned);
+        Assert.Equal(0, producerCalls);
+        Assert.Equal(0, owedCalls);
+        Assert.NotNull(_registry.Get("ws-prune-defdry-01"));
+    }
+
 }

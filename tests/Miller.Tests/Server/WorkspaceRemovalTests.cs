@@ -1120,6 +1120,97 @@ public sealed class WorkspaceRemovalTests : IDisposable
             "sidecar", WorkspaceRender.Remove(result, json: false), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RemoveById_WhenNotAwaitingProducer_DoesNotCallRetireViewAndUnregisters()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-store-defer");
+        using WorkspaceRegistry registry = OpenRegistry();
+        const string workspaceId = "ws-store-defer-01";
+        Register(registry, workspaceId, "store-defer-disp", root);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-defer");
+        registry.UpsertStoreMember(
+            workspaceId, family.FamilyId, "view-defer", root, WorkspaceRootIdentity.Unknown);
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-defer");
+        int retireCalls = 0;
+        int leaseRequests = 0;
+        StoreSidecarReclaimTarget? owed = null;
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "store-defer-disp",
+            liveRoot: null,
+            acquireSidecarLease: _ =>
+            {
+                leaseRequests++;
+                return null;
+            },
+            retireView: (target, apply) =>
+            {
+                retireCalls++;
+                return RetireView(target, apply);
+            },
+            awaitProducerRetirement: false,
+            onRetirementOwed: target => owed = target);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
+        Assert.True(result.ViewRetirementOwed);
+        Assert.Equal(0, retireCalls);
+        Assert.Equal(0, leaseRequests);
+        Assert.Equal(0, result.SidecarReclaim.FilesDeleted);
+        Assert.Null(registry.Get(workspaceId));
+        Assert.False(Directory.Exists(millerDir));
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+        Assert.Equal(
+            new StoreSidecarReclaimTarget(family.FamilyId, "view-defer", family.StoreRoot),
+            owed);
+        Assert.Contains(
+            "view_retirement_owed",
+            WorkspaceRender.Remove(result, json: true),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FinishProducerRetirement_AppliesThenReclaimsSidecars()
+    {
+        var (root, _) = MakeWorkspace("ws-store-finish");
+        using WorkspaceRegistry registry = OpenRegistry();
+        const string workspaceId = "ws-store-finish-01";
+        Register(registry, workspaceId, "store-finish-disp", root);
+        StoreFamilyRegistryRow family = SeedFamily(registry, "lineage-finish");
+        registry.UpsertStoreMember(
+            workspaceId, family.FamilyId, "view-finish", root, WorkspaceRootIdentity.Unknown);
+        IReadOnlyList<string> paths = WriteSidecars(family.StoreRoot, "view-finish");
+        var applies = new List<bool>();
+
+        WorkspaceRemoveResult removed = WorkspaceRemoval.RemoveById(
+            registry,
+            "store-finish-disp",
+            liveRoot: null,
+            retireView: (target, apply) =>
+            {
+                applies.Add(apply);
+                return RetireView(target, apply);
+            },
+            awaitProducerRetirement: false);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, removed.Result);
+        Assert.Empty(applies);
+        Assert.All(paths, p => Assert.True(File.Exists(p)));
+
+        StoreSidecarReclaimResult reclaim = WorkspaceRemoval.FinishProducerRetirement(
+            registry,
+            new StoreSidecarReclaimTarget(family.FamilyId, "view-finish", family.StoreRoot),
+            retireView: (target, apply) =>
+            {
+                applies.Add(apply);
+                return RetireView(target, apply);
+            });
+
+        Assert.Equal([false, true], applies);
+        Assert.Equal(3, reclaim.FilesDeleted);
+        Assert.All(paths, p => Assert.False(File.Exists(p)));
+    }
+
     /// <summary>
     /// A stand-in for the removal's injected indexer lease that runs an observation at RELEASE time. The lease
     /// bundle disposes indexer-last, so this fires after the guarded delete and before the best-effort dir
