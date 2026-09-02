@@ -46,8 +46,13 @@ public sealed class GradleTestBackendTests : IDisposable
         string initScript = ArgumentAfter(command, "--init-script");
         string initText = File.ReadAllText(initScript);
         Assert.Contains("beforeProject", initText, StringComparison.Ordinal);
-        Assert.DoesNotContain("projectsEvaluated", initText, StringComparison.Ordinal);
-        Assert.Contains("Base64", initText, StringComparison.Ordinal);
+        Assert.Contains("projectsEvaluated", initText, StringComparison.Ordinal);
+        Assert.Contains("rootProject.allprojects", initText, StringComparison.Ordinal);
+        Assert.Contains("reports.junitXml.required", initText, StringComparison.Ordinal);
+        Assert.Contains("outputLocation", initText, StringComparison.Ordinal);
+        Assert.Contains("MessageDigest", initText, StringComparison.Ordinal);
+        Assert.Contains("canonicalFile", initText, StringComparison.Ordinal);
+        Assert.Contains("project.path", initText, StringComparison.Ordinal);
         Assert.All(
             command.Environment.Values.Where(value => value is not null),
             value => Assert.True(IsInside(paths.GenerationRoot, value!), value));

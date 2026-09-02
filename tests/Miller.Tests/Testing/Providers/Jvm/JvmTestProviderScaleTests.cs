@@ -35,6 +35,10 @@ public sealed class JvmTestProviderScaleTests : IDisposable
             plugins {
                 id 'java'
             }
+            buildDir = file("${rootDir}/build")
+            test {
+                reports.junitXml.outputLocation = file("${rootDir}/build/test-results/test")
+            }
             repositories {
                 mavenCentral()
             }

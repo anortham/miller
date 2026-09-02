@@ -183,15 +183,26 @@ internal static class JvmTestTooling
             throw new GradleException('MILLER_CT_GRADLE_BUILD_ROOT is required for Miller continuous testing')
         }
 
+        def millerCtProjectSegment = { project ->
+            def buildIdentity = project.rootProject.projectDir.canonicalFile.path
+            def identity = buildIdentity + '\u0000' + project.path
+            def digest = java.security.MessageDigest.getInstance('SHA-256').digest(
+                identity.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+            'project-' + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
+        }
+
         def millerCtConfigureProject = { project ->
-            def projectSegment = 'project-' + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
-                project.path.getBytes(java.nio.charset.StandardCharsets.UTF_8))
-            project.buildDir = new File(millerCtBuildRoot, projectSegment)
+            def buildDirectory = new File(millerCtBuildRoot, millerCtProjectSegment(project))
+            project.buildDir = buildDirectory
             project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { testTask ->
-                testTask.reports.junitXml.outputLocation = new File(project.buildDir, 'test-results/test')
+                testTask.reports.junitXml.required = true
+                testTask.reports.junitXml.outputLocation = new File(buildDirectory, 'test-results/test')
             }
         }
 
         gradle.beforeProject(millerCtConfigureProject)
+        gradle.projectsEvaluated {
+            gradle.rootProject.allprojects(millerCtConfigureProject)
+        }
         """;
 }
