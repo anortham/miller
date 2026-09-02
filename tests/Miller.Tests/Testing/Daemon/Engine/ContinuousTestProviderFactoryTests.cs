@@ -72,10 +72,11 @@ public sealed class ContinuousTestProviderFactoryTests : IDisposable
         Assert.Equal("ct-provider:php", factory.Resolve(Workspace("composer.json", "pest")).ProviderSource);
         Assert.IsType<JvmTestProvider>(factory.Resolve(Workspace("build.gradle", "gradle")).Provider);
         Assert.Equal("ct-provider:jvm", factory.Resolve(Workspace("build.gradle", "gradle")).ProviderSource);
+        Assert.IsType<JvmTestProvider>(factory.Resolve(Workspace("pom.xml", "maven")).Provider);
+        Assert.Equal("ct-provider:jvm", factory.Resolve(Workspace("pom.xml", "maven")).ProviderSource);
     }
 
     [Theory]
-    [InlineData("maven", "pom.xml")]
     [InlineData("sbt", "build.sbt")]
     public async Task Unregistered_jvm_frameworks_refuse_until_their_backend_is_registered(
         string framework,
@@ -93,13 +94,11 @@ public sealed class ContinuousTestProviderFactoryTests : IDisposable
     }
 
     [Fact]
-    public void Null_framework_jvm_detection_does_not_route_maven_or_sbt_to_gradle()
+    public void Null_framework_jvm_detection_routes_maven_and_refuses_sbt_until_registered()
     {
         var factory = ContinuousTestProviderFactory.CreateDefault();
 
-        Assert.Equal(
-            "ct-provider:unsupported",
-            factory.Resolve(Workspace("pom.xml", null)).ProviderSource);
+        Assert.Equal("ct-provider:jvm", factory.Resolve(Workspace("pom.xml", null)).ProviderSource);
         Assert.Equal(
             "ct-provider:unsupported",
             factory.Resolve(Workspace("build.sbt", null)).ProviderSource);

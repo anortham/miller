@@ -10,7 +10,7 @@ namespace Miller.Tests.Testing;
 ///
 /// That single signal is what <see cref="Conventions.CtScaleTraitConventionTests"/> keys on: any test
 /// that calls <see cref="RequireDotnet"/>, <see cref="RequireCargo"/>, <see cref="RequireNode"/>,
-/// <see cref="RequirePython"/>, <see cref="RequireJava"/>, or <see cref="RequireGradle"/> spawns a real
+/// <see cref="RequirePython"/>, <see cref="RequireJava"/>, <see cref="RequireGradle"/>, or <see cref="RequireMaven"/> spawns a real
 /// provider process and MUST therefore carry
 /// <c>[Trait("Category","Scale")]</c> so the default fast suite excludes it. Before this helper existed
 /// the locator was copy-pasted into the Task 5/8 Scale files, so there was no reliable signal a guard
@@ -197,6 +197,18 @@ public static class CtProviderTestSupport
         string? binary = LocateGradle();
         Assert.SkipWhen(binary is null,
             "Gradle 8.3+ is required for JVM Gradle provider Scale smoke");
+        return binary!;
+    }
+
+    public static string? LocateMaven() =>
+        LocateOnPath(OperatingSystem.IsWindows() ? "mvn.cmd" : "mvn")
+        ?? LocateOnPath(OperatingSystem.IsWindows() ? "mvn.exe" : "mvn");
+
+    public static string RequireMaven()
+    {
+        string? binary = LocateMaven();
+        Assert.SkipWhen(binary is null,
+            "Maven with Surefire 2.7.3+ is required for JVM Maven provider Scale smoke");
         return binary!;
     }
 

@@ -114,6 +114,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
                 ["phpunit"] = new(php, "ct-provider:php"),
                 ["pest"] = new(php, "ct-provider:php"),
                 ["gradle"] = new(jvm, "ct-provider:jvm"),
+                ["maven"] = new(jvm, "ct-provider:jvm"),
             })
         {
             DefaultProcessRunner = process,

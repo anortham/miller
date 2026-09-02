@@ -3,6 +3,8 @@ namespace Miller.Testing.Providers.Jvm;
 internal static class JvmTestBackendIds
 {
     public const string Gradle = "gradle";
+    public const string Maven = "maven";
+    public const string ClassCaseSentinel = "\0miller-class";
 }
 
 internal sealed record JvmTestBackendCase(

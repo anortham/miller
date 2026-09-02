@@ -34,6 +34,7 @@ public sealed class CtScaleTraitConventionTests
     private static readonly string[] PhpUnitLaunchSignals = ["RequirePhpUnit", "LocatePhpUnit"];
     private static readonly string[] JavaLaunchSignals = ["RequireJava", "LocateJava"];
     private static readonly string[] GradleLaunchSignals = ["RequireGradle", "LocateGradle"];
+    private static readonly string[] MavenLaunchSignals = ["RequireMaven", "LocateMaven"];
     private static readonly string[] CMakeLaunchSignals = ["RequireCMake", "LocateCMake"];
     private static readonly string[] CTestLaunchSignals = ["RequireCTest", "LocateCTest"];
     private static readonly string[] QmakeLaunchSignals =
@@ -73,6 +74,7 @@ public sealed class CtScaleTraitConventionTests
         int phpUnitFilesSeen = 0;
         int javaFilesSeen = 0;
         int gradleFilesSeen = 0;
+        int mavenFilesSeen = 0;
         int cmakeFilesSeen = 0;
         int ctestFilesSeen = 0;
         int qmakeFilesSeen = 0;
@@ -95,13 +97,14 @@ public sealed class CtScaleTraitConventionTests
             bool spawnsPhpUnit = PhpUnitLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsJava = JavaLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsGradle = GradleLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
+            bool spawnsMaven = MavenLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsCMake = CMakeLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsCTest = CTestLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsQmake = QmakeLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsQtQuickTest = QtQuickTestLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             if (!spawnsDotnet && !spawnsCargo && !spawnsNode && !spawnsPython && !spawnsGo
                 && !spawnsRuby && !spawnsRspec && !spawnsPhp && !spawnsPhpUnit
-                && !spawnsJava && !spawnsGradle
+                && !spawnsJava && !spawnsGradle && !spawnsMaven
                 && !spawnsCMake && !spawnsCTest && !spawnsQmake && !spawnsQtQuickTest)
                 continue;
 
@@ -127,6 +130,8 @@ public sealed class CtScaleTraitConventionTests
                 javaFilesSeen++;
             if (spawnsGradle)
                 gradleFilesSeen++;
+            if (spawnsMaven)
+                mavenFilesSeen++;
             if (spawnsCMake)
                 cmakeFilesSeen++;
             if (spawnsCTest)
@@ -151,6 +156,7 @@ public sealed class CtScaleTraitConventionTests
         AssertSignalFamilyIsCovered(phpUnitFilesSeen, "PHPUnit", PhpUnitLaunchSignals);
         AssertSignalFamilyIsCovered(javaFilesSeen, "Java", JavaLaunchSignals);
         AssertSignalFamilyIsCovered(gradleFilesSeen, "Gradle", GradleLaunchSignals);
+        AssertSignalFamilyIsCovered(mavenFilesSeen, "Maven", MavenLaunchSignals);
         AssertSignalFamilyIsCovered(cmakeFilesSeen, "cmake", CMakeLaunchSignals);
         AssertSignalFamilyIsCovered(ctestFilesSeen, "ctest", CTestLaunchSignals);
         AssertSignalFamilyIsCovered(qmakeFilesSeen, "qmake", QmakeLaunchSignals);

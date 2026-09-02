@@ -92,11 +92,103 @@ public sealed class JvmTestProviderScaleTests : IDisposable
         Assert.All(result.CaseResults, row => Assert.StartsWith(workspace.BuildOutputRoot, row.Metadata["artifact_path"]!.ToString()!, StringComparison.Ordinal));
     }
 
-    private static string HashTree(string root)
+    [Fact]
+    public async Task Maven_smoke_discovers_and_runs_two_junit_classes_without_target_output()
+    {
+        _ = CtProviderTestSupport.RequireJava();
+        _ = CtProviderTestSupport.RequireMaven();
+        File.WriteAllText(Path.Combine(_root, "pom.xml"), """
+            <project xmlns="http://maven.apache.org/POM/4.0.0"
+                     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                     xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+              <modelVersion>4.0.0</modelVersion>
+              <groupId>sample</groupId>
+              <artifactId>miller-ct-maven</artifactId>
+              <version>1.0-SNAPSHOT</version>
+              <properties>
+                <maven.compiler.release>17</maven.compiler.release>
+                <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+              </properties>
+              <dependencies>
+                <dependency>
+                  <groupId>org.junit.jupiter</groupId>
+                  <artifactId>junit-jupiter</artifactId>
+                  <version>5.10.2</version>
+                  <scope>test</scope>
+                </dependency>
+              </dependencies>
+              <build>
+                <plugins>
+                  <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.2.5</version>
+                  </plugin>
+                </plugins>
+              </build>
+            </project>
+            """);
+        string first = Path.Combine(_root, "src", "test", "java", "sample", "FirstTest.java");
+        string second = Path.Combine(_root, "src", "test", "java", "sample", "SecondTests.java");
+        Directory.CreateDirectory(Path.GetDirectoryName(first)!);
+        File.WriteAllText(first, """
+            package sample;
+
+            import static org.junit.jupiter.api.Assertions.assertTrue;
+            import org.junit.jupiter.api.Test;
+
+            class FirstTest {
+                @Test void passes() { assertTrue(true); }
+            }
+            """);
+        File.WriteAllText(second, """
+            package sample;
+
+            import static org.junit.jupiter.api.Assertions.assertTrue;
+            import org.junit.jupiter.api.Test;
+
+            class SecondTests {
+                @Test void passes() { assertTrue(true); }
+            }
+            """);
+        string sourceHash = HashTree(_root, "ct-jvm-maven-scale");
+        var workspace = new ContinuousTestWorkspace(
+            WorkspaceId: "ws:jvm-maven-scale",
+            WorkspaceRoot: _root,
+            ProjectPath: Path.Combine(_root, "pom.xml"),
+            BuildOutputRoot: Path.Combine(_root, ".miller", "ct-jvm-maven-scale"),
+            Framework: "maven");
+        var provider = new JvmTestProvider(new TestProcessRunner());
+
+        IReadOnlyList<ProviderTestCase> discovered = await provider.DiscoverAsync(
+            workspace,
+            TestContext.Current.CancellationToken);
+        Assert.Equal(
+            ["sample.FirstTest", "sample.SecondTests"],
+            discovered.Select(test => test.Selector).OrderBy(value => value, StringComparer.Ordinal).ToArray());
+        Assert.All(discovered, test => Assert.Equal("jvm", test.Metadata["language_family"]));
+        Assert.All(discovered, test => Assert.Equal(test.Selector, test.Metadata["selector"]));
+
+        ProviderRunResult result = await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: workspace,
+                SelectedRevision: "rev-jvm-maven-scale",
+                IndexIdentity: "store:jvm-maven-scale",
+                TestCaseIds: discovered.Select(test => test.Id).ToArray()),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("passed", result.Status);
+        Assert.Equal(2, result.CaseResults.Count);
+        Assert.Equal(sourceHash, HashTree(_root, "ct-jvm-maven-scale"));
+        Assert.Empty(Directory.EnumerateDirectories(_root, "target", SearchOption.AllDirectories));
+        Assert.All(result.CaseResults, row => Assert.StartsWith(workspace.BuildOutputRoot, row.Metadata["artifact_path"]!.ToString()!, StringComparison.Ordinal));
+    }
+
+    private static string HashTree(string root, string buildDirectoryName = "ct-jvm-scale")
     {
         using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
         foreach (string path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-                     .Where(path => !path.Contains(Path.Combine(".miller", "ct-jvm-scale"), StringComparison.Ordinal)))
+                     .Where(path => !path.Contains(Path.Combine(".miller", buildDirectoryName), StringComparison.Ordinal)))
         {
             hash.AppendData(System.Text.Encoding.UTF8.GetBytes(Path.GetRelativePath(root, path)));
             hash.AppendData(File.ReadAllBytes(path));

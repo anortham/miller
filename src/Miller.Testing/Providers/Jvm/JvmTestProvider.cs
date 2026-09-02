@@ -11,7 +11,7 @@ public sealed class JvmTestProvider : IContinuousTestProvider
     private readonly CtGenerationHandoff _generations = new();
 
     public JvmTestProvider(ITestProcessRunner runner)
-        : this([new GradleTestBackend(runner)])
+        : this([new GradleTestBackend(runner), new MavenTestBackend(runner)])
     {
     }
 
@@ -229,6 +229,13 @@ public sealed class JvmTestProvider : IContinuousTestProvider
         if (language is not null)
             metadata["language"] = language;
 
+        string symbolName = string.Equals(
+            test.MethodName,
+            JvmTestBackendIds.ClassCaseSentinel,
+            StringComparison.Ordinal)
+            ? test.ClassName
+            : test.MethodName;
+
         return new ProviderTestCase(
             Id: JvmTestTooling.EncodeCaseId(
                 workspace.WorkspaceId,
@@ -242,7 +249,7 @@ public sealed class JvmTestProvider : IContinuousTestProvider
             Framework: backend,
             SourcePath: test.SourcePath,
             Metadata: metadata,
-            SymbolName: test.MethodName,
+            SymbolName: symbolName,
             SymbolPath: test.SourcePath);
     }
 

@@ -25,7 +25,9 @@ internal static class JvmTestTooling
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(className);
         ArgumentException.ThrowIfNullOrWhiteSpace(methodName);
-        return className + "." + methodName;
+        return string.Equals(methodName, JvmTestBackendIds.ClassCaseSentinel, StringComparison.Ordinal)
+            ? className
+            : className + "." + methodName;
     }
 
     internal static string EncodeCaseId(
