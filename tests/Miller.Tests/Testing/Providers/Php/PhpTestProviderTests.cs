@@ -82,6 +82,32 @@ public sealed class PhpTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Discover_reads_phpunit_12_listing_shape_and_preserves_data_set_tail()
+    {
+        WriteComposer("phpunit/phpunit");
+        WriteVendorBinary("phpunit");
+        var runner = new RecordingRunner(command =>
+        {
+            string artifactPath = ArgumentAfter(command, "--list-tests-xml");
+            Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+            File.WriteAllText(artifactPath, DiscoveryXmlPhpUnit12);
+            return Success();
+        });
+
+        IReadOnlyList<ProviderTestCase> cases = await new PhpTestProvider(runner).DiscoverAsync(
+            Workspace("phpunit"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [
+                "Tests\\Unit\\CalculatorTest::testAdd",
+                "Tests\\Unit\\CalculatorTest::testWithDataSet with data set \"fast\"",
+            ],
+            cases.Select(test => test.Selector).ToArray());
+        Assert.All(cases, test => Assert.Equal("Tests\\Unit\\CalculatorTest", test.Metadata["class_name"]));
+    }
+
+    [Fact]
     public void Build_run_command_uses_phpunit_and_escapes_filter_regex()
     {
         WriteComposer("phpunit/phpunit");
@@ -102,6 +128,30 @@ public sealed class PhpTestProviderTests : IDisposable
         string filter = ArgumentAfter(command, "--filter");
         Assert.Contains("test\\[adds\\]\\.case", filter, StringComparison.Ordinal);
         Assert.DoesNotContain("test[adds].case", filter, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_run_command_anchors_prefix_collisions_and_escapes_slash_data_set_selectors()
+    {
+        WriteComposer("phpunit/phpunit");
+        WriteVendorBinary("phpunit");
+        ContinuousTestWorkspace workspace = Workspace("phpunit");
+        string[] ids =
+        [
+            PhpTestTooling.EncodeCaseId(workspace.WorkspaceId, workspace.ProjectPath,
+                "Tests\\Unit\\CalculatorTest", "testAdd"),
+            PhpTestTooling.EncodeCaseId(workspace.WorkspaceId, workspace.ProjectPath,
+                "Tests\\Unit\\CalculatorTest", "testAdd/with[data]"),
+        ];
+
+        TestProcessCommand command = new PhpTestProvider(new RecordingRunner(_ => Success()))
+            .BuildRunCommand(Request(workspace, ids));
+
+        string filter = ArgumentAfter(command, "--filter");
+        Assert.StartsWith("^(?:", filter, StringComparison.Ordinal);
+        Assert.EndsWith(")$", filter, StringComparison.Ordinal);
+        Assert.Contains("testAdd", filter, StringComparison.Ordinal);
+        Assert.Contains("testAdd\\/with\\[data\\]", filter, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -377,12 +427,25 @@ public sealed class PhpTestProviderTests : IDisposable
 
     private static readonly string DiscoveryXml = """
         <?xml version="1.0" encoding="UTF-8"?>
-        <testsuites>
-          <testsuite name="Tests\\Unit\\CalculatorTest" tests="2">
-            <testcase name="Tests\\Unit\\CalculatorTest::testAdd" file="tests/Unit/CalculatorTest.php" />
-            <testcase name="Tests\\Unit\\CalculatorTest::testSubtract" file="tests/Unit/CalculatorTest.php" />
-          </testsuite>
-        </testsuites>
+        <tests>
+          <testCaseClass name="Tests\Unit\CalculatorTest">
+            <testCaseMethod id="Tests\Unit\CalculatorTest::testAdd" name="testAdd" />
+            <testCaseMethod id="Tests\Unit\CalculatorTest::testSubtract" name="testSubtract" />
+          </testCaseClass>
+        </tests>
+        """;
+
+    private static readonly string DiscoveryXmlPhpUnit12 = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <testSuite xmlns="https://xml.phpunit.de/testSuite">
+          <tests>
+            <testClass name="Tests\Unit\CalculatorTest" file="tests/Unit/CalculatorTest.php">
+              <testMethod id="Tests\Unit\CalculatorTest::testAdd" name="testAdd" />
+              <testMethod id="Tests\Unit\CalculatorTest::testWithDataSet with data set &quot;fast&quot;" name="testWithDataSet" />
+            </testClass>
+          </tests>
+          <groups />
+        </testSuite>
         """;
 
     private static readonly string ResultXml = """

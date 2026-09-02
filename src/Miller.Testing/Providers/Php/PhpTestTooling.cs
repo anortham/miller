@@ -217,15 +217,13 @@ internal static class PhpTestTooling
         string[] escaped = selectors
             .Select(selector => RegexEscape(selector))
             .ToArray();
-        return escaped.Length == 1
-            ? escaped[0]
-            : $"(?:{string.Join('|', escaped)})";
+        return $"^(?:{string.Join('|', escaped)})$";
     }
 
     private static string RegexEscape(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        const string metacharacters = @"\\^$.*+?()[]{}|";
+        const string metacharacters = @"\\^$.*+?()[]{}|/";
         var builder = new StringBuilder(value.Length * 2);
         foreach (char character in value)
         {

@@ -39,8 +39,10 @@ public sealed class PhpTestProvider : IContinuousTestProvider
                     ResultArtifactPath = artifactPath,
                 };
 
-            JUnitXmlParseResult report = ParseReport(artifactPath, $"PHP {framework} discovery");
-            return CasesFromReport(workspace, framework, report);
+            IReadOnlyList<PhpListedTest> listedTests = ParseListing(
+                artifactPath,
+                $"PHP {framework} discovery");
+            return CasesFromListing(workspace, framework, listedTests);
         }
         catch (ContinuousTestProviderException exception) when (exception.GenerationId is null)
         {
@@ -180,41 +182,40 @@ public sealed class PhpTestProvider : IContinuousTestProvider
     public static bool IsPhpProjectFile(string path) =>
         PhpTestTooling.IsPhpProjectFile(path);
 
-    private static IReadOnlyList<ProviderTestCase> CasesFromReport(
+    private static IReadOnlyList<ProviderTestCase> CasesFromListing(
         ContinuousTestWorkspace workspace,
         string framework,
-        JUnitXmlParseResult report)
+        IReadOnlyList<PhpListedTest> listedTests)
     {
-        var cases = new List<ProviderTestCase>(report.Cases.Count);
+        var cases = new List<ProviderTestCase>(listedTests.Count);
         var ids = new HashSet<string>(StringComparer.Ordinal);
-        foreach (JUnitXmlTestCase testCase in report.Cases)
+        foreach (PhpListedTest listedTest in listedTests)
         {
-            PhpTestCaseIdentity identity = IdentityFromReport(testCase);
             string id = PhpTestTooling.EncodeCaseId(
                 workspace.WorkspaceId,
                 workspace.ProjectPath,
-                identity.ClassName,
-                identity.MethodName);
+                listedTest.ClassName,
+                listedTest.MethodName);
             if (!ids.Add(id))
                 throw new ContinuousTestProviderException(
-                    $"PHP {framework} discovery returned duplicate test case '{identity.Selector}'.");
+                    $"PHP {framework} discovery returned duplicate test case '{listedTest.Selector}'.");
 
             cases.Add(new ProviderTestCase(
                 Id: id,
-                DisplayName: identity.Selector,
-                FullyQualifiedName: identity.Selector,
-                Selector: identity.Selector,
+                DisplayName: listedTest.Selector,
+                FullyQualifiedName: listedTest.Selector,
+                Selector: listedTest.Selector,
                 Framework: framework,
+                SourcePath: listedTest.FilePath,
                 Metadata: new Dictionary<string, object?>(StringComparer.Ordinal)
                 {
                     ["kind"] = "php-test",
                     ["framework"] = framework,
-                    ["class_name"] = identity.ClassName,
-                    ["method_name"] = identity.MethodName,
-                    ["suite_name"] = testCase.SuiteName,
-                    ["status"] = testCase.Status,
+                    ["class_name"] = listedTest.ClassName,
+                    ["method_name"] = listedTest.MethodName,
+                    ["file_path"] = listedTest.FilePath,
                 },
-                SymbolName: identity.MethodName));
+                SymbolName: listedTest.MethodName));
         }
 
         return cases.OrderBy(static test => test.Id, StringComparer.Ordinal).ToArray();
@@ -308,7 +309,7 @@ public sealed class PhpTestProvider : IContinuousTestProvider
 
         IReadOnlyList<IReadOnlyList<CaseBinding>> chunks = CtArgvChunking.Chunk(
             selections,
-            static selection => CtArgvChunking.ArgvCost(["--filter", RegexCost(selection.Selector)]));
+            static selection => RegexCost(selection.Selector));
         var invocations = new List<PhpInvocation>(chunks.Count);
         for (var index = 0; index < chunks.Count; index++)
         {
@@ -330,17 +331,17 @@ public sealed class PhpTestProvider : IContinuousTestProvider
         return invocations;
     }
 
-    private static string RegexCost(string selector)
+    private static int RegexCost(string selector)
     {
-        const string metacharacters = @"\\^$.*+?()[]{}|";
+        const string metacharacters = @"\\^$.*+?()[]{}|/";
         var builder = new StringBuilder(selector.Length * 2);
         foreach (char character in selector)
         {
-            if (metacharacters.Contains(character, StringComparison.Ordinal))
+            if (metacharacters.IndexOf(character) >= 0)
                 builder.Append('\\');
             builder.Append(character);
         }
-        return builder.ToString();
+        return CtArgvChunking.ArgvCost(["--filter", builder.ToString()]) + 5;
     }
 
     private static CaseBinding? FindSelection(
@@ -410,6 +411,23 @@ public sealed class PhpTestProvider : IContinuousTestProvider
                 + string.Join(" ", report.AggregateMismatches.Select(static mismatch => mismatch.ToString())),
                 resultArtifactPath ?? artifactPath);
         return report;
+    }
+
+    private static IReadOnlyList<PhpListedTest> ParseListing(
+        string artifactPath,
+        string operation)
+    {
+        try
+        {
+            return PhpListTestsXmlParser.Parse(File.ReadAllText(artifactPath));
+        }
+        catch (TestArtifactParseException exception)
+        {
+            throw ReportFailure(
+                $"{operation} wrote an unreadable PHPUnit listing: {exception.Message}",
+                artifactPath,
+                exception);
+        }
     }
 
     private static void EnsureAllSelectionsReported(
