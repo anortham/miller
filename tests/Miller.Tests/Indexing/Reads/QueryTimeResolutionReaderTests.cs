@@ -713,6 +713,7 @@ public sealed class QueryTimeResolutionReaderTests
     {
         using ResolutionStoreFixture fixture = PopulateOverloadStore();
         fixture.AddIdentifier(1, "id-save", "Save", "src/Svc.cs", kind: "call", containingSymbolId: "fn-caller", startByte: 10, endByte: 14);
+        fixture.AddIdentifier(1, "id-save-self", "Save", "src/Svc.cs", kind: "call", containingSymbolId: "ov-save-a", startByte: 20, endByte: 24);
         using SqliteConnection connection = fixture.OpenRead();
         QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
         StoreVisibility visibility = fixture.Visibility();
@@ -729,6 +730,8 @@ public sealed class QueryTimeResolutionReaderTests
             new Dictionary<(long VersionId, string Id), QueryTimeResolutionParity.PendingFact>(),
             new Dictionary<(long VersionId, string Id), QueryTimeResolutionParity.RelationshipFact>());
 
+        Assert.Contains("ov-save-a|ov-save-a|ov-save-b|call|0.40|identifier_name", actual);
+        Assert.DoesNotContain("ov-save-a|ov-save-a|ov-save-a|call|0.40|identifier_name", actual);
         Assert.Equal(expected, actual);
     }
 
