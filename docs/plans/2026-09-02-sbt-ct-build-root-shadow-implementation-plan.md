@@ -174,8 +174,9 @@ interrupted manifest recovery, source mutation, budget, and path bounds. Use no 
 [Inspecting settings](https://www.scala-sbt.org/1.x/docs/Howto-Inspect-the-Build.html),
 [Command line](https://www.scala-sbt.org/1.x/docs/Command-Line-Reference.html), and
 [directory structure](https://www.scala-sbt.org/1.x/docs/Directories.html). Discovery uses complete
-plain stdout from `show Test/definedTestNames`, including multi-project headers and `[info] * name`
-rows. Partial runs use one `testOnly <classes>` command; whole-suite uses `test`. Reports are any
+plain stdout from `show Test/definedTestNames`, including the official sbt 1.10 `[info] List(...)`
+form, newer `[info] * name` rows, and multi-project headers. Partial runs use one `testOnly
+<classes>` command; whole-suite uses `test`. Reports are any
 contained `target/test-reports/*.xml` with `<testsuite>`/`<testsuites>` root, copied with relative
 subproject paths into generation results before parsing.
 
@@ -201,14 +202,14 @@ same-named XML files in separate subprojects cannot collide. Do not refactor Gra
 the JVM interface.
 
 **Acceptance criteria:**
-- [ ] Fast tests cover plain/multi-project discovery, duplicate-class refusal, command/cache paths,
+- [x] Fast tests cover single-line-list/bullet/multi-project discovery, duplicate-class refusal, command/cache paths,
       selection, report-root validation/copying, class aggregation, and all fail-closed cases.
-- [ ] Factory and convention tests prove `sbt` resolves to `ct-provider:jvm` and real-tool tests stay
+- [x] Factory and convention tests prove `sbt` resolves to `ct-provider:jvm` and real-tool tests stay
       Scale-tagged.
-- [ ] Exact Scale smoke passes when sbt+JDK exist or honestly skips; source and source targets remain
+- [x] Exact Scale smoke passes when sbt+JDK exist or honestly skips; source and source targets remain
       unchanged, warm sync copies zero bytes, and metrics are recorded.
-- [ ] ADR-0007 records the mirror scope, cache split, trust boundary, and known limits.
-- [ ] Focused tests and Release build pass; worker commits owned files and report.
+- [x] ADR-0007 records the mirror scope, cache split, trust boundary, and known limits.
+- [x] Focused tests and Release build pass; worker commits owned files and report.
 
 ## Parent-plan integration
 

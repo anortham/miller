@@ -434,9 +434,13 @@ backend registration. Per-class granularity is a documented v1 bound (Python's p
 - Consumes: `IJvmTestBackend`; Task 1 sbt facts.
 - Produces: runnable framework value `sbt`.
 
-**Contract inputs:** Discovery via `Test/definedTests` listing (class-level cases); run via
-`testOnly <classes>`; results from `target/test-reports/TEST-*.xml`. Batch discovery and run into
-a single sbt invocation each (JVM startup dominates; one process per phase, never per class).
+**Contract inputs:** The approved child design and implementation plan are
+`docs/plans/2026-09-02-sbt-ct-workspace-shadow-design.md` and
+`docs/plans/2026-09-02-sbt-ct-build-root-shadow-implementation-plan.md`. Discovery uses complete
+stdout from `show Test/definedTestNames`, accepting sbt's single-line list and pretty/multi-project
+forms as class-level cases. Runs use one `testOnly <classes>` or `test` command. Results are any
+contained `target/test-reports/*.xml` whose root is `testsuite` or `testsuites`. Discovery and run
+each use one sbt process, never one process per class.
 
 **File ownership:** Create/Modify inside `Providers/Jvm/` + its tests; Modify:
 `CtProviderTestSupport.cs`
@@ -445,16 +449,15 @@ a single sbt invocation each (JVM startup dominates; one process per phase, neve
 
 **Dependency reason:** Extends Task 5's backend seam.
 
-**What to build:** The sbt backend, per-class granularity. If Task 1 recorded that
-`Test/definedTests` output is not machine-stable, fall back to the Maven approach (compile + scan
-`target/**/test-classes`) and note the substitution in the findings doc — that is a recorded
-plan-consistent adaptation, not silent narrowing.
+**What to build:** The sbt backend at per-class granularity, running exclusively from the approved
+project-stable build-root shadow with separate source/target and dependency-cache janitor candidates.
+The child plan and ADR-0007 record the implementation and supported boundary.
 
 **Acceptance criteria:**
-- [ ] Fast tests cover listing parse (fixtures), `testOnly` argv, report parse.
-- [ ] Scale smoke runs a 2-class ScalaTest or munit fixture when sbt is installed; skips
+- [x] Fast tests cover listing parse (fixtures), `testOnly` argv, report parse.
+- [x] Scale smoke runs a 2-class ScalaTest or munit fixture when sbt is installed; skips
       otherwise.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ### Task 8: GDScript provider (GUT)
 

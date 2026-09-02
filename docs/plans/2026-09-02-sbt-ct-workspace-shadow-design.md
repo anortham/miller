@@ -120,7 +120,7 @@ For one discovered sbt project:
   ivy/                       Ivy cache
   coursier/                  Coursier cache
 
-<generation>/results/sbt/
+<generation>/TestResults/sbt/
   *.xml                      immutable copies used for verdict parsing
 ```
 
@@ -202,10 +202,10 @@ read-only Git metadata view is a separate design, not an implicit exception.
   on them are a documented limitation.
 - Run sbt in batch mode with plain output: `-batch`, `-Dsbt.supershell=false`, `-Dsbt.color=false`,
   `-Dsbt.log.noformat=true`, so stdout rows are parseable without ANSI stripping.
-- Discovery uses complete stdout from `show Test/definedTestNames`. Parse only documented list rows
-  (`[info] * <name>`), and in a multi-project build also the per-project header rows sbt prints
-  before each project's list. Reject malformed/duplicate output and emit one class-level case per
-  unique fully-qualified name.
+- Discovery uses complete stdout from `show Test/definedTestNames`. Accept the official sbt 1.10
+  single-line `[info] List(...)` form and the newer pretty-printed `[info] * <name>` rows. In a
+  multi-project build, also parse the per-project header rows sbt prints before each project's list.
+  Reject malformed/duplicate output and emit one class-level case per unique fully-qualified name.
 - Partial runs invoke one `testOnly` command with whitespace-separated selected classes. Whole-suite
   runs invoke `test` while retaining the selected case list for attribution.
 - Clear old shadow reports before a run (every subproject's `target/test-reports`). After sbt exits,

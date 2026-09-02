@@ -3,7 +3,7 @@ id: ship-jvm-ruby-php-and-gdscript-continuous-testing-
 title: Ship JVM, Ruby, PHP, and GDScript continuous testing providers before v1.27.0
 status: active
 created: 2026-09-02T04:10:06.163Z
-updated: 2026-09-02T12:58:46.986Z
+updated: 2026-09-02T15:49:56.764Z
 tags:
   - continuous-testing
   - providers
@@ -20,14 +20,11 @@ Implement and verify the approved CT-provider plan before resuming the held v1.2
 
 ## Current state
 
-Tasks 1–6 are implemented and accepted. The approved Task 7 architecture is committed at `2670cb7f` in `docs/plans/2026-09-02-sbt-ct-workspace-shadow-design.md`.
+Tasks 1–7 are implemented and accepted. Task 7 landed through child-plan commits `850e651d` through `c02c2d9e`: a provider-private project-stable sbt build-root mirror, split janitor candidates, class-level sbt backend, JVM/factory registration, contained report copying, Scale support, and ADR-0007.
 
-The executable child plan is drafted at `docs/plans/2026-09-02-sbt-ct-build-root-shadow-implementation-plan.md` and awaits the writing-plans approval gate. It contains two serialized worker commits:
+Task 7 evidence: 31 shadow tests, 19 backend tests, 7 factory tests, and the CT Scale convention passed; Release build passed with zero warnings/errors; the bare fast suite passed 9,593 with 9 platform/tool skips. The exact sbt Scale smoke skipped honestly because `sbt` is absent.
 
-1. provider-private project-stable build-root reconciliation with split janitor candidates and cold/warm metrics;
-2. sbt backend, JVM/factory registration, report parsing/copying, Scale support, and ADR-0007.
-
-The user delegated the mirror scope decision; the selected boundary is the sbt build-root subtree. Whole-workspace copying was rejected because CT identity, lock, output root, and the 2 GB cache budget are per discovered project.
+Task 8 (GDScript/GUT) is next, followed by Task 9 documentation and the final Release/Scale/Windows/performance/release reconciliation gates.
 
 ## Constraints
 
