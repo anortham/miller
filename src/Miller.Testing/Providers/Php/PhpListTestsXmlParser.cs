@@ -52,10 +52,11 @@ internal static class PhpListTestsXmlParser
     private static IReadOnlyList<PhpListedTest> ParsePhpUnit10(XElement root)
     {
         var tests = new List<PhpListedTest>();
+        var selectors = new HashSet<string>(StringComparer.Ordinal);
         foreach (XElement classElement in root.Elements().Where(element =>
                      string.Equals(element.Name.LocalName, "testCaseClass", StringComparison.Ordinal)))
         {
-            ParseClass(classElement, "testCaseMethod", tests);
+            ParseClass(classElement, "testCaseMethod", tests, selectors);
         }
 
         return tests;
@@ -66,13 +67,14 @@ internal static class PhpListTestsXmlParser
         XElement? testsElement = root.Elements().FirstOrDefault(element =>
             string.Equals(element.Name.LocalName, "tests", StringComparison.Ordinal));
         if (testsElement is null)
-            return [];
+            throw new TestArtifactParseException("PHPUnit 11/12 listing is missing its <tests> container.");
 
         var tests = new List<PhpListedTest>();
+        var selectors = new HashSet<string>(StringComparer.Ordinal);
         foreach (XElement classElement in testsElement.Elements().Where(element =>
                      string.Equals(element.Name.LocalName, "testClass", StringComparison.Ordinal)))
         {
-            ParseClass(classElement, "testMethod", tests);
+            ParseClass(classElement, "testMethod", tests, selectors);
         }
 
         return tests;
@@ -81,7 +83,8 @@ internal static class PhpListTestsXmlParser
     private static void ParseClass(
         XElement classElement,
         string methodElementName,
-        ICollection<PhpListedTest> tests)
+        ICollection<PhpListedTest> tests,
+        ISet<string> selectors)
     {
         string className = RequiredAttribute(classElement, "name", "test class");
         string? filePath = OptionalAttribute(classElement, "file");
@@ -105,7 +108,7 @@ internal static class PhpListTestsXmlParser
                 throw new TestArtifactParseException($"PHPUnit listing test method id '{id}' has an empty method.");
 
             string selector = normalizedClass + "::" + methodName;
-            if (tests.Any(test => string.Equals(test.Selector, selector, StringComparison.Ordinal)))
+            if (!selectors.Add(selector))
                 throw new TestArtifactParseException(
                     $"PHPUnit listing returned duplicate test method '{selector}'.");
             tests.Add(new PhpListedTest(normalizedClass, methodName, selector, filePath));

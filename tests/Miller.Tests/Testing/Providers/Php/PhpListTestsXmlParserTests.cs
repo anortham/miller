@@ -50,6 +50,18 @@ public sealed class PhpListTestsXmlParserTests
     }
 
     [Fact]
+    public void Parse_rejects_a_phpunit_12_listing_without_the_tests_container()
+    {
+        const string xml = """
+            <testSuite xmlns="https://xml.phpunit.de/testSuite">
+              <groups />
+            </testSuite>
+            """;
+
+        Assert.Throws<TestArtifactParseException>(() => PhpListTestsXmlParser.Parse(xml));
+    }
+
+    [Fact]
     public void Parse_rejects_dtd_and_external_entities()
     {
         const string xml = """
