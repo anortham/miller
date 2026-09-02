@@ -173,11 +173,11 @@ the findings doc and sanitized fixtures. A tool that is not installed is recorde
 Scale smokes will skip for it, and the findings doc is the honest record.
 
 **Acceptance criteria:**
-- [ ] Findings doc has one section per backend with the six facts above and doc URLs.
-- [ ] Every claimed command was executed against the real tool, or the section says
+- [x] Findings doc has one section per backend with the six facts above and doc URLs.
+- [x] Every claimed command was executed against the real tool, or the section says
       "not installed — surface taken from docs at <URL>, needs runtime confirmation".
-- [ ] Sanitized sample reports committed as fixtures.
-- [ ] Worker-scope verification passes (no product code changed; `dotnet build Miller.slnx -c Release` still clean) and the change is committed per commit mode.
+- [x] Sanitized sample reports committed as fixtures.
+- [x] Worker-scope verification passes (no product code changed; `dotnet build Miller.slnx -c Release` still clean) and the change is committed per commit mode.
 
 ### Task 2: Shared JUnit XML result parser
 
