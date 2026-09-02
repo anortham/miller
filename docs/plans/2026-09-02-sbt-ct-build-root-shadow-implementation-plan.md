@@ -141,11 +141,11 @@ then add type transitions, metadata, internal links, unsafe links, nested `.git`
 interrupted manifest recovery, source mutation, budget, and path bounds. Use no narration comments.
 
 **Acceptance criteria:**
-- [ ] Red/green tests cover initial, no-op, update, deletion, recovery, metadata/link, exclusion,
+- [x] Red/green tests cover initial, no-op, update, deletion, recovery, metadata/link, exclusion,
       collision, mutation, budget, and Windows-path behavior.
-- [ ] Warm no-op sync reports zero copied files and bytes; one-file update copies only one file.
-- [ ] Mirror and dependency roots are separate janitor candidates; user source is byte-identical.
-- [ ] Focused tests and Release build pass; worker commits owned files and report.
+- [x] Warm no-op sync reports zero copied files and bytes; one-file update copies only one file.
+- [x] Mirror and dependency roots are separate janitor candidates; user source is byte-identical.
+- [x] Focused tests and Release build pass; worker commits owned files and report.
 
 ### Task 2: sbt JVM backend, registration, and live evidence
 
