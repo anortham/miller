@@ -130,10 +130,15 @@ internal static class GutTooling
     internal static int ParseGodotMajor(string output)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(output);
-        Match match = Regex.Match(
+        Match labeled = Regex.Match(
             output,
             @"(?i)\bGodot(?:\s+Engine)?(?:\s+v)?\s*(?<major>\d+)\.\d+",
             RegexOptions.CultureInvariant);
+        Match plain = Regex.Match(
+            output.Trim(),
+            @"\A(?<major>\d+)\.\d+(?:\.(?:\d+|[A-Za-z][A-Za-z0-9_-]*))+\z",
+            RegexOptions.CultureInvariant);
+        Match match = labeled.Success ? labeled : plain;
         if (!match.Success
             || !int.TryParse(match.Groups["major"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int major))
             throw new ContinuousTestProviderException("Godot version probe returned no parseable semantic version.");

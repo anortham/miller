@@ -2,6 +2,7 @@ using Miller.Testing;
 using Miller.Testing.Parsing;
 using Miller.Testing.Providers.Shared;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 
 namespace Miller.Testing.Providers.Godot;
 
@@ -204,9 +205,14 @@ public sealed class GodotTestProvider : IContinuousTestProvider
         GodotProjectShadowResult shadow,
         GutScript script)
     {
-        string sourcePath = Path.GetRelativePath(
-                workspace.WorkspaceRoot,
-                Path.Combine(shadow.SourceRoot, script.ResPath[6..].Replace('/', Path.DirectorySeparatorChar)))
+        string sourceAbsolutePath = Path.Combine(
+            shadow.SourceRoot,
+            script.ResPath[6..].Replace('/', Path.DirectorySeparatorChar));
+        string mirrorPath = shadow.MapSourcePath(sourceAbsolutePath);
+        CtWorkspaceMirror.EnsurePathHasNoReparsePoint(mirrorPath);
+        if (!File.Exists(mirrorPath))
+            throw new IOException($"Godot script was not copied into the project mirror: '{script.ResPath}'");
+        string sourcePath = Path.GetRelativePath(workspace.WorkspaceRoot, sourceAbsolutePath)
             .Replace('\\', '/');
         return new ProviderTestCase(
             Id: "gut:" + script.ResPath,
@@ -264,10 +270,28 @@ public sealed class GodotTestProvider : IContinuousTestProvider
         {
             timer.Stop();
             metrics.SetProcessDuration(phase, timer.Elapsed.TotalMilliseconds);
-            GodotProjectShadow.TouchActivity(shadow);
             (long projectBytes, long homeBytes) = GodotProjectShadow.EnforcePostProcessBudget(shadow);
             metrics.ProjectCandidateBytes = projectBytes;
             metrics.GodotHomeCandidateBytes = homeBytes;
+            Exception? activityFailure = null;
+            try
+            {
+                CtWorkspaceMirror.EnsurePathHasNoReparsePoint(shadow.ProjectActivityMarkerPath);
+                CtWorkspaceMirror.EnsurePathHasNoReparsePoint(shadow.HomeActivityMarkerPath);
+                GodotProjectShadow.TouchActivity(shadow);
+            }
+            catch (Exception exception)
+            {
+                activityFailure = exception;
+            }
+            finally
+            {
+                (projectBytes, homeBytes) = GodotProjectShadow.EnforcePostProcessBudget(shadow);
+                metrics.ProjectCandidateBytes = projectBytes;
+                metrics.GodotHomeCandidateBytes = homeBytes;
+            }
+            if (activityFailure is not null)
+                ExceptionDispatchInfo.Capture(activityFailure).Throw();
         }
     }
 
@@ -383,15 +407,28 @@ public sealed class GodotTestProvider : IContinuousTestProvider
     {
         CtWorkspaceMirror.EnsurePathHasNoReparsePoint(resultsRoot);
         if (Directory.Exists(resultsRoot))
-        {
-            foreach (string entry in Directory.EnumerateFileSystemEntries(
-                         resultsRoot,
-                         "*",
-                         SearchOption.AllDirectories))
-                CtWorkspaceMirror.EnsurePathHasNoReparsePoint(entry);
-            Directory.Delete(resultsRoot, recursive: true);
-        }
+            DeleteEntriesWithoutFollowingReparsePoints(resultsRoot);
         Directory.CreateDirectory(resultsRoot);
+    }
+
+    private static void DeleteEntriesWithoutFollowingReparsePoints(string directory)
+    {
+        foreach (string entry in Directory.EnumerateFileSystemEntries(directory))
+        {
+            CtWorkspaceMirror.EnsurePathHasNoReparsePoint(entry);
+            FileAttributes attributes = File.GetAttributes(entry);
+            if (attributes.HasFlag(FileAttributes.ReparsePoint))
+                throw new IOException($"GUT result path is a reparse point: '{entry}'");
+            if (attributes.HasFlag(FileAttributes.Directory))
+            {
+                DeleteEntriesWithoutFollowingReparsePoints(entry);
+                Directory.Delete(entry);
+            }
+            else
+            {
+                File.Delete(entry);
+            }
+        }
     }
 
     private static string CopyReport(
@@ -404,13 +441,16 @@ public sealed class GodotTestProvider : IContinuousTestProvider
             shadow.ProjectMirrorRoot,
             reportResPath[6..].Replace('/', Path.DirectorySeparatorChar));
         CtWorkspaceMirror.EnsurePathHasNoReparsePoint(resultsRoot);
-        if (!File.Exists(expected))
-            throw Failure("GUT did not produce its expected JUnit report.");
-        CtWorkspaceMirror.EnsurePathHasNoReparsePoint(expected);
-        string[] reports = Directory
-            .EnumerateFiles(resultsRoot, "*.xml", SearchOption.AllDirectories)
+        string[] reports = EnumerateFilesWithoutFollowingReparsePoints(resultsRoot)
+            .Where(path => string.Equals(Path.GetExtension(path), ".xml", StringComparison.OrdinalIgnoreCase))
             .Order(StringComparer.Ordinal)
             .ToArray();
+        if (!reports.Any(report => string.Equals(
+                Path.GetFullPath(report),
+                Path.GetFullPath(expected),
+                StringComparison.OrdinalIgnoreCase)))
+            throw Failure("GUT did not produce its expected JUnit report.");
+        CtWorkspaceMirror.EnsurePathHasNoReparsePoint(expected);
         if (reports.Length != 1
             || !string.Equals(
                 Path.GetFullPath(reports[0]),
@@ -431,6 +471,30 @@ public sealed class GodotTestProvider : IContinuousTestProvider
                 File.Delete(temporary);
         }
         return destination;
+    }
+
+    private static IReadOnlyList<string> EnumerateFilesWithoutFollowingReparsePoints(string root)
+    {
+        var directories = new Stack<string>();
+        var files = new List<string>();
+        directories.Push(root);
+        while (directories.Count != 0)
+        {
+            string directory = directories.Pop();
+            CtWorkspaceMirror.EnsurePathHasNoReparsePoint(directory);
+            foreach (string entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                CtWorkspaceMirror.EnsurePathHasNoReparsePoint(entry);
+                FileAttributes attributes = File.GetAttributes(entry);
+                if (attributes.HasFlag(FileAttributes.ReparsePoint))
+                    throw new IOException($"GUT result path is a reparse point: '{entry}'");
+                if (attributes.HasFlag(FileAttributes.Directory))
+                    directories.Push(entry);
+                else
+                    files.Add(entry);
+            }
+        }
+        return files;
     }
 
     private static void WriteAtomic(string path, string contents)

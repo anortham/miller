@@ -52,6 +52,8 @@ public sealed class GodotTestProviderTests : IDisposable
             Assert.Equal("gut", test.Framework);
             Assert.EndsWith(".gd", test.SourcePath, StringComparison.Ordinal);
         });
+        Assert.Equal("tests/nested/test_other.gd", cases[0].SourcePath);
+        Assert.Equal("tests/test_math.gd", cases[1].SourcePath);
         Assert.Empty(runner.Calls);
     }
 
@@ -165,6 +167,365 @@ public sealed class GodotTestProviderTests : IDisposable
             Assert.Equal(0L, (long)Assert.Single(warm.CaseResults).Metadata["mirror_bytes_copied"]!);
             Assert.Equal(0L, (long)Assert.Single(warm.CaseResults).Metadata["mirror_bytes_hashed"]!);
             Assert.Equal(workspace.BuildOutputRoot, Path.GetDirectoryName(CtGenerationPaths.CacheRoot(workspace)));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+        }
+    }
+
+    [Fact]
+    public async Task Run_rejects_a_replaced_project_candidate_before_touching_activity()
+    {
+        WriteProject("{\"tests\":[\"res://tests/test_math.gd\"]}");
+        WriteFile("addons/gut/plugin.cfg", "[plugin]\nversion=\"9.7.1\"\n");
+        WriteFile("tests/test_math.gd", "extends Node\n");
+        string godot = Path.Combine(_root, "godot");
+        File.WriteAllText(godot, string.Empty);
+        string outside = Path.Combine(_root, "outside-candidate");
+        Directory.CreateDirectory(outside);
+        string sentinel = Path.Combine(outside, "sentinel.txt");
+        File.WriteAllText(sentinel, "keep");
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("GODOT", godot);
+            var runner = new FakeTestProcessRunner();
+            runner.Enqueue("Godot Engine v4.7.2.stable\n");
+            runner.OnRun = command =>
+            {
+                if (!command.Arguments.Contains("--version"))
+                    return;
+                string candidate = Directory.GetParent(command.WorkingDirectory)!.FullName;
+                Directory.Delete(candidate, recursive: true);
+                try
+                {
+                    Directory.CreateSymbolicLink(candidate, outside);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    Assert.Skip("Symbolic directory links are unavailable on this host.");
+                }
+                catch (IOException)
+                {
+                    Assert.Skip("Symbolic directory links are unavailable on this host.");
+                }
+            };
+
+            ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+                new GodotTestProvider(runner).RunAsync(
+                    Request("gut:res://tests/test_math.gd"),
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("reparse", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("keep", File.ReadAllText(sentinel));
+            Assert.False(File.Exists(Path.Combine(outside, ".last-used")));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+        }
+    }
+
+    [Fact]
+    public async Task Run_rejects_a_replaced_project_activity_marker_before_touching_it()
+    {
+        WriteProject("{\"tests\":[\"res://tests/test_math.gd\"]}");
+        WriteFile("addons/gut/plugin.cfg", "[plugin]\nversion=\"9.7.1\"\n");
+        WriteFile("tests/test_math.gd", "extends Node\n");
+        string godot = Path.Combine(_root, "godot");
+        File.WriteAllText(godot, string.Empty);
+        string outsideMarker = Path.Combine(_root, "outside-marker.txt");
+        File.WriteAllText(outsideMarker, "keep");
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("GODOT", godot);
+            var runner = new FakeTestProcessRunner();
+            runner.Enqueue("Godot Engine v4.7.2.stable\n");
+            runner.Enqueue();
+            runner.Enqueue();
+            runner.OnRun = command =>
+            {
+                string candidate = Directory.GetParent(command.WorkingDirectory)!.FullName;
+                if (command.Arguments.Contains("--version"))
+                {
+                    try
+                    {
+                        File.CreateSymbolicLink(Path.Combine(candidate, ".last-used"), outsideMarker);
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        Assert.Skip("Symbolic links are unavailable on this host.");
+                    }
+                    catch (IOException)
+                    {
+                        Assert.Skip("Symbolic links are unavailable on this host.");
+                    }
+                }
+                else
+                {
+                    WritePassingReport(command);
+                }
+            };
+
+            ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+                new GodotTestProvider(runner).RunAsync(
+                    Request("gut:res://tests/test_math.gd"),
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("reparse", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("keep", File.ReadAllText(outsideMarker));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+        }
+    }
+
+    [Fact]
+    public async Task Run_rejects_nested_results_reparse_points_before_cleanup()
+    {
+        WriteProject("{\"tests\":[\"res://tests/test_math.gd\"]}");
+        WriteFile("addons/gut/plugin.cfg", "[plugin]\nversion=\"9.7.1\"\n");
+        WriteFile("tests/test_math.gd", "extends Node\n");
+        string godot = Path.Combine(_root, "godot");
+        File.WriteAllText(godot, string.Empty);
+        string outside = Path.Combine(_root, "outside-results");
+        Directory.CreateDirectory(outside);
+        string sentinel = Path.Combine(outside, "sentinel.txt");
+        File.WriteAllText(sentinel, "keep");
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("GODOT", godot);
+            var runner = new FakeTestProcessRunner();
+            runner.Enqueue("Godot Engine v4.7.2.stable\n");
+            runner.Enqueue();
+            runner.Enqueue();
+            runner.OnRun = command =>
+            {
+                string resultsRoot = Path.Combine(command.WorkingDirectory, ".miller-gut-results");
+                if (command.Arguments.Contains("--version"))
+                {
+                    Directory.CreateDirectory(resultsRoot);
+                    try
+                    {
+                        Directory.CreateSymbolicLink(Path.Combine(resultsRoot, "nested"), outside);
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        Assert.Skip("Symbolic directory links are unavailable on this host.");
+                    }
+                    catch (IOException)
+                    {
+                        Assert.Skip("Symbolic directory links are unavailable on this host.");
+                    }
+                }
+                else
+                {
+                    WritePassingReport(command);
+                }
+            };
+
+            ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+                new GodotTestProvider(runner).RunAsync(
+                    Request("gut:res://tests/test_math.gd"),
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("reparse", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("keep", File.ReadAllText(sentinel));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+        }
+    }
+
+    [Fact]
+    public async Task Run_rejects_a_malformed_junit_report()
+    {
+        string godot = PrepareSingleScript();
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("GODOT", godot);
+            var runner = new FakeTestProcessRunner();
+            runner.Enqueue("Godot Engine v4.7.2.stable\n");
+            runner.Enqueue();
+            runner.Enqueue();
+            runner.OnRun = command =>
+            {
+                if (command.Arguments.Contains("--import"))
+                    Directory.CreateDirectory(Path.Combine(command.WorkingDirectory, ".godot"));
+                else if (command.Arguments.Contains("-s"))
+                {
+                    string report = Path.Combine(command.WorkingDirectory, ".miller-gut-results", "run.xml");
+                    Directory.CreateDirectory(Path.GetDirectoryName(report)!);
+                    File.WriteAllText(report, "<testsuite>");
+                }
+            };
+
+            ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+                new GodotTestProvider(runner).RunAsync(
+                    Request("gut:res://tests/test_math.gd"),
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("malformed", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.NotNull(exception.ResultArtifactPath);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+        }
+    }
+
+    [Fact]
+    public async Task Run_rejects_an_unsupported_GUT_exit_code()
+    {
+        string godot = PrepareSingleScript();
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("GODOT", godot);
+            var runner = new FakeTestProcessRunner();
+            runner.Enqueue("Godot Engine v4.7.2.stable\n");
+            runner.Enqueue();
+            runner.Enqueue(exitCode: 2);
+            runner.OnRun = WritePassingReport;
+
+            ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+                new GodotTestProvider(runner).RunAsync(
+                    Request("gut:res://tests/test_math.gd"),
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("unsupported code", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.NotNull(exception.ResultArtifactPath);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+        }
+    }
+
+    [Fact]
+    public async Task Run_rejects_exit_one_when_junit_has_no_failure()
+    {
+        string godot = PrepareSingleScript();
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("GODOT", godot);
+            var runner = new FakeTestProcessRunner();
+            runner.Enqueue("Godot Engine v4.7.2.stable\n");
+            runner.Enqueue();
+            runner.Enqueue(exitCode: 1);
+            runner.OnRun = WritePassingReport;
+
+            ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+                new GodotTestProvider(runner).RunAsync(
+                    Request("gut:res://tests/test_math.gd"),
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("no failure", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.NotNull(exception.ResultArtifactPath);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+        }
+    }
+
+    [Fact]
+    public async Task Run_rejects_an_unexpected_extra_junit_report()
+    {
+        string godot = PrepareSingleScript();
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("GODOT", godot);
+            var runner = new FakeTestProcessRunner();
+            runner.Enqueue("Godot Engine v4.7.2.stable\n");
+            runner.Enqueue();
+            runner.Enqueue();
+            runner.OnRun = command =>
+            {
+                if (command.Arguments.Contains("--import"))
+                {
+                    Directory.CreateDirectory(Path.Combine(command.WorkingDirectory, ".godot"));
+                }
+                else if (command.Arguments.Contains("-s"))
+                {
+                    string resultsRoot = Path.Combine(command.WorkingDirectory, ".miller-gut-results");
+                    Directory.CreateDirectory(resultsRoot);
+                    File.WriteAllText(Path.Combine(resultsRoot, "run.xml"), PassingJUnit);
+                    File.WriteAllText(Path.Combine(resultsRoot, "unexpected.xml"), PassingJUnit);
+                }
+            };
+
+            ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+                new GodotTestProvider(runner).RunAsync(
+                    Request("gut:res://tests/test_math.gd"),
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("unexpected or duplicate", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Null(exception.ResultArtifactPath);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+        }
+    }
+
+    [Fact]
+    public async Task Run_rejects_a_nested_report_reparse_point_without_touching_outside()
+    {
+        string godot = PrepareSingleScript();
+        string outside = Path.Combine(_root, "outside-report");
+        Directory.CreateDirectory(outside);
+        string sentinel = Path.Combine(outside, "sentinel.txt");
+        File.WriteAllText(sentinel, "keep");
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("GODOT", godot);
+            var runner = new FakeTestProcessRunner();
+            runner.Enqueue("Godot Engine v4.7.2.stable\n");
+            runner.Enqueue();
+            runner.Enqueue();
+            runner.OnRun = command =>
+            {
+                if (command.Arguments.Contains("--import"))
+                {
+                    Directory.CreateDirectory(Path.Combine(command.WorkingDirectory, ".godot"));
+                }
+                else if (command.Arguments.Contains("-s"))
+                {
+                    string resultsRoot = Path.Combine(command.WorkingDirectory, ".miller-gut-results");
+                    Directory.CreateDirectory(resultsRoot);
+                    File.WriteAllText(Path.Combine(resultsRoot, "run.xml"), PassingJUnit);
+                    try
+                    {
+                        Directory.CreateSymbolicLink(Path.Combine(resultsRoot, "nested"), outside);
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        Assert.Skip("Symbolic directory links are unavailable on this host.");
+                    }
+                    catch (IOException)
+                    {
+                        Assert.Skip("Symbolic directory links are unavailable on this host.");
+                    }
+                }
+            };
+
+            ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+                new GodotTestProvider(runner).RunAsync(
+                    Request("gut:res://tests/test_math.gd"),
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("reparse", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("keep", File.ReadAllText(sentinel));
         }
         finally
         {
@@ -547,6 +908,16 @@ public sealed class GodotTestProviderTests : IDisposable
         WriteFile(".gutconfig.json", config);
     }
 
+    private string PrepareSingleScript()
+    {
+        WriteProject("{\"tests\":[\"res://tests/test_math.gd\"]}");
+        WriteFile("addons/gut/plugin.cfg", "[plugin]\nversion=\"9.7.1\"\n");
+        WriteFile("tests/test_math.gd", "extends Node\n");
+        string godot = Path.Combine(_root, "godot");
+        File.WriteAllText(godot, string.Empty);
+        return godot;
+    }
+
     private void WriteFile(string relativePath, string contents)
     {
         string path = Path.Combine(_root, relativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -578,6 +949,12 @@ public sealed class GodotTestProviderTests : IDisposable
         new(Workspace(), "rev-godot", IndexIdentity, RunId: "run-godot", TestCaseIds: ids);
 
     private static readonly string IndexIdentity = "identity-godot";
+
+    private const string PassingJUnit = """
+        <testsuite name="res://tests/test_math.gd" tests="1" failures="0" skipped="0">
+          <testcase name="test_add" status="pass" classname="res://tests/test_math.gd" />
+        </testsuite>
+        """;
 
     private const string GutJUnit = """
         <?xml version="1.0" encoding="UTF-8"?>

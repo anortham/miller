@@ -68,6 +68,17 @@ public sealed class GutToolingTests
         Assert.Equal(".gd", configuration.Suffix);
     }
 
+    [Theory]
+    [InlineData("{\"dirs\":\"tests\"}")]
+    [InlineData("{\"tests\":42}")]
+    [InlineData("{\"include_subdirs\":\"true\"}")]
+    [InlineData("{\"prefix\":42}")]
+    [InlineData("{\"suffix\":[]}")]
+    public void Configuration_rejects_malformed_field_types(string json)
+    {
+        Assert.Throws<ContinuousTestProviderException>(() => GutConfiguration.Parse(json));
+    }
+
     [Fact]
     public void Configuration_discovers_explicit_and_recursive_directory_scripts_without_duplicates()
     {
@@ -252,11 +263,66 @@ public sealed class GutToolingTests
     }
 
     [Fact]
+    public void Godot_resolution_uses_deterministic_name_order_across_PATH_entries()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-gut-tooling-").FullName;
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        string? previousPath = Environment.GetEnvironmentVariable("PATH");
+        try
+        {
+            string first = Path.Combine(root, "first");
+            string second = Path.Combine(root, "second");
+            Directory.CreateDirectory(first);
+            Directory.CreateDirectory(second);
+            string godot4 = Path.Combine(first, "godot4");
+            string godot = Path.Combine(second, "godot");
+            File.WriteAllText(godot4, string.Empty);
+            File.WriteAllText(godot, string.Empty);
+            Environment.SetEnvironmentVariable("GODOT", null);
+            Environment.SetEnvironmentVariable("PATH", first + Path.PathSeparator + second);
+
+            Assert.Equal(Path.GetFullPath(godot), GutTooling.ResolveGodotExecutable());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+            Environment.SetEnvironmentVariable("PATH", previousPath);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Godot_resolution_falls_back_to_godot4_when_generic_name_is_missing()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-ct-gut-tooling-").FullName;
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        string? previousPath = Environment.GetEnvironmentVariable("PATH");
+        try
+        {
+            string fallback = Path.Combine(root, "godot4");
+            File.WriteAllText(fallback, string.Empty);
+            Environment.SetEnvironmentVariable("GODOT", null);
+            Environment.SetEnvironmentVariable("PATH", root);
+
+            Assert.Equal(Path.GetFullPath(fallback), GutTooling.ResolveGodotExecutable());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+            Environment.SetEnvironmentVariable("PATH", previousPath);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Godot_version_and_GUT_plugin_versions_are_parsed_and_floor_is_enforced_by_callers()
     {
         Assert.Equal(4, GutTooling.ParseGodotMajor("Godot Engine v4.7.2.stable.official"));
+        Assert.Equal(4, GutTooling.ParseGodotMajor("4.7.2.stable.official.ed1daf0bf"));
         Assert.Equal(4, GutTooling.ParseGodotMajor("helper 3.0\nGodot Engine v4.7.2.stable.official"));
         Assert.Equal(3, GutTooling.ParseGodotMajor("Godot Engine v3.5.2.stable"));
+        Assert.Throws<ContinuousTestProviderException>(() => GutTooling.ParseGodotMajor("Godot Engine v4"));
+        Assert.Throws<ContinuousTestProviderException>(() => GutTooling.ParseGodotMajor("4.7.2.stable.official."));
         string root = Directory.CreateTempSubdirectory("miller-ct-gut-tooling-").FullName;
         try
         {
