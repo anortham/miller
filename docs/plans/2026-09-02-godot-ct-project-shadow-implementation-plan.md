@@ -181,5 +181,5 @@
 - [x] Lead inline review accepts every task with no open finding.
 - [x] Miller post-edit impact matches the planned files and focused scopes.
 - [ ] Task 8 focused tests, Release build, bare fast suite, real Godot/GUT Scale smoke, and deterministic performance checks are green.
-- [ ] Parent plan Task 8 is checked complete and the SDD ledger contains commit-bound evidence.
-- [ ] Worktree state is clean and reconciled before Task 9 documentation and final release gates begin.
+- [x] Parent plan Task 8 is checked complete and the SDD ledger contains commit-bound evidence.
+- [x] Worktree state is clean and reconciled before Task 9 documentation and final release gates begin.

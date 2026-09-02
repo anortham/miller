@@ -26,3 +26,8 @@ Task 7: fix round 2 (child Task 1: 3 remaining portability/safety findings; comm
 Task 7: fix round 3 (child Task 2: 7 command/identity/cache/report/evidence findings; commits 01d24827..c02c2d9e)
 | affected-change | Completed sbt provider keeps the default fast suite green | `MILLER_ALLOW_MISSING_JULIE_EXTRACT=1 MILLER_ALLOW_MISSING_SEMANTIC=1 dotnet test` | c02c2d9e | PASS — 9,593 passed, 0 failed, 9 skipped | 2026-09-02T15:46:00Z |
 Task 7: complete (child commits 1d65331b..c02c2d9e, 31 shadow + 19 backend + 7 factory + 1 convention focused tests, Release build clean, exact Scale skip recorded, Lead inline review clean)
+Task 8: complete (child commits fa726bd7..a5519146, real Godot 4.7.2/GUT 9.7.1 Scale passed, Release build clean, Lead inline review clean)
+Task 9: fix round 1 (1 addressed, 0 open — corrected F# project execution versus missing extractor-backed source-impact mapping; commits d3a997cc..206cab82)
+Task 9: documentation slice complete (commits a5519146..206cab82, focused site test and diff check green, Lead scoped re-review clean; branch gate pending)
+Release audit correction: fix round 1 (parity oracle now models same-parent overload fallback at 0.4 with self-exclusion; synthetic RED/GREEN and 33 Reader + 12 Graph + 106 Trace tests passed; commits 206cab82..48a83fa1)
+Release audit correction: fix round 2 (self-exclusion mutation now covered by literal sibling/self assertions; 33 Reader tests passed; commits 48a83fa1..151ecace, Lead scoped re-review clean)

@@ -510,7 +510,8 @@ the user project remains untouched and warm runs skip import when the stamp dige
 **Files:**
 - Modify: `docs/continuous-testing.md` (framework table at line 21 + per-provider bounds
   sections), `docs/known-limits.md` (CT framework limits), `docs/site/index.html` (framework
-  mentions, if the shipped list appears there)
+  mentions, if the shipped list appears there), `README.md` (public provider matrix), and
+  `docs/release-notes/v1.27.0.md` (new provider release summary)
 
 **Interfaces:**
 - Consumes: the shipped surface of Tasks 3–8, including any recorded adaptations.
@@ -521,7 +522,7 @@ per-class cases, GUT per-script cases, `minitest`/`gdunit4` refusal reasons and 
 resolution order, and minimum tool versions from Task 1.
 
 **File ownership:** Modify: `docs/continuous-testing.md`, `docs/known-limits.md`,
-`docs/site/index.html`
+`docs/site/index.html`, `README.md`, `docs/release-notes/v1.27.0.md`
 
 **Serialization required:** Yes
 
@@ -533,11 +534,11 @@ Update the remaining-gap list (swift, dart, elixir, erlang, c/c++/ctest, zig, lu
 remain unprovided — keep the honest inventory).
 
 **Acceptance criteria:**
-- [ ] Framework table matches `ContinuousTestProviderFactory.CreateDefault` exactly.
-- [ ] Every v1 bound and refusal is documented with its remedy.
+- [x] Framework table matches `ContinuousTestProviderFactory.CreateDefault` exactly.
+- [x] Every v1 bound and refusal is documented with its remedy.
 - [ ] Branch gate runs here: Release build, `scripts/test.sh scale` (skips recorded), win-test
       fast suite. Ledger updated.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ## Estimate
 
