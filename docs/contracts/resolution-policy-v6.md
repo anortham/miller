@@ -21,6 +21,7 @@ An edge is a pending relationship or a bare identifier.
 | name | `identifiers.name` | `target_terminal_name` |
 | receiver | `json_extract(metadata_json,'$.receiver')` | `target_receiver` |
 | receiverQualifier | `json_extract(metadata_json,'$.receiver_qualifier')` | `target_namespace_json` array joined with `.` (empty/unparseable ⇒ none) |
+| receiverType | `json_extract(metadata_json,'$.receiver_type')` | `json_extract(metadata_json,'$.receiver_type')` |
 | callerScopeSymbolId | `identifiers.containing_symbol_id` | `caller_scope_symbol_id` |
 | sourceConfidence | `identifiers.confidence` | `pending_relationships.confidence` |
 
@@ -78,6 +79,12 @@ ES-module languages: `javascript, jsx, typescript, tsx`. Tier-2 languages: `type
 javascript` exactly.
 
 ## Tier chains per (origin, refKind, hasReceiver)
+
+`hasReceiver` is true when `receiver` OR `receiverType` is non-empty. `receiverType` is the
+extractor's base type name for a self-style receiver (`this`, `self`, `super`, `base`, `$this`, a
+Go/Zig/Lua receiver parameter, ...); julie-extract ≥ 2.39.0 records it on identifier and pending
+call sites. A site that carries `receiverType` has a receiver by definition, even when the
+extractor left `receiver` empty.
 
 | origin, kind | condition | chain |
 |---|---|---|
@@ -137,12 +144,16 @@ import has a `source` but no resolved `module_version`, skip the import. Candida
 named `target`, same language, tier-1-3 kinds, and (when `module_version` is set) in that
 version. No module-wide branch: a named import authorizes only its own binding.
 
-**Tier 3 Receiver:** requires a receiver. Find receiver symbols by scope walk (name+language
-filter, no kinds). For each receiver symbol, for each of its `type_facts`: find the UNIQUE
-symbol with `name == resolved_type` (verbatim — no namespace or generic stripping), same
-language, kind ∈ TYPE_LIKE; 0 or ≥2 ⇒ the fact contributes nothing. Candidates: the type's
-DIRECT children (no base-class walk) named `name`, same language, tier-1-3 kinds. Confidence
-0.65 when the contributing fact `is_inferred`, else 0.75; dedupe keeps the max.
+**Tier 3 Receiver:** requires a receiver. Two sources feed one candidate set; both bind a type
+name the same way: the UNIQUE symbol with `name == <type name>` (verbatim — no namespace or
+generic stripping), same language, kind ∈ TYPE_LIKE; 0 or ≥2 ⇒ that type name contributes
+nothing. Candidates: the type's DIRECT children (no base-class walk) named `name`, same
+language, tier-1-3 kinds; dedupe keeps the max.
+1. `receiverType` (when set) binds directly at 0.75. No scope walk: the extractor already named
+   the enclosing type (or, for `super`/`base`, the declared base type).
+2. `receiver` (when set): find receiver symbols by scope walk (name+language filter, no kinds).
+   For each receiver symbol, for each of its `type_facts`, bind `resolved_type`. Confidence 0.65
+   when the contributing fact `is_inferred`, else 0.75.
 
 **Tier 3 StaticType:** requires a receiver; runs for every language. Ordered refusals:
 1. Scope binds the receiver name ⇒ refuse. Walk the scope chain; STOP and pass at the first
@@ -160,7 +171,9 @@ DIRECT children (no base-class walk) named `name`, same language, tier-1-3 kinds
    namespace path segment-for-segment — declared path = names of namespace/module ancestors
    root-first, EACH SPLIT ON `.` (C# emits dotted namespace names as one symbol); `global` and
    empty segments dropped from the qualifier; empty qualifier always matches. Same file ⇒ OK;
-   cross-file requires the type's `visibility == "public"` exactly.
+   cross-file requires the type's `visibility` to be exactly `public` or `internal` (`internal`
+   reaches every file of the same compilation unit; C# top-level types default to it, so
+   refusing it hid most in-repo static calls). Null and every other value refuse.
 4. Import corroboration: same file ⇒ pass; non-ES-module language ⇒ pass; else some import must
    bind the type (not type-only/namespace/default, `local_name == receiver`,
    `module_version == type's version`, `imported_name ?? local_name == type.name`).
@@ -206,5 +219,9 @@ policy. Pending rows are sparse: only Resolved pendings produce an edge.
 - pending Resolved ⇒ edge `from_symbol → target`, kind = `pending_relationships.kind`,
   confidence `min(pending.confidence, outcome confidence)`, reason `pending_resolution`.
 - `relationships` rows remain their own edge source (reason `relationship`), as today.
-- The unresolved-name fallback (globally unique name, confidence × 0.5, reason
-  `identifier_name`) applies only to identifiers whose outcome is not Resolved.
+- The unresolved-name fallback applies to identifiers and pending relationships whose outcome
+  is not Resolved (a pending suppresses its site's identifier, so exactly one of the two
+  contributes). A globally unique name gets one edge (site confidence × 0.5, reason
+  `identifier_name`). A name whose symbols all share one non-null declaring parent (an overload
+  set) gets an edge per member except the site's own container (site confidence × 0.4, same
+  reason). Any other duplicate name gets no fallback edge.

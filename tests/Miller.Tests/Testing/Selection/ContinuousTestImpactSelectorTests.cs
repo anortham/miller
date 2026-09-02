@@ -2017,6 +2017,62 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     }
 
     [Fact]
+    public void Select_ignores_identifier_references_from_an_unstored_sibling_test_symbol()
+    {
+        using ContinuousTestStore store = OpenStore();
+        SeedLinkedCase(
+            store,
+            "tc:adds",
+            "sym:test-adds",
+            "tests/payments/test_service.cs",
+            "test_adds",
+            typedIdentity: true);
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:test-adds", "test_adds", "tests/payments/test_service.cs", isTest: true));
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:test-positive", "test_positive", "tests/payments/test_service.cs", isTest: true));
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:value", "value", "tests/payments/test_service.cs", kind: "variable"));
+        AddCurrentFileFacts(facts, "tests/payments/test_service.cs");
+        facts.Identifiers.Add(FakeMillerFactSource.Identifier(
+            "sym:test-positive",
+            "sym:value",
+            "tests/payments/test_service.cs"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["tests/payments/test_service.cs"]));
+
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+        Assert.Equal(["tc:adds"], result.SelectedTestCaseIds);
+        Assert.DoesNotContain(result.Evidence, row => row.Tier == "identifier_reference");
+    }
+
+    [Fact]
+    public void Select_trusts_a_resolved_test_symbol_as_the_backing_file_when_the_path_looks_plain()
+    {
+        using ContinuousTestStore store = OpenStore();
+        SeedLinkedCase(store, "tc:adds", "sym:adds", "UnitTests.vb", "Adds", language: "vbnet", typedIdentity: true);
+        var facts = new FakeMillerFactSource();
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:adds", "Adds", "UnitTests.vb", isTest: true, language: "vbnet", kind: "method"));
+        facts.Symbols.Add(FakeMillerFactSource.Symbol(
+            "sym:first", "first", "UnitTests.vb", language: "vbnet", kind: "variable"));
+        AddCurrentFileFacts(facts, "UnitTests.vb");
+        facts.Identifiers.Add(FakeMillerFactSource.Identifier("sym:adds", "sym:first", "UnitTests.vb"));
+        var selector = new ContinuousTestImpactSelector(store, facts);
+
+        ContinuousTestSelectionResult result = selector.Select(new ContinuousTestImpactSelectionRequest(
+            WorkspaceId: Workspace,
+            ChangedPaths: ["UnitTests.vb"]));
+
+        Assert.Equal(ContinuousTestSelectionOutcome.Impacted, result.Outcome);
+        Assert.Equal(["tc:adds"], result.SelectedTestCaseIds);
+    }
+
+    [Fact]
     public void Select_prioritizes_test_cases_in_changed_test_files()
     {
         using ContinuousTestStore store = OpenStore();

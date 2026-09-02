@@ -48,6 +48,39 @@ public sealed class MarkerSearchTests
     }
 
     [Fact]
+    public void Run_ReturnsRazorbackFactsWithDefaultVocabulary()
+    {
+        using var fixture = JulieDbFixture.CreateDefault();
+        fixture.AddStructuralFact(
+            "marker-razorback",
+            null,
+            "src/Locks.cs",
+            patternId: "code.marker.v1",
+            captureName: "marker",
+            nodeKind: "comment",
+            metadataJson: """{"marker":"RAZORBACK","description":"global lock, per-account locks if throughput matters"}""");
+
+        string output = MarkerSearch.Run(
+            fixture.DbPath,
+            MarkerSearch.ParseMarkers(null),
+            50,
+            excludeTests: false,
+            json: true,
+            compactBanner: null,
+            filePattern: null,
+            language: null,
+            out int count);
+
+        Assert.Equal(1, count);
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement row = Assert.Single(document.RootElement.EnumerateArray());
+        Assert.Equal("RAZORBACK", row.GetProperty("marker").GetString());
+        Assert.Equal(
+            "RAZORBACK: global lock, per-account locks if throughput matters",
+            row.GetProperty("snippet").GetString());
+    }
+
+    [Fact]
     public void Run_AppliesMarkerPathAndLanguageFilters()
     {
         using var fixture = JulieDbFixture.CreateDefault();
@@ -185,8 +218,9 @@ public sealed class MarkerSearchTests
     }
 
     [Theory]
-    [InlineData(null, new[] { "TODO", "FIXME", "HACK", "XXX" })]
+    [InlineData(null, new[] { "TODO", "FIXME", "HACK", "XXX", "RAZORBACK" })]
     [InlineData("fixme,todo", new[] { "FIXME", "TODO" })]
+    [InlineData("razorback", new[] { "RAZORBACK" })]
     public void ParseMarkers_NormalizesAllowedVocabulary(string? value, string[] expected) =>
         Assert.Equal(expected, MarkerSearch.ParseMarkers(value));
 
@@ -195,6 +229,6 @@ public sealed class MarkerSearchTests
     {
         InvalidOperationException exception =
             Assert.Throws<InvalidOperationException>(() => MarkerSearch.ParseMarkers("NOTE"));
-        Assert.Contains("TODO, FIXME, HACK, or XXX", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("TODO, FIXME, HACK, XXX, or RAZORBACK", exception.Message, StringComparison.Ordinal);
     }
 }

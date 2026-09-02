@@ -514,7 +514,11 @@ public sealed class ContinuousTestImpactSelector
             .ToArray();
         return matches.Length switch
         {
-            1 => testCase with { SymbolId = matches[0].SymbolId },
+            1 => testCase with
+            {
+                SymbolId = matches[0].SymbolId,
+                FileRole = testCase.FileRole ?? (matches[0].IsTest ? "test" : null),
+            },
             > 1 => testCase with { IdentityAmbiguous = true },
             _ => testCase with { IdentityUnresolved = true },
         };
@@ -1409,8 +1413,10 @@ public sealed class ContinuousTestImpactSelector
 
             if (!testCaseBySymbolId.TryGetValue(reference.SourceSymbolId, out TestCaseFact? testCase))
             {
+                symbolById.TryGetValue(reference.SourceSymbolId, out SymbolFact? source);
                 TestCaseFact[] candidates = allTestCases
-                    .Where(row => PathsEqual(row.SymbolPath ?? row.SourcePath ?? row.FilePath, reference.FilePath))
+                    .Where(row => PathsEqual(row.SymbolPath ?? row.SourcePath ?? row.FilePath, reference.FilePath)
+                        && (source is null || TestNameMatches(source.Name, row)))
                     .ToArray();
                 if (candidates.Length != 1)
                     continue;

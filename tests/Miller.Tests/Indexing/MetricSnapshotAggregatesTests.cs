@@ -54,14 +54,19 @@ public sealed class MetricSnapshotAggregatesTests
         fx.AddStructuralFact(
             "r4", null, "src/D.cs", patternId: MarkerFactReader.PatternId,
             captureName: "marker", nodeKind: "comment", metadataJson: """{"marker":"FIXME"}""");
+        fx.AddStructuralFact(
+            "r5", null, "src/E.cs", patternId: MarkerFactReader.PatternId,
+            captureName: "marker", nodeKind: "comment", metadataJson: """{"marker":"RAZORBACK"}""");
 
         IReadOnlyList<MetricHistoryPoint> metrics =
             MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath);
 
         MetricHistoryPoint marker = Assert.Single(
             metrics, m => m.Metric == MetricSnapshotAggregates.MarkerTotal);
-        Assert.Equal(4d, marker.Value);
-        Assert.Equal("{\"TODO\":2,\"FIXME\":2,\"HACK\":0,\"XXX\":0}", marker.DetailJson);
+        Assert.Equal(5d, marker.Value);
+        Assert.Equal(
+            "{\"TODO\":2,\"FIXME\":2,\"HACK\":0,\"XXX\":0,\"RAZORBACK\":1}",
+            marker.DetailJson);
     }
 
     [Fact]
@@ -96,7 +101,9 @@ public sealed class MetricSnapshotAggregatesTests
         MetricHistoryPoint marker = Assert.Single(
             metrics, m => m.Metric == MetricSnapshotAggregates.MarkerTotal);
         Assert.Equal(501d, marker.Value);
-        Assert.Equal("{\"TODO\":501,\"FIXME\":0,\"HACK\":0,\"XXX\":0}", marker.DetailJson);
+        Assert.Equal(
+            "{\"TODO\":501,\"FIXME\":0,\"HACK\":0,\"XXX\":0,\"RAZORBACK\":0}",
+            marker.DetailJson);
     }
 
     [Fact]

@@ -51,7 +51,7 @@ workspace(workspace_id="<id>", operation="refresh")
 | Find docs/config prose | `search(query="...", mode="content")` |
 | Find source-body text | `search(query="...", mode="source")` |
 | Find text in comments/strings | `search(query="...", regions="comment,doc_comment,string_literal")` |
-| Audit TODO/FIXME/HACK/XXX | `search(query="TODO,FIXME,HACK,XXX", mode="markers")` |
+| Audit TODO/FIXME/HACK/XXX/RAZORBACK | `search(query="TODO,FIXME,HACK,XXX,RAZORBACK", mode="markers")` |
 | Read a file you can name | `inspect(target="<file>")` |
 | Understand a symbol first | `inspect(target="<symbol>", depth="overview")` |
 | Need complete body or complete relations | `inspect(target="<symbol>", depth="full")` |

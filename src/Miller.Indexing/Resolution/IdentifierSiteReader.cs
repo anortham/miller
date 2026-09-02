@@ -11,6 +11,7 @@ internal sealed record IdentifierSite(
     string Kind,
     string? Receiver,
     string? ReceiverQualifier,
+    string? ReceiverType,
     string? ContainingSymbolId,
     double Confidence,
     long StartByte,
@@ -169,7 +170,7 @@ internal static class IdentifierSiteReader
         while (reader.Read())
         {
             string? metadata = reader.IsDBNull(10) ? null : reader.GetString(10);
-            (string? receiver, string? qualifier) = FactMetadataParser.IdentifierReceivers(metadata);
+            (string? receiver, string? qualifier, string? receiverType) = FactMetadataParser.IdentifierReceivers(metadata);
             rows.Add(new IdentifierSite(
                 reader.GetInt64(0),
                 reader.GetInt64(1),
@@ -178,6 +179,7 @@ internal static class IdentifierSiteReader
                 reader.GetString(4),
                 receiver,
                 qualifier,
+                receiverType,
                 reader.IsDBNull(5) ? null : reader.GetString(5),
                 reader.IsDBNull(6) ? 1.0 : reader.GetDouble(6),
                 reader.IsDBNull(7) ? 0 : reader.GetInt64(7),

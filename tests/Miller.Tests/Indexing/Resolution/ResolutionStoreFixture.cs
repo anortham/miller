@@ -272,8 +272,12 @@ internal sealed class ResolutionStoreFixture : IDisposable
         bool siteExact = true,
         bool siteSpanless = false,
         long? siteStartColumn = null,
-        long? siteEndColumn = null)
+        long? siteEndColumn = null,
+        string? receiver = null,
+        string? metadataJson = null)
     {
+        string receiverSql = receiver is null ? "NULL" : $"'{Escape(receiver)}'";
+        string meta = metadataJson is null ? "NULL" : $"'{Escape(metadataJson)}'";
         string start = startByte is { } sb ? sb.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
         string end = endByte is { } eb ? eb.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
         ExecuteWrite(
@@ -284,7 +288,7 @@ internal sealed class ResolutionStoreFixture : IDisposable
               start_line,start_column,end_line,end_column,start_byte,end_byte,confidence,metadata_json)
             VALUES (
               {versionId},'{Escape(pendingId)}','site-{Escape(pendingId)}','{Escape(fromSymbolId)}',NULL,'{Escape(path)}',
-              '{Escape(kind)}','{Escape(name)}','{Escape(name)}',NULL,'[]',NULL,{startLine},1,{startLine},4,{start},{end},1.0,NULL);
+              '{Escape(kind)}','{Escape(name)}','{Escape(name)}',{receiverSql},'[]',NULL,{startLine},1,{startLine},4,{start},{end},1.0,{meta});
             INSERT OR REPLACE INTO reference_sites (
               version_id,reference_site_id,path,language,containing_symbol_id,
               start_line,start_column,end_line,end_column,start_byte,end_byte,is_exact,provenance)

@@ -41,7 +41,7 @@ When `--metric` is omitted, the default set is one rollup per signal family:
 | `symbol_count` | `converge` | Named symbols in the artifact. |
 | `complexity_p90` | `converge` | 90th-percentile `decision_count` over `complexity_metrics`. |
 | `clone_group_count` | `converge` | Body-hash groups with ≥ 2 members. |
-| `marker_total` | `converge` | Distinct comment regions containing a TODO/FIXME/HACK/XXX marker. |
+| `marker_total` | `converge` | Distinct comment regions containing a TODO/FIXME/HACK/XXX/RAZORBACK marker. |
 
 Any metric name recorded by any write arm may be requested via `--metric`, including heavy-arm names not
 in the default set (`churn_files_changed`, `risk_top_score`, `risk_rows`,

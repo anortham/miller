@@ -18,7 +18,7 @@ public sealed class QueryTimeResolver(IResolutionFacts facts)
             && string.Equals(input.Language, "qml", StringComparison.Ordinal))
             return ResolveQmlInstantiation(input);
 
-        bool hasReceiver = input.Receiver is { Length: > 0 };
+        bool hasReceiver = input.Receiver is { Length: > 0 } || input.ReceiverType is { Length: > 0 };
         IReadOnlyList<ResolutionTier> chain = ResolutionPolicy.Chain(input.Origin, input.RefKind, hasReceiver);
         if (chain.Count == 0)
             return ResolutionOutcome.NoContext;
@@ -131,31 +131,45 @@ public sealed class QueryTimeResolver(IResolutionFacts facts)
     private Dictionary<FactSymbolKey, double> ReceiverCandidates(ResolutionInput input)
     {
         var acc = new Dictionary<FactSymbolKey, double>();
+        IReadOnlySet<FactSymbolKind> kinds = ResolutionPolicy.CompatibleKinds(input.RefKind, tier4: false);
+
+        if (input.ReceiverType is { Length: > 0 } receiverType)
+            AddReceiverTypeMembers(acc, input, receiverType, ResolutionPolicy.ReceiverDeclaredConfidence, kinds);
+
         if (input.Receiver is not { Length: > 0 })
             return acc;
 
-        IReadOnlySet<FactSymbolKind> kinds = ResolutionPolicy.CompatibleKinds(input.RefKind, tier4: false);
         foreach (FactSymbol receiver in ScopeLevels(input.VersionId, input.CallerScopeSymbolId, input.Receiver, input.Language, kinds: null))
         {
             foreach (FactTypeFact fact in facts.TypeFactsOf(receiver.Key))
             {
-                FactSymbol? type = UniqueType(fact.ResolvedType, input.Language, ResolutionPolicy.TypeLike);
-                if (type is null)
-                    continue;
-
                 double confidence = fact.IsInferred
                     ? ResolutionPolicy.ReceiverInferredConfidence
                     : ResolutionPolicy.ReceiverDeclaredConfidence;
-                foreach (FactSymbol member in facts.ChildrenOf(type.Key))
-                {
-                    if (member.Name != input.Name || member.Language != input.Language || !kinds.Contains(member.Kind))
-                        continue;
-                    KeepMax(acc, member.Key, confidence);
-                }
+                AddReceiverTypeMembers(acc, input, fact.ResolvedType, confidence, kinds);
             }
         }
 
         return acc;
+    }
+
+    private void AddReceiverTypeMembers(
+        Dictionary<FactSymbolKey, double> acc,
+        ResolutionInput input,
+        string typeName,
+        double confidence,
+        IReadOnlySet<FactSymbolKind> kinds)
+    {
+        FactSymbol? type = UniqueType(typeName, input.Language, ResolutionPolicy.TypeLike);
+        if (type is null)
+            return;
+
+        foreach (FactSymbol member in facts.ChildrenOf(type.Key))
+        {
+            if (member.Name != input.Name || member.Language != input.Language || !kinds.Contains(member.Kind))
+                continue;
+            KeepMax(acc, member.Key, confidence);
+        }
     }
 
     private Dictionary<FactSymbolKey, double> StaticTypeCandidates(ResolutionInput input)
@@ -437,8 +451,10 @@ public sealed class QueryTimeResolver(IResolutionFacts facts)
 
         if (type.Key.VersionId == fromVersion)
             return true;
-        return type.Visibility == "public";
+        return TypeCrossFileVisible(type);
     }
+
+    private static bool TypeCrossFileVisible(FactSymbol type) => type.Visibility is "public" or "internal";
 
     private List<string> DeclaredNamespacePath(FactSymbol type)
     {

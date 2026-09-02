@@ -218,15 +218,30 @@ internal sealed class QueryTimeResolutionReader
             {
                 foreach (ResolvedIdentifier identifier in scratch.IdentifiersByContainer(candidateId))
                 {
-                    if (!TryUniqueNameTarget(scratch, identifier, out string targetId))
-                        continue;
-                    edges.Add(new FamilyGraphUnresolvedNameEdge(
-                        candidateId,
-                        identifier.ContainingSymbolId!,
-                        targetId,
-                        identifier.Kind,
-                        identifier.Confidence * 0.5,
-                        "identifier_name"));
+                    foreach ((string targetId, double multiplier) in NameFallbackTargets(scratch, identifier))
+                    {
+                        edges.Add(new FamilyGraphUnresolvedNameEdge(
+                            candidateId,
+                            identifier.ContainingSymbolId!,
+                            targetId,
+                            identifier.Kind,
+                            identifier.Confidence * multiplier,
+                            "identifier_name"));
+                    }
+                }
+
+                foreach (ResolvedPending pending in scratch.PendingsByFrom(candidateId))
+                {
+                    foreach ((string targetId, double multiplier) in NameFallbackTargets(scratch, pending))
+                    {
+                        edges.Add(new FamilyGraphUnresolvedNameEdge(
+                            candidateId,
+                            pending.FromSymbolId,
+                            targetId,
+                            pending.Kind,
+                            pending.Confidence * multiplier,
+                            "identifier_name"));
+                    }
                 }
             }
 
@@ -234,19 +249,36 @@ internal sealed class QueryTimeResolutionReader
             {
                 foreach (ResolvedIdentifier identifier in scratch.IdentifiersNamed(candidate.Name))
                 {
-                    if (!TryUniqueNameTarget(scratch, identifier, out string targetId)
-                        || !string.Equals(targetId, candidateId, StringComparison.Ordinal))
+                    foreach ((string targetId, double multiplier) in NameFallbackTargets(scratch, identifier))
                     {
-                        continue;
-                    }
+                        if (!string.Equals(targetId, candidateId, StringComparison.Ordinal))
+                            continue;
 
-                    edges.Add(new FamilyGraphUnresolvedNameEdge(
-                        candidateId,
-                        identifier.ContainingSymbolId!,
-                        candidateId,
-                        identifier.Kind,
-                        identifier.Confidence * 0.5,
-                        "identifier_name"));
+                        edges.Add(new FamilyGraphUnresolvedNameEdge(
+                            candidateId,
+                            identifier.ContainingSymbolId!,
+                            candidateId,
+                            identifier.Kind,
+                            identifier.Confidence * multiplier,
+                            "identifier_name"));
+                    }
+                }
+
+                foreach (ResolvedPending pending in scratch.PendingsNamed(candidate.Name))
+                {
+                    foreach ((string targetId, double multiplier) in NameFallbackTargets(scratch, pending))
+                    {
+                        if (!string.Equals(targetId, candidateId, StringComparison.Ordinal))
+                            continue;
+
+                        edges.Add(new FamilyGraphUnresolvedNameEdge(
+                            candidateId,
+                            pending.FromSymbolId,
+                            candidateId,
+                            pending.Kind,
+                            pending.Confidence * multiplier,
+                            "identifier_name"));
+                    }
                 }
             }
         }
@@ -813,7 +845,8 @@ internal sealed class QueryTimeResolutionReader
             site.Receiver,
             site.ReceiverQualifier,
             site.ContainingSymbolId,
-            site.Confidence));
+            site.Confidence,
+            ReceiverType: site.ReceiverType));
         return new ResolvedIdentifier(site, details, outcome, skip, source);
     }
 
@@ -834,7 +867,8 @@ internal sealed class QueryTimeResolutionReader
             site.ReceiverQualifier,
             site.CallerScopeSymbolId,
             site.Confidence,
-            site.Path));
+            site.Path,
+            site.ReceiverType));
         return new ResolvedPending(site, outcome);
     }
 
@@ -868,7 +902,8 @@ internal sealed class QueryTimeResolutionReader
                     SELECT f.rowid,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                            p.kind,p.target_terminal_name,p.target_display_name,p.target_receiver,p.target_namespace_json,
                            p.confidence,p.reference_site_id,COALESCE(s.path,p.path),COALESCE(s.language,f.language),
-                           s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
+                           s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id,
+                       p.metadata_json
                     FROM pending_relationships AS p
                     JOIN files AS f ON f.file_id=p.file_id
                     LEFT JOIN reference_sites AS s ON s.reference_site_id=p.reference_site_id
@@ -880,7 +915,8 @@ internal sealed class QueryTimeResolutionReader
                     SELECT p.version_id,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                            p.kind,p.target_terminal_name,p.target_display_name,p.target_receiver,p.target_namespace_json,
                            p.confidence,p.reference_site_id,COALESCE(s.path,p.path),COALESCE(s.language,e.language),
-                           s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
+                           s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id,
+                       p.metadata_json
                     FROM main.pending_relationships AS p
                     JOIN main.manifest_entries AS e ON e.version_id=p.version_id
                     LEFT JOIN main.reference_sites AS s
@@ -905,7 +941,8 @@ internal sealed class QueryTimeResolutionReader
                 SELECT f.rowid,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                        p.kind,p.target_terminal_name,p.target_display_name,p.target_receiver,p.target_namespace_json,
                        p.confidence,p.reference_site_id,COALESCE(s.path,p.path),COALESCE(s.language,f.language),
-                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
+                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id,
+                       p.metadata_json
                 FROM pending_relationships AS p
                 JOIN files AS f ON f.file_id=p.file_id
                 LEFT JOIN reference_sites AS s ON s.reference_site_id=p.reference_site_id
@@ -916,7 +953,8 @@ internal sealed class QueryTimeResolutionReader
                 SELECT p.version_id,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                        p.kind,p.target_terminal_name,p.target_display_name,p.target_receiver,p.target_namespace_json,
                        p.confidence,p.reference_site_id,COALESCE(s.path,p.path),COALESCE(s.language,e.language),
-                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
+                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id,
+                       p.metadata_json
                 FROM main.pending_relationships AS p
                 JOIN main.manifest_entries AS e ON e.version_id=p.version_id
                 LEFT JOIN main.reference_sites AS s
@@ -938,7 +976,8 @@ internal sealed class QueryTimeResolutionReader
                 SELECT f.rowid,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                        p.kind,p.target_terminal_name,p.target_display_name,p.target_receiver,p.target_namespace_json,
                        p.confidence,p.reference_site_id,COALESCE(s.path,p.path),COALESCE(s.language,f.language),
-                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
+                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id,
+                       p.metadata_json
                 FROM pending_relationships AS p
                 JOIN files AS f ON f.file_id=p.file_id
                 LEFT JOIN reference_sites AS s ON s.reference_site_id=p.reference_site_id
@@ -948,7 +987,8 @@ internal sealed class QueryTimeResolutionReader
                 SELECT p.version_id,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                        p.kind,p.target_terminal_name,p.target_display_name,p.target_receiver,p.target_namespace_json,
                        p.confidence,p.reference_site_id,COALESCE(s.path,p.path),COALESCE(s.language,e.language),
-                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id
+                       s.start_line,s.start_column,s.end_line,s.end_column,s.start_byte,s.end_byte,s.is_exact,s.provenance,s.containing_symbol_id,
+                       p.metadata_json
                 FROM main.pending_relationships AS p
                 JOIN main.manifest_entries AS e ON e.version_id=p.version_id
                 LEFT JOIN main.reference_sites AS s
@@ -1293,24 +1333,47 @@ internal sealed class QueryTimeResolutionReader
         }
     }
 
-    private static bool TryUniqueNameTarget(
+    private const double UniqueNameFallbackMultiplier = 0.5;
+    private const double OverloadSetFallbackMultiplier = 0.4;
+
+    private static IReadOnlyList<(string TargetId, double Multiplier)> NameFallbackTargets(
         QueryScratch scratch,
-        ResolvedIdentifier identifier,
-        out string targetId)
+        ResolvedIdentifier identifier)
     {
-        targetId = string.Empty;
         if (identifier.Skip
             || identifier.Outcome.Kind == ResolutionOutcomeKind.Resolved
             || identifier.ContainingSymbolId is null)
         {
-            return false;
+            return [];
         }
 
-        string? unique = scratch.UniqueSymbolId(identifier.Name);
-        if (unique is null || string.Equals(identifier.ContainingSymbolId, unique, StringComparison.Ordinal))
-            return false;
-        targetId = unique;
-        return true;
+        return NameFallbackTargets(scratch, identifier.Name, identifier.ContainingSymbolId);
+    }
+
+    private static IReadOnlyList<(string TargetId, double Multiplier)> NameFallbackTargets(
+        QueryScratch scratch,
+        ResolvedPending pending) =>
+        pending.Outcome.Kind == ResolutionOutcomeKind.Resolved
+            ? []
+            : NameFallbackTargets(scratch, pending.Name, pending.FromSymbolId);
+
+    private static IReadOnlyList<(string TargetId, double Multiplier)> NameFallbackTargets(
+        QueryScratch scratch,
+        string name,
+        string fromSymbolId)
+    {
+        (IReadOnlyList<string> ids, bool unique) = scratch.NameFallbackSet(name);
+        if (ids.Count == 0)
+            return [];
+
+        double multiplier = unique ? UniqueNameFallbackMultiplier : OverloadSetFallbackMultiplier;
+        var targets = new List<(string, double)>(ids.Count);
+        foreach (string id in ids)
+        {
+            if (!string.Equals(fromSymbolId, id, StringComparison.Ordinal))
+                targets.Add((id, multiplier));
+        }
+        return targets;
     }
 
     private static string TargetName(QueryScratch scratch, string symbolId, string fallback) =>
@@ -1696,7 +1759,8 @@ internal sealed class QueryTimeResolutionReader
                 ReadNullableInt64(reader, 18),
                 hasSite && reader.GetInt64(19) == 1,
                 hasSite ? reader.GetString(20) : string.Empty,
-                reader.IsDBNull(21) ? null : reader.GetString(21)));
+                reader.IsDBNull(21) ? null : reader.GetString(21),
+                FactMetadataParser.ReceiverType(reader.IsDBNull(22) ? null : reader.GetString(22))));
         }
 
         return rows;
@@ -1833,7 +1897,8 @@ internal sealed class QueryTimeResolutionReader
         long? EndByte,
         bool IsExact,
         string SiteProvenance,
-        string? SiteContainingSymbolId)
+        string? SiteContainingSymbolId,
+        string? ReceiverType)
     {
         internal string EvidenceContainerId => CallerScopeSymbolId ?? FromSymbolId;
     }
@@ -2026,6 +2091,36 @@ internal sealed class QueryTimeResolutionReader
             }
 
             return unique;
+        }
+
+        // Name-fallback edge set: a globally unique name, or an overload set — every symbol
+        // sharing the name declared under one non-null parent (resolution-policy-v6).
+        internal (IReadOnlyList<string> Ids, bool Unique) NameFallbackSet(string name)
+        {
+            List<string>? ids = null;
+            FactSymbolKey? sharedParent = null;
+            bool sameParent = true;
+            foreach (FactSymbol symbol in _cache.SymbolsNamed(name))
+            {
+                if (ids is null)
+                {
+                    ids = [symbol.Key.SymbolId];
+                    sharedParent = symbol.Parent;
+                    continue;
+                }
+
+                if (ids.Contains(symbol.Key.SymbolId))
+                    continue;
+                ids.Add(symbol.Key.SymbolId);
+                if (sharedParent is null || !sharedParent.Equals(symbol.Parent))
+                    sameParent = false;
+            }
+
+            if (ids is null)
+                return ([], false);
+            if (ids.Count == 1)
+                return (ids, true);
+            return sameParent && sharedParent is not null ? (ids, false) : ([], false);
         }
 
         private static Dictionary<string, List<T>> Group<T>(IEnumerable<T> rows, Func<T, string?> key)

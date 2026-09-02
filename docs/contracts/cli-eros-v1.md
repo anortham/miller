@@ -49,7 +49,7 @@ Current `json_commands` include:
 | `workspace open --json` | Register and index a workspace from the CLI. |
 | `workspace remove --json` | Delete a registered workspace `.miller` index directory and unregister it. |
 | `search --json` | Symbol/default search, marker audits, or explicit content/source/external/web/all-text search results. |
-| `todos --json` | CLI compatibility alias for bounded TODO/FIXME/HACK/XXX marker audits over comment/doc-comment source regions. |
+| `todos --json` | CLI compatibility alias for bounded TODO/FIXME/HACK/XXX/RAZORBACK marker audits over comment/doc-comment source regions. |
 | `inspect --json` | File/symbol summary or full inspect result. |
 | `context --json` | Token-budgeted code bundle. `--reference-mode usage` adds reason/confidence-labeled usage evidence. |
 | `impact --json` | Downstream impact result for a symbol, changed paths, or diff. Index-revision mode is documented by [`impact-index-revision-delta-v1.md`](impact-index-revision-delta-v1.md); bounded graph evidence by [`impact-traversal-evidence-v1.md`](impact-traversal-evidence-v1.md); positive test-role evidence by [`impact-test-role-evidence-v1.md`](impact-test-role-evidence-v1.md). |

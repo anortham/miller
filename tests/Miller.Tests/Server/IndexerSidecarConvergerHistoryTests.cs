@@ -57,7 +57,7 @@ public sealed class IndexerSidecarConvergerHistoryTests
         string historyPath = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
         Assert.Equal(1d, ScalarDouble(historyPath,
             $"SELECT value FROM snapshot_metrics WHERE metric = '{MetricSnapshotAggregates.MarkerTotal}';"));
-        Assert.Equal("{\"TODO\":1,\"FIXME\":0,\"HACK\":0,\"XXX\":0}", ScalarString(historyPath,
+        Assert.Equal("{\"TODO\":1,\"FIXME\":0,\"HACK\":0,\"XXX\":0,\"RAZORBACK\":0}", ScalarString(historyPath,
             $"SELECT detail_json FROM snapshot_metrics WHERE metric = '{MetricSnapshotAggregates.MarkerTotal}';"));
     }
 

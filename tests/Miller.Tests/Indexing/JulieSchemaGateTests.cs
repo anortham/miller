@@ -36,7 +36,7 @@ public sealed class JulieSchemaGateTests
         Assert.Equal(7, MillerExtractContract.ExpectedSqliteSchemaVersion);
         Assert.Equal(4, MillerExtractContract.ExpectedExtractContractVersion);
         Assert.Equal(5, MillerExtractContract.ExpectedJsonlSchemaVersion);
-        Assert.Equal("2.38.2", MillerExtractContract.PinnedJulieExtractVersion);
+        Assert.Equal("2.39.0", MillerExtractContract.PinnedJulieExtractVersion);
     }
 
     private static SqliteConnection OpenReadOnly(string dbPath)

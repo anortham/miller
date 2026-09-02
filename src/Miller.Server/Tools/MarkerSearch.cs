@@ -12,7 +12,7 @@ internal static class MarkerSearch
 {
     internal const int DefaultLimit = 50;
     internal const int MaxLimit = 500;
-    private static readonly string[] DefaultMarkers = ["TODO", "FIXME", "HACK", "XXX"];
+    private static readonly string[] DefaultMarkers = ["TODO", "FIXME", "HACK", "XXX", "RAZORBACK"];
     private static readonly HashSet<string> AllowedMarkers = new(DefaultMarkers, StringComparer.OrdinalIgnoreCase);
 
     internal static string Run(
@@ -163,7 +163,7 @@ internal static class MarkerSearch
         foreach (string marker in parts)
         {
             if (!AllowedMarkers.Contains(marker))
-                throw new InvalidOperationException("markers must be TODO, FIXME, HACK, or XXX.");
+                throw new InvalidOperationException("markers must be TODO, FIXME, HACK, XXX, or RAZORBACK.");
         }
         return parts;
     }

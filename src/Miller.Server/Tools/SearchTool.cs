@@ -96,7 +96,7 @@ public enum SearchToolMode
     /// <summary>Search all content corpus text kinds. Explicit only; never the default.</summary>
     AllText,
 
-    /// <summary>Audit TODO/FIXME/HACK/XXX markers in comments and doc comments.</summary>
+    /// <summary>Audit TODO/FIXME/HACK/XXX/RAZORBACK markers in comments and doc comments.</summary>
     Markers,
 }
 
@@ -286,7 +286,7 @@ public sealed class SearchTool
         "files. Pass a symbol name, identifier, or natural-language phrase; test code is auto-hidden for phrase " +
         "queries unless exclude_tests=false. Semantic retrieval is on by default; retrieval=lexical performs zero " +
         "vector work for that call, and MILLER_SEMANTIC=off is the permanent process-wide zero-work switch. " +
-        "Modes: mode=markers audits TODO/FIXME/HACK/XXX in comments; " +
+        "Modes: mode=markers audits TODO/FIXME/HACK/XXX/RAZORBACK in comments; " +
         "mode=content (alias docs) searches docs/config prose; mode=source searches source-body text; " +
         "mode=external/web/all-text search imported corpus text. regions=comment,doc_comment,string_literal " +
         "restricts to those source regions. Scope with file_pattern/language/limit. NOT for: a symbol you can " +
@@ -636,7 +636,7 @@ public sealed class SearchTool
 
         IndexLevelGuard.MarkDegraded(telemetry, "facts_layer_converging");
         return IndexLevelGuard.Converging(
-            "TODO/FIXME/HACK/XXX marker facts (code.marker.v1) have not been extracted yet.");
+            "TODO/FIXME/HACK/XXX/RAZORBACK marker facts (code.marker.v1) have not been extracted yet.");
     }
 
     /// <summary>

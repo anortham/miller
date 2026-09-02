@@ -126,7 +126,7 @@ calls and optional only for the CLI.
 - **Scope noisy search**: add `file_pattern=src/ui/**` or `language=typescript`.
 - **Find text only inside comments or strings**: `search "<phrase>" regions=comment` or `regions=string_literal`;
   `MILLER_REGION_INDEX=0` disables this path.
-- **List code markers**: `search mode=markers query=TODO,FIXME,HACK,XXX` for TODO/FIXME/HACK/XXX in comments/doc
+- **List code markers**: `search mode=markers query=TODO,FIXME,HACK,XXX,RAZORBACK` for TODO/FIXME/HACK/XXX/RAZORBACK in comments/doc
   comments; add `file_pattern=src/**` or `language=csharp` to scope the audit.
 - **Dashboard**: if the user asks to start, open, or show the Miller dashboard, call `workspace` with
   `operation=dashboard`. A dashboard request is a tool operation, not a file-finding task. Do not search plugin
@@ -156,7 +156,7 @@ modify code, paste this block into its prompt so it reaches for Miller before ra
     You have Miller MCP tools. Use them before raw shell/file exploration:
     - context(query, ...) for unfamiliar task-shaped orientation.
     - search(query, mode?, regions?, file_pattern?, language?) before rg/grep/find; use mode=content for docs,
-      mode=source/external/web/all-text for content text, mode=markers for TODO/FIXME/HACK/XXX audits,
+      mode=source/external/web/all-text for content text, mode=markers for TODO/FIXME/HACK/XXX/RAZORBACK audits,
       regions=... for comments/strings, and filters to scope.
     - inspect(target, depth?) before reading files/symbols; depth=overview is compact, depth=full is complete.
     - trace(target, mode?, to?, scope?, reference_kind?) before manual file hopping; use refs for usages and scope for ambiguous names. mode=path no-path means not proven unrelated; mode=bridge is provider-scoped to `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, and `backend-http`.

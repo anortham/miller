@@ -6,6 +6,89 @@ namespace Miller.Tests.Core.Resolution;
 public sealed class ReceiverTierTests
 {
     [Fact]
+    public void ReceiverTypeFact_BindsEnclosingTypeMemberAt075()
+    {
+        var facts = ServiceWithPing();
+        var resolver = new QueryTimeResolver(facts);
+
+        ResolutionOutcome outcome = resolver.Resolve(
+            ResolutionCases.Ident(ResolutionRefKind.Call, "Ping", receiver: "this", scope: "run", receiverType: "Service"));
+
+        Assert.Equal(ResolutionOutcomeKind.Resolved, outcome.Kind);
+        Assert.Equal(3, outcome.Tier);
+        Assert.Equal(ResolutionPolicy.ReceiverMethod, outcome.Method);
+        Assert.Equal(0.75, outcome.Confidence);
+        Assert.Equal(new FactSymbolKey(1, "ping"), outcome.Target);
+    }
+
+    [Fact]
+    public void ReceiverTypeFact_PendingCallBindsNamedBaseTypeMember()
+    {
+        var facts = ServiceWithPing();
+        facts.Add("Base", "BaseService", FactSymbolKind.Class);
+        facts.Add("base-ping", "Ping", FactSymbolKind.Method, parentId: "Base");
+        var resolver = new QueryTimeResolver(facts);
+
+        ResolutionOutcome outcome = resolver.Resolve(
+            ResolutionCases.Pend(ResolutionRefKind.Call, "Ping", receiver: "base", scope: "run", receiverType: "BaseService"));
+
+        Assert.Equal(ResolutionOutcomeKind.Resolved, outcome.Kind);
+        Assert.Equal(new FactSymbolKey(1, "base-ping"), outcome.Target);
+    }
+
+    [Fact]
+    public void ReceiverTypeFact_WithoutReceiverName_StillRunsReceiverTier()
+    {
+        var facts = ServiceWithPing();
+        var resolver = new QueryTimeResolver(facts);
+
+        ResolutionOutcome outcome = resolver.Resolve(
+            ResolutionCases.Ident(ResolutionRefKind.Call, "Ping", scope: "run", receiverType: "Service"));
+
+        Assert.Equal(ResolutionOutcomeKind.Resolved, outcome.Kind);
+        Assert.Equal(ResolutionPolicy.ReceiverMethod, outcome.Method);
+        Assert.Equal(new FactSymbolKey(1, "ping"), outcome.Target);
+    }
+
+    [Fact]
+    public void ReceiverTypeFact_AmbiguousTypeName_ContributesNothing()
+    {
+        var facts = ServiceWithPing();
+        facts.Add("Service2", "Service", FactSymbolKind.Class, version: 2);
+        var resolver = new QueryTimeResolver(facts);
+
+        ResolutionOutcome outcome = resolver.Resolve(
+            ResolutionCases.Ident(ResolutionRefKind.Call, "Ping", receiver: "this", scope: "run", receiverType: "Service"));
+
+        Assert.Equal(ResolutionOutcomeKind.Missing, outcome.Kind);
+    }
+
+    [Fact]
+    public void ReceiverTypeFact_DoesNotWalkBaseClasses()
+    {
+        var facts = new MemoryResolutionFacts();
+        facts.Add("Base", "BaseService", FactSymbolKind.Class);
+        facts.Add("base-ping", "Ping", FactSymbolKind.Method, parentId: "Base");
+        facts.Add("Service", "Service", FactSymbolKind.Class);
+        facts.Add("run", "Run", FactSymbolKind.Method, parentId: "Service");
+        var resolver = new QueryTimeResolver(facts);
+
+        ResolutionOutcome outcome = resolver.Resolve(
+            ResolutionCases.Ident(ResolutionRefKind.Call, "Ping", receiver: "this", scope: "run", receiverType: "Service"));
+
+        Assert.Equal(ResolutionOutcomeKind.Missing, outcome.Kind);
+    }
+
+    private static MemoryResolutionFacts ServiceWithPing()
+    {
+        var facts = new MemoryResolutionFacts();
+        facts.Add("Service", "Service", FactSymbolKind.Class);
+        facts.Add("run", "Run", FactSymbolKind.Method, parentId: "Service");
+        facts.Add("ping", "Ping", FactSymbolKind.Method, parentId: "Service");
+        return facts;
+    }
+
+    [Fact]
     public void DeclaredTypeFact_ResolvesDirectChildAt075()
     {
         var facts = BoxWithParse();

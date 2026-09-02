@@ -232,7 +232,7 @@ Text output is a compact human-facing contract and JSON output is the integratio
 - Text headings and ordering are intended to be stable enough for humans and logs, not for strict
   parsers. Use `--json` when a caller needs fields.
 - Search result kinds are deliberately separate: symbol search ranks `name + signature`,
-  `--mode markers` audits TODO/FIXME/HACK/XXX comment markers, `--mode content` searches docs-like file
+  `--mode markers` audits TODO/FIXME/HACK/XXX/RAZORBACK comment markers, `--mode content` searches docs-like file
   content, `--mode source|external|web|all-text` searches explicit content-corpus text, and `--regions`
   searches explicit source regions when region indexing is enabled.
 - `trace --mode refs` returns name-based identifier references for a resolved target symbol. Use

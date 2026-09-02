@@ -312,6 +312,21 @@ public sealed class TraceTool
                 "path_kind must be one of: call, dependency.");
         }
 
+        if (mode == ModePath && output.Contains("trace path destination '", StringComparison.Ordinal))
+        {
+            var destinationActions = new[]
+            {
+                new ToolDiagnosticAction(
+                    $"search(query=\"{ToolDiagnosticText.EscapeCallArgument(to ?? string.Empty)}\", mode=\"symbol\")",
+                    "resolve the path destination symbol"),
+            };
+            return output.Contains("Multiple candidates", StringComparison.Ordinal)
+                ? ToolDiagnostic.Ambiguity(
+                    "unresolved_destination", "Trace path destination is ambiguous.", destinationActions)
+                : ToolDiagnostic.ExpectedEmpty(
+                    "unresolved_destination", "Trace path destination could not be resolved.", destinationActions);
+        }
+
         bool ambiguous = output.Contains("Multiple candidates", StringComparison.Ordinal);
         bool unresolved =
             ambiguous ||
@@ -754,25 +769,34 @@ public sealed class TraceTool
                 ? RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, fromNote!, DiagnosticCode(fromNote!),
                     nextActions: fromNextActions)
                 : AppendNextActions(fromNote!, fromNextActions);
-        if (!ResolveSymbol(index, resolver, to, scope: null, out string toId, out string? toNote, out IReadOnlyList<TraceNextAction> toNextActions))
+        bool toResolved = ResolveSymbol(index, resolver, to, scope: null, out string toId, out string? toNote, out IReadOnlyList<TraceNextAction> _);
+        if (!toResolved && !string.IsNullOrWhiteSpace(scope))
+            toResolved = ResolveSymbol(index, resolver, to, scope, out toId, out toNote, out _);
+        if (!toResolved)
+        {
+            string destinationNote = $"trace path destination '{to}': {toNote}";
+            IReadOnlyList<TraceNextAction> destinationActions =
+                DestinationNextActions(resolver, target, to);
             return json
                 ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId: null, path: null,
                     normalizedPathKind,
-                    note: toNote!, diagnosticCode: DiagnosticCode(toNote!), nextActions: toNextActions)
-                : AppendNextActions(toNote!, toNextActions);
+                    note: destinationNote, diagnosticCode: DiagnosticCode(toNote!), nextActions: destinationActions)
+                : AppendNextActions(destinationNote, destinationActions);
+        }
 
         bool broadDependencyPath = normalizedPathKind == "dependency";
-        GraphPath? graphPath = graph.ShortestPathWithEvidence(
-            fromId,
-            toId,
-            depth,
-            broadDependencyPath ? static _ => true : IsCallLikePathEdge);
+        Func<GraphNeighbour, bool> edgeFilter = broadDependencyPath ? static _ => true : IsCallLikePathEdge;
+        GraphPath? graphPath = graph.ShortestPathWithEvidence(fromId, toId, depth, edgeFilter);
         if (graphPath is null)
         {
+            GraphPath? reversePath = graph.ShortestPathWithEvidence(toId, fromId, depth, edgeFilter);
             string message =
-                $"No path from '{target}' to '{to}' within {depth} hop(s) using path_kind={normalizedPathKind}.";
+                $"No path from '{target}' to '{to}' within {depth} hop(s) using path_kind={normalizedPathKind}." +
+                (reversePath is null
+                    ? " The search walks caller -> callee edges only, and unresolved call sites can hide a real path."
+                    : $" A reverse path exists from '{to}' to '{target}' ({reversePath.Nodes.Count - 1} hop(s)) — retry with the endpoints swapped.");
             IReadOnlyList<TraceNextAction> noPathNextActions =
-                NoPathNextActions(target, to, depth, normalizedPathKind);
+                NoPathNextActions(target, to, depth, normalizedPathKind, reverseExists: reversePath is not null);
             return json
                 ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId, path: null,
                     normalizedPathKind,
@@ -2202,16 +2226,27 @@ public sealed class TraceTool
         string target,
         string to,
         int depth,
-        string pathKind)
+        string pathKind,
+        bool reverseExists)
     {
-        var actions = new List<TraceNextAction>(capacity: 4)
+        var actions = new List<TraceNextAction>(capacity: 4);
+        if (reverseExists)
         {
-            NextAction(
+            actions.Add(NextAction(
                 "trace",
-                "check extracted identifier references from the source endpoint",
-                ("target", target),
-                ("mode", ModeRefs)),
-        };
+                "a reverse path exists; retry with the endpoints swapped",
+                ("target", to),
+                ("mode", ModePath),
+                ("to", target),
+                ("path_kind", pathKind),
+                ("depth", depth.ToString(CultureInfo.InvariantCulture))));
+        }
+
+        actions.Add(NextAction(
+            "trace",
+            "check extracted identifier references from the source endpoint",
+            ("target", target),
+            ("mode", ModeRefs)));
 
         if (!string.Equals(target.Trim(), to.Trim(), StringComparison.OrdinalIgnoreCase))
         {
@@ -2252,6 +2287,32 @@ public sealed class TraceTool
             ("mode", "source")));
 
         return actions.Take(5).ToArray();
+    }
+
+    private static IReadOnlyList<TraceNextAction> DestinationNextActions(
+        SmartTargetResolver resolver, string target, string to)
+    {
+        if (resolver.Resolve(to, scope: null) is TargetResolution.Candidates candidates)
+        {
+            return candidates.Matches
+                .Take(3)
+                .Select(match => NextAction(
+                    "trace",
+                    $"retry the path with this destination id for {match.Kind} in {match.FilePath}:{match.StartLine}",
+                    ("target", target),
+                    ("mode", ModePath),
+                    ("to", match.SymbolId)))
+                .ToArray();
+        }
+
+        return
+        [
+            NextAction(
+                "search",
+                "resolve the path destination symbol first",
+                ("query", to),
+                ("mode", "symbol")),
+        ];
     }
 
     private static string LimitTruncatedNote(int reachableLimit) =>

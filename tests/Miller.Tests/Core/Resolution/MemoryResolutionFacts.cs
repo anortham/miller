@@ -12,8 +12,9 @@ internal static class ResolutionCases
         string? receiver = null,
         string? qualifier = null,
         string? scope = null,
-        double confidence = 1.0) =>
-        new(ResolutionOrigin.Identifier, kind, language, version, name, receiver, qualifier, scope, confidence);
+        double confidence = 1.0,
+        string? receiverType = null) =>
+        new(ResolutionOrigin.Identifier, kind, language, version, name, receiver, qualifier, scope, confidence, ReceiverType: receiverType);
 
     public static ResolutionInput Pend(
         ResolutionRefKind kind,
@@ -23,8 +24,9 @@ internal static class ResolutionCases
         string? receiver = null,
         string? qualifier = null,
         string? scope = null,
-        double confidence = 1.0) =>
-        new(ResolutionOrigin.Pending, kind, language, version, name, receiver, qualifier, scope, confidence);
+        double confidence = 1.0,
+        string? receiverType = null) =>
+        new(ResolutionOrigin.Pending, kind, language, version, name, receiver, qualifier, scope, confidence, ReceiverType: receiverType);
 }
 
 internal sealed class MemoryResolutionFacts : IResolutionFacts

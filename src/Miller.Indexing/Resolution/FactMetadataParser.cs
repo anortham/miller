@@ -40,11 +40,18 @@ internal static class FactMetadataParser
         };
     }
 
-    internal static (string? Receiver, string? Qualifier) IdentifierReceivers(string? json)
+    internal static (string? Receiver, string? Qualifier, string? ReceiverType) IdentifierReceivers(string? json)
     {
         if (string.IsNullOrEmpty(json) || !TryParseObject(json, out JsonElement root))
-            return (null, null);
-        return (ReadString(root, "receiver"), ReadString(root, "receiver_qualifier"));
+            return (null, null, null);
+        return (ReadString(root, "receiver"), ReadString(root, "receiver_qualifier"), ReadString(root, "receiver_type"));
+    }
+
+    internal static string? ReceiverType(string? json)
+    {
+        if (string.IsNullOrEmpty(json) || !TryParseObject(json, out JsonElement root))
+            return null;
+        return ReadString(root, "receiver_type");
     }
 
     private static bool TryParseObject(string json, out JsonElement root)

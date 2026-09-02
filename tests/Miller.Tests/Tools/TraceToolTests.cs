@@ -268,6 +268,112 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Path_MissWithReversePathNamesTheSwappedRetry()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("b", "Beta", "method", "src/B.cs", 2),
+                ("c", "Gamma", "method", "src/C.cs", 3),
+            },
+            new[] { ("a", "b"), ("b", "c") });
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Gamma", mode: "path", to: "Alpha", depth: 5, limit: 20, fullFormat: false, json: true,
+            out _, out _);
+
+        using var document = JsonDocument.Parse(outp);
+        JsonElement root = document.RootElement;
+        string note = root.GetProperty("note").GetString()!;
+        Assert.Contains("No path from 'Gamma' to 'Alpha'", note);
+        Assert.Contains("reverse path exists", note);
+        Assert.Equal(
+            "no_path",
+            root.GetProperty("diagnostics").EnumerateArray().Single().GetProperty("code").GetString());
+        JsonElement swapped = root.GetProperty("next_actions").EnumerateArray().First();
+        Assert.Equal("Alpha", swapped.GetProperty("args").GetProperty("target").GetString());
+        Assert.Equal("path", swapped.GetProperty("args").GetProperty("mode").GetString());
+        Assert.Equal("Gamma", swapped.GetProperty("args").GetProperty("to").GetString());
+    }
+
+    [Fact]
+    public void Path_MissWithoutReversePathStatesTheSearchIsDirectional()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("d", "Delta", "method", "src/D.cs", 4),
+            },
+            Array.Empty<(string, string)>());
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", mode: "path", to: "Delta", depth: 3, limit: 20, fullFormat: false,
+            out _, out _);
+
+        Assert.Contains("No path from 'Alpha' to 'Delta'", outp);
+        Assert.Contains("caller -> callee edges only", outp);
+        Assert.Contains("unresolved call sites can hide a real path", outp);
+        Assert.DoesNotContain("reverse path exists", outp);
+    }
+
+    [Fact]
+    public void Path_AmbiguousDestinationKeepsThePathCallInRetriesAndNamesTheDestination()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("b1", "Beta", "method", "src/B1.cs", 2),
+                ("b2", "Beta", "method", "src/B2.cs", 3),
+            },
+            new[] { ("a", "b1") });
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var tool = new TraceTool(provider);
+
+        using var document = JsonDocument.Parse(tool.Trace("Alpha", mode: "path", to: "Beta", format: "json"));
+        JsonElement root = document.RootElement;
+
+        Assert.Contains("path destination 'Beta'", root.GetProperty("note").GetString());
+        Assert.Equal(
+            "unresolved_destination",
+            root.GetProperty("diagnostic").GetProperty("code").GetString());
+        JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.All(actions, action =>
+        {
+            JsonElement args = action.GetProperty("args");
+            Assert.Equal("Alpha", args.GetProperty("target").GetString());
+            Assert.Equal("path", args.GetProperty("mode").GetString());
+        });
+        Assert.Contains(actions, action =>
+            action.GetProperty("args").GetProperty("to").GetString() == "b1");
+        Assert.Contains(actions, action =>
+            action.GetProperty("args").GetProperty("to").GetString() == "b2");
+    }
+
+    [Fact]
+    public void Path_AmbiguousDestinationResolvesThroughTheCallersScope()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("b1", "Beta", "method", "src/A.cs", 2),
+                ("b2", "Beta", "method", "src/B2.cs", 3),
+            },
+            new[] { ("a", "b1") });
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", scope: "src/A.cs", mode: "path", to: "Beta", depth: 3, limit: 20,
+            fullFormat: false, json: false, out int emitted, out _);
+
+        Assert.Equal(2, emitted);
+        Assert.Contains("# trace path Alpha -> Beta (1 hop(s))", outp);
+    }
+
+    [Fact]
     public void Trace_InvalidPathKindPreservesTypedDiagnosticAtMcpBoundary()
     {
         var index = BuildSymbolIndex(

@@ -182,7 +182,7 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json", "exclude-tests");
         if (o.Positionals.Count > 0)
-            return Usage(err, "miller todos [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]");
+            return Usage(err, "miller todos [--markers TODO,FIXME,HACK,XXX,RAZORBACK] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
         if (!RequireIndex(ctx, err))
@@ -196,7 +196,7 @@ public static class CliDispatch
         catch (InvalidOperationException ex)
         {
             err.WriteLine(ex.Message);
-            return Usage(err, "miller todos [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]");
+            return Usage(err, "miller todos [--markers TODO,FIXME,HACK,XXX,RAZORBACK] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]");
         }
 
         if (!TryOpenCliReadScope(ctx, err, out CliReadScope readScope, "todos read failed"))
@@ -4223,8 +4223,8 @@ public static class CliDispatch
                              [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|markers|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--arm auto|lexical|semantic|hybrid] [--limit N] [--json] [--include-tests|--exclude-tests]
                              --arm selects the retrieval policy for this call (symbol route only); absent or auto = normal policy routing.
                              semantic retrieval is on by default; semantic|hybrid need a serving vector artifact and fail loudly rather than answering lexically.
-          todos              CLI alias for search --mode markers over TODO/FIXME/HACK/XXX comment markers.
-                             [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]
+          todos              CLI alias for search --mode markers over TODO/FIXME/HACK/XXX/RAZORBACK comment markers.
+                             [--markers TODO,FIXME,HACK,XXX,RAZORBACK] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]
           content <op>       Import/search/read/shape/list/remove/export external and web text in content.db.
                              import <path> [--max-bytes N] [--display-path NAME] [--json]
                              add-markdown <path> --url URL [--display-path NAME] [--json]

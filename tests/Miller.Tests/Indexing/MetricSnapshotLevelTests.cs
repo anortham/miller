@@ -64,7 +64,9 @@ public sealed class MetricSnapshotLevelTests : IDisposable
         MetricHistoryPoint marker = Assert.Single(
             metrics, m => m.Metric == MetricSnapshotAggregates.MarkerTotal);
         Assert.Equal(0d, marker.Value);
-        Assert.Equal("{\"TODO\":0,\"FIXME\":0,\"HACK\":0,\"XXX\":0}", marker.DetailJson);
+        Assert.Equal(
+            "{\"TODO\":0,\"FIXME\":0,\"HACK\":0,\"XXX\":0,\"RAZORBACK\":0}",
+            marker.DetailJson);
     }
 
     [Fact]
@@ -138,7 +140,7 @@ public sealed class MetricSnapshotLevelTests : IDisposable
         Assert.True(markers.GetProperty("available").GetBoolean());
         Assert.Equal(0, markers.GetProperty("total").GetInt32());
         Assert.Equal(
-            new[] { "TODO", "FIXME", "HACK", "XXX" },
+            new[] { "TODO", "FIXME", "HACK", "XXX", "RAZORBACK" },
             markers.GetProperty("counts").EnumerateArray()
                 .Select(c => c.GetProperty("marker").GetString())
                 .ToArray());

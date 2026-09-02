@@ -182,7 +182,7 @@ public sealed class MarkerLevelGuardTests : IDisposable
 
         Assert.Equal(0, code);
         Assert.Empty(errText);
-        Assert.Equal("No TODO/FIXME/HACK/XXX markers.", outText.Trim());
+        Assert.Equal("No TODO/FIXME/HACK/XXX/RAZORBACK markers.", outText.Trim());
     }
 
     private static string DiagnosticTail(string output)

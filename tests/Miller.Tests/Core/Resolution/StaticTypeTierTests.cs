@@ -257,11 +257,31 @@ public sealed class StaticTypeTierTests
         Assert.Equal(new FactSymbolKey(1, "parse"), outcome.Target);
     }
 
-    [Fact]
-    public void CrossFile_RequiresPublicType()
+    [Theory]
+    [InlineData("public")]
+    [InlineData("internal")]
+    public void CrossFile_AllowsPublicAndInternalTypes(string visibility)
     {
         var facts = new MemoryResolutionFacts();
-        facts.Add("Text", "Text", FactSymbolKind.Class, version: 2, visibility: "internal");
+        facts.Add("Text", "Text", FactSymbolKind.Class, version: 2, visibility: visibility);
+        facts.Add("parse", "Parse", FactSymbolKind.Method, version: 2, parentId: "Text", isStatic: true);
+        var resolver = new QueryTimeResolver(facts);
+
+        ResolutionOutcome outcome = resolver.Resolve(
+            ResolutionCases.Ident(ResolutionRefKind.MemberAccess, "Parse", receiver: "Text"));
+
+        Assert.Equal(new FactSymbolKey(2, "parse"), outcome.Target);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("private")]
+    [InlineData("fileprivate")]
+    [InlineData("protected")]
+    public void CrossFile_RefusesTypesThatAreNotPublicOrInternal(string? visibility)
+    {
+        var facts = new MemoryResolutionFacts();
+        facts.Add("Text", "Text", FactSymbolKind.Class, version: 2, visibility: visibility);
         facts.Add("parse", "Parse", FactSymbolKind.Method, version: 2, parentId: "Text", isStatic: true);
         var resolver = new QueryTimeResolver(facts);
 

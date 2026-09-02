@@ -33,7 +33,7 @@ public static class MetricSnapshotAggregates
     public const string CloneGroupCount = "clone_group_count";
     public const string MarkerTotal = "marker_total";
 
-    private static readonly string[] MarkerNames = { "TODO", "FIXME", "HACK", "XXX" };
+    private static readonly string[] MarkerNames = { "TODO", "FIXME", "HACK", "XXX", "RAZORBACK" };
     /// <summary>
     /// Read the converge metric set from <paramref name="symbolsDbPath"/>, including marker counts from the
     /// producer-owned <c>code.marker.v1</c> structural facts — except against a symbols-level artifact, whose
@@ -291,13 +291,14 @@ public static class MetricSnapshotAggregates
             perMarker[marker] = 0;
 
         using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = """
+        string markerInList = string.Join(", ", MarkerNames.Select(static name => $"'{name}'"));
+        command.CommandText = $"""
             SELECT UPPER(json_extract(metadata_json, '$.marker')), COUNT(*)
             FROM structural_facts
             WHERE pattern_id = $pattern
               AND json_valid(metadata_json)
               AND json_type(metadata_json, '$.marker') = 'text'
-              AND UPPER(json_extract(metadata_json, '$.marker')) IN ('TODO', 'FIXME', 'HACK', 'XXX')
+              AND UPPER(json_extract(metadata_json, '$.marker')) IN ({markerInList})
             GROUP BY UPPER(json_extract(metadata_json, '$.marker'));
             """;
         command.Parameters.AddWithValue("$pattern", MarkerFactReader.PatternId);

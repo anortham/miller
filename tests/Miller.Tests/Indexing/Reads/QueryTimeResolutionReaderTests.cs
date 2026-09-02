@@ -114,6 +114,79 @@ public sealed class QueryTimeResolutionReaderTests
     }
 
     [Fact]
+    public void FamilyStoreIdentifierReceiverTypeBindsEnclosingTypeMember()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        fixture.AddFile(1, "src/App.cs");
+        fixture.AddSymbol(1, App, "App", "class", "src/App.cs");
+        fixture.AddSymbol(1, Run, "Run", "method", "src/App.cs", parentId: App);
+        fixture.AddSymbol(1, Helper, "Helper", "method", "src/App.cs", parentId: App);
+        fixture.AddSymbol(1, "fn-other-helper", "Helper", "function", "src/App.cs");
+        fixture.AddIdentifier(
+            1, "id-this-help", "Helper", "src/App.cs", kind: "call", containingSymbolId: Run, startByte: 20, endByte: 26,
+            metadataJson: """{"receiver":"this","receiver_type":"App"}""");
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+
+        IReadOnlyList<FamilyGraphResolutionEdge> edges = reader.ReadResolutionEdges(
+            connection, [Run], Direction.Forward, statementObserver: null);
+
+        FamilyGraphResolutionEdge edge = Assert.Single(edges);
+        Assert.Equal("identifier_target", edge.Source);
+        Assert.Equal(Helper, edge.ToId);
+        Assert.Equal(0.75, edge.Confidence);
+    }
+
+    [Fact]
+    public void FamilyStorePendingReceiverTypeBindsEnclosingTypeMember()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        fixture.AddFile(1, "src/App.cs");
+        fixture.AddSymbol(1, App, "App", "class", "src/App.cs");
+        fixture.AddSymbol(1, Run, "Run", "method", "src/App.cs", parentId: App);
+        fixture.AddSymbol(1, Helper, "Helper", "method", "src/App.cs", parentId: App);
+        fixture.AddSymbol(1, "fn-other-helper", "Helper", "function", "src/App.cs");
+        fixture.AddPending(
+            1, "pend-this-help", Run, "Helper", "src/App.cs", startByte: 20, endByte: 26,
+            receiver: "this", metadataJson: """{"receiver_type":"App"}""");
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+
+        IReadOnlyList<FamilyGraphResolutionEdge> edges = reader.ReadResolutionEdges(
+            connection, [Run], Direction.Forward, statementObserver: null);
+
+        FamilyGraphResolutionEdge edge = Assert.Single(edges);
+        Assert.Equal("pending_resolution", edge.Source);
+        Assert.Equal(Helper, edge.ToId);
+        Assert.Equal(0.75, edge.Confidence);
+    }
+
+    [Fact]
+    public void ArtifactPendingReceiverTypeBindsEnclosingTypeMember()
+    {
+        const string AppFile = "file-9e7a11";
+        using ResolutionArtifactFixture fixture = ResolutionArtifactFixture.Create();
+        fixture.AddFile(AppFile, "src/App.cs");
+        fixture.AddSymbol(AppFile, App, "App", "class", "src/App.cs");
+        fixture.AddSymbol(AppFile, Run, "Run", "method", "src/App.cs", parentId: App);
+        fixture.AddSymbol(AppFile, Helper, "Helper", "method", "src/App.cs", parentId: App);
+        fixture.AddSymbol(AppFile, "fn-other-helper", "Helper", "function", "src/App.cs");
+        fixture.AddPending(
+            AppFile, "pend-this-help", Run, "Helper", "src/App.cs", startByte: 20, endByte: 26,
+            receiver: "this", metadataJson: """{"receiver_type":"App"}""");
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = ArtifactReader(connection);
+
+        IReadOnlyList<FamilyGraphResolutionEdge> edges = reader.ReadResolutionEdges(
+            connection, [Run], Direction.Forward, statementObserver: null);
+
+        FamilyGraphResolutionEdge edge = Assert.Single(edges);
+        Assert.Equal("pending_resolution", edge.Source);
+        Assert.Equal(Helper, edge.ToId);
+        Assert.Equal(0.75, edge.Confidence);
+    }
+
+    [Fact]
     public void QmlPendingInstantiationUsesCatalogAndConsumerPath()
     {
         using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
@@ -575,6 +648,73 @@ public sealed class QueryTimeResolutionReaderTests
         "site-pend-help|call|fn-help|pending_resolution|0.55|4",
         "site-rel-help|call|fn-help|relationship|1.00|",
     ];
+
+    [Fact]
+    public void UnresolvedOverloadSetCallGetsAnEdgePerSameParentCandidate()
+    {
+        using ResolutionStoreFixture fixture = PopulateOverloadStore();
+        fixture.AddIdentifier(1, "id-save", "Save", "src/Svc.cs", kind: "call", containingSymbolId: "fn-caller", startByte: 10, endByte: 14);
+        fixture.AddPending(1, "pend-save", "fn-caller", "Save", "src/Svc.cs", startByte: 10, endByte: 14);
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+
+        IReadOnlyList<FamilyGraphUnresolvedNameEdge> forward = reader.ReadUnresolvedNameEdges(
+            connection, ["fn-caller"], Direction.Forward, statementObserver: null);
+        IReadOnlyList<FamilyGraphUnresolvedNameEdge> reverse = reader.ReadUnresolvedNameEdges(
+            connection, ["ov-save-a"], Direction.Reverse, statementObserver: null);
+
+        Assert.Equal(
+            ["fn-caller|ov-save-a|calls|0.40|identifier_name", "fn-caller|ov-save-b|calls|0.40|identifier_name"],
+            forward
+                .Select(e => $"{e.FromId}|{e.ToId}|{e.Kind}|{e.Confidence.ToString("0.00", CultureInfo.InvariantCulture)}|{e.Source}")
+                .OrderBy(x => x, StringComparer.Ordinal)
+                .ToArray());
+        FamilyGraphUnresolvedNameEdge inbound = Assert.Single(reverse);
+        Assert.Equal("fn-caller", inbound.FromId);
+        Assert.Equal("ov-save-a", inbound.ToId);
+        Assert.Equal(0.40, inbound.Confidence, precision: 2);
+    }
+
+    [Fact]
+    public void OverloadSiblingCallExcludesTheContainingOverloadItself()
+    {
+        using ResolutionStoreFixture fixture = PopulateOverloadStore();
+        fixture.AddIdentifier(1, "id-save-self", "Save", "src/Svc.cs", kind: "call", containingSymbolId: "ov-save-a", startByte: 20, endByte: 24);
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+
+        IReadOnlyList<FamilyGraphUnresolvedNameEdge> forward = reader.ReadUnresolvedNameEdges(
+            connection, ["ov-save-a"], Direction.Forward, statementObserver: null);
+
+        FamilyGraphUnresolvedNameEdge edge = Assert.Single(forward);
+        Assert.Equal("ov-save-a", edge.FromId);
+        Assert.Equal("ov-save-b", edge.ToId);
+    }
+
+    [Fact]
+    public void SameNameSymbolsInDifferentParentsStillGetNoFallbackEdge()
+    {
+        using ResolutionStoreFixture fixture = PopulateOverloadStore();
+        fixture.AddSymbol(1, "cls-other", "Other", "class", "src/Svc.cs");
+        fixture.AddSymbol(1, "ov-save-c", "Save", "method", "src/Svc.cs", parentId: "cls-other");
+        fixture.AddIdentifier(1, "id-save", "Save", "src/Svc.cs", kind: "call", containingSymbolId: "fn-caller", startByte: 10, endByte: 14);
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+
+        Assert.Empty(reader.ReadUnresolvedNameEdges(
+            connection, ["fn-caller"], Direction.Forward, statementObserver: null));
+    }
+
+    private static ResolutionStoreFixture PopulateOverloadStore()
+    {
+        ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        fixture.AddFile(1, "src/Svc.cs");
+        fixture.AddSymbol(1, "cls-svc", "Svc", "class", "src/Svc.cs");
+        fixture.AddSymbol(1, "ov-save-a", "Save", "method", "src/Svc.cs", parentId: "cls-svc");
+        fixture.AddSymbol(1, "ov-save-b", "Save", "method", "src/Svc.cs", parentId: "cls-svc");
+        fixture.AddSymbol(1, "fn-caller", "Caller", "method", "src/Svc.cs", parentId: "cls-svc");
+        return fixture;
+    }
 
     private static QueryTimeResolutionReader FamilyReader(SqliteConnection connection, ResolutionStoreFixture fixture) =>
         new(RevisionFactCache.Load(connection, fixture.Visibility()), fixture.Visibility());
