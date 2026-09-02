@@ -200,6 +200,31 @@ public sealed class CtWorkspaceMirrorTests : IDisposable
     }
 
     [Fact]
+    public void Sync_preserves_empty_directory_timestamp_and_permissions()
+    {
+        string sourceRoot = Path.Combine(_root, "source");
+        string sourceDirectory = Path.Combine(sourceRoot, "empty");
+        Directory.CreateDirectory(sourceDirectory);
+        UnixFileMode sourceMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(sourceDirectory, sourceMode);
+        DateTime sourceTime = new(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        Directory.SetLastWriteTimeUtc(sourceDirectory, sourceTime);
+        ContinuousTestWorkspace workspace = Workspace("empty-directory-metadata");
+
+        CtWorkspaceMirrorResult result = CtWorkspaceMirror.Sync(
+            workspace,
+            sourceRoot,
+            Policy(CtWorkspaceMirrorIntegrity.StrictHash, "empty-directory-metadata"),
+            CancellationToken.None);
+
+        string mirroredDirectory = Path.Combine(result.MirrorRoot, "empty");
+        Assert.Equal(sourceTime, Directory.GetLastWriteTimeUtc(mirroredDirectory));
+        if (!OperatingSystem.IsWindows())
+            Assert.Equal(sourceMode, File.GetUnixFileMode(mirroredDirectory));
+    }
+
+    [Fact]
     public void Metadata_fast_path_reconciles_changed_and_deleted_files()
     {
         string sourceRoot = Path.Combine(_root, "source");
