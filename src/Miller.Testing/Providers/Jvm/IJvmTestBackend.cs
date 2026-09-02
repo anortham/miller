@@ -4,6 +4,7 @@ internal static class JvmTestBackendIds
 {
     public const string Gradle = "gradle";
     public const string Maven = "maven";
+    public const string Sbt = "sbt";
     public const string ClassCaseSentinel = "\0miller-class";
 }
 

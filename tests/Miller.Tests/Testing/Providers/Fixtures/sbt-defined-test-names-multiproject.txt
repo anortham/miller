@@ -1,0 +1,6 @@
+[info] core / Test / definedTestNames
+[info] * sample.CoreTest.adds
+[info] * sample.CoreTest.subtracts
+[info] app / Test / definedTestNames
+[info] * sample.AppTest.runs
+[success] Total time: 1 s, completed

@@ -1,0 +1,1 @@
+[info] List(sample.CalculatorTest.adds, sample.CalculatorTest.subtracts)

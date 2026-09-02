@@ -216,6 +216,22 @@ public static class CtProviderTestSupport
         return binary!;
     }
 
+    public static string? LocateSbt()
+    {
+        string[] names = OperatingSystem.IsWindows()
+            ? ["sbt.bat", "sbt.cmd", "sbt.exe"]
+            : ["sbt"];
+        return names.Select(LocateOnPath).FirstOrDefault(path => path is not null);
+    }
+
+    public static string RequireSbt()
+    {
+        string? binary = LocateSbt();
+        Assert.SkipWhen(binary is null,
+            "sbt 1.x is required for JVM sbt provider Scale smoke");
+        return binary!;
+    }
+
     public static string? LocateRspec() =>
         LocateOnPath(OperatingSystem.IsWindows() ? "rspec.bat" : "rspec")
         ?? LocateOnPath(OperatingSystem.IsWindows() ? "rspec.exe" : "rspec");

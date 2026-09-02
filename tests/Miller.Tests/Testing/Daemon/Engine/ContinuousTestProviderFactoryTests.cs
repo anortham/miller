@@ -76,32 +76,23 @@ public sealed class ContinuousTestProviderFactoryTests : IDisposable
         Assert.Equal("ct-provider:jvm", factory.Resolve(Workspace("pom.xml", "maven")).ProviderSource);
     }
 
-    [Theory]
-    [InlineData("sbt", "build.sbt")]
-    public async Task Unregistered_jvm_frameworks_refuse_until_their_backend_is_registered(
-        string framework,
-        string projectFile)
+    [Fact]
+    public void Default_factory_registers_sbt_with_the_jvm_provider()
     {
         var factory = ContinuousTestProviderFactory.CreateDefault();
-        ContinuousTestWorkspace workspace = Workspace(projectFile, framework);
+        ContinuousTestProviderResolution resolution = factory.Resolve(Workspace("build.sbt", "sbt"));
 
-        ContinuousTestProviderResolution resolution = factory.Resolve(workspace);
-
-        Assert.Equal("ct-provider:unsupported", resolution.ProviderSource);
-        ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
-            resolution.Provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
-        Assert.Contains(framework, exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.IsType<JvmTestProvider>(resolution.Provider);
+        Assert.Equal("ct-provider:jvm", resolution.ProviderSource);
     }
 
     [Fact]
-    public void Null_framework_jvm_detection_routes_maven_and_refuses_sbt_until_registered()
+    public void Null_framework_jvm_detection_routes_maven_and_sbt_to_the_jvm_provider()
     {
         var factory = ContinuousTestProviderFactory.CreateDefault();
 
         Assert.Equal("ct-provider:jvm", factory.Resolve(Workspace("pom.xml", null)).ProviderSource);
-        Assert.Equal(
-            "ct-provider:unsupported",
-            factory.Resolve(Workspace("build.sbt", null)).ProviderSource);
+        Assert.Equal("ct-provider:jvm", factory.Resolve(Workspace("build.sbt", null)).ProviderSource);
     }
 
     [Fact]

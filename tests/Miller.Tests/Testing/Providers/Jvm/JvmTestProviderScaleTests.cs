@@ -184,6 +184,101 @@ public sealed class JvmTestProviderScaleTests : IDisposable
         Assert.All(result.CaseResults, row => Assert.StartsWith(workspace.BuildOutputRoot, row.Metadata["artifact_path"]!.ToString()!, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task Sbt_smoke_keeps_the_source_immutable_and_reuses_the_warm_shadow()
+    {
+        string java = CtProviderTestSupport.RequireJava();
+        string sbt = CtProviderTestSupport.RequireSbt();
+        Assert.True(File.Exists(java));
+        Assert.True(File.Exists(sbt));
+        File.WriteAllText(Path.Combine(_root, "build.sbt"), """
+            ThisBuild / scalaVersion := "2.13.14"
+            libraryDependencies += "org.scalatest" %% "scalatest" % "3.2.18" % Test
+            """);
+        string first = Path.Combine(_root, "src", "test", "scala", "sample", "FirstTest.scala");
+        string second = Path.Combine(_root, "src", "test", "scala", "sample", "SecondTest.scala");
+        Directory.CreateDirectory(Path.GetDirectoryName(first)!);
+        File.WriteAllText(first, """
+            package sample
+            import org.scalatest.funsuite.AnyFunSuite
+            class FirstTest extends AnyFunSuite {
+              test("adds") { assert(1 + 1 == 2) }
+            }
+            """);
+        File.WriteAllText(second, """
+            package sample
+            import org.scalatest.funsuite.AnyFunSuite
+            class SecondTest extends AnyFunSuite {
+              test("subtracts") { assert(2 - 1 == 1) }
+            }
+            """);
+        string sourceHash = HashTree(_root, "ct-jvm-sbt-scale");
+        var workspace = new ContinuousTestWorkspace(
+            WorkspaceId: "ws:jvm-sbt-scale",
+            WorkspaceRoot: _root,
+            ProjectPath: Path.Combine(_root, "build.sbt"),
+            BuildOutputRoot: Path.Combine(_root, ".miller", "ct-jvm-sbt-scale"),
+            Framework: "sbt");
+        var backend = new SbtTestBackend(new TestProcessRunner());
+        var provider = new JvmTestProvider(backend);
+
+        DateTimeOffset coldSyncStarted = DateTimeOffset.UtcNow;
+        SbtWorkspaceShadowResult coldSync = SbtWorkspaceShadow.Sync(
+            workspace,
+            TestContext.Current.CancellationToken);
+        TimeSpan coldSyncElapsed = DateTimeOffset.UtcNow - coldSyncStarted;
+        IReadOnlyList<ProviderTestCase> discovered = await provider.DiscoverAsync(
+            workspace,
+            TestContext.Current.CancellationToken);
+
+        DateTimeOffset warmSyncStarted = DateTimeOffset.UtcNow;
+        SbtWorkspaceShadowResult warmSync = SbtWorkspaceShadow.Sync(
+            workspace,
+            TestContext.Current.CancellationToken);
+        TimeSpan warmSyncElapsed = DateTimeOffset.UtcNow - warmSyncStarted;
+        IReadOnlyList<ProviderTestCase> warmDiscovered = await provider.DiscoverAsync(
+            workspace,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, discovered.Count);
+        Assert.Equal(discovered.Select(test => test.Id), warmDiscovered.Select(test => test.Id));
+        Assert.Equal(0, warmSync.EntriesCopied);
+        Assert.Equal(0, warmSync.BytesCopied);
+
+        DateTimeOffset runStarted = DateTimeOffset.UtcNow;
+        ProviderRunResult result = await provider.RunAsync(
+            new ContinuousTestProviderRunRequest(
+                Workspace: workspace,
+                SelectedRevision: "rev-jvm-sbt-scale",
+                IndexIdentity: "store:jvm-sbt-scale",
+                TestCaseIds: discovered.Select(test => test.Id).ToArray()),
+            TestContext.Current.CancellationToken);
+        TimeSpan runElapsed = DateTimeOffset.UtcNow - runStarted;
+
+        Assert.Equal("passed", result.Status);
+        Assert.Equal(2, result.CaseResults.Count);
+        Assert.Equal(sourceHash, HashTree(_root, "ct-jvm-sbt-scale"));
+        Assert.False(Directory.Exists(Path.Combine(_root, "target")));
+        Assert.False(Directory.Exists(Path.Combine(_root, "project", "target")));
+        HashSet<string> sourceFiles =
+        [
+            "build.sbt",
+            Path.Combine("src", "test", "scala", "sample", "FirstTest.scala"),
+            Path.Combine("src", "test", "scala", "sample", "SecondTest.scala"),
+        ];
+        Assert.All(
+            Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories)
+                .Where(path => !path.StartsWith(Path.Combine(_root, ".miller"), StringComparison.Ordinal)),
+            path => Assert.Contains(Path.GetRelativePath(_root, path), sourceFiles));
+        Console.WriteLine(
+            $"sbt metrics: cold_sync_ms={coldSyncElapsed.TotalMilliseconds:F1} "
+            + $"warm_sync_ms={warmSyncElapsed.TotalMilliseconds:F1} "
+            + $"cold_entries={coldSync.EntriesScanned} warm_entries={warmSync.EntriesScanned} "
+            + $"cold_bytes={coldSync.BytesCopied} warm_bytes={warmSync.BytesCopied} "
+            + $"workspace_bytes={warmSync.WorkspaceCandidateBytes} dependency_bytes={warmSync.DependencyCandidateBytes} "
+            + $"run_ms={runElapsed.TotalMilliseconds:F1}");
+    }
+
     private static string HashTree(string root, string buildDirectoryName = "ct-jvm-scale")
     {
         using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);

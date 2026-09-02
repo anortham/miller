@@ -11,7 +11,10 @@ public sealed class JvmTestProvider : IContinuousTestProvider
     private readonly CtGenerationHandoff _generations = new();
 
     public JvmTestProvider(ITestProcessRunner runner)
-        : this([new GradleTestBackend(runner), new MavenTestBackend(runner)])
+        : this([
+            new GradleTestBackend(runner),
+            new MavenTestBackend(runner),
+            new SbtTestBackend(runner)])
     {
     }
 
