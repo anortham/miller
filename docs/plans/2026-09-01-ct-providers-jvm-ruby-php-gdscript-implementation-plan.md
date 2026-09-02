@@ -269,15 +269,15 @@ exception message as `FailureSummary`. Read the run JSON from the `--out` artifa
 stdout.
 
 **Acceptance criteria:**
-- [ ] Inventory tests prove: rspec Gemfile discovered as `rspec`; minitest-only Gemfile listed
+- [x] Inventory tests prove: rspec Gemfile discovered as `rspec`; minitest-only Gemfile listed
       with the refusal reason; `tests enable` refusal path covered by the existing
       framework-support machinery.
-- [ ] Fast provider tests cover discovery parse, run parse, selection argv, empty-selection
+- [x] Fast provider tests cover discovery parse, run parse, selection argv, empty-selection
       throw, `WholeSuite` argv, and truncated-stdout refusal on any stdout parse path.
-- [ ] Scale smoke discovers and runs a 2-example fixture spec (1 pass, 1 fail) when rspec is
+- [x] Scale smoke discovers and runs a 2-example fixture spec (1 pass, 1 fail) when rspec is
       installed; skips otherwise.
-- [ ] `ContinuousTestLanguageFamily` maps `.rb` and label `ruby`.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] `ContinuousTestLanguageFamily` maps `.rb` and label `ruby`.
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ### Task 4: PHP provider (PHPUnit + Pest)
 
