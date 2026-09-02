@@ -167,8 +167,14 @@ internal static class SbtWorkspaceShadow
     private static IEnumerable<SourceEntry> EnumerateSourceEntries(
         string sourceRoot,
         CancellationToken cancellationToken)
+        => EnumerateSourceEntries(sourceRoot, sourceRoot, cancellationToken);
+
+    private static IEnumerable<SourceEntry> EnumerateSourceEntries(
+        string currentRoot,
+        string sourceRoot,
+        CancellationToken cancellationToken)
     {
-        foreach (string path in Directory.EnumerateFileSystemEntries(sourceRoot))
+        foreach (string path in Directory.EnumerateFileSystemEntries(currentRoot))
         {
             cancellationToken.ThrowIfCancellationRequested();
             string relativePath = Path.GetRelativePath(sourceRoot, path);
@@ -195,9 +201,9 @@ internal static class SbtWorkspaceShadow
             if (info is DirectoryInfo)
             {
                 yield return new SourceEntry(path, relativePath, EntryKind.Directory, null, false);
-                foreach (SourceEntry child in EnumerateSourceEntries(path, cancellationToken))
+                foreach (SourceEntry child in EnumerateSourceEntries(path, sourceRoot, cancellationToken))
                 {
-                    yield return child with { RelativePath = Path.Combine(relativePath, child.RelativePath) };
+                    yield return child;
                 }
             }
             else
@@ -209,24 +215,62 @@ internal static class SbtWorkspaceShadow
         }
     }
 
-    private static bool IsRegularFile(string path)
+    internal static bool IsRegularFile(string path)
     {
         if (OperatingSystem.IsWindows())
             return true;
+        if (OperatingSystem.IsLinux())
+        {
+            if (RuntimeInformation.ProcessArchitecture is not (Architecture.X64 or Architecture.Arm64)
+                || !TryReadLinuxFileMode(path, out uint mode))
+                return false;
+            return IsRegularFileType(mode);
+        }
+        if (OperatingSystem.IsMacOS())
+        {
+            if (RuntimeInformation.ProcessArchitecture is not (Architecture.X64 or Architecture.Arm64)
+                || !TryReadMacOsFileMode(path, out uint mode))
+                return false;
+            return IsRegularFileType(mode);
+        }
+        return false;
+    }
 
-        IntPtr statBuffer = Marshal.AllocHGlobal(512);
+    internal static bool IsRegularFileType(uint mode) => (mode & UnixFileTypeMask) == UnixRegularFileType;
+
+    private static bool TryReadLinuxFileMode(string path, out uint mode)
+    {
+        mode = 0;
         try
         {
-            if (LStat(path, statBuffer) != 0)
+            if (Statx(
+                    AtCurrentWorkingDirectory,
+                    path,
+                    AtSymlinkNoFollow,
+                    StatxType,
+                    out LinuxStatx result) != 0)
+            {
                 throw new IOException($"could not inspect source entry '{path}'",
                     new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()));
-            uint mode = unchecked((uint)Marshal.ReadInt32(statBuffer, 24));
-            return (mode & UnixFileTypeMask) == UnixRegularFileType;
+            }
+
+            mode = result.Mode;
+            return true;
         }
-        finally
+        catch (Exception exception) when (exception is DllNotFoundException or EntryPointNotFoundException)
         {
-            Marshal.FreeHGlobal(statBuffer);
+            return false;
         }
+    }
+
+    private static bool TryReadMacOsFileMode(string path, out uint mode)
+    {
+        mode = 0;
+        if (LStat(path, out MacOsStat result) != 0)
+            throw new IOException($"could not inspect source entry '{path}'",
+                new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()));
+        mode = result.Mode;
+        return true;
     }
 
     private static bool IsExcluded(string relativePath)
@@ -281,6 +325,9 @@ internal static class SbtWorkspaceShadow
         StringComparer comparer = OperatingSystem.IsWindows()
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
+        StringComparison comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
         Dictionary<string, SourceEntry> links = sourceEntries
             .Where(entry => entry.Kind == EntryKind.SymbolicLink)
             .ToDictionary(entry => Path.GetFullPath(entry.SourcePath), comparer);
@@ -301,10 +348,19 @@ internal static class SbtWorkspaceShadow
                     current.SourcePath,
                     current.LinkTarget,
                     current.RelativePath);
+                if (IsAncestorPath(resolvedTarget, currentPath, comparison))
+                    throw new IOException($"looping symbolic link '{current.RelativePath}'");
                 if (!links.TryGetValue(resolvedTarget, out current!))
                     break;
             }
         }
+    }
+
+    private static bool IsAncestorPath(string ancestorPath, string childPath, StringComparison comparison)
+    {
+        string normalizedAncestor = Path.TrimEndingDirectorySeparator(Path.GetFullPath(ancestorPath));
+        string normalizedChild = Path.GetFullPath(childPath);
+        return normalizedChild.StartsWith(normalizedAncestor + Path.DirectorySeparatorChar, comparison);
     }
 
     private static void ValidatePathBudget(string shadowRoot, IReadOnlyList<SourceEntry> sourceEntries)
@@ -335,7 +391,8 @@ internal static class SbtWorkspaceShadow
 
     private static bool IsBuildOwned(string relativePath) =>
         relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .Any(segment => string.Equals(segment, "target", StringComparison.OrdinalIgnoreCase));
+            .Any(segment => string.Equals(segment, "target", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segment, GitDirectoryName, StringComparison.OrdinalIgnoreCase));
 
     private static bool RemoveStaleEntry(
         string destinationPath,
@@ -556,11 +613,63 @@ internal static class SbtWorkspaceShadow
         return new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint);
     }
 
-    [DllImport("libc", EntryPoint = "lstat", SetLastError = true)]
-    private static extern int LStat(string path, IntPtr statBuffer);
+    [DllImport("libc", EntryPoint = "statx", SetLastError = true, CharSet = CharSet.Ansi)]
+    private static extern int Statx(
+        int directoryFileDescriptor,
+        string path,
+        int flags,
+        uint mask,
+        out LinuxStatx result);
+
+    [DllImport("libc", EntryPoint = "lstat", SetLastError = true, CharSet = CharSet.Ansi)]
+    private static extern int LStat(string path, out MacOsStat result);
+
+    private const int AtCurrentWorkingDirectory = -100;
+    private const int AtSymlinkNoFollow = 0x100;
+    private const uint StatxType = 0x00000001;
 
     private const uint UnixFileTypeMask = 0xF000;
     private const uint UnixRegularFileType = 0x8000;
+
+    [StructLayout(LayoutKind.Explicit, Size = 256)]
+    private struct LinuxStatx
+    {
+        // Linux fixes stx_mode at byte 28 in the 256-byte statx ABI on every supported architecture.
+        [FieldOffset(28)]
+        public ushort Mode;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MacOsTimespec
+    {
+        public long Seconds;
+        public long Nanoseconds;
+    }
+
+    // Darwin's 64-bit struct stat layout is shared by the supported x64 and arm64 slices.
+    [StructLayout(LayoutKind.Sequential, Size = 144)]
+    private struct MacOsStat
+    {
+        public int Device;
+        public ushort Mode;
+        public ushort LinkCount;
+        public ulong Inode;
+        public uint UserId;
+        public uint GroupId;
+        public uint DeviceType;
+        public MacOsTimespec AccessTime;
+        public MacOsTimespec ModificationTime;
+        public MacOsTimespec ChangeTime;
+        public MacOsTimespec BirthTime;
+        public long Size;
+        public long Blocks;
+        public int BlockSize;
+        public uint Flags;
+        public uint Generation;
+        public int Spare;
+        public long Reserved0;
+        public long Reserved1;
+    }
 
     private static Dictionary<string, ManifestEntry> ReadManifest(string workspaceCandidateRoot)
     {
@@ -659,8 +768,25 @@ internal static class SbtWorkspaceShadow
             return 0;
 
         long total = 0;
-        foreach (string file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-            total += new FileInfo(file).Length;
+        Stack<string> pendingDirectories = new();
+        pendingDirectories.Push(path);
+        while (pendingDirectories.Count > 0)
+        {
+            string currentDirectory = pendingDirectories.Pop();
+            foreach (string childPath in Directory.EnumerateFileSystemEntries(currentDirectory))
+            {
+                FileSystemInfo childInfo = Directory.Exists(childPath)
+                    ? new DirectoryInfo(childPath)
+                    : new FileInfo(childPath);
+                if (childInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                    continue;
+                if (childInfo is DirectoryInfo)
+                    pendingDirectories.Push(childPath);
+                else
+                    total += ((FileInfo)childInfo).Length;
+            }
+        }
+
         return total;
     }
 

@@ -263,6 +263,61 @@ public sealed class SbtWorkspaceShadowTests : IDisposable
     }
 
     [Fact]
+    public void Ancestor_directory_symbolic_links_are_rejected_with_the_offending_relative_path()
+    {
+        string projectRoot = Path.Combine(_root, "project");
+        string moduleRoot = Path.Combine(projectRoot, "module");
+        Directory.CreateDirectory(moduleRoot);
+        string projectPath = Path.Combine(projectRoot, "build.sbt");
+        File.WriteAllText(projectPath, "name := \"shadow\"\n");
+        Directory.CreateSymbolicLink(Path.Combine(moduleRoot, "back"), "..");
+
+        ContinuousTestWorkspace workspace = new(
+            WorkspaceId: "ws:sbt-shadow",
+            WorkspaceRoot: _root,
+            ProjectPath: projectPath,
+            BuildOutputRoot: Path.Combine(_root, ".miller", "ct-sbt"),
+            Framework: "sbt");
+
+        IOException exception = Assert.Throws<IOException>(() =>
+            SbtWorkspaceShadow.Sync(workspace, CancellationToken.None));
+
+        Assert.Contains("module/back", exception.Message, StringComparison.Ordinal);
+        string workspaceCandidate = CtGenerationPaths.CacheDirectory(workspace, "sbt-workspace");
+        Assert.False(Directory.Exists(Path.Combine(workspaceCandidate, "build")));
+    }
+
+    [Fact]
+    public void Contained_directory_symbolic_links_are_not_double_counted_in_candidate_bytes()
+    {
+        string projectRoot = Path.Combine(_root, "project");
+        string assetsRoot = Path.Combine(projectRoot, "assets");
+        Directory.CreateDirectory(assetsRoot);
+        string projectPath = Path.Combine(projectRoot, "build.sbt");
+        string assetPath = Path.Combine(assetsRoot, "classes.bin");
+        File.WriteAllText(projectPath, "name := \"shadow\"\n");
+        File.WriteAllText(assetPath, "compiled\n");
+        Directory.CreateSymbolicLink(Path.Combine(projectRoot, "assets-alias"), "assets");
+
+        ContinuousTestWorkspace workspace = new(
+            WorkspaceId: "ws:sbt-shadow",
+            WorkspaceRoot: _root,
+            ProjectPath: projectPath,
+            BuildOutputRoot: Path.Combine(_root, ".miller", "ct-sbt"),
+            Framework: "sbt");
+
+        SbtWorkspaceShadowResult result = SbtWorkspaceShadow.Sync(workspace, CancellationToken.None);
+        long expectedBytes =
+            new FileInfo(Path.Combine(result.ShadowRoot, "build.sbt")).Length
+            + new FileInfo(Path.Combine(result.ShadowRoot, "assets", "classes.bin")).Length
+            + new FileInfo(Path.Combine(result.ShadowRoot, ".git", "HEAD")).Length
+            + new FileInfo(Path.Combine(result.ShadowRoot, ".git", "config")).Length
+            + new FileInfo(Path.Combine(result.WorkspaceCandidateRoot, "manifest.json")).Length;
+
+        Assert.Equal(expectedBytes, result.WorkspaceCandidateBytes);
+    }
+
+    [Fact]
     public void External_symbolic_links_are_rejected_with_the_offending_relative_path()
     {
         string projectRoot = Path.Combine(_root, "project");
@@ -367,6 +422,37 @@ public sealed class SbtWorkspaceShadowTests : IDisposable
         Assert.True(File.Exists(targetArtifactPath));
         Assert.Equal("compiled\n", File.ReadAllText(targetArtifactPath));
         Assert.True(File.Exists(Path.Combine(result.ShadowRoot, "build.sbt")));
+    }
+
+    [Fact]
+    public void Removing_a_source_directory_preserves_nested_build_owned_git_artifacts()
+    {
+        string projectRoot = Path.Combine(_root, "project");
+        string moduleRoot = Path.Combine(projectRoot, "module");
+        Directory.CreateDirectory(moduleRoot);
+        string projectPath = Path.Combine(projectRoot, "build.sbt");
+        string sourcePath = Path.Combine(moduleRoot, "source.scala");
+        File.WriteAllText(projectPath, "name := \"shadow\"\n");
+        File.WriteAllText(sourcePath, "object Source\n");
+
+        ContinuousTestWorkspace workspace = new(
+            WorkspaceId: "ws:sbt-shadow",
+            WorkspaceRoot: _root,
+            ProjectPath: projectPath,
+            BuildOutputRoot: Path.Combine(_root, ".miller", "ct-sbt"),
+            Framework: "sbt");
+
+        SbtWorkspaceShadowResult first = SbtWorkspaceShadow.Sync(workspace, CancellationToken.None);
+        string buildGitStatePath = Path.Combine(first.ShadowRoot, "module", "build-cache", ".git", "HEAD");
+        Directory.CreateDirectory(Path.GetDirectoryName(buildGitStatePath)!);
+        File.WriteAllText(buildGitStatePath, "ref: refs/heads/main\n");
+        Directory.Delete(moduleRoot, recursive: true);
+
+        SbtWorkspaceShadowResult result = SbtWorkspaceShadow.Sync(workspace, CancellationToken.None);
+
+        Assert.True(File.Exists(buildGitStatePath));
+        Assert.Equal("ref: refs/heads/main\n", File.ReadAllText(buildGitStatePath));
+        Assert.False(File.Exists(Path.Combine(result.ShadowRoot, "module", "source.scala")));
     }
 
     [Fact]
@@ -487,6 +573,30 @@ public sealed class SbtWorkspaceShadowTests : IDisposable
         Assert.Contains("stream.fifo", exception.Message, StringComparison.Ordinal);
         string workspaceCandidate = CtGenerationPaths.CacheDirectory(workspace, "sbt-workspace");
         Assert.False(File.Exists(Path.Combine(workspaceCandidate, "manifest.json")));
+    }
+
+    [Fact]
+    public void Unix_file_type_mode_classifier_distinguishes_regular_files_from_fifos()
+    {
+        Assert.True(SbtWorkspaceShadow.IsRegularFileType(0x8000));
+        Assert.False(SbtWorkspaceShadow.IsRegularFileType(0x1000));
+    }
+
+    [Fact]
+    public void Portable_file_classifier_reads_regular_files_and_fifos_without_opening()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        string projectRoot = Path.Combine(_root, "project");
+        Directory.CreateDirectory(projectRoot);
+        string regularPath = Path.Combine(projectRoot, "regular.txt");
+        string fifoPath = Path.Combine(projectRoot, "stream.fifo");
+        File.WriteAllText(regularPath, "regular\n");
+        Assert.Equal(0, mkfifo(fifoPath, 0x1B6));
+
+        Assert.True(SbtWorkspaceShadow.IsRegularFile(regularPath));
+        Assert.False(SbtWorkspaceShadow.IsRegularFile(fifoPath));
     }
 
     [DllImport("libc", SetLastError = true)]
