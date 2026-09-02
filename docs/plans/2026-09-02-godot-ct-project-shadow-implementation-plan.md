@@ -95,11 +95,11 @@
 **Approach:** Begin with direct shared-interface and adapter tests that fail because the new types do not exist. Move existing code without weakening any sbt scenario, then add Godot-specific red/green cases for warm metadata fast path, build-owned `.godot`, committed `.import`, global candidates, stale/import digests, marker recovery, budget refusal without recopy, and source immutability. Keep real-filesystem tests; do not introduce `IFileSystem`.
 
 **Acceptance criteria:**
-- [ ] Every existing `SbtWorkspaceShadowTests` case passes with unchanged sbt paths, strict-hash repair, metrics, and dependency-cache ordering.
-- [ ] Shared tests cover collision, traversal, links, special files, manifest ownership/recovery, cancellation, concurrency, metadata, budget, path length, no-follow measurement, and both integrity modes.
-- [ ] Godot shadow tests prove exact project-root scope, `.godot` preservation, `.import` ownership, `.gdignore`, import/over-budget state, two candidate roots, zero-copy/zero-hash warm sync, and no source mutation.
-- [ ] ADR-0008 records the earned two-policy seam and rejected duplicate/cold/in-place alternatives.
-- [ ] Worker-scope verification passes and the serial worker commits only the owned files plus its checkpoint.
+- [x] Every existing `SbtWorkspaceShadowTests` case passes with unchanged sbt paths, strict-hash repair, metrics, and dependency-cache ordering.
+- [x] Shared tests cover collision, traversal, links, special files, manifest ownership/recovery, cancellation, concurrency, metadata, budget, path length, no-follow measurement, and both integrity modes.
+- [x] Godot shadow tests prove exact project-root scope, `.godot` preservation, `.import` ownership, `.gdignore`, import/over-budget state, two candidate roots, zero-copy/zero-hash warm sync, and no source mutation.
+- [x] ADR-0008 records the earned two-policy seam and rejected duplicate/cold/in-place alternatives.
+- [x] Worker-scope verification passes and the serial worker commits only the owned files plus its checkpoint.
 
 ### Task 2: GUT tooling and provider
 
