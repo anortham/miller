@@ -318,13 +318,13 @@ deviation, Pest cases fall back to per-file granularity and the findings doc say
 Parse results only from the `--log-junit` artifact via `JUnitXmlResultParser`.
 
 **Acceptance criteria:**
-- [ ] Inventory tests prove pest wins over phpunit when both tokens are present; phpunit-only
+- [x] Inventory tests prove pest wins over phpunit when both tokens are present; phpunit-only
       composer.json → `phpunit`.
-- [ ] Fast tests cover both binaries' argv, selection escaping, chunking, empty-selection throw,
+- [x] Fast tests cover both binaries' argv, selection escaping, chunking, empty-selection throw,
       `WholeSuite`, and missing-vendor-binary error text.
-- [ ] Scale smoke runs a 2-test PHPUnit fixture when phpunit is installed; skips otherwise.
-- [ ] `ContinuousTestLanguageFamily` maps `.php` and label `php`.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] Scale smoke runs a 2-test PHPUnit fixture when phpunit is installed; skips otherwise.
+- [x] `ContinuousTestLanguageFamily` maps `.php` and label `php`.
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ### Task 5: JVM provider core + Gradle backend
 
