@@ -377,12 +377,12 @@ root wrapper is required instead, the spike records the working form). Skip `set
 roots.
 
 **Acceptance criteria:**
-- [ ] Inventory detects all three JVM build files with their framework values.
-- [ ] Fast tests cover wrapper-vs-PATH resolution, dry-run discovery parse (via fixtures),
+- [x] Inventory detects all three JVM build files with their framework values.
+- [x] Fast tests cover wrapper-vs-PATH resolution, dry-run discovery parse (via fixtures),
       selection argv, empty-selection throw, `WholeSuite`, and unregistered-framework refusal for
       `maven`/`sbt` at this task's state.
-- [ ] Scale smoke runs a 2-test JUnit 5 Gradle fixture when gradle is installed; skips otherwise.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] Scale smoke runs a 2-test JUnit 5 Gradle fixture when gradle is installed; skips otherwise.
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ### Task 6: JVM Maven backend
 
