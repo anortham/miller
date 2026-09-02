@@ -2,6 +2,7 @@ using Miller.Testing;
 using Miller.Testing.Providers.Php;
 using Miller.Testing.Providers.Qml;
 using Miller.Testing.Providers.Ruby;
+using Miller.Testing.Providers.Jvm;
 using Xunit;
 
 namespace Miller.Tests.Testing.Daemon.Engine;
@@ -69,6 +70,39 @@ public sealed class ContinuousTestProviderFactoryTests : IDisposable
         Assert.IsType<PhpTestProvider>(factory.Resolve(Workspace("composer.json", null)).Provider);
         Assert.Equal("ct-provider:php", factory.Resolve(Workspace("composer.json", "phpunit")).ProviderSource);
         Assert.Equal("ct-provider:php", factory.Resolve(Workspace("composer.json", "pest")).ProviderSource);
+        Assert.IsType<JvmTestProvider>(factory.Resolve(Workspace("build.gradle", "gradle")).Provider);
+        Assert.Equal("ct-provider:jvm", factory.Resolve(Workspace("build.gradle", "gradle")).ProviderSource);
+    }
+
+    [Theory]
+    [InlineData("maven", "pom.xml")]
+    [InlineData("sbt", "build.sbt")]
+    public async Task Unregistered_jvm_frameworks_refuse_until_their_backend_is_registered(
+        string framework,
+        string projectFile)
+    {
+        var factory = ContinuousTestProviderFactory.CreateDefault();
+        ContinuousTestWorkspace workspace = Workspace(projectFile, framework);
+
+        ContinuousTestProviderResolution resolution = factory.Resolve(workspace);
+
+        Assert.Equal("ct-provider:unsupported", resolution.ProviderSource);
+        ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            resolution.Provider.DiscoverAsync(workspace, TestContext.Current.CancellationToken));
+        Assert.Contains(framework, exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Null_framework_jvm_detection_does_not_route_maven_or_sbt_to_gradle()
+    {
+        var factory = ContinuousTestProviderFactory.CreateDefault();
+
+        Assert.Equal(
+            "ct-provider:unsupported",
+            factory.Resolve(Workspace("pom.xml", null)).ProviderSource);
+        Assert.Equal(
+            "ct-provider:unsupported",
+            factory.Resolve(Workspace("build.sbt", null)).ProviderSource);
     }
 
     [Fact]

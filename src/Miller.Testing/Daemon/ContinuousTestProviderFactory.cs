@@ -1,6 +1,7 @@
 using Miller.Testing.Providers.Qml;
 using Miller.Testing.Providers.Php;
 using Miller.Testing.Providers.Ruby;
+using Miller.Testing.Providers.Jvm;
 
 namespace Miller.Testing;
 
@@ -95,6 +96,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
         var go = new GoTestProvider(process);
         var ruby = new RubyTestProvider(process);
         var php = new PhpTestProvider(process);
+        var jvm = new JvmTestProvider(process);
         return new ContinuousTestProviderFactory(
             new DotnetTestProvider(process),
             new Dictionary<string, ContinuousTestProviderRegistration>(StringComparer.Ordinal)
@@ -111,6 +113,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
                 ["rspec"] = new(ruby, "ct-provider:ruby"),
                 ["phpunit"] = new(php, "ct-provider:php"),
                 ["pest"] = new(php, "ct-provider:php"),
+                ["gradle"] = new(jvm, "ct-provider:jvm"),
             })
         {
             DefaultProcessRunner = process,
@@ -185,6 +188,14 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
             && TryResolve(PhpFrameworks, out ContinuousTestProviderRegistration php))
         {
             return new ContinuousTestProviderResolution(php.Provider, php.ProviderSource);
+        }
+
+        if (framework is null
+            && JvmTestProvider.IsJvmProjectFile(workspace.ProjectPath)
+            && JvmTestProvider.FrameworkForProject(workspace.ProjectPath) is { } jvmFramework
+            && TryResolve([jvmFramework], out ContinuousTestProviderRegistration jvm))
+        {
+            return new ContinuousTestProviderResolution(jvm.Provider, jvm.ProviderSource);
         }
 
         if (framework is not null && _frameworkProviders.TryGetValue(framework, out ContinuousTestProviderRegistration? registration))

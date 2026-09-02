@@ -9,8 +9,9 @@ namespace Miller.Tests.Testing;
 /// lives in exactly one place.
 ///
 /// That single signal is what <see cref="Conventions.CtScaleTraitConventionTests"/> keys on: any test
-/// that calls <see cref="RequireDotnet"/>, <see cref="RequireCargo"/>, <see cref="RequireNode"/>, or
-/// <see cref="RequirePython"/> spawns a real provider process and MUST therefore carry
+/// that calls <see cref="RequireDotnet"/>, <see cref="RequireCargo"/>, <see cref="RequireNode"/>,
+/// <see cref="RequirePython"/>, <see cref="RequireJava"/>, or <see cref="RequireGradle"/> spawns a real
+/// provider process and MUST therefore carry
 /// <c>[Trait("Category","Scale")]</c> so the default fast suite excludes it. Before this helper existed
 /// the locator was copy-pasted into the Task 5/8 Scale files, so there was no reliable signal a guard
 /// could trust.
@@ -173,6 +174,29 @@ public static class CtProviderTestSupport
         string? binary = LocateRuby();
         Assert.SkipWhen(binary is null,
             "ruby executable is required for RubyTestProvider Scale smoke");
+        return binary!;
+    }
+
+    public static string? LocateJava() =>
+        LocateOnPath(OperatingSystem.IsWindows() ? "java.exe" : "java");
+
+    public static string RequireJava()
+    {
+        string? binary = LocateJava();
+        Assert.SkipWhen(binary is null,
+            "Java is required for JVM provider Scale smoke");
+        return binary!;
+    }
+
+    public static string? LocateGradle() =>
+        LocateOnPath(OperatingSystem.IsWindows() ? "gradle.bat" : "gradle")
+        ?? LocateOnPath(OperatingSystem.IsWindows() ? "gradle.exe" : "gradle");
+
+    public static string RequireGradle()
+    {
+        string? binary = LocateGradle();
+        Assert.SkipWhen(binary is null,
+            "Gradle 8.3+ is required for JVM Gradle provider Scale smoke");
         return binary!;
     }
 

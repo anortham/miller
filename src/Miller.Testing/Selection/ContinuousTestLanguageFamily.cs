@@ -10,12 +10,14 @@ public static class ContinuousTestLanguageFamily
     public const string Rust = "rust";
     public const string Ruby = "ruby";
     public const string Php = "php";
+    public const string Jvm = "jvm";
 
     public static string? FromLabel(string? label)
     {
         if (string.IsNullOrWhiteSpace(label))
             return null;
 
+        // Java, Kotlin, and Scala sources share a JVM compilation lane, so changes in any one label can impact the same test project.
         return label.Trim().ToLowerInvariant() switch
         {
             "csharp" or "razor" or "vbnet" => Dotnet,
@@ -26,6 +28,7 @@ public static class ContinuousTestLanguageFamily
             "rust" => Rust,
             "ruby" => Ruby,
             "php" => Php,
+            "java" or "kotlin" or "scala" => Jvm,
             _ => null,
         };
     }
@@ -61,6 +64,10 @@ public static class ContinuousTestLanguageFamily
             ".rs" => "rust",
             ".rb" => "ruby",
             ".php" => "php",
+            ".java" => "java",
+            ".kt" => "kotlin",
+            ".kts" => "kotlin",
+            ".scala" => "scala",
             _ => null,
         };
     }

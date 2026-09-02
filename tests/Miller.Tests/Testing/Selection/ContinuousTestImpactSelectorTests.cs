@@ -49,6 +49,10 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     [InlineData("qml", "qml", ".qml", "qml")]
     [InlineData("go", "go", ".go", "go")]
     [InlineData("php", "php", ".php", "php")]
+    [InlineData("java", "jvm", ".java", "java")]
+    [InlineData("kotlin", "jvm", ".kt", "kotlin")]
+    [InlineData("kotlin", "jvm", ".kts", "kotlin")]
+    [InlineData("scala", "jvm", ".scala", "scala")]
     public void Language_family_maps_exact_labels_and_paths(
         string label,
         string expected,
@@ -67,6 +71,14 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.Null(ContinuousTestLanguageFamily.FromPath("src/Thing.xyz"));
         Assert.False(ContinuousTestLanguageFamily.AreCompatible("vbnet", "javascript"));
         Assert.False(ContinuousTestLanguageFamily.AreCompatible("unknown-language", "csharp"));
+    }
+
+    [Fact]
+    public void Language_family_treats_java_kotlin_and_scala_as_one_jvm_family()
+    {
+        Assert.True(ContinuousTestLanguageFamily.AreCompatible("java", "kotlin"));
+        Assert.True(ContinuousTestLanguageFamily.AreCompatible(".kt", ".scala"));
+        Assert.True(ContinuousTestLanguageFamily.AreCompatible("scala", ".java"));
     }
 
     [Fact]

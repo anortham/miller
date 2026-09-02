@@ -1449,6 +1449,10 @@ public static class ContinuousTestProjectInventory
             || string.Equals(name, "go.mod", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "package.json", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "Gemfile", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "pom.xml", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "build.gradle", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "build.gradle.kts", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "build.sbt", StringComparison.OrdinalIgnoreCase)
             || PhpTestProvider.IsPhpProjectFile(path)
             || PythonProjectNames.Contains(name)
             || IsCMakeLists(path)
@@ -1465,6 +1469,25 @@ public static class ContinuousTestProjectInventory
         if (string.Equals(name, "Cargo.toml", StringComparison.OrdinalIgnoreCase))
         {
             framework = "cargo";
+            return true;
+        }
+
+        if (string.Equals(name, "pom.xml", StringComparison.OrdinalIgnoreCase))
+        {
+            framework = "maven";
+            return true;
+        }
+
+        if (string.Equals(name, "build.gradle", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "build.gradle.kts", StringComparison.OrdinalIgnoreCase))
+        {
+            framework = "gradle";
+            return true;
+        }
+
+        if (string.Equals(name, "build.sbt", StringComparison.OrdinalIgnoreCase))
+        {
+            framework = "sbt";
             return true;
         }
 
@@ -1805,6 +1828,13 @@ public static class ContinuousTestProjectInventory
             return "dotnet";
         if (string.Equals(name, "Cargo.toml", StringComparison.OrdinalIgnoreCase))
             return "cargo";
+        if (string.Equals(name, "pom.xml", StringComparison.OrdinalIgnoreCase))
+            return "maven";
+        if (string.Equals(name, "build.gradle", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "build.gradle.kts", StringComparison.OrdinalIgnoreCase))
+            return "gradle";
+        if (string.Equals(name, "build.sbt", StringComparison.OrdinalIgnoreCase))
+            return "sbt";
         if (string.Equals(name, "package.json", StringComparison.OrdinalIgnoreCase))
             return "node-test";
         if (string.Equals(name, "Gemfile", StringComparison.OrdinalIgnoreCase))

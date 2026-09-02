@@ -174,6 +174,33 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
     }
 
     [Fact]
+    public void Discover_classifies_each_jvm_build_file_and_ignores_settings_only_roots()
+    {
+        WriteProject("build.gradle", "plugins { id 'java' }");
+        WriteProject("module/build.gradle.kts", "plugins { java }");
+        WriteProject("service/pom.xml", "<project />");
+        WriteProject("legacy/build.sbt", "scalaVersion := \"3.3.0\"");
+        WriteProject("settings.gradle", "rootProject.name = 'settings-only'");
+
+        IReadOnlyList<ContinuousTestProject> projects = ContinuousTestProjectInventory.Discover(_root, "ws:1");
+
+        Assert.Equal(
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["build.gradle"] = "gradle",
+                ["build.gradle.kts"] = "gradle",
+                ["pom.xml"] = "maven",
+                ["build.sbt"] = "sbt",
+            },
+            projects.ToDictionary(
+                project => Path.GetFileName(project.ProjectPath),
+                project => project.Framework!,
+                StringComparer.OrdinalIgnoreCase));
+        Assert.DoesNotContain(projects, project =>
+            Path.GetFileName(project.ProjectPath).Equals("settings.gradle", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Discover_skips_a_helper_host_whose_name_contains_Test()
     {
         WriteProject("tests/App.SharedTestHost/App.SharedTestHost.csproj", """
