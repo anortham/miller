@@ -188,6 +188,29 @@ public static class CtProviderTestSupport
         return binary!;
     }
 
+    public static string? LocatePhp() =>
+        LocateOnPath(OperatingSystem.IsWindows() ? "php.exe" : "php");
+
+    public static string RequirePhp()
+    {
+        string? binary = LocatePhp();
+        Assert.SkipWhen(binary is null,
+            "PHP is required for PhpTestProvider Scale smoke");
+        return binary!;
+    }
+
+    public static string? LocatePhpUnit() =>
+        LocateOnPath(OperatingSystem.IsWindows() ? "phpunit.bat" : "phpunit")
+        ?? LocateOnPath(OperatingSystem.IsWindows() ? "phpunit.exe" : "phpunit");
+
+    public static string RequirePhpUnit()
+    {
+        string? binary = LocatePhpUnit();
+        Assert.SkipWhen(binary is null,
+            "PHPUnit 10+ is required for PhpTestProvider Scale smoke");
+        return binary!;
+    }
+
     public static string? LocatePowerShell() =>
         LocateOnPath("pwsh.exe") ?? LocateOnPath("powershell.exe");
 

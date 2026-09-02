@@ -1538,6 +1538,28 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
             ContinuousTestFrameworkSupport.RemedyFor(project.Framework));
     }
 
+    [Fact]
+    public void Discover_prefers_pest_when_composer_declares_phpunit_and_pest()
+    {
+        WriteProject("composer.json", "{\"require-dev\":{\"phpunit/phpunit\":\"^12\",\"pestphp/pest\":\"^3\"}}");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:php"));
+
+        Assert.Equal("pest", project.Framework);
+    }
+
+    [Fact]
+    public void Discover_classifies_a_phpunit_only_composer_project()
+    {
+        WriteProject("composer.json", "{\"require-dev\":{\"phpunit/phpunit\":\"^12\"}}");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:php"));
+
+        Assert.Equal("phpunit", project.Framework);
+    }
+
     private static bool IsInside(string root, string path)
     {
         string relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(path));

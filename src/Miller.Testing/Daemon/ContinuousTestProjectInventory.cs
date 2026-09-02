@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Miller.Indexing;
+using Miller.Testing.Providers.Php;
 using Miller.Testing.Providers.Qml;
 
 namespace Miller.Testing;
@@ -1448,6 +1449,7 @@ public static class ContinuousTestProjectInventory
             || string.Equals(name, "go.mod", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "package.json", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "Gemfile", StringComparison.OrdinalIgnoreCase)
+            || PhpTestProvider.IsPhpProjectFile(path)
             || PythonProjectNames.Contains(name)
             || IsCMakeLists(path)
             || string.Equals(Path.GetExtension(path), ".pro", StringComparison.OrdinalIgnoreCase)
@@ -1515,6 +1517,25 @@ public static class ContinuousTestProjectInventory
             if (ContainsToken(text, "minitest"))
             {
                 framework = "minitest";
+                return true;
+            }
+
+            framework = null;
+            return false;
+        }
+
+        if (PhpTestProvider.IsPhpProjectFile(path))
+        {
+            string text = ReadHead(path);
+            if (text.Contains("pestphp/pest", StringComparison.OrdinalIgnoreCase))
+            {
+                framework = "pest";
+                return true;
+            }
+
+            if (text.Contains("phpunit/phpunit", StringComparison.OrdinalIgnoreCase))
+            {
+                framework = "phpunit";
                 return true;
             }
 
@@ -1788,6 +1809,8 @@ public static class ContinuousTestProjectInventory
             return "node-test";
         if (string.Equals(name, "Gemfile", StringComparison.OrdinalIgnoreCase))
             return "rspec";
+        if (PhpTestProvider.IsPhpProjectFile(path))
+            return PhpTestTooling.DetectFramework(path) ?? "phpunit";
         if (PythonProjectNames.Contains(name))
             return "pytest";
         return null;

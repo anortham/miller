@@ -1,6 +1,7 @@
 using Miller.Testing;
 using Miller.Testing.Parsing;
 using Miller.Testing.Providers.Qml;
+using Miller.Testing.Providers.Php;
 using Miller.Testing.Providers.Ruby;
 using Miller.Tests.Testing.Providers.Dotnet;
 using QmlScriptedTestProcessRunner = Miller.Tests.Testing.Providers.Qml.ScriptedTestProcessRunner;
@@ -164,6 +165,47 @@ public sealed class WholeSuiteProviderContractTests : IDisposable
         Assert.Contains("--format", command.Arguments);
         Assert.Contains("json", command.Arguments);
         Assert.Contains("--out", command.Arguments);
+        AssertOneResultPerId(ids, result);
+    }
+
+    [Fact]
+    public async Task Php_whole_suite_run_is_unfiltered_and_reports_every_selected_case()
+    {
+        string root = Path.Combine(_dir, "php");
+        Directory.CreateDirectory(Path.Combine(root, "vendor", "bin"));
+        File.WriteAllText(Path.Combine(root, "composer.json"),
+            "{\"require-dev\":{\"phpunit/phpunit\":\"^12\"}}");
+        File.WriteAllText(Path.Combine(root, "vendor", "bin", "phpunit"), string.Empty);
+        var workspace = Track(new ContinuousTestWorkspace(
+            WorkspaceId: "ws:php",
+            WorkspaceRoot: root,
+            ProjectPath: Path.Combine(root, "composer.json"),
+            BuildOutputRoot: Path.Combine(_dir, "ct-build", "php"),
+            Framework: "phpunit"));
+        string[] ids =
+        [
+            PhpTestTooling.EncodeCaseId(workspace.WorkspaceId, workspace.ProjectPath,
+                "Tests\\Unit\\CalculatorTest", "testAdd"),
+            PhpTestTooling.EncodeCaseId(workspace.WorkspaceId, workspace.ProjectPath,
+                "Tests\\Unit\\CalculatorTest", "testSubtract"),
+        ];
+        var runner = new FakeTestProcessRunner();
+        runner.Enqueue();
+        runner.OnRun = command =>
+        {
+            string artifactPath = command.Arguments[command.Arguments.ToList().IndexOf("--log-junit") + 1];
+            Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+            File.WriteAllText(artifactPath,
+                "<testsuite name=\"Tests\\\\Unit\\\\CalculatorTest\" tests=\"2\"><testcase class=\"Tests\\\\Unit\\\\CalculatorTest\" name=\"testAdd\" /><testcase class=\"Tests\\\\Unit\\\\CalculatorTest\" name=\"testSubtract\" /></testsuite>");
+        };
+        var provider = new PhpTestProvider(runner);
+
+        ProviderRunResult result = await provider.RunAsync(
+            Request(workspace, ids) with { WholeSuite = true },
+            TestContext.Current.CancellationToken);
+
+        TestProcessCommand command = Assert.Single(runner.Calls);
+        Assert.DoesNotContain("--filter", command.Arguments);
         AssertOneResultPerId(ids, result);
     }
 

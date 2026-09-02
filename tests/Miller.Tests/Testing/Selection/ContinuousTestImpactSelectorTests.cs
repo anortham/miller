@@ -48,6 +48,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     [InlineData("typescript", "node", ".cts", "typescript")]
     [InlineData("qml", "qml", ".qml", "qml")]
     [InlineData("go", "go", ".go", "go")]
+    [InlineData("php", "php", ".php", "php")]
     public void Language_family_maps_exact_labels_and_paths(
         string label,
         string expected,

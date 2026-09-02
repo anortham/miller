@@ -1,4 +1,5 @@
 using Miller.Testing;
+using Miller.Testing.Providers.Php;
 using Miller.Testing.Providers.Qml;
 using Miller.Testing.Providers.Ruby;
 using Xunit;
@@ -65,6 +66,9 @@ public sealed class ContinuousTestProviderFactoryTests : IDisposable
         Assert.Equal("ct-provider:go", factory.Resolve(Workspace("go.mod", "go")).ProviderSource);
         Assert.IsType<RubyTestProvider>(factory.Resolve(Workspace("Gemfile", null)).Provider);
         Assert.Equal("ct-provider:ruby", factory.Resolve(Workspace("Gemfile", "rspec")).ProviderSource);
+        Assert.IsType<PhpTestProvider>(factory.Resolve(Workspace("composer.json", null)).Provider);
+        Assert.Equal("ct-provider:php", factory.Resolve(Workspace("composer.json", "phpunit")).ProviderSource);
+        Assert.Equal("ct-provider:php", factory.Resolve(Workspace("composer.json", "pest")).ProviderSource);
     }
 
     [Fact]

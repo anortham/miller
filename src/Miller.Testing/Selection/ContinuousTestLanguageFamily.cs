@@ -9,6 +9,7 @@ public static class ContinuousTestLanguageFamily
     public const string Python = "python";
     public const string Rust = "rust";
     public const string Ruby = "ruby";
+    public const string Php = "php";
 
     public static string? FromLabel(string? label)
     {
@@ -24,6 +25,7 @@ public static class ContinuousTestLanguageFamily
             "python" => Python,
             "rust" => Rust,
             "ruby" => Ruby,
+            "php" => Php,
             _ => null,
         };
     }
@@ -58,6 +60,7 @@ public static class ContinuousTestLanguageFamily
             ".py" => "python",
             ".rs" => "rust",
             ".rb" => "ruby",
+            ".php" => "php",
             _ => null,
         };
     }

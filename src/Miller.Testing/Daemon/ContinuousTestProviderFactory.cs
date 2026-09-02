@@ -1,4 +1,5 @@
 using Miller.Testing.Providers.Qml;
+using Miller.Testing.Providers.Php;
 using Miller.Testing.Providers.Ruby;
 
 namespace Miller.Testing;
@@ -48,6 +49,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
     private static readonly string[] RustFrameworks = ["cargo", "rust"];
     private static readonly string[] GoFrameworks = ["go"];
     private static readonly string[] RubyFrameworks = ["rspec"];
+    private static readonly string[] PhpFrameworks = ["phpunit", "pest"];
 
     private readonly IContinuousTestProvider _dotnetProvider;
     private readonly IReadOnlyDictionary<string, ContinuousTestProviderRegistration> _frameworkProviders;
@@ -92,6 +94,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
         var qml = new QtQuickTestProvider(process);
         var go = new GoTestProvider(process);
         var ruby = new RubyTestProvider(process);
+        var php = new PhpTestProvider(process);
         return new ContinuousTestProviderFactory(
             new DotnetTestProvider(process),
             new Dictionary<string, ContinuousTestProviderRegistration>(StringComparer.Ordinal)
@@ -106,6 +109,8 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
                 ["qt-quick-test"] = new(qml, "ct-provider:qml"),
                 ["go"] = new(go, "ct-provider:go"),
                 ["rspec"] = new(ruby, "ct-provider:ruby"),
+                ["phpunit"] = new(php, "ct-provider:php"),
+                ["pest"] = new(php, "ct-provider:php"),
             })
         {
             DefaultProcessRunner = process,
@@ -173,6 +178,13 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
             && TryResolve(RubyFrameworks, out ContinuousTestProviderRegistration ruby))
         {
             return new ContinuousTestProviderResolution(ruby.Provider, ruby.ProviderSource);
+        }
+
+        if (framework is null
+            && PhpTestProvider.IsPhpProjectFile(workspace.ProjectPath)
+            && TryResolve(PhpFrameworks, out ContinuousTestProviderRegistration php))
+        {
+            return new ContinuousTestProviderResolution(php.Provider, php.ProviderSource);
         }
 
         if (framework is not null && _frameworkProviders.TryGetValue(framework, out ContinuousTestProviderRegistration? registration))
