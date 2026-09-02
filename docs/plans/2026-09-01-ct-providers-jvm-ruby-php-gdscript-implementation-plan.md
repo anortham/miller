@@ -212,9 +212,9 @@ Pure logic, zero I/O beyond the file convenience wrapper.
 (`Providers/Qml/QTestResultParser.cs` is the closest sibling — inspect it first).
 
 **Acceptance criteria:**
-- [ ] One passing test per Task 1 XML dialect fixture.
-- [ ] Malformed XML surfaces as a detectable parse failure, not an empty result.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] One passing test per Task 1 XML dialect fixture.
+- [x] Malformed XML surfaces as a detectable parse failure, not an empty result.
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ### Task 3: Ruby provider (RSpec)
 
