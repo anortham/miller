@@ -2,6 +2,7 @@ using Miller.Testing.Providers.Qml;
 using Miller.Testing.Providers.Php;
 using Miller.Testing.Providers.Ruby;
 using Miller.Testing.Providers.Jvm;
+using Miller.Testing.Providers.Godot;
 
 namespace Miller.Testing;
 
@@ -51,6 +52,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
     private static readonly string[] GoFrameworks = ["go"];
     private static readonly string[] RubyFrameworks = ["rspec"];
     private static readonly string[] PhpFrameworks = ["phpunit", "pest"];
+    private static readonly string[] GodotFrameworks = ["gut"];
 
     private readonly IContinuousTestProvider _dotnetProvider;
     private readonly IReadOnlyDictionary<string, ContinuousTestProviderRegistration> _frameworkProviders;
@@ -97,6 +99,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
         var ruby = new RubyTestProvider(process);
         var php = new PhpTestProvider(process);
         var jvm = new JvmTestProvider(process);
+        var godot = new GodotTestProvider(process);
         return new ContinuousTestProviderFactory(
             new DotnetTestProvider(process),
             new Dictionary<string, ContinuousTestProviderRegistration>(StringComparer.Ordinal)
@@ -116,6 +119,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
                 ["gradle"] = new(jvm, "ct-provider:jvm"),
                 ["maven"] = new(jvm, "ct-provider:jvm"),
                 ["sbt"] = new(jvm, "ct-provider:jvm"),
+                ["gut"] = new(godot, "ct-provider:godot"),
             })
         {
             DefaultProcessRunner = process,
@@ -198,6 +202,13 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
             && TryResolve([jvmFramework], out ContinuousTestProviderRegistration jvm))
         {
             return new ContinuousTestProviderResolution(jvm.Provider, jvm.ProviderSource);
+        }
+
+        if (framework is null
+            && GodotTestProvider.IsGodotProjectFile(workspace.ProjectPath)
+            && TryResolve(GodotFrameworks, out ContinuousTestProviderRegistration godot))
+        {
+            return new ContinuousTestProviderResolution(godot.Provider, godot.ProviderSource);
         }
 
         if (framework is not null && _frameworkProviders.TryGetValue(framework, out ContinuousTestProviderRegistration? registration))

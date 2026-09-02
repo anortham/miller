@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Miller.Testing;
+using Miller.Testing.Providers.Godot;
 using Xunit;
 
 namespace Miller.Tests.Testing;
@@ -10,7 +12,8 @@ namespace Miller.Tests.Testing;
 ///
 /// That single signal is what <see cref="Conventions.CtScaleTraitConventionTests"/> keys on: any test
 /// that calls <see cref="RequireDotnet"/>, <see cref="RequireCargo"/>, <see cref="RequireNode"/>,
-/// <see cref="RequirePython"/>, <see cref="RequireJava"/>, <see cref="RequireGradle"/>, or <see cref="RequireMaven"/> spawns a real
+/// <see cref="RequirePython"/>, <see cref="RequireJava"/>, <see cref="RequireGradle"/>,
+/// <see cref="RequireMaven"/>, <see cref="RequireGodot"/>, or <see cref="RequireGut"/> spawns a real
 /// provider process and MUST therefore carry
 /// <c>[Trait("Category","Scale")]</c> so the default fast suite excludes it. Before this helper existed
 /// the locator was copy-pasted into the Task 5/8 Scale files, so there was no reliable signal a guard
@@ -230,6 +233,53 @@ public static class CtProviderTestSupport
         Assert.SkipWhen(binary is null,
             "sbt 1.x is required for JVM sbt provider Scale smoke");
         return binary!;
+    }
+
+    public static string? LocateGodot()
+    {
+        try
+        {
+            return GutTooling.ResolveGodotExecutable();
+        }
+        catch (ContinuousTestProviderException)
+        {
+            return null;
+        }
+    }
+
+    public static string RequireGodot()
+    {
+        string? binary = LocateGodot();
+        Assert.SkipWhen(binary is null,
+            "Godot 4 is required for GodotTestProvider Scale smoke");
+        return binary!;
+    }
+
+    public static string? LocateGut()
+    {
+        var candidates = new List<string>();
+        string? configured = Environment.GetEnvironmentVariable("MILLER_GUT_ROOT");
+        if (!string.IsNullOrWhiteSpace(configured))
+            candidates.Add(configured.Trim());
+        candidates.Add(Path.Combine(ScaleTestSupport.RepoRoot(), ".tools", "gut"));
+
+        foreach (string candidate in candidates)
+        {
+            string root = Path.GetFullPath(candidate);
+            string plugin = Path.Combine(root, "addons", "gut", "plugin.cfg");
+            if (File.Exists(plugin))
+                return root;
+        }
+
+        return null;
+    }
+
+    public static string RequireGut()
+    {
+        string? root = LocateGut();
+        Assert.SkipWhen(root is null,
+            "GUT 9 addon is required for GodotTestProvider Scale smoke");
+        return root!;
     }
 
     public static string? LocateRspec() =>

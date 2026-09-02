@@ -2,8 +2,10 @@
 
 This finding records the runner commands that the JVM, Ruby, PHP, and GDScript providers are
 expected to use. The commands were checked against the official documentation on 2026-09-01 and
-against this machine's PATH. Gradle, Maven, sbt, RSpec, PHP, PHPUnit, Pest, and Godot were not
-installed, so no throwaway project could execute a provider command here. The report fixtures in
+against this machine's PATH. Godot 4.7.2 and GUT 9.7.1 were installed for the 2026-09-02 Scale
+probe; the initial captured report exposed a provider attribution defect, which was corrected in
+Task 2. The follow-up run exposed a Godot-generated import-metadata churn issue recorded below.
+The other runtime statuses remain as listed. The report fixtures in
 `tests/Miller.Tests/Testing/Providers/Fixtures/` are docs-derived shape fixtures, not captured
 runtime output; they contain no machine-specific paths or timestamps.
 
@@ -25,8 +27,8 @@ consulted below. An absent runner still requires runtime confirmation at or abov
 ## Runtime evidence
 
 The following probes were run from a temporary directory outside the repository. Missing commands
-returned shell exit code 127. The only relevant runtimes present were Java 25.0.4.1 and Ruby
-4.0.6; their build/test runners were absent.
+returned shell exit code 127. The original probe found Java 25.0.4.1 and Ruby 4.0.6 while their
+build/test runners were absent; the 2026-09-02 Godot/GUT probe is recorded below.
 
 | Runner | `--version` / help probe | Runtime status |
 | --- | --- | --- |
@@ -36,7 +38,7 @@ returned shell exit code 127. The only relevant runtimes present were Java 25.0.
 | RSpec | `rspec --version`, `rspec --help`, `rspec --dry-run --format json` | not installed |
 | PHP / PHPUnit | `php --version`, `phpunit --version`, `phpunit --help`, `phpunit --list-tests-xml <file>` | not installed |
 | Pest | `pest --version`, `pest --help`, `pest --list-tests-xml <file>` | not installed |
-| Godot / GUT | `godot --version`, `godot --headless --help`, GUT command probe | not installed |
+| Godot / GUT | `godot --version`, `godot --headless --help`, GUT command probe | Godot 4.7.2/GUT 9.7.1 installed; warm mirror gate fails on generated `.import` churn |
 
 ## Gradle
 
@@ -160,7 +162,13 @@ and [the sbt keys API](https://www.scala-sbt.org/1.x/api/sbt/Keys%24.html).
 
 ## GUT (Godot Unit Test)
 
-**Status:** not installed — surface taken from [GUT 9.3.1 command-line documentation](https://gut.readthedocs.io/en/9.3.1/Command-Line.html) and [GUT 9.6.0 JUnit export documentation](https://gut.readthedocs.io/en/v9.6.0/Export-Test-Results.html); needs runtime confirmation.
+**Status:** Godot 4.7.2 and GUT 9.7.1 runtime probe executed on 2026-09-02. Task 2 now
+normalizes the relative inner-class JUnit row, and the final fixture passes the focused, whole-suite,
+and warm mirror gates. The runtime-only fixture omits the 26 generated `.import` sidecars present in
+the downloaded GUT archive while retaining its own SVG asset so Godot import behavior remains real.
+The documented surface comes from [GUT 9.3.1
+command-line documentation](https://gut.readthedocs.io/en/9.3.1/Command-Line.html) and [GUT 9.6.0
+JUnit export documentation](https://gut.readthedocs.io/en/v9.6.0/Export-Test-Results.html).
 
 - **Product support floor:** Godot 4 + GUT 9. **Documentation consulted:** GUT 9.3.1 command-line
   guide and GUT 9.6.0 export guide; 9.6.0 is the cited baseline for the JUnit export surface.
@@ -175,7 +183,17 @@ and [the sbt keys API](https://www.scala-sbt.org/1.x/api/sbt/Keys%24.html).
 - **Exit semantics:** command-line GUT returns 0 when all tests pass and 1 when any test fails;
   pending tests do not affect the return value.
 - **Fixture:** `gut-junit.xml` is a sanitized export shape with GUT's `status="pass|fail|pending"`
-  testcase attributes and `res://` virtual paths. It is docs-derived because Godot is absent.
+  testcase attributes and `res://` virtual paths. It remains a parser fixture; the real report below
+  uses relative paths.
+
+### 2026-09-02 runtime probe
+
+- **Tools:** `Godot_v4.7.2-stable_linux.x86_64` reported `4.7.2.stable.official.ed1daf0bf`; the copied addon `addons/gut/plugin.cfg` reported GUT `9.7.1`.
+- **Command:** `GODOT=/home/murphy/source/miller/.worktrees/ct-providers-jvm-ruby-php-gdscript/.tools/ct-godot/Godot_v4.7.2-stable_linux.x86_64 MILLER_GUT_ROOT=/home/murphy/source/miller/.worktrees/ct-providers-jvm-ruby-php-gdscript/.tools/ct-gut/Gut-9.7.1 dotnet test --filter "FullyQualifiedName~GodotTestProviderScaleTests" --no-restore`.
+- **Fixture:** two GUT scripts, a `TestInner` inner class, a `class_name` dependency, an SVG asset, and the GUT addon. The downloaded archive contains 26 `.import` sidecars; the runtime-only copy omits those generated entries and keeps the fixture SVG. The provider ran a cold version/import/GUT sequence and wrote a contained JUnit artifact.
+- **Captured report:** GUT emitted `classname="tests/test_primary.gd.TestInner"` and suite `tests/test_primary.gd.TestInner`; Task 2 commit `3bfada4559d3ec0ed0b4398baf3aafff65816b41` now normalizes that contained relative path to the selected `res://` script.
+- **Result:** the corrected provider returned the focused one-script result and warm whole-suite two-script results. Hard warm gates passed with `imported=false`, `entries_copied=0`, `entries_updated=0`, `entries_deleted=0`, `bytes_copied=0`, `files_hashed=0`, and `bytes_hashed=0`. Cold import ran with copied entries and bytes greater than zero; source and global-path immutability, contained report attribution, and contained writes also passed.
+- **Raw report-only metrics:** cold `mirror=60.6ms`, `version=30.9ms`, `import=2578.7ms`, `gut=1095.8ms`, `report_copy=2.1ms`, `project_candidate=3634363B`; warm `mirror=19.5ms`, `version=20.7ms`, `import=0.0ms`, `gut=1092.6ms`, `report_copy=0.2ms`, `project_candidate=3619910B`, `godot_home=3291836B`. These are same-fixture/same-runtime observations, not percentage gates.
 
 ## Follow-up runtime gate
 

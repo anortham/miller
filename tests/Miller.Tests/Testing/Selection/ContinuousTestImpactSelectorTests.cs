@@ -49,6 +49,7 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
     [InlineData("qml", "qml", ".qml", "qml")]
     [InlineData("go", "go", ".go", "go")]
     [InlineData("php", "php", ".php", "php")]
+    [InlineData("gdscript", "gdscript", ".gd", "gdscript")]
     [InlineData("java", "jvm", ".java", "java")]
     [InlineData("kotlin", "jvm", ".kt", "kotlin")]
     [InlineData("kotlin", "jvm", ".kts", "kotlin")]
@@ -79,6 +80,15 @@ public sealed class ContinuousTestImpactSelectorTests : IDisposable
         Assert.True(ContinuousTestLanguageFamily.AreCompatible("java", "kotlin"));
         Assert.True(ContinuousTestLanguageFamily.AreCompatible(".kt", ".scala"));
         Assert.True(ContinuousTestLanguageFamily.AreCompatible("scala", ".java"));
+    }
+
+    [Fact]
+    public void Language_family_keeps_gdscript_in_its_own_family()
+    {
+        Assert.Equal("gdscript", ContinuousTestLanguageFamily.FromLabel("gdscript"));
+        Assert.Equal("gdscript", ContinuousTestLanguageFamily.FromPath("gut:res://tests/test_math.gd"));
+        Assert.True(ContinuousTestLanguageFamily.AreCompatible("gdscript", ".gd"));
+        Assert.False(ContinuousTestLanguageFamily.AreCompatible("gdscript", "python"));
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Miller.Indexing;
+using Miller.Testing.Providers.Godot;
 using Miller.Testing.Providers.Php;
 using Miller.Testing.Providers.Qml;
 
@@ -1453,6 +1454,7 @@ public static class ContinuousTestProjectInventory
             || string.Equals(name, "build.gradle", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "build.gradle.kts", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "build.sbt", StringComparison.OrdinalIgnoreCase)
+            || GodotTestProvider.IsGodotProjectFile(path)
             || PhpTestProvider.IsPhpProjectFile(path)
             || PythonProjectNames.Contains(name)
             || IsCMakeLists(path)
@@ -1510,6 +1512,29 @@ public static class ContinuousTestProjectInventory
         if (string.Equals(name, "build.sbt", StringComparison.OrdinalIgnoreCase))
         {
             framework = "sbt";
+            return true;
+        }
+
+        if (GodotTestProvider.IsGodotProjectFile(path))
+        {
+            string projectRoot = Path.GetDirectoryName(Path.GetFullPath(path))!;
+            bool hasGut = File.Exists(Path.Combine(projectRoot, "addons", "gut", "plugin.cfg"));
+            bool hasGdUnit4 = File.Exists(Path.Combine(projectRoot, "addons", "gdUnit4", "plugin.cfg"));
+            if (!hasGut && !hasGdUnit4)
+            {
+                framework = null;
+                return false;
+            }
+
+            if (!hasGut)
+            {
+                framework = ContinuousTestFrameworkSupport.GdUnit4;
+                return true;
+            }
+
+            framework = IsSupportedGodotGut(path, projectRoot)
+                ? GutTooling.Framework
+                : ContinuousTestFrameworkSupport.GutUnsupported;
             return true;
         }
 
@@ -1626,8 +1651,67 @@ public static class ContinuousTestProjectInventory
         return false;
     }
 
+    private static bool IsSupportedGodotGut(string projectPath, string projectRoot)
+    {
+        if (!TryReadGodotConfigVersion(projectPath, out int configVersion)
+            || configVersion != 5)
+            return false;
+
+        string pluginPath = Path.Combine(projectRoot, "addons", "gut", "plugin.cfg");
+        try
+        {
+            return GutTooling.ReadGutMajor(pluginPath) >= GutTooling.MinimumGutMajor;
+        }
+        catch (ContinuousTestProviderException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadGodotConfigVersion(string projectPath, out int version)
+    {
+        version = 0;
+        Match match = Regex.Match(
+            ReadHead(projectPath),
+            @"(?m)^\s*config_version\s*=\s*(?<version>\d+)\s*$",
+            RegexOptions.CultureInvariant);
+        return match.Success
+            && int.TryParse(match.Groups["version"].Value, out version);
+    }
+
     private static IReadOnlyDictionary<string, object?>? ProjectMetadata(string projectPath, string workspaceRoot)
     {
+        if (GodotTestProvider.IsGodotProjectFile(projectPath))
+        {
+            string godotRoot = Path.GetDirectoryName(Path.GetFullPath(projectPath))!;
+            var godotMetadata = new Dictionary<string, object?>(StringComparer.Ordinal);
+            if (TryReadGodotConfigVersion(projectPath, out int configVersion))
+                godotMetadata["config_version"] = configVersion;
+
+            string gutPlugin = Path.Combine(godotRoot, "addons", "gut", "plugin.cfg");
+            if (File.Exists(gutPlugin))
+            {
+                try
+                {
+                    godotMetadata["gut_major"] = GutTooling.ReadGutMajor(gutPlugin);
+                }
+                catch (ContinuousTestProviderException)
+                {
+                    godotMetadata["gut_major"] = null;
+                }
+            }
+
+            string gdUnit4Plugin = Path.Combine(godotRoot, "addons", "gdUnit4", "plugin.cfg");
+            if (File.Exists(gdUnit4Plugin))
+            {
+                godotMetadata["gdunit4"] = true;
+                godotMetadata["gdunit4_reason"] = ContinuousTestFrameworkSupport.GdUnit4Reason;
+                godotMetadata["gdunit4_remedy"] = ContinuousTestFrameworkSupport.GdUnit4Remedy;
+            }
+
+            return godotMetadata;
+        }
+
         if (DotnetProjectExtensions.Contains(Path.GetExtension(projectPath)))
             return DotnetTestBackend.ToMetadata(DotnetTestBackend.ReadStatic(projectPath));
 

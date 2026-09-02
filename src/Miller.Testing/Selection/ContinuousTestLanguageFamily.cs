@@ -10,6 +10,7 @@ public static class ContinuousTestLanguageFamily
     public const string Rust = "rust";
     public const string Ruby = "ruby";
     public const string Php = "php";
+    public const string Gdscript = "gdscript";
     public const string Jvm = "jvm";
 
     public static string? FromLabel(string? label)
@@ -28,6 +29,7 @@ public static class ContinuousTestLanguageFamily
             "rust" => Rust,
             "ruby" => Ruby,
             "php" => Php,
+            "gdscript" => Gdscript,
             "java" or "kotlin" or "scala" => Jvm,
             _ => null,
         };
@@ -43,7 +45,16 @@ public static class ContinuousTestLanguageFamily
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
-        string extension = Path.GetExtension(path).ToLowerInvariant();
+        string normalized = path.Trim().Replace('\\', '/');
+        if (normalized.StartsWith("gut:", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized[4..];
+        if (normalized.StartsWith("res://", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized[6..];
+        int selector = normalized.IndexOf("::", StringComparison.Ordinal);
+        if (selector >= 0)
+            normalized = normalized[..selector];
+
+        string extension = Path.GetExtension(normalized).ToLowerInvariant();
         return extension switch
         {
             ".cs" => "csharp",
@@ -64,6 +75,7 @@ public static class ContinuousTestLanguageFamily
             ".rs" => "rust",
             ".rb" => "ruby",
             ".php" => "php",
+            ".gd" => "gdscript",
             ".java" => "java",
             ".kt" => "kotlin",
             ".kts" => "kotlin",

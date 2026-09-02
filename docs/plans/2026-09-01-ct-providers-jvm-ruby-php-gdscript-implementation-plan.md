@@ -491,17 +491,19 @@ Modify: same shared files as Task 3
 
 **What to build:** Full vertical slice like Task 3. `project.godot` joins `IsCandidateFileName`;
 inventory reads the addons directory beside it. Language family: `.gd` → `gdscript`, own family.
-Editor-import noise (a `.godot/` cache dir) must not break discovery — run with import-skipping
-flags as recorded in Task 1.
+The provider mirrors the project root into the supervised `godot-workspace/project` candidate,
+excluding `.godot` and other build-owned entries. It runs import only in that mirror with
+`godot --headless --path <mirror> --import`, then publishes an atomic source-metadata import stamp;
+the user project remains untouched and warm runs skip import when the stamp digest matches.
 
 **Acceptance criteria:**
-- [ ] Inventory tests prove: GUT project → `gut`; gdUnit4 project listed with refusal reason;
+- [x] Inventory tests prove: GUT project → `gut`; gdUnit4 project listed with refusal reason;
       bare Godot project ignored.
-- [ ] Fast tests cover argv construction, XML parse (fixture), empty-selection throw,
+- [x] Fast tests cover argv construction, XML parse (fixture), empty-selection throw,
       `WholeSuite`, and PATH/`GODOT` resolution order.
-- [ ] Scale smoke runs a 2-test GUT fixture when godot+GUT are available; skips otherwise.
-- [ ] `ContinuousTestLanguageFamily` maps `.gd` and label `gdscript`.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] Scale smoke runs a 2-test GUT fixture when godot+GUT are available; skips otherwise.
+- [x] `ContinuousTestLanguageFamily` maps `.gd` and label `gdscript`.
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ### Task 9: Docs and closeout
 

@@ -3,6 +3,7 @@ using Miller.Testing.Providers.Php;
 using Miller.Testing.Providers.Qml;
 using Miller.Testing.Providers.Ruby;
 using Miller.Testing.Providers.Jvm;
+using Miller.Testing.Providers.Godot;
 using Xunit;
 
 namespace Miller.Tests.Testing.Daemon.Engine;
@@ -84,6 +85,25 @@ public sealed class ContinuousTestProviderFactoryTests : IDisposable
 
         Assert.IsType<JvmTestProvider>(resolution.Provider);
         Assert.Equal("ct-provider:jvm", resolution.ProviderSource);
+    }
+
+    [Fact]
+    public void Default_factory_registers_gut_with_the_godot_provider()
+    {
+        var factory = ContinuousTestProviderFactory.CreateDefault();
+        ContinuousTestProviderResolution resolution = factory.Resolve(Workspace("project.godot", "gut"));
+
+        Assert.IsType<GodotTestProvider>(resolution.Provider);
+        Assert.Equal("ct-provider:godot", resolution.ProviderSource);
+    }
+
+    [Fact]
+    public void Null_framework_godot_detection_routes_project_file_to_the_godot_provider()
+    {
+        var factory = ContinuousTestProviderFactory.CreateDefault();
+
+        Assert.IsType<GodotTestProvider>(factory.Resolve(Workspace("project.godot", null)).Provider);
+        Assert.Equal("ct-provider:godot", factory.Resolve(Workspace("project.godot", null)).ProviderSource);
     }
 
     [Fact]

@@ -4,6 +4,7 @@ using Miller.Testing.Providers.Qml;
 using Miller.Testing.Providers.Php;
 using Miller.Testing.Providers.Ruby;
 using Miller.Testing.Providers.Jvm;
+using Miller.Testing.Providers.Godot;
 using Miller.Tests.Testing.Providers.Dotnet;
 using QmlScriptedTestProcessRunner = Miller.Tests.Testing.Providers.Qml.ScriptedTestProcessRunner;
 using Miller.Tests.Testing.Providers.Rust;
@@ -24,6 +25,7 @@ namespace Miller.Tests.Testing.Providers;
 /// <para>Every runner here is a fake or a scripted recorder. No real toolchain is launched, so these stay in
 /// the fast tier.</para>
 /// </summary>
+[Collection("GodotEnvironment")]
 public sealed class WholeSuiteProviderContractTests : IDisposable
 {
     private const string IndexIdentity = "store:test-identity";
@@ -264,6 +266,53 @@ public sealed class WholeSuiteProviderContractTests : IDisposable
     }
 
     [Fact]
+    public async Task Godot_whole_suite_run_uses_the_derived_config_and_reports_every_selected_script()
+    {
+        string root = Path.Combine(_dir, "godot");
+        WriteFile(root, "project.godot", "config_version=5\n[application]\nconfig/name=\"contract\"\n");
+        WriteFile(root, ".gutconfig.json", "{\"dirs\":[\"tests\"],\"include_subdirs\":true}\n");
+        WriteFile(root, "addons/gut/plugin.cfg", "[plugin]\nversion=\"9.7.1\"\n");
+        WriteFile(root, "tests/test_a.gd", "extends Node\n");
+        WriteFile(root, "tests/test_b.gd", "extends Node\n");
+        string godot = Path.Combine(_dir, "godot-bin");
+        File.WriteAllText(godot, string.Empty);
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        Environment.SetEnvironmentVariable("GODOT", godot);
+        try
+        {
+            var workspace = Track(new ContinuousTestWorkspace(
+                WorkspaceId: "ws:godot",
+                WorkspaceRoot: root,
+                ProjectPath: Path.Combine(root, "project.godot"),
+                BuildOutputRoot: Path.Combine(_dir, "ct-build", "godot"),
+                Framework: "gut"));
+            var runner = new FakeTestProcessRunner();
+            runner.Enqueue("Godot Engine v4.7.2.stable\n");
+            runner.Enqueue();
+            runner.Enqueue();
+            runner.OnRun = WriteGodotJUnit;
+            var provider = new GodotTestProvider(runner);
+            IReadOnlyList<ProviderTestCase> discovered = await provider.DiscoverAsync(
+                workspace,
+                TestContext.Current.CancellationToken);
+
+            ProviderRunResult result = await provider.RunAsync(
+                Request(workspace, discovered.Select(testCase => testCase.Id).ToArray()) with { WholeSuite = true },
+                TestContext.Current.CancellationToken);
+
+            TestProcessCommand command = runner.Calls.Single(call => call.Arguments.Contains("-s"));
+            Assert.DoesNotContain(command.Arguments, argument => argument.Contains("test_a.gd", StringComparison.Ordinal));
+            Assert.DoesNotContain(command.Arguments, argument => argument.Contains("test_b.gd", StringComparison.Ordinal));
+            Assert.Contains(command.Arguments, argument => argument.StartsWith("-gconfig=res://", StringComparison.Ordinal));
+            AssertOneResultPerId(discovered.Select(testCase => testCase.Id).ToArray(), result);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+        }
+    }
+
+    [Fact]
     public async Task Qt_quick_test_selected_run_rejects_missing_artifact_cases()
     {
         string[] names = ["A/basic", "B/slow"];
@@ -342,6 +391,17 @@ public sealed class WholeSuiteProviderContractTests : IDisposable
               "summary_line":"2 examples, 0 failures"
             }
             """);
+    }
+
+    private static void WriteGodotJUnit(TestProcessCommand command)
+    {
+        if (!command.Arguments.Contains("-s"))
+            return;
+        string mirror = command.Arguments[command.Arguments.ToList().IndexOf("--path") + 1];
+        string reportArgument = command.Arguments.Single(argument => argument.StartsWith("-gjunit_xml_file=", StringComparison.Ordinal));
+        string report = Path.Combine(mirror, reportArgument["-gjunit_xml_file=res://".Length..].Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(report)!);
+        File.WriteAllText(report, "<testsuites tests=\"2\" failures=\"0\"><testsuite name=\"tests\" tests=\"2\"><testcase classname=\"res://tests/test_a.gd\" name=\"one\" /><testcase classname=\"res://tests/test_b.gd\" name=\"two\" /></testsuite></testsuites>");
     }
 
     private string PythonRoot => Path.Combine(_dir, "py");

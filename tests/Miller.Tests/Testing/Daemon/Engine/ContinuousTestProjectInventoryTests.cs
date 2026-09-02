@@ -1590,6 +1590,93 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
         Assert.Equal("phpunit", project.Framework);
     }
 
+    [Fact]
+    public void Discover_classifies_a_supported_godot_gut_project()
+    {
+        WriteProject("project.godot", "config_version=5\n");
+        WriteProject("addons/gut/plugin.cfg", "[plugin]\nversion=\"9.7.1\"\n");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:godot"));
+
+        Assert.Equal("gut", project.Framework);
+        Assert.True(ContinuousTestFrameworkSupport.IsSupported(project.Framework));
+    }
+
+    [Fact]
+    public void Discover_accepts_a_gut_major_above_the_supported_floor()
+    {
+        WriteProject("project.godot", "config_version=5\n");
+        WriteProject("addons/gut/plugin.cfg", "[plugin]\nversion=\"10.0.0\"\n");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:godot"));
+
+        Assert.Equal("gut", project.Framework);
+        Assert.Equal(10, project.Metadata["gut_major"]);
+    }
+
+    [Fact]
+    public void Discover_classifies_gdunit4_as_refused_with_the_exact_contract()
+    {
+        WriteProject("project.godot", "config_version=5\n");
+        WriteProject("addons/gdUnit4/plugin.cfg", "[plugin]\nversion=\"6.1.0\"\n");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:godot"));
+
+        Assert.Equal("gdunit4", project.Framework);
+        Assert.False(ContinuousTestFrameworkSupport.IsSupported(project.Framework));
+        Assert.Equal(
+            "gdUnit4 is detected; Miller CT does not yet support its runner",
+            ContinuousTestFrameworkSupport.ReasonFor(project.Framework));
+        Assert.Equal(
+            "run it with its own runner; CT support is planned",
+            ContinuousTestFrameworkSupport.RemedyFor(project.Framework));
+    }
+
+    [Fact]
+    public void Discover_classifies_unsupported_godot_gut_evidence_as_refused()
+    {
+        WriteProject("project.godot", "config_version=4\n");
+        WriteProject("addons/gut/plugin.cfg", "[plugin]\nversion=\"8.0.0\"\n");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:godot"));
+
+        Assert.Equal("gut-unsupported", project.Framework);
+        Assert.False(ContinuousTestFrameworkSupport.IsSupported(project.Framework));
+        Assert.Equal(
+            "Godot 4 with GUT 9 was not detected",
+            ContinuousTestFrameworkSupport.ReasonFor(project.Framework));
+        Assert.Equal(
+            "Upgrade or configure Godot 4 with GUT 9, or run GUT directly",
+            ContinuousTestFrameworkSupport.RemedyFor(project.Framework));
+    }
+
+    [Fact]
+    public void Discover_ignores_a_bare_godot_project()
+    {
+        WriteProject("project.godot", "config_version=5\n");
+
+        Assert.Empty(ContinuousTestProjectInventory.Discover(_root, "ws:godot"));
+    }
+
+    [Fact]
+    public void Discover_keeps_gut_runnable_when_gdunit4_is_also_present()
+    {
+        WriteProject("project.godot", "config_version=5\n");
+        WriteProject("addons/gut/plugin.cfg", "[plugin]\nversion=\"9.7.1\"\n");
+        WriteProject("addons/gdUnit4/plugin.cfg", "[plugin]\nversion=\"6.1.0\"\n");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:godot"));
+
+        Assert.Equal("gut", project.Framework);
+        Assert.True(project.Metadata.TryGetValue("gdunit4", out object? detected));
+        Assert.Equal(true, detected);
+    }
+
     private static bool IsInside(string root, string path)
     {
         string relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(path));

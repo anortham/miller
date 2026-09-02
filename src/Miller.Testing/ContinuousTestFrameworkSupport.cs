@@ -32,6 +32,21 @@ public static class ContinuousTestFrameworkSupport
 
     public const string MinitestRemedy = "Add rspec, or run the suite directly with rake test";
 
+    public const string GdUnit4 = "gdunit4";
+
+    public const string GdUnit4Reason =
+        "gdUnit4 is detected; Miller CT does not yet support its runner";
+
+    public const string GdUnit4Remedy =
+        "run it with its own runner; CT support is planned";
+
+    public const string GutUnsupported = "gut-unsupported";
+
+    public const string GutUnsupportedReason = "Godot 4 with GUT 9 was not detected";
+
+    public const string GutUnsupportedRemedy =
+        "Upgrade or configure Godot 4 with GUT 9, or run GUT directly";
+
     /// <summary>
     /// The one-line reason, kept short enough for a <c>ct.db</c> status column and a compact project line.
     /// </summary>
@@ -47,6 +62,8 @@ public static class ContinuousTestFrameworkSupport
         {
             [XunitV2] = (XunitV2Reason, XunitV2Remedy),
             [Minitest] = (MinitestReason, MinitestRemedy),
+            [GdUnit4] = (GdUnit4Reason, GdUnit4Remedy),
+            [GutUnsupported] = (GutUnsupportedReason, GutUnsupportedRemedy),
         };
 
     /// <summary>True when continuous testing can run a project with this framework value.</summary>

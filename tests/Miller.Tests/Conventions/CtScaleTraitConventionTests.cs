@@ -42,6 +42,8 @@ public sealed class CtScaleTraitConventionTests
         ["RequireQmakeQuickTest", "LocateQmake", "RequireQmakeMake", "LocateQmakeMake"];
     private static readonly string[] QtQuickTestLaunchSignals =
         ["RequireQtQuickTestCMakePrefix", "LocateQtPaths"];
+    private static readonly string[] GodotLaunchSignals = ["RequireGodot", "LocateGodot"];
+    private static readonly string[] GutLaunchSignals = ["RequireGut", "LocateGut"];
 
     private static readonly HashSet<string> ExemptFileNames = new(StringComparer.Ordinal)
     {
@@ -82,6 +84,8 @@ public sealed class CtScaleTraitConventionTests
         int ctestFilesSeen = 0;
         int qmakeFilesSeen = 0;
         int qtQuickTestFilesSeen = 0;
+        int godotFilesSeen = 0;
+        int gutFilesSeen = 0;
 
         foreach (var path in sources)
         {
@@ -106,11 +110,14 @@ public sealed class CtScaleTraitConventionTests
             bool spawnsCTest = CTestLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsQmake = QmakeLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             bool spawnsQtQuickTest = QtQuickTestLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
+            bool spawnsGodot = GodotLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
+            bool spawnsGut = GutLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
             if (!spawnsDotnet && !spawnsCargo && !spawnsNode && !spawnsPython && !spawnsGo
                 && !spawnsRuby && !spawnsRspec && !spawnsPhp && !spawnsPhpUnit
                 && !spawnsJava && !spawnsGradle && !spawnsMaven
                 && !spawnsSbt
-                && !spawnsCMake && !spawnsCTest && !spawnsQmake && !spawnsQtQuickTest)
+                && !spawnsCMake && !spawnsCTest && !spawnsQmake && !spawnsQtQuickTest
+                && !spawnsGodot && !spawnsGut)
                 continue;
 
             if (spawnsDotnet)
@@ -147,6 +154,10 @@ public sealed class CtScaleTraitConventionTests
                 qmakeFilesSeen++;
             if (spawnsQtQuickTest)
                 qtQuickTestFilesSeen++;
+            if (spawnsGodot)
+                godotFilesSeen++;
+            if (spawnsGut)
+                gutFilesSeen++;
 
             if (!HasScaleTrait(code))
                 violations.Add(Path.GetRelativePath(testRoot, path));
@@ -169,6 +180,8 @@ public sealed class CtScaleTraitConventionTests
         AssertSignalFamilyIsCovered(ctestFilesSeen, "ctest", CTestLaunchSignals);
         AssertSignalFamilyIsCovered(qmakeFilesSeen, "qmake", QmakeLaunchSignals);
         AssertSignalFamilyIsCovered(qtQuickTestFilesSeen, "Qt Quick Test", QtQuickTestLaunchSignals);
+        AssertSignalFamilyIsCovered(godotFilesSeen, "Godot", GodotLaunchSignals);
+        AssertSignalFamilyIsCovered(gutFilesSeen, "GUT", GutLaunchSignals);
 
         Assert.True(violations.Count == 0,
             "These tests spawn a real CT provider toolchain but are MISSING [Trait(\"Category\",\"Scale\")], so a " +
