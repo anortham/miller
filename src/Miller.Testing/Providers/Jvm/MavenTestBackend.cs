@@ -228,7 +228,6 @@ internal sealed class MavenTestBackend : IJvmTestBackend
             "-Dmaven.compiler.outputDirectory=" + output,
             "-Dmaven.compiler.testOutputDirectory=" + testOutput,
             "-Dsurefire.reportsDirectory=" + reports,
-            "-DargLine=-Djava.io.tmpdir=" + paths.TempDirectory,
             "-Djava.io.tmpdir=" + paths.TempDirectory,
         };
         arguments.AddRange(taskArguments);
@@ -241,7 +240,6 @@ internal sealed class MavenTestBackend : IJvmTestBackend
         var environment = new ReadOnlyDictionary<string, string?>(
             new Dictionary<string, string?>(StringComparer.Ordinal)
             {
-                ["MAVEN_OPTS"] = "-Djava.io.tmpdir=" + paths.TempDirectory,
                 ["TMPDIR"] = paths.TempDirectory,
                 ["TEMP"] = paths.TempDirectory,
                 ["TMP"] = paths.TempDirectory,
@@ -311,7 +309,7 @@ internal sealed class MavenTestBackend : IJvmTestBackend
         {
             return Directory.EnumerateFiles(reports, "TEST-*.xml", SearchOption.AllDirectories)
                 .Select(Path.GetFullPath)
-                .Where(path => JvmTestTooling.IsInside(paths.GenerationRoot, path))
+                .Where(path => JvmTestTooling.IsInside(reports, path))
                 .OrderBy(path => path, PathComparer)
                 .ToArray();
         }
@@ -331,10 +329,11 @@ internal sealed class MavenTestBackend : IJvmTestBackend
     {
         var casesByClass = new Dictionary<string, List<JUnitXmlTestCase>>(StringComparer.Ordinal);
         var seenMethods = new HashSet<string>(StringComparer.Ordinal);
+        string reports = ReportsDirectory(paths);
         foreach (string reportPath in reportPaths)
         {
-            if (!JvmTestTooling.IsInside(paths.GenerationRoot, reportPath))
-                throw Failure($"Maven Surefire report escaped the CT generation: '{reportPath}'.");
+            if (!JvmTestTooling.IsInside(reports, reportPath))
+                throw Failure($"Maven Surefire report escaped its generation report directory: '{reportPath}'.");
 
             JUnitXmlParseResult report;
             try
@@ -431,12 +430,12 @@ internal sealed class MavenTestBackend : IJvmTestBackend
         IReadOnlyList<JvmTestSelection> selected,
         bool wholeSuite)
     {
-        if (wholeSuite)
-            return;
         if (selected.Any(test => string.IsNullOrWhiteSpace(test.ClassName)))
             throw Failure("Maven run selection contained an empty test class.");
         if (selected.Any(test => !string.Equals(test.MethodName, ClassCaseSentinel, StringComparison.Ordinal)))
             throw Failure("Maven run selections must use the class-level identity sentinel.");
+        if (wholeSuite)
+            return;
     }
 
     private static void ClearReports(CtGenerationPaths paths)

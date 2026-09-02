@@ -161,6 +161,44 @@ public sealed class MavenTestBackendTests : IDisposable
     }
 
     [Fact]
+    public void Commands_keep_project_argline_and_maven_options_untouched()
+    {
+        string project = Path.Combine(_root, "pom.xml");
+        File.WriteAllText(project, "<project />");
+        ContinuousTestWorkspace workspace = Workspace(project);
+        CtGenerationPaths paths = CtGenerationPaths.Allocate(workspace);
+
+        TestProcessCommand command = new MavenTestBackend(new RecordingRunner()).BuildDiscoveryCommand(
+            workspace,
+            paths);
+
+        Assert.DoesNotContain(command.Arguments, argument =>
+            argument.StartsWith("-DargLine=", StringComparison.Ordinal));
+        Assert.DoesNotContain("MAVEN_OPTS", command.Environment.Keys);
+        Assert.Contains("TMPDIR", command.Environment.Keys);
+        Assert.Contains("TEMP", command.Environment.Keys);
+        Assert.Contains("TMP", command.Environment.Keys);
+    }
+
+    [Fact]
+    public void Whole_suite_rejects_a_non_class_sentinel_selection()
+    {
+        string project = Path.Combine(_root, "pom.xml");
+        File.WriteAllText(project, "<project />");
+        ContinuousTestWorkspace workspace = Workspace(project);
+        CtGenerationPaths paths = CtGenerationPaths.Allocate(workspace);
+
+        ContinuousTestProviderException exception = Assert.Throws<ContinuousTestProviderException>(() =>
+            new MavenTestBackend(new RecordingRunner()).BuildRunCommands(
+                Request(workspace),
+                paths,
+                [new JvmTestSelection("sample.Class", "method", "sample.Class.method")],
+                wholeSuite: true));
+
+        Assert.Contains("sentinel", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Run_aggregates_methods_to_class_verdict_duration_and_joined_failures()
     {
         string project = Path.Combine(_root, "pom.xml");
@@ -289,14 +327,12 @@ public sealed class MavenTestBackendTests : IDisposable
 
     private static void AssertEnvironmentOwned(TestProcessCommand command, CtGenerationPaths paths)
     {
+        Assert.DoesNotContain("MAVEN_OPTS", command.Environment.Keys);
         foreach ((string key, string? value) in command.Environment)
         {
             if (value is null)
                 continue;
-            if (key == "MAVEN_OPTS")
-                Assert.Contains(paths.TempDirectory, value, StringComparison.Ordinal);
-            else
-                Assert.True(IsOwnedPath(paths, value), value);
+            Assert.True(IsOwnedPath(paths, value), value);
         }
     }
 

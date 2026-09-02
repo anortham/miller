@@ -177,8 +177,12 @@ public static class CtProviderTestSupport
         return binary!;
     }
 
-    public static string? LocateJava() =>
-        LocateOnPath(OperatingSystem.IsWindows() ? "java.exe" : "java");
+    public static string? LocateJava()
+    {
+        string? java = LocateOnPath(OperatingSystem.IsWindows() ? "java.exe" : "java");
+        string? javac = LocateOnPath(OperatingSystem.IsWindows() ? "javac.exe" : "javac");
+        return java is not null && javac is not null ? java : null;
+    }
 
     public static string RequireJava()
     {
