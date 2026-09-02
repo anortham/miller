@@ -45,6 +45,7 @@ internal static class SbtWorkspaceShadow
             Policy,
             cancellationToken);
         string dependencyCandidateRoot = CtGenerationPaths.CacheDirectory(workspace, DependencyCacheName);
+        CtWorkspaceMirror.EnsurePathHasNoReparsePoint(dependencyCandidateRoot);
         Directory.CreateDirectory(dependencyCandidateRoot);
         string shadowProjectPath = Path.Combine(
             mirror.MirrorRoot,

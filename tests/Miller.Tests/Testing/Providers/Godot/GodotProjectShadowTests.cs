@@ -136,6 +136,71 @@ public sealed class GodotProjectShadowTests : IDisposable
     }
 
     [Fact]
+    public void Post_process_budget_enforcement_writes_a_durable_marker_and_reports_both_candidates()
+    {
+        string projectRoot = CreateProject();
+        GodotProjectShadowResult result = GodotProjectShadow.Sync(
+            Workspace(Path.Combine(projectRoot, "project.godot")),
+            CancellationToken.None);
+        using (FileStream stream = new(Path.Combine(result.ProjectCandidateRoot, "imported.bin"), FileMode.CreateNew))
+            stream.SetLength(ContinuousTestCoordinatorOptions.DefaultBuildCacheBudgetBytes + 1);
+
+        IOException error = Assert.Throws<IOException>(() => GodotProjectShadow.EnforcePostProcessBudget(result));
+
+        Assert.Contains("over budget", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(result.OverBudgetMarkerPath));
+        Assert.True(Directory.Exists(result.GodotHomeRoot));
+    }
+
+    [Fact]
+    public void Post_process_budget_enforcement_rejects_a_reparse_project_candidate()
+    {
+        string projectRoot = CreateProject();
+        GodotProjectShadowResult first = GodotProjectShadow.Sync(
+            Workspace(Path.Combine(projectRoot, "project.godot")),
+            CancellationToken.None);
+        string outside = Path.Combine(_root, "outside-candidate");
+        Directory.CreateDirectory(outside);
+        string candidate = Path.Combine(_root, "candidate-link");
+        try
+        {
+            Directory.CreateSymbolicLink(candidate, outside);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+        GodotProjectShadowResult result = first with { ProjectCandidateRoot = candidate };
+
+        Assert.Throws<IOException>(() => GodotProjectShadow.EnforcePostProcessBudget(result));
+        Assert.False(File.Exists(Path.Combine(outside, "godot-workspace.over-budget.json")));
+    }
+
+    [Fact]
+    public void Post_process_budget_enforcement_rejects_a_reparse_over_budget_marker()
+    {
+        string projectRoot = CreateProject();
+        GodotProjectShadowResult result = GodotProjectShadow.Sync(
+            Workspace(Path.Combine(projectRoot, "project.godot")),
+            CancellationToken.None);
+        using (FileStream stream = new(Path.Combine(result.ProjectCandidateRoot, "imported.bin"), FileMode.CreateNew))
+            stream.SetLength(ContinuousTestCoordinatorOptions.DefaultBuildCacheBudgetBytes + 1);
+        string outsideMarker = Path.Combine(_root, "outside-marker.json");
+        File.WriteAllText(outsideMarker, "keep");
+        try
+        {
+            File.CreateSymbolicLink(result.OverBudgetMarkerPath, outsideMarker);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        Assert.Throws<IOException>(() => GodotProjectShadow.EnforcePostProcessBudget(result));
+        Assert.Equal("keep", File.ReadAllText(outsideMarker));
+    }
+
+    [Fact]
     public void Project_path_outside_its_selected_root_is_rejected()
     {
         string projectRoot = CreateProject();

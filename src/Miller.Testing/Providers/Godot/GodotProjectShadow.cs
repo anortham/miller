@@ -87,32 +87,26 @@ internal static class GodotProjectShadow
             OverBudgetMarkerFileName);
         string importStampPath = Path.Combine(projectCandidateRoot, ImportStampFileName);
 
-        string sourceMetadataDigest = CtWorkspaceMirror.SourceMetadataDigest(
-            sourceRoot,
-            Policy,
-            cancellationToken);
-        if (TryReadOverBudgetMarker(overBudgetMarkerPath, out OverBudgetMarker? marker)
-            && marker is not null
-            && string.Equals(marker.SourceMetadataDigest, sourceMetadataDigest, StringComparison.Ordinal))
-            throw new IOException(
-                $"Godot project candidate is over budget ({marker.CandidateBytes} bytes); source metadata has not changed");
-        if (File.Exists(overBudgetMarkerPath))
+        if (File.Exists(overBudgetMarkerPath) || IsReparsePoint(overBudgetMarkerPath))
+        {
+            CtWorkspaceMirror.EnsurePathHasNoReparsePoint(overBudgetMarkerPath);
+            string sourceMetadataDigest = CtWorkspaceMirror.SourceMetadataDigest(
+                sourceRoot,
+                Policy,
+                cancellationToken);
+            if (TryReadOverBudgetMarker(overBudgetMarkerPath, out OverBudgetMarker? marker)
+                && marker is not null
+                && string.Equals(marker.SourceMetadataDigest, sourceMetadataDigest, StringComparison.Ordinal))
+                throw new IOException(
+                    $"Godot project candidate is over budget ({marker.CandidateBytes} bytes); source metadata has not changed");
             File.Delete(overBudgetMarkerPath);
+        }
 
         CtWorkspaceMirrorResult mirror = CtWorkspaceMirror.Sync(
             workspace,
             sourceRoot,
             Policy,
             cancellationToken);
-        if (mirror.CandidateBytes > ContinuousTestCoordinatorOptions.DefaultBuildCacheBudgetBytes)
-        {
-            WriteOverBudgetMarker(
-                overBudgetMarkerPath,
-                new OverBudgetMarker(mirror.SourceMetadataDigest, mirror.CandidateBytes));
-            throw new IOException(
-                $"Godot project candidate is over budget ({mirror.CandidateBytes} bytes)");
-        }
-
         CtWorkspaceMirror.EnsurePathHasNoReparsePoint(homeCandidateRoot);
         Directory.CreateDirectory(homeCandidateRoot);
         string projectMirrorRoot = mirror.MirrorRoot;
@@ -126,7 +120,7 @@ internal static class GodotProjectShadow
             || relativeProjectPath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
             throw new IOException($"Godot project path is outside the selected project root: '{projectPath}'");
 
-        return new GodotProjectShadowResult(
+        GodotProjectShadowResult result = new(
             projectCandidateRoot,
             homeCandidateRoot,
             projectMirrorRoot,
@@ -148,6 +142,8 @@ internal static class GodotProjectShadow
             CtWorkspaceMirror.MeasureCandidateBytes(homeCandidateRoot),
             mirror.Elapsed,
             mirror.SourceOwnedStateChanged);
+        EnforceKnownBudget(result);
+        return result;
     }
 
     private static bool TryReadOverBudgetMarker(string path, out OverBudgetMarker? marker)
@@ -212,6 +208,42 @@ internal static class GodotProjectShadow
         {
             return true;
         }
+    }
+
+    internal static (long ProjectCandidateBytes, long GodotHomeCandidateBytes) EnforcePostProcessBudget(
+        GodotProjectShadowResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        CtWorkspaceMirror.EnsurePathHasNoReparsePoint(result.ProjectCandidateRoot);
+        CtWorkspaceMirror.EnsurePathHasNoReparsePoint(result.GodotHomeRoot);
+        CtWorkspaceMirror.EnsurePathHasNoReparsePoint(result.OverBudgetMarkerPath);
+        long projectCandidateBytes = CtWorkspaceMirror.MeasureCandidateBytes(result.ProjectCandidateRoot);
+        long godotHomeCandidateBytes = CtWorkspaceMirror.MeasureCandidateBytes(result.GodotHomeRoot);
+        EnforceBudget(result, projectCandidateBytes);
+        return (projectCandidateBytes, godotHomeCandidateBytes);
+    }
+
+    private static void EnforceKnownBudget(GodotProjectShadowResult result)
+    {
+        CtWorkspaceMirror.EnsurePathHasNoReparsePoint(result.ProjectCandidateRoot);
+        CtWorkspaceMirror.EnsurePathHasNoReparsePoint(result.GodotHomeRoot);
+        CtWorkspaceMirror.EnsurePathHasNoReparsePoint(result.OverBudgetMarkerPath);
+        EnforceBudget(result, result.ProjectCandidateBytes);
+    }
+
+    private static void EnforceBudget(GodotProjectShadowResult result, long projectCandidateBytes)
+    {
+        if (projectCandidateBytes > ContinuousTestCoordinatorOptions.DefaultBuildCacheBudgetBytes)
+        {
+            WriteOverBudgetMarker(
+                result.OverBudgetMarkerPath,
+                new OverBudgetMarker(result.SourceMetadataDigest, projectCandidateBytes));
+            throw new IOException(
+                $"Godot project candidate is over budget ({projectCandidateBytes} bytes)");
+        }
+
+        if (File.Exists(result.OverBudgetMarkerPath))
+            File.Delete(result.OverBudgetMarkerPath);
     }
 
     internal static void PublishImportStamp(GodotProjectShadowResult result, DateTimeOffset importedAtUtc)

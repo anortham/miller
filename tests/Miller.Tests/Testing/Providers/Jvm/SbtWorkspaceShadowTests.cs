@@ -897,4 +897,33 @@ public sealed class SbtWorkspaceShadowTests : IDisposable
         Assert.Equal("name := \"shadow\"\n", File.ReadAllText(results[0].ShadowProjectPath));
         Assert.Contains("build.sbt", File.ReadAllText(Path.Combine(results[0].WorkspaceCandidateRoot, "manifest.json")), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Symlinked_dependency_candidate_is_rejected_before_sbt_can_write_through_it()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        string projectRoot = Path.Combine(_root, "project");
+        string outsideRoot = Path.Combine(_root, "outside");
+        Directory.CreateDirectory(projectRoot);
+        Directory.CreateDirectory(outsideRoot);
+        string projectPath = Path.Combine(projectRoot, "build.sbt");
+        File.WriteAllText(projectPath, "name := \"shadow\"\n");
+        ContinuousTestWorkspace workspace = new(
+            WorkspaceId: "ws:sbt-shadow",
+            WorkspaceRoot: _root,
+            ProjectPath: projectPath,
+            BuildOutputRoot: Path.Combine(_root, ".miller", "ct-sbt"),
+            Framework: "sbt");
+        string cacheRoot = CtGenerationPaths.CacheRoot(workspace);
+        Directory.CreateDirectory(cacheRoot);
+        string dependencyCandidate = Path.Combine(cacheRoot, "sbt-deps");
+        Directory.CreateSymbolicLink(dependencyCandidate, outsideRoot);
+
+        IOException error = Assert.Throws<IOException>(() => SbtWorkspaceShadow.Sync(workspace, CancellationToken.None));
+
+        Assert.Contains("reparse", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(outsideRoot));
+    }
 }

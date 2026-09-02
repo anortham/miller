@@ -196,6 +196,7 @@ internal static class CtWorkspaceMirror
         long bytesCopied = 0;
         long filesHashed = 0;
         long bytesHashed = 0;
+        bool sourceOwnedStateChanged = false;
 
         foreach (SourceEntry sourceEntry in sourceEntries)
         {
@@ -209,7 +210,7 @@ internal static class CtWorkspaceMirror
                 ref filesHashed,
                 ref bytesHashed);
             bool existed = previousEntries.ContainsKey(relativePath);
-            if (!EntryMatches(
+            if (!existed || !EntryMatches(
                     entry,
                     destinationPath,
                     policy.Integrity,
@@ -244,6 +245,7 @@ internal static class CtWorkspaceMirror
                         entriesCopied++;
                     bytesCopied += entry.Length;
                 }
+                sourceOwnedStateChanged = true;
             }
             if (hashFallbacks > 0 && policy.Integrity == CtWorkspaceMirrorIntegrity.MetadataFastPath)
                 throw new InvalidOperationException("metadata fast path unexpectedly hashed a destination");
@@ -263,7 +265,10 @@ internal static class CtWorkspaceMirror
 
             string destinationPath = Path.Combine(mirrorRoot, relativePath);
             if (RemoveStaleEntry(destinationPath, mirrorRoot, policy, cancellationToken))
+            {
                 entriesDeleted++;
+                sourceOwnedStateChanged = true;
+            }
         }
 
         ValidateBuildOwnedPaths(mirrorRoot, policy);
@@ -284,7 +289,7 @@ internal static class CtWorkspaceMirror
             filesHashed,
             bytesHashed,
             sourceMetadataDigest,
-            entriesCopied > 0 || entriesUpdated > 0 || entriesDeleted > 0);
+            sourceOwnedStateChanged);
     }
 
     private static IEnumerable<SourceEntry> EnumerateSourceEntries(
