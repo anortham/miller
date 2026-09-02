@@ -7,6 +7,21 @@ installed, so no throwaway project could execute a provider command here. The re
 `tests/Miller.Tests/Testing/Providers/Fixtures/` are docs-derived shape fixtures, not captured
 runtime output; they contain no machine-specific paths or timestamps.
 
+## Product support floors
+
+These are Miller's product floors, separate from the versions of the official documentation
+consulted below. An absent runner still requires runtime confirmation at or above its product floor.
+
+| Backend | Product support floor | Documentation version consulted |
+| --- | --- | --- |
+| Gradle | Gradle 8.3+ | Current guide plus Gradle 8.3 release/API pages |
+| Maven Surefire | Maven runtime floor not separately constrained; Surefire 2.7.3+ for the documented method-selection surface | Current Surefire goal and plugin guide |
+| sbt | sbt 1.x | sbt 1.x reference/manual |
+| RSpec | RSpec 3.x | RSpec Core 3.12 feature pages and v3.12.3 formatter source |
+| PHPUnit | PHPUnit 10+ | PHPUnit 12.5 CLI manual |
+| Pest | Pest 2+ | Current Pest CLI API reference |
+| GUT | Godot 4 + GUT 9 | GUT 9.3.1 command-line and 9.6.0 export pages |
+
 ## Runtime evidence
 
 The following probes were run from a temporary directory outside the repository. Missing commands
@@ -27,8 +42,9 @@ returned shell exit code 127. The only relevant runtimes present were Java 25.0.
 
 **Status:** not installed — surface taken from [Gradle Java testing documentation](https://docs.gradle.org/current/userguide/java_testing.html), [Gradle 8.3 release notes](https://docs.gradle.org/8.3/release-notes.html), and [the `Test.dryRun` API](https://docs.gradle.org/current/kotlin-dsl/gradle/org.gradle.api.tasks.testing/-test/get-dry-run.html); needs runtime confirmation.
 
-- **Minimum version:** Gradle 8.3. The test dry-run property and `--test-dry-run` option are
-  documented as since 8.3.
+- **Product support floor:** Gradle 8.3+. The test dry-run property and `--test-dry-run` option
+  are documented as since 8.3. **Documentation consulted:** current Java testing guide plus the
+  Gradle 8.3 release notes and `Test.dryRun` API.
 - **Discovery:** `gradle test --test-dry-run`. Dry-run skips test execution but still generates
   reports, so the testcases in `build/test-results/test/` enumerate the selected tests.
 - **Selection:** `gradle test --tests "fully.qualified.Class.method"`; simple class/method names
@@ -45,9 +61,9 @@ returned shell exit code 127. The only relevant runtimes present were Java 25.0.
 
 **Status:** not installed — surface taken from [the Surefire test goal reference](https://maven.apache.org/surefire/maven-surefire-plugin/test-mojo) and [the current Surefire plugin guide](https://maven.apache.org/components/surefire-archives/surefire-LATEST/maven-surefire-plugin/); needs runtime confirmation.
 
-- **Minimum version:** no Maven runtime floor is stated by the cited pages. Surefire's
-  `-Dtest=Class#method` method-selection syntax is documented as available since Surefire 2.7.3;
-  the provider should verify the project plugin version before relying on it.
+- **Product support floor:** Maven's runtime floor is not separately constrained by the cited
+  official docs; require Surefire 2.7.3+ for the documented `-Dtest=Class#method` method-selection
+  surface. **Documentation consulted:** current Surefire test-goal reference and plugin guide.
 - **Discovery:** Maven has no Surefire dry-run/list command in the cited surface. Run
   `mvn test-compile`, then enumerate compiled test classes under `target/test-classes/` using the
   default include suffixes `Test*`, `*Test`, `*Tests`, and `*TestCase` (relative to that directory).
@@ -64,9 +80,9 @@ returned shell exit code 127. The only relevant runtimes present were Java 25.0.
 
 **Status:** not installed — surface taken from [the sbt testing guide](https://www.scala-sbt.org/1.x/docs/Testing.html) and [the sbt keys API](https://www.scala-sbt.org/1.x/api/sbt/Keys%24.html); needs runtime confirmation.
 
-- **Minimum version:** the cited documentation is for sbt 1.x; no narrower minimum for the
-  `Test` keys is stated. The provider must record the runtime sbt version when a scale host is
-  available.
+- **Product support floor:** sbt 1.x. **Documentation consulted:** sbt 1.x testing guide and
+  keys API; no narrower floor for the `Test` keys is stated. The provider must record the runtime
+  sbt version when a scale host is available.
 - **Discovery:** `show Test/definedTestNames` is the documented command that returns the detected
   test names after test compilation. `show Test/definedTests` is also a valid lower-level query
   (`Seq[TestDefinition]`) and is the shape named by the implementation plan.
@@ -83,8 +99,9 @@ returned shell exit code 127. The only relevant runtimes present were Java 25.0.
 
 **Status:** not installed — surface taken from [RSpec command-line documentation](https://rspec.info/features/3-12/rspec-core/command-line/), [`--dry-run`](https://rspec.info/features/3-12/rspec-core/command-line/dry-run/), [`--format`](https://rspec.info/features/3-12/rspec-core/command-line/format-option/), [line-number selection](https://rspec.info/features/3-12/rspec-core/command-line/line-number-appended-to-path/), [exit status](https://rspec.info/features/3-12/rspec-core/command-line/exit-status/), and [the JSON formatter](https://rspec.info/features/3-12/rspec-core/formatters/json-formatter/); needs runtime confirmation.
 
-- **Minimum version:** RSpec Core 3.12 is the cited documentation baseline; no older-version
-  floor was established. The installed RSpec version must be captured before enabling the provider.
+- **Product support floor:** RSpec 3.x. **Documentation consulted:** RSpec Core 3.12 feature pages
+  and the v3.12.3 JSON formatter source. The installed RSpec version must be captured before
+  enabling the provider.
 - **Discovery:** `rspec --dry-run --format json`. The JSON object has `version`, `examples`,
   `summary`, and `summary_line`; each example includes `id`, `file_path`, `line_number`, `status`,
   and `run_time`. Dry-run prints formatter output without running examples or hooks.
@@ -104,8 +121,7 @@ returned shell exit code 127. The only relevant runtimes present were Java 25.0.
 
 **Status:** not installed — surface taken from [PHPUnit 12.5 CLI options](https://docs.phpunit.de/en/12.5/cli-options.html); needs runtime confirmation.
 
-- **Minimum version:** PHPUnit 12.5 is the cited documentation baseline; no older-version floor
-  was established by this spike.
+- **Product support floor:** PHPUnit 10+. **Documentation consulted:** PHPUnit 12.5 CLI manual.
 - **Discovery:** `phpunit --list-tests-xml <file>`. It writes the selected test list as XML and
   exits without executing tests.
 - **Selection:** `phpunit --filter <pattern>`; the pattern may be a PCRE expression or the
@@ -121,8 +137,8 @@ returned shell exit code 127. The only relevant runtimes present were Java 25.0.
 
 **Status:** not installed — surface taken from [Pest's CLI API reference](https://pestphp.com/docs/cli-api-reference); needs runtime confirmation.
 
-- **Minimum version:** no minimum version is stated on the cited page; the current Pest CLI
-  reference documents the surface. The installed Pest version must be captured before enabling it.
+- **Product support floor:** Pest 2+. **Documentation consulted:** current Pest CLI API reference;
+  the installed Pest version must be captured before enabling it.
 - **Discovery:** `pest --list-tests-xml <file>`.
 - **Selection:** `pest --filter <pattern>`.
 - **Report artifact:** `pest --log-junit <file>` writes JUnit XML to the caller-selected path.
@@ -136,8 +152,8 @@ returned shell exit code 127. The only relevant runtimes present were Java 25.0.
 
 **Status:** not installed — surface taken from [GUT 9.3.1 command-line documentation](https://gut.readthedocs.io/en/9.3.1/Command-Line.html) and [GUT 9.6.0 JUnit export documentation](https://gut.readthedocs.io/en/v9.6.0/Export-Test-Results.html); needs runtime confirmation.
 
-- **Minimum version:** GUT 9.6.0 is the documented baseline for the JUnit export surface;
-  command-line selection is also shown in the 9.3.1 guide. No older export floor was established.
+- **Product support floor:** Godot 4 + GUT 9. **Documentation consulted:** GUT 9.3.1 command-line
+  guide and GUT 9.6.0 export guide; 9.6.0 is the cited baseline for the JUnit export surface.
 - **Discovery:** `godot --headless -s addons/gut/gut_cmdln.gd -gdir=res://tests -gexit`.
   `-gdir=<dir>` discovers scripts; `-gtest=<path>` can name scripts directly. GUT options require
   `-gname=value` with no spaces around `=`.
