@@ -3,7 +3,7 @@ id: ship-jvm-ruby-php-and-gdscript-continuous-testing-
 title: Ship JVM, Ruby, PHP, and GDScript continuous testing providers before v1.27.0
 status: active
 created: 2026-09-02T04:10:06.163Z
-updated: 2026-09-02T09:31:37.953Z
+updated: 2026-09-02T12:52:47.202Z
 tags:
   - continuous-testing
   - providers
@@ -30,11 +30,20 @@ The release audit found the provider plan untracked and unimplemented. The user 
 - TDD each provider, verify external runner surfaces from official docs or installed tools, keep real toolchain tests Scale-tagged.
 - Do not resume publication until the implementation and branch gates are green and the user re-authorizes release.
 
-## Current blocker
+## Approved Task 7 resolution
 
-Task 7 cannot implement a normal in-place sbt 1.x provider without violating CT write isolation. An official sbt 1.13.0 probe created both workspace `target/` and `project/target/` during build loading even when boot/global/Ivy/Coursier caches were redirected, the server and generated build properties were disabled, and a session target override was supplied. Official sbt source confirms the canonical working directory is the application base and `target/out` is allocated before session settings.
+The approved adaptation at `docs/plans/2026-09-02-sbt-ct-workspace-shadow-design.md` uses a provider-private, project-stable mirror of the sbt build-root subtree:
 
-Continuing requires an explicit product choice: design a generation-owned source/build shadow with measurable copy and compatibility costs, or remove runnable sbt from this release plan. Release remains held.
+- reconcile changed source files before each operation while retaining warm sbt/Zinc targets;
+- run sbt only from the mirror and copy JUnit evidence into immutable generation results;
+- keep `IJvmTestBackend`, `CtGenerationPaths`, and public CT contracts unchanged;
+- use separate `sbt-workspace` and `sbt-deps` janitor candidates under the 2 GB project cache budget;
+- exclude every nested `.git`, install an isolated Git barrier, and document live-Git/global-plugin/`../` builds as v1 limits;
+- parse all contained sbt test-report XML by root element, not filename prefix;
+- enforce the repository's 260-character Windows path budget before copy/launch;
+- gate with source immutability, Windows, Scale, disk, and cold/warm performance evidence.
+
+The user approved the approach after Claude review and delegated the build-root-vs-workspace mirror scope decision. The selected scope is the sbt build-root subtree because CT identity, cache budget, locking, and outputs are project-scoped.
 
 ## Success criteria
 
@@ -43,3 +52,4 @@ Tasks 1-9 land with inline review, Release build/fast/Scale/Windows/security gat
 ## Reference
 
 - docs/plans/2026-09-01-ct-providers-jvm-ruby-php-gdscript-implementation-plan.md
+- docs/plans/2026-09-02-sbt-ct-workspace-shadow-design.md
