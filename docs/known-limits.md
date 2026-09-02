@@ -69,9 +69,24 @@
   `workspace status` and compare the `pid` in the header to confirm the restart actually loaded a new
   process.
 - Continuous testing supports .NET (`xunit`, `nunit`, `mstest`, `dotnet`), Rust (`cargo`), Python
-  (`pytest`), JavaScript and TypeScript (`vitest`, `jest`, `node-test`), and QML/Qt
-  (`qt-quick-test`, CMake/CTest only). Support for more languages and frameworks is ongoing; an
-  enable on an unsupported toolchain refuses with exit `3` and writes nothing. CT runs the built
-  self-executing test assembly, so an xUnit v2 project fails discovery with a raw process error and
-  must migrate to xUnit v3; `dotnet new xunit` still scaffolds v2 on SDK 10.0.400. The full matrix,
-  discovery rules, and limits are in [continuous testing](continuous-testing.md).
+  (`pytest`), JavaScript and TypeScript (`vitest`, `jest`, `node-test`), QML/Qt
+  (`qt-quick-test` through CMake/CTest and qmake/QTest), Go (`go`), JVM (`gradle`, `maven`, `sbt`),
+  Ruby (`rspec`), PHP (`phpunit`, `pest`), and GDScript (`gut`). The v1 floors are Gradle 8.3+,
+  Maven Surefire 2.7.3+ with no separate Maven floor, sbt 1.x, RSpec 3.x, PHPUnit 10+, Pest 2+,
+  and Godot 4 with GUT 9 plus `config_version=5`. Gradle, Maven, and sbt prefer their project or
+  module wrapper before the workspace wrapper and PATH; RSpec uses `bundle exec rspec` when
+  `Gemfile.lock` exists; PHP uses local `vendor/bin` runners and `composer install` restores them.
+  GUT uses an isolated project mirror and Godot home, a 2 GiB candidate budget, and per-script
+  `res://` cases. The full matrix, discovery rules, and limits are in
+  [continuous testing](continuous-testing.md).
+- CT recognizes but refuses xUnit v2, `minitest`, `gdUnit4`, and unsupported GUT evidence instead
+  of treating them as unknown projects. xUnit v2 reports `xUnit v2 detected; CT needs the v3
+  self-executing assembly`; migrate to xUnit v3 or run it directly with `dotnet test`. `minitest`
+  reports `Minitest has no per-test machine-readable runner surface CT can consume`; remedy
+  `Add rspec, or run the suite directly with rake test`. `gdunit4` reports `gdUnit4 is detected; Miller CT does
+  not yet support its runner`; remedy `run it with its own runner; CT support is planned`.
+  `gut-unsupported` reports `Godot 4 with GUT 9 was not detected`; remedy
+  `Upgrade or configure Godot 4 with GUT 9, or run GUT directly`. A bare `project.godot` is ignored, while a project with both
+  addons remains runnable through GUT and retains the gdUnit4 refusal metadata.
+- Swift, Dart, Elixir, Erlang, native C/C++/CTest, Zig, Lua, R, and Bash have no CT provider yet.
+  F# remains extractable but has no dedicated CT provider.

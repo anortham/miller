@@ -29,10 +29,20 @@ The `framework` value is what `tests status --json` and `tests enable --json` re
 | JavaScript and TypeScript | `node-test` | `package.json` with a script that runs node's own test runner | `node --test` with the JUnit reporter | per file |
 | QML and Qt | `qt-quick-test` | `CMakeLists.txt` or `.pro` with Qt Quick Test evidence | CMake/CTest configure/build/run, or qmake configure/build/`make check`, with a generation-scoped XML report | per CTest name or qmake target |
 | Go | `go` | one `go.mod` module | `go list -json` / `go test -list` discovery, then package-grouped `go test -json` | top-level `TestXxx` names, grouped by package |
+| JVM | `gradle` | `build.gradle` or `build.gradle.kts` | project/workspace wrapper before PATH `gradle`; `test --test-dry-run` discovery and JUnit XML results | per test method (`Class.method`) |
+| JVM | `maven` | `pom.xml` | project/workspace wrapper before PATH `mvn`; `test-compile`, then Surefire class scanning | per test class |
+| JVM | `sbt` | `build.sbt` | persistent CT shadow; `show Test/definedTestNames` discovery and isolated `testOnly`/`test` runs | per test class |
+| Ruby | `rspec` | `Gemfile` containing `rspec` | `bundle exec rspec` with `Gemfile.lock`, otherwise direct `rspec`; JSON reports | per example |
+| PHP | `phpunit` | `composer.json` containing `phpunit/phpunit` | local `vendor/bin/phpunit`; XML listing and JUnit result reports | per class/method |
+| PHP | `pest` | `composer.json` containing `pestphp/pest` | local `vendor/bin/pest`; XML listing and JUnit result reports | per class/method |
+| Godot / GDScript | `gut` | `project.godot` plus `addons/gut/plugin.cfg` | isolated project mirror and Godot home; GUT JUnit reports | per script (`res://`) |
 
 Sources: [`ContinuousTestProviderFactory.CreateDefault`](../src/Miller.Testing/Daemon/ContinuousTestProviderFactory.cs),
 [`ContinuousTestProjectInventory`](../src/Miller.Testing/Daemon/ContinuousTestProjectInventory.cs), and the
 provider implementations under `src/Miller.Testing/Providers/`.
+
+The default factory also accepts the explicit compatibility aliases `rust` and `python`; inventory
+reports those projects as `cargo` and `pytest`. No other aliases are registered.
 
 Field evidence, by ecosystem:
 
@@ -54,14 +64,41 @@ Field evidence, by ecosystem:
 - Go single-module and in-root multi-module fixtures pass with Go 1.26.6; the provider gate is
   Go 1.24 or newer.
 
+### Provider bounds
+
+These floors and runner choices are part of the v1 contract. JVM wrapper lookup checks the project
+or module directory, then the workspace root, then PATH. sbt checks the wrapper in its persistent
+CT shadow before falling back to PATH.
+
+- Gradle requires 8.3 or newer. Miller accepts `build.gradle` and `build.gradle.kts`, discovers
+  with `test --test-dry-run`, records one case per JUnit method, and selects methods with
+  `--tests Class.method`.
+- Maven itself has no version floor, but its Surefire selection surface must be 2.7.3 or newer.
+  Discovery runs `test-compile`, scans `target/test-classes` using Surefire's default class-name
+  patterns, and records one case per class. Selected runs use class-level `-Dtest` selectors.
+- sbt requires 1.x. Miller mirrors the project into a persistent CT shadow, discovers with
+  `show Test/definedTestNames`, records one case per class, and uses `testOnly <Class>` for
+  selected runs or `test` for a whole-suite run.
+- RSpec requires 3.x and a `Gemfile` containing the `rspec` token. Discovery runs
+  `rspec --dry-run --format json` and records one case per example. With `Gemfile.lock`, runs use
+  `bundle exec rspec`; without it, Miller invokes `rspec` directly.
+- PHPUnit requires 10 or newer; Pest requires 2 or newer. Detection reads `composer.json`, with
+  `pestphp/pest` taking precedence when both framework tokens are present. Miller invokes the
+  local `vendor/bin/phpunit` or `vendor/bin/pest` runner, uses `--list-tests-xml` for discovery,
+  and writes `--log-junit` results. If the runner is missing, run `composer install`.
+- GUT requires Godot 4, GUT 9, `config_version=5` in `project.godot`, and the GUT addon. Miller
+  uses an isolated project mirror and Godot home, enforces a 2 GiB candidate budget, imports once,
+  then uses the warm metadata fast path. Cases are scripts with `res://` selectors.
+
 ### Support for more languages is ongoing
 
-The table above is the whole supported set today. F#, Ruby, Java, PHP, and every other toolchain are
-not supported yet, and more are planned. A `.fsproj` can be discovered as a .NET project, but Miller
-does not claim F# source coverage without Julie extractor rows. `miller tests enable` on a repository
-with no supported test project refuses with exit `3` and writes nothing: no opt-in marker, no `ct.db`,
-no `.miller/`. The refusal names the supported toolchains, so an unsupported repository cannot end
-up permanently enabled with zero projects. See the enablement section of
+The table above is the whole supported CT set today. Swift, Dart, Elixir, Erlang, native C/C++/CTest,
+Zig, Lua, R, and Bash remain unprovided. F# can be discovered as a .NET project, but Miller does not
+claim F# source coverage without Julie extractor rows. QML remains supported through its
+`qt-quick-test` CMake/CTest and qmake/QTest lanes; that does not add a native C/C++/CTest provider.
+`miller tests enable` on a repository with no supported test project refuses with exit `3` and writes
+nothing: no opt-in marker, no `ct.db`, no `.miller/`. The refusal names the supported toolchains, so an
+unsupported repository cannot end up permanently enabled with zero projects. See the enablement section of
 [`contracts/tests-cli-v1.md`](contracts/tests-cli-v1.md).
 
 ## How Miller finds test projects
@@ -217,6 +254,20 @@ runs normally under `dotnet test`; only continuous testing needs the v3 shape.
 
 **One environment per jest project.** CT invokes jest once under its default environment. A
 repository whose own `npm test` runs jest twice under two environments is covered for one of them.
+
+**Some detected frameworks are refused with a repair path.** A `Gemfile` with only `minitest` is
+listed as `framework: "minitest"` and refused with reason `Minitest has no per-test machine-readable
+runner surface CT can consume`. The remedy is `Add rspec, or run the suite directly with rake test`.
+A Godot
+project with `gdUnit4` is listed as `framework: "gdunit4"` and refused with reason `gdUnit4 is
+detected; Miller CT does not yet support its runner`. The remedy is
+`run it with its own runner; CT support is planned`. A Godot project that has GUT evidence below the supported floor is listed as
+`framework: "gut-unsupported"` and refused with reason `Godot 4 with GUT 9 was not detected`.
+The remedy is `Upgrade or configure Godot 4 with GUT 9, or run GUT directly`.
+
+Inventory ignores a bare `project.godot` with neither test addon. When both addons are present, a
+supported GUT project remains runnable as `framework: "gut"`; the `gdunit4` refusal reason and
+remedy remain in the project metadata.
 
 **Expensive MSBuild build hooks still run.** CT builds a .NET test project with
 `--artifacts-path` pointed at the supervised build root (see "Where CT builds"), which the watcher

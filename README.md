@@ -242,20 +242,29 @@ optimistic green. An index rebuild changes the generation identity, which stales
 | JavaScript and TypeScript | `vitest`, `jest`, `node-test` | yes — `jest` proven on `vercel/ms` (runs the suite once, under jest's default environment) |
 | QML and Qt | `qt-quick-test` (CMake/CTest and qmake/QTest) | fixture and focused-test proof; no host with the Qt Quick Test development package |
 | Go | `go` | yes — guarded single-module and multi-module fixtures on Go 1.24+ |
+| JVM | `gradle`, `maven`, `sbt` | fixture and focused-test proof; Scale smoke is guarded by tool availability |
+| Ruby | `rspec` | fixture and focused-test proof; Scale smoke is guarded by RSpec availability |
+| PHP | `phpunit`, `pest` | fixture and focused-test proof; Scale smoke is guarded by PHP tooling availability |
+| Godot / GDScript | `gut` | fixture and focused-test proof; Scale smoke is guarded by Godot/GUT availability |
 
-That is the whole supported set today. Support for more languages and frameworks is ongoing:
-F#, Ruby, Java, PHP, and every other toolchain are not supported yet. `miller tests enable` on a
-repo with no supported test project refuses with exit `3` and writes nothing, rather than leaving
-the workspace enabled with zero projects.
+That is the whole supported CT set today. Swift, Dart, Elixir, Erlang, native C/C++/CTest, Zig,
+Lua, R, and Bash remain unprovided. F# remains extractor-supported but has no dedicated CT provider.
+The provider floors are Gradle 8.3+, Maven Surefire 2.7.3+ with no separate Maven floor, sbt 1.x,
+RSpec 3.x, PHPUnit 10+, Pest 2+, and Godot 4 with GUT 9 plus `config_version=5`. `minitest`,
+`gdunit4`, and unsupported GUT evidence stay visible as refusals with repair guidance. `miller tests
+enable` on a repo with no supported test project refuses with exit `3` and writes nothing, rather than
+leaving the workspace enabled with zero projects.
 
 `miller tests enable` discovers projects from the files already in the repo: test-signal `.csproj`
-files, `.vbproj` and `.fsproj`, `Cargo.toml`, `go.mod`, `package.json`, the usual Python config
-files, and Qt Quick Test `CMakeLists.txt` or `.pro` projects with runner evidence. JavaScript and
-Python cases are discovered by each runner's own naming —
+files, `.vbproj` and `.fsproj`, `Cargo.toml`, `go.mod`, `package.json`, `build.gradle`/`build.gradle.kts`,
+`pom.xml`, `build.sbt`, `Gemfile`, `composer.json`, `project.godot` with a supported test addon, the
+usual Python config files, and Qt Quick Test `CMakeLists.txt` or `.pro` projects with runner evidence.
+JavaScript and Python cases are discovered by each runner's own naming —
 `*.test.*` / `*.spec.*` for vitest and jest (plus jest's `__tests__/` default and a literal
 `testMatch` / `include` array when the config is readable), `test_*.py` or `*_test.py` for Python —
-so a suite named some other way reports no cases rather than a false green. Go projects are one
-project per `go.mod`; an in-root `go.work` supplies context but does not merge modules.
+so a suite named some other way reports no cases rather than a false green. JVM, RSpec, PHP, and
+GUT cases come from their runner-specific discovery reports. Go projects are one project per `go.mod`;
+an in-root `go.work` supplies context but does not merge modules.
 
 For .NET, CT runs either a built self-executing xUnit v3/Microsoft.Testing.Platform assembly or
 the VSTest-compatible `dotnet test` path. MTP requires the built test application to prove MTP 1.7+

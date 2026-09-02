@@ -407,6 +407,39 @@
             <li><code>qt-quick-test</code></li>
           </ul>
         </article>
+        <article>
+          <h3>Go</h3>
+          <ul>
+            <li><code>go</code></li>
+          </ul>
+        </article>
+        <article>
+          <h3>JVM</h3>
+          <ul>
+            <li><code>gradle</code></li>
+            <li><code>maven</code></li>
+            <li><code>sbt</code></li>
+          </ul>
+        </article>
+        <article>
+          <h3>Ruby</h3>
+          <ul>
+            <li><code>rspec</code></li>
+          </ul>
+        </article>
+        <article>
+          <h3>PHP</h3>
+          <ul>
+            <li><code>phpunit</code></li>
+            <li><code>pest</code></li>
+          </ul>
+        </article>
+        <article>
+          <h3>Godot / GDScript</h3>
+          <ul>
+            <li><code>gut</code></li>
+          </ul>
+        </article>
       </div>
       <p class="language-note">
         Run on real repositories: .NET on Miller's own suite, <code>cargo</code> on
@@ -414,6 +447,8 @@
         (736 tests), <code>jest</code> on <code>vercel/ms</code>, plus <code>vitest</code> and
         <code>node-test</code> on live JavaScript projects. <code>qt-quick-test</code> shipped in
         v1.22.0 and is proven by fixtures, not yet on a real Qt repository.
+        The JVM, Ruby, PHP, and GDScript providers have bounded runner floors and refusal paths;
+        see the full <a href="continuous-testing.html">continuous-testing guide</a>.
         JavaScript and Python cases are discovered by test-file naming
         (<code>*.test.*</code> or <code>*.spec.*</code>, <code>test_*.py</code> or
         <code>*_test.py</code>), so a suite named some other way reports no cases rather than a false
