@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Miller.Testing;
@@ -67,6 +68,7 @@ internal static class SbtWorkspaceShadow
 
         List<SourceEntry> sourceEntries = EnumerateSourceEntries(sourceRoot, cancellationToken).ToList();
         ValidateCaseCollisions(sourceEntries);
+        ValidateLinkCycles(sourceRoot, sourceEntries);
         ValidatePathBudget(shadowRoot, sourceEntries);
         ValidateSourceBudget(sourceEntries);
 
@@ -139,16 +141,8 @@ internal static class SbtWorkspaceShadow
                 continue;
 
             string destinationPath = Path.Combine(shadowRoot, relativePath);
-            if (File.Exists(destinationPath))
-            {
-                File.Delete(destinationPath);
+            if (RemoveStaleEntry(destinationPath, shadowRoot, cancellationToken))
                 entriesDeleted++;
-            }
-            else if (Directory.Exists(destinationPath))
-            {
-                Directory.Delete(destinationPath, recursive: true);
-                entriesDeleted++;
-            }
         }
 
         WriteManifest(workspaceCandidateRoot, entries);
@@ -208,8 +202,30 @@ internal static class SbtWorkspaceShadow
             }
             else
             {
+                if (!IsRegularFile(path))
+                    throw new IOException($"unsupported special file '{relativePath}'");
                 yield return new SourceEntry(path, relativePath, EntryKind.File, null, false);
             }
+        }
+    }
+
+    private static bool IsRegularFile(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return true;
+
+        IntPtr statBuffer = Marshal.AllocHGlobal(512);
+        try
+        {
+            if (LStat(path, statBuffer) != 0)
+                throw new IOException($"could not inspect source entry '{path}'",
+                    new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()));
+            uint mode = unchecked((uint)Marshal.ReadInt32(statBuffer, 24));
+            return (mode & UnixFileTypeMask) == UnixRegularFileType;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(statBuffer);
         }
     }
 
@@ -260,6 +276,37 @@ internal static class SbtWorkspaceShadow
         }
     }
 
+    private static void ValidateLinkCycles(string sourceRoot, IReadOnlyList<SourceEntry> sourceEntries)
+    {
+        StringComparer comparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        Dictionary<string, SourceEntry> links = sourceEntries
+            .Where(entry => entry.Kind == EntryKind.SymbolicLink)
+            .ToDictionary(entry => Path.GetFullPath(entry.SourcePath), comparer);
+
+        foreach (SourceEntry link in links.Values)
+        {
+            HashSet<string> visited = new(comparer);
+            SourceEntry current = link;
+            while (true)
+            {
+                string currentPath = Path.GetFullPath(current.SourcePath);
+                if (!visited.Add(currentPath))
+                    throw new IOException($"looping symbolic link '{current.RelativePath}'");
+                if (current.LinkTarget is null)
+                    break;
+                string resolvedTarget = ResolveLinkTarget(
+                    sourceRoot,
+                    current.SourcePath,
+                    current.LinkTarget,
+                    current.RelativePath);
+                if (!links.TryGetValue(resolvedTarget, out current!))
+                    break;
+            }
+        }
+    }
+
     private static void ValidatePathBudget(string shadowRoot, IReadOnlyList<SourceEntry> sourceEntries)
     {
         foreach (SourceEntry entry in sourceEntries)
@@ -289,6 +336,47 @@ internal static class SbtWorkspaceShadow
     private static bool IsBuildOwned(string relativePath) =>
         relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
             .Any(segment => string.Equals(segment, "target", StringComparison.OrdinalIgnoreCase));
+
+    private static bool RemoveStaleEntry(
+        string destinationPath,
+        string shadowRoot,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (File.Exists(destinationPath) || IsReparsePoint(destinationPath))
+        {
+            if (!Directory.Exists(Path.GetDirectoryName(destinationPath)))
+                return false;
+            try
+            {
+                File.Delete(destinationPath);
+                return true;
+            }
+            catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return false;
+            }
+        }
+        if (!Directory.Exists(destinationPath))
+            return false;
+
+        foreach (string childPath in Directory.EnumerateFileSystemEntries(destinationPath))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string childRelativePath = Path.GetRelativePath(shadowRoot, childPath);
+            if (IsBuildOwned(childRelativePath))
+                continue;
+            RemoveStaleEntry(childPath, shadowRoot, cancellationToken);
+        }
+
+        if (!Directory.EnumerateFileSystemEntries(destinationPath).Any())
+        {
+            Directory.Delete(destinationPath);
+            return true;
+        }
+
+        return false;
+    }
 
     private static bool IsAncestorOfSeenEntry(string relativePath, IEnumerable<string> seenEntries)
     {
@@ -459,7 +547,7 @@ internal static class SbtWorkspaceShadow
             {
                 return new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint);
             }
-            catch (FileNotFoundException)
+            catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
             {
                 return false;
             }
@@ -467,6 +555,12 @@ internal static class SbtWorkspaceShadow
 
         return new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint);
     }
+
+    [DllImport("libc", EntryPoint = "lstat", SetLastError = true)]
+    private static extern int LStat(string path, IntPtr statBuffer);
+
+    private const uint UnixFileTypeMask = 0xF000;
+    private const uint UnixRegularFileType = 0x8000;
 
     private static Dictionary<string, ManifestEntry> ReadManifest(string workspaceCandidateRoot)
     {
@@ -476,10 +570,19 @@ internal static class SbtWorkspaceShadow
 
         try
         {
-            return JsonSerializer.Deserialize<List<ManifestEntry>>(File.ReadAllText(manifestPath))?
-                .Where(entry => !string.IsNullOrWhiteSpace(entry.Path))
-                .ToDictionary(entry => entry.Path, StringComparer.Ordinal)
-                ?? new Dictionary<string, ManifestEntry>(StringComparer.Ordinal);
+            List<ManifestEntry>? manifestEntries = JsonSerializer.Deserialize<List<ManifestEntry>>(
+                File.ReadAllText(manifestPath));
+            Dictionary<string, ManifestEntry> entries = new(StringComparer.Ordinal);
+            if (manifestEntries is null)
+                return entries;
+            string shadowRoot = Path.Combine(workspaceCandidateRoot, ShadowDirectoryName);
+            foreach (ManifestEntry entry in manifestEntries)
+            {
+                string normalizedPath = NormalizeManifestPath(entry.Path, shadowRoot);
+                entries.Add(normalizedPath, entry with { Path = normalizedPath });
+            }
+
+            return entries;
         }
         catch (JsonException)
         {
@@ -489,6 +592,25 @@ internal static class SbtWorkspaceShadow
         {
             return RecoverManifestEntries(workspaceCandidateRoot);
         }
+    }
+
+    private static string NormalizeManifestPath(string path, string shadowRoot)
+    {
+        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path))
+            throw new IOException($"unsafe sbt shadow manifest path '{path}'");
+        string normalizedInput = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        string[] segments = normalizedInput.Split(Path.DirectorySeparatorChar);
+        if (segments.Any(segment => segment is "" or "." or ".."))
+            throw new IOException($"unsafe sbt shadow manifest path '{path}'");
+
+        string shadowRootFullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(shadowRoot));
+        string fullPath = Path.GetFullPath(Path.Combine(shadowRootFullPath, normalizedInput));
+        StringComparison comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (!fullPath.StartsWith(shadowRootFullPath + Path.DirectorySeparatorChar, comparison))
+            throw new IOException($"unsafe sbt shadow manifest path '{path}'");
+        return normalizedInput;
     }
 
     private static Dictionary<string, ManifestEntry> RecoverManifestEntries(string workspaceCandidateRoot)

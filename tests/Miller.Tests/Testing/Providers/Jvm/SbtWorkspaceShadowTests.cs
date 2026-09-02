@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Runtime.InteropServices;
 using Miller.Testing;
 using Miller.Testing.Providers.Shared;
 using Miller.Testing.Providers.Jvm;
@@ -335,6 +337,160 @@ public sealed class SbtWorkspaceShadowTests : IDisposable
 
         Assert.Equal("custom\n", File.ReadAllText(headPath));
     }
+
+    [Fact]
+    public void Removing_a_source_directory_preserves_nested_build_owned_target_artifacts()
+    {
+        string projectRoot = Path.Combine(_root, "project");
+        string moduleRoot = Path.Combine(projectRoot, "module");
+        Directory.CreateDirectory(moduleRoot);
+        string projectPath = Path.Combine(projectRoot, "build.sbt");
+        string sourcePath = Path.Combine(moduleRoot, "source.scala");
+        File.WriteAllText(projectPath, "name := \"shadow\"\n");
+        File.WriteAllText(sourcePath, "object Source\n");
+
+        ContinuousTestWorkspace workspace = new(
+            WorkspaceId: "ws:sbt-shadow",
+            WorkspaceRoot: _root,
+            ProjectPath: projectPath,
+            BuildOutputRoot: Path.Combine(_root, ".miller", "ct-sbt"),
+            Framework: "sbt");
+
+        SbtWorkspaceShadowResult first = SbtWorkspaceShadow.Sync(workspace, CancellationToken.None);
+        string targetArtifactPath = Path.Combine(first.ShadowRoot, "module", "target", "classes.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(targetArtifactPath)!);
+        File.WriteAllText(targetArtifactPath, "compiled\n");
+        Directory.Delete(moduleRoot, recursive: true);
+
+        SbtWorkspaceShadowResult result = SbtWorkspaceShadow.Sync(workspace, CancellationToken.None);
+
+        Assert.True(File.Exists(targetArtifactPath));
+        Assert.Equal("compiled\n", File.ReadAllText(targetArtifactPath));
+        Assert.True(File.Exists(Path.Combine(result.ShadowRoot, "build.sbt")));
+    }
+
+    [Fact]
+    public void Self_referential_symbolic_links_are_rejected_with_the_offending_relative_path()
+    {
+        string projectRoot = Path.Combine(_root, "project");
+        Directory.CreateDirectory(projectRoot);
+        string projectPath = Path.Combine(projectRoot, "build.sbt");
+        string selfPath = Path.Combine(projectRoot, "self.txt");
+        File.WriteAllText(projectPath, "name := \"shadow\"\n");
+        File.CreateSymbolicLink(selfPath, "self.txt");
+
+        ContinuousTestWorkspace workspace = new(
+            WorkspaceId: "ws:sbt-shadow",
+            WorkspaceRoot: _root,
+            ProjectPath: projectPath,
+            BuildOutputRoot: Path.Combine(_root, ".miller", "ct-sbt"),
+            Framework: "sbt");
+
+        IOException exception = Assert.Throws<IOException>(() =>
+            SbtWorkspaceShadow.Sync(workspace, CancellationToken.None));
+
+        Assert.Contains("self.txt", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Multi_link_symbolic_cycles_are_rejected_with_an_offending_relative_path()
+    {
+        string projectRoot = Path.Combine(_root, "project");
+        Directory.CreateDirectory(projectRoot);
+        string projectPath = Path.Combine(projectRoot, "build.sbt");
+        string firstPath = Path.Combine(projectRoot, "first.txt");
+        string secondPath = Path.Combine(projectRoot, "second.txt");
+        File.WriteAllText(projectPath, "name := \"shadow\"\n");
+        File.CreateSymbolicLink(firstPath, "second.txt");
+        File.CreateSymbolicLink(secondPath, "first.txt");
+
+        ContinuousTestWorkspace workspace = new(
+            WorkspaceId: "ws:sbt-shadow",
+            WorkspaceRoot: _root,
+            ProjectPath: projectPath,
+            BuildOutputRoot: Path.Combine(_root, ".miller", "ct-sbt"),
+            Framework: "sbt");
+
+        IOException exception = Assert.Throws<IOException>(() =>
+            SbtWorkspaceShadow.Sync(workspace, CancellationToken.None));
+
+        Assert.True(
+            exception.Message.Contains("first.txt", StringComparison.Ordinal)
+            || exception.Message.Contains("second.txt", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Unsafe_manifest_paths_cannot_delete_files_outside_the_shadow_root()
+    {
+        string projectRoot = Path.Combine(_root, "project");
+        Directory.CreateDirectory(projectRoot);
+        string projectPath = Path.Combine(projectRoot, "build.sbt");
+        string outsidePath = Path.Combine(_root, "outside-sentinel.txt");
+        File.WriteAllText(projectPath, "name := \"shadow\"\n");
+        File.WriteAllText(outsidePath, "keep\n");
+
+        ContinuousTestWorkspace workspace = new(
+            WorkspaceId: "ws:sbt-shadow",
+            WorkspaceRoot: _root,
+            ProjectPath: projectPath,
+            BuildOutputRoot: Path.Combine(_root, ".miller", "ct-sbt"),
+            Framework: "sbt");
+
+        SbtWorkspaceShadowResult first = SbtWorkspaceShadow.Sync(workspace, CancellationToken.None);
+        string maliciousPath = Path.GetRelativePath(first.ShadowRoot, outsidePath);
+        string manifest = JsonSerializer.Serialize(new[]
+        {
+            new
+            {
+                Path = maliciousPath,
+                Kind = 0,
+                Length = new FileInfo(outsidePath).Length,
+                LastWriteTimeUtcTicks = File.GetLastWriteTimeUtc(outsidePath).Ticks,
+                LinkTarget = (string?)null,
+                Hash = (string?)null,
+                UnixMode = (int?)null,
+                IsReadOnly = false,
+            },
+        });
+        File.WriteAllText(Path.Combine(first.WorkspaceCandidateRoot, "manifest.json"), manifest);
+
+        Exception? exception = Record.Exception(() =>
+            SbtWorkspaceShadow.Sync(workspace, CancellationToken.None));
+
+        Assert.True(exception is null or IOException);
+        Assert.Equal("keep\n", File.ReadAllText(outsidePath));
+    }
+
+    [Fact]
+    public void Unix_fifo_source_entries_are_rejected_before_any_read()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        string projectRoot = Path.Combine(_root, "project");
+        Directory.CreateDirectory(projectRoot);
+        string projectPath = Path.Combine(projectRoot, "build.sbt");
+        string fifoPath = Path.Combine(projectRoot, "stream.fifo");
+        File.WriteAllText(projectPath, "name := \"shadow\"\n");
+        Assert.Equal(0, mkfifo(fifoPath, 0x1B6));
+
+        ContinuousTestWorkspace workspace = new(
+            WorkspaceId: "ws:sbt-shadow",
+            WorkspaceRoot: _root,
+            ProjectPath: projectPath,
+            BuildOutputRoot: Path.Combine(_root, ".miller", "ct-sbt"),
+            Framework: "sbt");
+
+        IOException exception = Assert.Throws<IOException>(() =>
+            SbtWorkspaceShadow.Sync(workspace, TestContext.Current.CancellationToken));
+
+        Assert.Contains("stream.fifo", exception.Message, StringComparison.Ordinal);
+        string workspaceCandidate = CtGenerationPaths.CacheDirectory(workspace, "sbt-workspace");
+        Assert.False(File.Exists(Path.Combine(workspaceCandidate, "manifest.json")));
+    }
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int mkfifo(string pathname, uint mode);
 
     [Fact]
     public void Destination_mutation_with_unchanged_metadata_uses_a_hash_fallback_and_repairs_content()
