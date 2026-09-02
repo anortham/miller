@@ -168,18 +168,18 @@
 **Approach:** Start with failing inventory/factory/framework/language/convention/whole-suite tests, then make the smallest shared-file changes. Build the Scale fixture at runtime from committed test source plus a real GUT 9 addon found through `MILLER_GUT_ROOT` or `<repo>/.tools/gut`; `RequireGodot` and `RequireGut` remain the only launch signals. The lead must install or locate a real Godot 4/GUT 9 setup and run the exact Scale case before accepting the task for release.
 
 **Acceptance criteria:**
-- [ ] Inventory proves GUT runnable, gdUnit4 refused with its exact remedy, unsupported project/plugin versions refused, both addons represented, and bare Godot ignored.
-- [ ] Factory shares the same process runner and registers `gut` with source `ct-provider:godot`.
-- [ ] `.gd`, `gdscript`, and GUT case/source paths map only to `ContinuousTestLanguageFamily.Gdscript` and participate in impact selection.
-- [ ] Convention and whole-suite contract tests include Godot without weakening existing providers.
-- [ ] The real Godot 4/GUT 9 Scale smoke executes and proves import isolation, exact focused and whole-suite runs, inner-class JUnit attribution, source/global-path immutability, warm zero-copy/zero-hash/no-import behavior, and recorded cold/warm metrics.
-- [ ] Findings and parent plan state the runtime-proven command/report behavior and the approved mirror adaptation.
-- [ ] Worker-scope verification passes and the serial worker commits only the owned files plus its checkpoint.
+- [x] Inventory proves GUT runnable, gdUnit4 refused with its exact remedy, unsupported project/plugin versions refused, both addons represented, and bare Godot ignored.
+- [x] Factory shares the same process runner and registers `gut` with source `ct-provider:godot`.
+- [x] `.gd`, `gdscript`, and GUT case/source paths map only to `ContinuousTestLanguageFamily.Gdscript` and participate in impact selection.
+- [x] Convention and whole-suite contract tests include Godot without weakening existing providers.
+- [x] The real Godot 4/GUT 9 Scale smoke executes and proves import isolation, exact focused and whole-suite runs, inner-class JUnit attribution, source/global-path immutability, warm zero-copy/zero-hash/no-import behavior, and recorded cold/warm metrics.
+- [x] Findings and parent plan state the runtime-proven command/report behavior and the approved mirror adaptation.
+- [x] Worker-scope verification passes and the serial worker commits only the owned files plus its checkpoint.
 
 ## Completion
 
-- [ ] Lead inline review accepts every task with no open finding.
-- [ ] Miller post-edit impact matches the planned files and focused scopes.
+- [x] Lead inline review accepts every task with no open finding.
+- [x] Miller post-edit impact matches the planned files and focused scopes.
 - [ ] Task 8 focused tests, Release build, bare fast suite, real Godot/GUT Scale smoke, and deterministic performance checks are green.
 - [ ] Parent plan Task 8 is checked complete and the SDD ledger contains commit-bound evidence.
 - [ ] Worktree state is clean and reconciled before Task 9 documentation and final release gates begin.
