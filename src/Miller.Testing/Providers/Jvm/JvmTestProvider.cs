@@ -83,7 +83,7 @@ public sealed class JvmTestProvider : IContinuousTestProvider
         {
             await backend.EnsureBuildAsync(request.Workspace, paths, cancellationToken).ConfigureAwait(false);
             IReadOnlyList<JvmTestSelection> selected = DecodeSelections(request, backend.Discriminator);
-            if (!request.WholeSuite && selected.Count == 0)
+            if (selected.Count == 0)
                 throw new ContinuousTestProviderException(
                     "JVM run request selected no test case IDs; an empty selection cannot be reported green.");
 
@@ -93,7 +93,7 @@ public sealed class JvmTestProvider : IContinuousTestProvider
                 .RunAsync(
                     request,
                     paths,
-                    request.WholeSuite ? Array.Empty<JvmTestSelection>() : selected,
+                    selected,
                     request.WholeSuite,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -142,14 +142,14 @@ public sealed class JvmTestProvider : IContinuousTestProvider
         IJvmTestBackend backend = BackendFor(request.Workspace);
         ValidateWorkspace(request.Workspace, backend);
         IReadOnlyList<JvmTestSelection> selected = DecodeSelections(request, backend.Discriminator);
-        if (!request.WholeSuite && selected.Count == 0)
+        if (selected.Count == 0)
             throw new ContinuousTestProviderException(
                 "JVM run request selected no test case IDs; an empty selection cannot be reported green.");
         CtGenerationPaths paths = CtGenerationPaths.ResolveLatestOrFirst(request.Workspace);
         return backend.BuildRunCommands(
             request,
             paths,
-            request.WholeSuite ? Array.Empty<JvmTestSelection>() : selected,
+            selected,
             request.WholeSuite);
     }
 
@@ -222,6 +222,7 @@ public sealed class JvmTestProvider : IContinuousTestProvider
             ["provider_source"] = ProviderSource,
             ["backend"] = backend,
             ["class_name"] = test.ClassName,
+            ["class"] = test.ClassName,
             ["method_name"] = test.MethodName,
             ["selector"] = test.Selector,
         };
@@ -298,6 +299,7 @@ public sealed class JvmTestProvider : IContinuousTestProvider
                 ["artifact_path"] = backendResult.ResultArtifactPath,
                 ["backend"] = backend,
                 ["class_name"] = testCase.ClassName,
+                ["class"] = testCase.ClassName,
                 ["method_name"] = testCase.MethodName,
                 ["raw_status"] = testCase.Status,
             };
@@ -328,12 +330,14 @@ public sealed class JvmTestProvider : IContinuousTestProvider
                 throw Failure(
                     $"JVM backend reported unselected test cases: {string.Join(", ", unexpected)}",
                     backendResult.ResultArtifactPath);
-            string[] missing = selected.Except(reported, StringComparer.Ordinal).ToArray();
-            if (missing.Length > 0)
-                throw Failure(
-                    $"JVM backend did not report selected test cases: {string.Join(", ", missing)}",
-                    backendResult.ResultArtifactPath);
         }
+
+        string[] reportedSelectors = backendResult.Cases.Select(test => test.Selector).ToArray();
+        string[] missing = selected.Except(reportedSelectors, StringComparer.Ordinal).ToArray();
+        if (missing.Length > 0)
+            throw Failure(
+                $"JVM backend did not report selected test cases: {string.Join(", ", missing)}",
+                backendResult.ResultArtifactPath);
 
         return rows.OrderBy(row => row.TestCaseId, StringComparer.Ordinal).ToArray();
     }
@@ -349,9 +353,10 @@ public sealed class JvmTestProvider : IContinuousTestProvider
     private static string NormalizeStatus(string status) =>
         status.ToLowerInvariant() switch
         {
+            "pass" or "passed" => "passed",
             "fail" or "failed" or "failure" or "error" or "errored" => "failed",
             "skip" or "skipped" or "pending" or "notrun" => "skipped",
-            _ => "passed",
+            _ => "failed",
         };
 
     private static string NewRunId(ContinuousTestProviderRunRequest request, string generationId) =>

@@ -3,6 +3,7 @@ using Miller.Testing.Parsing;
 using Miller.Testing.Providers.Qml;
 using Miller.Testing.Providers.Php;
 using Miller.Testing.Providers.Ruby;
+using Miller.Testing.Providers.Jvm;
 using Miller.Tests.Testing.Providers.Dotnet;
 using QmlScriptedTestProcessRunner = Miller.Tests.Testing.Providers.Qml.ScriptedTestProcessRunner;
 using Miller.Tests.Testing.Providers.Rust;
@@ -206,6 +207,37 @@ public sealed class WholeSuiteProviderContractTests : IDisposable
 
         TestProcessCommand command = Assert.Single(runner.Calls);
         Assert.DoesNotContain("--filter", command.Arguments);
+        AssertOneResultPerId(ids, result);
+    }
+
+    [Fact]
+    public async Task Jvm_whole_suite_run_is_unfiltered_and_reports_every_selected_case()
+    {
+        string root = Path.Combine(_dir, "jvm");
+        Directory.CreateDirectory(root);
+        string projectPath = Path.Combine(root, "build.gradle");
+        File.WriteAllText(projectPath, "plugins { id 'java' }");
+        var workspace = Track(new ContinuousTestWorkspace(
+            WorkspaceId: "ws:jvm",
+            WorkspaceRoot: root,
+            ProjectPath: projectPath,
+            BuildOutputRoot: Path.Combine(_dir, "ct-build", "jvm"),
+            Framework: "gradle"));
+        string[] ids =
+        [
+            JvmTestTooling.EncodeCaseId(workspace.WorkspaceId, projectPath, "gradle", "SampleTest", "adds"),
+            JvmTestTooling.EncodeCaseId(workspace.WorkspaceId, projectPath, "gradle", "SampleTest", "subtracts"),
+        ];
+        var backend = new WholeSuiteJvmBackend();
+
+        ProviderRunResult result = await new JvmTestProvider(backend).RunAsync(
+            Request(workspace, ids) with { WholeSuite = true },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(backend.WholeSuite);
+        Assert.Equal(
+            ["SampleTest.adds", "SampleTest.subtracts"],
+            backend.Selected.Select(selection => selection.Selector).ToArray());
         AssertOneResultPerId(ids, result);
     }
 
@@ -460,5 +492,59 @@ public sealed class WholeSuiteProviderContractTests : IDisposable
         catch (UnauthorizedAccessException)
         {
         }
+    }
+
+    private sealed class WholeSuiteJvmBackend : IJvmTestBackend
+    {
+        public string Discriminator => "gradle";
+
+        public bool WholeSuite { get; private set; }
+
+        public IReadOnlyList<JvmTestSelection> Selected { get; private set; } = [];
+
+        public Task EnsureBuildAsync(
+            ContinuousTestWorkspace workspace,
+            CtGenerationPaths paths,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<JvmTestBackendCase>> DiscoverAsync(
+            ContinuousTestWorkspace workspace,
+            CtGenerationPaths paths,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<JvmTestBackendCase>>(
+                [
+                    new JvmTestBackendCase("SampleTest", "adds", "SampleTest.adds"),
+                    new JvmTestBackendCase("SampleTest", "subtracts", "SampleTest.subtracts"),
+                ]);
+
+        public Task<JvmTestBackendRunResult> RunAsync(
+            ContinuousTestProviderRunRequest request,
+            CtGenerationPaths paths,
+            IReadOnlyList<JvmTestSelection> selected,
+            bool wholeSuite,
+            CancellationToken cancellationToken)
+        {
+            Selected = selected;
+            WholeSuite = wholeSuite;
+            return Task.FromResult(new JvmTestBackendRunResult(
+                Path.Combine(paths.ResultsDirectory, "jvm.xml"),
+                [
+                    new JvmTestBackendCaseResult("SampleTest", "adds", "passed", 0.01, null),
+                    new JvmTestBackendCaseResult("SampleTest", "subtracts", "passed", 0.01, null),
+                ]));
+        }
+
+        public TestProcessCommand BuildDiscoveryCommand(
+            ContinuousTestWorkspace workspace,
+            CtGenerationPaths paths) =>
+            new("gradle", ["test"], workspace.WorkspaceRoot);
+
+        public IReadOnlyList<TestProcessCommand> BuildRunCommands(
+            ContinuousTestProviderRunRequest request,
+            CtGenerationPaths paths,
+            IReadOnlyList<JvmTestSelection> selected,
+            bool wholeSuite) =>
+            [new TestProcessCommand("gradle", ["test"], request.Workspace.WorkspaceRoot)];
     }
 }

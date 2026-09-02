@@ -185,11 +185,12 @@ internal sealed class GradleTestBackend : IJvmTestBackend
 
     private static IReadOnlyList<string> ReportPaths(CtGenerationPaths paths)
     {
-        if (!Directory.Exists(paths.GenerationRoot))
+        string buildRoot = JvmTestTooling.GradleBuildRoot(paths);
+        if (!Directory.Exists(buildRoot))
             return [];
         try
         {
-            return Directory.EnumerateFiles(paths.GenerationRoot, "TEST-*.xml", SearchOption.AllDirectories)
+            return Directory.EnumerateFiles(buildRoot, "TEST-*.xml", SearchOption.AllDirectories)
                 .Select(Path.GetFullPath)
                 .Where(path => JvmTestTooling.IsInside(paths.GenerationRoot, path))
                 .OrderBy(path => path, PathComparer)

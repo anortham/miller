@@ -61,6 +61,7 @@ public sealed class JvmTestProviderTests : IDisposable
             Assert.Equal("gradle", test.Framework);
             Assert.Equal("jvm", test.Metadata["language_family"]);
             Assert.Equal("gradle", test.Metadata["backend"]);
+            Assert.Equal(test.Metadata["class_name"], test.Metadata["class"]);
             Assert.Equal("tests/CalculatorTest.java", test.SourcePath);
         });
     }
@@ -159,6 +160,12 @@ public sealed class JvmTestProviderTests : IDisposable
             provider.RunAsync(Request(workspace), TestContext.Current.CancellationToken));
         Assert.Contains("selected no test case IDs", exception.Message, StringComparison.Ordinal);
 
+        ContinuousTestProviderException emptyWholeSuite = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.RunAsync(
+                Request(workspace) with { WholeSuite = true },
+                TestContext.Current.CancellationToken));
+        Assert.Contains("selected no test case IDs", emptyWholeSuite.Message, StringComparison.Ordinal);
+
         string id = JvmTestTooling.EncodeCaseId(
             workspace.WorkspaceId,
             workspace.ProjectPath,
@@ -170,6 +177,49 @@ public sealed class JvmTestProviderTests : IDisposable
             TestContext.Current.CancellationToken);
         Assert.True(backend.LastWholeSuite);
         Assert.Equal("passed", result.Status);
+    }
+
+    [Fact]
+    public async Task Whole_suite_rejects_missing_selected_cases()
+    {
+        ContinuousTestWorkspace workspace = Workspace("gradle");
+        string first = JvmTestTooling.EncodeCaseId(
+            workspace.WorkspaceId, workspace.ProjectPath, "gradle", "com.example.CalculatorTest", "adds");
+        string second = JvmTestTooling.EncodeCaseId(
+            workspace.WorkspaceId, workspace.ProjectPath, "gradle", "com.example.CalculatorTest", "subtracts");
+        var backend = new RecordingBackend
+        {
+            RunCases =
+            [new JvmTestBackendCaseResult("com.example.CalculatorTest", "adds", "passed", 0.01, null)],
+        };
+
+        ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            new JvmTestProvider(backend).RunAsync(
+                Request(workspace, first, second) with { WholeSuite = true },
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("did not report selected", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("subtracts", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Run_fails_closed_for_an_unknown_backend_status()
+    {
+        ContinuousTestWorkspace workspace = Workspace("gradle");
+        string id = JvmTestTooling.EncodeCaseId(
+            workspace.WorkspaceId, workspace.ProjectPath, "gradle", "com.example.CalculatorTest", "adds");
+        var backend = new RecordingBackend
+        {
+            RunCases =
+            [new JvmTestBackendCaseResult("com.example.CalculatorTest", "adds", "future-status", 0.01, null)],
+        };
+
+        ProviderRunResult result = await new JvmTestProvider(backend).RunAsync(
+            Request(workspace, id),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("failed", Assert.Single(result.CaseResults).Status);
+        Assert.Equal("future-status", Assert.Single(result.CaseResults).Metadata["raw_status"]);
     }
 
     [Fact]
@@ -194,7 +244,7 @@ public sealed class JvmTestProviderTests : IDisposable
 
         provider.BuildRunCommands(Request(workspace, id) with { WholeSuite = true });
         Assert.True(backend.LastWholeSuite);
-        Assert.Empty(backend.LastSelected);
+        Assert.Equal(["com.example.CalculatorTest.adds"], backend.LastSelected.Select(selection => selection.Selector).ToArray());
     }
 
     [Fact]

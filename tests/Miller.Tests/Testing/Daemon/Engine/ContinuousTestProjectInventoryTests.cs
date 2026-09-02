@@ -177,7 +177,10 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
     public void Discover_classifies_each_jvm_build_file_and_ignores_settings_only_roots()
     {
         WriteProject("build.gradle", "plugins { id 'java' }");
+        WriteProject("src/test/java/SampleTest.java", "class SampleTest {}");
         WriteProject("module/build.gradle.kts", "plugins { java }");
+        WriteProject("module/src/test/kotlin/SampleTest.kt", "class SampleTest");
+        WriteProject("tools/build.gradle", "plugins { id 'distribution' }");
         WriteProject("service/pom.xml", "<project />");
         WriteProject("legacy/build.sbt", "scalaVersion := \"3.3.0\"");
         WriteProject("settings.gradle", "rootProject.name = 'settings-only'");
@@ -188,12 +191,12 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["build.gradle"] = "gradle",
-                ["build.gradle.kts"] = "gradle",
-                ["pom.xml"] = "maven",
-                ["build.sbt"] = "sbt",
+                ["module/build.gradle.kts"] = "gradle",
+                ["service/pom.xml"] = "maven",
+                ["legacy/build.sbt"] = "sbt",
             },
             projects.ToDictionary(
-                project => Path.GetFileName(project.ProjectPath),
+                project => Path.GetRelativePath(_root, project.ProjectPath),
                 project => project.Framework!,
                 StringComparer.OrdinalIgnoreCase));
         Assert.DoesNotContain(projects, project =>

@@ -1462,6 +1462,28 @@ public static class ContinuousTestProjectInventory
             || QuickTestRunnerExtensions.Contains(Path.GetExtension(path));
     }
 
+    private static bool IsGradleTestProject(string path)
+    {
+        string? projectRoot = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (projectRoot is null)
+            return false;
+        if (Directory.Exists(Path.Combine(projectRoot, "src", "test")))
+            return true;
+
+        string buildFile = ReadHead(path);
+        if (buildFile.Contains("src/test", StringComparison.OrdinalIgnoreCase)
+            || buildFile.Contains("src\\test", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return buildFile.Contains("sourceSets", StringComparison.OrdinalIgnoreCase)
+            && Regex.IsMatch(
+                buildFile,
+                @"\btest\s*(?:\{|\.|=)",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
     private static bool TryIdentify(string path, out string? framework, out IReadOnlyList<string> excludeTraits)
     {
         excludeTraits = [];
@@ -1481,8 +1503,8 @@ public static class ContinuousTestProjectInventory
         if (string.Equals(name, "build.gradle", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "build.gradle.kts", StringComparison.OrdinalIgnoreCase))
         {
-            framework = "gradle";
-            return true;
+            framework = IsGradleTestProject(path) ? "gradle" : null;
+            return framework is not null;
         }
 
         if (string.Equals(name, "build.sbt", StringComparison.OrdinalIgnoreCase))
@@ -1832,7 +1854,7 @@ public static class ContinuousTestProjectInventory
             return "maven";
         if (string.Equals(name, "build.gradle", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "build.gradle.kts", StringComparison.OrdinalIgnoreCase))
-            return "gradle";
+            return IsGradleTestProject(path) ? "gradle" : null;
         if (string.Equals(name, "build.sbt", StringComparison.OrdinalIgnoreCase))
             return "sbt";
         if (string.Equals(name, "package.json", StringComparison.OrdinalIgnoreCase))

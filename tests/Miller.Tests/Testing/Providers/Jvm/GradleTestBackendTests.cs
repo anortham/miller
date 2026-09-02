@@ -44,7 +44,10 @@ public sealed class GradleTestBackendTests : IDisposable
         Assert.Equal(project, ArgumentAfter(command, "-p"));
         Assert.Contains("--test-dry-run", command.Arguments);
         string initScript = ArgumentAfter(command, "--init-script");
-        Assert.Contains("projectsEvaluated", File.ReadAllText(initScript), StringComparison.Ordinal);
+        string initText = File.ReadAllText(initScript);
+        Assert.Contains("beforeProject", initText, StringComparison.Ordinal);
+        Assert.DoesNotContain("projectsEvaluated", initText, StringComparison.Ordinal);
+        Assert.Contains("Base64", initText, StringComparison.Ordinal);
         Assert.All(
             command.Environment.Values.Where(value => value is not null),
             value => Assert.True(IsInside(paths.GenerationRoot, value!), value));
@@ -217,6 +220,50 @@ public sealed class GradleTestBackendTests : IDisposable
                 TestContext.Current.CancellationToken));
 
         Assert.Contains("exited with code 1", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Run_ignores_test_reports_under_gradle_home_and_project_cache()
+    {
+        string projectFile = Path.Combine(_root, "build.gradle");
+        File.WriteAllText(projectFile, "plugins { id 'java' }");
+        ContinuousTestWorkspace workspace = Workspace(projectFile);
+        var runner = new RecordingRunner(command =>
+        {
+            string buildRoot = command.Environment["MILLER_CT_GRADLE_BUILD_ROOT"]!;
+            string gradleHome = command.Environment["GRADLE_USER_HOME"]!;
+            string projectCache = Path.Combine(Path.GetDirectoryName(buildRoot)!, "gradle-project-cache");
+            string buildReport = Path.Combine(buildRoot, "root", "test-results", "test", "TEST-real.xml");
+            string cacheReport = Path.Combine(gradleHome, "caches", "TEST-ignored.xml");
+            string projectCacheReport = Path.Combine(projectCache, "TEST-ignored-project-cache.xml");
+            Directory.CreateDirectory(Path.GetDirectoryName(buildReport)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(cacheReport)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(projectCacheReport)!);
+            File.WriteAllText(buildReport, RunReport);
+            File.WriteAllText(cacheReport, """
+                <testsuite name="ignored" tests="1"><testcase classname="Ignored" name="cacheCase" /></testsuite>
+                """);
+            File.WriteAllText(projectCacheReport, """
+                <testsuite name="ignored" tests="1"><testcase classname="Ignored" name="projectCacheCase" /></testsuite>
+                """);
+            return new TestProcessResult(0, string.Empty, string.Empty);
+        });
+        string id = JvmTestTooling.EncodeCaseId(
+            workspace.WorkspaceId,
+            workspace.ProjectPath,
+            "gradle",
+            "com.example.CalculatorTest",
+            "adds");
+
+        JvmTestBackendRunResult result = await new GradleTestBackend(runner).RunAsync(
+            Request(workspace, id),
+            CtGenerationPaths.Allocate(workspace),
+            [new JvmTestSelection("com.example.CalculatorTest", "adds", "com.example.CalculatorTest.adds")],
+            wholeSuite: false,
+            TestContext.Current.CancellationToken);
+
+        Assert.Single(result.Cases);
+        Assert.Equal("com.example.CalculatorTest.adds", Assert.Single(result.Cases).Selector);
     }
 
     private ContinuousTestWorkspace Workspace(string projectPath) =>

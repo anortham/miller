@@ -184,7 +184,8 @@ internal static class JvmTestTooling
         }
 
         def millerCtConfigureProject = { project ->
-            def projectSegment = project.path.replaceAll('[^A-Za-z0-9._-]', '_')
+            def projectSegment = 'project-' + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+                project.path.getBytes(java.nio.charset.StandardCharsets.UTF_8))
             project.buildDir = new File(millerCtBuildRoot, projectSegment)
             project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { testTask ->
                 testTask.reports.junitXml.outputLocation = new File(project.buildDir, 'test-results/test')
@@ -192,8 +193,5 @@ internal static class JvmTestTooling
         }
 
         gradle.beforeProject(millerCtConfigureProject)
-        gradle.projectsEvaluated {
-            gradle.allprojects(millerCtConfigureProject)
-        }
         """;
 }
