@@ -1,5 +1,6 @@
 using Miller.Testing;
 using Miller.Testing.Providers.Jvm;
+using Miller.Testing.Providers.Shared;
 using Xunit;
 
 namespace Miller.Tests.Testing.Providers.Jvm;
@@ -227,6 +228,18 @@ public sealed class JvmTestProviderScaleTests : IDisposable
             workspace,
             TestContext.Current.CancellationToken);
         TimeSpan coldSyncElapsed = DateTimeOffset.UtcNow - coldSyncStarted;
+        string versionWorkingDirectory = Path.GetDirectoryName(coldSync.ShadowProjectPath)
+            ?? coldSync.ShadowRoot;
+        string javaVersion = await ProbeVersionAsync(
+            java,
+            ["-version"],
+            versionWorkingDirectory,
+            TestContext.Current.CancellationToken);
+        string sbtVersion = await ProbeVersionAsync(
+            sbt,
+            ["--version"],
+            versionWorkingDirectory,
+            TestContext.Current.CancellationToken);
         IReadOnlyList<ProviderTestCase> discovered = await provider.DiscoverAsync(
             workspace,
             TestContext.Current.CancellationToken);
@@ -271,12 +284,41 @@ public sealed class JvmTestProviderScaleTests : IDisposable
                 .Where(path => !path.StartsWith(Path.Combine(_root, ".miller"), StringComparison.Ordinal)),
             path => Assert.Contains(Path.GetRelativePath(_root, path), sourceFiles));
         Console.WriteLine(
-            $"sbt metrics: cold_sync_ms={coldSyncElapsed.TotalMilliseconds:F1} "
+            $"sbt metrics: java_version={javaVersion} sbt_version={sbtVersion} "
+            + $"cold_sync_ms={coldSyncElapsed.TotalMilliseconds:F1} "
             + $"warm_sync_ms={warmSyncElapsed.TotalMilliseconds:F1} "
             + $"cold_entries={coldSync.EntriesScanned} warm_entries={warmSync.EntriesScanned} "
             + $"cold_bytes={coldSync.BytesCopied} warm_bytes={warmSync.BytesCopied} "
             + $"workspace_bytes={warmSync.WorkspaceCandidateBytes} dependency_bytes={warmSync.DependencyCandidateBytes} "
             + $"run_ms={runElapsed.TotalMilliseconds:F1}");
+    }
+
+    private static async Task<string> ProbeVersionAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        var runner = new TestProcessRunner(new TestProcessRunnerOptions
+        {
+            OutputStallTimeout = TimeSpan.FromSeconds(15),
+            MaxCapturedCharactersPerStream = 128 * 1024,
+        });
+        TestProcessResult result = await runner.RunAsync(
+            new TestProcessCommand(fileName, arguments, workingDirectory),
+            timeout.Token);
+        Assert.Equal(0, result.ExitCode);
+        Assert.False(result.StandardOutputTruncated);
+        Assert.False(result.StandardErrorTruncated);
+        string version = string.Join(
+            Environment.NewLine,
+            new[] { result.StandardOutput, result.StandardError }
+                .Where(output => !string.IsNullOrWhiteSpace(output)))
+            .Trim();
+        Assert.False(string.IsNullOrWhiteSpace(version));
+        return version.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)[0].Trim();
     }
 
     private static string HashTree(string root, string buildDirectoryName = "ct-jvm-scale")

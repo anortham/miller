@@ -1,1 +1,1 @@
-[info] List(sample.CalculatorTest.adds, sample.CalculatorTest.subtracts)
+[info] List(sample.CalculatorTest, sample.FinanceTest)

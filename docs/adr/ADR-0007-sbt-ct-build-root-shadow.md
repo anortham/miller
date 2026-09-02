@@ -13,7 +13,8 @@ untracked files, relative links, executable bits, and the build definition while
 `.git`, and source-owned `target` trees. The mirror has an isolated unborn Git barrier at its root.
 
 `SbtTestBackend` synchronizes the mirror before discovery and execution. It runs one sbt process per
-phase, uses plain batch output, and maps the project path and launcher into the mirror. Discovery reads
+phase, passes each sbt command with its arguments as one argv element, uses plain batch output, and maps
+the project path and launcher into the mirror. Discovery reads
 complete stdout from `show Test/definedTestNames`. It accepts sbt's single-line `List(...)` output,
 pretty-printed bullet rows, and multi-project headers. Miller emits one class-level case per unique
 fully-qualified class. Duplicate classes across sbt projects are refused because the existing JVM case
@@ -42,10 +43,10 @@ The source mirror and sbt launcher/dependency caches remain separate:
 
 The backend passes the four stable dependency paths through `sbt.boot.directory`, `sbt.global.base`,
 `sbt.ivy.home`, and `sbt.coursier.home`. It sets `-batch`, `-Dsbt.supershell=false`,
-`-Dsbt.color=false`, `-Dsbt.log.noformat=true`, and `-Dsbt.server.autostart=false`. It does not
-overwrite `SBT_OPTS`, `JAVA_OPTS`, project settings, or user source files. After each sbt process it
-touches the build-owned `.last-used` marker at the dependency candidate root for the existing cache
-janitor.
+`-Dsbt.color=false`, `-Dsbt.log.noformat=true`, `-Dsbt.server.autostart=false`, and
+`-Dsbt.genbuildprops=false`. It does not overwrite `SBT_OPTS`, `JAVA_OPTS`, project settings, or user
+source files. After each sbt process it atomically replaces the build-owned `.last-used` marker at the
+dependency candidate root for the existing cache janitor, updating the candidate directory activity.
 
 ## Trust boundary
 
@@ -72,4 +73,5 @@ Reference, and Directory Structure documentation. Committed fixtures cover singl
 multi-project discovery. Focused tests cover command isolation, class aggregation, report copying,
 duplicate and malformed attribution, stale-report clearing, factory registration, and Scale-trait
 guarding. The Scale smoke records cold and warm shadow metrics, copied bytes, cache bytes, and run time;
-the warm no-change sync must copy zero files and zero bytes.
+the warm no-change sync must copy zero files and zero bytes. When the live tools are available, it also
+records successful bounded Java and sbt version probes.

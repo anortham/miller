@@ -62,7 +62,7 @@ internal sealed class SbtTestBackend : IJvmTestBackend
             {
                 result = await _runner
                     .RunAsync(
-                        BuildCommand(workspace, paths, ["show", "Test/definedTestNames"], sync),
+                        BuildCommand(workspace, paths, ["show Test/definedTestNames"], sync),
                         cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -142,7 +142,7 @@ internal sealed class SbtTestBackend : IJvmTestBackend
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(paths);
-        return BuildCommand(workspace, paths, ["show", "Test/definedTestNames"]);
+        return BuildCommand(workspace, paths, ["show Test/definedTestNames"]);
     }
 
     public IReadOnlyList<TestProcessCommand> BuildRunCommands(
@@ -170,7 +170,7 @@ internal sealed class SbtTestBackend : IJvmTestBackend
     {
         IReadOnlyList<string> taskArguments = wholeSuite
             ? ["test"]
-            : ["testOnly", string.Join(' ', selected.Select(test => test.ClassName))];
+            : ["testOnly " + string.Join(' ', selected.Select(test => test.ClassName))];
         return [BuildCommand(request.Workspace, paths, taskArguments, sync)];
     }
 
@@ -229,32 +229,21 @@ internal sealed class SbtTestBackend : IJvmTestBackend
         if (names.Count == 0)
             throw Failure("sbt definedTestNames output contained no test names.");
 
-        var classes = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        var seenNames = new HashSet<string>(StringComparer.Ordinal);
-        var projectByClass = new Dictionary<string, string>(StringComparer.Ordinal);
+        var classes = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach ((string rawName, string projectName) in names)
         {
-            string name = rawName.Trim();
-            int separator = name.LastIndexOf('.');
-            if (separator <= 0 || separator == name.Length - 1 || !seenNames.Add(name))
-                throw Failure($"sbt definedTestNames output contained malformed or duplicate test name '{name}'.");
-
-            string className = name[..separator];
-            string methodName = name[(separator + 1)..];
-            if (projectByClass.TryGetValue(className, out string? existingProject)
-                && !string.Equals(existingProject, projectName, StringComparison.Ordinal))
+            string className = rawName.Trim();
+            if (className.Length == 0)
+                throw Failure("sbt definedTestNames output contained an empty test class.");
+            if (classes.TryGetValue(className, out string? existingProject))
             {
-                throw Failure($"sbt definedTestNames output contained duplicate class '{className}' across projects.");
+                string scope = string.Equals(existingProject, projectName, StringComparison.Ordinal)
+                    ? "in one project"
+                    : "across projects";
+                throw Failure($"sbt definedTestNames output contained duplicate class '{className}' {scope}.");
             }
 
-            projectByClass[className] = projectName;
-            if (!classes.TryGetValue(className, out List<string>? methods))
-            {
-                methods = [];
-                classes.Add(className, methods);
-            }
-
-            methods.Add(methodName);
+            classes.Add(className, projectName);
         }
 
         return classes
@@ -270,8 +259,8 @@ internal sealed class SbtTestBackend : IJvmTestBackend
                         ["class_scope"] = true,
                         ["class_name"] = pair.Key,
                         ["method_name"] = JvmTestBackendIds.ClassCaseSentinel,
-                        ["method_count"] = pair.Value.Count,
-                        ["defined_test_names"] = pair.Value.ToArray(),
+                        ["method_count"] = 1,
+                        ["defined_test_names"] = new[] { pair.Key },
                     })))
             .ToArray();
     }
@@ -295,6 +284,7 @@ internal sealed class SbtTestBackend : IJvmTestBackend
             "-Dsbt.color=false",
             "-Dsbt.log.noformat=true",
             "-Dsbt.server.autostart=false",
+            "-Dsbt.genbuildprops=false",
             "-Dsbt.boot.directory=" + Path.Combine(dependencyRoot, "boot"),
             "-Dsbt.global.base=" + Path.Combine(dependencyRoot, "global"),
             "-Dsbt.ivy.home=" + Path.Combine(dependencyRoot, "ivy"),
@@ -345,7 +335,7 @@ internal sealed class SbtTestBackend : IJvmTestBackend
 
         try
         {
-            return Directory.EnumerateFiles(shadowRoot, "*.xml", SearchOption.AllDirectories)
+            return EnumerateReportFiles(shadowRoot)
                 .Select(Path.GetFullPath)
                 .Where(path => JvmTestTooling.IsInside(shadowRoot, path))
                 .Where(IsTestReportPath)
@@ -359,6 +349,29 @@ internal sealed class SbtTestBackend : IJvmTestBackend
         catch (UnauthorizedAccessException exception)
         {
             throw Failure($"Could not enumerate sbt JUnit reports: {exception.Message}");
+        }
+    }
+
+    private static IEnumerable<string> EnumerateReportFiles(string shadowRoot)
+    {
+        var pending = new Stack<string>([Path.GetFullPath(shadowRoot)]);
+        while (pending.Count > 0)
+        {
+            string directory = pending.Pop();
+            foreach (string path in Directory.EnumerateFileSystemEntries(directory))
+            {
+                FileAttributes attributes = File.GetAttributes(path);
+                if (attributes.HasFlag(FileAttributes.ReparsePoint))
+                    continue;
+                if (attributes.HasFlag(FileAttributes.Directory))
+                {
+                    pending.Push(path);
+                    continue;
+                }
+
+                if (string.Equals(Path.GetExtension(path), ".xml", StringComparison.OrdinalIgnoreCase))
+                    yield return path;
+            }
         }
     }
 
@@ -599,7 +612,18 @@ internal sealed class SbtTestBackend : IJvmTestBackend
     private static void TouchDependencyCache(string root)
     {
         Directory.CreateDirectory(root);
-        File.WriteAllText(Path.Combine(root, LastUsedMarkerName), DateTimeOffset.UtcNow.ToString("O"));
+        string marker = Path.Combine(root, LastUsedMarkerName);
+        string temporary = marker + ".tmp-" + Path.GetRandomFileName();
+        try
+        {
+            File.WriteAllText(temporary, DateTimeOffset.UtcNow.ToString("O"));
+            File.Move(temporary, marker, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+                File.Delete(temporary);
+        }
     }
 
     private static string ProcessSummary(TestProcessResult result)

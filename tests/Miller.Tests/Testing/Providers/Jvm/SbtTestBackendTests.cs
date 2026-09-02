@@ -36,12 +36,16 @@ public sealed class SbtTestBackendTests : IDisposable
             CtGenerationPaths.Allocate(workspace),
             TestContext.Current.CancellationToken);
 
-        JvmTestBackendCase test = Assert.Single(cases);
-        Assert.Equal("sample.CalculatorTest", test.ClassName);
-        Assert.Equal(JvmTestBackendIds.ClassCaseSentinel, test.MethodName);
-        Assert.Equal("sample.CalculatorTest", test.Selector);
-        Assert.Equal(true, test.Metadata!["class_scope"]);
-        Assert.Equal(2, test.Metadata["method_count"]);
+        Assert.Equal(
+            ["sample.CalculatorTest", "sample.FinanceTest"],
+            cases.Select(test => test.ClassName).ToArray());
+        Assert.All(cases, test =>
+        {
+            Assert.Equal(JvmTestBackendIds.ClassCaseSentinel, test.MethodName);
+            Assert.Equal(test.ClassName, test.Selector);
+            Assert.Equal(true, test.Metadata!["class_scope"]);
+            Assert.Equal(1, test.Metadata["method_count"]);
+        });
     }
 
     [Fact]
@@ -60,7 +64,7 @@ public sealed class SbtTestBackendTests : IDisposable
         Assert.Equal(
             ["sample.AppTest", "sample.CoreTest"],
             cases.Select(test => test.ClassName).ToArray());
-        Assert.Equal(2, cases.Single(test => test.ClassName == "sample.CoreTest").Metadata!["method_count"]);
+        Assert.Equal(1, cases.Single(test => test.ClassName == "sample.CoreTest").Metadata!["method_count"]);
         Assert.Equal(1, cases.Single(test => test.ClassName == "sample.AppTest").Metadata!["method_count"]);
     }
 
@@ -71,9 +75,9 @@ public sealed class SbtTestBackendTests : IDisposable
         File.WriteAllText(project, "lazy val core = project");
         var runner = new RecordingRunner("""
             [info] core / Test / definedTestNames
-            [info] * sample.SharedTest.one
+            [info] * sample.SharedTest
             [info] app / Test / definedTestNames
-            [info] * sample.SharedTest.two
+            [info] * sample.SharedTest
             """);
         ContinuousTestWorkspace workspace = Workspace(project);
 
@@ -85,6 +89,46 @@ public sealed class SbtTestBackendTests : IDisposable
 
         Assert.Contains("duplicate", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("sample.SharedTest", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Discover_accepts_an_unqualified_default_package_class()
+    {
+        string project = Path.Combine(_root, "build.sbt");
+        File.WriteAllText(project, "lazy val core = project");
+        var runner = new RecordingRunner("[info] List(DefaultPackageTest)\n");
+        ContinuousTestWorkspace workspace = Workspace(project);
+
+        IReadOnlyList<JvmTestBackendCase> cases = await new SbtTestBackend(runner).DiscoverAsync(
+            workspace,
+            CtGenerationPaths.Allocate(workspace),
+            TestContext.Current.CancellationToken);
+
+        JvmTestBackendCase test = Assert.Single(cases);
+        Assert.Equal("DefaultPackageTest", test.ClassName);
+        Assert.Equal(JvmTestBackendIds.ClassCaseSentinel, test.MethodName);
+    }
+
+    [Fact]
+    public async Task Discover_advances_the_dependency_candidate_directory_activity_marker()
+    {
+        string project = Path.Combine(_root, "build.sbt");
+        File.WriteAllText(project, "lazy val core = project");
+        ContinuousTestWorkspace workspace = Workspace(project);
+        SbtWorkspaceShadowResult sync = SbtWorkspaceShadow.Sync(workspace, CancellationToken.None);
+        string marker = Path.Combine(sync.DependencyCandidateRoot, ".last-used");
+        File.WriteAllText(marker, "old");
+        DateTime oldActivity = DateTime.UtcNow.AddHours(-1);
+        Directory.SetLastWriteTimeUtc(sync.DependencyCandidateRoot, oldActivity);
+
+        await new SbtTestBackend(new RecordingRunner(ReadFixture("sbt-defined-test-names.txt"))).DiscoverAsync(
+            workspace,
+            CtGenerationPaths.Allocate(workspace),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(
+            Directory.GetLastWriteTimeUtc(sync.DependencyCandidateRoot) > oldActivity,
+            $"dependency candidate directory activity did not advance from {oldActivity:O}");
     }
 
     [Fact]
@@ -181,11 +225,8 @@ public sealed class SbtTestBackendTests : IDisposable
                 wholeSuite: false);
 
         TestProcessCommand command = Assert.Single(commands);
-        int testOnly = command.Arguments.ToList().IndexOf("testOnly");
-        Assert.True(testOnly >= 0);
-        Assert.Equal("sample.FirstTest sample.SecondTest", command.Arguments[testOnly + 1]);
-        Assert.DoesNotContain(command.Arguments, argument => argument == "sample.FirstTest");
-        Assert.DoesNotContain(command.Arguments, argument => argument == "sample.SecondTest");
+        Assert.Contains("testOnly sample.FirstTest sample.SecondTest", command.Arguments);
+        Assert.DoesNotContain("testOnly", command.Arguments);
     }
 
     [Fact]
@@ -209,11 +250,12 @@ public sealed class SbtTestBackendTests : IDisposable
         Assert.Contains("-Dsbt.color=false", command.Arguments);
         Assert.Contains("-Dsbt.log.noformat=true", command.Arguments);
         Assert.Contains("-Dsbt.server.autostart=false", command.Arguments);
+        Assert.Contains("-Dsbt.genbuildprops=false", command.Arguments);
         Assert.Contains(command.Arguments, argument => argument == "-Dsbt.boot.directory=" + Path.Combine(sync.DependencyCandidateRoot, "boot"));
         Assert.Contains(command.Arguments, argument => argument == "-Dsbt.global.base=" + Path.Combine(sync.DependencyCandidateRoot, "global"));
         Assert.Contains(command.Arguments, argument => argument == "-Dsbt.ivy.home=" + Path.Combine(sync.DependencyCandidateRoot, "ivy"));
         Assert.Contains(command.Arguments, argument => argument == "-Dsbt.coursier.home=" + Path.Combine(sync.DependencyCandidateRoot, "coursier"));
-        Assert.Equal(["show", "Test/definedTestNames"], command.Arguments.Skip(command.Arguments.Count - 2));
+        Assert.Equal("show Test/definedTestNames", command.Arguments[^1]);
         Assert.DoesNotContain(command.Environment, pair => pair.Key is "SBT_OPTS" or "JAVA_OPTS");
         Assert.All(command.Environment.Values, value => Assert.True(value is not null && JvmTestTooling.IsInside(paths.TempDirectory, value), value));
     }
@@ -489,6 +531,46 @@ public sealed class SbtTestBackendTests : IDisposable
         Assert.Contains("duplicate test class", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task Run_ignores_an_internal_directory_link_alias_when_scanning_reports()
+    {
+        string project = Path.Combine(_root, "build.sbt");
+        File.WriteAllText(project, "lazy val core = project");
+        ContinuousTestWorkspace workspace = Workspace(project);
+        SbtWorkspaceShadowResult sync = SbtWorkspaceShadow.Sync(workspace, CancellationToken.None);
+        string target = Path.Combine(sync.ShadowRoot, "target");
+        string reportRoot = Path.Combine(target, "test-reports");
+        Directory.CreateDirectory(reportRoot);
+        File.WriteAllText(Path.Combine(reportRoot, "sample.CalculatorTest.xml"), "stale");
+        string alias = Path.Combine(sync.ShadowRoot, "target-alias");
+        if (!TryCreateDirectoryLink(alias, target))
+            Assert.Skip("Symbolic directory links are unavailable on this host.");
+
+        var runner = new WritingRunner(command =>
+        {
+            string report = Path.Combine(command.WorkingDirectory, "target", "test-reports", "result.xml");
+            Directory.CreateDirectory(Path.GetDirectoryName(report)!);
+            File.WriteAllText(report, """
+                <testsuite name="sample.CalculatorTest" tests="1" failures="0" errors="0" skipped="0">
+                  <testcase classname="sample.CalculatorTest" name="runs" />
+                </testsuite>
+                """);
+            return new TestProcessResult(0, string.Empty, string.Empty);
+        });
+
+        JvmTestBackendRunResult result = await new SbtTestBackend(runner).RunAsync(
+            Request(workspace, "sample.CalculatorTest"),
+            CtGenerationPaths.Allocate(workspace),
+            [new JvmTestSelection(
+                "sample.CalculatorTest",
+                JvmTestBackendIds.ClassCaseSentinel,
+                "sample.CalculatorTest")],
+            wholeSuite: false,
+            TestContext.Current.CancellationToken);
+
+        Assert.Single(result.Cases);
+    }
+
     private ContinuousTestWorkspace Workspace(string project) =>
         new(
             WorkspaceId: "ws:sbt",
@@ -520,6 +602,27 @@ public sealed class SbtTestBackendTests : IDisposable
             "Providers",
             "Fixtures",
             fileName));
+
+    private static bool TryCreateDirectoryLink(string link, string target)
+    {
+        try
+        {
+            Directory.CreateSymbolicLink(link, target);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (PlatformNotSupportedException)
+        {
+            return false;
+        }
+    }
 
     private sealed class RecordingRunner(string output) : ITestProcessRunner
     {
