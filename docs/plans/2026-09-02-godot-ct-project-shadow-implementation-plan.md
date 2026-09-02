@@ -128,11 +128,11 @@
 **Approach:** Drive each behavior through a failing provider/tooling test using `FakeTestProcessRunner` and real temporary files. Preserve unknown user config keys in the derived config while overriding inventory, selection, exit, colors, and report keys. Use the import digest rather than the last sync's changed flag so discovery cannot suppress a required import. Whole-suite selection lives in the derived file, satisfying the existing no-selection-on-argv contract.
 
 **Acceptance criteria:**
-- [ ] Config discovery covers explicit tests, directories, recursion, prefix/suffix, defaults, trailing commas, duplicates, escapes, case collisions, missing paths, and malformed types.
-- [ ] Tooling tests cover `GODOT` precedence, PATH variants, version refusal, every isolated environment key, import command, GUT `-s` command, and no unbounded script argv.
-- [ ] Provider tests cover discovery with no process, conditional import and stamp publication, warm import skip, focused/whole-suite derived configs, empty selection, source immutability, report containment/copy, green/red/skipped aggregation, inner-class shape, and every failure mode in the design.
-- [ ] `GodotTestProvider` exposes no public surface beyond the provider contract and the inventory predicate.
-- [ ] Worker-scope verification passes and the serial worker commits only the owned files plus its checkpoint.
+- [x] Config discovery covers explicit tests, directories, recursion, prefix/suffix, defaults, trailing commas, duplicates, escapes, case collisions, missing paths, and malformed types.
+- [x] Tooling tests cover `GODOT` precedence, PATH variants, version refusal, every isolated environment key, import command, GUT `-s` command, and no unbounded script argv.
+- [x] Provider tests cover discovery with no process, conditional import and stamp publication, warm import skip, focused/whole-suite derived configs, empty selection, source immutability, report containment/copy, green/red/skipped aggregation, inner-class shape, and every failure mode in the design.
+- [x] `GodotTestProvider` exposes no public surface beyond the provider contract and the inventory predicate.
+- [x] Worker-scope verification passes and the serial worker commits only the owned files plus its checkpoint.
 
 ### Task 3: Inventory, registration, real-tool evidence, and plan reconciliation
 
