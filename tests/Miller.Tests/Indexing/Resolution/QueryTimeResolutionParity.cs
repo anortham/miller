@@ -609,6 +609,7 @@ internal static class QueryTimeResolutionParity
         IReadOnlyDictionary<(long VersionId, string Id), RelationshipFact> relationships)
     {
         Dictionary<string, string> uniqueNames = UniqueVisibleNames(store, visibility);
+        Dictionary<string, string[]> overloadSets = SameParentVisibleOverloads(store, visibility);
         IdentifierSite[] sites = [.. IdentifierSiteReader.SitesAll(store, visibility)];
         var rows = new List<string>();
         var candidateSet = new HashSet<string>(candidates, StringComparer.Ordinal);
@@ -638,6 +639,20 @@ internal static class QueryTimeResolutionParity
                         || string.Equals(unique, candidateId, StringComparison.Ordinal)))
                 {
                     rows.Add($"{candidateId}|{container}|{unique}|{site.Kind}|{Fmt(site.Confidence * 0.5)}|identifier_name");
+                }
+
+                if (!skip && !resolved && site.ContainingSymbolId is { } overloadContainer
+                    && overloadSets.TryGetValue(site.Name, out string[]? overloads))
+                {
+                    foreach (string overload in overloads)
+                    {
+                        if (!string.Equals(overloadContainer, overload, StringComparison.Ordinal)
+                            && (string.Equals(overloadContainer, candidateId, StringComparison.Ordinal)
+                                || string.Equals(overload, candidateId, StringComparison.Ordinal)))
+                        {
+                            rows.Add($"{candidateId}|{overloadContainer}|{overload}|{site.Kind}|{Fmt(site.Confidence * 0.4)}|identifier_name");
+                        }
+                    }
                 }
             }
 
@@ -820,6 +835,46 @@ internal static class QueryTimeResolutionParity
         while (reader.Read())
             names[reader.GetString(0)] = reader.GetString(1);
         return names;
+    }
+
+    private static Dictionary<string, string[]> SameParentVisibleOverloads(SqliteConnection store, StoreVisibility visibility)
+    {
+        using SqliteCommand command = store.CreateCommand();
+        command.CommandText =
+            """
+            SELECT s.name, s.symbol_id
+            FROM main.symbols AS s
+            JOIN main.manifest_entries AS e ON e.version_id=s.version_id
+            WHERE e.view_id=$view_id AND e.generation=$generation
+              AND s.name IN (
+                  SELECT grouped.name
+                  FROM main.symbols AS grouped
+                  JOIN main.manifest_entries AS grouped_entries
+                    ON grouped_entries.version_id=grouped.version_id
+                  WHERE grouped_entries.view_id=$view_id AND grouped_entries.generation=$generation
+                  GROUP BY grouped.name
+                  HAVING COUNT(*) > 1
+                     AND COUNT(grouped.parent_symbol_id) = COUNT(*)
+                     AND COUNT(DISTINCT grouped.parent_symbol_id) = 1
+              )
+            ORDER BY s.name, s.symbol_id
+            """;
+        BindVisibility(command, visibility);
+        using SqliteDataReader reader = command.ExecuteReader();
+        var names = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            string name = reader.GetString(0);
+            if (!names.TryGetValue(name, out List<string>? ids))
+            {
+                ids = [];
+                names[name] = ids;
+            }
+
+            ids.Add(reader.GetString(1));
+        }
+
+        return names.ToDictionary(static pair => pair.Key, static pair => pair.Value.ToArray(), StringComparer.Ordinal);
     }
 
     private static bool Matches(StoredResolution stored, QueryResolution query)

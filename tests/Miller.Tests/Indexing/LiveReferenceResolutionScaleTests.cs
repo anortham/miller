@@ -171,8 +171,29 @@ public sealed class LiveReferenceResolutionScaleTests(ITestOutputHelper output)
             Assert.True(pendingRows.Passed, string.Join(Environment.NewLine, pendingRows.Divergences));
             Assert.True(identifiers.Compared > 0);
 
-            string[] candidateIds = [cSharpParameterTargetId, cSharpLocalTargetId, typeScriptTargetId, javaScriptTargetId];
+            string overloadCallerId = symbols.Single(symbol => symbol.Name == "InvokeOverload").SymbolId;
+            string[] overloadTargetIds = symbols
+                .Where(symbol => symbol.Name == "Save")
+                .Select(symbol => symbol.SymbolId)
+                .OrderBy(static id => id, StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(2, overloadTargetIds.Length);
+
+            string[] candidateIds =
+            [
+                cSharpParameterTargetId,
+                cSharpLocalTargetId,
+                typeScriptTargetId,
+                javaScriptTargetId,
+                overloadCallerId,
+                overloadTargetIds[0],
+                overloadTargetIds[1],
+            ];
             string[] graph = QueryTimeResolutionParity.SerializeGraph(reader, storeRead, candidateIds);
+            string[] overloadFallback = graph
+                .Where(row => row.EndsWith("|identifier_name", StringComparison.Ordinal))
+                .ToArray();
+            Assert.Equal(4, overloadFallback.Length);
             string[] expectedGraph = QueryTimeResolutionParity.ReconstructGraphFromStore(
                 storeRead, visibility, cache, candidateIds, storedIdentifiers, storedPendings, pendings, relationships);
             Assert.Equal(expectedGraph, graph);
@@ -239,6 +260,33 @@ public sealed class LiveReferenceResolutionScaleTests(ITestOutputHelper output)
                 {
                     CSharpWorker worker = new CSharpWorker();
                     worker.ExecuteTypedLocal();
+                }
+            }
+
+            public sealed class CSharpOverloadWorker
+            {
+                public void Save(OverloadAlpha value)
+                {
+                }
+
+                public void Save(OverloadBeta value)
+                {
+                }
+            }
+
+            public sealed class OverloadAlpha
+            {
+            }
+
+            public sealed class OverloadBeta
+            {
+            }
+
+            public sealed class CSharpOverloadCaller
+            {
+                public void InvokeOverload(CSharpOverloadWorker worker)
+                {
+                    worker.Save(default);
                 }
             }
             """);

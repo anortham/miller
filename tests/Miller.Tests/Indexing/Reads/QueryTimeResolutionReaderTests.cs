@@ -709,6 +709,30 @@ public sealed class QueryTimeResolutionReaderTests
     }
 
     [Fact]
+    public void FamilyStoreParityMatchesReaderForUnresolvedOverloadSet()
+    {
+        using ResolutionStoreFixture fixture = PopulateOverloadStore();
+        fixture.AddIdentifier(1, "id-save", "Save", "src/Svc.cs", kind: "call", containingSymbolId: "fn-caller", startByte: 10, endByte: 14);
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+        StoreVisibility visibility = fixture.Visibility();
+        string[] candidates = ["fn-caller", "ov-save-a", "ov-save-b"];
+
+        string[] actual = SerializeGraph(reader, connection, candidates);
+        string[] expected = QueryTimeResolutionParity.ReconstructGraphFromStore(
+            connection,
+            visibility,
+            reader.Cache,
+            candidates,
+            new Dictionary<(long VersionId, string Id), StoredResolution>(),
+            new Dictionary<(long VersionId, string Id), StoredResolution>(),
+            new Dictionary<(long VersionId, string Id), QueryTimeResolutionParity.PendingFact>(),
+            new Dictionary<(long VersionId, string Id), QueryTimeResolutionParity.RelationshipFact>());
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
     public void UnresolvedNameFallbackOnlyAllocationStaysBelowBudgetPerSite()
     {
         long eightSites = MeasureUnresolvedNameFallbackAllocation(8, "Save", expectedEdgeCount: 16);
