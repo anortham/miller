@@ -7,6 +7,7 @@ namespace Miller.Testing.Providers.Php;
 internal sealed record PhpListedTest(
     string ClassName,
     string MethodName,
+    string BaseMethodName,
     string Selector,
     string? FilePath);
 
@@ -107,11 +108,13 @@ internal static class PhpListTestsXmlParser
             if (methodName.Length == 0)
                 throw new TestArtifactParseException($"PHPUnit listing test method id '{id}' has an empty method.");
 
+            string baseMethodName = RequiredAttribute(methodElement, "name", "test method");
+
             string selector = normalizedClass + "::" + methodName;
             if (!selectors.Add(selector))
                 throw new TestArtifactParseException(
                     $"PHPUnit listing returned duplicate test method '{selector}'.");
-            tests.Add(new PhpListedTest(normalizedClass, methodName, selector, filePath));
+            tests.Add(new PhpListedTest(normalizedClass, methodName, baseMethodName, selector, filePath));
         }
     }
 

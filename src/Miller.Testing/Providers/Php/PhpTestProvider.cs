@@ -191,6 +191,7 @@ public sealed class PhpTestProvider : IContinuousTestProvider
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (PhpListedTest listedTest in listedTests)
         {
+            string? sourcePath = NormalizeListingPath(workspace, listedTest.FilePath);
             string id = PhpTestTooling.EncodeCaseId(
                 workspace.WorkspaceId,
                 workspace.ProjectPath,
@@ -206,16 +207,19 @@ public sealed class PhpTestProvider : IContinuousTestProvider
                 FullyQualifiedName: listedTest.Selector,
                 Selector: listedTest.Selector,
                 Framework: framework,
-                SourcePath: listedTest.FilePath,
+                SourcePath: sourcePath,
                 Metadata: new Dictionary<string, object?>(StringComparer.Ordinal)
                 {
                     ["kind"] = "php-test",
                     ["framework"] = framework,
                     ["class_name"] = listedTest.ClassName,
+                    ["class"] = listedTest.ClassName,
                     ["method_name"] = listedTest.MethodName,
-                    ["file_path"] = listedTest.FilePath,
+                    ["file_path"] = sourcePath,
+                    ["source_path"] = sourcePath,
                 },
-                SymbolName: listedTest.MethodName));
+                SymbolName: listedTest.BaseMethodName,
+                SymbolPath: sourcePath));
         }
 
         return cases.OrderBy(static test => test.Id, StringComparer.Ordinal).ToArray();
@@ -489,6 +493,57 @@ public sealed class PhpTestProvider : IContinuousTestProvider
     private static ContinuousTestProviderException EmptySelection() =>
         new("PHP test run request selected no test case IDs; an empty selection cannot be reported green.");
 
+    private static string? NormalizeListingPath(
+        ContinuousTestWorkspace workspace,
+        string? reportedPath)
+    {
+        if (string.IsNullOrWhiteSpace(reportedPath))
+            return null;
+
+        string projectRoot = Path.GetFullPath(PhpTestTooling.ProjectRoot(workspace));
+        string workspaceRoot = Path.GetFullPath(workspace.WorkspaceRoot);
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(
+                Path.IsPathRooted(reportedPath)
+                    ? reportedPath
+                    : Path.Combine(projectRoot, reportedPath));
+        }
+        catch (ArgumentException exception)
+        {
+            throw new ContinuousTestProviderException(
+                $"PHP discovery reported an invalid test file path: '{reportedPath}'.",
+                exception);
+        }
+        catch (NotSupportedException exception)
+        {
+            throw new ContinuousTestProviderException(
+                $"PHP discovery reported an invalid test file path: '{reportedPath}'.",
+                exception);
+        }
+
+        if (!IsInsideRoot(projectRoot, fullPath) || !IsInsideRoot(workspaceRoot, fullPath))
+            throw new ContinuousTestProviderException(
+                $"PHP discovery reported a test file outside the workspace/project root: '{reportedPath}'.");
+
+        string relative = Path.GetRelativePath(workspaceRoot, fullPath);
+        if (relative == "." || Path.IsPathRooted(relative))
+            throw new ContinuousTestProviderException(
+                $"PHP discovery reported a test file outside the workspace/project root: '{reportedPath}'.");
+
+        return relative.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+    }
+
+    private static bool IsInsideRoot(string root, string path)
+    {
+        string relative = Path.GetRelativePath(root, path);
+        return relative != ".."
+            && !relative.StartsWith(".." + Path.DirectorySeparatorChar, PathComparison)
+            && !relative.StartsWith("../", StringComparison.Ordinal)
+            && !Path.IsPathRooted(relative);
+    }
+
     private static ContinuousTestProviderException ReportFailure(
         string message,
         string artifactPath,
@@ -541,6 +596,9 @@ public sealed class PhpTestProvider : IContinuousTestProvider
 
     private static StringComparer PathComparer =>
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     private sealed record CaseBinding(string Id, string ClassName, string MethodName)
     {

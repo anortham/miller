@@ -14,11 +14,13 @@ public sealed class PhpListTestsXmlParserTests
         Assert.Equal(2, tests.Count);
         Assert.Equal("Tests\\Unit\\CalculatorTest", tests[0].ClassName);
         Assert.Equal("testAdd", tests[0].MethodName);
+        Assert.Equal("testAdd", tests[0].BaseMethodName);
         Assert.Equal("Tests\\Unit\\CalculatorTest::testAdd", tests[0].Selector);
         Assert.Equal(
             "Tests\\Unit\\CalculatorTest::testWithDataSet with data set #0",
             tests[1].Selector);
         Assert.Equal("testWithDataSet with data set #0", tests[1].MethodName);
+        Assert.Equal("testWithDataSet", tests[1].BaseMethodName);
     }
 
     [Fact]

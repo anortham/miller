@@ -90,7 +90,11 @@ public sealed class PhpTestProviderTests : IDisposable
         {
             string artifactPath = ArgumentAfter(command, "--list-tests-xml");
             Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
-            File.WriteAllText(artifactPath, DiscoveryXmlPhpUnit12);
+            File.WriteAllText(artifactPath, DiscoveryXmlPhpUnit12WithFile(Path.Combine(
+                _root,
+                "tests",
+                "Unit",
+                "CalculatorTest.php")));
             return Success();
         });
 
@@ -104,7 +108,38 @@ public sealed class PhpTestProviderTests : IDisposable
                 "Tests\\Unit\\CalculatorTest::testWithDataSet with data set \"fast\"",
             ],
             cases.Select(test => test.Selector).ToArray());
-        Assert.All(cases, test => Assert.Equal("Tests\\Unit\\CalculatorTest", test.Metadata["class_name"]));
+        Assert.All(cases, test =>
+        {
+            Assert.Equal("tests/Unit/CalculatorTest.php", test.SourcePath);
+            Assert.Equal("tests/Unit/CalculatorTest.php", test.SymbolPath);
+            Assert.Equal("Tests\\Unit\\CalculatorTest", test.Metadata["class_name"]);
+            Assert.Equal("Tests\\Unit\\CalculatorTest", test.Metadata["class"]);
+        });
+        ProviderTestCase dataSetCase = Assert.Single(cases, test =>
+            test.Selector.Contains("with data set", StringComparison.Ordinal));
+        Assert.Equal("testWithDataSet", dataSetCase.SymbolName);
+    }
+
+    [Fact]
+    public async Task Discover_rejects_a_phpunit_12_listing_file_outside_the_workspace()
+    {
+        WriteComposer("phpunit/phpunit");
+        WriteVendorBinary("phpunit");
+        string outsidePath = Path.Combine(Path.GetTempPath(), "miller-php-outside.php");
+        var runner = new RecordingRunner(command =>
+        {
+            string artifactPath = ArgumentAfter(command, "--list-tests-xml");
+            Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+            File.WriteAllText(artifactPath, DiscoveryXmlPhpUnit12WithFile(outsidePath));
+            return Success();
+        });
+
+        ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            new PhpTestProvider(runner).DiscoverAsync(
+                Workspace("phpunit"),
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("outside", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -435,11 +470,11 @@ public sealed class PhpTestProviderTests : IDisposable
         </tests>
         """;
 
-    private static readonly string DiscoveryXmlPhpUnit12 = """
+    private static string DiscoveryXmlPhpUnit12WithFile(string filePath) => $"""
         <?xml version="1.0" encoding="UTF-8"?>
         <testSuite xmlns="https://xml.phpunit.de/testSuite">
           <tests>
-            <testClass name="Tests\Unit\CalculatorTest" file="tests/Unit/CalculatorTest.php">
+            <testClass name="Tests\Unit\CalculatorTest" file="{filePath}">
               <testMethod id="Tests\Unit\CalculatorTest::testAdd" name="testAdd" />
               <testMethod id="Tests\Unit\CalculatorTest::testWithDataSet with data set &quot;fast&quot;" name="testWithDataSet" />
             </testClass>
