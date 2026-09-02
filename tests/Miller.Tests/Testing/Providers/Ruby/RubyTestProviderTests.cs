@@ -102,6 +102,53 @@ public sealed class RubyTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_reads_the_out_artifact_and_maps_failure_and_pending_examples()
+    {
+        WriteGemfile(withLock: true);
+        var discoveryRunner = new RecordingRunner(_ => new TestProcessResult(0, RunJson, string.Empty));
+        var provider = new RubyTestProvider(discoveryRunner);
+        ContinuousTestWorkspace workspace = Workspace();
+        IReadOnlyList<ProviderTestCase> cases = await provider.DiscoverAsync(
+            workspace,
+            TestContext.Current.CancellationToken);
+
+        var runRunner = new RecordingRunner(command =>
+        {
+            string artifactPath = ArgumentAfter(command, "--out");
+            Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+            File.WriteAllText(artifactPath, RunJson);
+            return new TestProcessResult(
+                1,
+                "this stdout is not the result artifact",
+                string.Empty,
+                StandardOutputTruncated: true);
+        });
+        provider = new RubyTestProvider(runRunner);
+
+        ProviderRunResult result = await provider.RunAsync(
+            Request(workspace, cases.Select(test => test.Id).ToArray()),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("failed", result.Status);
+        Assert.Equal(3, result.CaseResults.Count);
+        Assert.Equal(
+            ["passed", "failed", "skipped"],
+            result.CaseResults.OrderBy(row => row.TestCaseId, StringComparer.Ordinal)
+                .Select(row => row.Status).ToArray());
+        ProviderCaseResult failed = Assert.Single(result.CaseResults, row => row.Status == "failed");
+        Assert.Contains("expected: 2", failed.FailureSummary, StringComparison.Ordinal);
+        Assert.Equal(0.002, failed.DurationSeconds);
+        Assert.All(result.CaseResults, row =>
+        {
+            Assert.Equal(IndexIdentity, row.IndexIdentity);
+            Assert.Equal("rev-ruby", row.ResultRevision);
+        });
+        Assert.NotNull(result.ResultArtifactPath);
+        Assert.True(File.Exists(result.ResultArtifactPath));
+        Assert.Equal("bundle", Assert.Single(runRunner.Calls).FileName);
+    }
+
+    [Fact]
     public async Task Run_round_trips_examples_that_share_a_location_selector()
     {
         WriteGemfile(withLock: false);
