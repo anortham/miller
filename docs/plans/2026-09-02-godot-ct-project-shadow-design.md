@@ -206,13 +206,19 @@ it:
 - `addons/gut/plugin.cfg` produces runnable framework `gut` and registration key
   `ct-provider:godot`;
 - `addons/gdUnit4/plugin.cfg` produces recognized-but-refused framework `gdunit4` with remedy
-  `run it with its own runner; CT support is planned`;
+  `run it with its own runner; CT support is planned` and reason
+  `gdUnit4 is detected; Miller CT does not yet support its runner`;
 - a bare `project.godot` is ignored.
 
 Runnable GUT support also requires `config_version=5` in `project.godot`, GUT major version 9 from
 `addons/gut/plugin.cfg`, and a Godot executable whose bounded `--version` probe reports major version
 4. Godot 3/GUT 7 projects are recognized but refused with the Godot 4/GUT 9 remedy; missing or
 unparseable version evidence also refuses enable rather than guessing.
+
+Inventory names the project-file failure as framework `gut-unsupported`. Its reason is
+`Godot 4 with GUT 9 was not detected`; its remedy is
+`Upgrade or configure Godot 4 with GUT 9, or run GUT directly`. Executable availability and version
+remain provider startup checks because a status inventory scan starts no external process.
 
 When both addon markers exist, `gut` is runnable and `gdunit4` remains visible as refused inventory
 evidence; it does not suppress the runnable GUT project. Reversing a prior project opt-out remains
@@ -263,9 +269,12 @@ Discovery follows this flow and starts no Godot process:
 Each run follows this flow:
 
 1. Synchronize the selected Godot project into the project-stable mirror.
-2. When source-owned state changed or `.godot` is absent, start one bounded
+2. When `.godot` is absent or the atomic import stamp does not contain the current metadata source
+   digest, start one bounded
    `godot --headless --path <mirror> --import` process with the isolated environment. Require exit 0,
-   record import time, and reject an over-budget candidate before GUT starts.
+   record import time, atomically replace the import stamp only after success, and reject an over-budget
+   candidate before GUT starts. The stamp lives at the project candidate root, outside the mirror
+   manifest, so a discovery sync cannot accidentally mark changed source as imported.
 3. Clear only the mirror-owned `.miller-gut-results` directory.
 4. Write a mirror-owned derived GUT config that preserves user settings but replaces `dirs`, `tests`,
    selection, exit, colors, and JUnit output with Miller-owned values. The `tests` array is the exact
