@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="Tests\\Unit\\CalculatorTest" tests="3" assertions="3" failures="1" errors="0" warnings="0" skipped="1" time="0.012">
+    <testcase name="testAdd" class="Tests\\Unit\\CalculatorTest" classname="Tests\\Unit\\CalculatorTest" file="tests/Unit/CalculatorTest.php" line="12" assertions="1" time="0.003"/>
+    <testcase name="testSubtract" class="Tests\\Unit\\CalculatorTest" classname="Tests\\Unit\\CalculatorTest" file="tests/Unit/CalculatorTest.php" line="18" assertions="1" time="0.004">
+      <failure message="Failed asserting that 3 is identical to 2."><![CDATA[Failed asserting that 3 is identical to 2.]]></failure>
+    </testcase>
+    <testcase name="testMultiply" class="Tests\\Unit\\CalculatorTest" classname="Tests\\Unit\\CalculatorTest" file="tests/Unit/CalculatorTest.php" line="24" assertions="1" time="0.000">
+      <skipped message="not implemented"/>
+    </testcase>
+  </testsuite>
+</testsuites>

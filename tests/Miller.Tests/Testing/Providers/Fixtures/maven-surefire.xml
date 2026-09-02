@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.CalculatorTest" tests="3" errors="0" failures="1" skipped="1" time="0.012" hostname="localhost">
+  <properties>
+    <property name="java.version" value="25"/>
+  </properties>
+  <testcase name="adds" classname="com.example.CalculatorTest" time="0.003"/>
+  <testcase name="subtracts" classname="com.example.CalculatorTest" time="0.004">
+    <failure message="expected 2 but was 3" type="java.lang.AssertionError"><![CDATA[java.lang.AssertionError: expected 2 but was 3
+    at com.example.CalculatorTest.subtracts(CalculatorTest.java:18)]]></failure>
+  </testcase>
+  <testcase name="multiplies" classname="com.example.CalculatorTest" time="0.000">
+    <skipped message="not implemented"/>
+  </testcase>
+  <system-out><![CDATA[CalculatorTest completed]]></system-out>
+</testsuite>

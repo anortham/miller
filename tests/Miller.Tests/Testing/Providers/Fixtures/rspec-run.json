@@ -1,0 +1,48 @@
+{
+  "version": "3.12.3",
+  "examples": [
+    {
+      "id": "./spec/calculator_spec.rb[1:1]",
+      "description": "adds",
+      "full_description": "Calculator adds",
+      "status": "passed",
+      "file_path": "./spec/calculator_spec.rb",
+      "line_number": 3,
+      "run_time": 0.001,
+      "pending_message": null
+    },
+    {
+      "id": "./spec/calculator_spec.rb[1:2]",
+      "description": "subtracts",
+      "full_description": "Calculator subtracts",
+      "status": "failed",
+      "file_path": "./spec/calculator_spec.rb",
+      "line_number": 7,
+      "run_time": 0.002,
+      "pending_message": null,
+      "exception": {
+        "class": "RSpec::Expectations::ExpectationNotMetError",
+        "message": "expected: 2\n     got: 3",
+        "backtrace": ["./spec/calculator_spec.rb:8:in `block (2 levels) in <top (required)>'"]
+      }
+    },
+    {
+      "id": "./spec/calculator_spec.rb[1:3]",
+      "description": "divides",
+      "full_description": "Calculator divides",
+      "status": "pending",
+      "file_path": "./spec/calculator_spec.rb",
+      "line_number": 11,
+      "run_time": 0.0,
+      "pending_message": "Temporarily skipped"
+    }
+  ],
+  "summary": {
+    "duration": 0.003,
+    "example_count": 3,
+    "failure_count": 1,
+    "pending_count": 1,
+    "errors_outside_of_examples_count": 0
+  },
+  "summary_line": "3 examples, 1 failure, 1 pending"
+}

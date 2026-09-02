@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.CalculatorTest" tests="3" skipped="1" failures="1" errors="0" time="0.012">
+  <properties/>
+  <testcase name="adds" classname="com.example.CalculatorTest" time="0.003"/>
+  <testcase name="subtracts" classname="com.example.CalculatorTest" time="0.004">
+    <failure message="expected 2 but was 3"><![CDATA[org.opentest4j.AssertionFailedError: expected: <2> but was: <3>]]></failure>
+  </testcase>
+  <testcase name="multiplies" classname="com.example.CalculatorTest" time="0.000">
+    <skipped/>
+  </testcase>
+</testsuite>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="com.example.CalculatorSpec" tests="3" errors="1" failures="0" skipped="1" time="0.012">
+    <testcase name="adds" classname="com.example.CalculatorSpec" time="0.003"/>
+    <testcase name="subtracts" classname="com.example.CalculatorSpec" time="0.004">
+      <error message="fixture setup failed" type="java.lang.IllegalStateException"><![CDATA[java.lang.IllegalStateException: fixture setup failed]]></error>
+    </testcase>
+    <testcase name="multiplies" classname="com.example.CalculatorSpec" time="0.000">
+      <skipped/>
+    </testcase>
+  </testsuite>
+</testsuites>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="GutTests" tests="3" failures="1" skipped="1">
+  <testsuite name="res://tests/test_math.gd" tests="3" failures="1" skipped="1">
+    <testcase name="test_add" assertions="1" status="pass" classname="res://tests/test_math.gd"></testcase>
+    <testcase name="test_subtract" assertions="1" status="fail" classname="res://tests/test_math.gd">
+      <failure message="failed"><![CDATA[Cannot compare Int[3] to Int[2].
+at line 18]]></failure>
+    </testcase>
+    <testcase name="test_multiply" assertions="0" status="pending" classname="res://tests/test_math.gd">
+      <skipped message="pending"></skipped>
+    </testcase>
+  </testsuite>
+</testsuites>
