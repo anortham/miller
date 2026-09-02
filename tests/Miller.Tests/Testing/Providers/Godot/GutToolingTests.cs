@@ -43,7 +43,15 @@ public sealed class GutToolingTests
             Assert.Equal(["--version"], command.Arguments);
             Assert.Equal(shadow.ProjectMirrorRoot, command.WorkingDirectory);
             Assert.Equal(Path.Combine(shadow.GodotHomeRoot, "home"), command.Environment["HOME"]);
-            Assert.Equal(Path.Combine(shadow.GodotHomeRoot, "cache"), command.Environment["XDG_CACHE_HOME"]);
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.Equal(Path.Combine(shadow.GodotHomeRoot, "localappdata"), command.Environment["LOCALAPPDATA"]);
+                Assert.False(command.Environment.ContainsKey("XDG_CACHE_HOME"));
+            }
+            else
+            {
+                Assert.Equal(Path.Combine(shadow.GodotHomeRoot, "cache"), command.Environment["XDG_CACHE_HOME"]);
+            }
         }
         finally
         {
@@ -141,8 +149,10 @@ public sealed class GutToolingTests
         {
             Directory.CreateDirectory(Path.Combine(root, "tests"));
             File.WriteAllText(Path.Combine(root, "tests", "test_one.gd"), "one");
-            File.WriteAllText(Path.Combine(root, "tests", "Test_one.gd"), "two");
-            GutConfiguration configuration = GutConfiguration.Parse("{\"dirs\":[\"tests\"],\"prefix\":\"\"}");
+            if (!OperatingSystem.IsWindows())
+                File.WriteAllText(Path.Combine(root, "tests", "Test_one.gd"), "two");
+            GutConfiguration configuration = GutConfiguration.Parse(
+                "{\"tests\":[\"res://tests/test_one.gd\",\"res://tests/Test_one.gd\"]}");
 
             ContinuousTestProviderException exception = Assert.Throws<ContinuousTestProviderException>(() =>
             {

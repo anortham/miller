@@ -282,7 +282,7 @@ public sealed class SbtWorkspaceShadowTests : IDisposable
         IOException exception = Assert.Throws<IOException>(() =>
             SbtWorkspaceShadow.Sync(workspace, CancellationToken.None));
 
-        Assert.Contains("module/back", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(Path.Combine("module", "back"), exception.Message, StringComparison.Ordinal);
         string workspaceCandidate = CtGenerationPaths.CacheDirectory(workspace, "sbt-workspace");
         Assert.False(Directory.Exists(Path.Combine(workspaceCandidate, "build")));
     }

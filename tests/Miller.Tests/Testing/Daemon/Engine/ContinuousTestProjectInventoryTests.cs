@@ -196,7 +196,7 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
                 ["legacy/build.sbt"] = "sbt",
             },
             projects.ToDictionary(
-                project => Path.GetRelativePath(_root, project.ProjectPath),
+                project => Path.GetRelativePath(_root, project.ProjectPath).Replace('\\', '/'),
                 project => project.Framework!,
                 StringComparer.OrdinalIgnoreCase));
         Assert.DoesNotContain(projects, project =>
