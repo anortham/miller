@@ -743,6 +743,97 @@ public sealed class GodotTestProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_attributes_project_relative_inner_class_rows_to_the_script()
+    {
+        WriteProject("{\"tests\":[\"res://tests/test_primary.gd\"]}");
+        WriteFile("addons/gut/plugin.cfg", "[plugin]\nversion=\"9.7.1\"\n");
+        WriteFile("tests/test_primary.gd", "extends Node\n");
+        string godot = Path.Combine(_root, "godot");
+        File.WriteAllText(godot, string.Empty);
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("GODOT", godot);
+            var runner = new FakeTestProcessRunner();
+            runner.Enqueue("Godot Engine v4.7.2.stable\n");
+            runner.Enqueue();
+            runner.Enqueue();
+            runner.OnRun = command =>
+            {
+                string mirror = command.Arguments[command.Arguments.ToList().IndexOf("--path") + 1];
+                if (command.Arguments.Contains("--import"))
+                    Directory.CreateDirectory(Path.Combine(mirror, ".godot"));
+                else if (command.Arguments.Contains("-s"))
+                {
+                    string report = Path.Combine(mirror, ".miller-gut-results", "run.xml");
+                    Directory.CreateDirectory(Path.GetDirectoryName(report)!);
+                    File.WriteAllText(report, """
+                        <testsuite name="tests/test_primary.gd.TestInner" tests="1" failures="0" skipped="0">
+                          <testcase name="test_primary" status="pass" classname="tests/test_primary.gd.TestInner" />
+                        </testsuite>
+                        """);
+                }
+            };
+
+            ProviderRunResult result = await new GodotTestProvider(runner).RunAsync(
+                Request("gut:res://tests/test_primary.gd"),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("passed", result.Status);
+            ProviderCaseResult row = Assert.Single(result.CaseResults);
+            Assert.Equal("gut:res://tests/test_primary.gd", row.TestCaseId);
+            Assert.Equal("passed", row.Status);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+        }
+    }
+
+    [Fact]
+    public async Task Run_rejects_a_rooted_relative_report_path()
+    {
+        string godot = PrepareSingleScript();
+        string? previousGodot = Environment.GetEnvironmentVariable("GODOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("GODOT", godot);
+            var runner = new FakeTestProcessRunner();
+            runner.Enqueue("Godot Engine v4.7.2.stable\n");
+            runner.Enqueue();
+            runner.Enqueue();
+            runner.OnRun = command =>
+            {
+                if (command.Arguments.Contains("--import"))
+                {
+                    Directory.CreateDirectory(Path.Combine(command.WorkingDirectory, ".godot"));
+                }
+                else if (command.Arguments.Contains("-s"))
+                {
+                    string report = Path.Combine(command.WorkingDirectory, ".miller-gut-results", "run.xml");
+                    Directory.CreateDirectory(Path.GetDirectoryName(report)!);
+                    File.WriteAllText(report, """
+                        <testsuite name="/outside.gd.TestInner" tests="1" failures="0" skipped="0">
+                          <testcase name="test_outside" status="pass" classname="/outside.gd.TestInner" />
+                        </testsuite>
+                        """);
+                }
+            };
+
+            ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+                new GodotTestProvider(runner).RunAsync(
+                    Request("gut:res://tests/test_math.gd"),
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("res://", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GODOT", previousGodot);
+        }
+    }
+
+    [Fact]
     public async Task Whole_suite_uses_every_discovered_script_in_the_derived_config()
     {
         WriteProject("{\"dirs\":[\"tests\"]}");

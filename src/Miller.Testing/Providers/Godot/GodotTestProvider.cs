@@ -391,11 +391,19 @@ public sealed class GodotTestProvider : IContinuousTestProvider
             if (string.IsNullOrWhiteSpace(candidate))
                 continue;
             string value = candidate.Trim();
-            int extension = value.IndexOf(".gd", StringComparison.OrdinalIgnoreCase);
-            if (extension >= 0)
-                value = value[..(extension + 3)];
-            if (value.StartsWith("res://", StringComparison.OrdinalIgnoreCase))
+            int extension = value.LastIndexOf(".gd", StringComparison.OrdinalIgnoreCase);
+            if (extension < 0
+                || extension + 3 < value.Length && value[extension + 3] is not ('.' or ':'))
+                continue;
+            value = value[..(extension + 3)];
+            try
+            {
                 return GutTooling.NormalizeResPath(value);
+            }
+            catch (ContinuousTestProviderException)
+            {
+                continue;
+            }
         }
         throw Failure($"GUT JUnit row has no attributable res:// script: '{row.Name}'.");
     }
