@@ -1447,6 +1447,7 @@ public static class ContinuousTestProjectInventory
             || string.Equals(name, "Cargo.toml", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "go.mod", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "package.json", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "Gemfile", StringComparison.OrdinalIgnoreCase)
             || PythonProjectNames.Contains(name)
             || IsCMakeLists(path)
             || string.Equals(Path.GetExtension(path), ".pro", StringComparison.OrdinalIgnoreCase)
@@ -1495,6 +1496,25 @@ public static class ContinuousTestProjectInventory
             if (DeclaresNodeTestRunnerScript(text))
             {
                 framework = "node-test";
+                return true;
+            }
+
+            framework = null;
+            return false;
+        }
+
+        if (string.Equals(name, "Gemfile", StringComparison.OrdinalIgnoreCase))
+        {
+            string text = ReadHead(path);
+            if (ContainsToken(text, "rspec"))
+            {
+                framework = "rspec";
+                return true;
+            }
+
+            if (ContainsToken(text, "minitest"))
+            {
+                framework = "minitest";
                 return true;
             }
 
@@ -1766,6 +1786,8 @@ public static class ContinuousTestProjectInventory
             return "cargo";
         if (string.Equals(name, "package.json", StringComparison.OrdinalIgnoreCase))
             return "node-test";
+        if (string.Equals(name, "Gemfile", StringComparison.OrdinalIgnoreCase))
+            return "rspec";
         if (PythonProjectNames.Contains(name))
             return "pytest";
         return null;

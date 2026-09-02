@@ -8,6 +8,7 @@ public static class ContinuousTestLanguageFamily
     public const string Go = "go";
     public const string Python = "python";
     public const string Rust = "rust";
+    public const string Ruby = "ruby";
 
     public static string? FromLabel(string? label)
     {
@@ -22,6 +23,7 @@ public static class ContinuousTestLanguageFamily
             "go" => Go,
             "python" => Python,
             "rust" => Rust,
+            "ruby" => Ruby,
             _ => null,
         };
     }
@@ -55,6 +57,7 @@ public static class ContinuousTestLanguageFamily
             ".go" => "go",
             ".py" => "python",
             ".rs" => "rust",
+            ".rb" => "ruby",
             _ => null,
         };
     }

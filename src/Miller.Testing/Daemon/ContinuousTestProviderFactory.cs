@@ -1,4 +1,5 @@
 using Miller.Testing.Providers.Qml;
+using Miller.Testing.Providers.Ruby;
 
 namespace Miller.Testing;
 
@@ -46,6 +47,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
     private static readonly string[] PythonFrameworks = ["pytest", "python"];
     private static readonly string[] RustFrameworks = ["cargo", "rust"];
     private static readonly string[] GoFrameworks = ["go"];
+    private static readonly string[] RubyFrameworks = ["rspec"];
 
     private readonly IContinuousTestProvider _dotnetProvider;
     private readonly IReadOnlyDictionary<string, ContinuousTestProviderRegistration> _frameworkProviders;
@@ -89,6 +91,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
         var python = new PythonTestProvider(process);
         var qml = new QtQuickTestProvider(process);
         var go = new GoTestProvider(process);
+        var ruby = new RubyTestProvider(process);
         return new ContinuousTestProviderFactory(
             new DotnetTestProvider(process),
             new Dictionary<string, ContinuousTestProviderRegistration>(StringComparer.Ordinal)
@@ -102,6 +105,7 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
                 ["python"] = new(python, "ct-provider:python"),
                 ["qt-quick-test"] = new(qml, "ct-provider:qml"),
                 ["go"] = new(go, "ct-provider:go"),
+                ["rspec"] = new(ruby, "ct-provider:ruby"),
             })
         {
             DefaultProcessRunner = process,
@@ -162,6 +166,13 @@ public sealed class ContinuousTestProviderFactory : IContinuousTestProviderResol
             && TryResolve(GoFrameworks, out ContinuousTestProviderRegistration go))
         {
             return new ContinuousTestProviderResolution(go.Provider, go.ProviderSource);
+        }
+
+        if (framework is null
+            && RubyTestProvider.IsRubyProjectFile(workspace.ProjectPath)
+            && TryResolve(RubyFrameworks, out ContinuousTestProviderRegistration ruby))
+        {
+            return new ContinuousTestProviderResolution(ruby.Provider, ruby.ProviderSource);
         }
 
         if (framework is not null && _frameworkProviders.TryGetValue(framework, out ContinuousTestProviderRegistration? registration))

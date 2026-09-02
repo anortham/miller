@@ -25,6 +25,13 @@ public static class ContinuousTestFrameworkSupport
     /// </summary>
     public const string XunitV2 = "xunit-v2";
 
+    public const string Minitest = "minitest";
+
+    public const string MinitestReason =
+        "Minitest has no per-test machine-readable runner surface CT can consume";
+
+    public const string MinitestRemedy = "Add rspec, or run the suite directly with rake test";
+
     /// <summary>
     /// The one-line reason, kept short enough for a <c>ct.db</c> status column and a compact project line.
     /// </summary>
@@ -39,6 +46,7 @@ public static class ContinuousTestFrameworkSupport
         new(StringComparer.OrdinalIgnoreCase)
         {
             [XunitV2] = (XunitV2Reason, XunitV2Remedy),
+            [Minitest] = (MinitestReason, MinitestRemedy),
         };
 
     /// <summary>True when continuous testing can run a project with this framework value.</summary>

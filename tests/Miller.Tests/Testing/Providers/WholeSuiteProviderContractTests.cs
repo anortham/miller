@@ -1,6 +1,7 @@
 using Miller.Testing;
 using Miller.Testing.Parsing;
 using Miller.Testing.Providers.Qml;
+using Miller.Testing.Providers.Ruby;
 using Miller.Tests.Testing.Providers.Dotnet;
 using QmlScriptedTestProcessRunner = Miller.Tests.Testing.Providers.Qml.ScriptedTestProcessRunner;
 using Miller.Tests.Testing.Providers.Rust;
@@ -139,6 +140,34 @@ public sealed class WholeSuiteProviderContractTests : IDisposable
     }
 
     [Fact]
+    public async Task Ruby_whole_suite_run_is_unfiltered_and_reports_every_selected_case()
+    {
+        var workspace = RubyWorkspace();
+        string[] ids =
+        [
+            RubyTestTooling.EncodeCaseId(workspace.WorkspaceId, workspace.ProjectPath,
+                "spec/calculator_spec.rb", "./spec/calculator_spec.rb[1:1]"),
+            RubyTestTooling.EncodeCaseId(workspace.WorkspaceId, workspace.ProjectPath,
+                "spec/calculator_spec.rb", "./spec/calculator_spec.rb[1:2]"),
+        ];
+        var runner = new FakeTestProcessRunner();
+        runner.Enqueue();
+        runner.OnRun = WriteRspecJsonArtifact;
+        var provider = new RubyTestProvider(runner);
+
+        var result = await provider.RunAsync(
+            Request(workspace, ids) with { WholeSuite = true },
+            TestContext.Current.CancellationToken);
+
+        var command = Assert.Single(runner.Calls);
+        Assert.DoesNotContain(command.Arguments, argument => argument.Contains(".rb:", StringComparison.Ordinal));
+        Assert.Contains("--format", command.Arguments);
+        Assert.Contains("json", command.Arguments);
+        Assert.Contains("--out", command.Arguments);
+        AssertOneResultPerId(ids, result);
+    }
+
+    [Fact]
     public async Task Qt_quick_test_whole_suite_run_reports_artifact_cases_without_selection()
     {
         string[] names = ["A/basic", "B/slow"];
@@ -224,6 +253,23 @@ public sealed class WholeSuiteProviderContractTests : IDisposable
         File.WriteAllText(outputPath, $$"""{"testResults":[{{string.Join(",", entries)}}]}""");
     }
 
+    private static void WriteRspecJsonArtifact(TestProcessCommand command)
+    {
+        string artifactPath = ArgumentAfter(command, "--out");
+        Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+        File.WriteAllText(artifactPath, """
+            {
+              "version": "3.12.3",
+              "examples": [
+                {"id":"./spec/calculator_spec.rb[1:1]","description":"adds","full_description":"Calculator adds","status":"passed","file_path":"./spec/calculator_spec.rb","line_number":3,"run_time":0.001},
+                {"id":"./spec/calculator_spec.rb[1:2]","description":"subtracts","full_description":"Calculator subtracts","status":"passed","file_path":"./spec/calculator_spec.rb","line_number":7,"run_time":0.002}
+              ],
+              "summary": {"duration":0.003,"example_count":2,"failure_count":0,"pending_count":0,"errors_outside_of_examples_count":0},
+              "summary_line":"2 examples, 0 failures"
+            }
+            """);
+    }
+
     private string PythonRoot => Path.Combine(_dir, "py");
 
     private string NodeRoot => Path.Combine(_dir, "package");
@@ -259,6 +305,19 @@ public sealed class WholeSuiteProviderContractTests : IDisposable
             WorkspaceRoot: RustRoot,
             ProjectPath: Path.Combine(RustRoot, "Cargo.toml"),
             BuildOutputRoot: Path.Combine(_dir, "ct-build", "rust")));
+
+    private ContinuousTestWorkspace RubyWorkspace()
+    {
+        string root = Path.Combine(_dir, "ruby");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "Gemfile"), "source 'https://rubygems.org'\ngem 'rspec'\n");
+        return Track(new ContinuousTestWorkspace(
+            WorkspaceId: "ws:ruby",
+            WorkspaceRoot: root,
+            ProjectPath: Path.Combine(root, "Gemfile"),
+            BuildOutputRoot: Path.Combine(_dir, "ct-build", "ruby"),
+            Framework: "rspec"));
+    }
 
     private ContinuousTestWorkspace QmlWorkspace()
     {

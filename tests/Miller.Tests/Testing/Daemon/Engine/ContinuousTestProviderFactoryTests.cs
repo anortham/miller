@@ -1,5 +1,6 @@
 using Miller.Testing;
 using Miller.Testing.Providers.Qml;
+using Miller.Testing.Providers.Ruby;
 using Xunit;
 
 namespace Miller.Tests.Testing.Daemon.Engine;
@@ -62,6 +63,8 @@ public sealed class ContinuousTestProviderFactoryTests : IDisposable
         Assert.Equal("ct-provider:qml", factory.Resolve(Workspace("CMakeLists.txt", "qt-quick-test")).ProviderSource);
         Assert.IsType<GoTestProvider>(factory.Resolve(Workspace("go.mod", null)).Provider);
         Assert.Equal("ct-provider:go", factory.Resolve(Workspace("go.mod", "go")).ProviderSource);
+        Assert.IsType<RubyTestProvider>(factory.Resolve(Workspace("Gemfile", null)).Provider);
+        Assert.Equal("ct-provider:ruby", factory.Resolve(Workspace("Gemfile", "rspec")).ProviderSource);
     }
 
     [Fact]

@@ -165,6 +165,29 @@ public static class CtProviderTestSupport
         return binary!;
     }
 
+    public static string? LocateRuby() =>
+        LocateOnPath(OperatingSystem.IsWindows() ? "ruby.exe" : "ruby");
+
+    public static string RequireRuby()
+    {
+        string? binary = LocateRuby();
+        Assert.SkipWhen(binary is null,
+            "ruby executable is required for RubyTestProvider Scale smoke");
+        return binary!;
+    }
+
+    public static string? LocateRspec() =>
+        LocateOnPath(OperatingSystem.IsWindows() ? "rspec.bat" : "rspec")
+        ?? LocateOnPath(OperatingSystem.IsWindows() ? "rspec.exe" : "rspec");
+
+    public static string RequireRspec()
+    {
+        string? binary = LocateRspec();
+        Assert.SkipWhen(binary is null,
+            "RSpec 3.x is required for RubyTestProvider Scale smoke");
+        return binary!;
+    }
+
     public static string? LocatePowerShell() =>
         LocateOnPath("pwsh.exe") ?? LocateOnPath("powershell.exe");
 

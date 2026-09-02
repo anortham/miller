@@ -1507,6 +1507,37 @@ public sealed class ContinuousTestProjectInventoryTests : IDisposable
         Assert.Equal(Path.Combine(_root, "go.work"), member.Metadata["go_work"]);
     }
 
+    [Fact]
+    public void Discover_classifies_an_rspec_gemfile()
+    {
+        WriteProject("Gemfile", "source 'https://rubygems.org'\ngem 'rspec'\n");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:ruby"));
+
+        Assert.Equal("rspec", project.Framework);
+        Assert.Equal(Path.Combine(_root, "Gemfile"), project.ProjectPath);
+        Assert.True(ContinuousTestFrameworkSupport.IsSupported(project.Framework));
+    }
+
+    [Fact]
+    public void Discover_lists_a_minitest_only_gemfile_with_the_refusal_contract()
+    {
+        WriteProject("Gemfile", "source 'https://rubygems.org'\ngem 'minitest'\n");
+
+        ContinuousTestProject project = Assert.Single(
+            ContinuousTestProjectInventory.Discover(_root, "ws:ruby"));
+
+        Assert.Equal("minitest", project.Framework);
+        Assert.False(ContinuousTestFrameworkSupport.IsSupported(project.Framework));
+        Assert.Equal(
+            "Minitest has no per-test machine-readable runner surface CT can consume",
+            ContinuousTestFrameworkSupport.ReasonFor(project.Framework));
+        Assert.Equal(
+            "Add rspec, or run the suite directly with rake test",
+            ContinuousTestFrameworkSupport.RemedyFor(project.Framework));
+    }
+
     private static bool IsInside(string root, string path)
     {
         string relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(path));
