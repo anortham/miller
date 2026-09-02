@@ -89,4 +89,5 @@
   `Upgrade or configure Godot 4 with GUT 9, or run GUT directly`. A bare `project.godot` is ignored, while a project with both
   addons remains runnable through GUT and retains the gdUnit4 refusal metadata.
 - Swift, Dart, Elixir, Erlang, native C/C++/CTest, Zig, Lua, R, and Bash have no CT provider yet.
-  F# remains extractable but has no dedicated CT provider.
+  `.fsproj` test projects can be discovered and run through the .NET provider, but F# source
+  changes do not have extractor-backed CT impact mapping.

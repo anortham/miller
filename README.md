@@ -248,7 +248,8 @@ optimistic green. An index rebuild changes the generation identity, which stales
 | Godot / GDScript | `gut` | fixture and focused-test proof; Scale smoke is guarded by Godot/GUT availability |
 
 That is the whole supported CT set today. Swift, Dart, Elixir, Erlang, native C/C++/CTest, Zig,
-Lua, R, and Bash remain unprovided. F# remains extractor-supported but has no dedicated CT provider.
+Lua, R, and Bash remain unprovided. `.fsproj` test projects can be discovered and run through the
+.NET provider, but F# source changes do not have extractor-backed CT impact mapping.
 The provider floors are Gradle 8.3+, Maven Surefire 2.7.3+ with no separate Maven floor, sbt 1.x,
 RSpec 3.x, PHPUnit 10+, Pest 2+, and Godot 4 with GUT 9 plus `config_version=5`. `minitest`,
 `gdunit4`, and unsupported GUT evidence stay visible as refusals with repair guidance. `miller tests
