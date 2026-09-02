@@ -71,7 +71,7 @@ public sealed class RubyTestProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task Run_reads_the_out_artifact_and_maps_failure_and_pending_examples()
+    public async Task Run_rejects_unselected_report_examples_on_a_partial_run()
     {
         WriteGemfile(withLock: true);
         var workspace = Workspace();
@@ -90,27 +90,53 @@ public sealed class RubyTestProviderTests : IDisposable
         });
         provider = new RubyTestProvider(runRunner);
 
-        ProviderRunResult result = await provider.RunAsync(
-            Request(workspace, cases.Select(test => test.Id).ToArray()),
+        ContinuousTestProviderException exception = await Assert.ThrowsAsync<ContinuousTestProviderException>(() =>
+            provider.RunAsync(
+                Request(workspace, cases.Select(test => test.Id).ToArray()),
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("not selected", exception.Message, StringComparison.Ordinal);
+        Assert.NotNull(exception.ResultArtifactPath);
+        Assert.True(File.Exists(exception.ResultArtifactPath));
+        Assert.Equal("bundle", Assert.Single(runRunner.Calls).FileName);
+    }
+
+    [Fact]
+    public async Task Run_round_trips_examples_that_share_a_location_selector()
+    {
+        WriteGemfile(withLock: false);
+        var discoveryRunner = new RecordingRunner(_ => new TestProcessResult(0, CollisionJson, string.Empty));
+        var provider = new RubyTestProvider(discoveryRunner);
+        ContinuousTestWorkspace workspace = Workspace();
+        IReadOnlyList<ProviderTestCase> discovered = await provider.DiscoverAsync(
+            workspace,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("failed", result.Status);
-        Assert.Equal(3, result.CaseResults.Count);
+        Assert.Equal(2, discovered.Count);
         Assert.Equal(
-            ["passed", "failed", "skipped"],
-            result.CaseResults.OrderBy(row => row.TestCaseId, StringComparer.Ordinal)
-                .Select(row => row.Status).ToArray());
-        ProviderCaseResult failed = Assert.Single(result.CaseResults, row => row.Status == "failed");
-        Assert.Contains("expected: 2", failed.FailureSummary, StringComparison.Ordinal);
-        Assert.Equal(0.002, failed.DurationSeconds);
-        Assert.All(result.CaseResults, row =>
+            "spec/calculator_spec.rb:3",
+            discovered.Single(test => (string)test.Metadata["example_id"]! == "./spec/calculator_spec.rb[1:1]").Selector);
+        Assert.Equal(
+            "./spec/calculator_spec.rb[1:2]",
+            discovered.Single(test => (string)test.Metadata["example_id"]! == "./spec/calculator_spec.rb[1:2]").Selector);
+
+        var runRunner = new RecordingRunner(command =>
         {
-            Assert.Equal(IndexIdentity, row.IndexIdentity);
-            Assert.Equal("rev-ruby", row.ResultRevision);
+            string artifactPath = ArgumentAfter(command, "--out");
+            Directory.CreateDirectory(Path.GetDirectoryName(artifactPath)!);
+            File.WriteAllText(artifactPath, CollisionJson);
+            return new TestProcessResult(0, string.Empty, string.Empty);
         });
-        Assert.NotNull(result.ResultArtifactPath);
-        Assert.True(File.Exists(result.ResultArtifactPath));
-        Assert.Equal("bundle", Assert.Single(runRunner.Calls).FileName);
+        provider = new RubyTestProvider(runRunner);
+
+        ProviderRunResult result = await provider.RunAsync(
+            Request(workspace, discovered.Select(test => test.Id).ToArray()),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            discovered.Select(test => test.Id).Order(StringComparer.Ordinal).ToArray(),
+            result.CaseResults.Select(row => row.TestCaseId).Order(StringComparer.Ordinal).ToArray());
+        Assert.All(result.CaseResults, row => Assert.Equal("passed", row.Status));
     }
 
     [Fact]
@@ -258,6 +284,18 @@ public sealed class RubyTestProviderTests : IDisposable
           ],
           "summary": {"duration":0.003,"example_count":3,"failure_count":1,"pending_count":1,"errors_outside_of_examples_count":0},
           "summary_line":"3 examples, 1 failure, 1 pending"
+        }
+        """;
+
+    private const string CollisionJson = """
+        {
+          "version": "3.12.3",
+          "examples": [
+            {"id":"./spec/calculator_spec.rb[1:1]","description":"adds","full_description":"Calculator adds","status":"passed","file_path":"./spec/calculator_spec.rb","line_number":3,"run_time":0.001},
+            {"id":"./spec/calculator_spec.rb[1:2]","description":"also adds","full_description":"Calculator also adds","status":"passed","file_path":"./spec/calculator_spec.rb","line_number":3,"run_time":0.002}
+          ],
+          "summary": {"duration":0.003,"example_count":2,"failure_count":0,"pending_count":0,"errors_outside_of_examples_count":0},
+          "summary_line":"2 examples, 0 failures"
         }
         """;
 

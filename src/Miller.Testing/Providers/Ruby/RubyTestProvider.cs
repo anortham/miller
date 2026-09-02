@@ -243,13 +243,21 @@ public sealed class RubyTestProvider : IContinuousTestProvider
     {
         string projectRoot = RubyTestTooling.ProjectRoot(request.Workspace);
         var reportedCaseIds = new HashSet<string>(StringComparer.Ordinal);
-        var usedSelectors = new HashSet<string>(StringComparer.Ordinal);
+        var usedSelectors = new HashSet<string>(PathComparer);
+        var selectionsByPathAndExample = BuildSelectionLookup(selections, bySelector: false);
+        var selectionsByPathAndSelector = BuildSelectionLookup(selections, bySelector: true);
         var results = new List<ProviderCaseResult>(Math.Max(selections.Count, report.Examples.Count));
         foreach (RspecJsonExample example in report.Examples)
         {
             string relativePath = RelativeSpecPath(projectRoot, example);
-            CaseBinding? selection = selections.FirstOrDefault(
-                candidate => ExampleMatches(projectRoot, candidate, example));
+            string locationSelector = LocationSelector(relativePath, example);
+            CaseBinding? selection = FindSelection(
+                selectionsByPathAndExample,
+                selectionsByPathAndSelector,
+                relativePath,
+                example.Id,
+                locationSelector,
+                artifactPath);
             string selector;
             string testCaseId;
             if (selection is not null)
@@ -265,7 +273,16 @@ public sealed class RubyTestProvider : IContinuousTestProvider
             }
             else
             {
-                selector = LocationSelector(relativePath, example);
+                if (!request.WholeSuite)
+                {
+                    throw new ContinuousTestProviderException(
+                        $"RSpec test report included an example that was not selected: '{example.Id}' at '{locationSelector}'.")
+                    {
+                        ResultArtifactPath = artifactPath,
+                    };
+                }
+
+                selector = locationSelector;
                 if (!usedSelectors.Add(selector))
                 {
                     selector = example.Id;
@@ -336,22 +353,69 @@ public sealed class RubyTestProvider : IContinuousTestProvider
         return results;
     }
 
-    private static bool ExampleMatches(
-        string projectRoot,
-        CaseBinding selection,
-        RspecJsonExample example)
+    private static Dictionary<string, Dictionary<string, List<CaseBinding>>> BuildSelectionLookup(
+        IReadOnlyList<CaseBinding> selections,
+        bool bySelector)
     {
-        if (!RubyTestTooling.TryRelativeSpecPath(projectRoot, example.FilePath, out string relativePath)
-            || !PathComparer.Equals(relativePath, selection.SpecFilePath))
+        var lookup = new Dictionary<string, Dictionary<string, List<CaseBinding>>>(PathComparer);
+        foreach (CaseBinding selection in selections)
         {
-            return false;
+            if (!lookup.TryGetValue(selection.SpecFilePath, out Dictionary<string, List<CaseBinding>>? byKey))
+            {
+                byKey = new Dictionary<string, List<CaseBinding>>(
+                    bySelector ? PathComparer : StringComparer.Ordinal);
+                lookup.Add(selection.SpecFilePath, byKey);
+            }
+
+            string key = bySelector ? selection.Selector : selection.ExampleId;
+            if (!byKey.TryGetValue(key, out List<CaseBinding>? matches))
+            {
+                matches = [];
+                byKey.Add(key, matches);
+            }
+
+            matches.Add(selection);
         }
 
-        if (string.Equals(example.Id, selection.ExampleId, StringComparison.Ordinal))
-            return true;
+        return lookup;
+    }
 
-        return selection.Selector is { Length: > 0 }
-            && string.Equals(LocationSelector(relativePath, example), selection.Selector, StringComparison.Ordinal);
+    private static CaseBinding? FindSelection(
+        IReadOnlyDictionary<string, Dictionary<string, List<CaseBinding>>> byExample,
+        IReadOnlyDictionary<string, Dictionary<string, List<CaseBinding>>> bySelector,
+        string relativePath,
+        string exampleId,
+        string locationSelector,
+        string artifactPath)
+    {
+        if (byExample.TryGetValue(relativePath, out Dictionary<string, List<CaseBinding>>? examples)
+            && examples.TryGetValue(exampleId, out List<CaseBinding>? exactMatches))
+        {
+            return SingleSelection(exactMatches, exampleId, artifactPath);
+        }
+
+        if (bySelector.TryGetValue(relativePath, out Dictionary<string, List<CaseBinding>>? selectors)
+            && selectors.TryGetValue(locationSelector, out List<CaseBinding>? selectorMatches))
+        {
+            return SingleSelection(selectorMatches, locationSelector, artifactPath);
+        }
+
+        return null;
+    }
+
+    private static CaseBinding SingleSelection(
+        IReadOnlyList<CaseBinding> matches,
+        string key,
+        string artifactPath)
+    {
+        if (matches.Count != 1)
+            throw new ContinuousTestProviderException(
+                $"RSpec test report matched selection '{key}' more than once.")
+            {
+                ResultArtifactPath = artifactPath,
+            };
+
+        return matches[0];
     }
 
     private static string RelativeSpecPath(string projectRoot, RspecJsonExample example)
