@@ -138,6 +138,39 @@ public sealed class QueryTimeResolutionReaderTests
     }
 
     [Fact]
+    public void FamilyStoreParityMatchesReaderForIdentifierReceiverType()
+    {
+        using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
+        fixture.AddFile(1, "src/App.cs");
+        fixture.AddSymbol(1, App, "App", "class", "src/App.cs");
+        fixture.AddSymbol(1, Run, "Run", "method", "src/App.cs", parentId: App);
+        fixture.AddSymbol(1, Helper, "Helper", "method", "src/App.cs", parentId: App);
+        fixture.AddSymbol(1, "fn-other-helper", "Helper", "function", "src/App.cs");
+        fixture.AddIdentifier(
+            1, "id-this-help", "Helper", "src/App.cs", kind: "call", containingSymbolId: Run, startByte: 20, endByte: 26,
+            metadataJson: """{"receiver":"this","receiver_type":"App"}""");
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+        StoreVisibility visibility = fixture.Visibility();
+        var site = Assert.Single(IdentifierSiteReader.SitesAll(connection, visibility));
+        QueryResolution parity = QueryTimeResolutionParity.FromOutcome(
+            QueryTimeResolutionParity.ResolveIdentifier(
+                new Miller.Core.Resolution.QueryTimeResolver(reader.Cache),
+                reader.Cache,
+                site,
+                new Dictionary<(long VersionId, string Id), QueryTimeResolutionParity.PendingFact>(),
+                new Dictionary<(long VersionId, string Id), QueryTimeResolutionParity.RelationshipFact>()));
+
+        IReadOnlyList<FamilyGraphResolutionEdge> edges = reader.ReadResolutionEdges(
+            connection, [Run], Direction.Forward, statementObserver: null);
+
+        FamilyGraphResolutionEdge edge = Assert.Single(edges);
+        Assert.Equal("resolved", parity.Outcome);
+        Assert.Equal(edge.ToId, parity.TargetSymbolId);
+        Assert.Equal(edge.Confidence, parity.Confidence);
+    }
+
+    [Fact]
     public void FamilyStorePendingReceiverTypeBindsEnclosingTypeMember()
     {
         using ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
@@ -676,6 +709,26 @@ public sealed class QueryTimeResolutionReaderTests
     }
 
     [Fact]
+    public void UnresolvedNameFallbackOnlyAllocationStaysBelowBudgetPerSite()
+    {
+        long eightSites = MeasureUnresolvedNameFallbackAllocation(8, "Save", expectedEdgeCount: 16);
+        long sixteenSites = MeasureUnresolvedNameFallbackAllocation(16, "Save", expectedEdgeCount: 32);
+        long eightWithoutFallback = MeasureUnresolvedNameFallbackAllocation(8, "Missing", expectedEdgeCount: 0);
+        long sixteenWithoutFallback = MeasureUnresolvedNameFallbackAllocation(16, "Missing", expectedEdgeCount: 0);
+        long eightFallbackOnly = eightSites - eightWithoutFallback;
+        long sixteenFallbackOnly = sixteenSites - sixteenWithoutFallback;
+        double eightBytesPerSite = eightFallbackOnly / 8.0;
+        double sixteenBytesPerSite = sixteenFallbackOnly / 16.0;
+
+        Assert.True(
+            eightBytesPerSite < 750,
+            $"Expected fallback-only allocation below 750 B/site at N=8, but measured {eightFallbackOnly} B ({eightBytesPerSite:F1} B/site).");
+        Assert.True(
+            sixteenBytesPerSite < 750,
+            $"Expected fallback-only allocation below 750 B/site at N=16, but measured {sixteenFallbackOnly} B ({sixteenBytesPerSite:F1} B/site).");
+    }
+
+    [Fact]
     public void OverloadSiblingCallExcludesTheContainingOverloadItself()
     {
         using ResolutionStoreFixture fixture = PopulateOverloadStore();
@@ -705,7 +758,27 @@ public sealed class QueryTimeResolutionReaderTests
             connection, ["fn-caller"], Direction.Forward, statementObserver: null));
     }
 
-    private static ResolutionStoreFixture PopulateOverloadStore()
+    private static long MeasureUnresolvedNameFallbackAllocation(int unresolvedSiteCount, string name, int expectedEdgeCount)
+    {
+        using ResolutionStoreFixture fixture = PopulateOverloadStore(unresolvedSiteCount, name);
+        using SqliteConnection connection = fixture.OpenRead();
+        QueryTimeResolutionReader reader = FamilyReader(connection, fixture);
+        IReadOnlyList<FamilyGraphUnresolvedNameEdge> warmup = reader.ReadUnresolvedNameEdges(
+            connection, ["fn-caller"], Direction.Forward, statementObserver: null);
+        Assert.Equal(expectedEdgeCount, warmup.Count);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        IReadOnlyList<FamilyGraphUnresolvedNameEdge> measured = reader.ReadUnresolvedNameEdges(
+            connection, ["fn-caller"], Direction.Forward, statementObserver: null);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(expectedEdgeCount, measured.Count);
+        return allocated;
+    }
+
+    private static ResolutionStoreFixture PopulateOverloadStore(int unresolvedSiteCount = 0, string name = "Save")
     {
         ResolutionStoreFixture fixture = ResolutionStoreFixture.Create();
         fixture.AddFile(1, "src/Svc.cs");
@@ -713,6 +786,20 @@ public sealed class QueryTimeResolutionReaderTests
         fixture.AddSymbol(1, "ov-save-a", "Save", "method", "src/Svc.cs", parentId: "cls-svc");
         fixture.AddSymbol(1, "ov-save-b", "Save", "method", "src/Svc.cs", parentId: "cls-svc");
         fixture.AddSymbol(1, "fn-caller", "Caller", "method", "src/Svc.cs", parentId: "cls-svc");
+        for (int i = 0; i < unresolvedSiteCount; i++)
+        {
+            long startByte = 10 + (i * 5);
+            fixture.AddIdentifier(
+                1,
+                $"id-save-{i}",
+                name,
+                "src/Svc.cs",
+                kind: "call",
+                containingSymbolId: "fn-caller",
+                startByte: startByte,
+                endByte: startByte + 4);
+        }
+
         return fixture;
     }
 

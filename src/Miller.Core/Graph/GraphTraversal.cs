@@ -361,6 +361,60 @@ internal static class GraphTraversal
         return null;
     }
 
+    public static GraphPath? ShortestPathWithEvidenceBatched(
+        string from,
+        string to,
+        int maxDepth,
+        Func<string, bool> contains,
+        Func<IReadOnlyList<string>, IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>>> batchDependencies,
+        Func<GraphNeighbour, bool> edgeFilter)
+    {
+        ArgumentNullException.ThrowIfNull(from);
+        ArgumentNullException.ThrowIfNull(to);
+        ArgumentNullException.ThrowIfNull(contains);
+        ArgumentNullException.ThrowIfNull(batchDependencies);
+        ArgumentNullException.ThrowIfNull(edgeFilter);
+
+        if (!contains(from) || !contains(to))
+            return null;
+        if (string.Equals(from, to, StringComparison.Ordinal))
+            return new GraphPath([from], []);
+        if (maxDepth <= 0)
+            return null;
+
+        var parent = new Dictionary<string, (string Parent, GraphNeighbour Edge)>(StringComparer.Ordinal);
+        var depth = new Dictionary<string, int>(StringComparer.Ordinal) { [from] = 0 };
+        var frontier = new List<string> { from };
+
+        while (frontier.Count > 0)
+        {
+            int currentDepth = depth[frontier[0]];
+            if (currentDepth >= maxDepth)
+                break;
+
+            IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>> adjacentById =
+                batchDependencies(frontier);
+            var nextFrontier = new List<string>();
+            foreach (string current in frontier)
+            {
+                foreach (GraphNeighbour neighbour in adjacentById.GetValueOrDefault(current, []))
+                {
+                    if (!edgeFilter(neighbour) || depth.ContainsKey(neighbour.Id))
+                        continue;
+
+                    depth[neighbour.Id] = currentDepth + 1;
+                    parent[neighbour.Id] = (current, neighbour);
+                    if (string.Equals(neighbour.Id, to, StringComparison.Ordinal))
+                        return ReconstructWithEvidence(parent, from, to);
+                    nextFrontier.Add(neighbour.Id);
+                }
+            }
+            frontier = nextFrontier;
+        }
+
+        return null;
+    }
+
     private static GraphPath ReconstructWithEvidence(
         IReadOnlyDictionary<string, (string Parent, GraphNeighbour Edge)> parent,
         string from,

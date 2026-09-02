@@ -58,7 +58,7 @@ opened the section is unavailable with a reason.
 |---|---|---|
 | `bounded_at` | number | Region fetch bound; counts saturate here. |
 | `truncated` | boolean | True when the total hit the bound. |
-| `counts` | array | `{marker, count}` for `TODO`, `FIXME`, `HACK`, `XXX`. A region matching several markers counts once per marker. |
+| `counts` | array | `{marker, count}` for `TODO`, `FIXME`, `HACK`, `XXX`, `RAZORBACK`. A region matching several markers counts once per marker. |
 | `total` | number | Distinct marker regions found (bounded). |
 
 ### `complexity`

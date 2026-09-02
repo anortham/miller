@@ -207,7 +207,14 @@ public sealed class TraceTool
             }
             else
             {
-                diagnostic = emitted == 0 ? TraceEmptyDiagnostic(normalizedMode, output, target, to) : null;
+                diagnostic = emitted == 0
+                    ? TraceEmptyDiagnostic(
+                        normalizedMode,
+                        output,
+                        target,
+                        to,
+                        json && normalizedMode == ModePath ? ReadTraceJsonNextActions(output) : null)
+                    : null;
             }
 
             if (telemetry is not null)
@@ -300,7 +307,20 @@ public sealed class TraceTool
     private static string NormalizeMode(string? mode) =>
         string.IsNullOrWhiteSpace(mode) ? ModeRefs : mode.Trim().ToLowerInvariant();
 
-    internal static ToolDiagnostic TraceEmptyDiagnostic(string mode, string output, string target, string? to)
+    internal static ToolDiagnostic TraceEmptyDiagnostic(
+        string mode,
+        string output,
+        string target,
+        string? to,
+        IReadOnlyList<ToolDiagnosticAction>? preservedNextActions = null)
+    {
+        ToolDiagnostic diagnostic = TraceEmptyDiagnosticCore(mode, output, target, to);
+        return mode == ModePath && preservedNextActions is { Count: > 0 }
+            ? diagnostic with { NextActions = preservedNextActions }
+            : diagnostic;
+    }
+
+    private static ToolDiagnostic TraceEmptyDiagnosticCore(string mode, string output, string target, string? to)
     {
         if (mode is not (ModePath or ModeRefs or ModeBridge))
             return ToolDiagnostic.Unsupported("unsupported_mode", $"Trace mode '{mode}' is not supported.");
@@ -764,7 +784,18 @@ public sealed class TraceTool
                 : message;
         }
 
-        if (!ResolveSymbol(index, resolver, target, scope, out string fromId, out string? fromNote, out IReadOnlyList<TraceNextAction> fromNextActions))
+        if (!ResolveSymbol(
+                index,
+                resolver,
+                target,
+                scope,
+                out string fromId,
+                out string? fromNote,
+                out IReadOnlyList<TraceNextAction> fromNextActions,
+                mode: ModePath,
+                to: to,
+                pathKind: normalizedPathKind,
+                depth: depth))
             return json
                 ? RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, fromNote!, DiagnosticCode(fromNote!),
                     nextActions: fromNextActions)
@@ -776,7 +807,7 @@ public sealed class TraceTool
         {
             string destinationNote = $"trace path destination '{to}': {toNote}";
             IReadOnlyList<TraceNextAction> destinationActions =
-                DestinationNextActions(resolver, target, to);
+                DestinationNextActions(resolver, target, to, depth, normalizedPathKind, scope);
             return json
                 ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId: null, path: null,
                     normalizedPathKind,
@@ -789,14 +820,11 @@ public sealed class TraceTool
         GraphPath? graphPath = graph.ShortestPathWithEvidence(fromId, toId, depth, edgeFilter);
         if (graphPath is null)
         {
-            GraphPath? reversePath = graph.ShortestPathWithEvidence(toId, fromId, depth, edgeFilter);
             string message =
                 $"No path from '{target}' to '{to}' within {depth} hop(s) using path_kind={normalizedPathKind}." +
-                (reversePath is null
-                    ? " The search walks caller -> callee edges only, and unresolved call sites can hide a real path."
-                    : $" A reverse path exists from '{to}' to '{target}' ({reversePath.Nodes.Count - 1} hop(s)) — retry with the endpoints swapped.");
+                " The search walks caller -> callee edges only, and unresolved call sites can hide a real path.";
             IReadOnlyList<TraceNextAction> noPathNextActions =
-                NoPathNextActions(target, to, depth, normalizedPathKind, reverseExists: reversePath is not null);
+                NoPathNextActions(target, to, depth, normalizedPathKind, scope);
             return json
                 ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId, path: null,
                     normalizedPathKind,
@@ -2142,7 +2170,8 @@ public sealed class TraceTool
     /// </summary>
     private static bool ResolveSymbol(
         ISymbolLookupIndex index, SmartTargetResolver resolver, string target, string? scope,
-        out string symbolId, out string? note, out IReadOnlyList<TraceNextAction> nextActions)
+        out string symbolId, out string? note, out IReadOnlyList<TraceNextAction> nextActions,
+        string mode = ModeRefs, string? to = null, string? pathKind = null, int depth = 3)
     {
         symbolId = string.Empty;
         note = null;
@@ -2165,7 +2194,7 @@ public sealed class TraceTool
                 return false;
 
             case TargetResolution.Candidates cands:
-                nextActions = AmbiguousTargetNextActions(target, cands.Matches);
+                nextActions = AmbiguousTargetNextActions(target, cands.Matches, mode, to, pathKind, depth);
                 note = RenderCandidatesNote(target, cands.Matches);
                 return false;
 
@@ -2194,7 +2223,13 @@ public sealed class TraceTool
         return sb.ToString().TrimEnd('\n');
     }
 
-    private static IReadOnlyList<TraceNextAction> AmbiguousTargetNextActions(string target, IReadOnlyList<IndexedSymbol> matches)
+    private static IReadOnlyList<TraceNextAction> AmbiguousTargetNextActions(
+        string target,
+        IReadOnlyList<IndexedSymbol> matches,
+        string mode = ModeRefs,
+        string? to = null,
+        string? pathKind = null,
+        int depth = 3)
     {
         string[] paths = matches
             .Select(static match => match.FilePath)
@@ -2204,6 +2239,23 @@ public sealed class TraceTool
 
         if (paths.Length < 2)
         {
+            if (mode == ModePath)
+            {
+                return matches
+                    .Take(3)
+                    .Select(match => NextAction(
+                        "trace",
+                        $"retry with this symbol id for {match.Kind} in {match.FilePath}:{match.StartLine}",
+                        TraceArgs(
+                            match.SymbolId,
+                            scope: null,
+                            ("mode", ModePath),
+                            ("to", to ?? string.Empty),
+                            ("path_kind", pathKind ?? "call"),
+                            ("depth", depth.ToString(CultureInfo.InvariantCulture)))))
+                    .ToArray();
+            }
+
             return matches
                 .Take(3)
                 .Select(match => NextAction(
@@ -2217,8 +2269,15 @@ public sealed class TraceTool
             .Select(path => NextAction(
                 "trace",
                 "retry with this file scope to disambiguate the target",
-                ("target", target),
-                ("scope", path)))
+                mode == ModePath
+                    ? TraceArgs(
+                        target,
+                        path,
+                        ("mode", ModePath),
+                        ("to", to ?? string.Empty),
+                        ("path_kind", pathKind ?? "call"),
+                        ("depth", depth.ToString(CultureInfo.InvariantCulture)))
+                    : new[] { ("target", target), ("scope", path) }))
             .ToArray();
     }
 
@@ -2227,26 +2286,22 @@ public sealed class TraceTool
         string to,
         int depth,
         string pathKind,
-        bool reverseExists)
+        string? scope)
     {
-        var actions = new List<TraceNextAction>(capacity: 4);
-        if (reverseExists)
-        {
-            actions.Add(NextAction(
-                "trace",
-                "a reverse path exists; retry with the endpoints swapped",
-                ("target", to),
-                ("mode", ModePath),
-                ("to", target),
-                ("path_kind", pathKind),
-                ("depth", depth.ToString(CultureInfo.InvariantCulture))));
-        }
+        var actions = new List<TraceNextAction>(capacity: 6);
+        actions.Add(NextAction(
+            "trace",
+            "retry with the endpoints swapped to search the opposite direction",
+            ("target", to),
+            ("mode", ModePath),
+            ("to", target),
+            ("path_kind", pathKind),
+            ("depth", depth.ToString(CultureInfo.InvariantCulture))));
 
         actions.Add(NextAction(
             "trace",
             "check extracted identifier references from the source endpoint",
-            ("target", target),
-            ("mode", ModeRefs)));
+            TraceArgs(target, scope, ("mode", ModeRefs))));
 
         if (!string.Equals(target.Trim(), to.Trim(), StringComparison.OrdinalIgnoreCase))
         {
@@ -2259,13 +2314,18 @@ public sealed class TraceTool
 
         if (depth < 3)
         {
+            var depthBumpArgs = new List<(string Key, string Value)>
+            {
+                ("mode", ModePath),
+                ("to", to),
+                ("depth", (depth + 1).ToString(CultureInfo.InvariantCulture)),
+            };
+            if (pathKind != "call")
+                depthBumpArgs.Add(("path_kind", pathKind));
             actions.Add(NextAction(
                 "trace",
                 "retry with a bounded depth bump; this does not prove a path exists",
-                ("target", target),
-                ("mode", ModePath),
-                ("to", to),
-                ("depth", (depth + 1).ToString(CultureInfo.InvariantCulture))));
+                TraceArgs(target, scope, depthBumpArgs.ToArray())));
         }
 
         if (pathKind == "call")
@@ -2273,11 +2333,13 @@ public sealed class TraceTool
             actions.Add(NextAction(
                 "trace",
                 "retry with broad dependency edges; the result is not a call path",
-                ("target", target),
-                ("mode", ModePath),
-                ("to", to),
-                ("path_kind", "dependency"),
-                ("depth", depth.ToString(CultureInfo.InvariantCulture))));
+                TraceArgs(
+                    target,
+                    scope,
+                    ("mode", ModePath),
+                    ("to", to),
+                    ("path_kind", "dependency"),
+                    ("depth", depth.ToString(CultureInfo.InvariantCulture)))));
         }
 
         actions.Add(NextAction(
@@ -2286,11 +2348,11 @@ public sealed class TraceTool
             ("query", $"{target} {to}"),
             ("mode", "source")));
 
-        return actions.Take(5).ToArray();
+        return actions.Take(6).ToArray();
     }
 
     private static IReadOnlyList<TraceNextAction> DestinationNextActions(
-        SmartTargetResolver resolver, string target, string to)
+        SmartTargetResolver resolver, string target, string to, int depth, string pathKind, string? scope)
     {
         if (resolver.Resolve(to, scope: null) is TargetResolution.Candidates candidates)
         {
@@ -2299,9 +2361,13 @@ public sealed class TraceTool
                 .Select(match => NextAction(
                     "trace",
                     $"retry the path with this destination id for {match.Kind} in {match.FilePath}:{match.StartLine}",
-                    ("target", target),
-                    ("mode", ModePath),
-                    ("to", match.SymbolId)))
+                    TraceArgs(
+                        target,
+                        scope,
+                        ("mode", ModePath),
+                        ("to", match.SymbolId),
+                        ("path_kind", pathKind),
+                        ("depth", depth.ToString(CultureInfo.InvariantCulture)))))
                 .ToArray();
         }
 
@@ -2516,6 +2582,21 @@ public sealed class TraceTool
 
     private static TraceNextAction NextAction(string tool, string reason, params (string Key, string Value)[] args) =>
         new(tool, reason, args.Select(static arg => new KeyValuePair<string, string>(arg.Key, arg.Value)).ToArray());
+
+    private static (string Key, string Value)[] TraceArgs(
+        string target,
+        string? scope,
+        params (string Key, string Value)[] args)
+    {
+        var result = new List<(string Key, string Value)>(args.Length + 2)
+        {
+            ("target", target),
+        };
+        if (!string.IsNullOrWhiteSpace(scope))
+            result.Add(("scope", scope));
+        result.AddRange(args);
+        return result.ToArray();
+    }
 
     private static string AppendNextActions(string message, IReadOnlyList<TraceNextAction> actions)
     {
@@ -2799,6 +2880,55 @@ public sealed class TraceTool
                     WriteBridgeLink(w, graph, edge);
                 w.WriteEndArray();
             });
+    }
+
+    private static IReadOnlyList<ToolDiagnosticAction>? ReadTraceJsonNextActions(string output)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(output);
+            if (!document.RootElement.TryGetProperty("next_actions", out JsonElement actions) ||
+                actions.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var result = new List<ToolDiagnosticAction>();
+            foreach (JsonElement action in actions.EnumerateArray())
+            {
+                if (!action.TryGetProperty("tool", out JsonElement toolElement) ||
+                    !action.TryGetProperty("args", out JsonElement argsElement) ||
+                    argsElement.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var call = new StringBuilder(toolElement.GetString() ?? string.Empty);
+                call.Append('(');
+                bool first = true;
+                foreach (JsonProperty arg in argsElement.EnumerateObject())
+                {
+                    if (!first)
+                        call.Append(", ");
+                    call.Append(arg.Name).Append("=\"")
+                        .Append(EscapeShellishArgument(arg.Value.GetString() ?? string.Empty))
+                        .Append('"');
+                    first = false;
+                }
+                call.Append(')');
+
+                result.Add(new ToolDiagnosticAction(
+                    call.ToString(),
+                    action.TryGetProperty("reason", out JsonElement reasonElement)
+                        ? reasonElement.GetString() ?? string.Empty
+                        : string.Empty));
+            }
+            return result;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static string RenderTraceJson(

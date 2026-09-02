@@ -1996,6 +1996,7 @@ internal sealed class QueryTimeResolutionReader
     {
         private readonly RevisionFactCache _cache;
         private readonly Dictionary<string, FactSymbol> _symbolsById = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (IReadOnlyList<string> Ids, bool Unique)> _nameFallbackSets = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<ResolvedIdentifier>> _identifiersByContainer;
         private readonly Dictionary<string, List<ResolvedIdentifier>> _identifiersByName;
         private readonly Dictionary<string, List<ResolvedPending>> _pendingsByFrom;
@@ -2097,6 +2098,9 @@ internal sealed class QueryTimeResolutionReader
         // sharing the name declared under one non-null parent (resolution-policy-v6).
         internal (IReadOnlyList<string> Ids, bool Unique) NameFallbackSet(string name)
         {
+            if (_nameFallbackSets.TryGetValue(name, out (IReadOnlyList<string> Ids, bool Unique) cached))
+                return cached;
+
             List<string>? ids = null;
             FactSymbolKey? sharedParent = null;
             bool sameParent = true;
@@ -2117,10 +2121,19 @@ internal sealed class QueryTimeResolutionReader
             }
 
             if (ids is null)
-                return ([], false);
-            if (ids.Count == 1)
-                return (ids, true);
-            return sameParent && sharedParent is not null ? (ids, false) : ([], false);
+            {
+                (IReadOnlyList<string> Ids, bool Unique) empty = ([], false);
+                _nameFallbackSets[name] = empty;
+                return empty;
+            }
+
+            (IReadOnlyList<string> Ids, bool Unique) result = ids.Count == 1
+                ? ([.. ids], true)
+                : sameParent && sharedParent is not null
+                    ? ([.. ids], false)
+                    : ([], false);
+            _nameFallbackSets[name] = result;
+            return result;
         }
 
         private static Dictionary<string, List<T>> Group<T>(IEnumerable<T> rows, Func<T, string?> key)

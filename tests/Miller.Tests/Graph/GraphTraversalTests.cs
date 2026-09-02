@@ -168,6 +168,47 @@ public sealed class GraphTraversalTests
     }
 
     [Fact]
+    public void ShortestPathWithEvidenceBatched_UsesOneBatchNeighbourLookupPerDepth()
+    {
+        var known = new HashSet<string>(["a", "b", "c", "d", "e"], StringComparer.Ordinal);
+        var batches = new List<string[]>();
+        var forward = new Dictionary<string, GraphNeighbour[]>(StringComparer.Ordinal)
+        {
+            ["a"] = [new("b", "calls", 1.0, "test", 0, null), new("c", "calls", 1.0, "test", 0, null)],
+            ["b"] =
+            [
+                new("e", "type_usage", 1.0, "test", 0, null),
+                new("d", "calls", 1.0, "test", 0, null),
+            ],
+            ["c"] = [new("e", "calls", 1.0, "test", 0, null)],
+        };
+
+        GraphPath path = Assert.IsType<GraphPath>(GraphTraversal.ShortestPathWithEvidenceBatched(
+            from: "a",
+            to: "e",
+            maxDepth: 2,
+            contains: known.Contains,
+            batchDependencies: ids =>
+            {
+                batches.Add(ids.ToArray());
+                return ids.ToDictionary(
+                    static id => id,
+                    id => (IReadOnlyList<GraphNeighbour>)forward.GetValueOrDefault(id, []),
+                    StringComparer.Ordinal);
+            },
+            edgeFilter: static edge => edge.EdgeKind == "calls"));
+
+        Assert.Equal(["a", "c", "e"], path.Nodes);
+        Assert.Equal(
+            [
+                new GraphPathEdge("a", "c", "calls", 1.0, "test"),
+                new GraphPathEdge("c", "e", "calls", 1.0, "test"),
+            ],
+            path.Edges);
+        Assert.Equal([["a"], ["b", "c"]], batches);
+    }
+
+    [Fact]
     public void ReachWithEvidence_PreliminaryWindowDoesNotUseLateHydratedRankSignals()
     {
         var known = new HashSet<string>(StringComparer.Ordinal) { "seed" };

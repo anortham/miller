@@ -241,7 +241,7 @@ Text output is a compact human-facing contract and JSON output is the integratio
   `trace --mode bridge` unsupported results include next local calls to try; JSON includes them as
   `next_actions`.
 - `todos --json` is a CLI compatibility alias over marker search for Eros/scripts. For agents and
-  normal interactive use, prefer `search "TODO,FIXME,HACK,XXX" --mode markers`; it returns marker,
+  normal interactive use, prefer `search "TODO,FIXME,HACK,XXX,RAZORBACK" --mode markers`; it returns marker,
   file:line, snippet, and containing symbol when available, with `--file-pattern` and `--language` for
   scope.
 - The `content` CLI stores non-workspace text in `.miller/content.db`. Use `content import` for

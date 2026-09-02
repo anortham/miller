@@ -308,7 +308,8 @@ internal static class QueryTimeResolutionParity
             site.Receiver,
             site.ReceiverQualifier,
             site.ContainingSymbolId,
-            site.Confidence));
+            site.Confidence,
+            ReceiverType: site.ReceiverType));
     }
 
     internal static ResolutionOutcome ResolvePending(
@@ -332,7 +333,8 @@ internal static class QueryTimeResolutionParity
             pending.Qualifier,
             pending.CallerScopeSymbolId,
             pending.Confidence,
-            path));
+            path,
+            ReceiverType: pending.ReceiverType));
     }
 
     internal static Dictionary<(long VersionId, string Id), PendingFact> ReadPendingFacts(
@@ -345,7 +347,7 @@ internal static class QueryTimeResolutionParity
             """
             SELECT p.version_id,p.pending_relationship_id,p.from_symbol_id,p.caller_scope_symbol_id,
                    p.kind,p.target_terminal_name,p.target_receiver,p.target_namespace_json,
-                   p.confidence,e.language
+                   p.confidence,e.language,p.metadata_json
             FROM main.pending_relationships AS p
             JOIN main.manifest_entries AS e ON e.version_id=p.version_id
             WHERE e.view_id=$view_id AND e.generation=$generation
@@ -365,6 +367,7 @@ internal static class QueryTimeResolutionParity
                 reader.GetString(5),
                 reader.IsDBNull(6) ? null : reader.GetString(6),
                 QualifierFromNamespaceJson(reader.IsDBNull(7) ? null : reader.GetString(7)),
+                FactMetadataParser.ReceiverType(reader.IsDBNull(10) ? null : reader.GetString(10)),
                 reader.GetDouble(8),
                 reader.GetString(9));
         }
@@ -728,7 +731,8 @@ internal static class QueryTimeResolutionParity
                 site.Receiver,
                 site.ReceiverQualifier,
                 site.ContainingSymbolId,
-                site.Confidence));
+                site.Confidence,
+                ReceiverType: site.ReceiverType));
         }
 
         return Stopwatch.GetElapsedTime(started);
@@ -773,6 +777,7 @@ internal static class QueryTimeResolutionParity
         string Name,
         string? Receiver,
         string? Qualifier,
+        string? ReceiverType,
         double Confidence,
         string Language);
 

@@ -157,15 +157,12 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             _evidenceCache.Clear();
             try
             {
-                return GraphTraversal.ShortestPathWithEvidence(
+                return GraphTraversal.ShortestPathWithEvidenceBatched(
                     from,
                     to,
                     maxDepth,
                     Contains,
-                    id => BatchNeighbourEvidence([id], Direction.Forward)
-                        .TryGetValue(id, out IReadOnlyList<GraphNeighbour>? neighbours)
-                            ? neighbours
-                            : Array.Empty<GraphNeighbour>(),
+                    frontier => BatchNeighbourEvidence(frontier, Direction.Forward),
                     edgeFilter);
             }
             finally
