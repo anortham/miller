@@ -1,0 +1,21 @@
+# Razorback SDD ledger — plan: docs/plans/2026-09-01-ct-providers-jvm-ruby-php-gdscript-implementation-plan.md
+
+| Scope | Invariant | Command | Commit | Result | Time |
+|---|---|---|---|---|---|
+| baseline | Held release tree starts green before provider work | `MILLER_ALLOW_MISSING_JULIE_EXTRACT=1 MILLER_ALLOW_MISSING_SEMANTIC=1 dotnet test` | `43b2fa07` | 9,456 passed, 0 failed, 9 skipped | 2026-09-02 |
+
+Task 1: fix round 1 (1 addressed, 0 open — explicit product support floors; commits 4c58678b..ac156ea7)
+Task 1: complete (commits be1f8318..980e0f91, Lead inline review clean)
+Task 2: complete (commit c87d7223, 16 focused tests passed, Lead inline review clean)
+Task 3: fix round 1 (2 addressed, 0 open — linear result attribution and partial-run ownership; commits 56f1e405..3cbd984a)
+Task 3: fix round 2 (1 addressed, 0 open — restored positive artifact-mapping coverage; commits 3cbd984a..60262e0c)
+Task 3: complete (commits 56f1e405..60262e0c, Lead inline review clean)
+Task 4: fix round 1 (2 addressed, 0 open — real PHPUnit listing schemas and exact filters; commits daf17b22..519e71c1)
+Task 4: fix round 2 (2 addressed, 0 open — linear duplicate detection and malformed-container refusal; commits 519e71c1..0eccb751)
+Task 4: fix round 3 (1 addressed, 0 open — workspace-relative typed PHP source identity; commits 0eccb751..927e6d0d)
+Task 4: complete (commits daf17b22..927e6d0d, Lead inline review clean)
+Task 5: fix round 1 (6 addressed, 0 open — bounded reports, whole-suite attribution, status and inventory hardening; commits fbe6ed7d..e71e7160)
+Task 5: fix round 2 (1 addressed, 0 open — final Gradle output isolation and build-identity hashing; commits e71e7160..d7f2d1d3)
+Task 5: complete (commits fbe6ed7d..d7f2d1d3, Lead inline review clean)
+Task 6: fix round 1 (4 addressed, 0 open — Maven config preservation, whole-suite identity validation, bounded reports, compiler-aware Scale guard; commits 98e9b540..9ea26a8e)
+Task 6: complete (commits 98e9b540..8262656e, 18 focused tests passed, Release build clean, Lead inline review clean)
