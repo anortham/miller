@@ -78,7 +78,10 @@ returned shell exit code 127. The only relevant runtimes present were Java 25.0.
 
 ## sbt
 
-**Status:** not installed — surface taken from [the sbt testing guide](https://www.scala-sbt.org/1.x/docs/Testing.html) and [the sbt keys API](https://www.scala-sbt.org/1.x/api/sbt/Keys%24.html); needs runtime confirmation.
+**Status:** sbt 1.13.0 launcher/load probe completed from the official universal package; test
+compilation and execution remain unavailable because this host has a Java runtime but no `javac`.
+The command surface still comes from [the sbt testing guide](https://www.scala-sbt.org/1.x/docs/Testing.html)
+and [the sbt keys API](https://www.scala-sbt.org/1.x/api/sbt/Keys%24.html).
 
 - **Product support floor:** sbt 1.x. **Documentation consulted:** sbt 1.x testing guide and
   keys API; no narrower floor for the `Test` keys is stated. The provider must record the runtime
@@ -92,6 +95,13 @@ returned shell exit code 127. The only relevant runtimes present were Java 25.0.
   can be disabled.
 - **Exit semantics:** a successful `test`/`testOnly` task exits 0 and a failed test/build exits
   nonzero. This was not run locally and needs runtime confirmation.
+- **Output-isolation blocker:** an official sbt 1.13.0 disposable probe redirected
+  `sbt.boot.directory`, `sbt.global.base`, `sbt.ivy.home`, and `sbt.coursier.home`, disabled the
+  server and generated build properties, and applied a session `ThisBuild / target` override.
+  Build loading still created both workspace `target/` and `project/target/` before the session
+  setting could take effect. A runnable provider therefore needs a generation-owned build/source
+  shadow or a narrower product decision; cache redirection alone cannot satisfy CT's write-isolation
+  contract.
 - **Fixture:** `sbt-junit.xml` is a sanitized nested JUnit report shape with an error case and a
   skipped case. It is docs-derived because sbt is absent.
 

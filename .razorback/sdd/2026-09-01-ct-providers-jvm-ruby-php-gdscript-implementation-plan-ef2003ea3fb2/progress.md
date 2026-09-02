@@ -19,3 +19,4 @@ Task 5: fix round 2 (1 addressed, 0 open — final Gradle output isolation and b
 Task 5: complete (commits fbe6ed7d..d7f2d1d3, Lead inline review clean)
 Task 6: fix round 1 (4 addressed, 0 open — Maven config preservation, whole-suite identity validation, bounded reports, compiler-aware Scale guard; commits 98e9b540..9ea26a8e)
 Task 6: complete (commits 98e9b540..8262656e, 18 focused tests passed, Release build clean, Lead inline review clean)
+Task 7: design blocker (official sbt 1.13.0 probe writes workspace target/ and project/target/ during build load despite cache and session-target redirection; runnable support needs an approved generation-owned source/build shadow or release-scope change)
