@@ -700,7 +700,11 @@ internal static class CtWorkspaceMirror
     {
         if (entry.Kind == EntryKind.SymbolicLink)
             return;
-        File.SetLastWriteTimeUtc(destinationPath, new DateTime(entry.LastWriteTimeUtcTicks, DateTimeKind.Utc));
+        DateTime lastWriteTimeUtc = new(entry.LastWriteTimeUtcTicks, DateTimeKind.Utc);
+        if (entry.Kind == EntryKind.Directory)
+            Directory.SetLastWriteTimeUtc(destinationPath, lastWriteTimeUtc);
+        else
+            File.SetLastWriteTimeUtc(destinationPath, lastWriteTimeUtc);
         if (entry.UnixMode.HasValue && !OperatingSystem.IsWindows())
             File.SetUnixFileMode(destinationPath, (UnixFileMode)entry.UnixMode.Value);
         FileAttributes attributes = File.GetAttributes(destinationPath);
