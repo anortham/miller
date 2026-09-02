@@ -416,10 +416,10 @@ backend registration. Per-class granularity is a documented v1 bound (Python's p
 `docs/continuous-testing.md` gets the row in Task 9).
 
 **Acceptance criteria:**
-- [ ] Fast tests cover class scanning (fixture dir tree), include patterns, selection argv +
+- [x] Fast tests cover class scanning (fixture dir tree), include patterns, selection argv +
       chunking, report aggregation to class verdicts.
-- [ ] Scale smoke runs a 2-class Maven fixture when mvn is installed; skips otherwise.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] Scale smoke runs a 2-class Maven fixture when mvn is installed; skips otherwise.
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ### Task 7: JVM sbt backend
 
