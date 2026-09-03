@@ -1,9 +1,9 @@
 ---
 id: ship-jvm-ruby-php-and-gdscript-continuous-testing-
 title: Ship JVM, Ruby, PHP, and GDScript continuous testing providers before v1.27.0
-status: active
+status: completed
 created: 2026-09-02T04:10:06.163Z
-updated: 2026-09-02T15:49:56.764Z
+updated: 2026-09-03T03:52:34.405Z
 tags:
   - continuous-testing
   - providers
