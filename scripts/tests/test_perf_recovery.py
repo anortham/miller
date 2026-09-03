@@ -923,6 +923,39 @@ class PerfRecoveryTests(unittest.TestCase):
         self.assertEqual(calls[0][0], calls[0][1])
         self.assertEqual("source-view", calls[0][2])
 
+    def test_source_changing_retry_isolation_copies_invariant_control_file(self) -> None:
+        live_family = self._family_root("source-live-family")
+        source_root = self.root / "source-root"
+        source_miller = source_root / ".miller"
+        source_miller.mkdir(parents=True)
+        source_control = source_miller / "invariant.julieignore"
+        source_control.write_text(".miller/\n.worktrees/\n", encoding="utf-8")
+        self._write_pointer_at(source_root, live_family, view_id="source-view")
+        request = self._request(source_root=source_root, live_store=live_family)
+        manifest_path = Path(__file__).resolve().parents[1] / "benchmarks" / "perf-recovery-workloads.json"
+        workload = dataclasses.replace(
+            perf_recovery.load_manifest(manifest_path)["producer.retry.identical"],
+            warmups=0,
+            runs=1,
+        )
+
+        def copy_family(source: Path, destination: Path, *, live_root: Path | None = None) -> None:
+            shutil.copytree(source, destination)
+
+        with mock.patch.object(
+            perf_recovery,
+            "_snapshot_helper_module",
+            return_value=SimpleNamespace(snapshot_family=copy_family),
+        ):
+            isolated, temporary = perf_recovery._isolated_request(request, source_changing=True)
+        try:
+            self.assertEqual("{change_root}", workload.command[workload.command.index("--root") + 1])
+            staged_control = isolated.change_root / ".miller" / "invariant.julieignore"
+            self.assertTrue(staged_control.is_file())
+            self.assertEqual(source_control.read_bytes(), staged_control.read_bytes())
+        finally:
+            temporary.cleanup()
+
     def test_retry_uses_one_generated_identity_across_attempts_and_avoids_history_conflict(self) -> None:
         live_family = self._family_root("live-family")
         source_root = self.root / "source-root"
