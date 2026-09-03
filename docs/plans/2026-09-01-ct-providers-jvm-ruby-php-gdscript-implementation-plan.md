@@ -536,7 +536,7 @@ remain unprovided — keep the honest inventory).
 **Acceptance criteria:**
 - [x] Framework table matches `ContinuousTestProviderFactory.CreateDefault` exactly.
 - [x] Every v1 bound and refusal is documented with its remedy.
-- [ ] Branch gate runs here: Release build, `scripts/test.sh scale` (skips recorded), win-test
+- [x] Branch gate runs here: Release build, `scripts/test.sh scale` (skips recorded), win-test
       fast suite. Ledger updated.
 - [x] Worker-scope verification passes and the change is committed per commit mode.
 

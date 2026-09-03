@@ -5,6 +5,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
+- [`findings/2026-09-03-v1.27.0-release-verification.md`](findings/2026-09-03-v1.27.0-release-verification.md) - v1.27.0 source-gate evidence; package validation, promotion, assets, checksums, release body, and published smoke remain pending.
+- [`plans/2026-09-01-ct-providers-jvm-ruby-php-gdscript-implementation-plan.md`](plans/2026-09-01-ct-providers-jvm-ruby-php-gdscript-implementation-plan.md) - implementation plan and final branch-gate ledger for JVM, Ruby, PHP, and GDScript CT providers.
 - [`findings/2026-08-31-v1.26.0-mcp-dogfood.md`](findings/2026-08-31-v1.26.0-mcp-dogfood.md) - live MCP dogfood of every tool on miller 1.26.0: numeric junk search, inspect continuation splice, insert newline glue, Description-example self-hits, class-level unresolved refs, and the broken registry rows.
 - [`findings/2026-08-28-miller-stale-view-cleanup.md`](findings/2026-08-28-miller-stale-view-cleanup.md) - exact cleanup of nine missing-root Miller family-store views: 12 views reduced to 3, 2.73 GB of per-view sidecars reclaimed, and the same impact graph workload improved about 30% while the 5-second gate remains open.
 - [`findings/2026-08-28-impact-read-path-spike.md`](findings/2026-08-28-impact-read-path-spike.md) - fixed impact replay and read-only SQL falsification: within/detail/resolver work dominates, the existing manifest visibility index is used, and a reference sidecar is rejected as the next change.
