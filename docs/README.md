@@ -5,7 +5,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
-- [`findings/2026-09-03-v1.27.1-release-verification.md`](findings/2026-09-03-v1.27.1-release-verification.md) - v1.27.1 release verification: exact Linux and Windows gates plus pending package validation, promotion, assets, and published-package smoke.
+- [`findings/2026-09-03-v1.27.1-release-verification.md`](findings/2026-09-03-v1.27.1-release-verification.md) - live v1.27.1 verification: exact Linux and Windows gates, exact-run validation and promotion, eight assets, four checksums, release-body equality, and published-package smoke.
 - [`release-notes/v1.27.1.md`](release-notes/v1.27.1.md) - current v1.27.1 patch notes: CT refreshes parameterized-test inventory before idle drain, and agent guidance prefers compact Miller output unless structured JSON is needed.
 - [`findings/2026-09-03-v1.27.0-release-verification.md`](findings/2026-09-03-v1.27.0-release-verification.md) - live v1.27.0 verification: exact-run validation and promotion, eight assets, four archive checksums, release-body match, and published Linux package smoke.
 - [`plans/2026-09-01-ct-providers-jvm-ruby-php-gdscript-implementation-plan.md`](plans/2026-09-01-ct-providers-jvm-ruby-php-gdscript-implementation-plan.md) - implementation plan and final branch-gate ledger for JVM, Ruby, PHP, and GDScript CT providers.
