@@ -956,6 +956,32 @@ class PerfRecoveryTests(unittest.TestCase):
         finally:
             temporary.cleanup()
 
+    def test_retry_isolation_copies_invariant_control_file_from_workspace_root(self) -> None:
+        source_root = self.root / "source-root"
+        source_miller = source_root / ".miller"
+        source_miller.mkdir(parents=True)
+        source_control = source_miller / "invariant.julieignore"
+        source_control.write_bytes(b"source-control\n")
+        workspace_control = self.workspace / ".miller" / "invariant.julieignore"
+        workspace_control.write_bytes(b"workspace-control\n")
+        request = self._request(source_root=source_root)
+
+        def copy_family(source: Path, destination: Path, *, live_root: Path | None = None) -> None:
+            shutil.copytree(source, destination)
+
+        with mock.patch.object(
+            perf_recovery,
+            "_snapshot_helper_module",
+            return_value=SimpleNamespace(snapshot_family=copy_family),
+        ):
+            isolated, temporary = perf_recovery._isolated_request(request, source_changing=False)
+        try:
+            staged_control = isolated.change_root / ".miller" / "invariant.julieignore"
+            self.assertTrue(staged_control.is_file())
+            self.assertEqual(workspace_control.read_bytes(), staged_control.read_bytes())
+        finally:
+            temporary.cleanup()
+
     def test_retry_uses_one_generated_identity_across_attempts_and_avoids_history_conflict(self) -> None:
         live_family = self._family_root("live-family")
         source_root = self.root / "source-root"

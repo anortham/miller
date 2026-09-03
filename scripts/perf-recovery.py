@@ -3321,10 +3321,9 @@ def _isolated_request(
         )
         isolated_miller = isolated_workspace / ".miller"
         isolated_miller.mkdir(parents=True, exist_ok=True)
-        if source_changing:
-            source_control = source_root / ".miller" / "invariant.julieignore"
-            if source_control.is_file():
-                shutil.copy2(source_control, isolated_miller / source_control.name)
+        clone_control = clone_root / ".miller" / "invariant.julieignore"
+        if clone_control.is_file():
+            shutil.copy2(clone_control, isolated_miller / clone_control.name)
         isolated_store = root / "store-family"
         if active.mode == "family":
             if source_changing:
