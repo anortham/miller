@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Miller.Testing;
 
 namespace Miller.Testing.Providers.Shared;
@@ -66,17 +67,12 @@ internal sealed record CtWorkspaceMirrorResult(
     string SourceMetadataDigest,
     bool SourceOwnedStateChanged);
 
-internal static class CtWorkspaceMirror
+internal static partial class CtWorkspaceMirror
 {
     private const string ManifestFileName = "manifest.json";
     private const string GitDirectoryName = ".git";
     private const int CopyAttempts = 3;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> SyncGates = new(StringComparer.Ordinal);
-    private static readonly JsonSerializerOptions ManifestJsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
-
     internal static CtWorkspaceMirrorResult Sync(
         ContinuousTestWorkspace workspace,
         string sourceRoot,
@@ -804,8 +800,9 @@ internal static class CtWorkspaceMirror
 
         try
         {
-            List<ManifestEntry>? manifestEntries = JsonSerializer.Deserialize<List<ManifestEntry>>(
-                File.ReadAllText(manifestPath), ManifestJsonOptions);
+            List<ManifestEntry>? manifestEntries = JsonSerializer.Deserialize(
+                File.ReadAllText(manifestPath),
+                CtWorkspaceMirrorJsonContext.Default.ListManifestEntry);
             Dictionary<string, ManifestEntry> entries = new(StringComparer.Ordinal);
             if (manifestEntries is null)
                 return entries;
@@ -878,7 +875,9 @@ internal static class CtWorkspaceMirror
         string tempPath = $"{manifestPath}.{Environment.ProcessId}.{Environment.CurrentManagedThreadId}.tmp";
         try
         {
-            File.WriteAllText(tempPath, JsonSerializer.Serialize(entries));
+            File.WriteAllText(
+                tempPath,
+                JsonSerializer.Serialize(entries, CtWorkspaceMirrorJsonContext.Default.IReadOnlyListManifestEntry));
             File.Move(tempPath, manifestPath, overwrite: true);
         }
         finally
@@ -1057,4 +1056,9 @@ internal static class CtWorkspaceMirror
         string? Hash,
         int? UnixMode,
         bool IsReadOnly);
+
+    [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
+    [JsonSerializable(typeof(List<ManifestEntry>))]
+    [JsonSerializable(typeof(IReadOnlyList<ManifestEntry>))]
+    private sealed partial class CtWorkspaceMirrorJsonContext : JsonSerializerContext;
 }

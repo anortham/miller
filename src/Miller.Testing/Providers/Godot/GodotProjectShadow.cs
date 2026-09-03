@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Miller.Testing;
 using Miller.Testing.Providers.Shared;
 
@@ -41,7 +42,7 @@ internal sealed record GodotProjectShadowResult(
     }
 }
 
-internal static class GodotProjectShadow
+internal static partial class GodotProjectShadow
 {
     internal const string ProjectCacheName = "godot-workspace";
     internal const string GodotHomeCacheName = "godot-home";
@@ -58,11 +59,6 @@ internal static class GodotProjectShadow
         BuildOwnedEntryNames: [".git", ".godot", ".miller-gut-results"],
         CreateGitBarrier: true,
         Integrity: CtWorkspaceMirrorIntegrity.MetadataFastPath);
-
-    private static readonly JsonSerializerOptions MarkerJsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
 
     internal static GodotProjectShadowResult Sync(
         ContinuousTestWorkspace workspace,
@@ -153,9 +149,9 @@ internal static class GodotProjectShadow
             return false;
         try
         {
-            marker = JsonSerializer.Deserialize<OverBudgetMarker>(
+            marker = JsonSerializer.Deserialize(
                 File.ReadAllText(path),
-                MarkerJsonOptions);
+                GodotProjectShadowJsonContext.Default.OverBudgetMarker);
             return marker is not null && !string.IsNullOrWhiteSpace(marker.SourceMetadataDigest);
         }
         catch (JsonException)
@@ -174,7 +170,9 @@ internal static class GodotProjectShadow
         string tempPath = $"{path}.{Environment.ProcessId}.{Environment.CurrentManagedThreadId}.tmp";
         try
         {
-            File.WriteAllText(tempPath, JsonSerializer.Serialize(marker));
+            File.WriteAllText(
+                tempPath,
+                JsonSerializer.Serialize(marker, GodotProjectShadowJsonContext.Default.OverBudgetMarker));
             File.Move(tempPath, path, overwrite: true);
         }
         finally
@@ -194,9 +192,9 @@ internal static class GodotProjectShadow
             return true;
         try
         {
-            ImportStamp? stamp = JsonSerializer.Deserialize<ImportStamp>(
+            ImportStamp? stamp = JsonSerializer.Deserialize(
                 File.ReadAllText(result.ImportStampPath),
-                MarkerJsonOptions);
+                GodotProjectShadowJsonContext.Default.ImportStamp);
             return stamp is null
                 || !string.Equals(stamp.SourceMetadataDigest, result.SourceMetadataDigest, StringComparison.Ordinal);
         }
@@ -280,7 +278,9 @@ internal static class GodotProjectShadow
 
     private static void WriteAtomic(string path, ImportStamp stamp)
     {
-        WriteAtomicText(path, JsonSerializer.Serialize(stamp));
+        WriteAtomicText(
+            path,
+            JsonSerializer.Serialize(stamp, GodotProjectShadowJsonContext.Default.ImportStamp));
     }
 
     private static void WriteAtomicText(string path, string contents)
@@ -325,4 +325,9 @@ internal static class GodotProjectShadow
     private sealed record OverBudgetMarker(string SourceMetadataDigest, long CandidateBytes);
 
     private sealed record ImportStamp(string SourceMetadataDigest, DateTimeOffset ImportedAtUtc);
+
+    [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
+    [JsonSerializable(typeof(OverBudgetMarker))]
+    [JsonSerializable(typeof(ImportStamp))]
+    private sealed partial class GodotProjectShadowJsonContext : JsonSerializerContext;
 }
