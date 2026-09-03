@@ -31,3 +31,4 @@ Task 9: fix round 1 (1 addressed, 0 open — corrected F# project execution vers
 Task 9: documentation slice complete (commits a5519146..206cab82, focused site test and diff check green, Lead scoped re-review clean; branch gate pending)
 Release audit correction: fix round 1 (parity oracle now models same-parent overload fallback at 0.4 with self-exclusion; synthetic RED/GREEN and 33 Reader + 12 Graph + 106 Trace tests passed; commits 206cab82..48a83fa1)
 Release audit correction: fix round 2 (self-exclusion mutation now covered by literal sibling/self assertions; 33 Reader tests passed; commits 48a83fa1..151ecace, Lead scoped re-review clean)
+Release audit correction: preservation branch reconciled path-by-path and five unique memory files restored; producer retry benchmark isolation now copies `.miller/invariant.julieignore`; focused test passed; lead commit b92ec7a7
