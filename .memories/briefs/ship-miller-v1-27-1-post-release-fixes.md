@@ -1,9 +1,9 @@
 ---
 id: ship-miller-v1-27-1-post-release-fixes
 title: Ship Miller v1.27.1 post-release fixes
-status: active
+status: completed
 created: 2026-09-03T15:25:07.865Z
-updated: 2026-09-03T15:25:07.865Z
+updated: 2026-09-03T15:55:36.955Z
 tags: []
 ---
 
