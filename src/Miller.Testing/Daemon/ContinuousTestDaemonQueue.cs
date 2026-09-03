@@ -265,7 +265,7 @@ public sealed class ContinuousTestDaemonQueue : IContinuousTestDaemonEnqueuer
                 FilterArguments: change.FilterArguments,
                 Command: change.Command,
                 Framework: change.Framework,
-                RefreshInventory: change.WorkspaceScope && !idleDrain,
+                RefreshInventory: change.WorkspaceScope,
                 ObservedAt: change.ObservedAt,
                 ReadyAt: change.ObservedAt + change.DebounceDelay)
             {

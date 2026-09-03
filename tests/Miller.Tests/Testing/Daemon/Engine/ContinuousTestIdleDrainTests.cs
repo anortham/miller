@@ -134,7 +134,11 @@ public sealed class ContinuousTestIdleDrainTests : IDisposable
         store.PutTestCase(EngineTestSupport.Case("test:other", workspace.ProjectPath, "tests/OtherTests.cs"));
         CommitOutcome(store, "test:app", 3, "passed");
         CommitOutcome(store, "test:other", 2, "passed");
-        var provider = new FakeContinuousTestProvider { RunResult = Passed("test:other", "3") };
+        var provider = new FakeContinuousTestProvider
+        {
+            DiscoverCases = [ProviderCase("test:other", "tests/OtherTests.cs")],
+            RunResult = Passed("test:other", "3"),
+        };
         ContinuousTestDaemonQueue queue = Queue(store, provider, revision: 3);
 
         ContinuousTestDaemonEnqueueResult result = queue.EnqueueIdleDrain(DrainChange(workspace));
@@ -160,7 +164,11 @@ public sealed class ContinuousTestIdleDrainTests : IDisposable
         store.PutTestCase(EngineTestSupport.Case("test:other", workspace.ProjectPath, "tests/OtherTests.cs"));
         CommitOutcome(store, "test:app", 2, "passed");
         CommitOutcome(store, "test:other", 2, "passed");
-        var provider = new FakeContinuousTestProvider { RunResult = Passed("test:app", "3") };
+        var provider = new FakeContinuousTestProvider
+        {
+            DiscoverCases = [ProviderCase("test:app"), ProviderCase("test:other", "tests/OtherTests.cs")],
+            RunResult = Passed("test:app", "3"),
+        };
         ContinuousTestDaemonQueue queue = Queue(store, provider, revision: 3);
 
         ContinuousTestDaemonEnqueueResult result = queue.EnqueueIdleDrain(DrainChange(workspace));
@@ -178,13 +186,45 @@ public sealed class ContinuousTestIdleDrainTests : IDisposable
     }
 
     [Fact]
+    public async Task A_workspace_idle_drain_refreshes_stale_provider_inventory_before_execution()
+    {
+        var workspace = EngineTestSupport.Workspace(_root);
+        using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
+        store.PutTestCase(EngineTestSupport.Case("test:old", workspace.ProjectPath));
+        CommitOutcome(store, "test:old", 2, "passed");
+        var provider = new FakeContinuousTestProvider
+        {
+            DiscoverCases =
+            [
+                new ProviderTestCase(
+                    "test:new",
+                    "test:new",
+                    "test:new",
+                    "test:new",
+                    SourcePath: "tests/NewTests.cs"),
+            ],
+            RunResult = Passed("test:new", "3"),
+        };
+        ContinuousTestDaemonQueue queue = Queue(store, provider, revision: 3);
+
+        queue.EnqueueIdleDrain(DrainChange(workspace));
+
+        IReadOnlyList<ContinuousTestDaemonDrainResult> drained =
+            await queue.DrainReadyAsync(T0, TestContext.Current.CancellationToken);
+
+        Assert.Single(drained);
+        ContinuousTestProviderRunRequest run = Assert.Single(provider.RunRequests);
+        Assert.Equal(["test:new"], run.TestCaseIds);
+    }
+
+    [Fact]
     public async Task An_idle_drain_never_reruns_an_unstamped_red()
     {
         var workspace = EngineTestSupport.Workspace(_root);
         using var store = new ContinuousTestStore(CtSchema.DbPathFor(_root));
         store.PutTestCase(EngineTestSupport.Case("test:app", workspace.ProjectPath));
         CommitOutcome(store, "test:app", 3, "failed");
-        var provider = new FakeContinuousTestProvider();
+        var provider = new FakeContinuousTestProvider { DiscoverCases = [ProviderCase("test:app")] };
         ContinuousTestDaemonQueue queue = Queue(store, provider, revision: 3);
 
         ContinuousTestDaemonEnqueueResult result = queue.EnqueueIdleDrain(DrainChange(workspace));
@@ -205,7 +245,11 @@ public sealed class ContinuousTestIdleDrainTests : IDisposable
             EngineTestSupport.WorkspaceId,
             ["test:app"],
             new CtFreshnessKey(EngineTestSupport.Identity, 3));
-        var provider = new FakeContinuousTestProvider { RunResult = Passed("test:app", "3") };
+        var provider = new FakeContinuousTestProvider
+        {
+            DiscoverCases = [ProviderCase("test:app")],
+            RunResult = Passed("test:app", "3"),
+        };
         ContinuousTestDaemonQueue queue = Queue(store, provider, revision: 3);
 
         ContinuousTestDaemonEnqueueResult result = queue.EnqueueIdleDrain(DrainChange(workspace));
@@ -246,7 +290,11 @@ public sealed class ContinuousTestIdleDrainTests : IDisposable
             EngineTestSupport.WorkspaceId,
             ["test:app"],
             new CtFreshnessKey(EngineTestSupport.Identity, 3));
-        var provider = new FakeContinuousTestProvider { RunResult = Passed("test:app", "3") };
+        var provider = new FakeContinuousTestProvider
+        {
+            DiscoverCases = [ProviderCase("test:app")],
+            RunResult = Passed("test:app", "3"),
+        };
         ContinuousTestDaemonQueue queue = Queue(store, provider, revision: 3);
         var source = new ScriptedRevisionSource();
         source.Observations.Enqueue(Observation(3));
@@ -329,6 +377,9 @@ public sealed class ContinuousTestIdleDrainTests : IDisposable
             store,
             EngineTestSupport.Selector(store, revision: revision),
             new ContinuousTestCoordinator(provider, store));
+
+    private static ProviderTestCase ProviderCase(string id, string sourcePath = "tests/AppTests.cs") =>
+        new(id, id, id, id, SourcePath: sourcePath);
 
     private static ContinuousTestRevisionObservation Observation(long revision) =>
         new(
