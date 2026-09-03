@@ -96,6 +96,7 @@ public sealed class AgentInstructionsTests
     public void Load_PinsBehavioralAdoptionLanguage()
     {
         string instructions = AgentInstructions.Load();
+        Assert.Contains("Use compact output by default. Request format=json only when you need machine-readable fields or chaining; extract only the fields you need.", instructions);
         Assert.Contains("One Miller call beats shell greps and full-file reads", instructions);
         Assert.Contains("Structure before content", instructions);
         Assert.Contains("Impact before changing", instructions);

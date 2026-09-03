@@ -41,6 +41,15 @@ test('routing block fits the hook context budget', () => {
   );
 });
 
+test('routing block states the compact output default', () => {
+  const block = readNormalized(ROUTING_BLOCK_PATH);
+
+  assert.ok(
+    block.includes('Use compact output by default. Request format=json only when you need machine-readable fields or chaining; extract only the fields you need.'),
+    `${ROUTING_BLOCK_PATH} should state the compact output default`,
+  );
+});
+
 test('routing block routes every tool the way the instruction core does', () => {
   const block = readNormalized(ROUTING_BLOCK_PATH);
   const core = readNormalized(INSTRUCTION_CORE_PATH);

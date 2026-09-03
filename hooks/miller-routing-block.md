@@ -1,6 +1,6 @@
 # Miller — this workspace's code-intelligence server
 
-Miller serves a fresh, structured index of this workspace's code. One Miller call beats shell greps and full-file reads: ranked, structured, fewer tokens.
+Miller serves a fresh index of this workspace's code. One Miller call beats shell greps and full-file reads.
 
 ## Rules
 
@@ -28,3 +28,5 @@ Miller serves a fresh, structured index of this workspace's code. One Miller cal
   answer, run the tests. Enable only for ongoing verdicts; start is explicit.
 
 Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
+
+Use compact output by default. Request format=json only when you need machine-readable fields or chaining; extract only the fields you need.
