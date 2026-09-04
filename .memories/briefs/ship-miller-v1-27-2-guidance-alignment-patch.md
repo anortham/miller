@@ -1,9 +1,9 @@
 ---
 id: ship-miller-v1-27-2-guidance-alignment-patch
 title: Ship Miller v1.27.2 guidance-alignment patch
-status: active
+status: completed
 created: 2026-09-04T12:47:23.045Z
-updated: 2026-09-04T12:47:23.045Z
+updated: 2026-09-04T13:10:30.495Z
 tags:
   - release
   - v1.27.2
