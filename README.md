@@ -56,6 +56,8 @@ codex
 
 Cursor: install Miller from the Cursor plugin marketplace.
 
+Antigravity: add Miller to `~/.gemini/config/mcp_config.json` (or via **Settings > MCP Servers** in the UI) with `command` pointing to your `miller` binary and `args: ["serve"]`.
+
 Then ask your agent to search, inspect, or trace something. For a user-level GUI client, call
 `workspace operation=list`; if the project is absent, call `workspace operation=open path=/absolute/project`,
 then pass the returned `workspace_id` on every workspace-bound call. To watch tests, ask the agent to enable
@@ -72,7 +74,7 @@ Every other install path is covered step by step in [docs/install.md](docs/insta
 - **Source checkout (development):** needs the .NET 10 SDK, then
   `bash scripts/restore-julie-extract.sh && dotnet build Miller.slnx -c Release`.
 
-The minimal MCP config for clients you configure by hand:
+The minimal MCP config for clients you configure by hand (such as Antigravity in `~/.gemini/config/mcp_config.json`):
 
 ```json
 {
@@ -118,15 +120,16 @@ byte-identical.
 Installing the MCP server does not guarantee an agent will use it. Newer harnesses defer MCP tool
 schemas behind on-demand tool search, so Miller's tools may not be in the model's context when it picks
 an exploration strategy, and the built-in grep and read tools always are. The reliable fix is a short
-routing block in instructions the model always sees: `CLAUDE.md` for Claude Code, `AGENTS.md` for
-Codex, or a Cursor rule.
+routing block in instructions the model always sees: `CLAUDE.md` for Claude Code, `AGENTS.md` (or `GEMINI.md`) for
+Codex and Antigravity, or a Cursor rule.
 
 ```bash
 miller rules --harness cursor > .cursor/rules/miller.mdc
 ```
 
 `miller rules --harness <name>` prints the block framed for that harness's rules file
-(`cursor`, `windsurf`, `cline`, `kiro`, `copilot`, `agents`). The Claude Code and Codex plugins inject
+(`cursor`, `windsurf`, `cline`, `kiro`, `copilot`, `agents`). For Antigravity, use `--harness agents` to write
+`AGENTS.md` or `GEMINI.md`. The Claude Code and Codex plugins inject
 the same guidance automatically at session start through a `SessionStart` hook; set
 `MILLER_SESSION_HOOKS=0` to opt out. To paste the block by hand, copy it from
 [docs/agent-setup-snippet.md](docs/agent-setup-snippet.md).
@@ -326,7 +329,7 @@ files, and relationships into SQLite; embeddings come from the pinned `julie-sem
 Miller is the pure-.NET host on top:
 
 ```
-MCP client (Claude Code / Cursor / Codex)
+MCP client (Claude Code / Cursor / Codex / Antigravity)
         │ stdio / MCP
         ▼
   Miller.Server      MCP host + CLI + telemetry
