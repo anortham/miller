@@ -15,9 +15,14 @@
   `ServerInstructions`. Six rules + a one-line tool list. Never let it grow past ~1,900 chars.
 - **Success-path nudges** — each read tool appends a one-line `next: <call>` hint on success so the next step is
   discoverable without reading this doc.
+- **Session-start routing block** — `hooks/miller-routing-block.md`, injected by the plugin's `SessionStart` and
+  `SubagentStart` hooks and printed by `miller rules --harness <name>`; the canonical copy of the always-in-context
+  rules, mirrored verbatim in [`agent-setup-snippet.md`](agent-setup-snippet.md).
 - **Plugin skills** — `miller-orientation`, `miller-explore-area`, `miller-impact-analysis`, `miller-editing`,
   `miller-search-debug`, `miller-text-audit`, `miller-cross-workspace`, `miller-bridge-trace`, `miller-large-file`,
-  and `miller-web-research` carry per-workflow depth for plugin users.
+  `miller-web-research`, `miller-patterns-audit`, `miller-metrics-audit`, `handoff-out`, and `handoff-in` carry
+  per-workflow depth for plugin users. Source of truth is `.agents/skills/`; `scripts/sync-plugin-skills.sh`
+  mirrors it into `skills/`.
 - **This reference** — the complete workflow catalog, the subagent primer, and per-tool parameter detail, for
   everyone via the repo.
 
@@ -94,8 +99,16 @@ calls and optional only for the CLI.
   repeated or `;`-joined; also `path`, `language`, `group_by`, `facet`, `workspace_id`, `ensure_fresh`. List and
   no-match results include `next_actions`; search adds `near_matches` and `empty_reason`.
 - **`workspace`** — index lifecycle: `status`, `health`, `onboarding`, `refresh`, `full`, `list`, `open`, `remove`,
-  `leader`, `dashboard` (start/reuse the loopback dashboard). `status`, `health`, `onboarding`, `leader`, `refresh`,
-  `full`, and `remove` accept `workspace_id` or `path`; `list` shows the registry (`filter`/`limit`).
+  `prune`, `leader`, `dashboard` (start/reuse the loopback dashboard). `status`, `health`, `onboarding`, `leader`,
+  `refresh`, `full`, and `remove` accept `workspace_id` or `path`; `list` shows the registry (`filter`/`limit`);
+  `prune` (`dry_run=true` first) drops registry rows whose roots are gone.
+- **`tests`** — continuous testing (CT), opt-in per workspace. `operation=status` (default) is a cheap read that
+  creates nothing and starts nothing: per-project verdict, stale and red counts, and — when CT is off —
+  `enabled: false` plus the test projects it found. `failures` pages red cases (`project`, `group=error_class`,
+  `limit`/`offset`). `run` executes only the stale and red set as an explicit test-ID list; `wait=true` blocks
+  for the verdict (`wait_seconds`, max 240). `enable`/`disable` opt a project in or out (`project` scopes one);
+  `start` is the only daemon spawn and `stop` ends it. `MILLER_CT=off` is the permanent zero-work switch.
+  Operating doc: [`continuous-testing.md`](continuous-testing.md).
 
 ## Workflows
 
@@ -133,6 +146,10 @@ calls and optional only for the CLI.
   cache directories for dashboard files.
 - **Scope a change**: `impact` (no args) for the current working-tree diff, or `impact target=…` for a planned
   edit → run the tests it lists → `edit` (preview) → `edit apply=true` → re-run `impact` if the surface changed.
+- **Verify with continuous testing**: after an edit, `tests operation=status`. When CT is enabled it names the
+  cases the edit staled; `tests operation=run wait=true` executes only those and returns the verdict. When status
+  reports `enabled: false`, run the tests `impact` listed with the project's runner; use `tests operation=enable`
+  then `tests operation=start` only when the user wants ongoing verdicts (start is the one daemon spawn).
 - **Edit a symbol**: `inspect` it → `edit …` (preview, the default) → `edit … apply=true`.
 - **Localized text edit**:
   `edit replace_text target=<file> old_text=<known-old> new_text=<new> match_mode=auto query=<nearby>`; add
@@ -162,9 +179,10 @@ modify code, paste this block into its prompt so it reaches for Miller before ra
     - trace(target, mode?, to?, scope?, reference_kind?) before manual file hopping; use refs for usages and scope for ambiguous names. mode=path no-path means not proven unrelated; mode=bridge is provider-scoped to `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, and `backend-http`.
     - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits; use match_mode=auto with query/anchor/line for localized replace_text.
-    - content(import|add_markdown|search|read|list|remove|export, ...) for logs, web markdown, and audits; use workspace_id=all for audits and pass hit workspace_id on reads.
+    - content(import|add_markdown|search|read|shape|list|remove, ...) for logs, web markdown, and audits; use workspace_id=all for audits and pass hit workspace_id on reads.
     - patterns(operation?, pattern_id?, query?, where?, path?, language?, group_by?, facet?) for code-shape facts.
-    - workspace(status|health|onboarding|leader|refresh|full|list|open|remove|dashboard) for readiness, leader diagnostics/handoff, refresh, other repos, onboarding, or dashboard with operation=dashboard.
-    Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.
+    - tests(status|failures|run|enable|disable|start|stop) for continuous-test verdicts: status is cheap and starts nothing; run wait=true executes only the cases your edit staled; when status says enabled=false use the project's test runner.
+    - workspace(status|health|onboarding|leader|refresh|full|list|open|remove|prune|dashboard) for readiness, leader diagnostics/handoff, refresh, other repos, onboarding, or dashboard with operation=dashboard.
+    Every workspace-bound call takes workspace_id from workspace(list) or workspace(open, path=...). Prefer a Miller call over Glob/Read/Grep chains whenever one fits: it returns targeted context in 1-2 calls.
 
-Do not use `grep`/`find`/`rg` when a Miller tool fits. Do not read a whole file before `inspect`.
+Prefer a Miller tool over `grep`/`find`/`rg` whenever one fits, and `inspect` a file before reading it whole.

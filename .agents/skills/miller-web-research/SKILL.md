@@ -47,6 +47,8 @@ PY
 miller content add-markdown "$tmp" --url "$url" --display-path "$title" --json
 ```
 
+MCP equivalent for the import step: `content(operation="add_markdown", path="<tmp>", url="<url>", display_path="<title>")`.
+
 ## Search And Read
 
 Search only imported web content:

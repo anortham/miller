@@ -12,21 +12,12 @@ Read a Miller handoff packet, validate it against the current workspace, and pro
 
 ## Workspace targeting (required)
 
-Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
-workspace from the launch directory, environment variables, MCP Roots, or a previous call.
-
-```text
-workspace(operation="list")
-workspace(operation="open", path="/absolute/project")
-```
-
-Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
-`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
-`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
-
-`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
-`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
-`current` and `primary` are CLI-only selectors; MCP refuses them.
+Every workspace-bound Miller MCP call names its target with `workspace_id`; Miller never infers it from the
+launch directory, environment variables, MCP Roots, or a previous call. Get the ID from
+`workspace(operation="list")`, or from `workspace(operation="open", path="/absolute/project")` when the repo is
+absent. The examples below write it as `workspace_id="<id>"`. Only `workspace` `list`, `open`, `remove`,
+`prune`, and `dashboard` run without one; `current` and `primary` are CLI-only. The full targeting rules live
+in the `miller-orientation` skill.
 
 ## Inputs
 

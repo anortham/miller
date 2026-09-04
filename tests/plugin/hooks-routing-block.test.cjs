@@ -9,7 +9,10 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 
 const ROUTING_BLOCK_PATH = 'hooks/miller-routing-block.md';
 const INSTRUCTION_CORE_PATH = 'src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md';
-const ROUTING_BLOCK_MAX_CHARS = 3000;
+const SETUP_SNIPPET_PATH = 'docs/agent-setup-snippet.md';
+// Self-imposed ceiling (hook additionalContext is not client-truncated the way ServerInstructions is).
+// Raised 3000 -> 3300 on 2026-09-03 when the block gained the mandatory workspace_id rule and the CT workflow.
+const ROUTING_BLOCK_MAX_CHARS = 3300;
 const BARE_NOT_SHOUTING = /\b(do NOT|Never use|MANDATORY|BLOCKED)\b/;
 
 // The instruction core is budget-trimmed to fragments (ADR-0001; ≤1,900 chars), so each file keeps
@@ -95,4 +98,22 @@ test('routing block redirects affirmatively instead of shouting bare prohibition
     null,
     `${ROUTING_BLOCK_PATH} should name the better tool instead of shouting "${match?.[0]}"`,
   );
+});
+
+test('setup snippet carries the routing block verbatim', () => {
+  const block = readNormalized(ROUTING_BLOCK_PATH).trim();
+  const snippet = readNormalized(SETUP_SNIPPET_PATH);
+
+  assert.ok(
+    snippet.includes(block),
+    `${SETUP_SNIPPET_PATH} must embed ${ROUTING_BLOCK_PATH} byte-for-byte; regenerate the fenced block from the hook file`,
+  );
+});
+
+test('routing block names the mandatory workspace_id and the continuous-testing workflow', () => {
+  const block = readNormalized(ROUTING_BLOCK_PATH);
+
+  for (const anchor of ['workspace_id', 'workspace list', 'workspace open path=/absolute/project', 'enabled: false', 'run wait=true']) {
+    assert.ok(block.includes(anchor), `${ROUTING_BLOCK_PATH} should say "${anchor}"`);
+  }
 });

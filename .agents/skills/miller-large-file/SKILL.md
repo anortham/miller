@@ -7,20 +7,29 @@ description: Use when an agent needs to inspect, search, or quote a large text f
 
 Use Miller's `content` tool instead of `cat`, full-file reads, or broad shell output when a text file may be large enough to waste context.
 
+## Workspace targeting (required)
+
+Every workspace-bound Miller MCP call names its target with `workspace_id`; Miller never infers it from the
+launch directory, environment variables, MCP Roots, or a previous call. Get the ID from
+`workspace(operation="list")`, or from `workspace(operation="open", path="/absolute/project")` when the repo is
+absent. The examples below write it as `workspace_id="<id>"`. Only `workspace` `list`, `open`, `remove`,
+`prune`, and `dashboard` run without one; `current` and `primary` are CLI-only. The full targeting rules live
+in the `miller-orientation` skill.
+
 ## Workflow
 
 1. Import the file:
-   - MCP: `content(operation: "import", path: "/absolute/path/to/file")`
+   - MCP: `content(workspace_id="<id>", operation="import", path="/absolute/path/to/file")`
    - CLI: `miller content import /absolute/path/to/file`
 2. Search it:
-   - MCP: `content(operation: "search", query: "error text")`
+   - MCP: `content(workspace_id="<id>", operation="search", query="error text")`
    - CLI: `miller content search "error text"`
 3. Read only bounded windows:
-   - MCP: `content(operation: "read", source_id: "...", line: 120, context_lines: 10)`
+   - MCP: `content(workspace_id="<id>", operation="read", source_id="...", line=120, context_lines=10)`
    - CLI: `miller content read --source-id ... --line 120 --context-lines 10`
 4. List or remove imported sources when needed:
-   - MCP: `content(operation: "list")`
-   - MCP: `content(operation: "remove", source_id: "...")`
+   - MCP: `content(workspace_id="<id>", operation="list")`
+   - MCP: `content(workspace_id="<id>", operation="remove", source_id="...")`
 
 ## Rules
 

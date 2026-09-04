@@ -3,7 +3,7 @@ name: miller-orientation
 description: Use when starting a Miller task, choosing a Miller tool, or choosing a Miller search mode.
 user-invocable: true
 arguments: "<what you want to find or do>"
-allowed-tools: mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__trace, mcp__miller__impact, mcp__miller__workspace, mcp__miller__patterns, mcp__miller__content, mcp__miller__edit
+allowed-tools: mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__trace, mcp__miller__impact, mcp__miller__workspace, mcp__miller__patterns, mcp__miller__content, mcp__miller__edit, mcp__miller__tests
 ---
 
 # Miller Orientation
@@ -60,6 +60,8 @@ workspace(workspace_id="<id>", operation="refresh")
 | How does A reach B | `trace(target="A", mode="path", to="B")` |
 | Where is this name referenced | `trace(target="<symbol>", mode="refs")` |
 | Scope a refactor / choose tests | `impact(target="...")` or `impact(git=true)` |
+| See which tests my edit staled and their verdict (CT) | `tests(operation="status")` — cheap, starts nothing |
+| Run only the tests my edit staled (CT enabled) | `tests(operation="run", wait=true)` |
 | Make a localized existing-file text edit | `edit(operation="replace_text", target="<file>", old_text="<known-old>", new_text="<new>", match_mode="auto", query="<nearby text>")` |
 | Prepare a handoff to another harness/model | Use the `handoff-out` skill |
 | Resume from a handoff packet | Use the `handoff-in` skill |
@@ -77,6 +79,8 @@ workspace(workspace_id="<id>", operation="refresh")
 - `patterns` list and no-match results include `Next:` / JSON `next_actions`; run `patterns(operation="list")` before raw route/HTML/JSON/YAML/Markdown greps.
 - `trace mode=bridge` is provider-scoped to `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, and `backend-http`; on another stack use `mode=refs`/`path`, and use `inspect depth=full` for callers and callees.
 - Symbol search ranks `name + signature` only; docs/literals/broad source text need the row above.
+- `tests` is opt-in per workspace. `enabled: false` in status lists the test projects it found; run those with
+  the project's test runner for a one-off answer. `enable` then `start` only when you want ongoing verdicts.
 - Use `edit` for localized text changes when `query`, `anchor`, or `line` can avoid a full-file read; use normal patching for broad multi-hunk edits.
 
 ## Report

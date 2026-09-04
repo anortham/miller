@@ -3,7 +3,7 @@ name: miller-impact-analysis
 description: Use when assessing blast radius with Miller, choosing tests for a change, answering who uses a symbol, or planning a refactor.
 user-invocable: true
 arguments: "<symbol, file path, diff, or change target>"
-allowed-tools: mcp__miller__impact, mcp__miller__search, mcp__miller__inspect, mcp__miller__trace, mcp__miller__context, mcp__miller__workspace
+allowed-tools: mcp__miller__impact, mcp__miller__search, mcp__miller__inspect, mcp__miller__trace, mcp__miller__context, mcp__miller__workspace, mcp__miller__tests
 ---
 
 # Miller Impact Analysis
@@ -12,21 +12,12 @@ Use Miller's graph-backed `impact` tool before refactors or shared behavior chan
 
 ## Workspace targeting (required)
 
-Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
-workspace from the launch directory, environment variables, MCP Roots, or a previous call.
-
-```text
-workspace(operation="list")
-workspace(operation="open", path="/absolute/project")
-```
-
-Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
-`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
-`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
-
-`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
-`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
-`current` and `primary` are CLI-only selectors; MCP refuses them.
+Every workspace-bound Miller MCP call names its target with `workspace_id`; Miller never infers it from the
+launch directory, environment variables, MCP Roots, or a previous call. Get the ID from
+`workspace(operation="list")`, or from `workspace(operation="open", path="/absolute/project")` when the repo is
+absent. The examples below write it as `workspace_id="<id>"`. Only `workspace` `list`, `open`, `remove`,
+`prune`, and `dashboard` run without one; `current` and `primary` are CLI-only. The full targeting rules live
+in the `miller-orientation` skill.
 
 ## Workflow
 
@@ -59,6 +50,17 @@ trace(workspace_id="<id>", target="<source>", mode="path", to="<sink>")
 ```
 
 4. If `impact` reports likely tests, treat that list as the starting verification set. Add broader tests when the touched surface is shared infrastructure or cross-workspace behavior.
+
+5. After the edit lands, check continuous testing (CT) before reaching for the whole suite:
+
+```text
+tests(workspace_id="<id>", operation="status")
+tests(workspace_id="<id>", operation="run", wait=true)
+```
+
+`status` is cheap and starts nothing. When CT is enabled it names the cases the edit staled and their last
+verdict; `run` executes only that stale set. When status reports `enabled: false`, run the likely tests from step
+4 with the project's test runner instead.
 
 ## Risk Tiers
 

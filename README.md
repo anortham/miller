@@ -129,8 +129,9 @@ miller rules --harness cursor > .cursor/rules/miller.mdc
 
 `miller rules --harness <name>` prints the block framed for that harness's rules file
 (`cursor`, `windsurf`, `cline`, `kiro`, `copilot`, `agents`). For Antigravity, use `--harness agents` to write
-`AGENTS.md` or `GEMINI.md`. The Claude Code and Codex plugins inject
-the same guidance automatically at session start through a `SessionStart` hook; set
+`AGENTS.md` or `GEMINI.md`. The Claude Code plugin injects
+the same guidance automatically at session start through a `SessionStart` hook (the Codex plugin ships the
+same hook; see [docs/install.md](docs/install.md) for the current Codex hook limitation); set
 `MILLER_SESSION_HOOKS=0` to opt out. To paste the block by hand, copy it from
 [docs/agent-setup-snippet.md](docs/agent-setup-snippet.md).
 

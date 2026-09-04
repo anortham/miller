@@ -321,12 +321,17 @@ erode:
 
 ## Guidance delivery channels
 
-- Three channels with distinct jobs: the embedded
+- Five channels with distinct jobs: the embedded
   [`MILLER_AGENT_INSTRUCTIONS.md`](src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md) core is the
   discovery contract (≤1,900 chars — clients truncate `ServerInstructions` silently); tool
   `[Description]`s are the usage contracts (budgets gated in `AgentInstructionsTests`); one-line
-  `NextStepHint` nudges are compact-only. Do not grow the budgets without reading
-  [ADR-0001](docs/adr/ADR-0001-guidance-delivery-channels.md).
+  `NextStepHint` nudges are compact-only; the session-start routing block
+  [`hooks/miller-routing-block.md`](hooks/miller-routing-block.md) is the always-in-context rule set
+  (hook-injected, printed by `miller rules`, mirrored verbatim in `docs/agent-setup-snippet.md`; gated by
+  `tests/plugin/hooks-routing-block.test.cjs`); the `miller-*`/`handoff-*` skills carry workflow depth
+  (edit `.agents/skills/`, then `scripts/sync-plugin-skills.sh`; `plugin-manifest.test.cjs` gates the
+  mirror). Every channel must teach the same workspace_id and CT rules. Do not grow the budgets
+  without reading [ADR-0001](docs/adr/ADR-0001-guidance-delivery-channels.md).
 - Empty-result cross-tool handoffs come from the one decision table
   [`CrossToolHandoff`](src/Miller.Server/Tools/CrossToolHandoff.cs) and must be
   `ToolDiagnosticAction.CompactOnly` (JSON `next_actions` stays byte-identical). A handoff must be

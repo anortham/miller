@@ -51,10 +51,14 @@ public sealed class TestsTool
 
     [McpServerTool(Name = "tests")]
     [Description(
-        "Read continuous-test status (cheap: starts nothing). start is the only daemon start; enable is opt-in. " +
-        "Operations: status (default), failures, start, stop, enable, disable, run. Compact adds a next-step line; " +
-        "JSON is unchanged. NOT for: finding which tests a change would affect (impact) or running your inner-loop " +
-        "suite (use your test runner). Example: tests operation=status.")]
+        "Continuous testing (CT) for this workspace: which cases a change staled and their last verdict. Opt-in " +
+        "per workspace. Operations: status (default; cheap, starts nothing) reports the per-project verdict with " +
+        "stale and red counts, or enabled=false plus the test projects found when CT is off; failures lists red " +
+        "cases; run executes only the stale and red set as an explicit test-ID list (wait=true blocks for the " +
+        "verdict); start is the only daemon spawn, stop ends it; enable/disable opt a project in or out. Compact " +
+        "adds a next-step line; JSON is unchanged. NOT for: predicting which tests a change affects (impact) or a " +
+        "one-off inner-loop run when CT is off (use your test runner). Example: tests operation=status, then " +
+        "tests operation=run wait=true after an edit.")]
     public string Tests(
         [Description("status|failures|start|stop|enable|disable|run. Default status. status starts nothing; start is the only spawn.")]
         string operation = "status",

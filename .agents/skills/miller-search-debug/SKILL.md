@@ -12,21 +12,12 @@ Diagnose search behavior by checking the query mode, index freshness, projection
 
 ## Workspace targeting (required)
 
-Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
-workspace from the launch directory, environment variables, MCP Roots, or a previous call.
-
-```text
-workspace(operation="list")
-workspace(operation="open", path="/absolute/project")
-```
-
-Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
-`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
-`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
-
-`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
-`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
-`current` and `primary` are CLI-only selectors; MCP refuses them.
+Every workspace-bound Miller MCP call names its target with `workspace_id`; Miller never infers it from the
+launch directory, environment variables, MCP Roots, or a previous call. Get the ID from
+`workspace(operation="list")`, or from `workspace(operation="open", path="/absolute/project")` when the repo is
+absent. The examples below write it as `workspace_id="<id>"`. Only `workspace` `list`, `open`, `remove`,
+`prune`, and `dashboard` run without one; `current` and `primary` are CLI-only. The full targeting rules live
+in the `miller-orientation` skill.
 
 ## Workflow
 
@@ -55,7 +46,7 @@ search(workspace_id="<id>", query="<known area>", file_pattern="src/ui/**", lang
 - Natural-language search hides test code by default; use `exclude_tests=false` when tests are expected.
 - Symbol search ranks `name + signature`; docs/prose belong in `mode=content`.
 - Source bodies belong in `mode=source`; imported logs/reports and web markdown belong in `mode=external` or `mode=web`.
-- Cross-workspace exact-text audits should use `content search "<term>" --workspace-id all --kind source|docs|config|external_file|web`.
+- Cross-workspace exact-text audits should use `content(operation="search", workspace_id="all", query="<term>", content_kind="source|docs|config|external_file|web")` (the `miller-text-audit` skill).
 - Comment, doc-comment, and string-literal searches require region indexing and a fresh sidecar.
 - File/path queries should use `mode=file` when auto mode looks noisy.
 - Scoped workflows should use `file_pattern` and `language` before raising `limit`.

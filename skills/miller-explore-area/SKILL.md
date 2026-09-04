@@ -12,21 +12,12 @@ Use Miller's indexed context before raw file reads. The goal is to identify the 
 
 ## Workspace targeting (required)
 
-Every workspace-bound Miller MCP call must name its target with `workspace_id`. Miller does not infer the
-workspace from the launch directory, environment variables, MCP Roots, or a previous call.
-
-```text
-workspace(operation="list")
-workspace(operation="open", path="/absolute/project")
-```
-
-Use the ID those return on every `search`, `inspect`, `context`, `trace`, `impact`, `edit`, `patterns`,
-`content`, and `tests` call, and on every scoped `workspace` operation (`status`, `health`, `onboarding`,
-`refresh`, `full`, `leader`). The examples below write it as `workspace_id="<id>"`.
-
-`workspace` `list`, `open`, `remove`, `prune`, and `dashboard` need no ID.
-`content(operation="search", workspace_id="all")` stays the read-only cross-workspace text audit.
-`current` and `primary` are CLI-only selectors; MCP refuses them.
+Every workspace-bound Miller MCP call names its target with `workspace_id`; Miller never infers it from the
+launch directory, environment variables, MCP Roots, or a previous call. Get the ID from
+`workspace(operation="list")`, or from `workspace(operation="open", path="/absolute/project")` when the repo is
+absent. The examples below write it as `workspace_id="<id>"`. Only `workspace` `list`, `open`, `remove`,
+`prune`, and `dashboard` run without one; `current` and `primary` are CLI-only. The full targeting rules live
+in the `miller-orientation` skill.
 
 ## Workflow
 
@@ -61,7 +52,9 @@ search(workspace_id="<id>", query="<imported log or web phrase>", mode="external
 search(workspace_id="<id>", query="<comment or literal>", regions="comment|string_literal|doc_comment")
 ```
 
-For audits across registered workspaces, use `content search "<term>" --workspace-id all --kind source|docs|config|external_file|web` and bounded `content read` windows before escalating to broader context.
+For exact-text audits across registered workspaces, use
+`content(operation="search", workspace_id="all", query="<term>", content_kind="source|docs|config|external_file|web")`
+and bounded `content(operation="read", ...)` windows (the `miller-text-audit` skill) before escalating to broader context.
 
 `context` integration from content hits remains opt-in: use it only when the user asks for surrounding code context after an audit or text-search hit.
 

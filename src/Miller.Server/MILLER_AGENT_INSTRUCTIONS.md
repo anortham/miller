@@ -25,7 +25,7 @@ Use compact output by default. Request format=json only when you need machine-re
 - inspect — named file/symbol.
 - patterns — extracted routes/config/docs.
 - search — ranked symbol/source/docs/marker/text; auto may use semantics, lexical does zero vector work.
-- tests — continuous verdicts; runner for inner-loop tests.
+- tests — continuous verdicts, opt-in; status is cheap, start is explicit.
 - trace — refs, dependency paths, bridges.
 - workspace — lifecycle, registered workspaces, onboarding, health, semantic-broker health.
 
