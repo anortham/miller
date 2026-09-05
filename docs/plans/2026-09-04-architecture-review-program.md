@@ -10,7 +10,7 @@
 
 **Architecture Quality:** High risk for cross-process retention; medium for cache lifetimes, query extraction, and evaluation; low for documentation correction and existing-runtime qualification. The program does not authorize a rewrite, new MCP tools, new search features, or a model-default change. Each detailed plan contains its concrete affected interface, rejected shortcuts, test surface, and acceptance criteria.
 
-**Status (2026-09-05):** Julie Audit Plan 4 is merged and reviewed; small closure corrections are in progress. S1 CPU runtime evidence is verified, with evidence-helper corrections in progress and M5 efficacy still not run. J1 Task 1 is dispatched to Sol in the reader-retention worktree. Miller M1–M5 remain planned.
+**Status (2026-09-05):** Julie Audit Plan 4 is merged and reviewed; closure corrections are committed locally. S1 CPU runtime evidence and its helper corrections are verified; M5 efficacy is still not run. J1 is implemented and qualified locally, including its reader CLI and Linux/Windows safety checks. All final producer gates pass. Miller M1 is next; M2–M5 remain planned. No branch was merged or pushed, and no release or Miller pin was changed by this run.
 
 ## Global Constraints
 
@@ -167,8 +167,9 @@ J1 execution selects development version `2.40.0` because its permanent `min_wri
 
 | Plan | State at preparation | Implementation evidence |
 |---|---|---|
-| J1 | Task 1 dispatched to Sol | Worktree `/home/murphy/source/julie-extractors/.worktrees/reader-retention-contract`, branch `feature/reader-retention-contract`, base `a87121c6`; baseline schema contract 24 passed. Producer safety not yet implemented/qualified. |
-| S1 | CPU evidence verified; review corrections in progress | Main `9ed082b`; BGE/Qwen CPU qualification records and identities validated, 27 helper tests passed; Vulkan unverified, M5 task efficacy null/not-run. Correction branch `fix/s1-evidence-alignment` tightens required join fields and identifies overwritten preliminary transcripts. |
-| M1, M2, M3, M4, M5 | Planned, not executed | M1 awaits J1 producer. M5 shared required metric keys clarified to match S1; no campaign run. |
+| J1 | Complete and qualified locally; integration/publication not performed | Branch `feature/reader-retention-contract` in Julie `.worktrees/reader-retention-contract`, verified implementation/test candidate `4ca16853ecb054f6989aafa1410381f41273adde`. Final changed-path/default/xtask/certification, contract, standalone crash, formatting, warning-free Clippy, and documentation gates pass. Required Windows admission, liveness, retention, rollback, crash, CLI, and mixed-version checks pass. Exact evidence: Julie `docs/evidence/2026-09-producer-retention-contract.md`. |
+| S1 | CPU evidence and review corrections verified locally | Main `9ed082b`; correction branch `fix/s1-evidence-alignment` at `5c41f1d` is clean and unmerged. All four branch gates passed, including68 Python tests. Original BGE/Qwen CPU records unchanged; Vulkan unverified, M5 efficacy null/not-run. Four overwritten preliminary transcripts are explicitly disclosed. |
+| M1 | Next; not executed | J1's implementation contract is now qualified. Coordinate its local integration and the consumer's qualified producer build/pin before relying on reader admission. The plan includes the clarified log-sequence semantics and legacy-reader rollout limits. |
+| M2, M3, M4, M5 | Planned, not executed | Existing dependency order remains. M5 shared required metric keys match S1; no outcome campaign was run. |
 
 Update this table only from accepted implementation evidence. Do not mark the whole program complete when only the documentation or dry harness is ready.
