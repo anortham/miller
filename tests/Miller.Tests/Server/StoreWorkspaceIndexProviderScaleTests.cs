@@ -77,7 +77,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
         // The pointer names a view the serving catalog does not carry. The leadership version is still
         // readable, because store_meta.binary_version is FAMILY-scoped.
         Assert.Equal(
-            MillerExtractContract.PinnedJulieExtractVersion,
+            ScaleTestSupport.ExpectedJulieVersion(binary),
             StoreArtifactVersionReader.ReadForLeadership(artifact, ExtractBinaryVersionReader.TryRead));
 
         string? priorStoreMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
@@ -100,6 +100,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 artifact,
                 canonicalRoot,
                 workspaceId,
+                new JulieStoreClient(binary),
                 storeEnabled: true);
             Assert.Equal("unbound", session.Snapshot.ResolutionState);
         }
@@ -209,6 +210,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 storeEnabled: static () => true))
             {
                 bootstrap.TestHomeDirectoryOverride = home;
+                bootstrap.TestToolsRootOverride = Path.GetDirectoryName(binary)!;
                 Assert.Equal(
                     BindOutcome.Started,
                     bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
@@ -406,6 +408,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 NullLogger<IndexBootstrapService>.Instance,
                 storeEnabled: () => storeEnabled);
             bootstrap.TestHomeDirectoryOverride = home;
+            bootstrap.TestToolsRootOverride = Path.GetDirectoryName(binary)!;
             Assert.Equal(
                 BindOutcome.Started,
                 bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
@@ -429,7 +432,8 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
             using (WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
                 artifact,
                 root,
-                bootstrap.Workspace.WorkspaceId))
+                bootstrap.Workspace.WorkspaceId,
+                new JulieStoreClient(binary)))
             {
                 Assert.Equal("unbound", session.Snapshot.ResolutionState);
             }
@@ -453,7 +457,8 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
             using WorkspaceReadHandle recoveredSession = WorkspaceReadSessionFactory.Open(
                 artifact,
                 root,
-                bootstrap.Workspace.WorkspaceId);
+                bootstrap.Workspace.WorkspaceId,
+                new JulieStoreClient(binary));
             Assert.Equal("unbound", recoveredSession.Snapshot.ResolutionState);
         }
         finally
@@ -500,6 +505,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 NullLogger<IndexBootstrapService>.Instance,
                 storeEnabled: static () => true);
             bootstrap.TestHomeDirectoryOverride = home;
+            bootstrap.TestToolsRootOverride = Path.GetDirectoryName(binary)!;
             Assert.Equal(
                 BindOutcome.Started,
                 bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
@@ -511,7 +517,8 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
             using (WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
                        artifact,
                        root,
-                       bootstrap.Workspace.WorkspaceId))
+                       bootstrap.Workspace.WorkspaceId,
+                       new JulieStoreClient(binary)))
             {
                 Assert.True(new ContentCorpusSidecar().EnsureStoreCurrent(session.FamilyStoreRoot!, session));
             }
@@ -521,7 +528,9 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
             DashboardSnapshot dashboard = DashboardData.ReadSnapshot(
                 context.RegistryDbPath,
                 context.TelemetryDbPath,
-                context.WorkspaceId);
+                context.WorkspaceId,
+                preferredWorkspaceRoot: null,
+                readerClientFactory: () => new JulieStoreClient(binary));
             Assert.NotNull(dashboard.Health);
             Assert.NotEqual("unavailable", dashboard.Health!.State);
             Assert.NotNull(dashboard.PatternInventory);
@@ -574,7 +583,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
     [Fact]
     public async Task StoreOffBootstrapReconcilesAnInterruptedRollbackMarkerFromSource()
     {
-        ScaleTestSupport.RequireJulieServer();
+        string binary = ScaleTestSupport.RequireJulieServer();
         string directory = Path.Combine(Path.GetTempPath(), "miller-store-rollback-bootstrap-" + Guid.NewGuid().ToString("N"));
         string root = Path.Combine(directory, "root");
         string home = Path.Combine(directory, "home");
@@ -589,6 +598,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                        storeEnabled: static () => true))
             {
                 store.TestHomeDirectoryOverride = home;
+                store.TestToolsRootOverride = Path.GetDirectoryName(binary)!;
                 Assert.Equal(
                     BindOutcome.Started,
                     store.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
@@ -607,6 +617,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 pointer.ViewId,
                 canonicalRoot,
                 StoreBindingState.Ready);
+            using (IDisposable? readerRouting = StoreReaderRegistrationRouting.Use(binding.StoreRoot, new JulieStoreClient(binary)))
             using (FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding))
             {
                 File.WriteAllLines(
@@ -631,6 +642,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 NullLogger<IndexBootstrapService>.Instance,
                 storeEnabled: static () => false);
             legacy.TestHomeDirectoryOverride = home;
+            legacy.TestToolsRootOverride = Path.GetDirectoryName(binary)!;
             Assert.Equal(
                 BindOutcome.Started,
                 legacy.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
@@ -673,6 +685,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                        storeEnabled: static () => true))
             {
                 first.TestHomeDirectoryOverride = home;
+                first.TestToolsRootOverride = Path.GetDirectoryName(binary)!;
                 Assert.Equal(
                     BindOutcome.Started,
                     first.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
@@ -697,6 +710,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 StoreFamilyBinding updatedBinding = StoreWorkspaceCoordinator.ResolveBinding(
                     first.Workspace,
                     first.Workspace.CanonicalRoot!);
+                using (IDisposable? readerRouting = StoreReaderRegistrationRouting.Use(updatedBinding.StoreRoot, new JulieStoreClient(binary)))
                 using (FamilyStoreReadSession updated = FamilyStoreReadSession.Open(updatedBinding))
                 {
                     Assert.Contains(
@@ -737,7 +751,8 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                         SymbolSearchSidecar.Disabled,
                         new ContentCorpusSidecar(),
                         new VectorSidecar(SemanticMode.Off),
-                        storeEnabled: true);
+                        storeEnabled: true,
+                        readerClient: () => new JulieStoreClient(binary));
                     Assert.Equal("ready", facts.Store?.State);
                     Assert.Equal(pointer.FamilyId.ToString("D"), facts.Store?.FamilyId);
                     Assert.Equal(pointer.ViewId, facts.Store?.ViewId);
@@ -755,6 +770,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                        storeEnabled: static () => true))
             {
                 second.TestHomeDirectoryOverride = home;
+                second.TestToolsRootOverride = Path.GetDirectoryName(binary)!;
                 second.TestScanObserver = () => scans++;
                 Assert.Equal(
                     BindOutcome.Started,
@@ -774,6 +790,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                        storeEnabled: static () => false))
             {
                 legacy.TestHomeDirectoryOverride = home;
+                legacy.TestToolsRootOverride = Path.GetDirectoryName(binary)!;
                 Assert.Equal(
                     BindOutcome.Started,
                     legacy.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
@@ -828,6 +845,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 PathCanonicalizer.CanonicalizeRoot(root),
                 StoreBindingState.Ready);
             using LegacyArtifactReadSession legacy = LegacyArtifactReadSession.Open(artifact);
+            using IDisposable? readerRouting = StoreReaderRegistrationRouting.Use(store, new JulieStoreClient(binary));
             using FamilyStoreReadSession family = FamilyStoreReadSession.Open(binding);
 
             Assert.Equal(
@@ -901,7 +919,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 directory,
                 "workspace-a",
                 PathCanonicalizer.CanonicalizeRoot(root),
-                artifact);
+                artifact) { ReaderClient = new JulieStoreClient(binary) };
             var contentTool = new ContentTool(
                 toolWorkspace,
                 new ContentCorpusExternalStore(),
@@ -935,6 +953,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                     WorkspaceId = "workspace-a",
                     CanonicalRoot = PathCanonicalizer.CanonicalizeRoot(root),
                     CanonicalExtractDbPath = artifact,
+                    ReaderClient = new JulieStoreClient(binary),
                 };
                 string vectorPath;
                 VectorGenerationManager generations;

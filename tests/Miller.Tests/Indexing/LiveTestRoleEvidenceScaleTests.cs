@@ -24,7 +24,7 @@ public sealed class LiveTestRoleEvidenceScaleTests
     {
         string binary = ScaleTestSupport.RequireJulieServer();
         Assert.Equal(
-            $"julie-extract {MillerExtractContract.PinnedJulieExtractVersion}",
+            $"julie-extract {ScaleTestSupport.ExpectedJulieVersion(binary)}",
             ScaleTestSupport.RunJulie(binary, "--version").Trim());
 
         string work = Path.Combine(Path.GetTempPath(), "miller-live-test-roles-" + Guid.NewGuid().ToString("N"));
@@ -111,6 +111,7 @@ public sealed class LiveTestRoleEvidenceScaleTests
             var runner = new JulieExtractRunner(binary);
             ExtractReport report = runner.Scan(repo, db, force: true);
             Assert.NotEqual("failed", report.Status);
+            Assert.Equal(ScaleTestSupport.ExpectedJulieVersion(binary), ExtractBinaryVersionReader.TryRead(db));
 
             IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.Read(db);
             IndexedSymbol razorCase = Assert.Single(symbols,

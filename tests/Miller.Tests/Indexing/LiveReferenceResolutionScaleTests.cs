@@ -19,7 +19,7 @@ public sealed class LiveReferenceResolutionScaleTests(ITestOutputHelper output)
     {
         string binary = ScaleTestSupport.RequireJulieServer();
         Assert.Equal(
-            $"julie-extract {MillerExtractContract.PinnedJulieExtractVersion}",
+            $"julie-extract {ScaleTestSupport.ExpectedJulieVersion(binary)}",
             ScaleTestSupport.RunJulie(binary, "--version").Trim());
 
         string work = Path.Combine(
@@ -35,6 +35,7 @@ public sealed class LiveReferenceResolutionScaleTests(ITestOutputHelper output)
             var runner = new JulieExtractRunner(binary);
             ExtractReport report = runner.Scan(repo, db, force: true);
             Assert.NotEqual("failed", report.Status);
+            Assert.Equal(ScaleTestSupport.ExpectedJulieVersion(binary), ExtractBinaryVersionReader.TryRead(db));
 
             using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(db);
             IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.ReadSession(session);
@@ -101,6 +102,7 @@ public sealed class LiveReferenceResolutionScaleTests(ITestOutputHelper output)
                 "view-a",
                 PathCanonicalizer.CanonicalizeRoot(repo),
                 StoreBindingState.Ready);
+            using IDisposable? readerRouting = StoreReaderRegistrationRouting.Use(store, new JulieStoreClient(binary));
             using FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding);
             QueryTimeResolutionReader reader = session.Resolution;
             RevisionFactCache cache = reader.Cache;

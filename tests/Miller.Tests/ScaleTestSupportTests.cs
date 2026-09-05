@@ -24,6 +24,31 @@ public sealed class ScaleTestSupportTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData(" ")]
+    public void VersionExpectationWithoutSourceKeepsThePin(string? source)
+    {
+        Assert.Equal(Miller.Indexing.MillerExtractContract.PinnedJulieExtractVersion,
+            ScaleTestSupport.JulieVersionExpectation(source, "julie-extract 9.98.7"));
+    }
+
+    [Fact]
+    public void VersionExpectationUsesTheExplicitSourceReport()
+    {
+        Assert.Equal("2.40.0", ScaleTestSupport.JulieVersionExpectation("source", "julie-extract 2.40.0\n"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("julie-extract invalid")]
+    [InlineData("another-program 2.40.0")]
+    public void InvalidSourceVersionReportRefusesPinnedFallback(string output)
+    {
+        Assert.Throws<InvalidOperationException>(() => ScaleTestSupport.JulieVersionExpectation("source", output));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
     public void BinarySelectionWithoutSourceKeepsThePlatformPin(string? source)
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-selection");

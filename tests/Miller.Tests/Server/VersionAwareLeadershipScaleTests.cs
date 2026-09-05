@@ -115,6 +115,7 @@ public sealed class VersionAwareLeadershipScaleTests
                 WorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot),
                 CanonicalRoot = canonicalRoot,
                 CanonicalExtractDbPath = db,
+                ToolsRoot = Path.GetDirectoryName(binary)!,
             };
             string millerDir = Path.GetDirectoryName(workspace.ExtractDbPath)!;
 
@@ -129,6 +130,7 @@ public sealed class VersionAwareLeadershipScaleTests
             Directory.CreateDirectory(tempHomeA);
             var aBootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
             aBootstrap.TestHomeDirectoryOverride = tempHomeA;
+            aBootstrap.TestToolsRootOverride = Path.GetDirectoryName(binary)!;
             var instanceA = new IndexerService(
                 aBootstrap,
                 NullLogger<IndexerService>.Instance,
@@ -145,10 +147,11 @@ public sealed class VersionAwareLeadershipScaleTests
                 ownExtractorVersion: () => OldVersion);
 
             // --- instance B: REAL fitness. Its own version comes from the production probe (ToolsRoot points
-            // at the repo's .tools, so JulieExtractRunner.Locate + QueryVersion run the live binary); its scans
+            // at the selected binary directory, so Locate + QueryVersion run that binary); its scans
             // are the real JulieExtractOps behind a recording wrapper.
             var bBootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
             bBootstrap.TestHomeDirectoryOverride = home;
+            bBootstrap.TestToolsRootOverride = Path.GetDirectoryName(binary)!;
             bBootstrap.SeedForTest(
                 workspace,
                 new IndexHolder(MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()), builtRevision: 0));

@@ -99,6 +99,21 @@ public static class ScaleTestSupport
     // Test-only input. Production tooling and package compatibility checks never read this variable.
     internal const string JulieBinaryOverride = "MILLER_TEST_JULIE_EXTRACT";
 
+    internal static string JulieVersionExpectation(string? sourceBinary, string versionOutput)
+    {
+        if (string.IsNullOrWhiteSpace(sourceBinary))
+            return Miller.Indexing.MillerExtractContract.PinnedJulieExtractVersion;
+        const string prefix = "julie-extract ";
+        string output = versionOutput.Trim();
+        if (!output.StartsWith(prefix, StringComparison.Ordinal)
+            || !Version.TryParse(output[prefix.Length..], out _))
+            throw new InvalidOperationException("Selected source did not report a valid julie-extract version.");
+        return output[prefix.Length..];
+    }
+
+    internal static string ExpectedJulieVersion(string binary) => JulieVersionExpectation(
+        Environment.GetEnvironmentVariable(JulieBinaryOverride), RunJulie(binary, "--version"));
+
     internal static string? SelectJulieBinary(string repoRoot, string? sourceBinary, Func<string, bool> exists)
     {
         if (!string.IsNullOrWhiteSpace(sourceBinary))
