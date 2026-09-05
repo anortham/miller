@@ -207,7 +207,16 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
                 output.WriteLine($"concurrent-{action}: admission_refused={cause.Failure}; partial_roots=0");
             }
         }
-        finally { session?.Dispose(); }
+        finally
+        {
+            session?.Dispose();
+            fixture.ReportReleaseState();
+        }
+        if (fixture.CountRegistrations() != 0)
+        {
+            Assert.NotNull(session);
+            await fixture.DrainReleaseAfterMaintenanceExpiry(session.Snapshot);
+        }
         Assert.Equal(0, fixture.CountRegistrations());
     }
 
@@ -233,6 +242,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
         private string? _firstNonce;
         private int _imports;
         private double _acquireMilliseconds;
+        private readonly string _initialWriterFloor;
 
         internal Fixture(string binary, ITestOutputHelper output)
         {
@@ -245,6 +255,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
             _transport = new(binary);
             _observedClient = new(binary, InvokeReader);
             Import("Original");
+            _initialWriterFloor = ReadWriterFloor();
             StoreWorkspacePointer.Write(root, Binding);
             _scope = StoreReaderRegistrationContext.Use(Binding.StoreRoot,
                 new(new StoreReaderRegistrationRunner(_observedClient), Registry, OpenRead));
@@ -257,6 +268,7 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
         internal int Acquires { get; private set; }
         internal int Renews { get; private set; }
         internal int Releases { get; private set; }
+        private bool _lastReleaseWasBusy;
         internal bool SameAcquireNonce { get; private set; } = true;
         internal bool LoseFirstAcquireReply { get; init; }
         internal Action? AfterFirstAcquire { get; set; }
@@ -288,6 +300,19 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
             }
             var watch = Stopwatch.StartNew();
             ReaderProcessResult result = _transport.InvokeReader(args, cancellationToken);
+            if (operation == "release")
+            {
+                string failure = "unreadable";
+                try
+                {
+                    using var report = JsonDocument.Parse(result.StandardOutput);
+                    failure = report.RootElement.TryGetProperty("failure_class", out var value) && value.ValueKind == JsonValueKind.String
+                        ? value.GetString() switch { "busy" => "busy", _ => "other" } : "none";
+                }
+                catch (JsonException) { }
+                _lastReleaseWasBusy = result.ExitCode == 1 && !result.TransportLost && failure == "busy";
+                _output.WriteLine($"release: exit={result.ExitCode}; transport_lost={result.TransportLost}; failure_class={failure}");
+            }
             if (operation == "acquire")
             {
                 _acquireMilliseconds += watch.Elapsed.TotalMilliseconds;
@@ -431,6 +456,55 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
             $"{scenario}: owner_pid={Environment.ProcessId}; generation={snapshot.GenerationName}; manifest={snapshot.ManifestGeneration}; " +
             $"acquire_processes={Acquires}; renew_processes={Renews}; release_processes={Releases}; " +
             $"acquire_ms={_acquireMilliseconds.ToString("F2", CultureInfo.InvariantCulture)}; latency=report-only; roots={CountRegistrations()}");
+
+        internal void ReportReleaseState() => _output.WriteLine(
+            $"after-dispose: release_attempts={Releases}; registry_handles={Registry.Count}; roots={CountRegistrations()}; " +
+            $"open_connections={_connections.Count(connection => connection.State != ConnectionState.Closed)}; " +
+            $"maintenance_intents={CoordinatorLong("SELECT COUNT(*) FROM maintenance_intent")}");
+
+        internal async Task DrainReleaseAfterMaintenanceExpiry(WorkspaceReadSnapshot snapshot)
+        {
+            Assert.True(_lastReleaseWasBusy, "A retained root after disposal must have an actual Busy release reply.");
+            Assert.All(_connections, connection => Assert.Equal(ConnectionState.Closed, connection.State));
+            Assert.Equal(1, Registry.Count);
+            // Test-only lifecycle observation; never print dictionary values, which contain owner nonces.
+            var handles = (Dictionary<StoreReaderRegistrationHandle, string>)typeof(StoreReaderRegistrationRegistry)
+                .GetField("_handles", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(Registry)!;
+            StoreReaderRegistrationHandle owed = Assert.Single(handles.Keys);
+            Assert.Equal(ReaderLifecycleStatus.ReleaseOwed, owed.Status);
+            Assert.Equal(ReaderFailure.Busy, owed.LastFailure);
+            _output.WriteLine($"writer-floor: initial={_initialWriterFloor}; after-stale-plan={ReadWriterFloor()}");
+            Assert.Equal(_initialWriterFloor, ReadWriterFloor());
+            AssertRoots(snapshot);
+            Assert.Equal(1, CoordinatorLong("SELECT COUNT(*) FROM maintenance_intent"));
+            long expires = CoordinatorLong("SELECT expires_at FROM maintenance_intent");
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            Assert.True(expires - now <= 65_000, "The real maintenance fence must have a bounded deadline.");
+            _output.WriteLine($"release-owed: status={owed.Status}; failure={owed.LastFailure}; " +
+                $"maintenance_deadline_remaining_ms={Math.Max(0, expires - now)}; roots={CountRegistrations()}");
+            // Wait for the persisted producer fence deadline, not an assumed scheduling delay.
+            // Expiry never authorizes deleting the reader: only the authenticated release below may do so.
+            if (expires > now)
+                await Task.Delay(TimeSpan.FromMilliseconds(expires - now + 1), TestContext.Current.CancellationToken);
+            Registry.Tick(DateTimeOffset.UtcNow.Add(StoreReaderRegistrationRegistry.DiagnosticInterval),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(ReaderLifecycleStatus.Released, owed.Status);
+            Assert.Equal(0, Registry.Count);
+            Assert.Equal(0, CountRegistrations());
+            _output.WriteLine($"writer-floor: after-expiry-release={ReadWriterFloor()}; " +
+                $"live-writer-leases={CoordinatorLong($"SELECT COUNT(*) FROM writer_lease WHERE expires_at>{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}")}");
+            Assert.Equal(_initialWriterFloor, ReadWriterFloor());
+            ReportReleaseState();
+        }
+
+        private string ReadWriterFloor()
+        {
+            using var connection = Connect(Path.Combine(Binding.StoreRoot, CurrentGeneration, "store.db"));
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT value FROM store_meta WHERE key='min_writer_version'";
+            return (string)command.ExecuteScalar()!;
+        }
 
         private static SqliteConnection Connect(string path, bool write = false)
         {
