@@ -152,6 +152,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 storeEnabled: static () => true))
             {
                 bootstrap.TestHomeDirectoryOverride = home;
+                bootstrap.TestToolsRootOverride = Path.GetDirectoryName(binary)!;
                 Assert.Equal(
                     BindOutcome.Started,
                     bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));

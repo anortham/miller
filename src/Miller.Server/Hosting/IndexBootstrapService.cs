@@ -274,8 +274,14 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// </summary>
     internal string? TestHomeDirectoryOverride { get; set; }
 
-    internal MillerHostPaths CreateHostPaths() =>
-        MillerHostPaths.Create(AppContext.BaseDirectory, TestHomeDirectoryOverride);
+    /// <summary>Test-only selected producer directory, shared by bootstrap and its workspace context.</summary>
+    internal string? TestToolsRootOverride { get; set; }
+
+    internal MillerHostPaths CreateHostPaths()
+    {
+        MillerHostPaths paths = MillerHostPaths.Create(AppContext.BaseDirectory, TestHomeDirectoryOverride);
+        return TestToolsRootOverride is { } toolsRoot ? paths with { ToolsRoot = toolsRoot } : paths;
+    }
 
     /// <summary>
     /// Test-only override for the machine-wide scan-admission budget, so a contention test does not sit out the
