@@ -52,6 +52,9 @@ public sealed class StoreFamilyResolver
     private readonly string _storesRoot;
     private readonly Func<Guid> _mintId;
 
+    // Internal phase observation allows deterministic catalog replacement race tests.
+    internal Action? CatalogMetadataRead { get; set; }
+
     public StoreFamilyResolver(
         WorkspaceRegistry registry,
         string storesRoot,
@@ -536,6 +539,7 @@ public sealed class StoreFamilyResolver
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadOnly,
             Pooling = false,
+            DefaultTimeout = 3,
         }.ToString());
         connection.Open();
         using (SqliteCommand pragma = connection.CreateCommand())
@@ -543,7 +547,11 @@ public sealed class StoreFamilyResolver
             pragma.CommandText = "PRAGMA query_only=ON; PRAGMA busy_timeout=3000;";
             pragma.ExecuteNonQuery();
         }
-        Dictionary<string, string> metadata = ReadMetadata(connection);
+        // Approved pre-admission discovery only: return provisional family/view/root facts,
+        // never serving data. One short read snapshot prevents mixed catalog identities.
+        using SqliteTransaction snapshot = connection.BeginTransaction(deferred: true);
+        Dictionary<string, string> metadata = ReadMetadata(connection, snapshot);
+        CatalogMetadataRead?.Invoke();
         RequireMetadata(metadata, "store_sqlite_schema_version", JulieStoreContract.SqliteSchemaVersion.ToString(CultureInfo.InvariantCulture));
         RequireMetadata(metadata, "store_format_epoch", JulieStoreContract.FormatEpoch.ToString(CultureInfo.InvariantCulture));
         RequireMetadata(metadata, "generation_state", "serving");
@@ -554,6 +562,7 @@ public sealed class StoreFamilyResolver
         }
 
         using SqliteCommand views = connection.CreateCommand();
+        views.Transaction = snapshot;
         views.CommandText = "SELECT view_id, root FROM views ORDER BY view_id";
         using SqliteDataReader reader = views.ExecuteReader();
         var rows = new List<StoreCatalogView>();
@@ -580,10 +589,15 @@ public sealed class StoreFamilyResolver
         return false;
     }
 
-    private static Dictionary<string, string> ReadMetadata(SqliteConnection connection)
+    private static Dictionary<string, string> ReadMetadata(SqliteConnection connection, SqliteTransaction snapshot)
     {
         using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = "SELECT key, value FROM store_meta ORDER BY key";
+        command.Transaction = snapshot;
+        command.CommandText = """
+            SELECT key, value FROM store_meta
+            WHERE key IN ('family_id', 'store_sqlite_schema_version', 'store_format_epoch', 'generation_state')
+            ORDER BY key
+            """;
         using SqliteDataReader reader = command.ExecuteReader();
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
         while (reader.Read())

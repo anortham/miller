@@ -179,6 +179,49 @@ public sealed class StoreFamilyResolverTests : IDisposable
     }
 
     [Fact]
+    public void DiscoveryKeepsFamilyAndViewsInOneSnapshotDuringCatalogReplacement()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
+        var resolver = Resolver(registry, new Queue<Guid>([
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ]));
+        WorkspaceRootFacts facts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        StoreFamilyBinding planned = resolver.ResolveOrCreate(facts);
+        WriteStoreCatalog(planned.StoreRoot, planned.FamilyId, planned.ViewId, facts.WorkspaceRoot);
+        using var writer = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(planned.StoreRoot, "gen-001", "store.db"),
+            Pooling = false,
+        }.ToString());
+        writer.Open();
+        using SqliteCommand mutate = writer.CreateCommand();
+        mutate.CommandText = "PRAGMA journal_mode=WAL";
+        mutate.ExecuteNonQuery();
+        resolver.CatalogMetadataRead = () =>
+        {
+            mutate.CommandText = """
+                BEGIN IMMEDIATE;
+                UPDATE store_meta SET value='99999999-9999-4999-8999-999999999999' WHERE key='family_id';
+                UPDATE views SET view_id='replacement-view';
+                COMMIT;
+                """;
+            mutate.ExecuteNonQuery();
+        };
+
+        StoreFamilyBinding discovered = resolver.ResolveOrCreate(facts);
+
+        Assert.Equal(planned.FamilyId, discovered.FamilyId);
+        Assert.Equal(planned.ViewId, discovered.ViewId);
+        // The discovery transaction has closed. A later discovery observes the replacement.
+        resolver.CatalogMetadataRead = null;
+        StoreFamilyBinding replaced = resolver.ResolveOrCreate(facts);
+        Assert.Equal(Guid.Parse("99999999-9999-4999-8999-999999999999"), replaced.FamilyId);
+        Assert.Equal("replacement-view", replaced.ViewId);
+    }
+
+    [Fact]
     public void ExistingUsableLineageWinsOverMalformedPointer()
     {
         Directory.CreateDirectory(_directory);
