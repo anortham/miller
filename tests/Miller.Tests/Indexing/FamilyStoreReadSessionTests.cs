@@ -12,6 +12,7 @@ using Xunit;
 
 namespace Miller.Tests.Indexing;
 
+[Collection(StoreEnvironmentCollection.Name)]
 public sealed class FamilyStoreReadSessionTests
 {
     [Theory]
