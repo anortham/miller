@@ -45,6 +45,9 @@ public sealed class WorkspaceTool
     private readonly ScanGovernor _governor;
     private readonly MillerHostPaths _hostPaths;
 
+    private Func<IJulieStoreClient> ReaderProducer => () =>
+        CurrentWorkspaceOrNull?.ReaderProducer ?? JulieStoreClient.Locate(_hostPaths.ToolsRoot);
+
     /// <summary>Construct over the live admin singletons (production).</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     public WorkspaceTool(
@@ -531,7 +534,8 @@ public sealed class WorkspaceTool
             facts.WorkspaceId,
             facts.Root,
             facts.DbPath,
-            storeEnabled: facts.Store is not null);
+            storeEnabled: facts.Store is not null,
+            readerClient: ReaderProducer);
         return OnboardingResult(onboarding, json, StaleRegistryHint(json));
     }
 
@@ -636,7 +640,8 @@ public sealed class WorkspaceTool
             _contentSidecar,
             _vectors,
             CurrentSemanticBrokerFacts(),
-            _governor);
+            _governor,
+            readerClient: ReaderProducer);
         LeaderHealthFacts leader = ReadLeaderFacts(row.IndexDbPath, ownWorkspace: false);
         return StatusResult(
             WorkspaceRender.Status(
@@ -743,7 +748,8 @@ public sealed class WorkspaceTool
             _contentSidecar,
             _vectors,
             CurrentSemanticBrokerFacts(),
-            _governor);
+            _governor,
+            readerClient: ReaderProducer);
         WorkspaceExtractionHealthFacts extraction;
         if (statusFacts.FreshnessStatus is "missing_index" or "unreadable_index")
         {
@@ -802,14 +808,16 @@ public sealed class WorkspaceTool
             _contentSidecar,
             _vectors,
             CurrentSemanticBrokerFacts(),
-            _governor);
+            _governor,
+            readerClient: ReaderProducer);
         WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingAssembler.CreateFromWorkspace(
             statusFacts,
             _ledger.DbPath,
             row.WorkspaceId,
             row.CanonicalRoot,
             row.IndexDbPath,
-            storeEnabled: statusFacts.Store is not null);
+            storeEnabled: statusFacts.Store is not null,
+            readerClient: ReaderProducer);
         return OnboardingResult(onboarding, json, StaleRegistryHint(json));
     }
 
@@ -861,7 +869,8 @@ public sealed class WorkspaceTool
                 row,
                 WorkspaceRegisteredFactsProfile.McpStatus,
                 _sidecar,
-                _contentSidecar);
+                _contentSidecar,
+                readerClient: ReaderProducer);
             ownWorkspace = false;
         }
 
@@ -1046,7 +1055,8 @@ public sealed class WorkspaceTool
             _vectors,
             CurrentSemanticBrokerFacts(),
             _governor,
-            storeEnabled: true);
+            storeEnabled: true,
+            readerClient: ReaderProducer);
         IndexHolderMetadata holderMetadata = holder.MetadataSnapshot();
         bool isStoreFacts = facts.Store is not null;
         return facts with
@@ -1892,12 +1902,12 @@ public sealed class WorkspaceTool
         ComplexityMetrics: HealthFactSection<ComplexityMetricGroup>.Unavailable(error),
         Files: HealthFactSection<FileStatusGroup>.Unavailable(error));
 
-    private static WorkspaceExtractionHealthFacts ReadExtractionHealth(
+    private WorkspaceExtractionHealthFacts ReadExtractionHealth(
         string dbPath,
         string workspaceRoot,
         string? workspaceId)
     {
-        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId);
+        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId, ReaderProducer);
         return WorkspaceHealthReader.Read(session);
     }
 

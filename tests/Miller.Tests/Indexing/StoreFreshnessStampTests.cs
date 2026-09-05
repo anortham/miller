@@ -139,10 +139,22 @@ public sealed class StoreFreshnessStampTests
             "11111111-1111-4111-8111-111111111111:gen-001",
             "2.33.6"));
 
+        int readerCalls = 0;
+        int producerSelections = 0;
+        var client = new JulieStoreClient(Path.Combine(dir.Root, "missing-producer"), (_, _) =>
+        {
+            readerCalls++;
+            throw new InvalidOperationException("A stamp read must not start reader transport.");
+        });
         WorkspaceFreshnessProbe probe = WorkspaceReadSessionFactory.Probe(
             Path.Combine(dir.Root, "legacy.db"),
             dir.WorkspaceRoot,
             "workspace-a",
+            readerClientFactory: () =>
+            {
+                producerSelections++;
+                return client;
+            },
             storeEnabled: true);
 
         Assert.Equal(42, probe.Revision);
@@ -152,6 +164,8 @@ public sealed class StoreFreshnessStampTests
             "ctgen1:store:11111111-1111-4111-8111-111111111111:view-a:gen-001",
             probe.IndexGenerationIdentity);
         Assert.False(File.Exists(Path.Combine(dir.StoreRoot, "gen-001", "store.db")));
+        Assert.Equal(0, readerCalls);
+        Assert.Equal(0, producerSelections);
     }
 
     private sealed class TempDir : IDisposable

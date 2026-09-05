@@ -267,7 +267,8 @@ internal static class WorkspaceFactsAssembler
         VectorSidecar? vectors = null,
         SemanticBrokerFacts? semanticBroker = null,
         ScanGovernor? scanGovernor = null,
-        bool? storeEnabled = null)
+        bool? storeEnabled = null,
+        Func<IJulieStoreClient>? readerClient = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(row);
@@ -282,7 +283,9 @@ internal static class WorkspaceFactsAssembler
                 row.IndexDbPath,
                 row.CanonicalRoot,
                 row.WorkspaceId,
-                storeEnabled);
+                storeEnabled,
+                factCacheStore: null,
+                readerClientFactory: readerClient);
             WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.ReadSession(session);
             if (session.Snapshot.Mode == WorkspaceReadMode.FamilyStore)
             {

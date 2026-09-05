@@ -14,6 +14,17 @@ public static class WorkspaceReadSessionFactory
         bool? storeEnabled = null) =>
         Open(legacyDatabasePath, workspaceRoot, workspaceId, storeEnabled, factCacheStore: null);
 
+    public static WorkspaceReadHandle Open(
+        string legacyDatabasePath, string workspaceRoot, string? workspaceId,
+        IJulieStoreClient readerClient, bool? storeEnabled = null) =>
+        Open(legacyDatabasePath, workspaceRoot, workspaceId, storeEnabled, factCacheStore: null, readerClient: readerClient);
+
+    public static WorkspaceReadHandle Open(
+        string legacyDatabasePath, string workspaceRoot, string? workspaceId,
+        Func<IJulieStoreClient> readerClientFactory, bool? storeEnabled = null) =>
+        Open(legacyDatabasePath, workspaceRoot, workspaceId, storeEnabled, factCacheStore: null,
+            readerClientFactory: readerClientFactory);
+
     /// <summary>
     /// The read session for a process that answers ONE command and exits — the <c>miller</c> CLI. It is the
     /// only caller that reads reference facts per file instead of loading the pinned generation whole, because
@@ -35,13 +46,27 @@ public static class WorkspaceReadSessionFactory
             factCacheStore: null,
             boundedFactsRequested: true);
 
+    public static WorkspaceReadHandle OpenForOneShotCli(
+        string legacyDatabasePath, string workspaceRoot, string? workspaceId,
+        IJulieStoreClient readerClient, bool? storeEnabled = null) =>
+        Open(legacyDatabasePath, workspaceRoot, workspaceId, storeEnabled, factCacheStore: null,
+            boundedFactsRequested: true, readerClient: readerClient);
+
+    public static WorkspaceReadHandle OpenForOneShotCli(
+        string legacyDatabasePath, string workspaceRoot, string? workspaceId,
+        Func<IJulieStoreClient> readerClientFactory, bool? storeEnabled = null) =>
+        Open(legacyDatabasePath, workspaceRoot, workspaceId, storeEnabled, factCacheStore: null,
+            boundedFactsRequested: true, readerClientFactory: readerClientFactory);
+
     internal static WorkspaceReadHandle Open(
         string legacyDatabasePath,
         string workspaceRoot,
         string? workspaceId,
         bool? storeEnabled,
         RevisionFactCacheStore? factCacheStore,
-        bool boundedFactsRequested = false)
+        bool boundedFactsRequested = false,
+        IJulieStoreClient? readerClient = null,
+        Func<IJulieStoreClient>? readerClientFactory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(legacyDatabasePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -72,6 +97,7 @@ public static class WorkspaceReadSessionFactory
             pointer.ViewId,
             pointer.WorkspaceRoot,
             StoreBindingState.Ready);
+        using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(binding.StoreRoot, readerClient ?? readerClientFactory?.Invoke());
         return new WorkspaceReadHandle(
             FamilyStoreReadSession.Open(binding, workspaceId, factCacheStore, boundedFactsRequested));
     }
@@ -80,7 +106,12 @@ public static class WorkspaceReadSessionFactory
         string legacyDatabasePath,
         string workspaceRoot,
         string? workspaceId,
-        bool? storeEnabled = null)
+        bool? storeEnabled = null) =>
+        ProbeCore(legacyDatabasePath, workspaceRoot, workspaceId, storeEnabled, null);
+
+    private static WorkspaceFreshnessProbe ProbeCore(
+        string legacyDatabasePath, string workspaceRoot, string? workspaceId,
+        bool? storeEnabled, IJulieStoreClient? readerClient, Func<IJulieStoreClient>? readerClientFactory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(legacyDatabasePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
@@ -137,8 +168,19 @@ public static class WorkspaceReadSessionFactory
             pointer.ViewId,
             pointer.WorkspaceRoot,
             StoreBindingState.Ready);
+        using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(binding.StoreRoot, readerClient ?? readerClientFactory?.Invoke());
         return FamilyStoreReadSession.Probe(binding);
     }
+
+    public static WorkspaceFreshnessProbe Probe(
+        string legacyDatabasePath, string workspaceRoot, string? workspaceId,
+        IJulieStoreClient readerClient, bool? storeEnabled = null) =>
+        ProbeCore(legacyDatabasePath, workspaceRoot, workspaceId, storeEnabled, readerClient);
+
+    public static WorkspaceFreshnessProbe Probe(
+        string legacyDatabasePath, string workspaceRoot, string? workspaceId,
+        Func<IJulieStoreClient> readerClientFactory, bool? storeEnabled = null) =>
+        ProbeCore(legacyDatabasePath, workspaceRoot, workspaceId, storeEnabled, null, readerClientFactory);
 
     public static bool StoreEnabledFromEnvironment()
     {

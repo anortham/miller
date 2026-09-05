@@ -727,7 +727,7 @@ public sealed class IndexerService : BackgroundService
     internal void RequestLevelUpgradeIfOwedForTest(WorkspaceContext workspace) =>
         RequestLevelUpgradeIfOwed(workspace);
 
-    private static string? ReadIndexLevel(WorkspaceContext workspace)
+    internal static string? ReadIndexLevel(WorkspaceContext workspace)
     {
         string databasePath = workspace.CanonicalExtractDbPath ?? workspace.ExtractDbPath;
         if (!WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
@@ -738,6 +738,7 @@ public sealed class IndexerService : BackgroundService
             databasePath,
             root,
             workspace.WorkspaceId,
+            workspace.ReaderProducerFactory,
             storeEnabled: true);
         return session.Snapshot.IndexLevel;
     }
@@ -1593,6 +1594,7 @@ public sealed class IndexerService : BackgroundService
             workspace.CanonicalExtractDbPath ?? workspace.ExtractDbPath,
             workspaceRoot,
             workspace.WorkspaceId,
+            workspace.ReaderProducerFactory,
             storeEnabled: true);
         return TryConvergeStoreSidecars(workspace, session);
     }
@@ -1660,6 +1662,7 @@ public sealed class IndexerService : BackgroundService
                 workspace.CanonicalExtractDbPath ?? workspace.ExtractDbPath,
                 workspaceRoot,
                 workspace.WorkspaceId,
+                workspace.ReaderProducerFactory,
                 storeEnabled: true);
             string storeRoot = session.FamilyStoreRoot ?? throw new InvalidOperationException(
                 "The store read session did not expose its family root.");

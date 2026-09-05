@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 
 namespace Miller.Dashboard;
 
@@ -36,22 +37,26 @@ public static class DashboardIndexFactsCache
             : 120);
 
     public static DashboardWorkspaceFacts Read(DashboardWorkspaceRow workspace, bool? storeEnabled = null)
+        => Read(workspace, storeEnabled, readerClientFactory: null);
+
+    internal static DashboardWorkspaceFacts Read(
+        DashboardWorkspaceRow workspace, bool? storeEnabled, Func<IJulieStoreClient>? readerClientFactory)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         bool enabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
         if (DefaultTtl <= TimeSpan.Zero)
-            return DashboardIndexFactsReader.Read(workspace, storeEnabled: enabled);
+            return DashboardIndexFactsReader.Read(workspace, enabled, readerClientFactory);
 
-        string? stamp = enabled ? TryBuildStoreStamp(workspace) : BuildLegacyStamp(workspace);
+        string? stamp = enabled ? TryBuildStoreStamp(workspace, readerClientFactory) : BuildLegacyStamp(workspace);
         if (stamp is null)
-            return DashboardIndexFactsReader.Read(workspace, storeEnabled: enabled);
+            return DashboardIndexFactsReader.Read(workspace, enabled, readerClientFactory);
 
         string key = BuildKey(workspace, enabled);
         TimeSpan ttl = TtlFor(workspace.WorkspaceId);
         if (Entries.TryGetValue(key, out CacheEntry? cached) && cached.IsFresh(stamp, ttl))
             return cached.Facts;
 
-        DashboardWorkspaceFacts facts = DashboardIndexFactsReader.Read(workspace, storeEnabled: enabled);
+        DashboardWorkspaceFacts facts = DashboardIndexFactsReader.Read(workspace, enabled, readerClientFactory);
         Entries[key] = new CacheEntry(facts, stamp, DateTime.UtcNow);
         TrimToCapacity();
         return facts;
@@ -96,7 +101,7 @@ public static class DashboardIndexFactsCache
             LegacySidecarState(workspace.IndexDbPath),
             RegistryState(workspace));
 
-    private static string? TryBuildStoreStamp(DashboardWorkspaceRow workspace)
+    private static string? TryBuildStoreStamp(DashboardWorkspaceRow workspace, Func<IJulieStoreClient>? readerClientFactory)
     {
         WorkspaceFreshnessProbe probe;
         try
@@ -105,6 +110,7 @@ public static class DashboardIndexFactsCache
                 workspace.IndexDbPath,
                 workspace.CanonicalRoot,
                 workspace.WorkspaceId,
+                readerClientFactory ?? (() => DashboardPaths.FromEnvironment(AppContext.BaseDirectory).ReaderClient),
                 storeEnabled: true);
         }
         catch (Exception ex) when (

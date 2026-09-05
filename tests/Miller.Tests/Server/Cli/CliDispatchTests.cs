@@ -110,7 +110,7 @@ public sealed class CliDispatchTests : IDisposable
             boundedFacts ? "on" : "off");
         try
         {
-            return Run(args, Context(fixture.LegacyArtifactPath, fixture.WorkspaceRoot));
+            return Run(args, Context(fixture.LegacyArtifactPath, fixture.WorkspaceRoot) with { ReaderClient = fixture.Reader.Client });
         }
         finally
         {
@@ -1078,6 +1078,30 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Empty(error);
         Assert.Contains("VisibleType", output);
         Assert.Contains("src/Visible.cs", output);
+        Assert.Equal("acquire", fx.Reader.Events[0]);
+        Assert.Equal("release", fx.Reader.Events[^1]);
+        Assert.Equal(0, fx.Reader.Owed);
+    }
+
+    [Theory]
+    [InlineData("status")]
+    [InlineData("health")]
+    [InlineData("leader")]
+    [InlineData("onboarding")]
+    public void RegisteredFamilyStoreCliFactsUseTheConfiguredProducer(string operation)
+    {
+        using var fx = MinimalFamilyStoreFixture.Create();
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
+            registry.UpsertSeen("workspace-a", "example", fx.WorkspaceRoot, fx.LegacyArtifactPath,
+                WorkspaceRegistryState.Ready);
+
+        var result = RunFamilyStore(fx, ["workspace", operation, "--json"]);
+
+        Assert.True(result.Code == 0, result.Err);
+        Assert.Contains("workspace-a", result.Out);
+        Assert.Equal("acquire", fx.Reader.Events[0]);
+        Assert.Equal("release", fx.Reader.Events[^1]);
+        Assert.Equal(0, fx.Reader.Owed);
     }
 
     [Fact]
@@ -5421,13 +5445,23 @@ public sealed class CliDispatchTests : IDisposable
 
     private sealed class MinimalFamilyStoreFixture : IDisposable
     {
+        private readonly StoreReaderRegistrationFixture _reader;
+
         private MinimalFamilyStoreFixture(string root, string workspaceRoot, string storeRoot)
         {
             Root = root;
             WorkspaceRoot = workspaceRoot;
             StoreRoot = storeRoot;
             LegacyArtifactPath = Path.Combine(workspaceRoot, ".miller", "symbols.db");
+            _reader = new StoreReaderRegistrationFixture(new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-4111-8111-111111111111"), storeRoot, "view-a", workspaceRoot,
+                StoreBindingState.Ready));
+            Reader = new StoreCallerReaderFixture(new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-4111-8111-111111111111"), storeRoot, "view-a", workspaceRoot,
+                StoreBindingState.Ready), _reader.Reply);
         }
+
+        internal StoreCallerReaderFixture Reader { get; }
 
         private string Root { get; }
 
@@ -5501,6 +5535,8 @@ public sealed class CliDispatchTests : IDisposable
 
         public void Dispose()
         {
+            Reader.Dispose();
+            _reader.Dispose();
             SqliteConnection.ClearAllPools();
             if (Directory.Exists(Root))
                 Directory.Delete(Root, recursive: true);

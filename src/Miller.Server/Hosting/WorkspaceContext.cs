@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server.Hosting;
 
 namespace Miller.Server;
@@ -25,6 +26,12 @@ public sealed record WorkspaceContext(
     string? CanonicalRoot = null,          // symlink-resolved WorkspaceRoot (verified-fact 4); set by bootstrap (M3)
     string? CanonicalExtractDbPath = null) // ExtractDbPath composed under CanonicalRoot (verified-fact 4); set by bootstrap (M3)
 {
+    internal IJulieStoreClient? ReaderClient { get; init; }
+
+    internal IJulieStoreClient ReaderProducer => ReaderClient ?? JulieStoreClient.Locate(ToolsRoot);
+
+    internal Func<IJulieStoreClient> ReaderProducerFactory => () => ReaderProducer;
+
     /// <summary>
     /// Build the context from the current working directory + the app base directory, using the M2 path
     /// conventions. The per-repo extract lives under <paramref name="workspaceRoot"/>; the shared telemetry

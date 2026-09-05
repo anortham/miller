@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server.Telemetry;
 
 namespace Miller.Server.Tools;
@@ -37,7 +38,8 @@ internal static class WorkspaceOnboardingAssembler
         string? workspaceId,
         string workspaceRoot,
         string indexDbPath,
-        bool storeEnabled)
+        bool storeEnabled,
+        Func<IJulieStoreClient>? readerClient = null)
     {
         TelemetryOnboardingFacts telemetry = TelemetryOnboardingReader.Read(telemetryDbPath, workspaceId);
         IReadOnlyList<RecoveredTargetHash> targets;
@@ -47,7 +49,9 @@ internal static class WorkspaceOnboardingAssembler
                 indexDbPath,
                 workspaceRoot,
                 workspaceId,
-                storeEnabled);
+                storeEnabled,
+                factCacheStore: null,
+                readerClientFactory: readerClient);
             targets = ResolveTargets(session, telemetry.TargetHashes);
         }
         catch (Exception ex) when (

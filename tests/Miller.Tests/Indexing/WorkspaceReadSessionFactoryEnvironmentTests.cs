@@ -1,6 +1,7 @@
 using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using Miller.Tests.Support;
+using Miller.Testing;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -54,10 +55,47 @@ public sealed class WorkspaceReadSessionFactoryEnvironmentTests : IDisposable
         using var registry = new StoreReaderRegistrationRegistry(startScheduler: false);
         using IDisposable scope = StoreReaderRegistrationContext.Use(legacy.WorkspaceRoot,
             new(new StoreReaderRegistrationRunner((_, _) => throw new InvalidOperationException("Unexpected reader activity")), registry));
-        using var session = WorkspaceReadSessionFactory.OpenForOneShotCli(legacy.DbPath, legacy.WorkspaceRoot, null, storeEnabled: false);
+        var client = new JulieStoreClient(Path.Combine(legacy.WorkspaceRoot, "missing-producer"),
+            (_, _) => throw new InvalidOperationException("Unexpected reader transport"));
+        using var session = WorkspaceReadSessionFactory.OpenForOneShotCli(legacy.DbPath, legacy.WorkspaceRoot, null, client, storeEnabled: false);
         Assert.Equal("legacy", session.Snapshot.ViewId);
         Assert.Equal(0, registry.Count);
-        Assert.Equal(0, WorkspaceReadSessionFactory.Probe(legacy.DbPath, legacy.WorkspaceRoot, null, storeEnabled: false).Revision);
+        Assert.Equal(0, WorkspaceReadSessionFactory.Probe(legacy.DbPath, legacy.WorkspaceRoot, null, client, storeEnabled: false).Revision);
+        using WorkspaceReadHandle resident = WorkspaceReadSessionFactory.Open(legacy.DbPath, legacy.WorkspaceRoot, null,
+            readerClientFactory: () => throw new InvalidOperationException("Legacy mode must not resolve a producer"), storeEnabled: false);
+        Assert.Equal("legacy", resident.Snapshot.ViewId);
+        Assert.Equal(0, WorkspaceReadSessionFactory.Probe(legacy.DbPath, legacy.WorkspaceRoot, null,
+            readerClientFactory: () => throw new InvalidOperationException("Legacy probe must not resolve a producer"), storeEnabled: false).Revision);
+    }
+
+    [Fact]
+    public async Task CtPollingAdmitsAndClosesOneSessionWithoutStartingTestingOrSemantics()
+    {
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
+        using IDisposable? scope = StoreReaderRegistrationRouting.Use(fixture.Binding.StoreRoot, reader.Client);
+        var source = new MillerArtifactRevisionSource();
+        ContinuousTestRevisionObservation? observation = await source.RefreshAsync("workspace-a", fixture.Binding.WorkspaceRoot,
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(observation);
+        Assert.True(observation.IndexFresh);
+        Assert.Equal(2, observation.Freshness!.Value.Revision);
+        Assert.False(observation.Rebuild);
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(0, reader.Owed);
+        reader.Events.Clear();
+        ContinuousTestImpactResult? impact = await new MillerFactImpactSource().ImpactAsync(
+            fixture.Binding.WorkspaceRoot, observation.Freshness.Value, observation.Freshness.Value,
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(impact);
+        Assert.Equal(ContinuousTestImpactOutcome.Empty, impact.Outcome);
+        Assert.Empty(impact.ChangedPaths);
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(0, reader.Owed);
+        Assert.False(File.Exists(Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "ct.db")));
+        Assert.False(File.Exists(Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "ct.enabled")));
     }
 
     [Theory]

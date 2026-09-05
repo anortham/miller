@@ -114,6 +114,10 @@ public static class DashboardIndexFactsReader
     }
 
     public static DashboardWorkspaceFacts Read(DashboardWorkspaceRow workspace, bool? storeEnabled = null)
+        => Read(workspace, storeEnabled, readerClientFactory: null);
+
+    internal static DashboardWorkspaceFacts Read(
+        DashboardWorkspaceRow workspace, bool? storeEnabled, Func<IJulieStoreClient>? readerClientFactory)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         bool enabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
@@ -126,6 +130,7 @@ public static class DashboardIndexFactsReader
                 workspace.IndexDbPath,
                 workspace.CanonicalRoot,
                 workspace.WorkspaceId,
+                readerClientFactory ?? (() => DashboardPaths.FromEnvironment(AppContext.BaseDirectory).ReaderClient),
                 storeEnabled: true);
             return ReadStoreOrEmpty(workspace, session);
         }

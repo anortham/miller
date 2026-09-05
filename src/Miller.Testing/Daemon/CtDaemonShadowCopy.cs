@@ -16,7 +16,7 @@ public sealed record CtDaemonImage(string Executable, bool IsShadowCopy, string?
 /// last-write time. The build key is the digest of this whole set, so any file the daemon can load
 /// moves the key when it is rebuilt.
 /// </summary>
-internal readonly record struct CtDaemonCopyEntry(string RelativePath, long Length, DateTime LastWriteUtc);
+internal readonly record struct CtDaemonCopyEntry(string RelativePath, long Length, DateTime LastWriteUtc, string? ContentHash = null);
 
 /// <summary>
 /// A per-build private copy of the Miller binaries that the CT daemon runs from, so a live daemon
@@ -29,10 +29,9 @@ internal readonly record struct CtDaemonCopyEntry(string RelativePath, long Leng
 /// the daemon holds files under <c>~/.miller/ct-daemon/&lt;key&gt;</c>, which nothing builds into and
 /// nothing installs over.</para>
 ///
-/// <para>The copy leaves out <c>.tools</c> — 164 MB of julie-extract, the semantic sidecar, and
-/// vec0. The daemon needs none of it: <c>TestsCoreRequest</c> carries no tools root, the daemon
-/// reads the index through <c>WorkspaceReadSessionFactory</c> (which names neither vec0 nor the
-/// tools directory), and every test provider it spawns is found on PATH.</para>
+/// <para>The copy includes the matching <c>.tools/julie-extract</c> binary for family-store reader
+/// admission. Its bytes participate in the build key. Semantic runtimes and other tools are excluded;
+/// every test provider the daemon spawns is found on PATH.</para>
 ///
 /// <para>Every failure here falls back to the in-place spawn with a stated reason. A daemon that
 /// starts and locks the install directory is worse than one that does not start only in a way the
@@ -52,7 +51,7 @@ public static class CtDaemonShadowCopy
     /// </summary>
     internal const string StagingDirectoryName = ".staging";
 
-    /// <summary>Not copied. See the type remarks: the daemon never reads it.</summary>
+    /// <summary>Only the matching reader producer is copied from this directory.</summary>
     private const string ExcludedDirectory = ".tools";
 
     private static readonly StringComparison PathComparison =
@@ -95,12 +94,13 @@ public static class CtDaemonShadowCopy
 
             string sourceDirectory = source.DirectoryName
                 ?? throw new IOException($"'{executable}' has no parent directory.");
-            string key = BuildKey(version, sourceDirectory, EnumerateCopySet(sourceDirectory));
+            IReadOnlyList<CtDaemonCopyEntry> files = EnumerateCopySet(sourceDirectory);
+            string key = BuildKey(version, sourceDirectory, files);
             string target = Path.Combine(root, key);
             string targetExecutable = Path.Combine(target, source.Name);
 
-            if (!IsReady(target) || !File.Exists(targetExecutable))
-                Materialize(root, sourceDirectory, target, key);
+            if (!IsReady(target) || !File.Exists(targetExecutable) || !ProducerMatches(target, files))
+                Materialize(root, sourceDirectory, target, key, files);
 
             if (!File.Exists(targetExecutable))
                 return new CtDaemonImage(executable, false, "the private copy has no executable");
@@ -153,6 +153,8 @@ public static class CtDaemonShadowCopy
             material.Append(
                 System.Globalization.CultureInfo.InvariantCulture,
                 $"|{KeyText(file.RelativePath)}|{file.Length}|{file.LastWriteUtc.Ticks}");
+            if (file.ContentHash is not null)
+                material.Append('|').Append(file.ContentHash);
         }
 
         byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes(material.ToString()));
@@ -177,7 +179,14 @@ public static class CtDaemonShadowCopy
             if (IsExcluded(relative))
                 continue;
 
-            entries.Add(new CtDaemonCopyEntry(relative, file.Length, file.LastWriteTimeUtc));
+            string? contentHash = null;
+            if (string.Equals(relative, Path.Combine(ExcludedDirectory,
+                OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract"), PathComparison))
+            {
+                using FileStream stream = file.OpenRead();
+                contentHash = Convert.ToHexStringLower(SHA256.HashData(stream));
+            }
+            entries.Add(new CtDaemonCopyEntry(relative, file.Length, file.LastWriteTimeUtc, contentHash));
         }
 
         entries.Sort((left, right) =>
@@ -256,11 +265,12 @@ public static class CtDaemonShadowCopy
     internal static bool IsExcluded(string relativePath)
     {
         ArgumentNullException.ThrowIfNull(relativePath);
-        string first = relativePath
-            .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
-            .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
+        string normalized = relativePath.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        string first = normalized.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
             .FirstOrDefault() ?? string.Empty;
-        return string.Equals(first, ExcludedDirectory, PathComparison);
+        return string.Equals(first, ExcludedDirectory, PathComparison)
+            && !string.Equals(normalized, Path.Combine(ExcludedDirectory,
+                OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract"), PathComparison);
     }
 
     internal static bool IsReady(string copyDirectory) =>
@@ -271,8 +281,10 @@ public static class CtDaemonShadowCopy
     /// half-copied directory as a usable build. The ready marker is written before the move for the
     /// same reason: the move is the single instant at which the copy becomes launchable.
     /// </summary>
-    internal static void Materialize(string root, string sourceDirectory, string target, string key)
+    internal static void Materialize(string root, string sourceDirectory, string target, string key,
+        IReadOnlyList<CtDaemonCopyEntry>? expectedFiles = null)
     {
+        IReadOnlyList<CtDaemonCopyEntry> files = expectedFiles ?? EnumerateCopySet(sourceDirectory);
         string staging = Path.Combine(
             root,
             StagingDirectoryName,
@@ -281,14 +293,16 @@ public static class CtDaemonShadowCopy
                 $"{Environment.ProcessId}-{Environment.CurrentManagedThreadId}"));
         TryDeleteDirectory(staging);
         Directory.CreateDirectory(staging);
-        CopyTree(sourceDirectory, staging);
+        CopyTree(sourceDirectory, staging, files);
+        if (!ProducerMatches(staging, files))
+            throw new IOException("The reader producer changed while the CT daemon image was copied.");
         File.WriteAllText(Path.Combine(staging, ReadyMarkerName), key);
 
         if (Directory.Exists(target))
         {
             // Another process finished the same build while this one copied. Its copy is as good as
             // ours, and it may already be running from it.
-            if (IsReady(target))
+            if (IsReady(target) && ProducerMatches(target, files))
             {
                 TryDeleteDirectory(staging);
                 return;
@@ -302,13 +316,30 @@ public static class CtDaemonShadowCopy
         {
             Directory.Move(staging, target);
         }
-        catch (IOException) when (IsReady(target))
+        catch (IOException) when (IsReady(target) && ProducerMatches(target, files))
         {
             TryDeleteDirectory(staging);
         }
     }
 
-    internal static void CopyTree(string sourceDirectory, string destinationDirectory)
+    private static bool ProducerMatches(string directory, IReadOnlyList<CtDaemonCopyEntry> files)
+    {
+        foreach (CtDaemonCopyEntry entry in files)
+        {
+            if (entry.ContentHash is null)
+                continue;
+            string path = Path.Combine(directory, entry.RelativePath);
+            if (!File.Exists(path))
+                return false;
+            using FileStream stream = File.OpenRead(path);
+            if (!string.Equals(entry.ContentHash, Convert.ToHexStringLower(SHA256.HashData(stream)), StringComparison.Ordinal))
+                return false;
+        }
+        return true;
+    }
+
+    internal static void CopyTree(string sourceDirectory, string destinationDirectory,
+        IReadOnlyList<CtDaemonCopyEntry>? expectedFiles = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationDirectory);
@@ -317,7 +348,7 @@ public static class CtDaemonShadowCopy
         Directory.CreateDirectory(destinationDirectory);
         // The SAME set the key digests. One enumeration serves both jobs, so a build identity and
         // the files a daemon can load cannot drift apart.
-        foreach (CtDaemonCopyEntry entry in EnumerateCopySet(source))
+        foreach (CtDaemonCopyEntry entry in expectedFiles ?? EnumerateCopySet(source))
         {
             string destination = Path.Combine(destinationDirectory, entry.RelativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);

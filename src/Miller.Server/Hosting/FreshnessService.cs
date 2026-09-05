@@ -75,8 +75,10 @@ public sealed class FreshnessService : BackgroundService
         _bootstrap = bootstrap;
         _logger = logger;
         _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
-        _probe = probe ?? WorkspaceReadSessionFactory.Probe;
-        _openReadSession = openReadSession ?? WorkspaceReadSessionFactory.Open;
+        _probe = probe ?? ((path, root, id, enabled) => WorkspaceReadSessionFactory.Probe(
+            path, root, id, _bootstrap.Workspace.ReaderProducerFactory, enabled));
+        _openReadSession = openReadSession ?? ((path, root, id, enabled) => WorkspaceReadSessionFactory.Open(
+            path, root, id, _bootstrap.Workspace.ReaderProducerFactory, enabled));
     }
 
     // The live holder, read LAZILY off the bootstrap. The host constructs this hosted service before

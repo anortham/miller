@@ -334,10 +334,12 @@ Task 3 focused caller scope passed 194 tests. Caller-selected producers now flow
 
 **Acceptance:**
 
-- [ ] All enabled direct callers use the concrete registration boundary.
-- [ ] One-shot bounded facts, CT snapshots, dashboard reads, CLI reads, and evaluator leases preserve their existing disposal and zero-work contracts.
-- [ ] No caller creates a per-query/per-case renewal timer or producer process.
-- [ ] Output schemas and budgets remain unchanged.
+- [x] All enabled direct callers use the concrete registration boundary.
+- [x] One-shot bounded facts, CT snapshots, dashboard reads, CLI reads, and evaluator leases preserve their existing disposal and zero-work contracts.
+- [x] No caller creates a per-query/per-case renewal timer or producer process.
+- [x] Output schemas and budgets remain unchanged.
+
+Task 4 consumer coverage passed 713 tests with one existing OS skip; the final deferred host/provider selection correction passed 141 affected tests. Dashboard coverage passed 116 tests and CT private-copy coverage passed 27. Existing public factory overloads remain available. Caller-selected producers are resolved only when an enabled family-store read requires admission; legacy, empty-registry, and matching-stamp reads do not resolve an unused producer. One-shot fact connections share one session registration, and CT private images carry the matching producer with verified content identity. Acquisition remains once per session lifecycle, not per fact query. Tasks 5 and 6 still own lifecycle stress, real-process races, and platform qualification; this is not release qualification.
 
 ## Task 5: Renewal, legacy, mixed-version, and retry qualification
 

@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
@@ -638,6 +639,10 @@ public static class DashboardData
         string registryDbPath,
         string? telemetryDbPath = null,
         bool? storeEnabled = null)
+        => ReadIndex(registryDbPath, telemetryDbPath, storeEnabled, readerClientFactory: null);
+
+    internal static DashboardWorkspaceIndex ReadIndex(
+        string registryDbPath, string? telemetryDbPath, bool? storeEnabled, Func<IJulieStoreClient>? readerClientFactory)
     {
         (IReadOnlyList<DashboardWorkspaceRow> workspaces, string? registryError) = TryReadWorkspaces(registryDbPath);
         IReadOnlyDictionary<string, string> lastActivity = ReadLastActivityByWorkspace(telemetryDbPath);
@@ -654,7 +659,7 @@ public static class DashboardData
         {
             bool rootExists = Directory.Exists(workspace.CanonicalRoot);
             DashboardWorkspaceFacts facts = rootExists
-                ? DashboardIndexFactsCache.Read(workspace, storeEnabled)
+                ? DashboardIndexFactsCache.Read(workspace, storeEnabled, readerClientFactory)
                 : MissingRootFacts(workspace, storeEnabled);
             lastActivity.TryGetValue(workspace.WorkspaceId, out string? lastActivityTs);
             var entry = new DashboardWorkspaceIndexEntry(workspace, facts, rootExists, lastActivityTs);
@@ -754,6 +759,9 @@ public static class DashboardData
 
     public static string RenderIndexJson(string registryDbPath, string? telemetryDbPath = null) =>
         JsonSerializer.Serialize(ReadIndex(registryDbPath, telemetryDbPath), JsonContext.DashboardWorkspaceIndex);
+
+    internal static string RenderIndexJson(string registryDbPath, string? telemetryDbPath, Func<IJulieStoreClient> readerClientFactory) =>
+        JsonSerializer.Serialize(ReadIndex(registryDbPath, telemetryDbPath, null, readerClientFactory), JsonContext.DashboardWorkspaceIndex);
 
     /// <summary>
     /// Registry rows for the page spine. A corrupt/truncated <c>workspaces.db</c> degrades to an EMPTY list
@@ -1125,6 +1133,11 @@ public static class DashboardData
         string telemetryDbPath,
         string? workspaceId,
         string? preferredWorkspaceRoot = null)
+        => ReadSnapshot(registryDbPath, telemetryDbPath, workspaceId, preferredWorkspaceRoot, readerClientFactory: null);
+
+    internal static DashboardSnapshot ReadSnapshot(
+        string registryDbPath, string telemetryDbPath, string? workspaceId,
+        string? preferredWorkspaceRoot, Func<IJulieStoreClient>? readerClientFactory)
     {
         IReadOnlyList<DashboardWorkspaceRow> workspaces = ReadWorkspaces(registryDbPath);
         string? selectedWorkspaceId = SelectWorkspace(workspaces, telemetryDbPath, workspaceId, preferredWorkspaceRoot);
@@ -1136,7 +1149,7 @@ public static class DashboardData
         string? storeSessionError = null;
         Exception? storeSessionFailure = null;
         if (selectedWorkspace is not null && storeEnabled)
-            storeSession = TryOpenStoreReadSession(selectedWorkspace, out storeSessionError, out storeSessionFailure);
+            storeSession = TryOpenStoreReadSession(selectedWorkspace, out storeSessionError, out storeSessionFailure, readerClientFactory);
 
         try
         {
@@ -1707,7 +1720,8 @@ public static class DashboardData
     private static WorkspaceReadHandle? TryOpenStoreReadSession(
         DashboardWorkspaceRow workspace,
         out string? error,
-        out Exception? failure)
+        out Exception? failure,
+        Func<IJulieStoreClient>? readerClientFactory)
     {
         error = null;
         failure = null;
@@ -1717,6 +1731,7 @@ public static class DashboardData
                 workspace.IndexDbPath,
                 workspace.CanonicalRoot,
                 workspace.WorkspaceId,
+                readerClientFactory ?? (() => DashboardPaths.FromEnvironment(AppContext.BaseDirectory).ReaderClient),
                 storeEnabled: true);
         }
         catch (Exception ex) when (
@@ -1766,6 +1781,13 @@ public static class DashboardData
         string? preferredWorkspaceRoot = null) =>
         JsonSerializer.Serialize(
             ReadSnapshot(registryDbPath, telemetryDbPath, workspaceId, preferredWorkspaceRoot),
+            JsonContext.DashboardSnapshot);
+
+    internal static string RenderSnapshotJson(
+        string registryDbPath, string telemetryDbPath, string? workspaceId,
+        string? preferredWorkspaceRoot, Func<IJulieStoreClient> readerClientFactory) =>
+        JsonSerializer.Serialize(
+            ReadSnapshot(registryDbPath, telemetryDbPath, workspaceId, preferredWorkspaceRoot, readerClientFactory),
             JsonContext.DashboardSnapshot);
 
     public static string RenderRefreshJson(WorkspaceRefreshResult result) =>

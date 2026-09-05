@@ -1807,7 +1807,8 @@ public static class CliDispatch
                 using WorkspaceReadHandle storeSession = WorkspaceReadSessionFactory.Open(
                     ctx.ExtractDbPath,
                     ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
-                    ctx.WorkspaceId);
+                    ctx.WorkspaceId,
+                    ctx.ReaderProducerFactory);
                 return CaptureHeavyArmIdentity(ctx, storeSession);
             }
 
@@ -1910,7 +1911,8 @@ public static class CliDispatch
                 using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
                     ctx.ExtractDbPath,
                     ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
-                    ctx.WorkspaceId);
+                    ctx.WorkspaceId,
+                    ctx.ReaderProducerFactory);
                 return (
                     session.Snapshot.Freshness.ArtifactOrStoreId,
                     session.Snapshot.Freshness.StoreLogSequence
@@ -2801,7 +2803,7 @@ public static class CliDispatch
         string? indexLevel = null;
         try
         {
-            using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId);
+            using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId, ctx.ReaderProducerFactory);
             indexLevel = readSession.Snapshot.IndexLevel;
         }
         catch (Exception ex) when (
@@ -2886,7 +2888,8 @@ public static class CliDispatch
                     contentSidecar,
                     vectors,
                     semanticBroker,
-                    CliScanGovernor(ctx));
+                    CliScanGovernor(ctx),
+                    readerClient: ctx.ReaderProducerFactory);
             outw.WriteLine(WorkspaceRender.Status(
                 selectedFacts,
                 TelemetrySummary.Empty,
@@ -2909,7 +2912,8 @@ public static class CliDispatch
                     contentSidecar,
                     vectors,
                     semanticBroker,
-                    CliScanGovernor(ctx));
+                    CliScanGovernor(ctx),
+                    readerClient: ctx.ReaderProducerFactory);
             outw.WriteLine(WorkspaceRender.Status(
                 currentFacts,
                 TelemetrySummary.Empty,
@@ -2923,7 +2927,8 @@ public static class CliDispatch
         using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(
             ctx.ExtractDbPath,
             ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
-            ctx.WorkspaceId);
+            ctx.WorkspaceId,
+            ctx.ReaderProducerFactory);
         WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.ReadSession(readSession);
         WorkspaceFacts facts = WorkspaceFactsAssembler.FromUnregisteredLocal(
             ctx,
@@ -2977,8 +2982,9 @@ public static class CliDispatch
                 contentSidecar,
                 vectors,
                 semanticBroker,
-                CliScanGovernor(ctx));
-            WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(row, facts.WarningText);
+                CliScanGovernor(ctx),
+                readerClient: ctx.ReaderProducerFactory);
+            WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(row, facts.WarningText, ctx.ReaderProducerFactory);
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
                     facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction,
@@ -3001,8 +3007,9 @@ public static class CliDispatch
                 contentSidecar,
                 vectors,
                 semanticBroker,
-                CliScanGovernor(ctx));
-            WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(currentRow, facts.WarningText);
+                CliScanGovernor(ctx),
+                readerClient: ctx.ReaderProducerFactory);
+            WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(currentRow, facts.WarningText, ctx.ReaderProducerFactory);
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
                     facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction,
@@ -3017,7 +3024,8 @@ public static class CliDispatch
         using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(
             ctx.ExtractDbPath,
             ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
-            ctx.WorkspaceId);
+            ctx.WorkspaceId,
+            ctx.ReaderProducerFactory);
         WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.ReadSession(readSession);
         WorkspaceFacts localFacts = WorkspaceFactsAssembler.FromUnregisteredLocal(
             ctx,
@@ -3102,7 +3110,8 @@ public static class CliDispatch
                 row,
                 WorkspaceRegisteredFactsProfile.CliStatus,
                 sidecar,
-                contentSidecar);
+                contentSidecar,
+                readerClient: ctx.ReaderProducerFactory);
             outw.WriteLine(RenderWorkspaceLeader(facts, row.WorkspaceId, handoff, wait, json));
             return 0;
         }
@@ -3115,7 +3124,8 @@ public static class CliDispatch
                 currentRow,
                 WorkspaceRegisteredFactsProfile.CliStatus,
                 sidecar,
-                contentSidecar);
+                contentSidecar,
+                readerClient: ctx.ReaderProducerFactory);
             outw.WriteLine(RenderWorkspaceLeader(facts, currentRow.WorkspaceId, handoff, wait, json));
             return 0;
         }
@@ -3126,7 +3136,8 @@ public static class CliDispatch
         using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(
             ctx.ExtractDbPath,
             ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
-            ctx.WorkspaceId);
+            ctx.WorkspaceId,
+            ctx.ReaderProducerFactory);
         WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.ReadSession(readSession);
         WorkspaceFacts localFacts = WorkspaceFactsAssembler.FromUnregisteredLocal(
             ctx,
@@ -3163,7 +3174,8 @@ public static class CliDispatch
                 row,
                 WorkspaceRegisteredFactsProfile.CliHealth,
                 sidecar,
-                contentSidecar);
+                contentSidecar,
+                readerClient: ctx.ReaderProducerFactory);
             outw.WriteLine(WorkspaceRender.Onboarding(
                 WorkspaceOnboardingAssembler.CreateFromWorkspace(
                     facts,
@@ -3171,7 +3183,8 @@ public static class CliDispatch
                     row.WorkspaceId,
                     row.CanonicalRoot,
                     row.IndexDbPath,
-                    storeEnabled: facts.Store is not null),
+                    storeEnabled: facts.Store is not null,
+                    readerClient: ctx.ReaderProducerFactory),
                 json));
             return 0;
         }
@@ -3184,7 +3197,8 @@ public static class CliDispatch
                 currentRow,
                 WorkspaceRegisteredFactsProfile.CliHealth,
                 sidecar,
-                contentSidecar);
+                contentSidecar,
+                readerClient: ctx.ReaderProducerFactory);
             outw.WriteLine(WorkspaceRender.Onboarding(
                 WorkspaceOnboardingAssembler.CreateFromWorkspace(
                     facts,
@@ -3192,7 +3206,8 @@ public static class CliDispatch
                     currentRow.WorkspaceId,
                     currentRow.CanonicalRoot,
                     currentRow.IndexDbPath,
-                    storeEnabled: facts.Store is not null),
+                    storeEnabled: facts.Store is not null,
+                    readerClient: ctx.ReaderProducerFactory),
                 json));
             return 0;
         }
@@ -3203,7 +3218,8 @@ public static class CliDispatch
         using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(
             ctx.ExtractDbPath,
             ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
-            ctx.WorkspaceId);
+            ctx.WorkspaceId,
+            ctx.ReaderProducerFactory);
         WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.ReadSession(readSession);
         WorkspaceFacts localFacts = WorkspaceFactsAssembler.FromUnregisteredLocal(
             ctx,
@@ -3217,7 +3233,8 @@ public static class CliDispatch
                 ctx.WorkspaceId,
                 localFacts.Root,
                 ctx.ExtractDbPath,
-                storeEnabled: localFacts.Store is not null),
+                storeEnabled: localFacts.Store is not null,
+                readerClient: ctx.ReaderProducerFactory),
             json));
         return 0;
     }
@@ -3314,14 +3331,15 @@ public static class CliDispatch
         return false;
     }
 
-    private static WorkspaceExtractionHealthFacts ReadHealthOrUnavailable(WorkspaceRegistryRow row, string? error)
+    private static WorkspaceExtractionHealthFacts ReadHealthOrUnavailable(WorkspaceRegistryRow row, string? error, Func<IJulieStoreClient> readerClient)
     {
         try
         {
             using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
                 row.IndexDbPath,
                 row.CanonicalRoot,
-                row.WorkspaceId);
+                row.WorkspaceId,
+                readerClient);
             return WorkspaceHealthReader.Read(session);
         }
         catch (Exception ex) when (
@@ -3396,7 +3414,7 @@ public static class CliDispatch
             row.CanonicalRoot,
             CurrentRootForRegistrySelection(ctx));
         string? vectorNote = VectorRefreshNote(SemanticActivation.FromEnvironment(), currentWorkspace);
-        var action = WorkspaceRefreshAction(result, force, sidecar, registry, vectorNote);
+        var action = WorkspaceRefreshAction(result, force, sidecar, registry, vectorNote, ctx.ReaderProducerFactory);
         outw.WriteLine(WorkspaceRender.Action(action, json));
         return RefreshExitCode(result.Status);
     }
@@ -3437,7 +3455,8 @@ public static class CliDispatch
         bool force,
         SymbolSearchSidecar sidecar,
         WorkspaceRegistry? registry = null,
-        string? vectorNote = null)
+        string? vectorNote = null,
+        Func<IJulieStoreClient>? readerClient = null)
     {
         long revision = result.Revision ?? 0;
         bool? indexFresh = result.Status switch
@@ -3451,7 +3470,7 @@ public static class CliDispatch
             _ => null,
         };
 
-        var refreshSidecars = OpenRefreshSidecarFacts(result, sidecar, revision);
+        var refreshSidecars = OpenRefreshSidecarFacts(result, sidecar, revision, readerClient);
 
         return new WorkspaceActionResult(
             Operation: force ? "full" : "refresh",
@@ -3467,7 +3486,7 @@ public static class CliDispatch
             ContentCorpus: refreshSidecars.Content,
             ScanDurationMs: (long?)result.ScanDuration?.TotalMilliseconds,
             DurationMs: (long?)result.TotalDuration?.TotalMilliseconds,
-            ArtifactId: ArtifactIdForAction(result, registry),
+            ArtifactId: ArtifactIdForAction(result, registry, readerClient),
             Sidecars: result.Sidecars);
     }
 
@@ -3479,7 +3498,8 @@ public static class CliDispatch
     private static (SearchSidecarFacts Search, ContentCorpusFacts Content) OpenRefreshSidecarFacts(
         WorkspaceRefreshResult result,
         SymbolSearchSidecar sidecar,
-        long revision)
+        long revision,
+        Func<IJulieStoreClient>? readerClient)
     {
         var contentSidecar = new ContentCorpusSidecar();
         try
@@ -3487,7 +3507,8 @@ public static class CliDispatch
             using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
                 result.IndexDbPath,
                 result.WorkspaceRoot,
-                result.WorkspaceId);
+                result.WorkspaceId,
+                storeEnabled: null, factCacheStore: null, readerClientFactory: readerClient);
             return RefreshSidecarFacts(
                 session.FamilyStoreRoot,
                 session.Snapshot,
@@ -3553,7 +3574,7 @@ public static class CliDispatch
         return first + "; " + second;
     }
 
-    private static string? ArtifactIdForAction(WorkspaceRefreshResult result, WorkspaceRegistry? registry)
+    private static string? ArtifactIdForAction(WorkspaceRefreshResult result, WorkspaceRegistry? registry, Func<IJulieStoreClient>? readerClient)
     {
         if (!string.IsNullOrWhiteSpace(result.ArtifactId))
             return result.ArtifactId;
@@ -3569,7 +3590,7 @@ public static class CliDispatch
             row,
             WorkspaceRegisteredFactsProfile.CliStatus,
             SymbolSearchSidecar.Disabled,
-            new ContentCorpusSidecar()).ArtifactId;
+            new ContentCorpusSidecar(), readerClient: readerClient).ArtifactId;
     }
 
     // ---------- open (bootstrap a fresh directory) ----------
@@ -3650,7 +3671,7 @@ public static class CliDispatch
             Status: result.StatusText,
             ScanDurationMs: (long?)result.ScanDuration?.TotalMilliseconds,
             DurationMs: (long?)result.TotalDuration?.TotalMilliseconds,
-            ArtifactId: ArtifactIdForAction(result, registry));
+            ArtifactId: ArtifactIdForAction(result, registry, ctx.ReaderProducerFactory));
         outw.WriteLine(WorkspaceRender.Action(action, json));
         return RefreshExitCode(result.Status);
     }
@@ -3890,7 +3911,8 @@ public static class CliDispatch
             session = WorkspaceReadSessionFactory.OpenForOneShotCli(
                 ctx.ExtractDbPath,
                 ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
-                ctx.WorkspaceId);
+                ctx.WorkspaceId,
+                ctx.ReaderProducerFactory);
             SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
             if (session.Snapshot.Mode == WorkspaceReadMode.FamilyStore)
             {
@@ -4043,6 +4065,7 @@ public static class CliDispatch
                     repaired.ViewId,
                     repaired.WorkspaceRoot,
                     StoreBindingState.Ready);
+                using IDisposable? readerScope = StoreReaderRegistrationRouting.Use(binding.StoreRoot, ctx.ReaderProducer);
                 using FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding, row.WorkspaceId);
                 return true;
             }

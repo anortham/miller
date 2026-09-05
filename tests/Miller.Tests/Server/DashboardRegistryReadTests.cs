@@ -834,17 +834,18 @@ public sealed class DashboardRegistryReadTests : IDisposable
         using StoreFixture fixture = StoreFixture.Create();
         StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
         DashboardWorkspaceRow workspace = StoreWorkspaceRow(fixture, "ws-store-advance", "store-advance-abcd1234");
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
 
         DashboardIndexFactsCache.Clear();
-        DashboardWorkspaceFacts first = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
-        DashboardWorkspaceFacts second = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+        DashboardWorkspaceFacts first = DashboardIndexFactsCache.Read(workspace, true, () => reader.Client);
+        DashboardWorkspaceFacts second = DashboardIndexFactsCache.Read(workspace, true, () => reader.Client);
 
         Assert.Same(first, second);
         Assert.NotNull(first.Store);
         Assert.Equal(2, first.IndexRevision);
 
         AppendStoreLogEvent(fixture, sequence: 3);
-        DashboardWorkspaceFacts third = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+        DashboardWorkspaceFacts third = DashboardIndexFactsCache.Read(workspace, true, () => reader.Client);
 
         Assert.NotSame(first, third);
         Assert.Equal(3, third.IndexRevision);
@@ -856,14 +857,15 @@ public sealed class DashboardRegistryReadTests : IDisposable
         using StoreFixture fixture = StoreFixture.Create();
         StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
         DashboardWorkspaceRow workspace = StoreWorkspaceRow(fixture, "ws-store-members", "store-members-abcd1234");
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
 
         DashboardIndexFactsCache.Clear();
-        DashboardWorkspaceFacts first = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+        DashboardWorkspaceFacts first = DashboardIndexFactsCache.Read(workspace, true, () => reader.Client);
         Assert.Equal(1, first.Store?.MemberCount);
 
         AddStoreView(fixture, "view-b", Path.Combine(fixture.Binding.WorkspaceRoot, "..", "sibling"));
         DashboardStoreViewsWitness.Clear();
-        DashboardWorkspaceFacts second = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+        DashboardWorkspaceFacts second = DashboardIndexFactsCache.Read(workspace, true, () => reader.Client);
 
         Assert.NotSame(first, second);
         Assert.Equal(2, second.Store?.MemberCount);
@@ -903,10 +905,11 @@ public sealed class DashboardRegistryReadTests : IDisposable
         using StoreFixture fixture = StoreFixture.Create();
         StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
         DashboardWorkspaceRow workspace = StoreWorkspaceRow(fixture, "ws-mode-isolation", "mode-isolation-abcd1234");
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
 
         DashboardIndexFactsCache.Clear();
         DashboardWorkspaceFacts legacy = DashboardIndexFactsCache.Read(workspace, storeEnabled: false);
-        DashboardWorkspaceFacts store = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+        DashboardWorkspaceFacts store = DashboardIndexFactsCache.Read(workspace, true, () => reader.Client);
         DashboardWorkspaceFacts legacyAgain = DashboardIndexFactsCache.Read(workspace, storeEnabled: false);
 
         Assert.NotSame(legacy, store);

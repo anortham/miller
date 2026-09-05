@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Indexing.Resolution;
 using Miller.Indexing.Semantic;
+using Miller.Indexing.Store;
 using Miller.Server.Cli;
 using Miller.Server.Git;
 using Miller.Server.Tools;
@@ -230,7 +231,8 @@ public static class MillerServiceRegistration
                 supplementalEdgesCache: sp.GetRequiredService<SupplementalEdgeCache>(),
                 factCacheStore: sp.GetRequiredService<RevisionFactCacheStore>(),
                 backgroundRefreshGate: sp.GetRequiredService<BackgroundRefreshGate>(),
-                primary: sp.GetRequiredService<IndexBootstrapService>()));
+                primary: sp.GetRequiredService<IndexBootstrapService>(),
+                readerClientFactory: () => JulieStoreClient.Locate(sp.GetRequiredService<MillerHostPaths>().ToolsRoot)));
         services.AddTransient<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceArtifactProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddTransient<IWorkspaceSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());

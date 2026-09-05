@@ -111,8 +111,7 @@ public sealed class CtDaemonShadowCopyTests : IDisposable
 
     /// <summary>
     /// The key digests exactly what <c>CopyTree</c> copies. A file that cannot reach the copy must
-    /// not move the key: <c>.tools</c> is 164 MB that julie-extract restores independently of any
-    /// Miller build, and re-keying on it would copy the whole tree again for nothing.
+    /// not move the key. Semantic runtimes are unused by the CT daemon.
     /// </summary>
     [Fact]
     public void The_copy_set_leaves_out_what_the_copy_leaves_out()
@@ -120,12 +119,59 @@ public sealed class CtDaemonShadowCopyTests : IDisposable
         WriteInstall("build one");
         string first = CtDaemonShadowCopy.BuildKey("1.13.0", Install, CtDaemonShadowCopy.EnumerateCopySet(Install));
 
-        File.WriteAllText(Path.Combine(Install, ".tools", "julie-extract.exe"), "a different extractor entirely");
+        File.WriteAllText(Path.Combine(Install, ".tools", "vec0.so"), "a different semantic runtime");
 
         Assert.Equal(first, CtDaemonShadowCopy.BuildKey("1.13.0", Install, CtDaemonShadowCopy.EnumerateCopySet(Install)));
         Assert.DoesNotContain(
             CtDaemonShadowCopy.EnumerateCopySet(Install),
-            entry => entry.RelativePath.Contains(".tools", StringComparison.Ordinal));
+            entry => entry.RelativePath.EndsWith("vec0.so", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_changed_reader_producer_gets_a_fresh_copy()
+    {
+        string executable = WriteInstall("build one");
+        CtDaemonImage first = CtDaemonShadowCopy.Resolve(executable, "1.13.0", CopyRoot);
+        string producer = OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract";
+        string path = Path.Combine(Install, ".tools", producer);
+        DateTime written = File.GetLastWriteTimeUtc(path);
+        File.WriteAllText(path, "VERY LARGE IN PRODUCTION");
+        File.SetLastWriteTimeUtc(path, written);
+
+        CtDaemonImage second = CtDaemonShadowCopy.Resolve(executable, "1.13.0", CopyRoot);
+
+        Assert.NotEqual(first.Executable, second.Executable);
+        Assert.Equal("VERY LARGE IN PRODUCTION", File.ReadAllText(
+            Path.Combine(Path.GetDirectoryName(second.Executable)!, ".tools", producer)));
+    }
+
+    [Fact]
+    public void A_corrupted_cached_reader_producer_is_repaired_before_reuse()
+    {
+        string executable = WriteInstall("build one");
+        CtDaemonImage first = CtDaemonShadowCopy.Resolve(executable, "1.13.0", CopyRoot);
+        string producer = OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract";
+        string cached = Path.Combine(Path.GetDirectoryName(first.Executable)!, ".tools", producer);
+        File.WriteAllText(cached, "corrupted reader binary");
+
+        CtDaemonImage second = CtDaemonShadowCopy.Resolve(executable, "1.13.0", CopyRoot);
+
+        Assert.True(second.IsShadowCopy, second.Reason);
+        Assert.Equal("very large in production", File.ReadAllText(cached));
+    }
+
+    [Fact]
+    public void A_reader_producer_changed_after_keying_cannot_publish_ready()
+    {
+        WriteInstall("build one");
+        IReadOnlyList<CtDaemonCopyEntry> entries = CtDaemonShadowCopy.EnumerateCopySet(Install);
+        string key = CtDaemonShadowCopy.BuildKey("1.13.0", Install, entries);
+        string target = Path.Combine(CopyRoot, key);
+        string producer = OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract";
+        File.WriteAllText(Path.Combine(Install, ".tools", producer), "changed after keying");
+
+        Assert.Throws<IOException>(() => CtDaemonShadowCopy.Materialize(CopyRoot, Install, target, key, entries));
+        Assert.False(File.Exists(Path.Combine(target, CtDaemonShadowCopy.ReadyMarkerName)));
     }
 
     // ---- cleanup safety ------------------------------------------------------------------
@@ -344,19 +390,24 @@ public sealed class CtDaemonShadowCopyTests : IDisposable
     }
 
     /// <summary>
-    /// `.tools` is 164 MB of julie-extract, the semantic sidecar, and vec0. The daemon needs none of
-    /// it: it carries no tools root, it reads the index through WorkspaceReadSessionFactory, and
-    /// every test provider it spawns is found on PATH.
+    /// Reader admission needs the matching producer beside the private daemon executable.
+    /// Semantic runtimes and unrelated tool subtrees do not travel with it.
     /// </summary>
     [Fact]
-    public void The_copy_leaves_the_tools_directory_behind()
+    public void The_copy_includes_only_the_reader_producer_from_tools()
     {
         string executable = WriteInstall("build one");
 
         CtDaemonImage image = CtDaemonShadowCopy.Resolve(executable, "1.13.0", CopyRoot);
 
         string copy = Path.GetDirectoryName(image.Executable)!;
-        Assert.False(Directory.Exists(Path.Combine(copy, ".tools")));
+        string producer = OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract";
+        Assert.Equal("very large in production", File.ReadAllText(Path.Combine(copy, ".tools", producer)));
+        Assert.Equal([producer], Directory.GetFiles(Path.Combine(copy, ".tools")).Select(Path.GetFileName));
+        Assert.Empty(Directory.GetDirectories(Path.Combine(copy, ".tools")));
+        if (!OperatingSystem.IsWindows())
+            Assert.Equal(File.GetUnixFileMode(Path.Combine(Install, ".tools", producer)),
+                File.GetUnixFileMode(Path.Combine(copy, ".tools", producer)));
         Assert.True(Directory.Exists(Path.Combine(Install, ".tools")), "the install itself is never modified");
     }
 
@@ -500,7 +551,12 @@ public sealed class CtDaemonShadowCopyTests : IDisposable
 
         string tools = Path.Combine(Install, ".tools");
         Directory.CreateDirectory(tools);
-        File.WriteAllText(Path.Combine(tools, "julie-extract.exe"), "very large in production");
+        File.WriteAllText(Path.Combine(tools, OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract"), "very large in production");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(Path.Combine(tools, "julie-extract"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        File.WriteAllText(Path.Combine(tools, "vec0.so"), "semantic runtime");
+        Directory.CreateDirectory(Path.Combine(tools, "semantic"));
+        File.WriteAllText(Path.Combine(tools, "semantic", "julie-semantic-sidecar"), "semantic producer");
         return executable;
     }
 }

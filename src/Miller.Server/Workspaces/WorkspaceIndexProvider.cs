@@ -58,7 +58,9 @@ public sealed class WorkspaceIndexProvider
         SupplementalEdgeCache supplementalEdgesCache,
         RevisionFactCacheStore factCacheStore,
         BackgroundRefreshGate backgroundRefreshGate,
-        IndexBootstrapService? primary = null)
+        IndexBootstrapService? primary = null,
+        IJulieStoreClient? readerClient = null,
+        Func<IJulieStoreClient>? readerClientFactory = null)
         : this(
             holder,
             currentWorkspace,
@@ -76,9 +78,12 @@ public sealed class WorkspaceIndexProvider
             currentIndexFresh: _ => null,
             sidecar,
             openReadSession: (databasePath, root, workspaceId) =>
-                WorkspaceReadSessionFactory.Open(databasePath, root, workspaceId, storeEnabled: null, factCacheStore),
+                WorkspaceReadSessionFactory.Open(databasePath, root, workspaceId, storeEnabled: null, factCacheStore,
+                    readerClient: readerClient, readerClientFactory: readerClientFactory ?? currentWorkspace?.ReaderProducerFactory),
             supplementalEdgesCache: supplementalEdgesCache,
             factCacheStore: factCacheStore,
+            hasReadableIndex: row => HasReadableIndex(row, storeEnabled: null, readerClient,
+                readerClientFactory ?? currentWorkspace?.ReaderProducerFactory),
             backgroundRefreshGate: backgroundRefreshGate,
             primary: primary)
     {
@@ -1160,14 +1165,17 @@ public sealed class WorkspaceIndexProvider
     /// </summary>
     /// <param name="row">The registry row to probe.</param>
     /// <param name="storeEnabled">Null reads <c>MILLER_INDEX_STORE</c>, exactly as the read path does.</param>
-    internal static bool HasReadableIndex(WorkspaceRegistryRow row, bool? storeEnabled)
+    internal static bool HasReadableIndex(WorkspaceRegistryRow row, bool? storeEnabled, IJulieStoreClient? readerClient = null,
+        Func<IJulieStoreClient>? readerClientFactory = null)
     {
         ArgumentNullException.ThrowIfNull(row);
         try
         {
             bool storeMode = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
-            _ = WorkspaceReadSessionFactory.Probe(
-                row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, storeMode);
+            Func<IJulieStoreClient>? select = readerClient is null ? readerClientFactory : () => readerClient;
+            _ = select is null
+                ? WorkspaceReadSessionFactory.Probe(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, storeMode)
+                : WorkspaceReadSessionFactory.Probe(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, select, storeMode);
 
             // Opening a legacy artifact is not proof it can serve a read: SQLite opens a zero-byte or truncated file
             // happily and the failure lands later, inside whichever reader the tool call reaches. The schema gate is

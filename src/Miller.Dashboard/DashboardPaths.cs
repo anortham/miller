@@ -7,6 +7,11 @@ internal sealed record DashboardPaths(
     string WebRoot,
     string Url)
 {
+    internal Miller.Indexing.Store.IJulieStoreClient? ReaderClientOverride { get; init; }
+
+    internal Miller.Indexing.Store.IJulieStoreClient ReaderClient =>
+        ReaderClientOverride ?? Miller.Indexing.Store.JulieStoreClient.Locate(ToolsRoot);
+
     public static DashboardPaths FromEnvironment(string appBaseDirectory)
     {
         string millerHome = Miller.Indexing.MillerHome.ResolveMillerDirectory();

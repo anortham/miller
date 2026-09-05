@@ -617,6 +617,7 @@ public sealed class VectorConvergeService : BackgroundService
             workspace.CanonicalExtractDbPath ?? Path.Combine(workspaceRoot, ".miller", "symbols.db"),
             workspaceRoot,
             workspace.WorkspaceId,
+            workspace.ReaderProducerFactory,
             storeEnabled: true);
         WorkspaceReadSnapshot snapshot = session.Snapshot;
         if (session.FamilyStoreRoot is not { } storeRoot || snapshot.Freshness.StoreLogSequence is not { } target)
@@ -690,6 +691,7 @@ public sealed class VectorConvergeService : BackgroundService
             workspace.CanonicalExtractDbPath ?? Path.Combine(workspaceRoot, ".miller", "symbols.db"),
             workspaceRoot,
             workspace.WorkspaceId,
+            workspace.ReaderProducerFactory,
             storeEnabled: true);
         return probe.StoreRoot
             ?? throw new InvalidOperationException("The family-store read session has no store root.");
@@ -705,6 +707,7 @@ public sealed class VectorConvergeService : BackgroundService
             workspace.CanonicalExtractDbPath ?? Path.Combine(workspaceRoot, ".miller", "symbols.db"),
             workspaceRoot,
             workspace.WorkspaceId,
+            workspace.ReaderProducerFactory,
             storeEnabled: true);
         return VectorSidecar.PathForStore(
             probe.StoreRoot
@@ -1733,6 +1736,7 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
             workspace.CanonicalExtractDbPath ?? Path.Combine(workspaceRoot, ".miller", "symbols.db"),
             workspaceRoot,
             workspace.WorkspaceId,
+            workspace.ReaderProducerFactory,
             storeEnabled: true);
         try
         {

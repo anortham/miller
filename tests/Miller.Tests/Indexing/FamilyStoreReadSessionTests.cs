@@ -14,6 +14,46 @@ namespace Miller.Tests.Indexing;
 
 public sealed class FamilyStoreReadSessionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FactoryUsesCallerProducerAndClosesAllConnectionsBeforeRelease(bool oneShot)
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
+        string legacy = Path.Combine(fixture.Root, "missing-legacy.db");
+        using (WorkspaceReadHandle handle = oneShot
+            ? WorkspaceReadSessionFactory.OpenForOneShotCli(legacy, fixture.Binding.WorkspaceRoot, "workspace-a", reader.Client, true)
+            : WorkspaceReadSessionFactory.Open(legacy, fixture.Binding.WorkspaceRoot, "workspace-a", reader.Client, true))
+        {
+            Assert.Equal("Visible", Assert.Single(SqliteSymbolReader.ReadForPaths(handle, ["same.cs"])).Name);
+            RevisionFactCache cache = RequireCache(handle);
+            Assert.Equal(!oneShot, cache.CanAdvance);
+            Assert.Equal(oneShot ? 0 : 1, cache.LoadedSliceCount);
+            Assert.Equal("acquire", reader.Events[0]);
+            Assert.DoesNotContain("release", reader.Events);
+            Assert.Equal(1, reader.Owed);
+        }
+        Assert.Equal(oneShot
+            ? ["acquire", "open", "open", "close", "close", "release"]
+            : new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(0, reader.Owed);
+    }
+
+    [Fact]
+    public void FactoryProbeFallbackUsesCallerProducerWithoutHydratingFacts()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        using var reader = new StoreCallerReaderFixture(fixture.Binding, fixture.ReaderReply);
+        WorkspaceFreshnessProbe probe = WorkspaceReadSessionFactory.Probe(
+            Path.Combine(fixture.Root, "missing-legacy.db"), fixture.Binding.WorkspaceRoot, "workspace-a", reader.Client, true);
+        Assert.Equal(2, probe.Revision);
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, reader.Events);
+        Assert.Equal(0, reader.Owed);
+    }
+
     [Fact]
     public void SymbolPathQueryUsesTheManifestPathIndexBeforeReadingSymbols()
     {

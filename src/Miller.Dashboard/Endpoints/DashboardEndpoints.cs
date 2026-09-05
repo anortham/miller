@@ -56,7 +56,7 @@ internal static class DashboardEndpoints
         endpoints.MapGet("/", (string? notice, string? detail) =>
             new RazorComponentResult<WorkspacesShell>(new
             {
-                Index = DashboardData.ReadIndex(paths.RegistryDbPath, paths.TelemetryDbPath),
+                Index = DashboardData.ReadIndex(paths.RegistryDbPath, paths.TelemetryDbPath, null, () => paths.ReaderClient),
                 Activity = DashboardData.ReadRecentActivity(
                     paths.TelemetryDbPath,
                     paths.RegistryDbPath,
@@ -85,7 +85,7 @@ internal static class DashboardEndpoints
                 paths.RegistryDbPath,
                 paths.TelemetryDbPath,
                 workspace_id,
-                launchDirectory);
+                launchDirectory, () => paths.ReaderClient);
             // A requested id that did not resolve must not silently render the fallback workspace —
             // or, on an empty registry, the empty workspace shell.
             if (!string.IsNullOrWhiteSpace(workspace_id) &&
@@ -133,7 +133,7 @@ internal static class DashboardEndpoints
                     paths.RegistryDbPath,
                     paths.TelemetryDbPath,
                     workspace_id,
-                    launchDirectory),
+                    launchDirectory, () => paths.ReaderClient),
             })
             {
                 PreventStreamingRendering = true,
@@ -153,7 +153,7 @@ internal static class DashboardEndpoints
         endpoints.MapGet("/fragments/workspaces", () =>
             new RazorComponentResult<WorkspaceIndex>(new
             {
-                Index = DashboardData.ReadIndex(paths.RegistryDbPath, paths.TelemetryDbPath),
+                Index = DashboardData.ReadIndex(paths.RegistryDbPath, paths.TelemetryDbPath, null, () => paths.ReaderClient),
             })
             {
                 PreventStreamingRendering = true,
@@ -297,7 +297,7 @@ internal static class DashboardEndpoints
             paths.RegistryDbPath,
             paths.TelemetryDbPath,
             workspaceId,
-            launchDirectory);
+            launchDirectory, () => paths.ReaderClient);
         return new RazorComponentResult<WorkspaceDetailStack>(new
         {
             Snapshot = snapshot,
@@ -340,7 +340,7 @@ internal static class DashboardEndpoints
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/index.json", () => Results.Text(
-            DashboardData.RenderIndexJson(paths.RegistryDbPath, paths.TelemetryDbPath),
+            DashboardData.RenderIndexJson(paths.RegistryDbPath, paths.TelemetryDbPath, () => paths.ReaderClient),
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/activity.json", (string? workspace_id) => Results.Text(
@@ -352,7 +352,7 @@ internal static class DashboardEndpoints
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/snapshot.json", (string? workspace_id) => Results.Text(
-            DashboardData.RenderSnapshotJson(paths.RegistryDbPath, paths.TelemetryDbPath, workspace_id, launchDirectory),
+            DashboardData.RenderSnapshotJson(paths.RegistryDbPath, paths.TelemetryDbPath, workspace_id, launchDirectory, () => paths.ReaderClient),
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/diagnostics.json", () => Results.Text(
