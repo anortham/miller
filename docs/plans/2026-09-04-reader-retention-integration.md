@@ -362,10 +362,12 @@ Task 4 consumer coverage passed 713 tests with one existing OS skip; the final d
 
 **Acceptance:**
 
-- [ ] Renewal is shared, bounded, deadline-based, and never grants deletion permission.
-- [ ] Failed renewal/unknown identity retains protection and reports degradation.
-- [ ] Release retry/owed state is idempotent, scoped, and primary-error preserving.
-- [ ] Legacy and incompatible mixed-version behavior is fail-closed with no stale fallback.
+- [x] Renewal is shared, bounded, deadline-based, and never grants deletion permission.
+- [x] Failed renewal/unknown identity retains protection and reports degradation.
+- [x] Release retry/owed state is idempotent, scoped, and primary-error preserving.
+- [x] Legacy and incompatible mixed-version behavior is fail-closed with no stale fallback.
+
+Task 5 focused qualification passed 206 distinct tests, including 26 added cases. Five real-SQLite regressions failed before fixes and passed afterward. Repeated reads now refuse additional connections while a failed secondary connection remains unclosed; shared-work joiners do not inherit another session's cleanup debt. Cache loading preserves the original query error if disposal also fails. Compatibility preflight selects only its seven required metadata keys. Renewal refusal, expiry, release retry, and mixed-version refusal tests use simulated producer reports and do not establish actual OS process-identity behavior. Task 6 still owns those real-process and platform limits.
 
 ## Task 6: Real producer race, Linux/Windows Scale, and final integration gate
 

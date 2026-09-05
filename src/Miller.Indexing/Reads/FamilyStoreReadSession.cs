@@ -53,7 +53,7 @@ public sealed class FamilyStoreReadSession :
     private readonly RevisionFactCacheStore? _factCacheStore;
     private readonly bool _boundedFactsRequested;
     private readonly StoreReaderRegistrationHandle _registration;
-    private readonly Func<string, SqliteConnection> _openRead;
+    private readonly StoreReaderConnectionOwner _connections;
     private readonly object _gate = new();
     private QueryTimeResolutionReader? _resolution;
     private Task? _warmTask;
@@ -80,7 +80,7 @@ public sealed class FamilyStoreReadSession :
         RevisionFactCacheStore? factCacheStore,
         bool boundedFactsRequested,
         StoreReaderRegistrationHandle registration,
-        Func<string, SqliteConnection> openRead)
+        StoreReaderConnectionOwner connections)
     {
         _connection = connection;
         Visibility = visibility;
@@ -88,7 +88,7 @@ public sealed class FamilyStoreReadSession :
         _factCacheStore = factCacheStore;
         _boundedFactsRequested = boundedFactsRequested;
         _registration = registration;
-        _openRead = openRead;
+        _connections = connections;
     }
 
     private string FactCacheScope =>
@@ -135,10 +135,12 @@ public sealed class FamilyStoreReadSession :
             try
             {
                 StoreVisibility visibility = Visibility;
-                Func<string, SqliteConnection> openRead = _openRead;
+                StoreReaderConnectionOwner connections = _connections;
+                SqliteConnection? readConnection = null;
                 Task shared = store.WarmInBackground(FactCacheScope, FactCacheIdentity,
-                    () => openRead(visibility.StoreDatabasePath), visibility);
-                return _warmTask = ReleaseAfter(shared, retained);
+                    () => readConnection = connections.OpenRead(visibility.StoreDatabasePath), visibility);
+                return _warmTask = ReleaseAfter(shared, retained,
+                    () => connections.RecordFailedRead(readConnection));
             }
             catch
             {
@@ -147,9 +149,10 @@ public sealed class FamilyStoreReadSession :
             }
         }
 
-        static async Task ReleaseAfter(Task shared, IDisposable retained)
+        static async Task ReleaseAfter(Task shared, IDisposable retained, Action recordFailure)
         {
             try { await shared.ConfigureAwait(false); }
+            catch { recordFailure(); throw; }
             finally { retained.Dispose(); }
         }
     }
@@ -159,11 +162,20 @@ public sealed class FamilyStoreReadSession :
         RevisionFactCache cache;
         if (_factCacheStore is { } store)
         {
-            cache = store.GetOrAdvance(
-                FactCacheScope,
-                FactCacheIdentity,
-                () => _openRead(Visibility.StoreDatabasePath),
-                Visibility);
+            SqliteConnection? readConnection = null;
+            try
+            {
+                cache = store.GetOrAdvance(
+                    FactCacheScope,
+                    FactCacheIdentity,
+                    () => readConnection = _connections.OpenRead(Visibility.StoreDatabasePath),
+                    Visibility);
+            }
+            catch
+            {
+                _connections.RecordFailedRead(readConnection);
+                throw;
+            }
         }
         else if (_boundedFactsRequested && BoundedFactsEnabled())
         {
@@ -179,7 +191,7 @@ public sealed class FamilyStoreReadSession :
             // each slice taking its own implicit snapshot and a mid-command generation delete producing a
             // half-populated view. And the session's connection stays free: callers serialize it on _gate, and
             // readers such as PatternFactsReader open their own transaction on it.
-            _boundedConnection = _openRead(Visibility.StoreDatabasePath);
+            _boundedConnection = _connections.OpenRead(Visibility.StoreDatabasePath);
             try
             {
                 _boundedSnapshot = _boundedConnection.BeginTransaction(deferred: true);
@@ -187,6 +199,7 @@ public sealed class FamilyStoreReadSession :
             }
             catch
             {
+                _connections.RecordFailedRead(_boundedConnection);
                 // A failed lazy initialization must not leave a connection behind when a caller retries.
                 try { _boundedSnapshot?.Dispose(); } catch { }
                 _boundedSnapshot = null;
@@ -338,7 +351,7 @@ public sealed class FamilyStoreReadSession :
                         factCacheStore,
                         boundedFactsRequested,
                         registration,
-                        openRead);
+                        connections);
                     transferred = true;
                     return session;
                 }
@@ -459,7 +472,7 @@ public sealed class FamilyStoreReadSession :
             using SqliteConnection connection = OpenReadOnly(paths.StoreDatabasePath);
             SetQueryOnly(connection);
             using SqliteTransaction validation = connection.BeginTransaction(deferred: true);
-            Dictionary<string, string> metadata = ReadStoreMetadata(connection);
+            Dictionary<string, string> metadata = ReadStoreMetadata(connection, compatibilityOnly: true);
             _ = ValidateStoreMetadata(metadata, binding);
             return Required(metadata, "binary_version");
         }
@@ -499,7 +512,7 @@ public sealed class FamilyStoreReadSession :
         using SqliteConnection connection = OpenReadOnly(paths.StoreDatabasePath);
         SetQueryOnly(connection);
         using SqliteTransaction validation = connection.BeginTransaction(deferred: true);
-        _ = ValidateStoreMetadata(ReadStoreMetadata(connection), binding);
+        _ = ValidateStoreMetadata(ReadStoreMetadata(connection, compatibilityOnly: true), binding);
         using SqliteCommand command = connection.CreateCommand();
         command.Transaction = validation;
         command.CommandText = "SELECT root FROM views WHERE view_id=$view";
@@ -816,10 +829,17 @@ public sealed class FamilyStoreReadSession :
         }
     }
 
-    private static Dictionary<string, string> ReadStoreMetadata(SqliteConnection connection)
+    private static Dictionary<string, string> ReadStoreMetadata(SqliteConnection connection, bool compatibilityOnly = false)
     {
         using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = "SELECT key,value FROM store_meta ORDER BY key";
+        command.CommandText = compatibilityOnly
+            ? """
+              SELECT key,value FROM store_meta
+              WHERE key IN ('family_id','store_sqlite_schema_version','store_format_epoch',
+                  'extraction_identity_epoch','generation_state','min_reader_version','binary_version')
+              ORDER BY key
+              """
+            : "SELECT key,value FROM store_meta ORDER BY key";
         using SqliteDataReader reader = command.ExecuteReader();
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
         while (reader.Read())

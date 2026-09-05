@@ -5,6 +5,44 @@ namespace Miller.Tests.Indexing;
 
 public sealed class StoreReaderRegistrationRunnerTests
 {
+    [Theory]
+    [InlineData(null, true, "Transport")]
+    [InlineData(137, false, "InvalidReport")]
+    public void Missing_process_reply_has_bounded_ambiguous_cleanup_without_raw_diagnostics(
+        int? exitCode, bool transportLost, string expected)
+    {
+        int calls = 0;
+        var runner = new StoreReaderRegistrationRunner((_, _) =>
+        {
+            calls++;
+            return new(exitCode, "", "private stderr " + Nonce, TransportLost: transportLost);
+        });
+        var error = Assert.Throws<StoreReaderRegistrationException>(() =>
+            runner.Acquire(Request(), TestContext.Current.CancellationToken));
+        Assert.Equal(expected, error.Failure.ToString());
+        Assert.True(error.MayHaveAcquired);
+        Assert.Equal(3, calls);
+        Assert.DoesNotContain(Nonce, error.ToString());
+        Assert.DoesNotContain("private stderr", error.ToString());
+    }
+
+    [Theory]
+    [InlineData("pin-42", "wrong-pin")]
+    [InlineData("01234567890123456789012345678901", "wrong-nonce-01234567890123456789")]
+    [InlineData("\"owner_pid\":1234", "\"owner_pid\":5678")]
+    public void Renewal_cannot_replace_the_original_pin_or_owner(string original, string replacement)
+    {
+        ReaderAcquireResult acquired = StoreReaderRegistrationRunner.ParseAcquire(new(0, Report, ""), Request());
+        var runner = new StoreReaderRegistrationRunner((_, _) => new(0,
+            Report.Replace("reader_acquire", "reader_renew").Replace("acquired", "renewed").Replace(original, replacement), "private stderr"));
+        var error = Assert.Throws<StoreReaderRegistrationException>(() =>
+            runner.Renew(Request(), acquired, TestContext.Current.CancellationToken));
+        Assert.Equal(ReaderFailure.InvalidReport, error.Failure);
+        Assert.DoesNotContain(Nonce, error.ToString());
+        Assert.DoesNotContain("pin-42", error.ToString());
+        Assert.DoesNotContain("private stderr", error.ToString());
+    }
+
     [Fact]
     public async Task Invalid_utf8_is_rejected_without_rewriting_identity_bytes()
     {
@@ -88,6 +126,7 @@ public sealed class StoreReaderRegistrationRunnerTests
     [InlineData("\"extraction_identity_epoch\":7", "\"extraction_identity_epoch\":8")]
     [InlineData("\"min_retained_store_log_sequence\":80", "\"min_retained_store_log_sequence\":101")]
     [InlineData("\"owner_pid\":1234", "\"owner_pid\":5678")]
+    [InlineData("01234567890123456789012345678901", "wrong-nonce-01234567890123456789")]
     [InlineData("\"operation\":\"reader_acquire\"", "\"operation\":\"reader_renew\"")]
     public void Invalid_reports_refuse_without_echoing_credentials(string original, string replacement)
     {

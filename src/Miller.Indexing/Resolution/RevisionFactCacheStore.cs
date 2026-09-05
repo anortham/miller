@@ -140,10 +140,21 @@ public sealed class RevisionFactCacheStore
                 lazy = new Lazy<RevisionFactCache>(
                     () =>
                     {
-                        using SqliteConnection connection = openRead();
-                        if (previous is { CanAdvance: true })
-                            return previous.Advance(connection, visibility);
-                        return RevisionFactCache.Load(connection, visibility);
+                        SqliteConnection connection = openRead();
+                        RevisionFactCache loaded;
+                        try
+                        {
+                            loaded = previous is { CanAdvance: true }
+                                ? previous.Advance(connection, visibility)
+                                : RevisionFactCache.Load(connection, visibility);
+                        }
+                        catch
+                        {
+                            try { connection.Dispose(); } catch { /* Preserve the primary query failure. */ }
+                            throw;
+                        }
+                        connection.Dispose();
+                        return loaded;
                     },
                     LazyThreadSafetyMode.ExecutionAndPublication);
                 _scopes[workspaceScope] = new ScopeEntry(revisionIdentity, lazy, ++_clock);

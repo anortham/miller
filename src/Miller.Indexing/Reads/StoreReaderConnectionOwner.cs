@@ -9,11 +9,16 @@ internal sealed class StoreReaderConnectionOwner(Func<string, SqliteConnection> 
 {
     private readonly object _gate = new();
     private readonly List<SqliteConnection> _connections = [];
+    private readonly HashSet<SqliteConnection> _closeOwed = [];
 
     internal SqliteConnection OpenRead(string path)
     {
         lock (_gate)
         {
+            _closeOwed.RemoveWhere(connection => connection.State == ConnectionState.Closed);
+            if (_closeOwed.Count != 0)
+                throw new FamilyStoreReadException(FamilyStoreReadFailure.BindingNotReady,
+                    "A prior family-store reader connection still requires closure.");
             _connections.RemoveAll(connection => connection.State == ConnectionState.Closed);
             SqliteConnection connection = createRead(path);
             _connections.Add(connection);
@@ -24,10 +29,17 @@ internal sealed class StoreReaderConnectionOwner(Func<string, SqliteConnection> 
             }
             catch
             {
+                _closeOwed.Add(connection);
                 try { connection.Dispose(); } catch { /* The final-release guard still owns it. */ }
                 throw;
             }
         }
+    }
+
+    internal void RecordFailedRead(SqliteConnection? connection)
+    {
+        if (connection is null) return;
+        lock (_gate) _closeOwed.Add(connection);
     }
 
     internal bool TryCloseAll()
@@ -40,6 +52,7 @@ internal sealed class StoreReaderConnectionOwner(Func<string, SqliteConnection> 
                 try { connection.Dispose(); } catch { /* Retry only while closure remains unproved. */ }
             }
             _connections.RemoveAll(connection => connection.State == ConnectionState.Closed);
+            _closeOwed.RemoveWhere(connection => connection.State == ConnectionState.Closed);
             return _connections.Count == 0;
         }
     }

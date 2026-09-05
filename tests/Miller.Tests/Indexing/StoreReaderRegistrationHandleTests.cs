@@ -7,6 +7,43 @@ namespace Miller.Tests.Indexing;
 
 public sealed class StoreReaderRegistrationHandleTests
 {
+    [Theory]
+    [InlineData("reader_owner_mismatch", "ReaderOwnerMismatch")]
+    [InlineData("reader_identity_unknown", "ReaderIdentityUnknown")]
+    [InlineData("reader_not_found", "ReaderNotFound")]
+    [InlineData("busy", "Busy")]
+    public void Producer_refusal_preserves_typed_degradation_and_snapshot_beyond_expiry(string refusal, string expected)
+    {
+        DateTimeOffset now = DateTimeOffset.FromUnixTimeMilliseconds(1900000000000);
+        int renewals = 0;
+        var runner = new StoreReaderRegistrationRunner((args, _) => args[2] switch
+        {
+            "release" => Released(),
+            "renew" => Refused(),
+            _ => new(0, Report, "")
+        });
+        ReaderProcessResult Refused()
+        {
+            renewals++;
+            return new(1, $$"""{"report_schema_version":1,"operation":"reader_renew","state":"refused","failure_class":"{{refusal}}"}""", "private stderr");
+        }
+        using var registry = new StoreReaderRegistrationRegistry(startScheduler: false, utcNow: () => now);
+        using var handle = StoreReaderRegistrationHandle.Acquire(runner, Request(), registry, TestContext.Current.CancellationToken);
+        var snapshot = handle.Snapshot;
+        for (int tick = 0; tick < 4; tick++)
+        {
+            now += TimeSpan.FromSeconds(tick == 0 ? 90 : 30);
+            registry.Tick(now, TestContext.Current.CancellationToken);
+            Assert.Equal(ReaderLifecycleStatus.RenewDegraded, handle.Status);
+            Assert.Equal(expected, handle.LastFailure.ToString());
+            Assert.Equal(snapshot, handle.Snapshot);
+            Assert.Equal(1, registry.Count);
+            Assert.Equal(tick + 1, renewals);
+            registry.Tick(now, TestContext.Current.CancellationToken);
+            Assert.Equal(tick + 1, renewals);
+        }
+    }
+
     [Fact]
     public void Manual_renewal_uses_expiry_deadline_and_leaves_ample_lease_untouched()
     {
