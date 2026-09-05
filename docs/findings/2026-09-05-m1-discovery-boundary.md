@@ -25,7 +25,9 @@ Julie `crates/julie-extract-cli/src/store/maintenance_report.rs:StoreMaintenance
 Producer `validate_reader_catalog` and `validate_reader_writer_floor` enforce the
 admission prerequisites; they must not be bypassed by a same-PID exception.
 
-## Recommended amendment, awaiting approval
+## Amendment approved on 2026-09-05
+
+The user approved the recommended metadata-only exception. M1 now records its exact scope. Session integration may proceed; release pin adoption remains separate.
 
 Permit a narrowly named metadata-only bootstrap/discovery path for family/view/root
 and compatibility facts. Use read-only bounded transactions, close before admission,

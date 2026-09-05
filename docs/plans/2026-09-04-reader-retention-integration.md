@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Producer pin acquisition happens before any generation `SQLiteConnection` handle is opened. No caller may open first and register later.
+- Producer pin acquisition happens before any serving generation `SQLiteConnection` handle is opened. No serving caller may open first and register later. The approved metadata-only exception below is the only pre-admission database-read exception.
 - `FamilyStoreReadSession` is the concrete enforcement boundary for all direct callers; changing only the factory is insufficient.
 - Use a typed `Indexing.StoreReaderRegistrationRunner`/registration handle in the indexing/server boundary. Do not move process, CLI, SQLite, or filesystem I/O into `Miller.Core`.
 - The registration handle owns the opaque nonce and bounded producer report, validates every snapshot identity and path field, and exposes only the admitted snapshot needed to open the session.
@@ -35,6 +35,19 @@
 - Use explicit workspace paths and task-specific environment variables in commands; do not repurpose `$HOME`, `$CODEX_HOME`, or common system variables.
 
 ## Producer Contract Inputs
+
+### Approved metadata-only exception, 2026-09-05
+
+The user approved bounded metadata-only discovery and compatibility reads before registration. This resolves the family/view discovery cycle described in `docs/findings/2026-09-05-m1-discovery-boundary.md` without extending the producer wire contract.
+
+- Only family identity, view/root catalogue, and writer/reader compatibility facts may be read through a narrowly named discovery/preflight path. Use read-only bounded transactions and close every connection before acquiring a registration.
+- Discovery results are provisional. Revalidate the selected family/view/root and admitted generation/manifest identity after acquisition. A race fails or retries safely; it never permits unpinned serving or a stale legacy fallback.
+- No symbols, relationships, source facts, freshness snapshots, query results, or sidecar hydration may use this exception. `Probe` reads that expose serving freshness still require admission.
+- Writer preflight must work when the requested view or retention catalogue does not yet exist. Existing WAL checkpointing and producer mutation anchors are maintenance mechanisms, not serving sessions; do not turn them into a circular registration prerequisite.
+- Every serving session, including deferred fact warming and bounded CLI/CT reads, keeps its registration until its last generation connection closes. Deferred workers retain the existing handle before scheduling and release it after their shared task settles; they do not acquire another pin.
+- Miller's workspace `indexer.lock` is not the producer writer lease or maintenance intent. Preserve existing workspace serialization. No same-PID fence bypass is permitted.
+
+This exception supersedes blanket references to "any generation handle" only for the metadata paths above. All serving-session acceptance gates remain unchanged.
 
 The producer plan defines `store reader acquire|renew|release` JSON report schema v1, immutable identity `(pin_id, owner_nonce, owner_pid, owner_birth_identity, view_id, manifest_generation, generation_name)`, `manifest_hash`, `store_instance_id`, `extraction_identity_epoch`, `protected_manifest_count`, `served_store_log_sequence`, `min_retained_store_log_sequence`, and `snapshot_fingerprint`. Acquire is idempotent for the same nonce and identical request; a mismatched nonce/request refuses. The producer commits the registration before returning `acquired` and captures process birth identity itself. Miller receives no copied per-reader version-root list, index level, or level stamps.
 
@@ -218,10 +231,12 @@ The fixture and expected generation must come from the selected store binding; t
 
 **Acceptance:**
 
-- [ ] Typed runner/report parsing validates all producer snapshot fields and bounded paths.
-- [ ] Same-nonce ambiguous acquire retries identically.
-- [ ] Legacy and incompatible states are distinct typed outcomes.
-- [ ] No generation connection is opened by the runner/parser.
+- [x] Typed runner/report parsing validates all producer snapshot fields and bounded paths.
+- [x] Same-nonce ambiguous acquire retries identically.
+- [x] Legacy and incompatible states are distinct typed outcomes.
+- [x] No generation connection is opened by the runner/parser.
+
+Task 1 component slice committed as `a70c305c`, with 31 registration tests and 25 existing client tests passing. The concrete session signature adjustment moves with Task 2 after approval of the metadata exception.
 
 ## Task 2: Enforce acquire-before-open and deterministic disposal
 
