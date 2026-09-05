@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server;
 using Miller.Server.Hosting;
 using Miller.Server.Workspaces;
@@ -12,7 +14,7 @@ namespace Miller.Tests.Server;
 /// Pins the bootstrap's answer to a machine-wide scan-admission timeout. A fleet worktree hit the ten-minute
 /// admission budget, threw, and then never retried — the server sat unbound for the next fifty minutes until it
 /// was restarted by hand (2026-08-06 P4 scale validation §3). The timeout is contention, not a workspace fault,
-/// so it self-heals; every other bootstrap failure stays terminal.
+/// so it self-heals. Typed reader-admission contention also retries; deterministic failures stay terminal.
 /// </summary>
 public sealed class BootstrapAdmissionRetryTests : IDisposable
 {
@@ -84,6 +86,58 @@ public sealed class BootstrapAdmissionRetryTests : IDisposable
 
         bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Cwd);
 
+        Assert.True(WaitUntil(() => bootstrap.Snapshot.Phase == BootstrapPhase.Failed));
+        Thread.Sleep(TimeSpan.FromMilliseconds(300));
+
+        Assert.Equal(1, Volatile.Read(ref runs));
+        Assert.Equal(BootstrapPhase.Failed, bootstrap.Snapshot.Phase);
+    }
+
+    [Fact]
+    public void ReaderAdmissionBusyRetriesUntilBootstrapBinds()
+    {
+        string root = NewTempDirectory("reader-busy-root");
+        string home = NewTempDirectory("reader-busy-home");
+        using var bootstrap = NewBootstrap(home, TimeSpan.FromMilliseconds(20));
+        int runs = 0;
+        bootstrap.TestRunBootstrapOverride = canonicalRoot =>
+        {
+            if (Interlocked.Increment(ref runs) <= 2)
+                throw new FamilyStoreReadException(FamilyStoreReadFailure.BindingNotReady,
+                    "The family-store reader could not acquire retention.",
+                    new StoreReaderRegistrationException(ReaderFailure.Busy));
+            Bind(bootstrap, canonicalRoot, home);
+        };
+
+        bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Cwd);
+
+        Assert.True(WaitUntil(() => bootstrap.IsBound));
+        Assert.Equal(3, Volatile.Read(ref runs));
+    }
+
+    [Theory]
+    [InlineData("Incompatible", false)]
+    [InlineData("InvalidReport", false)]
+    [InlineData("ReaderIdentityUnknown", false)]
+    [InlineData("Busy", true)]
+    [InlineData("UntypedBusy", false)]
+    public void ReaderAdmissionNonRetryableFailureStaysTerminal(string failure, bool ambiguous)
+    {
+        string root = NewTempDirectory("reader-terminal-root");
+        string home = NewTempDirectory("reader-terminal-home");
+        using var bootstrap = NewBootstrap(home, TimeSpan.FromMilliseconds(20));
+        int runs = 0;
+        bootstrap.TestRunBootstrapOverride = _ =>
+        {
+            Interlocked.Increment(ref runs);
+            if (failure == "UntypedBusy")
+                throw new FamilyStoreReadException(FamilyStoreReadFailure.BindingNotReady, "busy");
+            throw new FamilyStoreReadException(FamilyStoreReadFailure.BindingNotReady,
+                "The family-store reader could not acquire retention.",
+                new StoreReaderRegistrationException(Enum.Parse<ReaderFailure>(failure), ambiguous));
+        };
+
+        bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Cwd);
         Assert.True(WaitUntil(() => bootstrap.Snapshot.Phase == BootstrapPhase.Failed));
         Thread.Sleep(TimeSpan.FromMilliseconds(300));
 

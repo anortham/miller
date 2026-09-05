@@ -1383,6 +1383,15 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             ScheduleRollbackRetry(canonicalRoot, source, runGeneration);
         else if (error is ScanAdmissionTimeoutException)
             ScheduleAdmissionRetry(canonicalRoot, source, runGeneration);
+        else if (error is FamilyStoreReadException
+                 {
+                     InnerException: StoreReaderRegistrationException
+                     {
+                         Failure: ReaderFailure.Busy, MayHaveAcquired: false,
+                     },
+                 })
+            ScheduleBootstrapRetry(canonicalRoot, source, runGeneration,
+                "family-store reader admission contention");
     }
 
     /// <summary>
