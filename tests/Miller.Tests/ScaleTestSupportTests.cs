@@ -20,6 +20,67 @@ namespace Miller.Tests;
 /// </summary>
 public sealed class ScaleTestSupportTests
 {
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void BinarySelectionWithoutSourceKeepsThePlatformPin(string? source)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-selection");
+        string pinned = Path.Combine(root, ".tools", OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract");
+        var examined = new List<string>();
+        Assert.Equal(pinned, ScaleTestSupport.SelectJulieBinary(root, source, path =>
+        {
+            examined.Add(path);
+            return path == pinned;
+        }));
+        Assert.Equal([pinned], examined);
+    }
+
+    [Fact]
+    public void MissingPinWithoutSourceRemainsUnavailable()
+    {
+        Assert.Null(ScaleTestSupport.SelectJulieBinary(Path.GetTempPath(), null, _ => false));
+    }
+
+    [Fact]
+    public void SelectedSourceWinsWithoutExaminingThePin()
+    {
+        string source = Path.Combine(Path.GetTempPath(), "miller-selection", "source-extractor");
+        var examined = new List<string>();
+        Assert.Equal(source, ScaleTestSupport.SelectJulieBinary(Path.GetTempPath(), source, path =>
+        {
+            examined.Add(path);
+            return true;
+        }));
+        Assert.Equal([source], examined);
+    }
+
+    [Fact]
+    public void MissingSelectedSourceRefusesRatherThanUsingThePin()
+    {
+        string source = Path.Combine(Path.GetTempPath(), "miller-selection", "missing-extractor");
+        var examined = new List<string>();
+        Assert.Throws<FileNotFoundException>(() => ScaleTestSupport.SelectJulieBinary(Path.GetTempPath(), source, path =>
+        {
+            examined.Add(path);
+            return path != source;
+        }));
+        Assert.Equal([source], examined);
+    }
+
+    [Fact]
+    public void RelativeSelectedSourceRefusesBeforeFilesystemChecks()
+    {
+        int examined = 0;
+        Assert.Throws<ArgumentException>(() => ScaleTestSupport.SelectJulieBinary(Path.GetTempPath(), "relative-extractor", _ =>
+        {
+            examined++;
+            return true;
+        }));
+        Assert.Equal(0, examined);
+    }
+
     [Fact]
     public void LocateRepoRoot_ReturnsNull_WhenNoAncestorHasSlnx()
     {

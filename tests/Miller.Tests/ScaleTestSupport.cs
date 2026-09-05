@@ -87,14 +87,31 @@ public static class ScaleTestSupport
         string.IsNullOrWhiteSpace(workspaceRoot) ? null : LocateRepoRoot(workspaceRoot);
 
     /// <summary>
-    /// The pinned julie-extract binary under <c>.tools/</c>, or <c>null</c> if restore has not been run.
+    /// The pinned binary, or an explicit source binary selected only for test qualification.
+    /// An unavailable default pin returns null; an invalid explicit selection fails without fallback.
     /// Referencing this method marks a test as julie-spawning (see the class remarks).
     /// </summary>
     public static string? LocateJulieServer()
     {
+        return SelectJulieBinary(RepoRoot(), Environment.GetEnvironmentVariable(JulieBinaryOverride), File.Exists);
+    }
+
+    // Test-only input. Production tooling and package compatibility checks never read this variable.
+    internal const string JulieBinaryOverride = "MILLER_TEST_JULIE_EXTRACT";
+
+    internal static string? SelectJulieBinary(string repoRoot, string? sourceBinary, Func<string, bool> exists)
+    {
+        if (!string.IsNullOrWhiteSpace(sourceBinary))
+        {
+            if (!Path.IsPathFullyQualified(sourceBinary))
+                throw new ArgumentException($"{JulieBinaryOverride} must name an absolute binary path.", nameof(sourceBinary));
+            if (!exists(sourceBinary))
+                throw new FileNotFoundException($"{JulieBinaryOverride} selected an unavailable binary; refusing pinned fallback.", sourceBinary);
+            return sourceBinary;
+        }
         string name = OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract";
-        string candidate = Path.Combine(RepoRoot(), ".tools", name);
-        return File.Exists(candidate) ? candidate : null;
+        string candidate = Path.Combine(repoRoot, ".tools", name);
+        return exists(candidate) ? candidate : null;
     }
 
     /// <summary>
