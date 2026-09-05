@@ -408,10 +408,10 @@ Use the real producer command and source-build command from the producer reposit
 - [ ] Real producer evidence proves acquire-before-open, exact snapshot serving, manifest/entry/generation retention, safe disposal, renewal, release, and no retarget.
 - [x] Linux/Windows race and process-identity results are recorded, or the lane is explicitly blocked/unverified.
 - [x] No per-symbol/session-query producer spawning occurs; acquisition is once per session lifecycle.
-- [ ] Fast, Release, and required Scale verification pass for the final diff.
+- [x] Fast, Release, and required Scale verification pass for the final diff.
 - [x] The finding distinguishes implementation completion from producer/platform evidence that remains unavailable.
 
-Task 6 evidence is in [the qualification finding](../findings/2026-09-04-reader-retention-integration.md). Native admitted-snapshot, disposal, lost-reply and concurrent maintenance cases pass, as does the all-40-language matrix. Full Linux source-backed Scale passes 216 tests with 24 recorded skips. Renewal and adverse identity handling have deterministic coverage; native forced owner death, PID reuse and unknown kernel identity remain unverified rather than implied by normal process ownership. The installed 2.39 producer lacks the contract, so source qualification does not satisfy package integration. The unchecked acceptance items remain open until the missing qualification and separately approved compatible pin adoption are addressed.
+Task 6 evidence is in [the qualification finding](../findings/2026-09-04-reader-retention-integration.md). Native admitted-snapshot, disposal, lost-reply and concurrent maintenance cases pass, as does the all-40-language matrix. The user subsequently approved the producer release and pin adoption. Published 2.40.0 is pinned in `75e6d9b4`; without source overrides, Linux fast passed 9,859 tests with nine skips, Linux Scale passed 216 with 24 skips, Windows affected qualification passed 158 with three skips, and Release built with zero warnings/errors. The package prerequisite is closed. Renewal and adverse identity handling have deterministic coverage; native forced owner death, PID reuse and unknown kernel identity remain explicitly unverified in Miller rather than implied by normal process ownership. That evidence limitation keeps the first acceptance item unchecked; it does not mean the producer pin is still unavailable. Producer J1's separate native/deterministic identity evidence is linked from the finding.
 
 ## Completion Boundary
 

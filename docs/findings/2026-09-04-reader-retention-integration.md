@@ -1,6 +1,28 @@
 # M1 reader-retention integration qualification
 
-Status: implementation on `feature/reader-retention-integration`; source qualification recorded below; installed-package integration **pin-blocked**. No merge, pin change, producer modification, or release is part of this work.
+Status updated after the user's release/pin approval: implementation is on `feature/reader-retention-integration`; published julie-extract 2.40.0 is adopted in `75e6d9b4`. The original source-only qualification below remains historical evidence. Installed-binary qualification is recorded in the following section; source injection is no longer required. Native adverse-process-identity limits remain explicit.
+
+## Published producer adoption
+
+The user approved release, pin adoption and subsequent local M1 merge. [julie-extract v2.40.0](https://github.com/anortham/julie-extractors/releases/tag/v2.40.0) published at 2026-09-05 19:58:05 UTC from `adfb72a5e57a0b34629943865a2ac2d9ee218901`. [Source CI 33987008736](https://github.com/anortham/julie-extractors/actions/runs/33987008736) and [release run 33987969809](https://github.com/anortham/julie-extractors/actions/runs/33987969809) passed all jobs. The four archives were downloaded, their hashes matched the live asset digests, and each embedded binary matched its packaged checksum.
+
+`scripts/julie-pins.json`, `MillerExtractContract.PinnedJulieExtractVersion`, three existing version assertions, README and the third-party notice now agree on 2.40.0. Normal restore scripts fetched the Linux and Windows published URLs and verified the archive pins. No source override or missing-tool escape hatch was used. Semantic pins and runtime are unchanged.
+
+Published Linux binary SHA-256: `c92aec10146e7178aa5e2762c095fbb65557af2687efacb462cfa474cf0b0310`.
+Published Windows binary SHA-256: `e2dd8a1edce6597e09942d911d72c1ed4d651c696b8b0be47b7317a91e57268e`.
+Archive digests are committed in the pin file and Julie's `docs/release-evidence/2026-09-05-v2-40-0-release.md`.
+
+Installed-pin verification at `75e6d9b45f4cea0d8d8c16df8048d31273dbbf0f`:
+
+- Three explicit version checks failed with expected 2.40.0 / actual 2.39.0 before the constant update; the focused pin/schema/layout/CLI scope then passed 41 tests in 150 ms.
+- Full Linux Release fast suite passed 9,859 tests, nine skips, zero failures in 38 seconds.
+- Full Linux installed Scale passed 216 tests, 24 skips, zero failures in 85 seconds. Command: `scripts/test.sh scale --no-build --no-restore --logger 'console;verbosity=minimal' --logger 'trx;LogFileName=m1-installed-2.40-scale.trx' --results-directory <gate-directory>`, with no source-binary override. The TRX is retained beside the earlier source gate in the scratch gate directory below.
+- Final `dotnet build Miller.slnx -c Release --no-restore` passed with zero warnings/errors in 19.92 seconds.
+- Windows guest NTFS was synced to the exact full commit above, then `powershell -File scripts/restore-julie-extract.ps1` restored the published asset. `dotnet test -c Release --filter ...` passed 158 tests, three skips, zero failures in 117 seconds. The filter joined `RealProducerReaderRetentionScaleTests`, `ReaderRetentionLanguageScaleTests`, `ScaleTestSupportTests`, `ScaleTraitConventionTests`, `StoreWorkspaceIndexProviderScaleTests`, `VersionAwareLeadershipScaleTests`, `LiveTestRoleEvidenceScaleTests`, `LiveReferenceResolutionScaleTests`, `FamilyStoreReadSessionTests`, `MillerExtractContractTests`, `JulieSchemaGateTests`, `SemanticSidecarLayoutTests` and `Capabilities_Json_ReportsErosContractSurface` with `FullyQualifiedName~` predicates. Skips were two Unix-only restore checks and the retired `store resolve` command. No source override was used. This is an affected-scope Windows run, not a new whole-fast-suite claim.
+
+These installed-binary gates close the incompatible-pin blocker and permit the user-approved local main integration. Later changes to this finding, the plan status, documentation map and checkpoints are documentation-only. The already-green executable/test tree is not rerun for those edits. Main's running MCP process is not replaced by a source merge; the user still needs to rebuild and restart.
+
+The following sections describe the earlier implementation/source qualification. References to a 2.39 pin or publication approval being absent describe that earlier stage, not the adopted pin above.
 
 ## What changed
 
@@ -137,7 +159,7 @@ The real query `SELECT language, kind, COUNT(*) FROM symbols GROUP BY 1,2 ORDER 
 
 ## Remaining boundary
 
-Do not merge or ship enabled M1 with the incompatible 2.39 pin. The next release task needs explicit authority to publish a compatible Julie artifact and adopt its actual checksums in Miller, restore tools, and run installed-package compatibility gates. Native process-death/PID-reuse/unknown-identity qualification remains explicitly unverified here. No uncertainty authorizes dropping reader protection or using a stale legacy artifact.
+The incompatible 2.39 pin was the original integration blocker. The approved 2.40.0 publication, adoption and passing installed-binary verification above close that dependency. Native process-death/PID-reuse/unknown-identity qualification remains explicitly unverified in Miller; producer J1 has separately scoped native and deterministic evidence. No uncertainty authorizes dropping reader protection or using a stale legacy artifact. No Miller marketplace release is part of this pin-adoption task.
 
 ## Workspace inventory
 

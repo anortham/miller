@@ -10,14 +10,14 @@
 
 **Architecture Quality:** High risk for cross-process retention; medium for cache lifetimes, query extraction, and evaluation; low for documentation correction and existing-runtime qualification. The program does not authorize a rewrite, new MCP tools, new search features, or a model-default change. Each detailed plan contains its concrete affected interface, rejected shortcuts, test surface, and acceptance criteria.
 
-**Status (2026-09-05):** Julie Audit Plan 4 is merged and reviewed; closure corrections are committed locally. S1 CPU runtime evidence and its helper corrections are verified; M5 efficacy is still not run. J1 is implemented and qualified locally, including its reader CLI and Linux/Windows safety checks. All final producer gates pass. Miller M1 is next; M2–M5 remain planned. No branch was merged or pushed, and no release or Miller pin was changed by this run.
+**Status (2026-09-05, release/pin follow-up):** Julie Audit Plan 4 and J1 are integrated; J1 and the WAL completion fixes now ship in published julie-extract 2.40.0. Source CI and all four release targets passed. Miller M1 is implemented and adopts that published pin in `75e6d9b4`; exact installed-binary verification and native identity limits are recorded in [the M1 finding](../findings/2026-09-04-reader-retention-integration.md). M3 is the next dependent implementation plan, followed by M2. M4 and M5 remain planned and can be developed independently. S1 CPU evidence is on semantic-sidecar main, but reviewed correction `5c41f1d` remains unmerged; Vulkan and M5 task efficacy remain unverified/not-run. No semantic runtime or Miller marketplace release is part of this follow-up.
 
 ## Global Constraints
 
 - Julie **Audit Plan 4 is merged at `bb93a721`**. Do not repeat its refactors. The review found only a leftover unused Vue parsing wrapper and stale closure records; bounded correction ownership is separate from J1's store files.
 - Read each repository's current `CLAUDE.md`/`AGENTS.md`, its test strategy, and the assigned plan before editing. Repo rules override copied historical plan assumptions.
 - Use Miller to orient, inspect actual interfaces, and assess impact before implementing. Recheck line numbers and APIs against the assigned commit.
-- The lead owns architecture and integration decisions. The user's latest request explicitly selects **Sol workers** for this execution, superseding the earlier Luna default. Workers do not broaden scope, redesign contracts, or spawn additional agents.
+- The lead owns architecture and integration decisions. The user removed the earlier requirement to use Sol workers; select execution tooling under the current session instructions. Workers do not broaden scope, redesign contracts, or spawn additional agents.
 - No production files were changed during plan preparation. Plans are documents in the main checkouts; creating them does not merge or release any pending dependency work.
 - Do not create a new MCP tool. Preserve current public output contracts and the CLI/MCP common query behavior unless a detailed plan explicitly specifies an additive producer CLI contract.
 - Keep `Miller.Core` free of I/O dependencies. Extraction recognition remains in Julie across every supported language, not in Miller.
@@ -163,7 +163,9 @@ Reader safety is not complete until the producer and consumer have passed their 
 
 J1 execution selects development version `2.40.0` because its permanent `min_writer_version` gate must exclude old v2.39.0 writers while supporting existing stores. This is not a release approval or a Miller pin selection. Once code is integrated, the repository's release process determines the verified candidate and the user approves publishing it.
 
-## Progress ledger
+## Historical preparation ledger
+
+The table below preserves the accepted pre-M1 handoff. The current status paragraph above and each plan's qualification finding supersede its integration/publication state.
 
 | Plan | State at preparation | Implementation evidence |
 |---|---|---|
