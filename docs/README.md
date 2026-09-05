@@ -5,7 +5,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
-- [Architecture review follow-up program](plans/2026-09-04-architecture-review-program.md) - seven implementation plans across Miller, julie-extractors, and julie-semantic-sidecar, with execution order, file ownership, compatibility gates, and verification. These are planned work; Julie's running Audit Plan 4 remains separate.
+- [Architecture review follow-up program](plans/2026-09-04-architecture-review-program.md) - seven implementation plans across Miller, julie-extractors, and julie-semantic-sidecar, with execution order, file ownership, compatibility gates, and verification. Its preparation-state table is historical; consult each plan's acceptance and findings for execution evidence.
+- [M1 reader-retention qualification](findings/2026-09-04-reader-retention-integration.md) - implementation, native retention and 40-language evidence, Linux/Windows verification, and the incompatible installed-producer pin that still blocks integration.
 - [`findings/2026-09-04-v1.27.2-release-verification.md`](findings/2026-09-04-v1.27.2-release-verification.md) - live v1.27.2 verification: exact Linux and Windows gates, exact-run validation and promotion, eight assets, four checksums, and published-package smoke with the local schema digest.
 - [`findings/2026-09-03-v1.27.1-release-verification.md`](findings/2026-09-03-v1.27.1-release-verification.md) - live v1.27.1 verification: exact Linux and Windows gates, exact-run validation and promotion, eight assets, four checksums, release-body equality, and published-package smoke.
 - [`release-notes/v1.27.2.md`](release-notes/v1.27.2.md) - current v1.27.2 patch notes: every agent guidance channel (routing block, server core, `tests` description, skills, docs) teaches the same `workspace_id` and continuous-testing rules.
