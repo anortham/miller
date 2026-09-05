@@ -1,5 +1,11 @@
 # M1 reader-retention integration qualification
 
+Post-restart update: the first live upgrade exposed an orphan-request activation
+blocker and a missing bootstrap retry. The stored index was recovered through a
+normal producer import. Paired follow-up fixes and exact verification are recorded
+in [the restart recovery finding](2026-09-05-reader-retention-restart-recovery.md).
+Those fixes are not part of the initial 2.40.0 release described below.
+
 Status updated after the user's release/pin approval: M1 was fast-forwarded into local main at `fbc8db25`; published julie-extract 2.40.0 is adopted in `75e6d9b4`. Main's `.tools/julie-extract` was restored from the published URL and its binary hash matches the qualified Linux binary below. The original source-only qualification remains historical evidence. Source injection is no longer required. Native adverse-process-identity limits remain explicit. Miller main was not pushed or published, and the running MCP binary was not rebuilt or restarted.
 
 ## Published producer adoption
