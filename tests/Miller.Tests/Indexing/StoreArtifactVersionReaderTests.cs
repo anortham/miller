@@ -15,6 +15,20 @@ public sealed class StoreArtifactVersionReaderTests
 {
     private const string LegacySentinel = "legacy-reader-was-called";
 
+    [Fact]
+    public void LeadershipPreflightReadsMetadataWithoutAcquiringAnUnpublishedView()
+    {
+        using var fixture = StorePointerFixture.Create(binaryVersion: "2.34.4");
+        using var registry = new StoreReaderRegistrationRegistry(startScheduler: false);
+        using IDisposable scope = StoreReaderRegistrationContext.Use(fixture.StoreRoot,
+            new(new StoreReaderRegistrationRunner((_, _) =>
+                throw new InvalidOperationException("Leadership preflight attempted reader admission.")), registry));
+
+        Assert.Equal("2.34.4", StoreArtifactVersionReader.ReadForLeadership(
+            fixture.LegacyArtifactPath, _ => LegacySentinel));
+        Assert.Equal(0, registry.Count);
+    }
+
     /// <summary>
     /// Proves: an unpublished view no longer makes the leadership version unreadable. The FAMILY-scope
     /// <c>store_meta.binary_version</c> is returned instead, because there is no per-view version in the store.

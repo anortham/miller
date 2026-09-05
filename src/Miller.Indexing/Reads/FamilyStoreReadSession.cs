@@ -43,6 +43,8 @@ public sealed class FamilyStoreReadSession :
 {
     private const int StoreSchemaVersion = 2;
     private const int StoreFormatEpoch = 1;
+    // Read capability verified against reader v1 in producer 2.40.0, independent of package pins.
+    private const string ReaderContractCapability = "2.40.0";
     private static readonly Regex GenerationName = new(
         @"^gen-[0-9]{3,}$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -50,8 +52,11 @@ public sealed class FamilyStoreReadSession :
     private readonly SqliteConnection _connection;
     private readonly RevisionFactCacheStore? _factCacheStore;
     private readonly bool _boundedFactsRequested;
+    private readonly StoreReaderRegistrationHandle _registration;
+    private readonly Func<string, SqliteConnection> _openRead;
     private readonly object _gate = new();
     private QueryTimeResolutionReader? _resolution;
+    private Task? _warmTask;
     private SqliteConnection? _boundedConnection;
     private SqliteTransaction? _boundedSnapshot;
     private bool _disposed;
@@ -73,13 +78,17 @@ public sealed class FamilyStoreReadSession :
         StoreVisibility visibility,
         WorkspaceReadSnapshot snapshot,
         RevisionFactCacheStore? factCacheStore,
-        bool boundedFactsRequested)
+        bool boundedFactsRequested,
+        StoreReaderRegistrationHandle registration,
+        Func<string, SqliteConnection> openRead)
     {
         _connection = connection;
         Visibility = visibility;
         Snapshot = snapshot;
         _factCacheStore = factCacheStore;
         _boundedFactsRequested = boundedFactsRequested;
+        _registration = registration;
+        _openRead = openRead;
     }
 
     private string FactCacheScope =>
@@ -117,16 +126,32 @@ public sealed class FamilyStoreReadSession :
     /// </summary>
     internal Task WarmResolutionFactsInBackground()
     {
-        if (_factCacheStore is not { } store)
-            return Task.CompletedTask;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_factCacheStore is not { } store) return Task.CompletedTask;
+            if (_warmTask is { IsCompleted: false }) return _warmTask;
+            IDisposable retained = _registration.Retain();
+            try
+            {
+                StoreVisibility visibility = Visibility;
+                Func<string, SqliteConnection> openRead = _openRead;
+                Task shared = store.WarmInBackground(FactCacheScope, FactCacheIdentity,
+                    () => openRead(visibility.StoreDatabasePath), visibility);
+                return _warmTask = ReleaseAfter(shared, retained);
+            }
+            catch
+            {
+                retained.Dispose();
+                throw;
+            }
+        }
 
-        StoreVisibility visibility = Visibility;
-        string databasePath = visibility.StoreDatabasePath;
-        return store.WarmInBackground(
-            FactCacheScope,
-            FactCacheIdentity,
-            () => OpenReadOnly(databasePath),
-            visibility);
+        static async Task ReleaseAfter(Task shared, IDisposable retained)
+        {
+            try { await shared.ConfigureAwait(false); }
+            finally { retained.Dispose(); }
+        }
     }
 
     private QueryTimeResolutionReader CreateResolutionReader()
@@ -137,7 +162,7 @@ public sealed class FamilyStoreReadSession :
             cache = store.GetOrAdvance(
                 FactCacheScope,
                 FactCacheIdentity,
-                () => OpenReadOnly(Visibility.StoreDatabasePath),
+                () => _openRead(Visibility.StoreDatabasePath),
                 Visibility);
         }
         else if (_boundedFactsRequested && BoundedFactsEnabled())
@@ -154,9 +179,21 @@ public sealed class FamilyStoreReadSession :
             // each slice taking its own implicit snapshot and a mid-command generation delete producing a
             // half-populated view. And the session's connection stays free: callers serialize it on _gate, and
             // readers such as PatternFactsReader open their own transaction on it.
-            _boundedConnection = OpenReadOnly(Visibility.StoreDatabasePath);
-            _boundedSnapshot = _boundedConnection.BeginTransaction(deferred: true);
-            cache = RevisionFactCache.LoadBounded(_boundedConnection, Visibility);
+            _boundedConnection = _openRead(Visibility.StoreDatabasePath);
+            try
+            {
+                _boundedSnapshot = _boundedConnection.BeginTransaction(deferred: true);
+                cache = RevisionFactCache.LoadBounded(_boundedConnection, Visibility);
+            }
+            catch
+            {
+                // A failed lazy initialization must not leave a connection behind when a caller retries.
+                try { _boundedSnapshot?.Dispose(); } catch { }
+                _boundedSnapshot = null;
+                try { _boundedConnection.Dispose(); } catch { }
+                _boundedConnection = null;
+                throw;
+            }
         }
         else
         {
@@ -224,71 +261,97 @@ public sealed class FamilyStoreReadSession :
         try
         {
             ServingStorePaths paths = ResolveServingStorePaths(binding);
-            string storeRoot = paths.StoreRoot;
-            string workspaceRoot = paths.WorkspaceRoot;
-            string generationName = paths.GenerationName;
-            string storeDatabasePath = paths.StoreDatabasePath;
-            string coordinatorDatabasePath = paths.CoordinatorDatabasePath;
-
-            SqliteConnection connection = OpenReadOnly(storeDatabasePath);
+            binding = binding with { StoreRoot = paths.StoreRoot, WorkspaceRoot = paths.WorkspaceRoot };
+            StoreReaderRegistrationContext? context = StoreReaderRegistrationContext.Find(paths.StoreRoot);
+            StoreReaderRegistrationHandle registration = Acquire(binding, paths.GenerationName, context, out StoreReaderConnectionOwner connections);
+            bool transferred = false;
             try
             {
-                Dictionary<string, string> metadata = ReadStoreMetadata(connection);
-                int extractionIdentityEpoch = ValidateStoreMetadata(metadata, binding);
-                StoreVisibility visibility = ReadVisibility(
-                    connection,
-                    binding,
-                    storeRoot,
-                    generationName,
-                    storeDatabasePath,
-                    coordinatorDatabasePath,
-                    workspaceRoot,
-                    Required(metadata, "binary_version"));
-                CreateCompatibilityProjection(
-                    connection,
-                    visibility,
-                    metadata,
-                    extractionIdentityEpoch);
-                SetQueryOnly(connection);
-                var freshness = new WorkspaceFreshnessToken(
-                    visibility.FamilyId,
-                    visibility.StoreLogSequence,
-                    visibility.ManifestHash,
-                    visibility.StoreLogSequence,
-                    ResolutionStamp(visibility),
-                    StoreInstanceId: visibility.StoreInstanceId,
-                    ViewId: visibility.ViewId,
-                    GenerationName: visibility.GenerationName,
-                    ManifestGeneration: visibility.ManifestGeneration,
-                    IndexLevel: visibility.IndexLevel,
-                    LevelStampL1: visibility.LevelStampL1,
-                    LevelStampL2: visibility.LevelStampL2,
-                    LevelStampL3: visibility.LevelStampL3);
-                var snapshot = new WorkspaceReadSnapshot(
-                    visibility.WorkspaceRoot,
-                    workspaceId,
-                    visibility.FamilyId,
-                    visibility.ViewId,
-                    freshness,
-                    visibility.IndexLevel,
-                    WorkspaceReadMode.FamilyStore,
-                    visibility.GenerationName,
-                    visibility.ManifestGeneration,
-                    visibility.ResolutionState,
-                    visibility.ResolutionBaseId,
-                    visibility.ResolutionDeltaGeneration,
-                    visibility.ResolutionExactAt);
-                return new FamilyStoreReadSession(
-                    connection,
-                    visibility,
-                    snapshot,
-                    factCacheStore,
-                    boundedFactsRequested);
+                paths = ResolveAdmittedStorePaths(binding, registration.Snapshot!);
+                Func<string, SqliteConnection> openRead = connections.OpenRead;
+                string storeRoot = paths.StoreRoot;
+                string workspaceRoot = paths.WorkspaceRoot;
+                string generationName = paths.GenerationName;
+                string storeDatabasePath = paths.StoreDatabasePath;
+                string coordinatorDatabasePath = paths.CoordinatorDatabasePath;
+
+                SqliteConnection connection = openRead(storeDatabasePath);
+                SqliteTransaction? validation = null;
+                try
+                {
+                    validation = connection.BeginTransaction(deferred: true);
+                    Dictionary<string, string> metadata = ReadStoreMetadata(connection);
+                    int extractionIdentityEpoch = ValidateStoreMetadata(metadata, binding, admitted: true);
+                    StoreVisibility visibility = ReadVisibility(
+                        connection,
+                        binding,
+                        storeRoot,
+                        generationName,
+                        storeDatabasePath,
+                        coordinatorDatabasePath,
+                        workspaceRoot,
+                        Required(metadata, "binary_version"),
+                        registration.Snapshot!.ManifestGeneration);
+                    ValidateAdmission(registration.Snapshot!, visibility, extractionIdentityEpoch);
+                    ValidateRetainedLogRows(connection, registration.Snapshot!);
+                    CreateCompatibilityProjection(
+                        connection,
+                        visibility,
+                        metadata,
+                        extractionIdentityEpoch);
+                    SetQueryOnly(connection);
+                    validation.Commit();
+                    validation.Dispose();
+                    validation = null;
+                    var freshness = new WorkspaceFreshnessToken(
+                        visibility.FamilyId,
+                        visibility.StoreLogSequence,
+                        visibility.ManifestHash,
+                        visibility.StoreLogSequence,
+                        ResolutionStamp(visibility),
+                        StoreInstanceId: visibility.StoreInstanceId,
+                        ViewId: visibility.ViewId,
+                        GenerationName: visibility.GenerationName,
+                        ManifestGeneration: visibility.ManifestGeneration,
+                        IndexLevel: visibility.IndexLevel,
+                        LevelStampL1: visibility.LevelStampL1,
+                        LevelStampL2: visibility.LevelStampL2,
+                        LevelStampL3: visibility.LevelStampL3);
+                    var snapshot = new WorkspaceReadSnapshot(
+                        visibility.WorkspaceRoot,
+                        workspaceId,
+                        visibility.FamilyId,
+                        visibility.ViewId,
+                        freshness,
+                        visibility.IndexLevel,
+                        WorkspaceReadMode.FamilyStore,
+                        visibility.GenerationName,
+                        visibility.ManifestGeneration,
+                        visibility.ResolutionState,
+                        visibility.ResolutionBaseId,
+                        visibility.ResolutionDeltaGeneration,
+                        visibility.ResolutionExactAt);
+                    var session = new FamilyStoreReadSession(
+                        connection,
+                        visibility,
+                        snapshot,
+                        factCacheStore,
+                        boundedFactsRequested,
+                        registration,
+                        openRead);
+                    transferred = true;
+                    return session;
+                }
+                catch
+                {
+                    try { validation?.Dispose(); } catch { /* Keep the original open/validation failure. */ }
+                    try { connection.Dispose(); } catch { /* Keep the original open/validation failure. */ }
+                    throw;
+                }
             }
-            catch
+            finally
             {
-                connection.Dispose();
-                throw;
+                if (!transferred) registration.Dispose();
             }
         }
         catch (FamilyStoreReadException)
@@ -315,26 +378,56 @@ public sealed class FamilyStoreReadSession :
         try
         {
             ServingStorePaths paths = ResolveServingStorePaths(binding);
-            using SqliteConnection connection = OpenReadOnly(paths.StoreDatabasePath);
-            Dictionary<string, string> metadata = ReadStoreMetadata(connection);
-            _ = ValidateStoreMetadata(metadata, binding);
-            (long generation, string hash) = ReadManifestIdentity(connection, binding.ViewId, paths.WorkspaceRoot);
-            long sequence = ReadStoreLogSequence(connection, binding.ViewId, generation);
-            return new WorkspaceFreshnessProbe(
-                sequence,
-                StoreInstanceId(binding.FamilyId, paths.GenerationName),
-                binding.ViewId,
-                generation,
-                hash,
-                paths.StoreRoot,
-                Required(metadata, "binary_version"),
-                string.Join(
-                    ':',
-                    "ctgen1",
-                    "store",
-                    binding.FamilyId.ToString("D", CultureInfo.InvariantCulture),
+            binding = binding with { StoreRoot = paths.StoreRoot, WorkspaceRoot = paths.WorkspaceRoot };
+            StoreReaderRegistrationContext? context = StoreReaderRegistrationContext.Find(paths.StoreRoot);
+            using StoreReaderRegistrationHandle registration = Acquire(binding, paths.GenerationName, context, out StoreReaderConnectionOwner connections);
+            paths = ResolveAdmittedStorePaths(binding, registration.Snapshot!);
+            SqliteConnection connection = connections.OpenRead(paths.StoreDatabasePath);
+            SqliteTransaction? validation = null;
+            Exception? primaryFailure = null;
+            try
+            {
+                SetQueryOnly(connection);
+                validation = connection.BeginTransaction(deferred: true);
+                Dictionary<string, string> metadata = ReadStoreMetadata(connection);
+                int epoch = ValidateStoreMetadata(metadata, binding, admitted: true);
+                StoreReaderSnapshot admitted = registration.Snapshot!;
+                (long generation, string hash) = ReadManifestIdentity(connection, binding.ViewId,
+                    paths.WorkspaceRoot, admitted.ManifestGeneration);
+                if (admitted.ManifestHash != hash || admitted.ExtractionIdentityEpoch != epoch)
+                    throw new FamilyStoreReadException(FamilyStoreReadFailure.Corrupt,
+                        "The opened family-store identity differs from its reader admission.");
+                ValidateRetainedLogRows(connection, admitted);
+                long sequence = ReadStoreLogSequence(connection, binding.ViewId, generation);
+                return new WorkspaceFreshnessProbe(
+                    sequence,
+                    StoreInstanceId(binding.FamilyId, paths.GenerationName),
                     binding.ViewId,
-                    paths.GenerationName));
+                    generation,
+                    hash,
+                    paths.StoreRoot,
+                    Required(metadata, "binary_version"),
+                    string.Join(
+                        ':',
+                        "ctgen1",
+                        "store",
+                        binding.FamilyId.ToString("D", CultureInfo.InvariantCulture),
+                        binding.ViewId,
+                        paths.GenerationName));
+            }
+            catch (Exception error)
+            {
+                primaryFailure = error;
+                throw;
+            }
+            finally
+            {
+                Exception? closeFailure = null;
+                try { validation?.Dispose(); } catch (Exception error) { closeFailure = error; }
+                try { connection.Dispose(); } catch (Exception error) { closeFailure ??= error; }
+                if (primaryFailure is null && closeFailure is not null)
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(closeFailure).Throw();
+            }
         }
         catch (FamilyStoreReadException)
         {
@@ -364,6 +457,8 @@ public sealed class FamilyStoreReadSession :
         {
             ServingStorePaths paths = ResolveServingStorePaths(binding);
             using SqliteConnection connection = OpenReadOnly(paths.StoreDatabasePath);
+            SetQueryOnly(connection);
+            using SqliteTransaction validation = connection.BeginTransaction(deferred: true);
             Dictionary<string, string> metadata = ReadStoreMetadata(connection);
             _ = ValidateStoreMetadata(metadata, binding);
             return Required(metadata, "binary_version");
@@ -581,29 +676,119 @@ public sealed class FamilyStoreReadSession :
         lock (_gate)
         {
             if (_disposed)
+            {
+                _registration.Dispose();
                 return;
+            }
             _disposed = true;
             // The bounded snapshot transaction ends with its own connection; ending it first keeps the release
             // explicit rather than leaving it to the handle close.
-            _boundedSnapshot?.Dispose();
+            Exception? failure = null;
+            Close(_boundedSnapshot);
             _boundedSnapshot = null;
-            _boundedConnection?.Dispose();
+            Close(_boundedConnection);
             _boundedConnection = null;
-            _connection.Dispose();
+            Close(_connection);
+            _registration.Dispose();
+            if (failure is not null)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+
+            void Close(IDisposable? resource)
+            {
+                try { resource?.Dispose(); }
+                catch (Exception error) { failure ??= error; }
+            }
         }
     }
 
-    private static SqliteConnection OpenReadOnly(string path)
+    private static StoreReaderRegistrationHandle Acquire(
+        StoreFamilyBinding binding, string generationName, StoreReaderRegistrationContext? context,
+        out StoreReaderConnectionOwner connections)
     {
-        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        connections = new StoreReaderConnectionOwner(context?.OpenRead ?? CreateReadOnlyConnection);
+        var runner = context?.Runner ?? new StoreReaderRegistrationRunner(
+            JulieStoreClient.Locate(Path.Combine(AppContext.BaseDirectory, ".tools")));
+        var request = new ReaderAcquireRequest(binding, generationName, "miller",
+            Environment.ProcessId, Guid.NewGuid().ToString("N"));
+        try
+        {
+            StoreReaderRegistrationHandle registration = StoreReaderRegistrationHandle.Acquire(runner, request,
+                context?.Registry ?? StoreReaderRegistrationRegistry.Shared, CancellationToken.None);
+            registration.SetReleaseGuard(connections.TryCloseAll);
+            return registration;
+        }
+        catch (StoreReaderRegistrationException error)
+        {
+            throw new FamilyStoreReadException(
+                error.Failure switch
+                {
+                    ReaderFailure.Incompatible => FamilyStoreReadFailure.ReaderFloorIncompatible,
+                    ReaderFailure.InvalidReport => FamilyStoreReadFailure.Corrupt,
+                    _ => FamilyStoreReadFailure.BindingNotReady,
+                },
+                "The family-store reader could not acquire retention.", error);
+        }
+    }
+
+    private static ServingStorePaths ResolveAdmittedStorePaths(StoreFamilyBinding binding, StoreReaderSnapshot admitted)
+    {
+        string generationPath = admitted.ResolveGenerationPath(binding);
+        string database = CanonicalizeContained(generationPath, Path.Combine(generationPath, "store.db"),
+            "The admitted database escapes its generation.");
+        if (!File.Exists(database))
+            throw new FamilyStoreReadException(FamilyStoreReadFailure.StoreMissing, "The admitted store.db is missing.");
+        string coordinator = CanonicalizeContained(binding.StoreRoot, Path.Combine(binding.StoreRoot, "coord.db"),
+            "The family coordinator escapes its root.");
+        return new(binding.StoreRoot, binding.WorkspaceRoot, admitted.GenerationName, database, coordinator);
+    }
+
+    private static void ValidateAdmission(StoreReaderSnapshot admitted, StoreVisibility visibility, int epoch)
+    {
+        if (admitted.FamilyId != visibility.FamilyId || admitted.ViewId != visibility.ViewId
+            || admitted.GenerationName != visibility.GenerationName || admitted.StoreInstanceId != visibility.StoreInstanceId
+            || admitted.ManifestGeneration != visibility.ManifestGeneration || admitted.ManifestHash != visibility.ManifestHash
+            || admitted.ExtractionIdentityEpoch != epoch)
+            throw new FamilyStoreReadException(FamilyStoreReadFailure.Corrupt,
+                "The opened family-store identity differs from its reader admission.");
+        // Global retention bounds are validated separately from per-view revision and level stamps.
+    }
+
+    private static void ValidateRetainedLogRows(SqliteConnection connection, StoreReaderSnapshot admitted)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT ($floor=0 OR EXISTS(SELECT 1 FROM store_log WHERE sequence=$floor))
+               AND ($served=0 OR EXISTS(SELECT 1 FROM store_log WHERE sequence=$served))
+            """;
+        command.Parameters.AddWithValue("$floor", admitted.MinRetainedStoreLogSequence);
+        command.Parameters.AddWithValue("$served", admitted.ServedStoreLogSequence);
+        if (Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 1)
+            throw new FamilyStoreReadException(FamilyStoreReadFailure.Corrupt,
+                "The opened family store is missing a log row protected by its reader admission.");
+    }
+
+    private static SqliteConnection CreateReadOnlyConnection(string path) =>
+        new(new SqliteConnectionStringBuilder
         {
             DataSource = path,
             Mode = SqliteOpenMode.ReadOnly,
             Cache = SqliteCacheMode.Private,
             Pooling = false,
         }.ToString());
-        connection.Open();
-        return connection;
+
+    private static SqliteConnection OpenReadOnly(string path)
+    {
+        SqliteConnection connection = CreateReadOnlyConnection(path);
+        try
+        {
+            connection.Open();
+            return connection;
+        }
+        catch
+        {
+            try { connection.Dispose(); } catch { }
+            throw;
+        }
     }
 
     private static Dictionary<string, string> ReadStoreMetadata(SqliteConnection connection)
@@ -619,7 +804,8 @@ public sealed class FamilyStoreReadSession :
 
     private static int ValidateStoreMetadata(
         IReadOnlyDictionary<string, string> metadata,
-        StoreFamilyBinding binding)
+        StoreFamilyBinding binding,
+        bool admitted = false)
     {
         string familyId = Required(metadata, "family_id");
         if (!Guid.TryParse(familyId, out Guid actualFamily) || actualFamily != binding.FamilyId)
@@ -630,8 +816,9 @@ public sealed class FamilyStoreReadSession :
         int schema = ParseInt(metadata, "store_sqlite_schema_version");
         int format = ParseInt(metadata, "store_format_epoch");
         int extractionIdentityEpoch = ParseRequiredInt(metadata, "extraction_identity_epoch");
+        string generationState = Required(metadata, "generation_state");
         if (schema != StoreSchemaVersion || format != StoreFormatEpoch ||
-            !string.Equals(Required(metadata, "generation_state"), "serving", StringComparison.Ordinal))
+            !(generationState == "serving" || (admitted && generationState == "retired")))
         {
             throw new FamilyStoreReadException(
                 FamilyStoreReadFailure.SchemaIncompatible,
@@ -643,13 +830,13 @@ public sealed class FamilyStoreReadSession :
         try
         {
             if (LeadershipEligibility.CompareVersions(
-                    MillerExtractContract.PinnedJulieExtractVersion,
+                    ReaderContractCapability,
                     minimumReader) < 0)
             {
                 throw new FamilyStoreReadException(
                     FamilyStoreReadFailure.ReaderFloorIncompatible,
-                    $"The family store requires reader {minimumReader}; Miller bundles " +
-                    $"julie-extract {MillerExtractContract.PinnedJulieExtractVersion}.");
+                    $"The family store requires reader {minimumReader}; Miller implements " +
+                    $"reader contract {ReaderContractCapability}.");
             }
         }
         catch (ArgumentException ex)
@@ -671,20 +858,22 @@ public sealed class FamilyStoreReadSession :
         string storeDatabasePath,
         string coordinatorDatabasePath,
         string workspaceRoot,
-        string binaryVersion)
+        string binaryVersion,
+        long admittedManifestGeneration)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT v.root,v.current_generation,m.manifest_hash,
+            SELECT v.root,m.generation,m.manifest_hash,
                    v.resolution_state,v.resolution_base_id,
                    v.resolution_delta_generation,v.resolution_exact_at
             FROM views AS v
             LEFT JOIN manifests AS m
-              ON m.view_id=v.view_id AND m.generation=v.current_generation
+              ON m.view_id=v.view_id AND m.generation=$manifest_generation
             WHERE v.view_id=$view_id
             """;
         command.Parameters.AddWithValue("$view_id", binding.ViewId);
+        command.Parameters.AddWithValue("$manifest_generation", admittedManifestGeneration);
         using SqliteDataReader reader = command.ExecuteReader();
         if (!reader.Read())
             throw new FamilyStoreReadException(
@@ -739,18 +928,20 @@ public sealed class FamilyStoreReadSession :
     private static (long Generation, string Hash) ReadManifestIdentity(
         SqliteConnection connection,
         string viewId,
-        string workspaceRoot)
+        string workspaceRoot,
+        long admittedManifestGeneration)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT v.root,v.current_generation,m.manifest_hash
+            SELECT v.root,m.generation,m.manifest_hash
             FROM views AS v
             LEFT JOIN manifests AS m
-              ON m.view_id=v.view_id AND m.generation=v.current_generation
+              ON m.view_id=v.view_id AND m.generation=$manifest_generation
             WHERE v.view_id=$view_id
             """;
         command.Parameters.AddWithValue("$view_id", viewId);
+        command.Parameters.AddWithValue("$manifest_generation", admittedManifestGeneration);
         using SqliteDataReader reader = command.ExecuteReader();
         if (!reader.Read())
             throw new FamilyStoreReadException(

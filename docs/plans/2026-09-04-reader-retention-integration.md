@@ -275,11 +275,13 @@ Use the existing connection seams and exact admitted generation; do not build a 
 
 **Acceptance:**
 
-- [ ] Every enabled `FamilyStoreReadSession.Open` acquires before opening a generation handle.
-- [ ] Open uses the admitted snapshot and never re-resolves `CURRENT`.
-- [ ] All connections/transactions close before release; disposal is idempotent.
-- [ ] Release failure never overwrites a primary session error and remains retryable.
-- [ ] Legacy mode performs zero producer reader activity.
+- [x] Every enabled `FamilyStoreReadSession.Open` acquires before opening a generation handle.
+- [x] Open uses the admitted snapshot and never re-resolves `CURRENT`.
+- [x] All connections/transactions close before release; disposal is idempotent.
+- [x] Release failure never overwrites a primary session error and remains retryable.
+- [x] Legacy mode performs zero producer reader activity.
+
+Task 2 adds a final-release connection guard and `CloseOwed` state on the existing shared lifecycle scheduler. Attempted disposal is not proof of closure. Deferred fact workers retain the same registration until their connection closes. Positive admitted log bounds are checked against retained database rows without replacing per-view freshness identities. Focused implementation scope passed 147 tests; real producer and caller qualification remain Tasks 3–6.
 
 ## Task 3: Migrate bootstrap, export, coordinator, rollback, and tree callers
 

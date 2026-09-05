@@ -1,4 +1,5 @@
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Tests.Support;
 using Xunit;
 
@@ -9,6 +10,55 @@ public sealed class WorkspaceReadSessionFactoryEnvironmentTests : IDisposable
 {
     private readonly string? originalValue =
         Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
+
+    [Fact]
+    public void ReconstructedFactoryBindingUsesAndRestoresTheExactRootScope()
+    {
+        using StoreFixture first = StoreFixture.Create();
+        using StoreFixture second = StoreFixture.Create();
+        StoreWorkspacePointer.Write(first.Binding.WorkspaceRoot, first.Binding);
+        StoreWorkspacePointer.Write(second.Binding.WorkspaceRoot, second.Binding);
+        var events = new List<string>();
+        using var registry = new StoreReaderRegistrationRegistry(startScheduler: false);
+        StoreReaderRegistrationContext Context(StoreFixture fixture, string name) =>
+            new(new StoreReaderRegistrationRunner((args, _) =>
+            {
+                events.Add(name + ":" + args[2]);
+                return fixture.ReaderReply(args);
+            }), registry);
+        using IDisposable outer = StoreReaderRegistrationContext.Use(first.Binding.StoreRoot, Context(first, "outer"));
+        using (StoreReaderRegistrationContext.Use(second.Binding.StoreRoot, Context(second, "second")))
+        {
+            using (StoreReaderRegistrationContext.Use(first.Binding.StoreRoot, Context(first, "inner")))
+            {
+                Read(first);
+                Read(second);
+            }
+            Read(first);
+        }
+        Assert.Equal(new[] { "inner:acquire", "inner:release", "second:acquire", "second:release", "outer:acquire", "outer:release" }, events);
+        Assert.Equal(0, registry.Count);
+
+        static void Read(StoreFixture fixture)
+        {
+            using var session = WorkspaceReadSessionFactory.Open(Path.Combine(fixture.Root, "unused.db"),
+                fixture.Binding.WorkspaceRoot, null, storeEnabled: true);
+            Assert.Equal("view-a", session.Snapshot.ViewId);
+        }
+    }
+
+    [Fact]
+    public void LegacyFactoryDoesNoReaderWorkEvenWhenAScopeExists()
+    {
+        using JulieDbFixture legacy = JulieDbFixture.CreateForInspect();
+        using var registry = new StoreReaderRegistrationRegistry(startScheduler: false);
+        using IDisposable scope = StoreReaderRegistrationContext.Use(legacy.WorkspaceRoot,
+            new(new StoreReaderRegistrationRunner((_, _) => throw new InvalidOperationException("Unexpected reader activity")), registry));
+        using var session = WorkspaceReadSessionFactory.OpenForOneShotCli(legacy.DbPath, legacy.WorkspaceRoot, null, storeEnabled: false);
+        Assert.Equal("legacy", session.Snapshot.ViewId);
+        Assert.Equal(0, registry.Count);
+        Assert.Equal(0, WorkspaceReadSessionFactory.Probe(legacy.DbPath, legacy.WorkspaceRoot, null, storeEnabled: false).Revision);
+    }
 
     [Theory]
     [InlineData(null, true)]

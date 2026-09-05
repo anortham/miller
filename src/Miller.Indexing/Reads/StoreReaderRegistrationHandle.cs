@@ -2,7 +2,7 @@ using Miller.Indexing.Store;
 
 namespace Miller.Indexing.Reads;
 
-internal enum ReaderLifecycleStatus { Acquiring, Acquired, RenewDegraded, AcquireReleaseOwed, ReleaseOwed, Released, Legacy }
+internal enum ReaderLifecycleStatus { Acquiring, Acquired, RenewDegraded, AcquireReleaseOwed, CloseOwed, ReleaseOwed, Released, Legacy }
 
 internal sealed class StoreReaderRegistrationHandle : IDisposable
 {
@@ -17,6 +17,7 @@ internal sealed class StoreReaderRegistrationHandle : IDisposable
     private bool _disposed;
     private int _references = 1;
     private long _schedulingDeadlineTicks;
+    private Func<bool>? _releaseGuard;
 
     private StoreReaderRegistrationHandle() => _status = ReaderLifecycleStatus.Legacy;
 
@@ -31,6 +32,17 @@ internal sealed class StoreReaderRegistrationHandle : IDisposable
     internal StoreReaderSnapshot Snapshot { get { lock (_gate) return _acquired?.Snapshot ?? throw new InvalidOperationException("No admitted reader snapshot."); } }
     internal DateTimeOffset? ExpiresAt { get { lock (_gate) return _acquired?.ExpiresAt; } }
     internal long SchedulingDeadlineTicks => Interlocked.Read(ref _schedulingDeadlineTicks);
+
+    internal void SetReleaseGuard(Func<bool> guard)
+    {
+        ArgumentNullException.ThrowIfNull(guard);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_releaseGuard is not null) throw new InvalidOperationException("A release guard is already installed.");
+            _releaseGuard = guard;
+        }
+    }
 
     internal IDisposable Retain()
     {
@@ -112,7 +124,7 @@ internal sealed class StoreReaderRegistrationHandle : IDisposable
                     _acquired = _runner!.Acquire(_request!, cancellationToken);
                     _status = ReaderLifecycleStatus.ReleaseOwed;
                 }
-                if (_status == ReaderLifecycleStatus.ReleaseOwed)
+                if (_status is ReaderLifecycleStatus.CloseOwed or ReaderLifecycleStatus.ReleaseOwed)
                     Release(cancellationToken);
                 else if (_acquired!.ExpiresAt <= now + StoreReaderRegistrationRegistry.DiagnosticInterval + StoreReaderRegistrationRunner.ProcessTimeout)
                     Renew(cancellationToken);
@@ -131,7 +143,16 @@ internal sealed class StoreReaderRegistrationHandle : IDisposable
     {
         lock (_gate)
         {
-            if (_disposed) return;
+            if (_disposed)
+            {
+                if (_status == ReaderLifecycleStatus.CloseOwed)
+                {
+                    try { Release(CancellationToken.None); }
+                    catch (Exception error) { RecordFailure(error); }
+                    finally { ScheduleNextAttempt(); }
+                }
+                return;
+            }
             _disposed = true;
             DropReference();
         }
@@ -148,9 +169,21 @@ internal sealed class StoreReaderRegistrationHandle : IDisposable
 
     private void Release(CancellationToken cancellationToken)
     {
+        if (_references != 0) throw new InvalidOperationException("A live owner still retains this registration.");
+        if (_releaseGuard is not null)
+        {
+            _status = ReaderLifecycleStatus.CloseOwed;
+            if (!_releaseGuard())
+            {
+                _lastFailure = ReaderFailure.Operational;
+                return;
+            }
+        }
+        _status = ReaderLifecycleStatus.ReleaseOwed;
         _runner!.Release(_request!, _acquired!, cancellationToken);
         _status = ReaderLifecycleStatus.Released;
         _lastFailure = null;
+        _releaseGuard = null;
         _registry!.Detach(this);
     }
 

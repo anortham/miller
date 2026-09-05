@@ -194,38 +194,20 @@ public static class StoreArtifactVersionReader
             if (StoreRootIsMissing(pointer.StoreRoot))
                 return new StoreVersionRead(null, true, new DirectoryNotFoundException(pointer.StoreRoot), true);
 
-            // The pointer round trip is lossy: it records no binding state, so every rebuild here hard-codes
-            // Ready. That stays honest because the per-view read is TRIED first and only the typed
-            // ViewNotFound falls back below.
+            // This is family-wide compatibility preflight, not a serving freshness read. It must work
+            // before the requested view or reader catalogue exists; admission would create a bootstrap
+            // cycle. The metadata path validates family/schema/floor but never serves view facts.
             var binding = new StoreFamilyBinding(
                 pointer.FamilyId,
                 pointer.StoreRoot,
                 pointer.ViewId,
                 pointer.WorkspaceRoot,
                 StoreBindingState.Ready);
-            try
-            {
-                WorkspaceFreshnessProbe probe = FamilyStoreReadSession.Probe(binding);
-                return new StoreVersionRead(
-                    probe.BinaryVersion ?? throw new FamilyStoreReadException(
-                        FamilyStoreReadFailure.Corrupt,
-                        "The family-store freshness probe omitted binary_version."),
-                    PointerPresent: true,
-                    Failure: null,
-                    MissingStoreRoot: false);
-            }
-            catch (FamilyStoreReadException ex) when (ex.Failure == FamilyStoreReadFailure.ViewNotFound)
-            {
-                // The pointer names a view the serving generation does not carry: never imported, or lost. Do
-                // NOT report "no artifact version" — that would let an OLDER extractor claim leadership and
-                // write into a family whose store was produced by a NEWER one. store_meta.binary_version is
-                // family-wide, so the family's version is the correct comparison target here.
-                return new StoreVersionRead(
-                    FamilyStoreReadSession.ReadFamilyBinaryVersion(binding),
-                    PointerPresent: true,
-                    Failure: null,
-                    MissingStoreRoot: false);
-            }
+            return new StoreVersionRead(
+                FamilyStoreReadSession.ReadFamilyBinaryVersion(binding),
+                PointerPresent: true,
+                Failure: null,
+                MissingStoreRoot: false);
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException

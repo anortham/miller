@@ -12,10 +12,13 @@ namespace Miller.Tests.Support;
 /// </summary>
 internal sealed class StoreFixture : IDisposable
 {
+    private readonly StoreReaderRegistrationFixture _reader;
+
     private StoreFixture(string root, StoreFamilyBinding binding)
     {
         Root = root;
         Binding = binding;
+        _reader = new StoreReaderRegistrationFixture(binding);
     }
 
     public string Root { get; }
@@ -48,9 +51,12 @@ internal sealed class StoreFixture : IDisposable
 
     public void Dispose()
     {
+        _reader.Dispose();
         if (Directory.Exists(Root))
             Directory.Delete(Root, recursive: true);
     }
+
+    internal ReaderProcessResult ReaderReply(IReadOnlyList<string> args) => _reader.Reply(args);
 
     private static void CreateCoordinator(string path)
     {
