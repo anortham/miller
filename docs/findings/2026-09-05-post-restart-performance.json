@@ -1,0 +1,991 @@
+{
+  "server_version": "1.27.2+7bd50a76a793",
+  "source_commit": "ecd021c05d774068423911877ebf254eac6ec0cf",
+  "revision_before": 105091,
+  "revision_after": 105109,
+  "manifest_hash_after": "eb774fa291bed393d73de22578da011517961c5ca757302b99c37e04fe291736",
+  "wal_path": "/home/murphy/.miller/stores/eed7c2dd-023b-493b-b706-a135ab011fbc/gen-001/store.db-wal",
+  "wal_bytes_before": 9400130232,
+  "wal_bytes_after": 0,
+  "pre_cleanup": {
+    "start": "2026-09-05T11:36:33.700Z",
+    "ms": 2184,
+    "response": {
+      "content": [
+        {
+          "type": "text",
+          "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+        }
+      ]
+    }
+  },
+  "workloads": [
+    {
+      "name": "inspect_reader",
+      "tool": "mcp__miller__inspect",
+      "args": {
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7",
+        "target": "crates/julie-extract-artifact/src/store/reader.rs",
+        "depth": "summary",
+        "ensure_fresh": false
+      }
+    },
+    {
+      "name": "inspect_xtask",
+      "tool": "mcp__miller__inspect",
+      "args": {
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7",
+        "target": "xtask/src/test_tiers.rs",
+        "depth": "summary",
+        "ensure_fresh": false
+      }
+    },
+    {
+      "name": "impact",
+      "tool": "mcp__miller__impact",
+      "args": {
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7",
+        "changed_paths": [
+          "crates/julie-extract-artifact/src/store/reader.rs",
+          "crates/julie-extract-artifact/tests/store_maintenance_contract.rs"
+        ],
+        "limit": 8,
+        "ensure_fresh": false
+      }
+    },
+    {
+      "name": "search",
+      "tool": "mcp__miller__search",
+      "args": {
+        "workspace_id": "82e547e2231631399bf69bf1b5694288db7864c4a4d737035b59790451f127b7",
+        "query": "store/reader.rs",
+        "mode": "file",
+        "retrieval": "lexical",
+        "limit": 6,
+        "ensure_fresh": false
+      }
+    }
+  ],
+  "calls": [
+    {
+      "workload": "inspect_reader",
+      "iteration": 0,
+      "start": "2026-09-05T11:38:03.297Z",
+      "ms": 37,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "inspect_reader",
+      "iteration": 1,
+      "start": "2026-09-05T11:38:03.334Z",
+      "ms": 39,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "inspect_reader",
+      "iteration": 2,
+      "start": "2026-09-05T11:38:03.373Z",
+      "ms": 34,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "inspect_reader",
+      "iteration": 3,
+      "start": "2026-09-05T11:38:03.407Z",
+      "ms": 40,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "inspect_reader",
+      "iteration": 4,
+      "start": "2026-09-05T11:38:03.447Z",
+      "ms": 36,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "inspect_reader",
+      "iteration": 5,
+      "start": "2026-09-05T11:38:03.483Z",
+      "ms": 35,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# crates/julie-extract-artifact/src/store/reader.rs\nstruct (8)\n  ReaderAcquireRequest  :5-13  pub struct ReaderAcquireRequest\n  ReaderRenewRequest  :65-71  pub struct ReaderRenewRequest\n  ReaderReleaseRequest  :111-115  pub struct ReaderReleaseRequest\n  ReaderOwnerIdentity  :144-150  #[derive(Clone, PartialEq, Eq)] pub struct ReaderOwnerIdentity\n  ReaderManifestSnapshot  :191-202  #[derive(Clone, Debug, PartialEq, Eq)] pub struct ReaderManifestSnapshot\n  ReaderRegistration  :282-288  #[derive(Clone, PartialEq, Eq)] pub struct ReaderRegistration\n  ReaderAcquireResult  :328-330  pub struct ReaderAcquireResult\n  ReaderReportFacts  :347-354  pub struct ReaderReportFacts\nmethod (2)\n  new  :16-34  [parent=ReaderAcquireRequest]  pub fn new(family_id: impl Into<String>, view_id: impl Into<String>, generation_name: impl Into<String>, owne…\n  family_id  :36-38  [parent=ReaderAcquireRequest]  pub fn family_id(&self) -> &str\n… 94 more\nnext: inspect target=\"crates/julie-extract-artifact/src/store/reader.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIJiVotUz-KvoZn4Iq200HV3tVf1lFa0iEAaBcPt-z9ZrASCxQQ2QaYNkvOqvNo1G4O8q4afx2Slm_vDwR39dDFo0ZwoDdrevtH4bx7iba2TyVy7kEus2Zig2sdLXbF4FJYHFaQ\" — continue this file listing\nlow_signal hidden: 1 import, 88 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "inspect_xtask",
+      "iteration": 0,
+      "start": "2026-09-05T11:38:03.518Z",
+      "ms": 32,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "inspect_xtask",
+      "iteration": 1,
+      "start": "2026-09-05T11:38:03.550Z",
+      "ms": 31,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "inspect_xtask",
+      "iteration": 2,
+      "start": "2026-09-05T11:38:03.581Z",
+      "ms": 38,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "inspect_xtask",
+      "iteration": 3,
+      "start": "2026-09-05T11:38:03.619Z",
+      "ms": 38,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "inspect_xtask",
+      "iteration": 4,
+      "start": "2026-09-05T11:38:03.657Z",
+      "ms": 115,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "inspect_xtask",
+      "iteration": 5,
+      "start": "2026-09-05T11:38:03.773Z",
+      "ms": 75,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# xtask/src/test_tiers.rs\nstruct (3)\n  TestPlan  :7-10  #[derive(Debug, Clone, PartialEq, Eq)] pub struct TestPlan\n  CommandSpec  :27-31  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CommandSpec\n  CliError  :86-88  #[derive(Debug, Clone, PartialEq, Eq)] pub struct CliError\nmethod (7)\n  new  :13-18  [parent=TestPlan]  pub fn new(commands: Vec<CommandSpec>) -> Self\n  with_wall_clock_report  :20-23  [parent=TestPlan]  pub fn with_wall_clock_report(mut self, report_wall_clock: bool) -> Self\n  new  :34-45  [parent=CommandSpec]  pub fn new<P, I, A>(program: P, args: I) -> Self where P: Into<String>, I: IntoIterator<Item = A>, A: Into<St…\n  with_env  :47-59  [parent=CommandSpec]  pub fn with_env<I, K, V>(mut self, env: I) -> Self where I: IntoIterator<Item = (K, V)>, K: Into<String>, V: …\n  display  :61-82  [parent=CommandSpec]  pub fn display(&self) -> String\n  new  :91-95  [parent=CliError]  fn new(message: impl Into<String>) -> Self\n  message  :97-99  [parent=CliError]  pub fn message(&self) -> &str\n… 33 more\nnext: inspect target=\"xtask/src/test_tiers.rs\" limit=10 continuation=\"AgIADGluc3BlY3RfZmlsZQEgguVH4iMWMTmb9pvxtWlCiNt4ZMSk1zcDW1l5BFHxJ7cBIAaJk_kzt6hKRPb2IAKI8oQ0tGPUQtv9X207snVQy_qyASCsne4sXe7kwscFl9GfYcXzkU6XgdtMKZ8TuMQ7d8XeiAoxxAH-7QAartVeZznbbECU4M7n_AoS56m_YbCEj1Yn3w\" — continue this file listing\nlow_signal hidden: 3 imports, 40 variables (pass kind=import/variable)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "impact",
+      "iteration": 0,
+      "start": "2026-09-05T11:38:18.744Z",
+      "ms": 6545,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "impact",
+      "iteration": 1,
+      "start": "2026-09-05T11:38:25.290Z",
+      "ms": 2158,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "impact",
+      "iteration": 2,
+      "start": "2026-09-05T11:38:27.449Z",
+      "ms": 2161,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "impact",
+      "iteration": 3,
+      "start": "2026-09-05T11:38:29.611Z",
+      "ms": 2118,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "impact",
+      "iteration": 4,
+      "start": "2026-09-05T11:38:31.730Z",
+      "ms": 2172,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "impact",
+      "iteration": 5,
+      "start": "2026-09-05T11:38:33.903Z",
+      "ms": 2153,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\n# traversal\nstatus=truncated reason=depth_and_limit max_depth=2 limit=8 reached=95 returned=8 graph_returned=8 test_candidates=0 likely_tests=0 test_candidates_truncated=False truncated_by_depth=True truncated_by_limit=True\nseeded_paths (2): crates/julie-extract-artifact/src/store/reader.rs, crates/julie-extract-artifact/tests/store_maintenance_contract.rs\n\n# impacted (8)\ncrates/julie-extract-artifact/src/store/coordinator.rs:\n  :2140 acquire_reader_with_probe_impl method hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2275 renew_reader_with_probe_impl method hop=1 via=c00a73db41f23c3a3d0fd062b2853973 edge=call source=identifier_target\n  :3061 read_reader_manifest_snapshot function hop=1 via=4992e3f8d8d1110c8127a580bc7f4fdc edge=call source=identifier_target\n  :2330 release_reader method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\n  :3404 into_registration method hop=1 via=8feb837b156ba86f345746a05d08baf5 edge=call source=identifier_target\n  :3153 reader_manifest_snapshot_is_current function hop=1 via=3349428a5f420cdcbf1e3324cb387e2e edge=calls source=pending_resolution\n  :2366 reader_registration method hop=1 via=2306b57b1b248b4e8dab30274203e710 edge=call source=identifier_target\ncrates/julie-extract-cli/src/store/reader.rs:\n  :420 registration method hop=1 via=0c33a755f59945bb3a625303db869141 edge=call source=identifier_target"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "search",
+      "iteration": 0,
+      "start": "2026-09-05T11:38:36.057Z",
+      "ms": 52,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "search",
+      "iteration": 1,
+      "start": "2026-09-05T11:38:36.110Z",
+      "ms": 37,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "search",
+      "iteration": 2,
+      "start": "2026-09-05T11:38:36.147Z",
+      "ms": 35,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "search",
+      "iteration": 3,
+      "start": "2026-09-05T11:38:36.183Z",
+      "ms": 33,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "search",
+      "iteration": 4,
+      "start": "2026-09-05T11:38:36.217Z",
+      "ms": 33,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+          }
+        ]
+      }
+    },
+    {
+      "workload": "search",
+      "iteration": 5,
+      "start": "2026-09-05T11:38:36.250Z",
+      "ms": 34,
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "workspace: reader-retention-contract-82e547e22316\nfreshness: ready\nFile matches:\ncrates/julie-extract-cli/src/store/reader.rs:\n  :32 parse_failure function\n  :44 operation variable\n  :50 json variable\n  :61 acquire function\n  :61 args variable\ncrates/julie-extract-artifact/src/store/reader.rs:\n  :185 owner_birth_identity method\n… 321 more (narrow query or filters)"
+          }
+        ]
+      }
+    }
+  ],
+  "telemetry": [
+    {
+      "ts": "2026-09-05T11:38:03.299Z",
+      "tool": "inspect",
+      "duration_ms": 28,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 9,
+        "read_lookup_count": 2,
+        "read_lookup_ms": 18,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 0,
+        "read_graph_ms": 0,
+        "read_provider_cache_entries": 1,
+        "depth": "summary",
+        "format": "compact",
+        "has_kind": false,
+        "has_scope": false,
+        "limit_bucket": "6-10",
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:03.337Z",
+      "tool": "inspect",
+      "duration_ms": 30,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 10,
+        "read_lookup_count": 2,
+        "read_lookup_ms": 19,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 0,
+        "read_graph_ms": 0,
+        "read_provider_cache_entries": 1,
+        "depth": "summary",
+        "format": "compact",
+        "has_kind": false,
+        "has_scope": false,
+        "limit_bucket": "6-10",
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:03.376Z",
+      "tool": "inspect",
+      "duration_ms": 25,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 7,
+        "read_lookup_count": 2,
+        "read_lookup_ms": 17,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 0,
+        "read_graph_ms": 0,
+        "read_provider_cache_entries": 1,
+        "depth": "summary",
+        "format": "compact",
+        "has_kind": false,
+        "has_scope": false,
+        "limit_bucket": "6-10",
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:03.409Z",
+      "tool": "inspect",
+      "duration_ms": 33,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 9,
+        "read_lookup_count": 2,
+        "read_lookup_ms": 23,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 0,
+        "read_graph_ms": 0,
+        "read_provider_cache_entries": 1,
+        "depth": "summary",
+        "format": "compact",
+        "has_kind": false,
+        "has_scope": false,
+        "limit_bucket": "6-10",
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:03.450Z",
+      "tool": "inspect",
+      "duration_ms": 27,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 8,
+        "read_lookup_count": 2,
+        "read_lookup_ms": 18,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 0,
+        "read_graph_ms": 0,
+        "read_provider_cache_entries": 1,
+        "depth": "summary",
+        "format": "compact",
+        "has_kind": false,
+        "has_scope": false,
+        "limit_bucket": "6-10",
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:03.486Z",
+      "tool": "inspect",
+      "duration_ms": 26,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 8,
+        "read_lookup_count": 2,
+        "read_lookup_ms": 17,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 0,
+        "read_graph_ms": 0,
+        "read_provider_cache_entries": 1,
+        "depth": "summary",
+        "format": "compact",
+        "has_kind": false,
+        "has_scope": false,
+        "limit_bucket": "6-10",
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:03.520Z",
+      "tool": "inspect",
+      "duration_ms": 25,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 7,
+        "read_lookup_count": 2,
+        "read_lookup_ms": 17,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 0,
+        "read_graph_ms": 0,
+        "read_provider_cache_entries": 1,
+        "depth": "summary",
+        "format": "compact",
+        "has_kind": false,
+        "has_scope": false,
+        "limit_bucket": "6-10",
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:03.552Z",
+      "tool": "inspect",
+      "duration_ms": 23,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 6,
+        "read_lookup_count": 2,
+        "read_lookup_ms": 16,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 0,
+        "read_graph_ms": 0,
+        "read_provider_cache_entries": 1,
+        "depth": "summary",
+        "format": "compact",
+        "has_kind": false,
+        "has_scope": false,
+        "limit_bucket": "6-10",
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:03.584Z",
+      "tool": "inspect",
+      "duration_ms": 29,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 10,
+        "read_lookup_count": 2,
+        "read_lookup_ms": 18,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 0,
+        "read_graph_ms": 0,
+        "read_provider_cache_entries": 1,
+        "depth": "summary",
+        "format": "compact",
+        "has_kind": false,
+        "has_scope": false,
+        "limit_bucket": "6-10",
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:03.623Z",
+      "tool": "inspect",
+      "duration_ms": 30,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 9,
+        "read_lookup_count": 2,
+        "read_lookup_ms": 20,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 0,
+        "read_graph_ms": 0,
+        "read_provider_cache_entries": 1,
+        "depth": "summary",
+        "format": "compact",
+        "has_kind": false,
+        "has_scope": false,
+        "limit_bucket": "6-10",
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:03.661Z",
+      "tool": "inspect",
+      "duration_ms": 25,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 7,
+        "read_lookup_count": 2,
+        "read_lookup_ms": 17,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 0,
+        "read_graph_ms": 0,
+        "read_provider_cache_entries": 1,
+        "depth": "summary",
+        "format": "compact",
+        "has_kind": false,
+        "has_scope": false,
+        "limit_bucket": "6-10",
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:03.776Z",
+      "tool": "inspect",
+      "duration_ms": 26,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 7,
+        "read_lookup_count": 2,
+        "read_lookup_ms": 18,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 0,
+        "read_graph_ms": 0,
+        "read_provider_cache_entries": 1,
+        "depth": "summary",
+        "format": "compact",
+        "has_kind": false,
+        "has_scope": false,
+        "limit_bucket": "6-10",
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:18.748Z",
+      "tool": "impact",
+      "duration_ms": 6535,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 10,
+        "read_lookup_count": 243,
+        "read_lookup_ms": 48,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 1,
+        "read_graph_ms": 6462,
+        "read_provider_cache_entries": 1,
+        "format": "compact",
+        "limit_bucket": "6-10",
+        "max_depth_bucket": "2",
+        "traversal_candidate_limit": 500,
+        "graph_reached_count": 95,
+        "heuristic_test_candidate_count": 0,
+        "graph_displacement_count": 87,
+        "selected_count": 8,
+        "test_candidates_truncated": false,
+        "truncated_by_depth": true,
+        "truncated_by_limit": true,
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:25.292Z",
+      "tool": "impact",
+      "duration_ms": 2151,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 7,
+        "read_lookup_count": 243,
+        "read_lookup_ms": 46,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 1,
+        "read_graph_ms": 2096,
+        "read_provider_cache_entries": 2,
+        "format": "compact",
+        "limit_bucket": "6-10",
+        "max_depth_bucket": "2",
+        "traversal_candidate_limit": 500,
+        "graph_reached_count": 95,
+        "heuristic_test_candidate_count": 0,
+        "graph_displacement_count": 87,
+        "selected_count": 8,
+        "test_candidates_truncated": false,
+        "truncated_by_depth": true,
+        "truncated_by_limit": true,
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:27.452Z",
+      "tool": "impact",
+      "duration_ms": 2153,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 7,
+        "read_lookup_count": 243,
+        "read_lookup_ms": 53,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 1,
+        "read_graph_ms": 2091,
+        "read_provider_cache_entries": 2,
+        "format": "compact",
+        "limit_bucket": "6-10",
+        "max_depth_bucket": "2",
+        "traversal_candidate_limit": 500,
+        "graph_reached_count": 95,
+        "heuristic_test_candidate_count": 0,
+        "graph_displacement_count": 87,
+        "selected_count": 8,
+        "test_candidates_truncated": false,
+        "truncated_by_depth": true,
+        "truncated_by_limit": true,
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:29.613Z",
+      "tool": "impact",
+      "duration_ms": 2110,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 7,
+        "read_lookup_count": 243,
+        "read_lookup_ms": 45,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 1,
+        "read_graph_ms": 2057,
+        "read_provider_cache_entries": 2,
+        "format": "compact",
+        "limit_bucket": "6-10",
+        "max_depth_bucket": "2",
+        "traversal_candidate_limit": 500,
+        "graph_reached_count": 95,
+        "heuristic_test_candidate_count": 0,
+        "graph_displacement_count": 87,
+        "selected_count": 8,
+        "test_candidates_truncated": false,
+        "truncated_by_depth": true,
+        "truncated_by_limit": true,
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:31.733Z",
+      "tool": "impact",
+      "duration_ms": 2163,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 6,
+        "read_lookup_count": 243,
+        "read_lookup_ms": 46,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 1,
+        "read_graph_ms": 2109,
+        "read_provider_cache_entries": 2,
+        "format": "compact",
+        "limit_bucket": "6-10",
+        "max_depth_bucket": "2",
+        "traversal_candidate_limit": 500,
+        "graph_reached_count": 95,
+        "heuristic_test_candidate_count": 0,
+        "graph_displacement_count": 87,
+        "selected_count": 8,
+        "test_candidates_truncated": false,
+        "truncated_by_depth": true,
+        "truncated_by_limit": true,
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:33.906Z",
+      "tool": "impact",
+      "duration_ms": 2145,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "wait_reason": "index_load",
+        "read_resolve_ms": 7,
+        "read_lookup_count": 243,
+        "read_lookup_ms": 45,
+        "read_lookup_backend": "search_sidecar",
+        "read_graph_count": 1,
+        "read_graph_ms": 2091,
+        "read_provider_cache_entries": 2,
+        "format": "compact",
+        "limit_bucket": "6-10",
+        "max_depth_bucket": "2",
+        "traversal_candidate_limit": 500,
+        "graph_reached_count": 95,
+        "heuristic_test_candidate_count": 0,
+        "graph_displacement_count": 87,
+        "selected_count": 8,
+        "test_candidates_truncated": false,
+        "truncated_by_depth": true,
+        "truncated_by_limit": true,
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:36.059Z",
+      "tool": "search",
+      "duration_ms": 43,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "route": "symbols",
+        "mixed": false,
+        "format": "compact",
+        "limit_bucket": "6-10",
+        "has_regions": false,
+        "has_file_pattern": false,
+        "has_language": false,
+        "exclude_tests": "default",
+        "retrieval": "lexical",
+        "wait_reason": "index_load",
+        "search_backend": "memory",
+        "relaxed": false,
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:36.113Z",
+      "tool": "search",
+      "duration_ms": 29,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "route": "symbols",
+        "mixed": false,
+        "format": "compact",
+        "limit_bucket": "6-10",
+        "has_regions": false,
+        "has_file_pattern": false,
+        "has_language": false,
+        "exclude_tests": "default",
+        "retrieval": "lexical",
+        "wait_reason": "index_load",
+        "search_backend": "memory",
+        "relaxed": false,
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:36.150Z",
+      "tool": "search",
+      "duration_ms": 26,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "route": "symbols",
+        "mixed": false,
+        "format": "compact",
+        "limit_bucket": "6-10",
+        "has_regions": false,
+        "has_file_pattern": false,
+        "has_language": false,
+        "exclude_tests": "default",
+        "retrieval": "lexical",
+        "wait_reason": "index_load",
+        "search_backend": "memory",
+        "relaxed": false,
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:36.185Z",
+      "tool": "search",
+      "duration_ms": 26,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "route": "symbols",
+        "mixed": false,
+        "format": "compact",
+        "limit_bucket": "6-10",
+        "has_regions": false,
+        "has_file_pattern": false,
+        "has_language": false,
+        "exclude_tests": "default",
+        "retrieval": "lexical",
+        "wait_reason": "index_load",
+        "search_backend": "memory",
+        "relaxed": false,
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:36.219Z",
+      "tool": "search",
+      "duration_ms": 26,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "route": "symbols",
+        "mixed": false,
+        "format": "compact",
+        "limit_bucket": "6-10",
+        "has_regions": false,
+        "has_file_pattern": false,
+        "has_language": false,
+        "exclude_tests": "default",
+        "retrieval": "lexical",
+        "wait_reason": "index_load",
+        "search_backend": "memory",
+        "relaxed": false,
+        "index_state": "unknown"
+      }
+    },
+    {
+      "ts": "2026-09-05T11:38:36.252Z",
+      "tool": "search",
+      "duration_ms": 27,
+      "miller_version": "1.27.2+7bd50a76a793",
+      "metadata_json": {
+        "server_version": "1.27.2+7bd50a76a793",
+        "route": "symbols",
+        "mixed": false,
+        "format": "compact",
+        "limit_bucket": "6-10",
+        "has_regions": false,
+        "has_file_pattern": false,
+        "has_language": false,
+        "exclude_tests": "default",
+        "retrieval": "lexical",
+        "wait_reason": "index_load",
+        "search_backend": "memory",
+        "relaxed": false,
+        "index_state": "unknown"
+      }
+    }
+  ]
+}
