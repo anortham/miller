@@ -93,4 +93,19 @@ The previous family status aggregation incorrectly reported Ok when only one dat
 
 ## Verification status
 
-The 67 focused family-read tests and the 67 focused coordinator/checkpoint tests pass. Python snapshot and recovery checks pass: 189 run, two platform skips. The final Linux gate completed with zero build warnings/errors, 9679 fast tests passed and nine skipped, plus 204 scale tests passed and 24 skipped. Focused Windows verification is pending. No deployment claim is made here.
+Implementation commit: `f502c0d726a3b4174621069b563b522d3c62af8a`.
+
+- The 67 focused family-read tests and the 67 focused coordinator/checkpoint tests pass.
+- Python snapshot and recovery checks pass: 189 run, two platform skips.
+- The final Linux gate completed with zero build warnings/errors, 9679 fast tests passed and nine skipped, plus 204 scale tests passed and 24 skipped.
+- Windows NTFS verification at the implementation commit passed all 135 affected family-read, coordinator, checkpoint, and bridge tests, with zero skips. The guest was synchronized using the full commit ID. Log: `~/.local/share/win-test/logs/20260905T110642Z-miller-2476958.log`.
+- Python checks were not run on Windows: command discovery found only the Windows Store alias, not an installed Python runtime. The Python checks above are Linux results.
+- The live 2.39.0 extractor, its pin, and the live 9,400,130,232-byte WAL were left unchanged. No merge, push, release, or deployment was performed.
+
+An initial Windows sync used the short commit ID. The guest reached the correct full commit, but the helper reported a mismatch because it compared the short input with the full result. Repeating sync with the full ID succeeded. The tested source did not change.
+
+## Remaining client-side question
+
+Direct stdio requests are concurrent, while this session's Promise.all calls arrived serially at Miller. Inspect's MCP attribute does not set a read-only hint. That alone does not prove the cause: the [official MCP configuration documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) describes read-only classification for approval policy but does not establish that changing it enables parallel dispatch. No client source checkout was available at the checked local path or in the registered workspaces.
+
+No tool safety annotations or client settings were changed speculatively. Locating that upstream queue requires instrumentation of the session's dispatcher. The committed fixes address the measured database work; they do not claim to eliminate the upstream queue or reproduce every historical multi-minute tail.
