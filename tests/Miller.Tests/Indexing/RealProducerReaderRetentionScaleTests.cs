@@ -14,6 +14,27 @@ namespace Miller.Tests.Indexing;
 public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper output)
 {
     [Fact]
+    public void LegacyStoreWithExpiredDeadClaimActivatesAndAdmitsTheOriginalSnapshot()
+    {
+        using var fixture = new Fixture(ScaleTestSupport.RequireJulieServer(), output);
+        fixture.SeedLegacyExpiredDeadClaim();
+
+        using var session = fixture.Open();
+        Assert.Equal(new[] { "acquire", "open" }, fixture.Events);
+        Assert.Equal(1, fixture.Acquires);
+        Assert.Equal(1, fixture.CoordinatorLong(
+            "SELECT COUNT(*) FROM requests WHERE request_id='legacy-orphan' AND state='failed' AND claim_owner IS NULL"));
+        Assert.Equal(1, fixture.StoreLong(
+            "SELECT COUNT(*) FROM store_meta WHERE key='min_writer_version' AND value='2.40.0'"));
+        fixture.AssertRoots(session.Snapshot);
+        Assert.True(HasSymbol(session, "Original"));
+        session.Dispose();
+        Assert.Equal(new[] { "acquire", "open", "close", "release" }, fixture.Events);
+        Assert.Equal(0, fixture.CountRegistrations());
+        Assert.Equal(0, fixture.Registry.Count);
+    }
+
+    [Fact]
     public void AdmissionRootsTheSnapshotBeforeOpeningAndReleasesAfterClosing()
     {
         using var fixture = new Fixture(ScaleTestSupport.RequireJulieServer(), output);
@@ -353,6 +374,55 @@ public sealed class RealProducerReaderRetentionScaleTests(ITestOutputHelper outp
                 "--family", Binding.FamilyId.ToString("D"), "--root", Binding.WorkspaceRoot,
                 "--view", Binding.ViewId, "--level", "full", "--jobs", "1",
                 "--request-id", request, "--idempotency-key", request, "--json");
+        }
+
+        internal void SeedLegacyExpiredDeadClaim()
+        {
+            var start = new ProcessStartInfo(_binary)
+            {
+                UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true,
+            };
+            start.ArgumentList.Add("--version");
+            using var child = Process.Start(start)!;
+            int deadPid = child.Id;
+            if (!child.WaitForExit(10_000))
+            {
+                child.Kill(entireProcessTree: true);
+                child.WaitForExit();
+                Assert.Fail("The isolated version probe did not exit.");
+            }
+            Assert.Equal(0, child.ExitCode);
+            Assert.StartsWith("julie-extract ", child.StandardOutput.ReadToEnd());
+            Assert.Empty(child.StandardError.ReadToEnd());
+            Assert.Equal(0, CountRegistrations());
+
+            // Disposable fixture only: recreate the pre-reader catalog and expired queue ownership
+            // observed during the real 2.39-to-2.40 restart. The source/manifest data stays intact.
+            using (var store = Connect(Path.Combine(Binding.StoreRoot, CurrentGeneration, "store.db"), write: true))
+            using (var command = store.CreateCommand())
+            {
+                command.CommandText = """
+                    UPDATE store_meta SET value='2.31.3' WHERE key='min_writer_version';
+                    UPDATE store_meta SET value='2.39.0' WHERE key='binary_version';
+                    """;
+                command.ExecuteNonQuery();
+            }
+            using var coordinator = Connect(Path.Combine(Binding.StoreRoot, "coord.db"), write: true);
+            using var seed = coordinator.CreateCommand();
+            seed.CommandText = """
+                DROP TABLE reader_registrations;
+                DELETE FROM writer_lease;
+                INSERT INTO writer_lease
+                    (resource,holder_id,holder_version,holder_pid,heartbeat_at,expires_at,fencing_token)
+                    VALUES ('store-writer',$owner,'2.39.0',$pid,1,1,1);
+                INSERT INTO requests
+                    (request_id,idempotency_key,kind,payload_json,state,requester_id,
+                     requester_deadline,claim_owner,claim_heartbeat_at,created_at,updated_at)
+                    VALUES ('legacy-orphan','legacy-orphan','update','{}','claimed',$owner,1,$owner,1,1,1);
+                """;
+            seed.Parameters.AddWithValue("$owner", $"cli-{deadPid}");
+            seed.Parameters.AddWithValue("$pid", deadPid);
+            seed.ExecuteNonQuery();
         }
 
         internal void Maintain(string action, params string[] extra)

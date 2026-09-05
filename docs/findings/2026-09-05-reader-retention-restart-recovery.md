@@ -79,11 +79,47 @@ was stale, so this was not claimed as a fully healthy resident restart.
 - Final `dotnet build Miller.slnx -c Release --no-restore` passed with zero
   warnings/errors in 18.59 seconds. Later finding/checkpoint changes are docs-only.
 
+## Published 2.40.1 qualification
+
+The user approved the paired patch release and Miller pin adoption. Julie
+`v2.40.1` published at 2026-09-05T22:07:52Z from
+`1d424c2fcfde16d7d5df2b8686f35b9a1f9295b9`. Source CI `33993422701` and
+release workflow `33994328326` passed. All four downloaded archive digests match
+the live release assets and all embedded binaries match their packaged checksums.
+Miller's ordinary restore fetched the published Linux URL without a source or
+test-executable override. The previous 2.40.0 assets and tag are unchanged.
+
+The new real-producer test
+`LegacyStoreWithExpiredDeadClaimActivatesAndAdmitsTheOriginalSnapshot` first failed
+with typed Busy on published 2.40.0. It recreates the legacy coordinator in a
+disposable store using an actual exited child's identity, then exercises Miller's
+public factory. It checks acquire-before-open, the original manifest and symbol,
+failed orphan ownership, the permanent 2.40.0 writer floor, close-before-release,
+and no remaining registration.
+
+Its first 2.40.1 run got past admission and found a separate pin-qualification
+omission. Julie's existing `initialize_store_database` sets `min_reader_version`
+to the creating binary's version. Miller's independently qualified
+`ReaderContractCapability` still read 2.40.0. That rejected newly created 2.40.1
+stores. The capability is now explicitly 2.40.1, not automatically aliased to the
+package pin. A future pin still requires qualification. The permanent producer
+reader-registration writer floor remains 2.40.0; these are different values.
+
+Added pure coverage accepting 2.40.1 and refusing 2.40.2, alongside the existing
+2.40.0 acceptance and 2.41.0 refusal. Before the capability change, exactly the
+new acceptance case failed. Afterward all four cases and the installed-producer
+legacy recovery test passed, five tests total. The Linux fast gate passed with
+9,867 passes, nine platform/availability skips, zero failures, 41 seconds.
+The complete Linux Scale gate on published 2.40.1 passed with 217 passes,
+24 toolchain/platform/opt-in skips, zero failures, 74 seconds. It includes the
+native reader lifecycle and supported-language inventory/projection tests.
+
 ## Integration boundary
 
-The initial 2.40.0 release and its checksums are not overwritten. These follow-up
-fixes are isolated and are not in either project's main or released binaries yet.
-Shipping automatic recovery for other pre-reader stores requires a producer patch
-release and Miller pin adoption as well as the bootstrap fix. That additional
-publication decision is separate from the completed 2.40.0 release. M3 remains
-unstarted while this rollout correction is handled.
+Julie 2.40.1 is published. Miller's paired bootstrap retry, explicit reader
+capability qualification, pin and regressions are being verified on
+`fix/reader-admission-bootstrap-retry` before the approved local main merge.
+The running resident process still uses the earlier build and needs the user's
+rebuild/restart after integration. Stored-data recovery alone is not proof of a
+healthy resident restart. M3 remains unstarted. No semantic runtime or Miller
+marketplace release is included.
