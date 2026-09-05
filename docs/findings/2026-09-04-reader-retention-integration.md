@@ -1,6 +1,6 @@
 # M1 reader-retention integration qualification
 
-Status updated after the user's release/pin approval: implementation is on `feature/reader-retention-integration`; published julie-extract 2.40.0 is adopted in `75e6d9b4`. The original source-only qualification below remains historical evidence. Installed-binary qualification is recorded in the following section; source injection is no longer required. Native adverse-process-identity limits remain explicit.
+Status updated after the user's release/pin approval: M1 was fast-forwarded into local main at `fbc8db25`; published julie-extract 2.40.0 is adopted in `75e6d9b4`. Main's `.tools/julie-extract` was restored from the published URL and its binary hash matches the qualified Linux binary below. The original source-only qualification remains historical evidence. Source injection is no longer required. Native adverse-process-identity limits remain explicit. Miller main was not pushed or published, and the running MCP binary was not rebuilt or restarted.
 
 ## Published producer adoption
 
@@ -161,7 +161,9 @@ The real query `SELECT language, kind, COUNT(*) FROM symbols GROUP BY 1,2 ORDER 
 
 The incompatible 2.39 pin was the original integration blocker. The approved 2.40.0 publication, adoption and passing installed-binary verification above close that dependency. Native process-death/PID-reuse/unknown-identity qualification remains explicitly unverified in Miller; producer J1 has separately scoped native and deterministic evidence. No uncertainty authorizes dropping reader protection or using a stale legacy artifact. No Miller marketplace release is part of this pin-adoption task.
 
-## Workspace inventory
+## Earlier source-qualification workspace inventory
+
+At final local merge closeout, the unrelated preservation branch `preserve/pre-v127-main-dirty-20260902` remained unmerged and untouched. The M1 worktree is clean and retained for its ignored test reports and remaining qualification work. Registry cleanup was previewed again with the same 33 unrelated candidates and six unconfirmed removals; nothing was pruned.
 
 Miller main remains at `54dab498f2e7132aac12b94fd80fae6e30b903ad`, clean and locally ahead of origin by 13 commits. Julie main remains at `3b3e5b6f03b724448df9012bb75224e99ca68f5d`, clean and locally ahead by 24. Semantic-sidecar main is clean and locally ahead by five. These ahead counts reflect local tracking refs, not a fresh remote synchronization.
 
