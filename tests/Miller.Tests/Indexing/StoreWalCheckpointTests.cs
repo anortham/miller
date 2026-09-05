@@ -8,6 +8,110 @@ namespace Miller.Tests.Indexing;
 public sealed class StoreWalCheckpointTests
 {
     [Fact]
+    public async Task FamilyCheckpointDoesNotWaitForALongCoordinatorLock()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using var writer = new SqliteConnection($"Data Source={Path.Combine(fixture.Binding.StoreRoot, "coord.db")};Pooling=False");
+        writer.Open();
+        using var command = writer.CreateCommand();
+        command.CommandText = "BEGIN EXCLUSIVE;";
+        command.ExecuteNonQuery();
+        StoreWalCheckpoint.MarkOwed(fixture.Binding.StoreRoot);
+        Assert.True(StoreWalCheckpoint.IsOwed(fixture.Binding.StoreRoot));
+        Task<StoreWalCheckpointReport?> attempt = Task.Run(() => StoreWalCheckpoint.Maintain(fixture.Binding.StoreRoot));
+        bool returnedWhileLocked;
+        try
+        {
+            returnedWhileLocked = await Task.WhenAny(attempt, Task.Delay(TimeSpan.FromSeconds(4), TestContext.Current.CancellationToken)) == attempt;
+        }
+        finally
+        {
+            command.CommandText = "ROLLBACK;";
+            command.ExecuteNonQuery();
+        }
+        StoreWalCheckpointReport? report = await attempt;
+        Assert.True(returnedWhileLocked, "A maintenance checkpoint must defer rather than wait behind a long writer lock.");
+        Assert.Equal(StoreWalCheckpointStatus.Busy, report!.Status);
+    }
+
+    [Fact]
+    public void RepeatedDebtMarksPreserveTheOriginalAge()
+    {
+        using var dir = new TempDir();
+        StoreWalCheckpoint.MarkOwed(dir.Root);
+        string marker = StoreWalCheckpoint.OwedPath(dir.Root);
+        var original = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(marker, original);
+
+        StoreWalCheckpoint.MarkOwed(dir.Root);
+
+        Assert.Equal(original, File.GetLastWriteTimeUtc(marker));
+    }
+
+    [Fact]
+    public void ObservationOfAnAbsentFamilyIsUnknownAndWritesNothing()
+    {
+        using var dir = new TempDir();
+        string root = Path.Combine(dir.Root, "absent");
+        StoreWalObservation observation = StoreWalCheckpoint.Observe(root);
+        Assert.Null(observation.StoreBytes);
+        Assert.Null(observation.CoordinatorBytes);
+        Assert.Null(observation.DebtAgeSeconds);
+        Assert.True(observation.NeedsWarning);
+        Assert.False(Directory.Exists(root));
+    }
+
+    [Theory]
+    [InlineData(268435455, 0, 299, false)]
+    [InlineData(268435456, 0, 0, true)]
+    [InlineData(0, 268435456, 0, true)]
+    [InlineData(0, 0, 300, true)]
+    public void WarningDetectsOversizedOrOverdueDebt(long store, long coord, double age, bool warning)
+    {
+        Assert.Equal(warning, new StoreWalObservation(store, coord, age).NeedsWarning);
+    }
+
+    [Fact]
+    public void SustainedWritesRetainDebtAndRecoverOnANewMaintenanceInvocation()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        string root = fixture.Binding.StoreRoot;
+        string database = Path.Combine(root, "gen-001", "store.db");
+        using var writer = new SqliteConnection($"Data Source={database};Pooling=False");
+        writer.Open();
+        using var command = writer.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE wal_batches(x); INSERT INTO wal_batches VALUES (zeroblob(4096));";
+        command.ExecuteNonQuery();
+        using var reader = new SqliteConnection($"Data Source={database};Mode=ReadOnly;Pooling=False");
+        reader.Open();
+        using var read = reader.CreateCommand();
+        read.CommandText = "BEGIN; SELECT COUNT(*) FROM wal_batches;";
+        Assert.Equal(1L, read.ExecuteScalar());
+        for (int batch = 0; batch < 3; batch++)
+        {
+            command.CommandText = "INSERT INTO wal_batches VALUES (zeroblob(4096));";
+            command.ExecuteNonQuery();
+            StoreWalCheckpointReport report = Assert.IsType<StoreWalCheckpointReport>(StoreWalCheckpoint.Maintain(root));
+            Assert.Equal(StoreWalCheckpointStatus.Busy, report.Status);
+            Assert.True(report.After.StoreBytes > 0);
+            Assert.NotNull(report.After.DebtAgeSeconds);
+        }
+        File.SetLastWriteTimeUtc(StoreWalCheckpoint.OwedPath(root), DateTime.UtcNow.AddMinutes(-6));
+        Assert.True(StoreWalCheckpoint.Maintain(root)!.After.NeedsWarning);
+        read.CommandText = "ROLLBACK;";
+        read.ExecuteNonQuery(); // Keep the idle connection alive so last-close cannot hide a missing checkpoint.
+
+        StoreWalCheckpointReport recovered = Assert.IsType<StoreWalCheckpointReport>(StoreWalCheckpoint.Maintain(root));
+
+        Assert.Equal(StoreWalCheckpointStatus.Ok, recovered.Status);
+        Assert.Equal(0L, recovered.After.StoreBytes);
+        Assert.False(StoreWalCheckpoint.IsOwed(root));
+        Assert.Null(StoreWalCheckpoint.Maintain(root));
+        command.CommandText = "SELECT COUNT(*) FROM wal_batches;";
+        Assert.Equal(4L, command.ExecuteScalar());
+    }
+
+    [Fact]
     public void FamilyCheckpointDoesNotReportSuccessWhenTheCoordinatorIsUnreadable()
     {
         using StoreFixture fixture = StoreFixture.Create();

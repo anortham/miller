@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Miller.Indexing.Store;
 using Miller.Server.Hosting;
 using Xunit;
 
@@ -11,6 +12,25 @@ namespace Miller.Tests.Server;
 /// </summary>
 public sealed class IndexerPhaseRecordTests
 {
+    [Theory]
+    [InlineData(StoreWalCheckpointStatus.Busy, 301, LogLevel.Warning)]
+    [InlineData(StoreWalCheckpointStatus.Busy, 1, LogLevel.Information)]
+    [InlineData(StoreWalCheckpointStatus.Skipped, 1, LogLevel.Warning)]
+    public void CheckpointLogExposesOutcomeBytesAndOverdueDebt(StoreWalCheckpointStatus status, double age, LogLevel expected)
+    {
+        var log = new RecordingLogger();
+        var sink = new LoggingIndexerPhaseSink(log);
+        sink.RecordWalCheckpoint(new StoreWalCheckpointReport("/family", status,
+            new StoreWalObservation(8192, 4096, age), new StoreWalObservation(8192, 0, age),
+            TimeSpan.FromMilliseconds(12)));
+        var entry = Assert.Single(log.Entries);
+        Assert.Equal(expected, entry.Level);
+        Assert.Contains("/family", entry.Message, StringComparison.Ordinal);
+        Assert.Contains(status.ToString(), entry.Message, StringComparison.Ordinal);
+        Assert.Contains("8192", entry.Message, StringComparison.Ordinal);
+        Assert.Contains(age.ToString(System.Globalization.CultureInfo.InvariantCulture), entry.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void CompletedNoWorkBind_LogsAtDebug_NotInformation()
     {

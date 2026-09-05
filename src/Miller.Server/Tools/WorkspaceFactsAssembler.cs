@@ -54,7 +54,10 @@ internal static class WorkspaceFactsAssembler
             storeRoot,
             members?.DisplayLabels,
             members?.TotalCount ?? 0,
-            Queue: queue);
+            Queue: queue)
+        {
+            Wal = storeRoot is null ? null : StoreWalCheckpoint.Observe(storeRoot),
+        };
     }
 
     /// <summary>

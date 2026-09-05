@@ -85,6 +85,16 @@ public sealed record WorkspaceHealthFacts(
         var warnings = new List<HealthWarning>();
         var recommended = new List<string>();
 
+        if (statusFacts.Store?.Wal is { NeedsWarning: true } wal)
+        {
+            string storeBytes = wal.StoreBytes?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
+            string coordBytes = wal.CoordinatorBytes?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
+            string age = wal.DebtAgeSeconds?.ToString("F0", CultureInfo.InvariantCulture) ?? "unknown";
+            warnings.Add(new HealthWarning("store_wal_checkpoint_owed", "usable_with_warnings",
+                $"family WAL cleanup needs attention: store_bytes={storeBytes} coordinator_bytes={coordBytes} debt_age_seconds={age}"));
+            recommended.Add("run workspace refresh to retry WAL cleanup; if debt persists, inspect checkpoint logs and long-lived readers; never delete a live WAL");
+        }
+
         long openCapabilityGaps = extraction.CapabilityGaps.Rows
                 .Where(static row => string.Equals(row.Status, "open", StringComparison.Ordinal))
             .Sum(static row => row.Count);

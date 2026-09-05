@@ -1091,8 +1091,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
 
     private void TryCheckpointOwedWal()
     {
-        if (StoreWalCheckpoint.IsOwed(_binding.StoreRoot))
-            StoreWalCheckpoint.TryCompleteOwedFamily(_binding.StoreRoot);
+        _phaseSink.RecordWalCheckpoint(StoreWalCheckpoint.Maintain(_binding.StoreRoot));
     }
 
     private void PublishFreshnessStamp()

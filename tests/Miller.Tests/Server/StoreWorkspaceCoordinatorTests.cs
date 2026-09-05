@@ -11,6 +11,32 @@ namespace Miller.Tests.Server;
 
 public sealed class StoreWorkspaceCoordinatorTests
 {
+    [Fact]
+    public void NoChangeRefreshDiscoversMarkerlessWalAndReportsCleanup()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        var phases = new RecordingPhaseSink();
+        StoreWorkspaceCoordinator Create() => new(
+            fixture.Binding, new RecordingStoreClient(StoreOperation.Update),
+            () => IndexLevelPolicy.Full, _ => new StoreWorkspaceState(2, "full"),
+            () => "request-a", fromArtifact: null, phaseSink: phases,
+            inspectTree: () => new StoreTreeDelta([], []), millerDirectory: fixture.Root);
+        Create().Scan(); // Publish a stamp so the next scan exercises the no-change path.
+        string database = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var writer = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={database};Pooling=False");
+        writer.Open();
+        using var command = writer.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE wal_test(x); INSERT INTO wal_test VALUES (1);";
+        command.ExecuteNonQuery();
+        Assert.True(new FileInfo(database + "-wal").Length > 0);
+        Assert.False(StoreWalCheckpoint.IsOwed(fixture.Binding.StoreRoot));
+
+        Create().Scan();
+
+        Assert.Equal(0, new FileInfo(database + "-wal").Length);
+        Assert.Contains(phases.Records, p => p.Phase == "wal_checkpoint" && p.Outcome == "ok");
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

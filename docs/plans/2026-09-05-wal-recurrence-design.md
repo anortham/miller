@@ -21,23 +21,23 @@ process means no autonomous timer; next refresh or producer command must recover
 ## Acceptance criteria and single-agent implementation sequence
 
 1. `src/Miller.Indexing/Store/StoreWalCheckpoint.cs` and its tests.
-   - [ ] Preserve the original debt timestamp across repeated marks.
-   - [ ] Observe current-generation and coordinator WAL bytes without creating files.
-   - [ ] Discover nonempty markerless WALs, attempt cleanup, preserve debt on Busy/Skipped.
-   - [ ] Report bytes before/after, debt age, outcome and elapsed time.
-   - [ ] Warning threshold is 256 MiB remaining in either WAL or debt at least five
+   - [x] Preserve the original debt timestamp across repeated marks.
+   - [x] Observe current-generation and coordinator WAL bytes without creating files.
+   - [x] Discover nonempty markerless WALs, attempt cleanup, preserve debt on Busy/Skipped.
+   - [x] Report bytes before/after, debt age, outcome and elapsed time.
+   - [x] Warning threshold is 256 MiB remaining in either WAL or debt at least five
      minutes old; unavailable measurements must not masquerade as zero.
-   - [ ] Exercise multiple committed batches under a held reader, then recovery using
+   - [x] Exercise multiple committed batches under a held reader, then recovery using
      a new invocation with no in-memory state. Assert data intact and WAL truncated.
 2. `src/Miller.Server/Workspaces/StoreWorkspaceCoordinator.cs`,
    `src/Miller.Server/Hosting/IndexerService.cs`,
    `src/Miller.Server/Hosting/IndexerPhaseRecord.cs` and focused server tests.
-   - [ ] Both no-change refresh and idle maintenance discover markerless WAL debt.
-   - [ ] Publish real checkpoint status instead of discarding it; warn with byte/age
+   - [x] Both no-change refresh and idle maintenance discover markerless WAL debt.
+   - [x] Publish real checkpoint status instead of discarding it; warn with byte/age
      evidence for overdue or oversized remaining debt. Keep logging fail-open.
-   - [ ] Retain the existing 30-second resident retry throttle, including successful
+   - [x] Retain the existing 30-second resident retry throttle, including successful
      empty checks, so idle ticks do not add per-tick filesystem work.
-   - [ ] Cross-workspace coordinator recreation/no-resident path proves recovery.
+   - [x] Cross-workspace coordinator recreation/no-resident path proves recovery.
 3. Qualify standalone producer lifecycle. Record precise paths and focused tests;
    repair a demonstrated producer omission in its owning repo if required. Do not
    silently merge or overwrite the outstanding J1 branch.
@@ -55,3 +55,18 @@ At the branch gate run Release build, fast suite and `scripts/test.sh scale` onc
 Run affected tests on the Windows NTFS guest because this changes file lifecycles.
 Record results and remaining limitations. No release or push is authorized.
 Security scope: none declared. No external reviewer selected.
+
+## Execution refinements
+
+Health visibility uses an optional WAL observation in StoreWorkspaceFacts, populated
+by WorkspaceFactsAssembler and DashboardIndexFactsReader. WorkspaceHealthFacts adds
+a typed warning without I/O in the renderer or health aggregation. Existing MCP,
+CLI registered-workspace health and dashboard warning rendering consume it.
+
+The exclusive-coordinator-lock regression demonstrated that the previous 300-second
+SQLite timeout can wait behind a lock. Family checkpoints now wait at most one
+second per database for locks. This does not bound checkpoint disk I/O.
+
+The resident test lives in IndexerServiceWalTests, in the existing serialized store
+environment collection, because the fast suite defaults MILLER_INDEX_STORE=off.
+It uses the existing service clock to test the retry interval without sleeping.

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Miller.Indexing.Store;
 
 namespace Miller.Server.Hosting;
 
@@ -13,6 +14,7 @@ internal static class IndexerPhaseNames
     public const string Vector = "vector";
     public const string SidecarTotal = "sidecar_total";
     public const string StartupTotal = "startup_total";
+    public const string WalCheckpoint = "wal_checkpoint";
 
     /// <summary>
     /// A store view had to be re-planned because the serving catalog does not carry it. Outcome is
@@ -37,6 +39,7 @@ internal sealed record IndexerPhaseRecord(
     bool DidWork)
 {
     public double ElapsedMilliseconds => Math.Max(0, Elapsed.TotalMilliseconds);
+    public StoreWalCheckpointReport? WalCheckpoint { get; init; }
 }
 
 internal interface IIndexerPhaseSink
@@ -46,6 +49,21 @@ internal interface IIndexerPhaseSink
 
 internal static class IndexerPhaseSinkExtensions
 {
+    public static void RecordWalCheckpoint(this IIndexerPhaseSink sink, StoreWalCheckpointReport? report)
+    {
+        if (report is null)
+            return;
+        try
+        {
+            sink.Record(new IndexerPhaseRecord(IndexerPhaseNames.WalCheckpoint, report.Elapsed,
+                report.Status.ToString().ToLowerInvariant(), null, true) { WalCheckpoint = report });
+        }
+        catch
+        {
+            // Diagnostics must never change the result of already committed work.
+        }
+    }
+
     public static void RecordSafely(
         this IIndexerPhaseSink sink,
         string phase,
@@ -136,6 +154,17 @@ internal sealed class LoggingIndexerPhaseSink(ILogger logger) : IIndexerPhaseSin
     public void Record(IndexerPhaseRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
+        if (record.WalCheckpoint is { } wal)
+        {
+            _logger.Log(wal.Status == StoreWalCheckpointStatus.Skipped || wal.After.NeedsWarning ? LogLevel.Warning : LogLevel.Information,
+                "family_store_wal_checkpoint {StoreRoot} {Status} {ElapsedMilliseconds} " +
+                "{StoreWalBytesBefore} {StoreWalBytesAfter} {CoordinatorWalBytesBefore} " +
+                "{CoordinatorWalBytesAfter} {DebtAgeSeconds}",
+                wal.StoreRoot, wal.Status, record.ElapsedMilliseconds,
+                wal.Before.StoreBytes, wal.After.StoreBytes, wal.Before.CoordinatorBytes,
+                wal.After.CoordinatorBytes, wal.After.DebtAgeSeconds);
+            return;
+        }
         // Completed no-work bind is the idle heartbeat: Debug. Failed and did-work binds stay Information.
         LogLevel level = record.Phase == IndexerPhaseNames.Bind &&
                          record.Outcome == IndexerPhaseOutcomes.Completed &&

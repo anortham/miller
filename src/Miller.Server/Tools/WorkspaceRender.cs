@@ -69,6 +69,8 @@ public sealed record StoreWorkspaceFacts(
     string? Error = null,
     StoreCoordinatorQueueFacts? Queue = null)
 {
+    public StoreWalObservation? Wal { get; init; }
+
     public static StoreWorkspaceFacts Unavailable(string state, string failure, string error) =>
         new(
             string.Empty,

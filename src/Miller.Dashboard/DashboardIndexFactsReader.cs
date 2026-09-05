@@ -384,7 +384,10 @@ public static class DashboardIndexFactsReader
                 File.Exists(workspace.IndexDbPath) ? "available" : "export_required",
                 storeRoot,
                 members.DisplayLabels,
-                members.TotalCount);
+                members.TotalCount)
+            {
+                Wal = StoreWalCheckpoint.Observe(storeRoot),
+            };
 
             return new DashboardWorkspaceFacts(
                 workspace.WorkspaceId,

@@ -1560,6 +1560,10 @@ public sealed class IndexerService : BackgroundService
         if (!WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
             return;
 
+        if (_clock().UtcDateTime < _nextWalCheckpointUtc)
+            return;
+        _nextWalCheckpointUtc = _clock().UtcDateTime.AddSeconds(30);
+
         string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
         StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(workspaceRoot);
         if (pointer is null)
@@ -1568,22 +1572,17 @@ public sealed class IndexerService : BackgroundService
             return;
         }
 
-        bool owed = _walCheckpointOwed || StoreWalCheckpoint.IsOwed(pointer.StoreRoot);
-        if (!owed)
-            return;
-        if (DateTime.UtcNow < _nextWalCheckpointUtc)
-            return;
-
-        StoreWalCheckpointStatus status = StoreWalCheckpoint.TryCompleteOwedFamily(pointer.StoreRoot);
-        if (status != StoreWalCheckpointStatus.Ok)
+        if (_walCheckpointOwed)
         {
-            _nextWalCheckpointUtc = DateTime.UtcNow.AddSeconds(30);
-            _logger.LogDebug("Family store WAL checkpoint {Status} for {StoreRoot}; retrying later.", status, pointer.StoreRoot);
-            return;
+            try { StoreWalCheckpoint.MarkOwed(pointer.StoreRoot); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Cannot persist WAL checkpoint debt for {StoreRoot}.", pointer.StoreRoot);
+            }
         }
-
-        _walCheckpointOwed = false;
-        _logger.LogInformation("Family store WAL checkpoint truncated {StoreRoot}.", pointer.StoreRoot);
+        StoreWalCheckpointReport? report = StoreWalCheckpoint.Maintain(pointer.StoreRoot);
+        _phaseSink.RecordWalCheckpoint(report);
+        _walCheckpointOwed = report is not null && report.Status != StoreWalCheckpointStatus.Ok;
     }
 
     private StoreSidecarConvergenceResult TryConvergeStoreSidecars()

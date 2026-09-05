@@ -1,6 +1,9 @@
 using System.ComponentModel;
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
+using Miller.Tests.Support;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -17,6 +20,24 @@ namespace Miller.Tests.Server;
 /// </summary>
 public sealed class WorkspaceHealthLeaderTests
 {
+    [Fact]
+    public void HealthWarnsAboutOldWalDebtWithoutAttemptingCleanup()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWalCheckpoint.MarkOwed(fixture.Binding.StoreRoot);
+        string marker = StoreWalCheckpoint.OwedPath(fixture.Binding.StoreRoot);
+        var original = DateTime.UtcNow.AddMinutes(-6);
+        File.SetLastWriteTimeUtc(marker, original);
+        using var session = FamilyStoreReadSession.Open(fixture.Binding);
+        var store = WorkspaceFactsAssembler.StoreFactsFor(session.Snapshot, false, fixture.Binding.StoreRoot);
+
+        WorkspaceHealthFacts health = Health(Facts() with { Store = store }, null);
+
+        Assert.Contains(health.Warnings, w => w.Code == "store_wal_checkpoint_owed");
+        Assert.Contains(health.RecommendedActions, a => a.Contains("refresh", StringComparison.Ordinal));
+        Assert.Equal(original, File.GetLastWriteTimeUtc(marker));
+    }
+
     private static WorkspaceFacts Facts() => new WorkspaceFacts(
         Root: "/repo",
         WorkspaceId: "ws-123",
